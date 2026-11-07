@@ -460,3 +460,32 @@ describe('APPROVE_IN_CHAT in the Worker config', () => {
     expect(parsed.env.staging.vars.APPROVE_IN_CHAT).toBe('1');
   });
 });
+
+// A message landing in a chat between a card shown there and the owner's answer would read as what their "yes" answers. The jobs
+// lane holds a finished task's report while such a card waits, by asking where one waits.
+describe('where a card the owner can approve in words waits', () => {
+  it('names the chat a waiting card was shown in, and none once it is decided or when words cannot approve it', async () => {
+    await owner('words-awaited-main', async state => {
+      const f = harness(state, 'whatsapp');
+      expect(f.desk.wordsAwaited()).toEqual([]);
+      const id = await f.desk.proposeSendMessage(message());
+      expect(f.desk.wordsAwaited()).toEqual([null]);
+      await f.desk.approveShown(id, said(), 'trace');
+      expect(f.desk.wordsAwaited()).toEqual([]);
+    });
+    await owner('words-awaited-off', async state => {
+      const f = harness(state, 'whatsapp', { inWords: false });
+      await f.desk.proposeSendMessage(message());
+      expect(f.desk.wordsAwaited()).toEqual([]);
+    });
+  });
+
+  it('an app card shown in a thread names that thread', async () => {
+    await owner('words-awaited-thread', async state => {
+      const f = harness(state, 'app', { thread: () => 'owner:prn_1:thr_1' });
+      const id = await f.desk.proposeSendMessage(message());
+      expect(f.desk.placement(id)).toMatchObject({ chatApprovable: true });
+      expect(f.desk.wordsAwaited()).toEqual(['owner:prn_1:thr_1']);
+    });
+  });
+});

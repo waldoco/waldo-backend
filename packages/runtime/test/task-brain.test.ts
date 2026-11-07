@@ -10,9 +10,11 @@ import { InMemoryCircuitBreaker } from '../src/llm/provider';
 import { sanitise } from '../src/scribe/sanitiser';
 import { taskHost, UNKEPT_EFFECT, UNKEPT_OUTPUT, type TaskHostDeps } from '../src/tasks/brain';
 import { clearedToolResult, DROPPED_STEPS_NOTE } from '../src/conversation/tool-loop';
-import { jobBook, type JobBook, type TaskBrief, type TaskTicket } from '../src/tasks/jobs';
+import { jobBook, jobCheckpoint, type JobBook, type TaskBrief, type TaskTicket } from '../src/tasks/jobs';
 import { FINISH_TASK } from '../src/tasks/profiles';
 import { runTaskAttempt, type TaskModel } from '../src/tasks/worker-loop';
+import { parkedApplyText } from '../src/tasks/lane';
+import { watchdogJudgeText } from '../src/tasks/watchdog';
 import { MACHINE_READER, TASK_PROFILE_SPECS, unreplayable } from '../src/tasks/profiles';
 import { CHILD_READ_TOOLS } from '../src/conversation/subagent';
 import { OUTSIDE_TEXT_JOB_TOOLS } from '../src/channels/check-back';
@@ -401,6 +403,26 @@ describe('the task brain host', () => {
       const [kept] = JSON.parse(book.get(t.jobId)!.checkpoint_json!).turns as { output: string }[];
       expect(kept!.output).toBe(`${note}${UNKEPT_OUTPUT}`);
       expect(book.get(t.jobId)!.checkpoint_json).not.toContain('synthetic server text');
+    });
+  });
+
+  it.each([
+    ['TSH', 'Your TSH is 6.2 mIU/L (0.4-4.0) H.', /6\.2/],
+    ['vitamin D', '25-OH Vitamin D: 18 ng/mL, flagged low.', /\b18\b/],
+    ['haemoglobin', 'Haemoglobin 10.9 g/dL L.', /10\.9/],
+    ['eGFR', 'eGFR 45 mL/min/1.73m2 (>60) L.', /\b45\b/],
+    ['creatinine', 'Serum creatinine 1.6 mg/dL (H).', /1\.6/],
+    ['PSA', 'PSA 6.1 ng/mL (0-4.0) H.', /6\.1/],
+    ['ferritin', 'Ferritin 8 ng/mL, below range.', /\b8 ng/],
+  ])('a %s lab mail read by a reader task: the checkpoint keeps no reading', async (_analyte, body, reading) => {
+    await withHost(async ({ host, ticket, book, handler }) => {
+      const t = ticket();
+      handler.search = async () => ({ messages: [{ from: 'lab@clinic.example', subject: 'Your results', body: `${body} Please book a follow-up.` }] });
+      const model: TaskModel = async () => ({ response: { text: '', tool_calls: [{ call_id: 'c1:search', name: 'search_communication', arguments: JSON.stringify({ query: 'from:lab@clinic.example' }) }] }, event: { trace: 'task:x', hop: 'llm_task', ms: 1, ok: true } });
+      expect(await runTaskAttempt(t, { brain: host, model, sliceEnd: 0 })).toBe('continue');
+      const checkpoint = book.get(t.jobId)!.checkpoint_json!;
+      expect(checkpoint).not.toMatch(reading);
+      expect(JSON.parse(checkpoint).turns[0].output).toBe(UNKEPT_OUTPUT);
     });
   });
 
@@ -965,6 +987,231 @@ describe('the task brain host', () => {
 // Every profile against every tool a worker must never hold: a worker cannot reach the owner, approve or propose for them,
 // write or read their memory, hand work on, start or stop tasks, or read health. Read from the tool records, so a tool added
 // to one of those groups is covered without editing this list.
+describe('a steered task', () => {
+  const result = (summary: string) => ({ status: 'done' as const, summary, findings: [], proposals: [], left: [] });
+  const finish = (summary: string, id = 'f') => ({ call_id: id, name: FINISH_TASK, arguments: JSON.stringify(result(summary)) });
+  type Step = Awaited<ReturnType<TaskModel>>;
+  const respond = (calls: { call_id: string; name: string; arguments: string }[]): Step => ({ response: { text: '', tool_calls: calls }, event: { trace: 'task:x', hop: 'llm_task', ms: 1, ok: true } });
+  const steer = (book: JobBook, id: string, mode: 'interrupt' | 'enqueue', text: string, key: string) => expect(book.steer(id, { key, text, mode, at: T0 }, null)).toBe('steered');
+  const hops = (log: TurnLogEntry[]) => log.map(entry => entry.hop).filter(hop => ['task_attempt_steered', 'task_reported', 'task_checkpoint'].includes(hop));
+
+  it('interrupt: the attempt ends at its next checkpoint, a new attempt resumes from it with the change, and the job reports once under its id', async () => {
+    await withHost(async ({ host, ticket, book, log, ran, handler }) => {
+      const first = ticket();
+      handler.search = async () => { steer(book, first.jobId, 'interrupt', 'Only tables with outdoor seating.', 'turn-2:s1'); return { hits: 2 }; };
+      const seen: string[] = [];
+      const model: TaskModel = async ({ content, turns }) => { seen.push(content); return turns.length === 0 ? respond([call('search_communication')]) : respond([finish('Two outdoor tables.')]); };
+      expect(await runTaskAttempt(first, { brain: host, model, sliceEnd: Infinity })).toBe('fenced');
+      const requeued = book.get(first.jobId)!;
+      expect(requeued).toMatchObject({ status: 'queued', crashes: 0, lease_token: null, inflight_json: null, park_reason: null });
+      expect(jobCheckpoint(requeued).turns.map(turn => turn.call.name)).toEqual(['search_communication']);
+
+      handler.search = undefined;
+      const second = book.startAttempt(first.jobId)!;
+      expect(second.attempt).toBe(first.attempt + 1);
+      expect(await runTaskAttempt(second, { brain: host, model, sliceEnd: Infinity })).toBe('reported');
+      expect(seen[0]).not.toContain('outdoor');
+      expect(seen[1]).toContain('Only tables with outdoor seating.');
+      expect(seen[1]).toMatch(/a correction/);
+      expect(book.get(first.jobId)).toMatchObject({ status: 'reported', outcome: 'done', park_reason: null });
+      expect(JSON.parse(book.get(first.jobId)!.result_json!)).toMatchObject({ summary: 'Two outdoor tables.' });
+      // The trace: one search, the steer at the round's checkpoint, then the resumed attempt's single report.
+      expect(ran).toEqual(['search_communication']);
+      expect(hops(log)).toEqual(['task_attempt_steered', 'task_reported']);
+      expect(log.find(entry => entry.hop === 'task_attempt_steered')).toMatchObject({ job_id: first.jobId, code: 'checkpoint', detail: `attempt=${first.attempt}` });
+    });
+  });
+
+  it('enqueue: the attempt runs on; its report becomes a new attempt that sees the change and its own draft, and only that one reports', async () => {
+    await withHost(async ({ host, ticket, book, log, ran, handler }) => {
+      const first = ticket();
+      handler.search = async () => { steer(book, first.jobId, 'enqueue', 'Also check if they take walk-ins.', 'turn-2:s1'); return { hits: 2 }; };
+      const seen: string[] = [];
+      const model: TaskModel = async ({ content, turns }) => {
+        seen.push(content);
+        if (seen.length === 1) return respond([call('search_communication')]);
+        return respond([finish(seen.length === 2 ? 'Two tables found.' : 'Two tables; one takes walk-ins.', `f${seen.length}`)]);
+      };
+      expect(await runTaskAttempt(first, { brain: host, model, sliceEnd: Infinity })).toBe('fenced');
+      // The round that read the mail checkpointed and kept going; only the report turned into a new attempt.
+      expect(seen).toHaveLength(2);
+      expect(book.get(first.jobId)).toMatchObject({ status: 'queued', result_json: null, outcome: null, crashes: 0 });
+      expect(jobCheckpoint(book.get(first.jobId)!).draft).toEqual(result('Two tables found.'));
+
+      handler.search = undefined;
+      const second = book.startAttempt(first.jobId)!;
+      expect(await runTaskAttempt(second, { brain: host, model, sliceEnd: Infinity })).toBe('reported');
+      expect(seen[2]).toContain('Also check if they take walk-ins.');
+      expect(seen[2]).toMatch(/an addition/);
+      expect(seen[2]).toContain('Two tables found.');
+      expect(JSON.parse(book.get(first.jobId)!.result_json!)).toMatchObject({ summary: 'Two tables; one takes walk-ins.' });
+      expect(ran).toEqual(['search_communication']);
+      expect(hops(log)).toEqual(['task_checkpoint', 'task_attempt_steered', 'task_reported']);
+    });
+  });
+
+  it('a change made before the attempt claims is shown at the claim and ends nothing: the attempt runs and reports', async () => {
+    await withHost(async ({ host, book, log }) => {
+      const { job } = book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'k-pre', origin: 'tg-1', surface: 'app', brief, dueAt: T0, deadlineAt: T0 + 3_600_000 });
+      steer(book, job.id, 'interrupt', 'Only after 8pm.', 'turn-2:s1');
+      steer(book, job.id, 'enqueue', 'And the phone number.', 'turn-2:s2');
+      const seen: string[] = [];
+      const model: TaskModel = async ({ content }) => { seen.push(content); return respond([finish('A table at 9pm, +91 phone on the site.')]); };
+      expect(await runTaskAttempt(book.startAttempt(job.id)!, { brain: host, model, sliceEnd: Infinity })).toBe('reported');
+      expect(seen[0]).toContain('Only after 8pm.');
+      expect(seen[0]).toContain('And the phone number.');
+      expect(hops(log)).toEqual(['task_reported']);
+      expect(jobCheckpoint(book.get(job.id)!).steers?.every(steer => steer.shown === 1)).toBe(true);
+    });
+  });
+
+  it('a change made while the task waits on the owner\'s card stays with it, and the resumed attempt is shown it', async () => {
+    await withHost(async ({ host, book, ticket }) => {
+      const t = ticket('errand');
+      steer(book, t.jobId, 'enqueue', 'Book for three, not two.', 'turn-2:s1');
+      expect(book.await(t, { approval_id: 'appr-1', call: { call_id: 'c1', name: 'browse_act', arguments: '{}' } })).toBe(true);
+      steer(book, t.jobId, 'interrupt', 'Skip the rooftop place.', 'turn-3:s1');
+      expect(jobCheckpoint(book.get(t.jobId)!)).toMatchObject({ asked: { approval_id: 'appr-1' }, steers: [{ key: 'turn-2:s1' }, { key: 'turn-3:s1' }] });
+      expect(book.resume('appr-1', 'declined')).toBe(true);
+      const claim = await host.claim(book.startAttempt(t.jobId)!);
+      expect(claim === 'fenced' ? [] : claim.steers?.map(change => change.text)).toEqual(['Book for three, not two.', 'Skip the rooftop place.']);
+    });
+  });
+
+  it('the draft is not lost: a later attempt that fails, or a job that stops, keeps what the earlier attempt found', async () => {
+    await withHost(async ({ book, ticket }) => {
+      const failed = ticket();
+      steer(book, failed.jobId, 'enqueue', 'Also check walk-ins.', 'turn-2:s1');
+      expect(book.report(failed, result('Two tables found.'), { rounds: 1, costUsd: 0 })).toBe('steered');
+      const next = book.startAttempt(failed.jobId)!;
+      expect(book.claim(next)).not.toBe('fenced');
+      expect(book.report(next, { status: 'failed', summary: 'The worker stopped with an error (x).', findings: [], proposals: [], left: [] }, { rounds: 1, costUsd: 0 })).toBe('accepted');
+      expect(JSON.parse(book.get(failed.jobId)!.result_json!)).toMatchObject({ status: 'partial', summary: 'Two tables found.', left: [expect.stringMatching(/change made after it first finished/)] });
+
+      const stopped = ticket();
+      steer(book, stopped.jobId, 'enqueue', 'Also check walk-ins.', 'turn-3:s1');
+      expect(book.report(stopped, result('Three tables found.'), { rounds: 1, costUsd: 0 })).toBe('steered');
+      expect(book.park(stopped.jobId, 'deadline')).toBe(true);
+      expect(parkedApplyText(book.get(stopped.jobId)!)).toContain('Three tables found.');
+    });
+  });
+
+  it('a steered task that stops says which changes no worker saw; a stop with no change reads as it did before', async () => {
+    await withHost(async ({ book, ticket }) => {
+      const progress = (text: string) => JSON.parse(/<task_progress>\n(.*)\n<\/task_progress>/s.exec(text)![1]!);
+      const t = ticket();
+      steer(book, t.jobId, 'enqueue', 'Only places with a terrace.', 'turn-2:s1');
+      expect(book.claim(t)).not.toBe('fenced');
+      steer(book, t.jobId, 'enqueue', 'Skip the rooftop place.', 'turn-3:s1');
+      expect(book.park(t.jobId, 'deadline')).toBe(true);
+      const text = parkedApplyText(book.get(t.jobId)!);
+      expect(progress(text).changes).toEqual([{ change: 'Only places with a terrace.', worker_saw_it: true }, { change: 'Skip the rooftop place.', worker_saw_it: false }]);
+      expect(text).toContain('Name each change Waldo made to it that was not done');
+
+      const plain = ticket();
+      expect(book.park(plain.jobId, 'deadline')).toBe(true);
+      const unchanged = parkedApplyText(book.get(plain.jobId)!);
+      expect(progress(unchanged)).not.toHaveProperty('changes');
+      expect(unchanged).not.toContain('Name each change');
+    });
+  });
+
+  it('a report at or past the deadline, or with a step still recorded in flight, is accepted as partial and names each change it did not do', async () => {
+    await withHost(async ({ book, ticket, clock }) => {
+      const late = ticket();
+      steer(book, late.jobId, 'enqueue', 'Also check walk-ins.', 'turn-2:s1');
+      clock.at = book.get(late.jobId)!.deadline_at;
+      book.touch(late, null);
+      expect(book.report(late, result('Two tables found.'), { rounds: 1, costUsd: 0 })).toBe('accepted');
+      expect(JSON.parse(book.get(late.jobId)!.result_json!)).toEqual({ ...result('Two tables found.'), status: 'partial', left: ['The change "Also check walk-ins." came too late for this task and was not done.'] });
+      expect(book.get(late.jobId)!.outcome).toBe('partial');
+      clock.at = T0;
+      const acting = ticket('errand');
+      steer(book, acting.jobId, 'enqueue', 'Also check walk-ins.', 'turn-3:s1');
+      expect(book.beginEffect(acting, { tool: 'browse_act', call_id: 'c1' })).toBe(true);
+      expect(book.report(acting, result('Booked view of the form.'), { rounds: 1, costUsd: 0 })).toBe('accepted');
+      expect(book.get(acting.jobId)).toMatchObject({ status: 'reported', inflight_json: null, outcome: 'partial' });
+      expect(JSON.parse(book.get(acting.jobId)!.result_json!).left).toEqual(['The change "Also check walk-ins." came too late for this task and was not done.']);
+    });
+  });
+
+  it('a failed report keeps its status and still names the change it did not do; a shown change is never named', async () => {
+    await withHost(async ({ book, ticket, clock }) => {
+      const failed = ticket();
+      steer(book, failed.jobId, 'interrupt', 'Only rooftop places.', 'turn-2:s1');
+      clock.at = book.get(failed.jobId)!.deadline_at;
+      book.touch(failed, null);
+      expect(book.report(failed, { status: 'failed', summary: 'Stopped.', findings: [], proposals: [], left: ['Prices'] }, { rounds: 1, costUsd: 0 })).toBe('accepted');
+      expect(JSON.parse(book.get(failed.jobId)!.result_json!)).toMatchObject({ status: 'failed', left: ['Prices', 'The change "Only rooftop places." came too late for this task and was not done.'] });
+      clock.at = T0;
+      const shown = ticket();
+      steer(book, shown.jobId, 'interrupt', 'Only rooftop places.', 'turn-3:s1');
+      expect(book.report(shown, result('Two rooftops.'), { rounds: 1, costUsd: 0 })).toBe('steered');
+      const next = book.startAttempt(shown.jobId)!;
+      expect(book.claim(next)).not.toBe('fenced');
+      expect(book.report(next, result('Two rooftops.'), { rounds: 1, costUsd: 0 })).toBe('accepted');
+      expect(JSON.parse(book.get(shown.jobId)!.result_json!)).toEqual(result('Two rooftops.'));
+    });
+  });
+
+  it('a correction that lands while an approved step resumes ends the attempt with the step kept, raises the taint, and wakes the lane', async () => {
+    await withHost(async ({ host, book, ticket, log, handler }) => {
+      const t = ticket();
+      const step = call('search_communication');
+      expect(book.await(t, { approval_id: 'appr-1', call: step })).toBe(true);
+      expect(book.resume('appr-1', 'approved')).toBe(true);
+      handler.search = async () => { steer(book, t.jobId, 'interrupt', 'Only rooftop places.', 'turn-2:s1'); return { hits: 1 }; };
+      expect(await host.claim(book.startAttempt(t.jobId)!)).toBe('fenced');
+      const row = book.get(t.jobId)!;
+      expect(row).toMatchObject({ status: 'queued', taint: 'external' });
+      expect(jobCheckpoint(row).turns.map(turn => turn.call.name)).toEqual(['search_communication']);
+      expect(log.filter(entry => entry.hop === 'task_attempt_steered')).toHaveLength(1);
+    });
+  });
+
+  it('the judge reads a long change cut like the context beside it', async () => {
+    await withHost(async ({ book, ticket }) => {
+      const t = ticket();
+      steer(book, t.jobId, 'interrupt', `Rome. ${'r'.repeat(5_000)}`, 'turn-2:s1');
+      const text = watchdogJudgeText(book.get(t.jobId)!, null, [], T0);
+      expect(text).toContain('Rome.');
+      expect(text).not.toContain('r'.repeat(2_100));
+    });
+  });
+
+  it('the progress watchdog judges a changed task against its changes, not only the goal it started with', async () => {
+    await withHost(async ({ book, ticket }) => {
+      const t = ticket();
+      steer(book, t.jobId, 'interrupt', 'Rome instead of Paris.', 'turn-2:s1');
+      const text = watchdogJudgeText(book.get(t.jobId)!, null, [], T0);
+      expect(text).toContain('Rome instead of Paris.');
+      expect(text.indexOf('Rome instead of Paris.')).toBeGreaterThan(text.indexOf('Goal:'));
+    });
+  });
+
+  it('the cancellation fence holds: a cancel after a change drops it with the job, and a change after a cancel writes nothing', async () => {
+    await withHost(async ({ book, ticket }) => {
+      const t = ticket();
+      steer(book, t.jobId, 'interrupt', 'Only rooftop places.', 'turn-2:s1');
+      expect(book.cancel(t.jobId, 'owner')).toBe(true);
+      expect(book.get(t.jobId)!.checkpoint_json).toBeNull();
+      expect(book.steer(t.jobId, { key: 'turn-3:s1', text: 'Any place.', mode: 'interrupt', at: T0 }, null)).toBe('closed');
+      expect(book.get(t.jobId)).toMatchObject({ status: 'cancelled', checkpoint_json: null });
+      expect(book.checkpoint(t, 1, { turns: [] }, { rounds: 1, costUsd: 0 })).toBe('fenced');
+    });
+  });
+
+  it('a forget that names a change\'s words cancels the open job and leaves no copy of them', async () => {
+    await withHost(async ({ book, ticket }) => {
+      const t = ticket();
+      steer(book, t.jobId, 'enqueue', 'Also ask about the Mehta anniversary dinner.', 'turn-2:s1');
+      const { cancelled } = book.forget(['Mehta anniversary']);
+      expect(cancelled).toEqual([t.jobId]);
+      expect(JSON.stringify(book.get(t.jobId))).not.toContain('Mehta anniversary');
+    });
+  });
+});
+
 describe('task profiles', () => {
   const names = Object.keys(TOOL_RECORDS) as ToolName[];
   const forbidden: Readonly<Record<string, readonly ToolName[]>> = {
@@ -974,7 +1221,7 @@ describe('task profiles', () => {
     memory: [...names.filter(name => TOOL_RECORDS[name].brain === 'memory' && name !== 'read_tool_output'), 'read_memory', 'remember'],
     delegation: ['delegate_task', 'use_mac'],
     tasks: ['start_task', 'cancel_task'],
-    health: [...names.filter(name => TOOL_RECORDS[name].brain === 'health'), 'get_health'],
+    health: [...names.filter(name => TOOL_RECORDS[name].brain === 'health' || TOOL_RECORDS[name].brain === 'phone'), 'get_health'],
   };
 
   // Whatever list a tool is missing from, a profile can only read: every tool a worker holds is a safe read, except the

@@ -10,6 +10,7 @@ import type { LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
 import { INTERRUPTED_NOTICES } from '../src/prompt/fixed-lines';
 import { ensureSchema } from '../src/tracer/schema';
+import { WhatsAppOwnerInbox } from '../src/channels/whatsapp-inbox';
 import { presenceAuthority } from './helpers/directory-presence';
 import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
@@ -148,6 +149,54 @@ describe('a typed /stop on WhatsApp', { timeout: 30_000 }, () => {
       await drainWhatsAppTurns(o);
       expect(world.sent).toEqual([]);
       expect(rows(state)).toEqual(expect.arrayContaining([['wamid.in.long', 'interrupted'], ['wamid.in.stop', 'completed']]));
+    });
+  });
+
+  it('stops a turn already claimed but not yet under way, read from the inbox rather than the turn in memory', async () => {
+    await owner('wa-stop-claimed-gap', { WHATSAPP_STOP: '1' }, async (o, state, admit) => {
+      expect(await admit(message('wamid.in.long', 'Plan my whole week in detail'))).toBe(200);
+      // Claimed, as a drain does before the turn starts: nothing in memory names it yet.
+      expect(new WhatsAppOwnerInbox(state.storage).claimNext(Date.now() + 60_000)?.wamid).toBe('wamid.in.long');
+      expect(await admit(message('wamid.in.stop', '/stop'))).toBe(200);
+      await vi.waitFor(() => expect(world.sent).toEqual([{ text: INTERRUPTED_NOTICES.stopped, quote: 'wamid.in.long' }]), { timeout: 5_000, interval: 20 });
+      world.release();
+      await drainWhatsAppTurns(o);
+      expect(world.started).toBe(0);
+      // The stop's notice is the only one: the row it closed is no cut-off turn for recovery to report again.
+      expect(world.sent).toEqual([{ text: INTERRUPTED_NOTICES.stopped, quote: 'wamid.in.long' }]);
+      expect(rows(state)).toEqual(expect.arrayContaining([['wamid.in.long', 'interrupted'], ['wamid.in.stop', 'completed']]));
+    });
+  });
+
+  it('lands in the very commit that admits the /stop', async () => {
+    await owner('wa-stop-in-commit', { WHATSAPP_STOP: '1' }, async (_o, state, admit) => {
+      expect(await admit(message('wamid.in.long', 'Plan my whole week in detail'))).toBe(200);
+      // Each commit is numbered; the inbox's admit and stop say which commit they ran in.
+      let commit = 0, current = 0;
+      const commitOf: Record<string, number> = {};
+      const sync = state.storage.transactionSync.bind(state.storage);
+      vi.spyOn(state.storage, 'transactionSync').mockImplementation(<T>(work: () => T): T => { const outer = current; current = ++commit; try { return sync(work); } finally { current = outer; } });
+      for (const name of ['admit', 'stop'] as const) {
+        const real = WhatsAppOwnerInbox.prototype[name] as (...args: unknown[]) => unknown;
+        vi.spyOn(WhatsAppOwnerInbox.prototype, name).mockImplementation(function (this: WhatsAppOwnerInbox, ...args: unknown[]) { commitOf[name] = current; return real.apply(this, args); } as never);
+      }
+      expect(await admit(message('wamid.in.stop', '/stop'))).toBe(200);
+      expect(commitOf.stop).toBeGreaterThan(0);
+      expect(commitOf.stop).toBe(commitOf.admit);
+      expect(rows(state)).toEqual(expect.arrayContaining([['wamid.in.long', 'revoked'], ['wamid.in.stop', 'completed']]));
+    });
+  });
+
+  it('still tells the owner and answers Meta when stopping background work fails after the commit', async () => {
+    await owner('wa-stop-background-fails', { WHATSAPP_STOP: '1' }, async (o, state, admit) => {
+      expect(await admit(message('wamid.in.long', 'Plan my whole week in detail'))).toBe(200);
+      vi.spyOn(o as unknown as { stopOwnerWork(): Promise<void> }, 'stopOwnerWork').mockRejectedValue(new Error('synthetic failure after the commit'));
+      expect(await admit(message('wamid.in.stop', '/stop'))).toBe(200);
+      await vi.waitFor(() => expect(world.sent).toEqual([{ text: INTERRUPTED_NOTICES.stopped, quote: 'wamid.in.long' }]), { timeout: 5_000, interval: 20 });
+      world.release();
+      await drainWhatsAppTurns(o);
+      expect(world.started).toBe(0);
+      expect(rows(state)).toEqual(expect.arrayContaining([['wamid.in.long', 'revoked'], ['wamid.in.stop', 'completed']]));
     });
   });
 
