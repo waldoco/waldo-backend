@@ -183,7 +183,7 @@ third-party security review (CASA, repeated yearly).
   oversized body is refused; an unknown `healthUserId` is acknowledged and dropped; an unreachable owner object gets a
   retry.
 - **Traces:** a turn holding `google_health` context captures no text in staging, shown by a trace assertion.
-- **End to end:** one Fitbit-and-iPhone tester connects on staging, and HRV, sleep stages, resting heart rate and SpO₂
+- **End to end:** one Fitbit-and-iPhone tester connects on staging, and HRV, sleep duration, resting heart rate and SpO₂
   arrive under source `google_health`. Recovery then computes with method `rmssd`.
 ```
 
