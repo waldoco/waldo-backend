@@ -95,7 +95,7 @@ export const cleanAliases = (raw: readonly string[] | undefined): string | null 
 // trace_log.note and runtime_trace.detail_json are diagnostic logs whose hop names would match short topics, so they stay tracked as gaps in forget-store-table.
 export const LITERAL_REDACTED_STORES = [
   ['thread_topic_index', ['topic']], ['patrol_log', ['summary']],
-  ['goals', ['description', 'baseline', 'target', 'progress']],
+  ['goals', ['description', 'baseline', 'target', 'progress', 'plan']],
   // A look-up finding is external text, not the owner's record: one that carries a forgotten text is deleted with the rest.
   ['owner_findings', ['text', 'evidence', 'source_url', 'source_title']],
 ] as const;
@@ -933,6 +933,9 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
                   if (normal === row.value && redacted !== normal) next = redacted;
                 } catch { continue; }
               }
+              // A goal's text holds at most 500 characters (its CHECK counts characters); a marker longer than the text it
+              // replaces can grow it past that, so the end is cut by character, never inside one, and the forget still lands.
+              if (table === 'goals') next = Array.from(next).slice(0, 500).join('');
               if (next !== row.value) { sql.exec(`UPDATE ${table} SET ${column} = ? WHERE rowid = ?`, next, row.rowid); tally('redacted', table); }
             }
           }

@@ -137,20 +137,27 @@ export const gateScheduleExecutors = (executors: ScheduleExecutors, prefs: Sched
 
 const allowlist = () => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('set_schedule_preference'));
 
-export const schedulePreferenceHandlers = (book: SchedulePreferenceBook, context: () => ScheduleApplyContext | Promise<ScheduleApplyContext>) => [
+// cardTime sets the owner's every-day Brief or Close time (ownerCardTime) and returns its receipt; absent where it is not offered.
+export type CardTimeSetter = (card: 'card:brief' | 'card:close', time: string) => Promise<Readonly<{ state: 'recorded' | 'rejected'; message: string }>>;
+export const schedulePreferenceHandlers = (book: SchedulePreferenceBook, context: () => ScheduleApplyContext | Promise<ScheduleApplyContext>, cardTime?: CardTimeSetter) => [
   {
     name: 'set_schedule_preference',
-    description: "Turn one of Waldo's own scheduled behaviors off or back on, or reset all of them to the out-of-the-box defaults. Only when the owner asks. The current state of every behavior is in the ledger; nothing is forced on the owner. Use kind for on and off. Tell the owner plainly what changed and that reset restores everything to on.",
+    description: "Turn one of Waldo's own scheduled behaviors off or back on, reset all of them to the out-of-the-box defaults, or set when the Brief or the Close comes every day. Only when the owner asks. The current state of every behavior is in the ledger; nothing is forced on the owner. Use kind for on and off. Tell the owner plainly what changed and that reset restores everything to on; after a time change, say what the result's said says.",
     schema: setSchedulePreferenceArgsSchema,
     trigger_allowlist: allowlist(),
     autonomy_gated: false,
     mutates_state: true,
     async handle(args: SetSchedulePreferenceArgs) {
+      if (args.action === 'time') {
+        const receipt = cardTime ? await cardTime(args.card === 'brief' ? 'card:brief' : 'card:close', args.time!) : null;
+        if (receipt?.state !== 'recorded') return { ok: false, code: 'rejected', error: receipt?.message ?? 'The Brief and Close times cannot be set here.', source_taint: null };
+        return { ok: true, data: { preferences: book.all(), said: receipt.message }, source_taint: null };
+      }
       if (args.action !== 'reset' && args.kind === undefined) return { ok: false, code: 'invalid_args', error: 'kind is required for on and off', source_taint: null };
       if (args.action === 'reset') book.reset(); else book.set(args.kind!, args.action === 'on');
       if (args.mode) book.setHealthMode(args.mode);
       await applySchedulePreferences(book.all(), await context(), args.action === 'reset' ? undefined : args.kind);
       return { ok: true, data: { preferences: book.all() }, source_taint: null };
     },
-  } satisfies ToolHandler<SetSchedulePreferenceArgs, { preferences: SchedulePreferences }, ToolDispatcherContext>,
+  } satisfies ToolHandler<SetSchedulePreferenceArgs, { preferences: SchedulePreferences; said?: string }, ToolDispatcherContext>,
 ];
