@@ -35,6 +35,20 @@ describe('a card with more choices than reply buttons hold', () => {
     expect(bodies(fetcher)[0]).toMatchObject({ type: 'interactive', interactive: { type: 'list' } });
   });
 
+  it('with words longer than reply buttons take, goes out as a list rather than typed codes', async () => {
+    const fetcher = graph(), text = 'x'.repeat(1500);
+    await shim(fetcher, true)('sendMessage', { chat_id: OWNER, text, reply_markup: keyboard(['Send it', 'a:p2'], ['Not now', 'd:p2']) });
+    expect(bodies(fetcher)[0]).toMatchObject({ type: 'interactive', interactive: { type: 'list', body: { text } } });
+  });
+
+  it('holds ten rows and row titles of 24 characters, and no more', async () => {
+    const rows = (count: number, title = (n: number) => `Option ${n}`) => keyboard(...Array.from({ length: count }, (_, n) => [title(n), `a:p${n}`] as [string, string]));
+    const sent = async (markup: ReturnType<typeof keyboard>) => { const fetcher = graph(); await shim(fetcher, true)('sendMessage', { chat_id: OWNER, text: 'Pick one?', reply_markup: markup }); return bodies(fetcher)[0]!.type; };
+    expect(await sent(rows(10))).toBe('interactive');
+    expect(await sent(rows(4, n => `${'y'.repeat(23)}${n}`))).toBe('interactive');
+    expect(await sent(rows(4, n => `${'y'.repeat(24)}${n}`))).toBe('text');
+  });
+
   it('that fits three reply buttons keeps them', async () => {
     const fetcher = graph();
     await shim(fetcher, true)('sendMessage', { chat_id: OWNER, text: 'Send it?', reply_markup: keyboard(['Send it', 'a:p2'], ['Not now', 'd:p2']) });

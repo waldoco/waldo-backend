@@ -108,7 +108,8 @@ export const WA_LAST_INBOUND_ID_KEY = 'wa_last_inbound_id';
 export type WhatsAppShimOptions = Readonly<{ lastInbound?: () => string | null; now?: () => number; onSent?: (id: string, text: string) => void;
   // WHATSAPP_REPLY_BUTTONS: a card whose buttons fit WhatsApp's reply buttons goes out as one interactive message.
   replyButtons?: boolean;
-  // WHATSAPP_LIST_CARDS: a card those buttons cannot hold (four choices, or reply buttons off) goes out as one interactive list.
+  // WHATSAPP_LIST_CARDS: a card those buttons cannot hold goes out as one interactive list: four choices, words past the reply
+  // buttons' 1,024 characters (up to the list's 4,096), or reply buttons off.
   listCards?: boolean }>;
 
 // Meta's limits for an interactive reply-buttons message, read on 6 Nov 2026 from
