@@ -137,8 +137,9 @@ export const localDayOf = (now: Date, timeZone: string): string => {
 
 type Group = Readonly<{ source: string; method: Method | null; readings: readonly Reading[] }>;
 // One source per signal, the one with the most readings; for a signal with methods one method as well, so they never blend.
-// A part of a reading (a food entry's protein) is given for a day only when every reading that day carries it, so a day's
-// sum is never a partial one.
+// For a signal summed over a day, a part of a reading (a food entry's protein) is given for that day only when every reading
+// that day carries it, so a day's sum is never a partial one. A signal that takes one reading (a night's deep sleep) is
+// unaffected by another reading that lacks the part.
 export const chooseGroup = (signal: HealthReadSignal, sources: readonly Readonly<{ source: string; readings: readonly Reading[] }>[]): Group | null => {
   const spec = SIGNALS[signal];
   const groups = new Map<string, { source: string; method: Method | null; readings: Reading[] }>();
@@ -150,7 +151,7 @@ export const chooseGroup = (signal: HealthReadSignal, sources: readonly Readonly
       const method = spec.methods?.find(known => known === reading.method) ?? null;
       if (spec.methods && method === null) continue;
       const value = spec.value ? spec.value(reading) : reading.value;
-      if (value === null) { partial.add(`${source.source}\u0000${reading.day}`); continue; }
+      if (value === null) { if (spec.fold === 'sum') partial.add(`${source.source}\u0000${reading.day}`); continue; }
       const key = `${source.source}\u0000${method ?? ''}`;
       const group = groups.get(key) ?? { source: source.source, method, readings: [] };
       group.readings.push({ ...reading, value });

@@ -209,6 +209,15 @@ describe('get_health', () => {
       ]);
       expect(JSON.parse(String(calls[1]!.args.p_payload)).signals).toEqual(['sleep_duration']);
     });
+    it('keeps a staged night\'s stages when the same source and day also has an unstaged reading: only a day\'s sums need every entry', async () => {
+      const mixed = { ...series, sources: [{ source: 'apple', consent_epoch: 3, samples: [
+        night('2026-10-12', 430, { light: 200, deep: 70, rem: 90, unspecified: 70, awake: 22 }, '2026-10-11T17:30:00Z', '2026-10-12T00:50:00Z'),
+        night('2026-10-12', 25, null, '2026-10-12T08:00:00Z', '2026-10-12T08:25:00Z'),
+      ] }] };
+      const { handler } = fake({ series: mixed });
+      const result = await handler.handle({ signals: ['sleep_deep'], from: '2026-10-12', to: '2026-10-12', aggregation: 'daily' }, ctx);
+      expect(result.ok && result.data.state === 'available' && result.data.signals.map(entry => [entry.signal, value(entry)])).toEqual([['sleep_deep', 70]]);
+    });
     it('gives the night\'s means, a day\'s sums and the day\'s newest single readings in their own units', async () => {
       const { signals } = await one(['sleep_efficiency', 'respiratory_rate', 'spo2', 'walking_hr', 'hr_recovery', 'vo2_max', 'steps', 'active_energy', 'mindful']);
       expect(signals && signals.map(entry => [entry.signal, entry.unit, value(entry)])).toEqual([
