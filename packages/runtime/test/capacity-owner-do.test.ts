@@ -214,12 +214,12 @@ describe('the planning Brief with CAPACITY_BUDGET', { timeout: 30_000 }, () => {
   const LIGHT = { id: 'ev-dentist', title: 'Dentist', start: '2030-03-08T09:00:00Z', end: '2030-03-08T10:00:00Z', status: 'confirmed' };
   const MOVE = { action: 'move', event_id: EXPENSES.id, title: EXPENSES.title, start: '2030-03-08T13:30:00Z', end: '2030-03-08T14:30:00Z', reason: 'Today runs past what holds for you; Friday afternoon is light' };
   const BUDGET = { CAPACITY_PLAN: '1', CAPACITY_BUDGET: '1', PLANNING_BRIEF: '1', PROACTIVE_GATE: '1' };
-  const brief = () => model.cards.find(asked => asked.request.includes('Scheduled card \\"The Brief'))!;
+  const brief = () => model.cards.find(asked => asked.request.includes('Scheduled card \\"The Daily Brief'))!;
   const weekReads = () => calendar.reads.filter(read => read.startsWith(TOMORROW));
 
   it('reads the rest of the week beside the note as the job\'s context, and its one move waits on a card under the owner\'s limits', async () => {
     calendar.events = [MEETING, EXPENSES]; calendar.week = [LIGHT];
-    model.card = [{ calls: [{ name: 'propose_calendar_change', arguments: MOVE }] }, { text: 'The Brief\nA long day; the expense report can wait for Friday afternoon, on a card for your yes.' }];
+    model.card = [{ calls: [{ name: 'propose_calendar_change', arguments: MOVE }] }, { text: 'The Daily Brief\nA long day; the expense report can wait for Friday afternoon, on a card for your yes.' }];
     await owned('capacity-budget-on', BUDGET, async ({ state, nightly, card, approvals }) => {
       const book = interruptBook(state.storage.kv, { now: () => Date.now(), timezone: () => 'UTC', ownerSpokeSince: at => ownerSpokeSince(state.storage.sql, at) });
       await nightly();
@@ -240,7 +240,7 @@ describe('the planning Brief with CAPACITY_BUDGET', { timeout: 30_000 }, () => {
 
   it('reads no week with the switch off, on the recap Brief, or with CAPACITY_PLAN off', async () => {
     for (const [name, settings] of [['budget-off', { ...BUDGET, CAPACITY_BUDGET: '0' }], ['budget-recap', { ...BUDGET, PLANNING_BRIEF: '0' }], ['budget-no-plan', { ...BUDGET, CAPACITY_PLAN: '0' }]] as const) {
-      model.cards = []; calendar.reads = []; model.card = [{ text: 'The Brief\nA long day.' }];
+      model.cards = []; calendar.reads = []; model.card = [{ text: 'The Daily Brief\nA long day.' }];
       await owned(`capacity-${name}`, settings, async ({ card }) => {
         await card('card:brief');
         expect(weekReads(), name).toEqual([]);
@@ -250,7 +250,7 @@ describe('the planning Brief with CAPACITY_BUDGET', { timeout: 30_000 }, () => {
   });
 
   it('a move the owner turned down is in the next Brief\'s context, and a disconnected Google is one line, not two', async () => {
-    model.card = [{ text: 'The Brief\nA long day.' }];
+    model.card = [{ text: 'The Daily Brief\nA long day.' }];
     await owned('capacity-budget-declined', BUDGET, async ({ state, card }) => {
       const source = { events: async () => [], event: async (id: string) => ({ ...EXPENSES, id, all_day: false, etag: 'v1' }) };
       const desk = approvalDesk(state.storage.sql, { call: async () => ({}), owner: 42, google: async () => source as never, newId: () => 'declined', now: () => AT - 86_400_000, timezone: 'UTC', log: () => undefined });
@@ -266,7 +266,7 @@ describe('the planning Brief with CAPACITY_BUDGET', { timeout: 30_000 }, () => {
 
   it('a week that cannot be read is said plainly and the Brief still goes', async () => {
     calendar.weekFails = true;
-    model.card = [{ text: 'The Brief\nA long day; I could not see the rest of your week, so nothing moves.' }];
+    model.card = [{ text: 'The Daily Brief\nA long day; I could not see the rest of your week, so nothing moves.' }];
     await owned('capacity-budget-unread', BUDGET, async ({ card, approvals }) => {
       await card('card:brief');
       expect(brief().request).toContain('Calendar could not be read right now');
@@ -299,7 +299,7 @@ describe('the Brief and the Close with CAPACITY_PLAN', { timeout: 30_000 }, () =
 
   it('the planning Brief raises the weekly reset as a rest block on a card under the owner\'s limits, and the next card sees it waiting', async () => {
     const RESET = { action: 'create', title: 'Reset: long walk, no screens', start: `${DAY}T17:00:00Z`, end: `${DAY}T19:00:00Z`, block: 'rest', reason: 'Your week ran heavy; Saturday afternoon is the stretch you keep free' };
-    model.card = [{ calls: [{ name: 'propose_calendar_change', arguments: RESET }] }, { text: 'The Brief\nA heavy week behind you. I put a reset on a card for your yes.' },
+    model.card = [{ calls: [{ name: 'propose_calendar_change', arguments: RESET }] }, { text: 'The Daily Brief\nA heavy week behind you. I put a reset on a card for your yes.' },
       { text: 'The Close\nThe reset waits on your yes.' }];
     await owned('capacity-brief-reset', { CAPACITY_PLAN: '1', PLANNING_BRIEF: '1', PROACTIVE_GATE: '1' }, async ({ state, card, approvals }) => {
       const book = interruptBook(state.storage.kv, { now: () => Date.now(), timezone: () => 'UTC', ownerSpokeSince: at => ownerSpokeSince(state.storage.sql, at) });
@@ -333,7 +333,7 @@ describe('the Brief and the Close with CAPACITY_PLAN', { timeout: 30_000 }, () =
   });
 
   it('without a note yet, the Brief is told so and no capacity is guessed', async () => {
-    model.card = [{ text: 'The Brief\nBoard review at three.' }];
+    model.card = [{ text: 'The Daily Brief\nBoard review at three.' }];
     await owned('capacity-brief-no-note', { CAPACITY_PLAN: '1' }, async ({ card }) => {
       await card('card:brief');
       expect(model.cards[0]!.request).toContain(NO_NOTE);

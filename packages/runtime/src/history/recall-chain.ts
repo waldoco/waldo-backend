@@ -60,7 +60,7 @@ const isoDay = (at: number) => at > 0 ? new Date(at).toISOString().slice(0, 10) 
 const turnOf = (entryId: string) => entryId.endsWith('-reply') ? entryId.slice(0, -'-reply'.length) : entryId;
 
 type EpisodeRow = Readonly<{ row: number; entry_id: string; speaker: string; at: number; text: string }>;
-const EPISODE = "SELECT rowid AS row, entry_id, CASE speaker WHEN 'owner_said' THEN 'owner' ELSE speaker END AS speaker, at, text FROM episodes";
+const EPISODE = "SELECT rowid AS row, entry_id, CASE speaker WHEN 'owner_said' THEN 'owner' WHEN 'owner_said_answering_outside' THEN 'owner' WHEN 'waldo_read_outside' THEN 'waldo' ELSE speaker END AS speaker, at, text FROM episodes";
 // A link to a message names who said it and when; its surface is on the read of its ref.
 const episodeLine = (row: EpisodeRow) => line(`${row.speaker} ${isoDay(row.at)}: ${row.text}`);
 const claimLine = (claim: Claim) => claim.kind === 'health' ? 'health note' : line(`${claim.kind}: ${claim.text}`);
@@ -75,7 +75,7 @@ export const recallChain = (deps: RecallChainDeps): RecallChain => ({ open: (opt
   };
   const episodes = () => tableExists(sql, 'episodes');
   // An entry's row to link: the owner's own words when the index split the message (a quote may come first), else its first.
-  const OWN_FIRST = "ORDER BY episodes.speaker = 'owner_said' DESC, rowid LIMIT 1";
+  const OWN_FIRST = "ORDER BY episodes.speaker IN ('owner_said', 'owner_said_answering_outside') DESC, rowid LIMIT 1";
   const entryRow = (entryId: string, near: number): EpisodeRow | undefined =>
     sql.exec<EpisodeRow>(`${EPISODE} WHERE rowid BETWEEN ? AND ? AND entry_id = ? ${OWN_FIRST}`, near - NEAR_ROWS, near + NEAR_ROWS, entryId).toArray()[0];
   const anyRow = (entryId: string): EpisodeRow | undefined => episodes() ? sql.exec<EpisodeRow>(`${EPISODE} WHERE entry_id = ? ${OWN_FIRST}`, entryId).toArray()[0] : undefined;

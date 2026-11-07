@@ -29,7 +29,7 @@ describe('pushing the owner\'s app', () => {
     expect(posted).toHaveLength(1);
     expect(posted[0]!.url).toBe('https://exp.host/--/api/v2/push/send');
     expect(posted[0]!.headers.get('authorization')).toBe(`Bearer ${ACCESS}`);
-    expect(posted[0]!.body).toEqual([EXPO, OTHER].map(to => ({ to, body: 'Your Brief is ready', data: BRIEF, sound: 'default' })));
+    expect(posted[0]!.body).toEqual([EXPO, OTHER].map(to => ({ to, body: 'Your Daily Brief is ready', data: BRIEF, sound: 'default' })));
     expect(logged).toEqual([{ code: 'sent', count: 2 }]);
     expect(JSON.stringify(logged)).not.toContain('Token');
   });
@@ -76,7 +76,7 @@ describe('pushing the owner\'s app', () => {
     expect(early.logged.at(-1)).toEqual({ code: 'daily_limit', count: 0 });
     await early.push('brief');
     expect(early.send).toHaveBeenCalledTimes(PUSH_DAILY_LIMIT);
-    expect(early.posted.at(-1)!.body).toEqual([expect.objectContaining({ body: 'Your Brief is ready' })]);
+    expect(early.posted.at(-1)!.body).toEqual([expect.objectContaining({ body: 'Your Daily Brief is ready' })]);
 
     const briefFirst = fixture();
     await briefFirst.push('brief');

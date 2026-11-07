@@ -74,8 +74,8 @@ it('a host closure failure retains the serial queue when durable closure cannot 
 it('failure notice storage failure does not retain stale run slots or block the next run',async()=>{
  seen.pause=true;await setup('fence-do-notice-fault',async(i,s)=>{
   const inbox=await admit(i,s,6);let enter!:()=>void;const ready=new Promise<void>(r=>{enter=r;});seen.entered=enter;
-  const internal=i as unknown as {drainInbox:()=>Promise<void>;closeRunAtomic:(r:unknown,reason:string)=>void;activeAbort?:AbortController;activeScope?:unknown;activeInbox?:unknown;liveAttempts:Set<string>;setup:()=>{finalOutbox:{enqueueFenced:(...args:unknown[])=>Promise<void>}}};
-  const running=internal.drainInbox();await ready;const row=(await inbox.records())[0]!;const outbox=internal.setup().finalOutbox;const original=outbox.enqueueFenced.bind(outbox);outbox.enqueueFenced=async()=>{throw new Error('injected failure notice storage fault');};
+  const internal=i as unknown as {drainInbox:()=>Promise<void>;closeRunAtomic:(r:unknown,reason:string)=>void;activeAbort?:AbortController;activeScope?:unknown;activeInbox?:unknown;liveAttempts:Set<string>;setup:(channel:string)=>{finalOutbox:{enqueueFenced:(...args:unknown[])=>Promise<void>}}};
+  const running=internal.drainInbox();await ready;const row=(await inbox.records())[0]!;const outbox=internal.setup('telegram').finalOutbox;const original=outbox.enqueueFenced.bind(outbox);outbox.enqueueFenced=async()=>{throw new Error('injected failure notice storage fault');};
   internal.closeRunAtomic(row,'owner_stopped');internal.activeAbort!.abort();await running;
   expect(internal.activeInbox).toBeNull();expect(internal.activeScope).toBeUndefined();expect(internal.activeAbort).toBeUndefined();expect(internal.liveAttempts.size).toBe(0);expect(await s.storage.getAlarm()).not.toBeNull();
   seen.finish!({id:'late',output_text:'LATE',output:[],usage:{input_tokens:1,output_tokens:1}});seen.pause=false;outbox.enqueueFenced=original;

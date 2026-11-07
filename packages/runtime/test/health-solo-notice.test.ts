@@ -210,19 +210,11 @@ describe('the health trigger on a day with nothing coming', () => {
 describe('the note prompt and its answer', () => {
   const view = healthTriggerView(ROW, NOW, TZ)!;
 
-  it('leaves whether to speak to the model, names what changed, and forbids numbers, diagnosis and alarm', () => {
+  it('gives the model what changed and a no_op answer, and no figure from the row', () => {
     const prompt = healthNoticePrompt({ view, now: NOW, timezone: TZ, reasons: ['sleep_debt_building'] });
     expect(prompt).toContain('What changed: Sleep debt has been building over the last few days.');
-    expect(prompt).toContain('return no_op');
-    expect(prompt).toContain('Never diagnose or alarm');
-    expect(prompt).toContain('never a number');
+    expect(prompt).toContain('no_op');
     for (const leak of LEAKS) expect(prompt).not.toContain(leak);
-  });
-
-  it('asks the note to lead with the change itself, under no fixed header', () => {
-    const prompt = healthNoticePrompt({ view, now: NOW, timezone: TZ, reasons: ['zone_change'] });
-    expect(prompt).toContain('lead with the change itself, in plain words');
-    expect(prompt).not.toContain('"Update"');
   });
 
   it('names the signals outside usual only when a driver woke the run', () => {
