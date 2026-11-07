@@ -28,6 +28,15 @@ export const reviseArtifactArgsSchema = z.strictObject({
 });
 export type ReviseArtifactArgs = z.infer<typeof reviseArtifactArgsSchema>;
 
+// Undo for a revise: the kept revision's body comes back as a new revision, so a restore is itself undoable. Compare-and-swap
+// on expected_revision like revise.
+export const restoreArtifactArgsSchema = z.strictObject({
+  artifact_id: z.string().min(1),
+  revision: z.int().positive().describe('The earlier revision to bring back.'),
+  expected_revision: z.int().positive().describe('The revision you last saw; on a mismatch nothing is written.'),
+});
+export type RestoreArtifactArgs = z.infer<typeof restoreArtifactArgsSchema>;
+
 // Export an existing artifact at a stated revision. format is a free string on purpose: an
 // unsupported value is a typed receipt from the handler, never a schema error or a renamed file.
 export const exportArtifactArgsSchema = z.strictObject({
