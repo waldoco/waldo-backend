@@ -171,6 +171,14 @@ describe('diagnostics in the console', { timeout: 30_000 }, () => {
     });
   });
 
+  it('on a deploy without the directory, offers its one owner every command and leaves their fires unspaced, as before', async () => {
+    await consoleOf('harness-no-directory', { ...ON, SUPABASE_PROJECT_URL: undefined, SUPABASE_PUBLISHABLE_KEY: undefined, WALDO_ROUTER_HMAC_SECRET: undefined } as never, async (send, _state, owner) => {
+      vi.spyOn(owner as unknown as { runHarness(): Promise<string> }, 'runHarness').mockResolvedValue('Fired.');
+      expect(((await (await send('', undefined, 'GET')).json()) as { commands: string[] }).commands).toEqual(['/trace', '/e2e', '/usage', '/heldrows', '/ledger', '/langfuse', '/fire']);
+      expect([await output(await send('/fire fetch')), await output(await send('/fire fetch'))]).toEqual(['Fired.', 'Fired.']);
+    });
+  });
+
   it('refuses an admin command when the directory cannot say who is an admin, and offers only the diagnostics', async () => {
     await consoleOf('harness-admin-outage', ON, async (send, _state, owner) => {
       const ran = vi.spyOn(owner as unknown as { runHarness(): Promise<string> }, 'runHarness');

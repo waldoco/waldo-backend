@@ -12,7 +12,8 @@ const ADMIN_ONLY = 'That command is for Waldo admins.';
 // A fire is spaced and capped per owner, so the wait can be minutes or hours: say how long, from the answer's retry-after.
 const tooMany = (retryAfter: string | null): string => {
   const minutes = Math.ceil(Number(retryAfter) / 60);
-  return Number.isFinite(minutes) && minutes > 1 ? `Too many just now. Try again in ${minutes} minutes.` : 'Too many commands just now. Wait a minute and try again.';
+  if (!Number.isFinite(minutes) || minutes <= 1) return 'Too many commands just now. Wait a minute and try again.';
+  return `Too many just now. Try again in ${minutes <= 90 ? `${minutes} minutes` : `${Math.ceil(minutes / 60)} hours`}.`;
 };
 const FAILED = 'The command didn’t finish. Try again.';
 

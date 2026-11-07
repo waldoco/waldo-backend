@@ -73,7 +73,7 @@ describe('diagnostics on Patrol', () => {
   it('says plainly when the commands were turned off meanwhile, when a command is unknown, when it is busy and when it failed', async () => {
     for (const [status, said, error, retry] of [[403, 'Your console session changed. Reload the page and try again.', 'forbidden', null], [403, 'That command is for Waldo admins.', 'admin_only', null],
       [404, 'Diagnostics are off on this Waldo.', 'not_found', null], [400, 'Waldo doesn’t know that command.', 'invalid_command', null], [429, 'Too many commands just now. Wait a minute and try again.', 'rate_limited', '60'],
-      [429, 'Too many just now. Try again in 10 minutes.', 'rate_limited', '600'], [429, 'Too many commands just now. Wait a minute and try again.', 'rate_limited', null], [503, 'The command didn’t finish. Try again.', 'unavailable', null]] as const) {
+      [429, 'Too many just now. Try again in 10 minutes.', 'rate_limited', '600'], [429, 'Too many just now. Try again in 24 hours.', 'rate_limited', '86400'], [429, 'Too many commands just now. Wait a minute and try again.', 'rate_limited', null], [503, 'The command didn’t finish. Try again.', 'unavailable', null]] as const) {
       const { host, root, run } = await mount(() => Response.json({ error }, { status, headers: retry ? { 'retry-after': retry } : {} }));
       await run('/fire fetch');
       expect(host.querySelector('[role="alert"]')?.textContent, `${status} ${error} ${retry}`).toBe(said);

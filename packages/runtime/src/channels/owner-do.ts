@@ -139,14 +139,14 @@ import { attachFileHandler } from '../tools/live/attach-file';
 import { cardReplyBook, offerRepliesHandler } from '../tools/live/offer-replies';
 import { deliverTurnAttachments, turnAttachmentBook, type AttachmentSend } from './turn-attachments';
 import { HARNESS_MESSAGE_LIMIT, heldRowShapes } from '../memory/held-rows';
-import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
+import { FIRE_TARGETS, parseHarnessCommand, traceBook, type HarnessCommand, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { turnAbortedEntry, type AbortedTurn } from '../observability/turn-aborted';
 import { ownerTraceId, ownerTraceSalt, rowTraces, syncRatingScore, type RatingScoreChange } from '../observability/langfuse-scores';
 import { costRollup, costRollupEnabled } from '../observability/cost-rollup';
 import { MONTHLY_SPEND_CEILING_USD } from '../llm/cost-ledger';
 import { barrierMemory, type ForgetBarrierMode } from '../context-composer/forget-barrier';
-import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
+import { errorClass, gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
 import { nextDailyLocalOccurrence, nextOccurrence, Scheduler } from '../scheduler/multiplexer';
 import { CURATED_PACK_SKILLS } from '../skills/curated-catalog';
 import { FORGET_PURGE_ID, forgetPurge, type ForgetPurge, type ForgetStore } from '../memory/forget-purge';
@@ -299,7 +299,7 @@ import { taskHost, type TaskHost } from '../tasks/brain';
 import { runJobsLane } from '../tasks/lane';
 import { runWatchdog, watchdogJudge, watchdogStore } from '../tasks/watchdog';
 import { consoleWatchdog, DASHBOARD_WATCHDOG_PATH } from './dashboard-watchdog';
-import { consoleHarness, DASHBOARD_HARNESS_PATH, type ConsoleHarnessCommand } from './dashboard-harness';
+import { admitHarnessCommand, consoleHarness, DASHBOARD_HARNESS_PATH, harnessRefusalText, type ConsoleHarnessCommand, type HarnessRefusal } from './dashboard-harness';
 import { enqueueMachine, workerRouteDown, type MachineAppliers } from '../tasks/machine';
 import { modelProviderSetting, ownerModels, type OwnerModelAccess } from '../llm/owner-routes';
 import { runningTasksLine, taskToolHandlers } from '../tasks/tools';
@@ -408,9 +408,6 @@ type OwnerRuntime = Readonly<{
   replayApproval(brief: ReplayBrief, scope: RunEffectScope): Promise<ReplayOutcome>;
   progressNote(trace: string, input: string, scope: RunEffectScope): Promise<string>;
 }>;
-
-// A failure as its class only: its text can carry provider or internal detail.
-const errorClass = (error: unknown): string => error instanceof Error ? error.name : 'unknown';
 
 const LATE_FIRE_MS = 5 * 60_000;
 // The look-up consent grant time the owner look-up was last started for (onboarding/lookup.ts).
@@ -2847,8 +2844,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (stepUp) return stepUp;
     if (url.pathname === DASHBOARD_ACCESS_LOG_PATH) return this.consoleAccessLog(request, url);
     if (url.pathname === DASHBOARD_HELD_CHANGES_PATH) return this.consoleHeldChanges(request, url);
-    if (url.pathname === DASHBOARD_HARNESS_PATH) return consoleHarness({ request, csrf: session.csrf, enabled: this.env.CONSOLE_HARNESS === '1', kv: this.ctx.storage.kv, now: Date.now(),
-      admin: async () => { const auth = consoleAuth(this.env), doName = this.ctx.storage.kv.get<string>('do_name'); return Boolean(auth && doName && await auth.adminOverview(doName)); },
+    if (url.pathname === DASHBOARD_HARNESS_PATH) return consoleHarness({ request, csrf: session.csrf, enabled: this.env.CONSOLE_HARNESS === '1',
+      admin: () => this.harnessAdmin(), admit: (command, budget) => this.admitHarness(command, budget),
       limited: kind => this.consoleRateLimited(kind),
       run: command => this.consoleCommand(command),
       ledger: async () => { const runtime = this.setup(this.ownerSurface()); await runtime.ready; return runtime.ledger(); } });
@@ -3907,7 +3904,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       if (harness) {
         if (!durable) await this.ctx.storage.put(offsetKey, updateId + 1);
-        await call('sendMessage', { chat_id: owner, text: (await this.runHarness(harness, updateId, channel)).slice(0, HARNESS_MESSAGE_LIMIT) });
+        const refusal = await this.admitHarness(harness);
+        await call('sendMessage', { chat_id: owner, text: refusal ? harnessRefusalText(refusal) : (await this.runHarness(harness, updateId, channel)).slice(0, HARNESS_MESSAGE_LIMIT) });
         return;
       }
       const feedback = raw.callback_query?.data?.match(/^fb:(\d+):([un])$/);
@@ -3925,7 +3923,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace: commandTrace, hop: 'command', ms: Date.now() - commandStarted, ok: true, detail: commandWhat });
         log({ trace: commandTrace, hop: 'machine_turn', ms: Date.now() - commandStarted, ok: true, detail: 'command' });
       } catch (error) {
-        log({ trace: commandTrace, hop: 'command', ms: Date.now() - commandStarted, ok: false, error: String(error), detail: commandWhat });
+        log({ trace: commandTrace, hop: 'command', ms: Date.now() - commandStarted, ok: false, error: errorClass(error), detail: commandWhat });
         log({ trace: commandTrace, hop: 'machine_turn', ms: Date.now() - commandStarted, ok: false, detail: 'command' });
         throw error;
       }
@@ -3977,6 +3975,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return `Fired ${command.target}.\n\n${traces.recent(timezone, null, 10)}`;
   }
 
+  // A deploy without the directory has one owner, who runs it: every command is theirs and fires are not spaced. With the
+  // directory, the admin commands need its admin check, and fires are spaced and capped per owner.
+  private async harnessAdmin(): Promise<boolean> {
+    const auth = consoleAuth(this.env), doName = this.ctx.storage.kv.get<string>('do_name');
+    return auth ? Boolean(doName && await auth.adminOverview(doName)) : true;
+  }
+
+  private async admitHarness(command: HarnessCommand, budget?: () => boolean): Promise<HarnessRefusal | null> {
+    if (!consoleAuth(this.env)) return budget && !budget() ? { reason: 'budget' } : null;
+    return admitHarnessCommand(command, { admin: () => this.harnessAdmin(), kv: this.ctx.storage.kv, now: Date.now, ...(budget ? { budget } : {}) });
+  }
+
   // An operator command from the owner console, with the receipt Telegram's commands leave. Reads answer at once, so /trace
   // can look at a turn while it runs. A fire waits its turn on the queue and, like the scheduled pass, runs under the app
   // delivery and job owner the directory admits; an app owner the directory cannot confirm gets nothing fired, since the
@@ -4014,7 +4024,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       await exportTurn({ trace: `langfuse-check-${Date.now()}`, hop: 'turn', ms: 1, ok: true, detail: 'owner self-test' });
       return 'Langfuse self-test export accepted. A telegram.turn trace from user langfuse-check should appear within a minute.';
     } catch (error) {
-      return `Langfuse self-test failed: ${String(error)}`;
+      return `Langfuse self-test failed (${errorClass(error)}).`;
     }
   }
 
