@@ -71,6 +71,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" lets the app attach one voice note, photo or file to a chat message (APP_CHAT_UPLOAD_PATH). Off, the upload route is
   // not there and a send that names an attachment is refused.
   APP_CHAT_ATTACHMENTS?: string;
+  // "1" serves the operator commands (/trace /e2e /usage /langfuse /heldrows /fire /ledger) to the owner in the console
+  // (DASHBOARD_HARNESS_PATH), so none needs Telegram. Off, the route is not there.
+  CONSOLE_HARNESS?: string;
   // "1" lets a typed /stop on WhatsApp stop the running turn at once and the owner's background work, as on Telegram. Off, it
   // waits its turn as any message does.
   WHATSAPP_STOP?: string;
@@ -174,6 +177,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_SECOND_MESSAGE?: string;
   // "1": the owner's own turn holds no long tool; long work goes to start_task, and workers' browser steps leave the owner's chain (async-tools.ts).
   WALDO_ASYNC_TOOLS?: string;
+  // "1": a background job's request row keeps only a key, never the job's prompt (conversation/job-outcome.ts).
+  WALDO_JOB_OUTCOME_ROWS?: string;
   // "1": the owner's own reply takes a light step that answers quick chat or hands the turn to the strong role, and every task
   // worker runs on the chat model (async-tools.ts).
   WALDO_LIGHT_CHAT?: string;
@@ -188,6 +193,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string;
   // '1': a card whose buttons fit WhatsApp's three reply buttons goes out as an interactive message; any other card stays text.
   WHATSAPP_REPLY_BUTTONS?: string;
+  /** "1": an approval card WhatsApp's reply buttons cannot hold goes out as one interactive list instead of typed codes. */
+  WHATSAPP_LIST_CARDS?: string;
   // The approved template for a message the owner did not ask for (a day card, an update); unset, such a message waits without a knock.
   WHATSAPP_PROACTIVE_TEMPLATE?: string;
   WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE?: string;
