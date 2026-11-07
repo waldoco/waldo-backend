@@ -42,12 +42,13 @@ export type MachineBrief = Readonly<{
 // A task worker's frozen brief: the words the model wrote in start_task plus the owner's clock, so the worker can reason
 // about dates without seeing the conversation. outside_text: the turn that wrote it had read someone else's words, so its
 // title is not repeated to the owner as Waldo's own. The job's taint says more: it also turns external once the worker reads.
+// owner_approved: that turn's start_task ran from the owner's own card, so a profile holding mail and the web together keeps both.
 // conversation_ref: the app thread's chain the task was started in, so its report answers there; absent for main and every
 // other surface. The host's, never the worker's: the claim leaves it out.
 // A machine job's brief is written by the brain instead, and says so.
 export type TaskBrief = Readonly<{
   title: string; goal: string; context: string; done_when: string;
-  effort: 'standard' | 'deep'; timezone?: string; started_at: number; outside_text?: true; conversation_ref?: string; machine?: MachineBrief;
+  effort: 'standard' | 'deep'; timezone?: string; started_at: number; outside_text?: true; owner_approved?: true; conversation_ref?: string; machine?: MachineBrief;
 }>;
 // A turn the brain retries after every provider failed: the owner's message, the chain it belongs to, and the time the
 // floor reply promised an answer by.
@@ -64,7 +65,8 @@ export type AskedStep = Readonly<{ approval_id: string; call: Readonly<{ call_id
 // later attempt resumes from, so the brief and its digest stay frozen and the job keeps its id. key: the turn and tool call
 // that made it, so a replayed call adds nothing. shown: the attempt whose claim first showed it to a worker; until then an
 // interrupt ends the running attempt at its next checkpoint, and either kind turns its report into a new attempt.
-export type Steer = Readonly<{ key: string; text: string; mode: 'interrupt' | 'enqueue'; at: number; shown?: number }>;
+// outside_text: the turn that wrote it had read someone else's words (tasks/profiles jobTools).
+export type Steer = Readonly<{ key: string; text: string; mode: 'interrupt' | 'enqueue'; at: number; shown?: number; outside_text?: true }>;
 // draft: the result an attempt reported while a change waited for it, which the next attempt finishes from.
 export type Checkpoint = Readonly<{ turns: readonly LLMToolTurn[]; asked?: AskedStep; steers?: readonly Steer[]; draft?: TaskResult }>;
 
@@ -158,11 +160,11 @@ type LostAttempt = Readonly<{ id: string; crashes: number; deadline_at: number; 
 const placeholders = (values: readonly unknown[]) => values.map(() => '?').join(', ');
 
 export const jobBook = (sql: Sql, deps: Readonly<{ now(): number; newId(): string; newToken(): string; archive?: HistoryArchive }>) => {
-  // A table an earlier build created does not admit approval replays, jobs awaiting the owner or the no_progress park; it is
-  // rebuilt with every column it had, and park_retries at its default, in this synchronous block, which the storage commits as
-  // one transaction.
+  // A table an earlier build created does not admit approval replays, jobs awaiting the owner, the no_progress park or the
+  // web and private profiles; it is rebuilt with every column it had, and park_retries at its default, in this synchronous
+  // block, which the storage commits as one transaction.
   const made = sql.exec<{ sql: string }>("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'task_jobs'").toArray()[0]?.sql;
-  if (made !== undefined && (!made.includes("'approval_replay'") || !made.includes("'awaiting_owner'") || !made.includes("'no_progress'"))) {
+  if (made !== undefined && (!made.includes("'approval_replay'") || !made.includes("'awaiting_owner'") || !made.includes("'no_progress'") || !made.includes("'private'"))) {
     sql.exec('DROP INDEX IF EXISTS task_jobs_open');
     sql.exec('ALTER TABLE task_jobs RENAME TO task_jobs_before_ask');
     for (const statement of TASK_JOBS_TABLE_SCHEMA) sql.exec(statement);

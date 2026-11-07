@@ -64,7 +64,7 @@ describe('starting the owner look-up', () => {
     startLookup(d, identity);
     expect([...jobTools(openLookup(book)!)].sort()).toEqual(['browse_page', 'list_owner_findings', 'read_tool_output', 'record_owner_finding', 'web_search']);
     expect(LOOKUP_READER).not.toContain('get_communication');
-    expect(jobTools({ origin: 'machine:heartbeat', profile: 'reader' })).toEqual(MACHINE_READER);
+    expect(jobTools({ origin: 'machine:heartbeat', profile: 'reader', kind: 'task', brief_json: '{}', checkpoint_json: null })).toEqual(MACHINE_READER);
   }));
 
   it('starts nothing without a live yes: not offered, never granted, withdrawn, or no name yet', () => withOwner(({ book, deps }) => {

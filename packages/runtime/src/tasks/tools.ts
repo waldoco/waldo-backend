@@ -6,7 +6,7 @@ import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { numericHealthIn } from '../scribe/sanitiser';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import { isMachine, jobCheckpoint, jobResult, replayBrief, TASK_DEADLINE_MS, TASK_MAX_OPEN, TASK_MAX_PER_TURN, TASK_MAX_STEERS, taskBrief, type JobBook, type JobRow, type TaskBrief } from './jobs';
-import { TASK_PROFILE_SPECS } from './profiles';
+import { holdsPrivateAndEgress, TASK_PROFILE_SPECS } from './profiles';
 import { quoted } from '../prompt/turn-prompt';
 import { PARK_WORDS } from '../prompt/fixed-lines';
 
@@ -52,7 +52,8 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
       const brief: TaskBrief = {
         title: args.title, goal: args.goal, context: args.context,
         done_when: args.done_when, effort: args.effort ?? 'standard', timezone: deps.timezone(), started_at: now,
-        ...(tainted ? { outside_text: true as const } : {}), ...(conversationRef ? { conversation_ref: conversationRef } : {}),
+        ...(tainted ? { outside_text: true as const } : {}), ...(tainted && ctx.approvedTaintedAction?.tool === 'start_task' ? { owner_approved: true as const } : {}),
+        ...(conversationRef ? { conversation_ref: conversationRef } : {}),
       };
       // A brief persists with the job, and the owner's health values are never stored: say it in zone words instead. Each
       // field is read as the model wrote it; in the brief's JSON a quote or a tab before a number is an escape the check misses.
@@ -142,7 +143,8 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
       if (numericHealthIn(instruction)) return refusal('The change contains health values, which a task never stores. Describe them in words (for example "a low-recovery morning") and call steer_task again.', 'invalid_args');
       if (!ctx.turnId || !ctx.toolCallId) return refusal('Task invocation identity is unavailable.');
       const title = titleOf(row), now = deps.now();
-      const written = deps.book.steer(job_id, { key: `${ctx.turnId}:${ctx.toolCallId}`, text: instruction, mode, at: now }, ctx.toolArgSourceTaint === 'external' ? 'external' : null);
+      const outside = ctx.toolArgSourceTaint === 'external';
+      const written = deps.book.steer(job_id, { key: `${ctx.turnId}:${ctx.toolCallId}`, text: instruction, mode, at: now, ...(outside ? { outside_text: true as const } : {}) }, outside ? 'external' : null);
       if (written === 'closed') {
         const after = deps.book.get(job_id);
         return refusal(`"${title}" ${after?.status === 'cancelled' ? 'was cancelled' : after?.park_reason ? 'already stopped' : 'already finished'}, so it cannot change. For more work, call start_task with a brief that says all of it.`);
@@ -152,7 +154,9 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
         deps.log({ trace: `task:${job_id}`, hop: 'task_steered', ms: 0, ok: true, job_id, ...(row.profile ? { job_profile: row.profile } : {}), code: mode });
         await deps.wake(now);
       }
-      return { ok: true as const, data: { job_id, title, mode, steered: true }, source_taint: null };
+      // A change written after outside text takes the web from a task that also reads the owner's data (tasks/profiles jobTools).
+      const webWithheld = outside && holdsPrivateAndEgress(row.profile ? TASK_PROFILE_SPECS[row.profile].tools : []);
+      return { ok: true as const, data: { job_id, title, mode, steered: true, ...(webWithheld ? { note: 'This change came after outside content, so the task goes on without the web: it keeps the owner\'s mail, calendar and files.' } : {}) }, source_taint: null };
     },
   } satisfies ToolHandler<SteerTaskArgs, unknown, ToolDispatcherContext>] : []),
 ];
