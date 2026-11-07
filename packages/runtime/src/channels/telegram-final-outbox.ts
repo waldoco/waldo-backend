@@ -66,8 +66,9 @@ export type FinalRecord = {
   reaction?: { message_id: number; emoji: string };
   reminder?: { id: string; occurrence: number; runId: string; schedulerRunId: string | null; once: boolean };
   // A day card on a surface where sends can wait: once it is delivered the day plan records it sent and folds the updates
-  // written up to foldUpTo, the time the card was written, and the quests it checked in on count as checked in.
-  dayCard?: { day: string; card: CardId; foldUpTo: number; quests?: readonly string[] };
+  // written up to foldUpTo, the time the card was written, the quests it checked in on count as checked in and the
+  // experiments whose verdict it offered count as offered.
+  dayCard?: { day: string; card: CardId; foldUpTo: number; quests?: readonly string[]; verdicts?: readonly string[] };
   // A standing order's report: the order's run finishes when the report is delivered, or when it ends unsent.
   standingOrder?: { runId: string; gate: StandingGate };
 };

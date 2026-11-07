@@ -3,7 +3,7 @@ import { LLM_ATTACHMENTS_MAX, opaqueIMessageIdSchema as id, type IMessageEvent, 
 import { normaliseHost } from '../../security/public-host';
 import type { InboundPart } from '../owner-inbound-turn';
 import { keptNote, type UploadKeeper } from '../upload-keeper';
-import { readableAs, toBase64 } from '../telegram-media';
+import { loadTelegramMedia, readableAs, toBase64, type Transcriber } from '../telegram-media';
 import { PHOTON_ID } from './photon';
 
 // Photos and files sent to Waldo on iMessage. A host forwards only Photon's metadata for each attachment; the owner's
@@ -17,6 +17,9 @@ const PHOTON_HOSTS = new Set(Object.values(PHOTON_ORIGINS).map(origin => new URL
 // may carry, keeps that well inside a Worker's 128 MiB.
 export const IMESSAGE_MEDIA_MAX_BYTES = 20 * 1024 * 1024;
 export const IMESSAGE_MEDIA_TIMEOUT_MS = 30_000;
+// A voice note's transcription: the providers take no signal, so it is raced against the turn and this bound, and the turn
+// is told the note could not be transcribed when either ends first.
+export const IMESSAGE_TRANSCRIBE_TIMEOUT_MS = 60_000;
 
 // The most files one message carries across, so a stored inbox record stays small. Above LLM_ATTACHMENTS_MAX, so a message
 // with more files than the model reads is still answered with the too-many reply.
@@ -141,14 +144,43 @@ export const IMESSAGE_MEDIA_REPLIES = {
 
 /** What the owner sent, as the model and the conversation read it beside the files. */
 export const iMessageMediaNotes = (files: readonly MediaFile[]): readonly InboundPart[] => files.map(file => ({ authorship: 'media_note',
-  text: readableAs({ kind: 'document', fileId: '', fileName: file.name, mimeType: file.mimeType, fileSize: file.size })?.kind === 'image'
+  text: isVoice(file) ? '[Owner sent a voice note.]' : readableAs({ kind: 'document', fileId: '', fileName: file.name, mimeType: file.mimeType, fileSize: file.size })?.kind === 'image'
     ? '[Owner sent a photo, attached.]' : `[Owner sent a file "${file.name}", attached.]` }));
 
 export type OpenedIMessageMedia =
   | Readonly<{ kind: 'opened'; parts: readonly InboundPart[]; attachments: readonly LLMAttachment[] }>
   | Readonly<{ kind: 'reply'; text: string }>;
 // keep: present with WALDO_FILE_TOOLS on. Every file is then fetched and kept in the owner's workspace, whatever its type.
-export type OpenIMessageMediaDeps = Readonly<{ enabled: boolean; source: PhotonAttachmentSource | null; sender: string; signal: AbortSignal; admit: () => void; keep?: UploadKeeper }>;
+// transcribe: present with IMESSAGE_VOICE on and a transcriber set up. A voice note sent alone is then heard, not refused.
+export type OpenIMessageMediaDeps = Readonly<{ enabled: boolean; source: PhotonAttachmentSource | null; sender: string; signal: AbortSignal; admit: () => void; keep?: UploadKeeper; transcribe?: Transcriber }>;
+
+// A voice note sent alone, fetched from Photon and transcribed the way a Telegram or WhatsApp voice note is: the transcript is
+// its own part, the audio is not attached or kept, and a failed transcription is said to the model. Anything Photon cannot
+// give, or a voice note with other files, keeps the fixed reply.
+const hear = async (media: IMessageMedia, deps: OpenIMessageMediaDeps, transcribe: Transcriber, reply: (text: string, code: string) => OpenedIMessageMedia): Promise<OpenedIMessageMedia> => {
+  const [voice, ...others] = media.files;
+  if (others.length) return reply(IMESSAGE_MEDIA_REPLIES.voice, 'voice_with_files');
+  if (voice!.size > IMESSAGE_MEDIA_MAX_BYTES) return reply(IMESSAGE_MEDIA_REPLIES.voice, 'too_large');
+  if (!deps.source || voice!.id === undefined) return reply(IMESSAGE_MEDIA_REPLIES.voice, deps.source ? 'not_on_photon' : 'photon_unconfigured');
+  deps.admit();
+  const fetched = await deps.source({ messageGuid: media.messageGuid, sender: deps.sender, files: [{ id: voice!.id, mimeType: voice!.mimeType }],
+    maxBytes: IMESSAGE_MEDIA_MAX_BYTES, signal: AbortSignal.any([deps.signal, AbortSignal.timeout(IMESSAGE_MEDIA_TIMEOUT_MS)]) });
+  deps.admit();
+  if (!fetched.ok || fetched.bytes.length !== 1) return reply(IMESSAGE_MEDIA_REPLIES.voice, fetched.ok ? 'unexpected_response' : fetched.code);
+  const bounded = AbortSignal.any([deps.signal, AbortSignal.timeout(IMESSAGE_TRANSCRIBE_TIMEOUT_MS)]);
+  const raced: Transcriber = (audio, name, mime) => new Promise((resolve, reject) => {
+    const stop = () => reject(bounded.reason);
+    if (bounded.aborted) return stop();
+    bounded.addEventListener('abort', stop, { once: true });
+    transcribe(audio, name, mime).then(resolve, reject).finally(() => bounded.removeEventListener('abort', stop));
+  });
+  const heard = await loadTelegramMedia({ kind: 'voice', fileId: voice!.id, fileName: voice!.name, mimeType: voice!.mimeType, fileSize: voice!.size },
+    { download: async () => fetched.bytes[0]!, transcribe: raced });
+  deps.admit();
+  const transcript = heard.parts.some(part => part.authorship === 'file_transcript');
+  console.log(JSON.stringify({ hop: 'imessage_media', ok: transcript, voice: true, ...(transcript ? {} : { code: 'no_transcript' }) }));
+  return { kind: 'opened', parts: heard.parts, attachments: [] };
+};
 
 /** Either every file reaches the model, or the owner gets one fixed reply saying why none did. Logs carry codes only. */
 export const openIMessageMedia = async (media: IMessageMedia, deps: OpenIMessageMediaDeps): Promise<OpenedIMessageMedia> => {
@@ -157,7 +189,7 @@ export const openIMessageMedia = async (media: IMessageMedia, deps: OpenIMessage
     console.log(JSON.stringify({ hop: 'imessage_media', ok: false, code }));
     return { kind: 'reply', text };
   };
-  if (files.some(isVoice)) return reply(IMESSAGE_MEDIA_REPLIES.voice, 'voice_note');
+  if (files.some(isVoice)) return deps.transcribe ? hear(media, deps, deps.transcribe, reply) : reply(IMESSAGE_MEDIA_REPLIES.voice, 'voice_note');
   if (!deps.enabled) return reply(IMESSAGE_MEDIA_REPLIES.unopened(files), 'media_off');
   if (files.length > LLM_ATTACHMENTS_MAX) return reply(IMESSAGE_MEDIA_REPLIES.tooMany(files), 'too_many');
   const readable = files.map(file => readableAs({ kind: 'document', fileId: '', fileName: file.name, mimeType: file.mimeType, fileSize: file.size }));

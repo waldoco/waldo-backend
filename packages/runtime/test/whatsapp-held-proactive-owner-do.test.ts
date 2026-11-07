@@ -90,8 +90,9 @@ const owned = async (name: string, script: (steps: Readonly<{
   // Runs the step with the clock moved forward, as when the owner next writes much later.
   later<T>(ms: number, step: () => Promise<T>): Promise<T>;
   card(): Promise<void>;
-  // A daily quest started two days ago, so the Close falls due with it due too; answers its last check-in.
-  closeWithQuest(): Promise<() => string | null>;
+  // A daily quest started ten days ago with a week-long experiment that ended two days ago, so the Close falls due with the
+  // quest due and the verdict to offer; answers its last check-in and when the verdict counted as offered.
+  closeWithQuest(): Promise<Readonly<{ checkedIn(): string | null; offered(): string | null }>>;
   // Arms the Check-in this far ahead; answers when it is due.
   checkIn(ms: number): Promise<number>;
   // Daily unless a cron expression is given.
@@ -158,9 +159,14 @@ const owned = async (name: string, script: (steps: Readonly<{
         },
         card: async () => { await scheduler.schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: Date.now() - 60_000, dueAt: Date.now() - 60_000, recurrence: null }); },
         closeWithQuest: async () => {
-          questBook(state.storage.sql, { timezone: 'UTC', now: () => new Date(Date.now() - 48 * HOUR) }, () => 'q1').set({ title: 'Daylight before ten', check_in_days: 1 }, 'owner');
+          const book = (ago: number) => questBook(state.storage.sql, { timezone: 'UTC', now: () => new Date(Date.now() - ago) }, () => 'q1');
+          book(240 * HOUR).set({ title: 'Daylight before ten', check_in_days: 1 }, 'owner');
+          book(216 * HOUR).startExperiment('quest:q1', 'A walk outside before work', 7);
           await scheduler.schedule({ id: 'card:close', kind: 'brief', payloadRefs: { id: 'card:close' }, occurrenceAt: Date.now() - 60_000, dueAt: Date.now() - 60_000, recurrence: null });
-          return () => state.storage.sql.exec<{ at: string | null }>('SELECT last_check_in_at AS at FROM goals').one().at;
+          return {
+            checkedIn: () => state.storage.sql.exec<{ at: string | null }>('SELECT last_check_in_at AS at FROM goals').one().at,
+            offered: () => state.storage.sql.exec<{ at: string | null }>('SELECT offered_at AS at FROM experiments').one().at,
+          };
         },
         checkIn: async ms => {
           const at = Date.now() + ms;
@@ -261,17 +267,17 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
     });
   });
 
-  it('counts a held Close\'s quests checked in only once it reaches the owner', async () => {
+  it('counts a held Close\'s quests checked in and its verdicts offered only once it reaches the owner', async () => {
     await owned('wa-held-close-quest', async ({ alarms, reply, arrived, closeWithQuest, outbox }) => {
-      const lastCheckIn = await closeWithQuest();
+      const quest = await closeWithQuest();
       await alarms(3);
       expect(outbox()).toEqual([{ id: `day-card:${today()}:card:close`, status: 'pending' }]);
-      expect(lastCheckIn()).toBeNull();
+      expect([quest.checkedIn(), quest.offered()]).toEqual([null, null]);
       await reply();
-      expect(lastCheckIn()).toBeNull();
+      expect([quest.checkedIn(), quest.offered()]).toEqual([null, null]);
       await arrived();
       expect(outbox()).toEqual([{ id: `day-card:${today()}:card:close`, status: 'delivered' }]);
-      expect(lastCheckIn()?.slice(0, 10)).toBe(today());
+      expect([quest.checkedIn()?.slice(0, 10), quest.offered()?.slice(0, 10)]).toEqual([today(), today()]);
     });
   });
 
