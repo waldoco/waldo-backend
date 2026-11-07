@@ -124,7 +124,9 @@ const HEALTH_FREE_TEXT: readonly RegExp[] = [...HEALTH_FREE_TEXT_NUMERIC, ...HEA
 // candidates").
 const STEADY_WORDS = String.raw`is|was|were|are|of|about|around|roughly|approx(?:imately)?|averag(?:e|es|ed|ing)|avg|only|just|under|over|below|above|nearly|almost|hit|reads?|reading|down\s+to|up\s+to`;
 const READING_WORDS = String.raw`${STEADY_WORDS}|now|(?:rose|fell|dropped|dipped|slipped|climbed|jumped|increased|decreased|declined|went\s+(?:up|down|from))(?:\s+(?:to|from|by))?`;
-// An arrow ties a metric to its value as a trend word does: "HRV →", "HRV ↓" before the number.
+// An arrow ties a metric to its value as a trend word does: "HRV →", "HRV ↓" before the number. Words ordinary life shares
+// (an HR arrow before a head count) take no arrow: their gap is the plain one.
+const plainGapOf = (words: string): string => String.raw`(?:\s*(?:[:=~]|\b(?:${words})\b))*\s*`;
 const gapOf = (words: string): string => String.raw`(?:\s*(?:[:=~→↓↑]|->|\b(?:${words})\b))*\s*`;
 const READING_GAP = gapOf(String.raw`${READING_WORDS}|at`);
 const BARE_GAP = gapOf(READING_WORDS);
@@ -132,7 +134,7 @@ const BARE_GAP = gapOf(READING_WORDS);
 // that can match nothing and ends in `\s*` splits a run of blanks between its turns every way there is.
 const SLEEP_GAP = gapOf(String.raw`${READING_WORDS}|at|for|a|an|less\s+than|more\s+than`);
 const WRIST_GAP = gapOf(String.raw`${READING_WORDS}|at|up|down|rose|fell|dropped|climbed|by`);
-const STEADY_GAP = gapOf(STEADY_WORDS);
+const STEADY_GAP = plainGapOf(STEADY_WORDS);
 const SEPARATOR_GAP = String.raw`(?:\s*[:=~])*\s*`;
 const READING_NUMBER = String.raw`\d+(?:[.,]\d+)?`;
 // A bare two- or three-digit value that is not a clock time ("10:30", "7am", "10h30") or the first group of a phone number.
@@ -164,7 +166,7 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\b(?:resting\s+(?:hr|heart\s+rate|pulse)|heart\s+rate|rhr)\b${BARE_GAP}${BARE_VALUE}`),
   reading(String.raw`\b${HRV}${BARE_GAP}${BARE_VALUE}`),
   reading(String.raw`\b${HRV}${READING_GAP}${READING_NUMBER}\s*ms\b`),
-  reading(String.raw`\b${READING_NUMBER}\s*ms\s+(?:of\s+)?${HRV}`),
+  reading(String.raw`\b${READING_NUMBER}\s*ms\s+(?:of\s+)?${HRV}(?![\w-])`),
   // Apple names VO2 max "Cardio Fitness", which is also a class with a length.
   reading(String.raw`\b(?:vo2\s*max|cardio\s+fitness)\b${BARE_GAP}${BARE_VALUE}(?!\s*${DURATION})`),
   reading(String.raw`\b${READING_NUMBER}\s*ml\s*\/\s*kg\s*\/\s*min\b`),
@@ -183,8 +185,10 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   // Minutes in a heart-rate zone, as a workout session lists them; a zone that is a room or an area carries no duration.
   reading(String.raw`\b${READING_NUMBER}\s*${DURATION}\s+in\s+(?:(?:hr|heart[\s-]+rate)\s+)?zone\s*[1-5]\b|\b(?:(?:hr|heart[\s-]+rate)\s+)?zone\s*[1-5]\s*[:=]\s*${READING_NUMBER}\s*${DURATION}`),
   reading(String.raw`\b(?:slept|asleep|(?:deep|rem|light|core)\s+sleep|sleep\s+duration)\b${SLEEP_GAP}(?:${STAGE_DURATION}|${READING_NUMBER}\s*${DURATION})`),
-  // "sleep" with a duration before "before the flight" is a plan; the past tense above is what was slept.
+  // "sleep" with a duration before "before the flight" is a plan; the past tense above is what was slept. Said as a reading
+  // ("sleep was 6 hours", "Sleep: 6 h"), it is one whatever follows.
   reading(String.raw`\b(?:sleeps?|sleeping)\b${SLEEP_GAP}(?:${STAGE_DURATION}|${READING_NUMBER}\s*${DURATION})(?!\s+(?:before|until|till|ahead\s+of)\b)`),
+  reading(String.raw`\b(?:sleeps?|sleeping)\s*(?:[:=~]|\b(?:${READING_WORDS})\b)${SLEEP_GAP}(?:${STAGE_DURATION}|${READING_NUMBER}\s*${DURATION})`),
   reading(String.raw`\b(?:slept|sleeps?|sleeping|asleep|(?:deep|rem|light|core)\s+sleep|sleep\s+duration)\b${SEPARATOR_GAP}\d{1,2}h[0-5]\d\b`),
   reading(String.raw`\b${READING_NUMBER}\s*${DURATION}\s+(?:of\s+)?(?:(?:deep|rem|light|core)\s+)?(?:sleep|asleep)\b`),
   // A bare stage word is ordinary ("rem: 5 min left", "Deep: 2h 30m focus block"), so deep, core and light count only beside
@@ -258,9 +262,11 @@ const MARKUP = new RegExp(String.raw`${EMPHASIS}|[|\u2013\u2014\u2082]|(?<= )-(?
 const unmarked = (text: string): string => text.replace(MARKUP, (mark) => (mark === '|' ? ':' : mark === '\u2082' ? '2' : ' '));
 const unemphasised = (text: string): string => text.replace(new RegExp(EMPHASIS, 'gu'), ' ');
 // A trend's second value ("from 48 to 35", "48 → 35") belongs to the reading.
-// Every further value is the reading's too: a trend's next step after an arrow, a value restated after ", now", or the next
-// cells of a table row, whose borders the prose view reads as colons.
-const TREND_TAIL = String.raw`(?:\s*(?:to|→|->|↓|↑|,\s*now|:)\s*[+\-−]?\d+(?:[.,]\d+)?)+`;
+// Every further value is the reading's too, each with its unit: a trend's next step after an arrow or "down to", a value
+// restated after ", now", the next in a list, or the next cells of a table row, whose borders the prose view reads as colons.
+// A clock time ("10:30") is never one.
+const TREND_UNIT = String.raw`(?:\s*(?:ms|bpm|%|kg|lbs?|hrs?|hours?|h|mins?|minutes?|m)\b)?`;
+const TREND_TAIL = String.raw`(?:\s*(?:(?:down\s+|up\s+)?to|→|->|=>|↓|↑|⬇|⬆|↘|↗|,\s*now|,|:)\s*[+\-−]?\d+(?:[.,]\d+)?(?![\d:])${TREND_UNIT})+`;
 type Found = Readonly<{ index: number; text: string }>;
 const found = (pattern: RegExp, source: string): Found[] => {
   const tail = new RegExp(TREND_TAIL, 'iy');

@@ -102,6 +102,10 @@ const NEAR_MISSES: Readonly<Record<string, (chars: number) => string>> = {
   'sleep, a tilde and hours, repeated': n => 'slept ~7h '.repeat(n / 10),
   'sleep and glued hours and minutes, repeated': n => 'sleep 7h22 '.repeat(n / 11),
   'sleep and hours glued to one digit, repeated': n => 'sleep 7h2'.repeat(n / 9),
+  'a trend of values with units, repeated': n => 'hrv 42 ms → '.repeat(n / 12),
+  'a list of values, repeated': n => 'hrv 42, '.repeat(n / 8),
+  'a list of values with no unit after the last, then blanks': n => 'hrv 42, 45' + ' '.repeat(n),
+  'sleep said as a reading, repeated': n => 'sleep was 6 '.repeat(n / 12),
   'Devanagari digit groups': n => '\u096f\u096e\u096d\u096c\u096b '.repeat(n / 6),
   'a WhatsApp link, then fullwidth digits': n => 'wa.me/' + '\uff19'.repeat(n),
 };
@@ -134,7 +138,7 @@ describe('the patterns sanitise() runs stay linear on the near-miss and whitespa
   });
 
   // The health patterns the Scribe also runs on task output, recalled memory and traces, outside sanitise().
-  it.each(['hrv', 'hrv rmssd', 'hrv (', 'heart rate variability ( rmssd', 'slept', 'sleep:', 'slept ~', 'sleep ~ :', 'hrv →', 'hrv now', '42 ms'])('numericHealthIn and redactNumericHealth read %s followed by a run of blanks', word => {
+  it.each(['hrv', 'hrv rmssd', 'hrv (', 'heart rate variability ( rmssd', 'slept', 'sleep:', 'slept ~', 'sleep ~ :', 'hrv →', 'hrv now', '42 ms', 'sleep was', 'hrv 42,', 'hrv 42 ms →', 'hrv 48 down'])('numericHealthIn and redactNumericHealth read %s followed by a run of blanks', word => {
     expectLinear('numericHealthIn', 100_000, n => numericHealthIn(`${word}${' '.repeat(n)}`));
     expectLinear('redactNumericHealth', 100_000, n => redactNumericHealth(`${word}${' '.repeat(n)}`, '[health]'));
   });
