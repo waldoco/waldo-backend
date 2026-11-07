@@ -31,17 +31,18 @@ const { default: worker } = await import('../src/index');
 
 const OWNER_ID = '2b1c0d9e-8f7a-4b6c-9d5e-4f3a2b1c0d9e';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
-const wire = { authority: 'current' as 'current' | 'outage', admin: 'up' as 'up' | 'outage' };
+const wire = { authority: 'current' as 'current' | 'outage', admin: 'up' as 'up' | 'outage', adminAsks: 0 };
 // The directory admits these owners as admins; it answers null for anyone else.
 const ADMINS = new Set(['harness-get', 'harness-fire-card', 'harness-fire-unconfirmed', 'harness-budget', 'harness-spacing', 'harness-daily', 'harness-fire-failure', 'harness-admin-outage']);
 beforeEach(() => {
-  wire.authority = 'current'; wire.admin = 'up';
+  wire.authority = 'current'; wire.admin = 'up'; wire.adminAsks = 0;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
     const asked = init?.body && typeof init.body === 'string' ? JSON.parse(init.body) as Record<string, string> : {};
     if (fn === 'owner_runtime_authority') return wire.authority === 'outage' ? new Response('upstream unavailable', { status: 503 })
       : Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: asked.p_do_name, state_version: 1, admission_revision: '5' });
+    if (fn === 'admin_overview') wire.adminAsks += 1;
     if (fn === 'admin_overview') return wire.admin === 'outage' ? new Response('upstream unavailable', { status: 503 }) : Response.json(ADMINS.has(asked.p_do_name ?? '') ? { owners: [], invites: [] } : null);
     if (fn === 'app_session_authority') return Response.json({ owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
     if (fn === 'health_context_read' || fn === 'health_plane' || fn === 'presence_hint') return Response.json(null);
@@ -176,6 +177,16 @@ describe('diagnostics in the console', { timeout: 30_000 }, () => {
       vi.spyOn(owner as unknown as { runHarness(): Promise<string> }, 'runHarness').mockResolvedValue('Fired.');
       expect(((await (await send('', undefined, 'GET')).json()) as { commands: string[] }).commands).toEqual(['/trace', '/e2e', '/usage', '/heldrows', '/ledger', '/langfuse', '/fire']);
       expect([await output(await send('/fire fetch')), await output(await send('/fire fetch'))]).toEqual(['Fired.', 'Fired.']);
+    });
+  });
+
+  it('spends a read before asking the directory, so a non-admin repeating /fire is stopped by the read budget', async () => {
+    await consoleOf('harness-owner-repeats', ON, async send => {
+      const statuses: number[] = [];
+      for (let n = 0; n < 100; n += 1) statuses.push((await send('/fire fetch')).status);
+      expect(statuses.slice(0, 10).every(status => status === 403)).toBe(true);
+      expect(statuses.at(-1)).toBe(429);
+      expect(wire.adminAsks).toBeLessThan(90);
     });
   });
 

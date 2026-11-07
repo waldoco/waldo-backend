@@ -3927,6 +3927,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const commandTrace = ownerTurnTrace(channel, updateId);
       const commandStarted = Date.now();
       const commandWhat = harness ? `/${harness.kind}` : raw.callback_query !== undefined ? 'callback' : '/ledger';
+      // Why a command was answered without running, kept on its receipt.
+      let refused: HarnessRefusal['reason'] | undefined;
       const run = async () => {
         if (harness?.kind === 'console') {
         if (!durable) await this.ctx.storage.put(offsetKey, updateId + 1);
@@ -3938,6 +3940,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (harness) {
         if (!durable) await this.ctx.storage.put(offsetKey, updateId + 1);
         const refusal = await this.admitHarness(harness);
+        refused = refusal?.reason;
         await call('sendMessage', { chat_id: owner, text: refusal ? harnessRefusalText(refusal) : (await this.runHarness(harness, updateId, channel)).slice(0, HARNESS_MESSAGE_LIMIT) });
         return;
       }
@@ -3953,7 +3956,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       };
       try {
         await run();
-        log({ trace: commandTrace, hop: 'command', ms: Date.now() - commandStarted, ok: true, detail: commandWhat });
+        log({ trace: commandTrace, hop: 'command', ms: Date.now() - commandStarted, ok: true, detail: commandWhat, ...(refused ? { code: `refused_${refused}` } : {}) });
         log({ trace: commandTrace, hop: 'machine_turn', ms: Date.now() - commandStarted, ok: true, detail: 'command' });
       } catch (error) {
         log({ trace: commandTrace, hop: 'command', ms: Date.now() - commandStarted, ok: false, error: errorClass(error), detail: commandWhat });

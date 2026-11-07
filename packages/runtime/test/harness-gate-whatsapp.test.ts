@@ -32,14 +32,14 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-const withOwner = (name: string, run: (owner: OwnerDO, commands: () => number) => Promise<void>) =>
+const withOwner = (name: string, run: (owner: OwnerDO, commands: () => number, state: DurableObjectState) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     state.storage.kv.put('do_name', name);
     state.storage.kv.put('whatsapp_subject', SUBJECT);
     const owner = new OwnerDO(state, { ...env, ...directory, ...whatsapp, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TELEGRAM_ID: undefined } as never);
     let commands = 0;
     (owner as unknown as { runHarness: () => Promise<string> }).runHarness = async () => { commands += 1; return 'HARNESS-RAN'; };
-    try { await run(owner, () => commands); } finally { await state.storage.deleteAlarm(); }
+    try { await run(owner, () => commands, state); } finally { await state.storage.deleteAlarm(); }
   });
 let wamid = 0;
 const says = async (owner: OwnerDO, text: string): Promise<string> => {
@@ -55,9 +55,11 @@ const says = async (owner: OwnerDO, text: string): Promise<string> => {
 
 describe('admin commands on WhatsApp', { timeout: 30_000 }, () => {
   it('refuses /fire and /langfuse to an owner who is not an admin, and still answers their own diagnostics', async () => {
-    await withOwner('gate-wa-owner', async (owner, commands) => {
+    await withOwner('gate-wa-owner', async (owner, commands, state) => {
       for (const text of ['/fire nightly', '/langfuse', '/fire']) expect([text, await says(owner, text)]).toEqual([text, 'That command is for Waldo admins.']);
       expect(commands()).toBe(0);
+      // Each receipt says the command was refused, not that it ran.
+      expect(state.storage.sql.exec<{ note: string }>("SELECT note FROM trace_log WHERE hop = 'command' ORDER BY id").toArray().map(row => row.note)).toEqual(['refused_admin_only', 'refused_admin_only', 'refused_admin_only']);
       expect(await says(owner, '/usage')).toBe('HARNESS-RAN');
     });
   });

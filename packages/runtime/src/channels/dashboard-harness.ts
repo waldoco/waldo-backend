@@ -87,6 +87,8 @@ export const consoleHarness = async (input: Readonly<{
   const budget = text === '/ledger' ? 'read' : parsed ? (parsed.kind === 'fire' && parsed.target === null ? 'read' : IN_CONSOLE[parsed.kind]) : null;
   if (budget === null) return reply({ error: 'invalid_command' }, 400);
   let limited = null as Response | null;
+  // An admin command asks the directory first, so it spends a read before that ask: a refused one still costs its caller.
+  if (parsed && FOR_ADMINS.has(parsed.kind) && (limited = input.limited('read'))) return limited;
   const spend = () => !(limited = input.limited(budget));
   const refusal = parsed ? await input.admit(parsed, spend) : spend() ? null : { reason: 'budget' as const };
   if (limited) return limited;
