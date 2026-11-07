@@ -73,7 +73,7 @@ observation of the challenge; it is not Apple cryptographic attestation.
 | Direct incoming iMessage text from the verified owner | Supported (owner turn) |
 | Plain-text reply to the same exact direct chat | Supported (frozen, signed, committed) |
 | Groups, SMS, RCS, SMS fallback | Refused / retained as evidence |
-| Incoming media (photos, voice, files) | Retained as held evidence; not loaded, not transcribed |
+| Incoming media (photos, voice, files) | Photon photos and documents open for the owner's turn behind `IMESSAGE_MEDIA`; a Photon voice note sent alone is transcribed behind `IMESSAGE_VOICE`. Otherwise, and for a Mac host's files, retained as held evidence and answered with one fixed reply |
 | Owner's reply to a message Waldo sent them in the bound chat (`replyToGuid`) | The turn reads one quoted line: the message's first 80 characters, health readings withheld |
 | Waldo's reply threaded onto the owner's message (a `send` whose `target` names `messageGuid` and `partIndex`) | Only where a thread helps: the owner wrote that message as a reply themselves, or wrote again in the chat before Waldo answered. A reply to the owner's latest message, written plainly, goes out plain. Also only where the host reports `replies` sent, verified and exact; otherwise the plain reply. A target outside the bound chat is refused (`target_not_in_chat`) |
 | Outgoing files, formatting, effects | Refused (typed not_started) |
