@@ -118,6 +118,7 @@ const expectedMigrations = [
   '20261106120000_health_zones_read.sql',
   '20261106140000_health_nutrition.sql',
   '20261106190000_device_place_moved.sql',
+  '20261107080000_health_log_delete.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);

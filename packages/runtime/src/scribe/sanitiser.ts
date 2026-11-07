@@ -123,15 +123,18 @@ const HEALTH_FREE_TEXT: readonly RegExp[] = [...HEALTH_FREE_TEXT_NUMERIC, ...HEA
 // A trend ("dropped to", "went from") carries the value too, except after a word ordinary life shares ("HR jumped to 30
 // candidates").
 const STEADY_WORDS = String.raw`is|was|were|are|of|about|around|roughly|approx(?:imately)?|averag(?:e|es|ed|ing)|avg|only|just|under|over|below|above|nearly|almost|hit|reads?|reading|down\s+to|up\s+to`;
-const READING_WORDS = String.raw`${STEADY_WORDS}|(?:rose|fell|dropped|dipped|climbed|jumped|increased|decreased|declined|went\s+(?:up|down|from))(?:\s+(?:to|from|by))?`;
-const gapOf = (words: string): string => String.raw`(?:\s*(?:[:=~]|\b(?:${words})\b))*\s*`;
+const READING_WORDS = String.raw`${STEADY_WORDS}|now|(?:rose|fell|dropped|dipped|slipped|climbed|jumped|increased|decreased|declined|went\s+(?:up|down|from))(?:\s+(?:to|from|by))?`;
+// An arrow ties a metric to its value as a trend word does: "HRV →", "HRV ↓" before the number. Words ordinary life shares
+// (an HR arrow before a head count) take no arrow: their gap is the plain one.
+const plainGapOf = (words: string): string => String.raw`(?:\s*(?:[:=~]|\b(?:${words})\b))*\s*`;
+const gapOf = (words: string): string => String.raw`(?:\s*(?:[:=~→↓↑]|->|\b(?:${words})\b))*\s*`;
 const READING_GAP = gapOf(String.raw`${READING_WORDS}|at`);
 const BARE_GAP = gapOf(READING_WORDS);
 // A gap that also takes some words of its own is one gap with more words, not a gap inside a repeat: a repeat around a gap
 // that can match nothing and ends in `\s*` splits a run of blanks between its turns every way there is.
 const SLEEP_GAP = gapOf(String.raw`${READING_WORDS}|at|for|a|an|less\s+than|more\s+than`);
 const WRIST_GAP = gapOf(String.raw`${READING_WORDS}|at|up|down|rose|fell|dropped|climbed|by`);
-const STEADY_GAP = gapOf(STEADY_WORDS);
+const STEADY_GAP = plainGapOf(STEADY_WORDS);
 const SEPARATOR_GAP = String.raw`(?:\s*[:=~])*\s*`;
 const READING_NUMBER = String.raw`\d+(?:[.,]\d+)?`;
 // The owner eating or logging, as a relayed food reading says it. Someone else's meal is not the owner's reading.
@@ -139,7 +142,8 @@ const OWNER_ATE = String.raw`\b(?:you|i)(?:'ve|\s+have)?\s+(?:ate|eaten|had|logg
 // A bare two- or three-digit value that is not a clock time ("10:30", "7am", "10h30") or the first group of a phone number.
 const BARE_VALUE = String.raw`\d{2,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|[-–]?\s*\d))`;
 // A weight that follows a bag or a parcel is the luggage's.
-const NOT_CARRIED = String.raw`(?<!\b(?:bags?|baggage|luggage|suitcase|parcel|package|box|cargo|carry-on)\s+)`;
+const CARRIED = String.raw`(?:bags?|baggage|luggage|suitcases?|parcel|package|box|cargo|carry-on)`;
+const NOT_CARRIED = String.raw`(?<!\b${CARRIED}\s+)`;
 const reading = (source: string): RegExp => new RegExp(source, 'i');
 // REM the sleep stage is written in capitals; lowercase "rem" is usually "remaining".
 const casedReading = (source: string): RegExp => new RegExp(source);
@@ -153,6 +157,51 @@ const STAGE_HOURS = String.raw`\d{1,2}\s*h(?:rs?|ours?)?\s*`;
 const STAGE_MINUTES = String.raw`\d{1,2}\s*m(?:ins?|inutes?)?\b`;
 const STAGE_DURATION = `${STAGE_HOURS}${STAGE_MINUTES}`;
 const AT_NIGHT = String.raw`(?:overnight|at\s+night|last\s+night|(?:in|during)\s+the\s+night|during\s+sleep)`;
+// Lab results as a report or a clinic mail sets them out: the analyte, then its value with a unit, a reference range or a
+// high or low flag. A dose is not a result ("Vitamin D 1000 IU", "60k weekly"), nor is a date, a year, a clock time or a count
+// after the name.
+const LAB_GAP = gapOf(String.raw`${READING_WORDS}|results?|levels?|values?`);
+// A gap with a separator or a reading word in it ("TSH: 4", "ferritin is 15"), as against blanks alone ("TSH 14 Nov").
+const LAB_SAID = String.raw`(?:\s*(?:[:=~]|\b(?:${READING_WORDS}|results?|levels?|values?)\b))+\s*`;
+const MONTH = String.raw`(?:jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*`;
+const NOT_A_RESULT = String.raw`(?:iu|i\.u\.|mcg|µg|ug|mg|k|capsules?|tablets?|tabs?|units?|drops?|sachets?|bottles?|minutes?|mins?|hours?|weeks?|days?|daily|weekly|monthly|once|twice|a\s+(?:day|week|month)|${MONTH})\b`;
+const LAB_VALUE = String.raw`(?:[<>≤≥]\s*)?(?!(?:19|20)\d\d(?![\d.,]))\d{1,4}(?:[.,]\d+)?(?![\d\/]|[.,]\d|\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|${NOT_A_RESULT}))`;
+const LAB_DECIMAL = String.raw`(?:[<>≤≥]\s*)?\d{1,4}[.,]\d+(?![\d\/]|[.,]\d|\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|${NOT_A_RESULT}))`;
+// The units only a lab result uses: thyroid hormone, vitamin D, PSA, ferritin, haemoglobin. mL/min is also a pump or a drip
+// rate, so it counts only after an analyte's name.
+const LAB_UNIT_ALONE = String.raw`(?:[mµμu]\s*iu\s*\/\s*m?l|ng\s*\/\s*ml|[nµμup]mol\s*\/\s*l|[µμu]g\s*\/\s*l|g\s*\/\s*dl)`;
+const LAB_UNIT = String.raw`(?:${LAB_UNIT_ALONE}|ml\s*\/\s*min(?:\s*\/\s*1[.,]73\s*m?(?:2|²)?)?)`;
+// A bare H or L is a flag only in brackets or after a decimal value ("Hb 9.8 L"); after a whole number it is as likely litres
+// or hours ("Hb 2 L of water"). A flag word never starts a compound ("high-priority").
+const LAB_RANGE = String.raw`(?:${LAB_UNIT}|g\s*\/\s*l|\(\s*(?:[<>]\s*)?\d|\(\s*(?:[HL]|high|low)\s*\)|\b(?:high|low)(?![\w-]))`;
+const LAB_FLAG = String.raw`\s*\b[HL](?![\w-])`;
+// One blank run, then a unit, a reference range or a flag; a second optional blank run beside it scanned blanks quadratically.
+const LAB_MARK = String.raw`\s*${LAB_RANGE}`;
+// A whole number after blanks alone counts only where a line, a table cell or the text ends, or a mark follows: a sentence
+// that ends on one ("Take Vitamin D 3.", "Hgb 3.") is a dose or a list as often as a result.
+const LAB_ENDS = String.raw`(?=[^\S\n]*(?:\||\n|$))`;
+const QUALIFIER = String.raw`(?:\s*\([\w\s-]{1,24}\)|\s*,\s*(?:serum|plasma|blood|total|free)\b)?`;
+const LAB_NAME = String.raw`(?:tsh|thyroid[\s-]+stimulating[\s-]+hormone|25[\s-]*(?:\(\s*oh\s*\)|oh|hydroxy)[\s-]*(?:vitamin|vit\.?)\s*d[23]?|ha?emoglobin|hgb|egfr|(?:serum\s+)?creatinine|ferritin)`;
+// Plain vitamin D is bought, taken and dosed far more often than it is measured, and "D 2" or "D 3" is its form: it counts
+// only with a lab unit or a reference range ("(30-100)", "(<20)"), or after a lab qualifier ("Vitamin D (25-OH) 18").
+const VITAMIN_D = String.raw`(?:vitamin|vit\.?)\s*d(?:\s*[23](?![\d.,]))?`;
+const RANGE_SHAPE = String.raw`\(\s*(?:[<>≤≥]\s*\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?\s*[-–]\s*\d+(?:[.,]\d+)?)\s*\)`;
+const D_QUALIFIER = String.raw`\(\s*(?:25[\s-]*(?:\(\s*oh\s*\)|oh|hydroxy)|hydroxy|total|serum)\s*\)`;
+// "PSA" is also an announcement and "Hb" a pencil, so these count only with a unit, a range, a flag or a level.
+const SHARED_LAB_NAME = String.raw`(?:(?:total\s+|free\s+)?psa|hb)`;
+const LAB_READINGS: readonly RegExp[] = [
+  reading(String.raw`\b${READING_NUMBER}\s*${LAB_UNIT_ALONE}`),
+  reading(String.raw`\b${LAB_NAME}\b${QUALIFIER}${LAB_SAID}${LAB_VALUE}`),
+  reading(String.raw`\b${LAB_NAME}\b${QUALIFIER}\s*${LAB_DECIMAL}`),
+  reading(String.raw`\b${LAB_NAME}\b${QUALIFIER}\s*${LAB_VALUE}(?:${LAB_MARK}|${LAB_ENDS})`),
+  reading(String.raw`\b${VITAMIN_D}\b${LAB_GAP}${LAB_VALUE}\s*(?:${LAB_UNIT}|${RANGE_SHAPE})`),
+  reading(String.raw`\b${VITAMIN_D}\s*${D_QUALIFIER}\s*${LAB_VALUE}(?:${LAB_MARK}|${LAB_ENDS})`),
+  reading(String.raw`\b${SHARED_LAB_NAME}\b${QUALIFIER}${LAB_GAP}${LAB_VALUE}${LAB_MARK}`),
+  casedReading(String.raw`\b(?:(?:[Tt]otal\s+|[Ff]ree\s+)?(?:PSA|psa|Psa)|H[Bb]|hb)\b${QUALIFIER}${LAB_GAP}${LAB_DECIMAL}${LAB_FLAG}`),
+  reading(String.raw`\b${SHARED_LAB_NAME}\s+(?:levels?|results?)\b${LAB_GAP}${LAB_VALUE}`),
+  // A trend whose last value carries the unit ("Hb 10.9 → 11.4 g/dL") is the reading from its first value.
+  reading(String.raw`\b${SHARED_LAB_NAME}\b${QUALIFIER}${LAB_GAP}${LAB_DECIMAL}(?=\s*(?:→|->|=>|\bto\b)\s*\d+(?:[.,]\d+)?\s*${LAB_UNIT_ALONE})`),
+];
 // Readings in an owner's own words: a metric tied to its number through a reading gap, or a number carrying a unit only a
 // health measurement uses. Words a metric shares with ordinary life (form, load, recovery, steps, pulse, hr, temperature)
 // count only with a score, a unit or a plausible value, so "Form 16", "Laundry load at 6" or a meeting with HR at a
@@ -164,6 +213,7 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\b(?:resting\s+(?:hr|heart\s+rate|pulse)|heart\s+rate|rhr)\b${BARE_GAP}${BARE_VALUE}`),
   reading(String.raw`\b${HRV}${BARE_GAP}${BARE_VALUE}`),
   reading(String.raw`\b${HRV}${READING_GAP}${READING_NUMBER}\s*ms\b`),
+  reading(String.raw`\b${READING_NUMBER}\s*ms\s+(?:of\s+)?${HRV}(?![\w-])`),
   // Apple names VO2 max "Cardio Fitness", which is also a class with a length.
   reading(String.raw`\b(?:vo2\s*max|cardio\s+fitness)\b${BARE_GAP}${BARE_VALUE}(?!\s*${DURATION})`),
   reading(String.raw`\b${READING_NUMBER}\s*ml\s*\/\s*kg\s*\/\s*min\b`),
@@ -172,7 +222,7 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\b(?:bp|blood\s+pressure)\b${READING_GAP}(?:[6-9]\d|1\d\d|2[0-4]\d)\s*(?:\/|over)\s*(?:[3-9]\d|1[0-4]\d)\b`),
   reading(String.raw`\b(?:blood\s+pressure|systolic|diastolic)\b${BARE_GAP}${BARE_VALUE}`),
   // A body weight has two or three digits, so a laptop's 1.4 kg is not one.
-  reading(String.raw`${NOT_CARRIED}\b(?:weigh(?:s|ed|ing)?|weight|body\s+weight)\b${READING_GAP}\d{2,3}(?:[.,]\d+)?\s*(?:kg|kgs|kilos?|kilograms?|lbs?|pounds?|st|stone)\b`),
+  reading(String.raw`${NOT_CARRIED}\b(?:weigh(?:s|ed|ing)?|weight|body\s+weight)\b${READING_GAP}\d{2,3}(?:[.,]\d+)?\s*(?:kg|kgs|kilos?|kilograms?|lbs?|pounds?|st|stone)\b(?!\s+${CARRIED}\b)`),
   reading(String.raw`${NOT_CARRIED}\b(?:body\s+)?weight\s*[:=]\s*${BARE_VALUE}`),
   // Body composition as get_health gives it: body mass and lean mass in kilograms, body fat as a percentage.
   reading(String.raw`\b(?:body|lean(?:\s+body)?)\s+mass\b${READING_GAP}\d{2,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b))`),
@@ -237,6 +287,7 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\b(?:protein|carbs?|carbohydrates?|fat)\b${READING_GAP}${READING_NUMBER}\s*(?:g|grams?)\s+(?:today|yesterday|so\s+far|logged|eaten)\b|\b${READING_NUMBER}\s*(?:g|grams?)\s+(?:of\s+)?(?:protein|carbs?|carbohydrates?|fat)\s+(?:today|yesterday|so\s+far|logged|eaten|a\s+day|per\s+day|daily)\b`),
   reading(String.raw`\bcrs\b${BARE_GAP}\d`),
   reading(String.raw`\b(?:form|recovery|load|strain|readiness|sleep|hrv)\s+score\b${BARE_GAP}\d`),
+  ...LAB_READINGS,
 ];
 // Matched with only emphasis blanked. A word ordinary life shares (hr, pulse, steps, recovery), with no unit, names a
 // reading only when tied to its number as plain text would tie it: bold around "Steps:" keeps the tie, a table cell border
@@ -263,7 +314,15 @@ const MARKUP = new RegExp(String.raw`${EMPHASIS}|[|\u2013\u2014\u2082]|(?<= )-(?
 const unmarked = (text: string): string => text.replace(MARKUP, (mark) => (mark === '|' ? ':' : mark === '\u2082' ? '2' : ' '));
 const unemphasised = (text: string): string => text.replace(new RegExp(EMPHASIS, 'gu'), ' ');
 // A trend's second value ("from 48 to 35", "48 → 35") belongs to the reading.
-const TREND_TAIL = String.raw`\s*(?:to|→|->)\s*[+\-−]?\d+(?:[.,]\d+)?`;
+// Every further value is the reading's too, each with its unit: a trend's next step after an arrow or "down to", a value
+// restated after ", now", the next in a list, or the next cells of a table row, whose borders the prose view reads as colons.
+// A clock time ("10:30") is never one. After a bare comma a value is the reading's only with a unit, or as one of a list that
+// goes on or ends there ("HRV 42, 45, 48"): "HR 61, 2 meetings moved" counts the meetings.
+const TREND_UNIT = String.raw`\s*(?:ms|bpm|%|kg|lbs?|hrs?|hours?|h|mins?|minutes?|m)\b`;
+const TREND_VALUE = String.raw`[+\-−]?\d+(?:[.,]\d+)?(?![\d:])`;
+const TREND_STEP = String.raw`\s*(?:(?:down\s+|up\s+)?to|→|->|=>|↓|↑|⬇|⬆|↘|↗|,\s*now|:)\s*${TREND_VALUE}(?:${TREND_UNIT})?`;
+const LIST_STEP = String.raw`\s*,\s*${TREND_VALUE}(?:${TREND_UNIT}|(?=[^\S\n]*(?:,|\band\b|[.;!?)]|\n|$)))`;
+const TREND_TAIL = String.raw`(?:${TREND_STEP}|${LIST_STEP})+`;
 type Found = Readonly<{ index: number; text: string }>;
 const found = (pattern: RegExp, source: string): Found[] => {
   const tail = new RegExp(TREND_TAIL, 'iy');
@@ -429,18 +488,21 @@ function cardMatches(text: string): RegExpMatchArray[] {
   });
 }
 
+// A card written in other digits (fullwidth on a Japanese receipt, Arabic-Indic) is found in its ASCII reading. Text with
+// a card is returned in that reading; text with none is returned as it was.
 function redactCards(text: string, counts: Map<RedactionKind, number>): string {
-  const found = cardMatches(text);
+  const read = asciiDigits(text);
+  const found = cardMatches(read);
   if (found.length === 0) return text;
   let output = '';
   let last = 0;
   for (const match of found) {
     const at = match.index!;
-    output += text.slice(last, at) + '[REDACTED_CREDIT_CARD]';
+    output += read.slice(last, at) + '[REDACTED_CREDIT_CARD]';
     last = at + match[0].length;
   }
   increment(counts, 'credit_card', found.length);
-  return output + text.slice(last);
+  return output + read.slice(last);
 }
 
 // A phone-shaped number the words before it or the numbers beside it say is something else:
@@ -1320,7 +1382,7 @@ function encodedPiiKind(text: string, destination: SanitiseDestination): Redacti
   if (decoded.invalid) return undefined;
   for (const view of decoded.views.slice(1)) {
     if (matches(PII_PATTERNS.email, view)) return 'email';
-    if (cardMatches(view).length > 0) return 'credit_card';
+    if (cardMatches(asciiDigits(view)).length > 0) return 'credit_card';
     if (phoneMatches(asciiDigits(view)).length > 0) return 'phone';
     if (matches(PII_PATTERNS.ipv4, view)) return 'address';
     if (matches(PII_PATTERNS.ipv6, view)) return 'address';

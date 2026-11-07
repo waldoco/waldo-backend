@@ -18,7 +18,7 @@ export type ThreadRecord = Readonly<{
   title_asked?: true;
 }>;
 type OperationRecord = Readonly<{ digest: string; result: AppThreadOperationResultV1 }>;
-type Admitted = Readonly<{ kind: 'admitted' | 'duplicate'; record: Readonly<{ id: string; state: string }> }> | Readonly<{ kind: 'conflict' | 'capacity' }>;
+type Admitted = Readonly<{ kind: 'admitted' | 'duplicate'; record: Readonly<{ id: string; state: string }> }> | Readonly<{ kind: 'conflict' | 'capacity' | 'upload_unavailable' }>;
 
 // A thread's conversation is its own chain, owner:<principal>:<thread id>; main's is owner:<principal>.
 export const threadChainRef = (principal: string, thread: string) => `owner:${principal}:${thread}`;
@@ -97,8 +97,9 @@ export type AppThreadsHost = Readonly<{
   now(): number;
   principal: string;
   messages: Readonly<{
-    // Admits a message into the owner's inbox; `assertCurrent` runs inside the admission and throws to refuse it.
-    admit(conversationRef: string, clientId: string, text: string, assertCurrent: () => void, revision: number): Promise<Admitted>;
+    // Admits a message into the owner's inbox; `assertCurrent` runs inside the admission and throws to refuse it. `upload`:
+    // the staged attachment the message takes.
+    admit(conversationRef: string, clientId: string, text: string, assertCurrent: () => void, revision: number, upload?: string): Promise<Admitted>;
     receipt(conversationRef: string, clientId: string, revision?: number): unknown;
     cancel(conversationRef: string, clientId: string): unknown;
     history(thread: string, cursor: string | null, limit: number): Promise<ReturnType<typeof appTranscriptPage>>;
@@ -154,7 +155,7 @@ const messages = async (request: Request, host: AppThreadsHost, id: string, rest
     if (request.method !== 'POST') return problem(405, 'method_not_allowed');
     const sent = appThreadSendV1Schema.safeParse(await bodyOf(request));
     if (!sent.success) return problem(400, 'invalid_request');
-    const { client_message_id: clientId, text, expected_revision: expected } = sent.data;
+    const { client_message_id: clientId, text, expected_revision: expected, attachments } = sent.data;
     let result: Admitted;
     try {
       result = await host.messages.admit(ref, clientId, text, () => {
@@ -163,12 +164,12 @@ const messages = async (request: Request, host: AppThreadsHost, id: string, rest
         if (refused) throw refused;
         if (thread!.state === 'archived') throw new ThreadRefusal(409, 'thread_archived');
         if (thread!.revision !== expected) throw new ThreadRefusal(409, 'thread_revision_conflict');
-      }, expected);
+      }, expected, attachments?.[0]?.upload_id);
     } catch (error) {
       if (error instanceof ThreadRefusal) return problem(error.status, error.code);
       throw error;
     }
-    if (!('record' in result)) return problem(result.kind === 'conflict' ? 409 : 503, result.kind);
+    if (!('record' in result)) return problem(result.kind === 'capacity' ? 503 : 409, result.kind);
     if (result.kind === 'admitted') host.storage.transactionSync(() => touchThread(host.storage.kv, id, host.now()));
     return answer({ accepted: true, message_id: result.record.id, state: result.record.state }, 202);
   }
