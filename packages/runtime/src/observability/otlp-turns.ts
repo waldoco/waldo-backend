@@ -7,7 +7,7 @@ import { ownerTraceFields, ownerTraceIdentity } from './owner-trace-identity';
 export type OtlpConfig = Readonly<{ endpoint: string; headers: Readonly<Record<string, string>> }>;
 // userId may be read when a trace is written, so a trace buffered before its owner resolved still files under that owner.
 // traceId, when given, names the Langfuse trace for a trace key it knows; any other key gets a random one.
-export type TraceContext = Readonly<{ environment: string; release: string; channel: string; userId: string | (() => string); sessionId: string; captureText: boolean; traceId?: (traceKey: string) => string | undefined }>;
+export type TraceContext = Readonly<{ environment: string; release: string; channel: string; userId: string | (() => string); sessionId: string; captureText: boolean | (() => boolean); traceId?: (traceKey: string) => string | undefined }>;
 type Env = Readonly<{ LANGFUSE_PUBLIC_KEY?: string; LANGFUSE_SECRET_KEY?: string; LANGFUSE_BASE_URL?: string }>;
 type Send = (url: string, init: RequestInit) => Promise<Response>;
 type Span = Readonly<{ entry: TurnLogEntry; endMs: number; arrival: number }>;
@@ -56,18 +56,20 @@ const MAX_RETAINED = 50;
 const MAX_BUFFERED_HOPS = 1000;
 // OpenTelemetry's standard OTLP exporter timeout.
 const EXPORT_TIMEOUT_MS = 10_000;
-const tagsFor = (context: TraceContext, spans: readonly Span[]) => [
+const tagsFor = (context: Pick<TraceContext, 'channel'>, spans: readonly Span[]) => [
   `channel:${context.channel}`,
   ...[...new Set(spans.map(({ entry }) => hopFeature(entry.hop)))].filter((feature) => feature !== 'turn').sort().map((feature) => `feature:${feature}`),
 ];
 
 // Exports each owner turn as one Langfuse trace: a root span for the turn, a child per hop,
-// and a generation per model call with tokens and explicit USD estimates. Message text only when captureText is on.
+// and a generation per model call with tokens and explicit USD estimates. Message text only when captureText is on, asked for
+// each entry when it is a question, so a switch an owner's state turns off applies from the next entry; production never captures.
 export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceContext, send: Send = fetch, now: () => number = Date.now) => {
-  const context = { ...suppliedContext, captureText: resolveCaptureText({ WALDO_ENVIRONMENT: suppliedContext.environment, LANGFUSE_CAPTURE_TEXT: suppliedContext.captureText ? 'true' : 'false' }) };
+  const { captureText: asked, ...context } = suppliedContext;
+  const captureText = () => resolveCaptureText({ WALDO_ENVIRONMENT: context.environment, LANGFUSE_CAPTURE_TEXT: (typeof asked === 'function' ? asked() : asked) ? 'true' : 'false' });
   const userId = () => typeof context.userId === 'function' ? context.userId() : context.userId;
   const nonBlank = (value: unknown) => typeof value === 'string' && value.trim().length > 0;
-  const validContext = [context.environment, context.release, context.channel, context.sessionId].every(nonBlank) && (typeof context.userId === 'function' || nonBlank(context.userId)) && typeof suppliedContext.captureText === 'boolean';
+  const validContext = [context.environment, context.release, context.channel, context.sessionId].every(nonBlank) && (typeof context.userId === 'function' || nonBlank(context.userId)) && (typeof asked === 'boolean' || typeof asked === 'function');
   const pending = new Map<string, Span[]>();
   let nextArrival = 0;
   let bufferedHops = 0;
@@ -113,8 +115,9 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
     ];
   };
 
+  // An entry keeps its text only when capture was on as it arrived.
   const io = ({ text }: TurnLogEntry) => {
-    if (!context.captureText || !text) return [];
+    if (!text) return [];
     return [
       attr('langfuse.observation.input', text.input),
       ...(text.output === undefined ? [] : [attr('langfuse.observation.output', text.reasoning ? JSON.stringify({ reasoning: text.reasoning, text: text.output }) : text.output)]),
@@ -125,7 +128,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
   // per-hop observation attrs above don't surface there. The turn entry carries the owner's
   // message and the final reply, gated by the same captureText switch.
   const traceIo = ({ text }: TurnLogEntry) => {
-    if (!context.captureText || !text) return [];
+    if (!text) return [];
     return [
       attr('langfuse.trace.input', text.input),
       ...(text.output === undefined ? [] : [attr('langfuse.trace.output', text.reasoning ? JSON.stringify({ reasoning: text.reasoning, text: text.output }) : text.output)]),
@@ -283,8 +286,9 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
 
   return (entry: TurnLogEntry): Promise<void> => {
     if (!validContext || !nonBlank(userId())) return Promise.reject(new Error('otlp_context_invalid'));
-    const gated = gateTraceEntry(entry, context.captureText);
-    const item = { entry: { ...gated, text: context.captureText && gated.text ? { ...gated.text } : undefined, usage: gated.usage ? { ...gated.usage } : undefined }, endMs: now(), arrival: nextArrival++ };
+    const capture = captureText();
+    const gated = gateTraceEntry(entry, capture);
+    const item = { entry: { ...gated, text: capture && gated.text ? { ...gated.text } : undefined, usage: gated.usage ? { ...gated.usage } : undefined }, endMs: now(), arrival: nextArrival++ };
     const done = exported.get(entry.trace);
     if (done) return post([span(done.traceId, hex(8), done.rootId, item, [list('langfuse.trace.tags', tagsFor(context, [item]))], done.rootHop)], done.delivery);
     if (entry.hop !== 'turn' && entry.hop !== 'machine_turn') {

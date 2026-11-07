@@ -39,7 +39,7 @@ import { healthSnapshot, type HealthWakeReason } from '../health/wakes';
 import { wakeFreshMs } from '../health/wake-notice';
 import { dispatchProviderCall, HEALTH_PROVIDER_PATH, verifiedProviderCall } from '../health/providers/provider-route';
 import { whoopOwner, WHOOP_SYNC_EVERY_MS, WHOOP_SYNC_ID, type WhoopOwner } from '../health/providers/whoop-owner';
-import { googleHealthOwner, GOOGLE_HEALTH_SYNC_ID, type GoogleHealthOwner } from '../health/providers/google-health-owner';
+import { googleHealthOwner, GOOGLE_HEALTH_SYNC_ID, holdsGoogleHealthData, type GoogleHealthOwner } from '../health/providers/google-health-owner';
 import { googleHealthConfig } from '../health/providers/google-health-routes';
 import { whoopConfig } from '../health/providers/whoop-routes';
 import { dailyScoresFor } from '../health/scores';
@@ -3973,6 +3973,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // Either provider's key runs the owner path (ownerModels picks the deployed one).
     if (!key && !this.env.ANTHROPIC_API_KEY) throw new Error('owner runtime is unconfigured');
     const otlp = langfuseOtlpConfig(this.env);
+    // Asked for each entry: an owner who links Google Health stops having text captured from the next entry on.
+    const captureText = () => resolveCaptureText(this.env) && !holdsGoogleHealthData(this.ctx.storage.kv);
     // Traces are filed under the verified owner principal once an owner turn has resolved it, else under the chat.
     let tracePrincipal: string | undefined;
     // A turn's or a scheduled occurrence's trace id comes from the owner's salt, so a rating made later can score the trace its row came from.
@@ -3980,15 +3982,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       traceId: (key) => ownerTraceId(ownerTraceSalt(this.ctx.storage.kv), key),
       environment: this.env.WALDO_ENVIRONMENT ?? 'development', release: this.env.WALDO_RELEASE ?? 'unknown',
       channel, userId: () => tracePrincipal ?? (owner > 0 ? `${channel}:${owner}` : `${channel}:unlinked`), sessionId: owner > 0 ? `${channel}-dm:${owner}` : `${channel}-dm:unlinked`,
-      captureText: resolveCaptureText(this.env),
+      captureText,
     }) : undefined;
     const deps = productionDeps();
     const traces = traceBook(this.ctx.storage.sql);
-    const captureText = resolveCaptureText(this.env);
     const costs = costRollupEnabled(this.env) ? costRollup({
       kv: identity, call: signedRpc(this.env), doName: identity.get<string>('do_name') ?? null, newId: () => crypto.randomUUID(),
       onError: (error) => {
-        const failed: TurnLogEntry = gateTraceEntry({ trace: `cost:${channel}`, hop: 'cost_ledger', ms: 0, ok: false, error: String(error), code: 'sync_failed' }, captureText);
+        const failed: TurnLogEntry = gateTraceEntry({ trace: `cost:${channel}`, hop: 'cost_ledger', ms: 0, ok: false, error: String(error), code: 'sync_failed' }, captureText());
         console.log(JSON.stringify(failed));
         traces.record(failed, deps.now());
       },
@@ -4010,14 +4011,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // the capture switch is off; whitelisted hops keep their count/enum detail either way.
       const enriched: TurnLogEntry = gateTraceEntry(enrichOwnerTrace(entry,
         channel === 'telegram' ? identity.get<InboxRecord[]>(OWNER_INBOX_KEY) ?? [] : [],
-        identity.get<string>('do_name') ?? '', String(owner)), captureText);
+        identity.get<string>('do_name') ?? '', String(owner)), captureText());
       traces.record(enriched, deps.now());
       console.log(JSON.stringify({ ...enriched, text: undefined }));
       if (costs?.record(enriched, deps.now())) this.ctx.waitUntil(costs.flush());
       if (exportTurn) this.ctx.waitUntil(exportTurn(enriched).catch((error: unknown) => {
         const note = String(error);
         const failed: TurnLogEntry = gateTraceEntry({ trace: enriched.trace, hop: 'otlp_export', ms: 0, ok: false, error: note, code: 'export_failed', owner: enriched.owner,
-          owner_id: enriched.owner_id, owner_email: enriched.owner_email, owner_identity: enriched.owner_identity }, captureText);
+          owner_id: enriched.owner_id, owner_email: enriched.owner_email, owner_identity: enriched.owner_identity }, captureText());
         console.log(JSON.stringify({ ...failed, text: undefined }));
         traces.record(failed, deps.now());
       }));
