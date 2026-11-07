@@ -47,7 +47,7 @@ async function world() {
     const url = new URL(String(input instanceof Request ? input.url : input));
     // The transcriber the config's model key selects, answered as OpenAI's transcription route answers.
     if (url.href === 'https://api.openai.com/v1/audio/transcriptions') {
-      const file = (init?.body as FormData).get('file') as File;
+      const file = (init?.body as FormData).get('file') as unknown as Blob & { name: string };
       photon.heard.push(`${file.name} ${file.type} ${file.size}`);
       return photon.transcript === null ? Response.json({ error: { code: 'invalid_file_format' } }, { status: 400 }) : Response.json({ text: photon.transcript });
     }
@@ -237,7 +237,7 @@ it('an attachment Photon holds on someone else\'s message is never read, and a G
 
 it('two media messages in a row are two turns, each with only its own file', async () => {
   const w = await world();
-  const second: File = { ...photo, id: 'photon-att-second', bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 9, 9, 9, 9]) };
+  const second: Attached = { ...photo, id: 'photon-att-second', bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 9, 9, 9, 9]) };
   expect((await w.host.send(w.media('first', [photo]))).status).toBe(200);
   expect((await w.host.send(w.media('second', [second]))).status).toBe(200);
   await w.pump();
