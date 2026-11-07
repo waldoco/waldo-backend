@@ -1076,6 +1076,26 @@ describe('a steered task', () => {
     });
   });
 
+  it('a steered task that stops says which changes no worker saw; a stop with no change reads as it did before', async () => {
+    await withHost(async ({ book, ticket }) => {
+      const progress = (text: string) => JSON.parse(/<task_progress>\n(.*)\n<\/task_progress>/s.exec(text)![1]!);
+      const t = ticket();
+      steer(book, t.jobId, 'enqueue', 'Only places with a terrace.', 'turn-2:s1');
+      expect(book.claim(t)).not.toBe('fenced');
+      steer(book, t.jobId, 'enqueue', 'Skip the rooftop place.', 'turn-3:s1');
+      expect(book.park(t.jobId, 'deadline')).toBe(true);
+      const text = parkedApplyText(book.get(t.jobId)!);
+      expect(progress(text).changes).toEqual([{ change: 'Only places with a terrace.', worker_saw_it: true }, { change: 'Skip the rooftop place.', worker_saw_it: false }]);
+      expect(text).toContain('Name each change Waldo made to it that was not done');
+
+      const plain = ticket();
+      expect(book.park(plain.jobId, 'deadline')).toBe(true);
+      const unchanged = parkedApplyText(book.get(plain.jobId)!);
+      expect(progress(unchanged)).not.toHaveProperty('changes');
+      expect(unchanged).not.toContain('Name each change');
+    });
+  });
+
   it('a report at or past the deadline, or with a step still recorded in flight, is accepted as partial and names each change it did not do', async () => {
     await withHost(async ({ book, ticket, clock }) => {
       const late = ticket();
