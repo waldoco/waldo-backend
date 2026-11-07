@@ -21,7 +21,7 @@ const TABLES: Record<string, Row> = {
   responsibility_outside: exempt('a responsibility id, kept once its text was written after outside text or holds a worker\'s report; no owner text'),
   claims: purged('forget-coverage.test.ts'), episodes: purged('forget-coverage.test.ts'),
   memory_backups: purged('forget-coverage.test.ts'), spots: purged('forget-coverage.test.ts'), core_file_revisions: purged('forget-coverage.test.ts'),
-  constellation_nodes: purged('forget-coverage.test.ts'), 
+  constellation_nodes: purged('forget-coverage.test.ts'), entities: purged('forget-people.test.ts'), claim_links: purged('forget-people.test.ts'),
   run_candidates: purged('forget-tracer-stores.test.ts'), outbox: purged('forget-tracer-stores.test.ts'), held_candidates: purged('forget-tracer-stores.test.ts'),
   schedule: purged('forget-tracer-stores.test.ts'), update_cards: purged('forget-derived-stores.test.ts'), day_plan: purged('forget-derived-stores.test.ts'),
   claim_holds: exempt('kind, reason code and a fingerprint hash'), forget_barriers: exempt('never holds topic words for new writes (marker and hash only); legacy rows are redacted on load'),
