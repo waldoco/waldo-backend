@@ -150,6 +150,8 @@ export const toolNameSchema = z.enum([
   'set_quest',
   // check_task: how one background task the model started stands, and its result while the owner has not heard it yet.
   'check_task',
+  // steer_task: change a running background task's work, as a correction or an addition, keeping its id (WALDO_TASK_STEER).
+  'steer_task',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -357,6 +359,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'start_task',
     'cancel_task',
     'check_task',
+    'steer_task',
     'record_owner_finding',
     'list_owner_findings',
     'search_history',

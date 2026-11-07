@@ -31,6 +31,8 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_TOOL_LOADER: mapped("'harness' loads core tools up front and the rest through find_tools and use_tool"),
   WALDO_TOOL_SEARCH: mapped('provider tool search; the harness loader wins when both are set'),
   WALDO_TASK_ASK: gap('a background worker\'s held step raises its card and waits; the trial runs no background workers'),
+  WALDO_TASK_STEER: gap('the owner\'s turn is offered steer_task to change a running background task; the trial runs no background workers'),
+  WALDO_TASK_PICKUP: gap('a running owner turn is told when a background task finishes, and a report waits behind a card the owner can approve in words; the trial runs no background workers'),
   WALDO_TASK_NOTES: inert('background jobs that stop say so outside any turn, and a parked task retries once; the trial runs no background jobs'),
   WALDO_OWNER_FIRST: gap('owner messages take the chain before queued machine turns; the trial runs one owner turn at a time with no machine work queued'),
   WALDO_SECOND_MESSAGE: gap('a running owner turn is offered newer owner messages; the trial sends each step after the last one answered'),
