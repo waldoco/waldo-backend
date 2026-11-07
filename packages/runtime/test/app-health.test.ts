@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { appHealthRoutesV1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, healthApiErrorV1Schema, healthDriverPhraseV1Schema, healthIngestV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema } from '../../contracts/src/app/health-ingest';
+import { appHealthRoutesV1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, healthApiErrorV1Schema, healthDriverPhraseV1Schema, healthIngestV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema } from '../../contracts/src/app/health-ingest';
 import { handleApp } from '../src/channels/app-api';
 import { healthScoresView } from '../src/channels/app-health';
 import { md5Hex } from '../src/channels/md5';
@@ -113,12 +113,12 @@ describe('app health routes: signed database calls', () => {
     expect([response.status, await response.json(), rpcs]).toEqual([400, { error: 'invalid_request' }, []]);
   });
   it('takes a WHOOP grant only on the WHOOP notice\'s copy version, and a device grant only on the device copy', async () => {
-    const whoopGrant = { ...grant, request_id: 'consent-grant-w01', source: 'whoop', version: 3 };
-    for (const refused of [{ ...whoopGrant, version: 2 }, { ...grant, version: 3 }]) {
+    const whoopGrant = { ...grant, request_id: 'consent-grant-w01', source: 'whoop', version: HEALTH_PROVIDER_CONSENT_VERSION_V1 };
+    for (const refused of [{ ...whoopGrant, version: 2 }, { ...whoopGrant, version: 3 }, { ...grant, version: HEALTH_PROVIDER_CONSENT_VERSION_V1 }]) {
       expect((await post('/app/v1/health/consents', refused, { 'idempotency-key': refused.request_id })).status, JSON.stringify(refused)).toBe(400);
     }
     expect(rpcs).toEqual([]);
-    rpcResult = { consent: { ...consent, source: 'whoop', version: 3 }, replayed: false, deletion_routed: false };
+    rpcResult = { consent: { ...consent, source: 'whoop', version: HEALTH_PROVIDER_CONSENT_VERSION_V1 }, replayed: false, deletion_routed: false };
     const accepted = await post('/app/v1/health/consents', whoopGrant, { 'idempotency-key': whoopGrant.request_id });
     expect([accepted.status, rpcs.map(call => call.fn)]).toEqual([200, ['health_consent_grant']]);
   });
@@ -709,5 +709,45 @@ describe('app health scores: revision 4', () => {
     const debt = { state: 'unavailable', reason: 'missing_sleep' };
     expect((await json({ ...plain, sleep_debt: debt }, contracts('health=4'))).sleep_debt).toEqual(debt);
     expect('sleep_debt' in await json({ ...plain, sleep_debt: debt }, contracts('health=1'))).toBe(false);
+  });
+});
+
+describe('a finished workout in an upload (WORKOUT_WAKE)', () => {
+  // The owner's object answers the notice; what it was told is kept, and nothing else.
+  const told: unknown[] = [];
+  const workoutEnv = (on: boolean) => ({ ...(env() as object), ...(on ? { WORKOUT_WAKE: '1' } : {}),
+    OWNER_DO: { idFromName: (n: string) => n, get: () => ({ fetch: async (request: Request) => { if (new URL(request.url).pathname.endsWith('/health-samples')) told.push(await request.json()); return Response.json({ ok: true }); } }) } }) as never;
+  const upload = async (endedMinutesAgo: number, on: boolean) => {
+    told.length = 0;
+    const end = Date.now() - endedMinutesAgo * 60_000, start = end - 45 * 60_000;
+    const run = { sample_id: 'HK:run-1', revision: 0, signal: 'workout', unit: 'minutes', activity: 'running', value: 45, start_at: new Date(start).toISOString(), end_at: new Date(end).toISOString(), day: new Date(end).toISOString().slice(0, 10), utc_offset_minutes: 0 };
+    rpcResult = { ...receipt, accepted: 1 };
+    const deferred: Promise<unknown>[] = [];
+    const response = await handleApp(new Request('https://w.test/app/v1/health/ingest', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ ...batch, samples: [run] }) }), workoutEnv(on), auth, work => { deferred.push(work); });
+    await Promise.all(deferred);
+    return { status: response?.status, told: [...told] };
+  };
+  it('tells the owner\'s object a workout just ended, with that word alone', async () => {
+    expect(await upload(10, true)).toEqual({ status: 200, told: [{ workout: true }] });
+  });
+  it('says nothing of an old workout, or with the switch off', async () => {
+    expect(await upload(240, true)).toEqual({ status: 200, told: [{}] });
+    expect(await upload(10, false)).toEqual({ status: 200, told: [{}] });
+  });
+  it('counts only a workout the ingest took: one it rejected, or a replayed upload, says nothing', async () => {
+    const end = Date.now() - 10 * 60_000;
+    const run = { sample_id: 'HK:run-2', revision: 0, signal: 'workout', unit: 'minutes', activity: 'running', value: 45, start_at: new Date(end - 45 * 60_000).toISOString(), end_at: new Date(end).toISOString(), day: new Date(end).toISOString().slice(0, 10), utc_offset_minutes: 0 };
+    const steps = { sample_id: 'HK:steps-1', revision: 0, signal: 'steps_window', unit: 'count', value: 900, start_at: new Date(end - 3_600_000).toISOString(), end_at: new Date(end).toISOString(), day: new Date(end).toISOString().slice(0, 10), utc_offset_minutes: 0 };
+    const send = async (answer: Record<string, unknown>) => {
+      told.length = 0;
+      rpcResult = { ...receipt, ...answer };
+      const deferred: Promise<unknown>[] = [];
+      await handleApp(new Request('https://w.test/app/v1/health/ingest', { method: 'POST', headers: headers({ 'content-type': 'application/json', 'x-waldo-app-contract': 'health=3' }), body: JSON.stringify({ ...batch, samples: [steps, run] }) }), workoutEnv(true), auth, work => { deferred.push(work); });
+      await Promise.all(deferred);
+      return [...told];
+    };
+    expect(await send({ accepted: 1, rejected: [{ change: 'sample', index: 1, signal: 'workout', reason: 'revision_conflict' }] })).toEqual([{}]);
+    expect(await send({ accepted: 2, rejected: [] })).toEqual([{ workout: true }]);
+    expect(await send({ accepted: 2, rejected: [], replayed: true })).toEqual([]);
   });
 });

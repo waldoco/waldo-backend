@@ -36,7 +36,7 @@ import { APP_CALENDAR_DAY_PATH, appCalendarDayRequest } from './app-calendar-day
 import { HEALTH_SAMPLES_PATH, HEALTH_ZONE_CHANGE_PATH, PLACE_MOVED_PATH, verifiedHealthSamples, verifiedPlaceMoved, verifiedZoneChange, type HealthRecomputeCause } from '../health/zone-change-route';
 import { healthRecompute, HEALTH_RECOMPUTE_ID } from '../health/recompute';
 import { healthSnapshot, type HealthWakeReason } from '../health/wakes';
-import { wakeFreshMs } from '../health/wake-notice';
+import { wakeFreshMs, workoutStillFresh } from '../health/wake-notice';
 import { dispatchProviderCall, HEALTH_PROVIDER_PATH, verifiedProviderCall } from '../health/providers/provider-route';
 import { whoopOwner, WHOOP_SYNC_EVERY_MS, WHOOP_SYNC_ID, type WhoopOwner } from '../health/providers/whoop-owner';
 import { whoopConfig } from '../health/providers/whoop-routes';
@@ -356,8 +356,9 @@ type OwnerRuntime = Readonly<{
   briefs(entry: ScheduleEntry): Promise<void>;
   // The owner's derived health rows: asked for by each upload that changed a reading and each wearable sync, and recomputed
   // once for every window of asks.
-  // `woke` says the readings carry a night that just ended (WAKE_BRIEF), which may move today's Brief.
-  healthSamples(cause?: HealthRecomputeCause, woke?: boolean): Promise<void>;
+  // `woke` says the readings carry a night that just ended (WAKE_BRIEF), which may move today's Brief; `workout` that they
+  // carry a workout that just ended (WORKOUT_WAKE), which may reshape the rest of the day.
+  healthSamples(cause?: HealthRecomputeCause, woke?: boolean, workout?: boolean): Promise<void>;
   healthRecompute(): Promise<void>;
   // The health trigger: a day marked by a zone change, and the scheduled evaluation of it.
   healthChanged(day: string): Promise<void>;
@@ -497,6 +498,10 @@ const whatsappQuietMs = (value: string | undefined): number => {
   return value !== undefined && value !== '' && Number.isFinite(parsed) && parsed >= 0 ? parsed : WHATSAPP_QUIET_MS;
 };
 
+
+// When an upload last said a workout just ended (WORKOUT_WAKE): held until a recompute hands it to the trigger, and ignored
+// once it is no longer fresh.
+const WORKOUT_NOTED_KEY = 'health_workout_noted_v1';
 
 export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly ownerBrowser: ReturnType<typeof ownerBrowserRuntime>;
@@ -1832,7 +1837,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const headers={'cache-control':'no-store'};
     const notice=await verifiedHealthSamples(request,this.env.WALDO_ROUTER_HMAC_SECRET,name=>this.env.OWNER_DO?.idFromName(name).toString()===this.ctx.id.toString()&&this.ctx.storage.kv.get<string>('do_name')===name);
     if(!notice)return Response.json({error:'unavailable'},{status:403,headers});
-    await this.setup('app').healthSamples(notice.cause,notice.woke);
+    await this.setup('app').healthSamples(notice.cause,notice.woke,notice.workout);
     return Response.json({ok:true},{headers});
   }
   // Worker-to-DO only: one of the owner's phones moved to another time zone or city. It carries nothing, and brings the next look forward.
@@ -1920,8 +1925,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return this.whoop??=whoopOwner({
       doName:()=>this.ctx.storage.kv.get<string>('do_name')??'',rpc:signedRpc(this.env),config:config?{clientId:config.clientId,redirectUri:config.redirectUri}:null,proxy:oauthProxy(this.env),kv:this.ctx.storage.kv,now:Date.now,
       timezone:()=>this.setup('app').timezone,
-      produce:woke=>this.setup('app').healthSamples('readings',woke),
+      produce:(woke,workout)=>this.setup('app').healthSamples('readings',woke,workout),
       ...(this.env.WAKE_BRIEF==='1'?{wakeFreshMs:wakeFreshMs(this.env.WAKE_BRIEF_FRESH_MIN)}:{}),
+      ...(this.env.WORKOUT_WAKE==='1'?{workoutWake:true as const}:{}),
       arm:async at=>{await this.setup('app').scheduler.schedule({id:WHOOP_SYNC_ID,kind:'provider_sync',occurrenceAt:at,dueAt:at,payloadRefs:{id:WHOOP_SYNC_ID},recurrence:{type:'interval',every_ms:WHOOP_SYNC_EVERY_MS,phase_ms:at%WHOOP_SYNC_EVERY_MS}});},
       disarm:async()=>{await this.setup('app').scheduler.cancelReadable(WHOOP_SYNC_ID);},
       log:line=>this.setup('app').log({trace:`whoop:${Date.now()}`,hop:line.hop,ms:0,ok:line.ok,code:line.code}),
@@ -5495,6 +5501,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     // A wake the recompute found in the stored rows: noted once per reason per day, and armed only when one is new.
     const healthWoken = async (day: string, reasons: readonly HealthWakeReason[]) => {
+      if (reasons.includes('workout_ended')) storage.kv.delete(WORKOUT_NOTED_KEY);
       if (reasons.filter(reason => healthBook.markOnce(day, Date.now(), reason)).length) await armHealthTrigger();
     };
     const healthRpc = (operation: string, payload: string) => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', operation, payload);
@@ -5512,10 +5519,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       ...(this.env.HEALTH_COACHING === '1' ? { readSettings: () => healthRpc('settings_read', '{}') } : {}), readDemand: range => this.setup('app').calendarDemand(range), onZoneChange: healthChanged,
     }, forgetDemand: day => forgetDemandDay(storage.sql, day, Date.now()),
       wakes: { enabled: () => schedPrefs.enabled('health_proposals'), woken: healthWoken,
-        readContext: readModelHealth } });
+        readContext: readModelHealth, noted: startedAt => (this.env.WORKOUT_WAKE === '1' && workoutStillFresh(storage.kv.get(WORKOUT_NOTED_KEY), startedAt) ? ['workout_ended'] : []) } });
     // An upload or a wearable sync changed the readings; an empty welcome health stage reads them once more.
     // A new stated need changes no reading, so it never spends the welcome's one retry for late health data.
-    const healthSamples = async (cause: HealthRecomputeCause = 'readings', woke = false) => {
+    const healthSamples = async (cause: HealthRecomputeCause = 'readings', woke = false, workout = false) => {
+      // WORKOUT_WAKE: a workout just ended. The time is noted before the recompute is asked for, so a recompute already due
+      // still finds it; the first one that starts after it and finds today's row hands it to the health trigger, so the
+      // trigger never reads the day before the workout.
+      if (workout && this.env.WORKOUT_WAKE === '1') storage.kv.put(WORKOUT_NOTED_KEY, Date.now());
       await recompute.ask();
       if (woke && this.env.WAKE_BRIEF === '1') await wakeNoticed();
       if (cause === 'readings' && runtime.welcome.lateHealth()) this.continueWelcome(runtime);
