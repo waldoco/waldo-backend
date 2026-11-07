@@ -343,9 +343,11 @@ export const providerOwner = <Config, Api, Source extends string>(deps: Provider
   };
 
   const connectedAt = (): number | null => connection()?.linked_at ?? null;
+  // Whether this Worker can start a connection at all: the client id and redirect, and an edge to hold the tokens.
+  const configured = (): boolean => config !== null && proxy !== null;
 
   // What a provider's webhook hint works with: the same token path, consent read, ingest and error classes as a sync.
   const kit = { api, key, log, connection, hasProxy: () => proxy !== null, consents, missingGrants, ingest, guard, classify, markDirty, produce: deps.produce, now: deps.now, arm: deps.arm, kv };
-  return { owner: { connect, exchange, status, connectedAt, disconnect, sync }, kit };
+  return { owner: { connect, exchange, status, connectedAt, configured, disconnect, sync }, kit };
 };
 export type ProviderKit<Api> = ReturnType<typeof providerOwner<unknown, Api, string>>['kit'];

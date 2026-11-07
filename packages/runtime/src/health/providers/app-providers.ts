@@ -55,16 +55,16 @@ export const handleAppHealthProviders = async (input: Readonly<{ request: Reques
   if (route === '') return request.method === 'GET' && [...url.searchParams.keys()].length === 0 ? settle('status', {}, healthProviderListV1Schema) : refuse('invalid_request', 405);
   if (route !== '/connect' && route !== '/disconnect') return refuse('invalid_request', 404);
   if (request.method !== 'POST') return refuse('invalid_request', 405);
-  // The owner object connects WHOOP only, so any other provider the contract names is not configured on this Worker yet.
+  // The owner object takes WHOOP when no provider is named.
+  const named = (provider: string) => (provider === 'whoop' ? {} : { provider });
   if (route === '/connect') {
     const asked = await readJson(request, healthProviderConnectV1Schema);
     if (!asked) return refuse('invalid_request', 400);
-    if (asked.provider !== 'whoop') return refuse('not_configured', 503);
     const allowed = await input.mayConnect().catch(() => null);
     if (allowed === null) return refuse('unavailable', 503);
-    return allowed ? settle('connect', {}, healthProviderConnectResultV1Schema) : refuse('step_up_required', 403);
+    return allowed ? settle('connect', named(asked.provider), healthProviderConnectResultV1Schema) : refuse('step_up_required', 403);
   }
   const leaving = await readJson(request, healthProviderDisconnectV1Schema);
   if (!leaving) return refuse('invalid_request', 400);
-  return leaving.provider === 'whoop' ? settle('disconnect', {}, healthProviderDisconnectResultV1Schema) : refuse('not_configured', 503);
+  return settle('disconnect', named(leaving.provider), healthProviderDisconnectResultV1Schema);
 };
