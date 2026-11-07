@@ -1,6 +1,6 @@
 import { healthReadSignalSchema, type HealthReadSignal } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
-import { numericHealthIn } from '../src/scribe/sanitiser';
+import { numericHealthIn, redactNumericHealth } from '../src/scribe/sanitiser';
 
 // The one floor that keeps measurements from outside content out of memory, and out of stored summaries. A match drops the
 // write, so precision wins over recall: it must not fire on ordinary life that puts a number near a word a metric also
@@ -177,7 +177,7 @@ describe('the numeric health floor', () => {
   });
   // Lab results as a report or a clinic mail sets them out: a value with its unit, a reference range, a high or low flag.
   const LAB_READINGS: Record<string, readonly string[]> = {
-    tsh: ['TSH 4.8 mIU/L', 'TSH: 6.2 (0.4-4.0) H', 'Thyroid stimulating hormone (TSH) 3.1 uIU/mL', 'Your TSH result was 5.9', '| TSH | 4.8 | mIU/L | 0.4 - 4.0 |', 'TSH (ultrasensitive) 4.8', 'TSH 6'],
+    tsh: ['TSH 4.8 mIU/L', 'TSH: 6.2 (0.4-4.0) H', 'Thyroid stimulating hormone (TSH) 3.1 uIU/mL', 'Your TSH result was 5.9', '| TSH | 4.8 | mIU/L | 0.4 - 4.0 |', 'TSH (ultrasensitive) 4.8', 'TSH 6', 'TSH 5\nT3 1.2'],
     vitamin_d: ['Vitamin D 18 ng/mL', '25-OH Vitamin D: 42 nmol/L (75-200) L', 'Vitamin D (25-OH) 18', 'vitamin D level was 22', 'Vit D3 31 ng/ml'],
     haemoglobin: ['Haemoglobin 11.2 g/dL', 'Hemoglobin: 135 g/L', 'Hb 10.9 g/dL L', 'Hgb 14.1', 'haemoglobin of 9.8', 'Hb 10.9 → 11.4 g/dL', 'Hb 9.8 L'],
     egfr: ['eGFR 58 mL/min/1.73m2', 'eGFR: >90', 'eGFR 45 (>60) L', 'eGFR was 72'],
@@ -217,8 +217,26 @@ describe('the numeric health floor', () => {
     'PSA: 3 high-priority items',
     'PSA 2 low-hanging fruits',
     'Set the pump at 200 ml/min',
+    // A dose or a shopping list ends a sentence with a whole number the way a result ends a line.
+    'Take Vitamin D 3.',
+    'Remind me to buy Vitamin D 3',
+    'Pick up Vitamin D 2!',
+    'Vitamin D 3, zinc and magnesium',
+    'Vitamin D3 5000',
+    'Vitamin D 1000',
+    'vitamin D 600.',
+    'Hgb 3.',
+    'ferritin 2.',
+    'TSH 3)',
   ])('leaves a lab-adjacent ordinary sentence alone: %s', (text) => {
     expect(numericHealthIn(text)).toBe(false);
+  });
+  it.each([
+    ['Ferritin 12\nTSH 6', ['12', '6']],
+    ['Hb 10.9 → 11.4 g/dL', ['10.9', '11.4']],
+  ])('redacts every lab value in %s', (text, values) => {
+    const redacted = redactNumericHealth(text, '[H]');
+    for (const value of values) expect(redacted).not.toContain(value);
   });
   it('covers every signal get_health returns', () => {
     expect(Object.keys(GET_HEALTH_READINGS).sort()).toEqual([...healthReadSignalSchema.options].sort());

@@ -171,10 +171,14 @@ const LAB_RANGE = String.raw`(?:${LAB_UNIT}|g\s*\/\s*l|\(\s*(?:[<>]\s*)?\d|\(\s*
 const LAB_FLAG = String.raw`\s*\b[HL](?![\w-])`;
 // One blank run, then a unit, a reference range or a flag; a second optional blank run beside it scanned blanks quadratically.
 const LAB_MARK = String.raw`\s*${LAB_RANGE}`;
-// A whole number after blanks alone counts only where the line or sentence ends, or a mark follows.
-const LAB_ENDS = String.raw`(?=\s*(?:[.,;!?)\]|]|$))`;
+// A whole number after blanks alone counts only where a line, a table cell or the text ends, or a mark follows: a sentence
+// that ends on one ("Take Vitamin D 3.", "Hgb 3.") is a dose or a list as often as a result.
+const LAB_ENDS = String.raw`(?=[^\S\n]*(?:\||\n|$))`;
 const QUALIFIER = String.raw`(?:\s*\([\w\s-]{1,24}\)|\s*,\s*(?:serum|plasma|blood|total|free)\b)?`;
-const LAB_NAME = String.raw`(?:tsh|thyroid[\s-]+stimulating[\s-]+hormone|(?:25[\s-]*(?:\(\s*oh\s*\)|oh|hydroxy)[\s-]*)?(?:vitamin|vit\.?)\s*d[23]?|ha?emoglobin|hgb|egfr|(?:serum\s+)?creatinine|ferritin)`;
+const LAB_NAME = String.raw`(?:tsh|thyroid[\s-]+stimulating[\s-]+hormone|25[\s-]*(?:\(\s*oh\s*\)|oh|hydroxy)[\s-]*(?:vitamin|vit\.?)\s*d[23]?|ha?emoglobin|hgb|egfr|(?:serum\s+)?creatinine|ferritin)`;
+// Plain vitamin D is bought, taken and dosed far more often than it is measured, and "D 2" or "D 3" is its form: it counts
+// only when the number is said to be its value or carries a lab mark, or after a lab qualifier ("Vitamin D (25-OH) 18").
+const VITAMIN_D = String.raw`(?:vitamin|vit\.?)\s*d(?:\s*[23](?![\d.,]))?`;
 // "PSA" is also an announcement and "Hb" a pencil, so these count only with a unit, a range, a flag or a level.
 const SHARED_LAB_NAME = String.raw`(?:(?:total\s+|free\s+)?psa|hb)`;
 const LAB_READINGS: readonly RegExp[] = [
@@ -182,9 +186,14 @@ const LAB_READINGS: readonly RegExp[] = [
   reading(String.raw`\b${LAB_NAME}\b${QUALIFIER}${LAB_SAID}${LAB_VALUE}`),
   reading(String.raw`\b${LAB_NAME}\b${QUALIFIER}\s*${LAB_DECIMAL}`),
   reading(String.raw`\b${LAB_NAME}\b${QUALIFIER}\s*${LAB_VALUE}(?:${LAB_MARK}|${LAB_ENDS})`),
+  reading(String.raw`\b${VITAMIN_D}\b${QUALIFIER}${LAB_SAID}${LAB_VALUE}`),
+  reading(String.raw`\b${VITAMIN_D}\b${QUALIFIER}\s*${LAB_VALUE}${LAB_MARK}`),
+  reading(String.raw`\b${VITAMIN_D}\s*\([\w\s-]{1,24}\)\s*${LAB_VALUE}(?:${LAB_MARK}|${LAB_ENDS})`),
   reading(String.raw`\b${SHARED_LAB_NAME}\b${QUALIFIER}${LAB_GAP}${LAB_VALUE}${LAB_MARK}`),
   casedReading(String.raw`\b(?:(?:[Tt]otal\s+|[Ff]ree\s+)?(?:PSA|psa|Psa)|H[Bb]|hb)\b${QUALIFIER}${LAB_GAP}${LAB_DECIMAL}${LAB_FLAG}`),
   reading(String.raw`\b${SHARED_LAB_NAME}\s+(?:levels?|results?)\b${LAB_GAP}${LAB_VALUE}`),
+  // A trend whose last value carries the unit ("Hb 10.9 → 11.4 g/dL") is the reading from its first value.
+  reading(String.raw`\b${SHARED_LAB_NAME}\b${QUALIFIER}${LAB_GAP}${LAB_DECIMAL}(?=\s*(?:→|->|=>|\bto\b)\s*\d+(?:[.,]\d+)?\s*${LAB_UNIT_ALONE})`),
 ];
 // Readings in an owner's own words: a metric tied to its number through a reading gap, or a number carrying a unit only a
 // health measurement uses. Words a metric shares with ordinary life (form, load, recovery, steps, pulse, hr, temperature)
