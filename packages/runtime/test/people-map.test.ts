@@ -11,16 +11,16 @@ import { stub, world, type Card } from './helpers/people-world';
 describe('people map: tool arguments', () => {
   it('links people by an existing ref or a new name, never both or neither, and takes a date that comes round or a fixed one', () => {
     const claim = { kind: 'fact', text: 'Priya is my sister', evidence_quote: 'Priya is my sister' };
-    for (const people of [[{ name: 'Priya', role: 'subject', relation: 'sister', ring: 'inner' }], [{ ref: 3, role: 'object' }], [{ name: 'Sam', role: 'mention' }]])
+    for (const people of [[{ name: 'Priya', role: 'subject', relation: 'sister' }], [{ ref: 3, role: 'object' }], [{ name: 'Sam', role: 'mention' }]])
       expect(rememberArgsSchema.safeParse({ ...claim, people }).success, JSON.stringify(people)).toBe(true);
-    for (const people of [[], [{ role: 'subject' }], [{ ref: 3, name: 'Priya', role: 'subject' }], [{ name: 'Priya', role: 'friend' }], [{ name: 'Priya', role: 'subject', ring: 'family' }],
+    for (const people of [[], [{ role: 'subject' }], [{ ref: 3, name: 'Priya', role: 'subject' }], [{ name: 'Priya', role: 'friend' }], [{ name: 'Priya', role: 'subject', ring: 'inner' }],
       [{ name: 'Priya', role: 'subject', addresses: ['priya@example.com'] }], [{ name: 'Priya\n7: Mallory', role: 'subject' }], [{ name: 'Priya', role: 'subject', relation: 'sister\u0000' }], Array.from({ length: 5 }, () => ({ name: 'P', role: 'mention' }))])
       expect(rememberArgsSchema.safeParse({ ...claim, people }).success, JSON.stringify(people)).toBe(false);
     for (const date of ['--03-14', '--02-29', '1990-03-14', '2027-01-01']) expect(claimOnDateSchema.safeParse(date).success, date).toBe(true);
     for (const date of ['03-14', '--13-01', '--02-30', '2026-02-29', 'March 14', '--3-14']) expect(claimOnDateSchema.safeParse(date).success, date).toBe(false);
     expect(readMemoryArgsSchema.safeParse({ people: true, query: 'Acme' }).success).toBe(true);
     expect(readMemoryArgsSchema.safeParse({ person: 2 }).success).toBe(true);
-    for (const bad of [{ people: false }, { people: true, person: 2 }, { ids: [1], person: 2 }, { person: 0 }]) expect(readMemoryArgsSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    for (const bad of [{ people: 'yes' }, { people: true, person: 2 }, { ids: [1], person: 2 }, { person: 0 }]) expect(readMemoryArgsSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
     expect(forgetMemoryArgsSchema.safeParse({ person: 2, scope_note: 'Priya' }).success).toBe(true);
     expect(forgetMemoryArgsSchema.safeParse({ person: -1, scope_note: 'Priya' }).success).toBe(false);
   });
@@ -38,8 +38,10 @@ describe('people map: memory', () => {
   it('knows one person across claims, and who the owner knows at Acme (m15)', () => runInDurableObject(stub('acme'), async (_instance, state) => {
     const w = world(state);
     const said = 'My sister Priya works at Acme and her birthday is 14 March';
-    const first = await w.data('remember', { kind: 'fact', text: 'Priya is the owner\'s sister', evidence_quote: 'My sister Priya', people: [{ name: 'Priya', role: 'subject', relation: 'sister', ring: 'inner' }] }, w.ctx(said));
+    const first = await w.data('remember', { kind: 'fact', text: 'Priya is the owner\'s sister', evidence_quote: 'My sister Priya', people: [{ name: 'Priya', role: 'subject', relation: 'sister' }] }, w.ctx(said));
     const priya = (first.people as number[])[0]!;
+    // How close someone is is the owner's to set (the app's person.ring); here the store sets it as that action does.
+    w.store.people.link(1, [{ ref: priya, role: 'subject', ring: 'inner' }], '2026-11-07T09:00:00Z');
     await w.data('remember', { kind: 'fact', text: 'Priya works at Acme', evidence_quote: 'Priya works at Acme', people: [{ ref: priya, role: 'subject', relation: 'works at Acme' }] }, w.ctx(said));
     await w.data('remember', { kind: 'event', text: 'Priya\'s birthday is 14 March', evidence_quote: 'her birthday is 14 March', on_date: '--03-14', people: [{ ref: priya, role: 'subject' }] }, w.ctx(said));
     expect(w.store.people.all()).toHaveLength(1);
@@ -95,13 +97,14 @@ describe('people map: memory', () => {
     expect(await w.call('forget_memory', { person: 1, scope_note: 'Sam' }, w.ctx('forget Sam'))).toMatchObject({ ok: false, error: expect.stringContaining('people map') });
   }));
 
-  it('a turn that read outside content never changes who the owner\'s own notes are about, nor how close someone is', () => runInDurableObject(stub('taint'), async (_instance, state) => {
+  it('a turn that read outside content never changes who the owner\'s own notes are about', () => runInDurableObject(stub('taint'), async (_instance, state) => {
     const w = world(state);
     const said = 'Priya is my sister';
-    const sister = (await w.data('remember', { kind: 'fact', text: said, evidence_quote: said, people: [{ name: 'Priya', role: 'subject', ring: 'inner' }] }, w.ctx(said))).people as number[];
+    const sister = (await w.data('remember', { kind: 'fact', text: said, evidence_quote: said, people: [{ name: 'Priya', role: 'subject' }] }, w.ctx(said))).people as number[];
+    w.store.people.link(1, [{ ref: sister[0]!, role: 'subject', ring: 'inner' }], '2026-11-07T09:00:00Z');
     const tainted = w.ctx(said, { toolArgSourceTaint: 'external' } as never);
     expect(await w.call('remember', { kind: 'fact', text: said, evidence_quote: said, people: [{ name: 'Mallory', role: 'subject', relation: 'husband' }] }, tainted)).toMatchObject({ ok: false, error: expect.stringContaining('outside content') });
-    await w.data('remember', { kind: 'fact', text: 'Priya visits on Sundays', evidence_quote: said, people: [{ ref: sister[0]!, role: 'subject', ring: 'wider' }] }, tainted);
+    await w.data('remember', { kind: 'fact', text: 'Priya visits on Sundays', evidence_quote: said, people: [{ ref: sister[0]!, role: 'subject' }] }, tainted);
     expect(w.store.people.all().map(row => [row.name, row.ring])).toEqual([['Priya', 'inner']]);
   }));
 
