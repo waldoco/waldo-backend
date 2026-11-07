@@ -449,10 +449,13 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
   // words would be the leak returning. Store the marker + fingerprint only (the fingerprint is what blocks re-admission),
   // and dedupe on it. Also store the lower-cased, space-collapsed form: alias forms are normalised, so a capitalised topic
   // must still match them. The as-given hash stays for exact claim-text blocking.
+  const barrierHashes = (text: string): ReadonlySet<string> => {
+    const given = text.trim();
+    return new Set([textFingerprint(given), textFingerprint(given.toLowerCase().replace(/\s+/g, ' '))]);
+  };
   const barrier = (topic: string, at: string): void => {
     forgetLanded();
-    const given = topic.trim();
-    for (const hash of new Set([textFingerprint(given), textFingerprint(given.toLowerCase().replace(/\s+/g, ' '))])) {
+    for (const hash of barrierHashes(topic)) {
       const existing = sql.exec<{ n: number }>('SELECT count(*) AS n FROM forget_barriers WHERE topic_hash = ?', hash).one().n;
       if (existing === 0) sql.exec('INSERT INTO forget_barriers (topic, topic_hash, created_at) VALUES (?, ?, ?)', FORGOTTEN, hash, at);
     }
@@ -582,6 +585,8 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
       });
     },
     barriers: () => sql.exec<ForgetBarrier>('SELECT * FROM forget_barriers ORDER BY id').toArray(),
+    // Whether a text is one the owner asked to forget, by the same fingerprints the barrier stores.
+    barred: (text: string): boolean => [...barrierHashes(text)].some(hash => sql.exec<{ n: number }>('SELECT count(*) AS n FROM forget_barriers WHERE topic_hash = ?', hash).one().n > 0),
     forgetGeneration: (): number => sql.exec<{ value: number }>('SELECT value FROM forget_generation WHERE id = 1').toArray()[0]?.value ?? 0,
     nodes: () => sql.exec<ConstellationNode>('SELECT * FROM constellation_nodes ORDER BY strength DESC').toArray(),
     edges: () => sql.exec<ConstellationEdge>('SELECT * FROM constellation_edges ORDER BY strength DESC').toArray(),

@@ -3,7 +3,7 @@ import {
   type ImportMemoriesArgs, type ImportSource, type ReadImportArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
 import { WorkspaceError, type WorkspaceStore } from '@waldo/workspace';
-import { normalizeForGrounding, textFingerprint, type ClaimStore } from './claims';
+import { normalizeForGrounding, type ClaimStore } from './claims';
 import { IMPORT_SOURCE_NAMES, importEvidence, importRef, importSourceOf } from './import-ref';
 import { carriesSecretOrCanary, HEALTH_SPAN_MARKER, numericHealthIn } from '../scribe/sanitiser';
 import type { SemanticRecall } from './semantic-recall';
@@ -96,9 +96,10 @@ const parts = (text: string): string[] => {
   }
   return part ? [...out, part] : out;
 };
-const page = <T>(items: readonly T[], start: number): Readonly<{ items: T[]; next_cursor: number | null }> => {
+// Whatever else the result carries (the ids not found) comes out of the same page.
+const page = <T>(items: readonly T[], start: number, beside: unknown = null): Readonly<{ items: T[]; next_cursor: number | null }> => {
   const out: T[] = [];
-  let size = 0, at = start;
+  let size = JSON.stringify(beside).length, at = start;
   for (; at < items.length; at++) {
     const next = JSON.stringify(items[at]).length;
     if (out.length > 0 && size + next > PAGE_JSON_CHARS) break;
@@ -136,7 +137,7 @@ export const importHandlers = (deps: Deps): ToolHandler<any, unknown, MemoryTool
     return { digest: exported.meta.sha256.slice(0, 16), conversations };
   };
   const loaded = (value: Loaded | ToolResult<never>): value is Loaded => 'conversations' in value;
-  const blocked = (value: string) => deps.store.barriers().some(barrier => barrier.topic_hash === textFingerprint(value.trim()) || barrier.topic_hash === textFingerprint(value.trim().toLowerCase().replace(/\s+/g, ' ')));
+  const blocked = (value: string) => deps.store.barred(value);
 
   return [
     {
@@ -175,7 +176,7 @@ export const importHandlers = (deps: Deps): ToolHandler<any, unknown, MemoryTool
           const pieces = parts(clean(message.text));
           return pieces.length <= 1 ? [{ ...base, text: pieces[0] ?? '' }] : pieces.map((text, index) => ({ ...base, part: `${index + 1}/${pieces.length}`, text }));
         }) : []);
-        const shown = page(all, start);
+        const shown = page(all, start, missing);
         return { ok: true, source_taint: 'external', data: { messages: shown.items, missing_conversation_ids: missing, next_cursor: shown.next_cursor } };
       },
     } satisfies ToolHandler<ReadImportArgs, unknown, MemoryToolContext>,

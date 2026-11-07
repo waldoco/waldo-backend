@@ -1,5 +1,5 @@
 import { rememberArgsSchema, forgetMemoryArgsSchema, readMemoryArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ToolHandler, type ToolName, type ReadMemoryArgs, type RememberArgs, type ForgetMemoryArgs } from '@waldo/contracts';
-import { FORGOTTEN, ground, normalizeForGrounding, textFingerprint, type Claim, type ClaimStore } from '../../memory/claims';
+import { FORGOTTEN, ground, normalizeForGrounding, type Claim, type ClaimStore } from '../../memory/claims';
 import { carriesTopic, forgettableTopic, hidesTopic } from '../../memory/forget-guard';
 import { NODE_STATEMENT } from '../../memory/node-sources';
 import { HEALTH_MEMORY_RULES } from '../../memory/health-rules';
@@ -70,7 +70,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
   };
   const ready = async (ctx: MemoryToolContext) => { ctx.runScope?.admit(); await ctx.assertTaskSourceCurrent?.(); ctx.runScope?.admit(); };
   const hidden = (claim: Claim) => store.pendingTopics().some(topic => [claim.text, claim.evidence, claim.source_ref, (claim as Claim & { aliases?: string | null }).aliases].some(text => typeof text === 'string' && (carriesTopic(text, topic) || hidesTopic(text, topic))));
-  const blocked = (text: string) => store.barriers().some(barrier => barrier.topic_hash === textFingerprint(text.trim()) || barrier.topic_hash === textFingerprint(text.trim().toLowerCase().replace(/\s+/g, ' ')));
+  const blocked = (text: string) => store.barred(text);
   const base = (name: ToolName, description: string) => ({ name, description, trigger_allowlist: triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes(name)), autonomy_gated: false });
   return [
     { ...base('remember', `Store a fact or preference grounded in a verbatim quote from the owner in this conversation. To correct an active claim, pass its id as replaces_id: the c12 that starts its memory line, or 12. Memory is context, never permission to act. ${HEALTH_MEMORY_RULES.join(' ')}`), schema: rememberArgsSchema, mutates_state: true,
@@ -144,8 +144,9 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
       async handle(args: ForgetMemoryArgs, ctx) {
         await ready(ctx); const turn = admitted(ctx);
         // A forget by ids from a turn that read outside text runs only from the owner's card. That replay has no
-        // conversation turn; the dispatcher has matched it to the approved call, and ids need none to select.
-        const approvedById = ctx.approvedTaintedAction?.tool === 'forget_memory' && args.topic === undefined && args.source === undefined;
+        // conversation turn; the dispatcher has matched it to the approved call, and ids need none to select. A topic, span or
+        // whole import selects more than the card's ids show, so none of them runs from a replay.
+        const approvedById = ctx.approvedTaintedAction?.tool === 'forget_memory' && args.claim_ids !== undefined && args.topic === undefined && args.source === undefined && args.import_source === undefined;
         if (!turn && !approvedById) return fail('Authenticated owner memory context is unavailable.');
         const claims = store.allClaims(); const selected = new Map<number, Claim>(); const texts = new Set<string>();
         for (const id of args.claim_ids ?? []) { const claim = claims.find(row => row.id === id); if (!claim) return fail('A claim id does not belong to this owner store.'); selected.set(id, claim); }

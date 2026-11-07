@@ -75,9 +75,10 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
     }
     const frozen = parsed.data as Record<string, unknown>;
     // A topic or span selects by matching the owner's message, and outside text can name any fragment of it (one letter
-    // selects everything). Ids are what the owner can check on the card, and the replay admits only those.
-    if (tool.data === 'forget_memory' && (frozen.topic !== undefined || frozen.source !== undefined)) {
-      return { ok: false, error: 'After reading outside content, a forget goes to the owner only by memory ids. Call read_memory to find the claims to remove, then propose forget_memory with their claim_ids and a scope_note, without topic or source.', code: 'rejected' };
+    // selects everything); an import source selects every claim from that export. Ids are what the owner can check on the
+    // card, and the replay admits only those.
+    if (tool.data === 'forget_memory' && (frozen.claim_ids === undefined || frozen.topic !== undefined || frozen.source !== undefined || frozen.import_source !== undefined)) {
+      return { ok: false, error: 'After reading outside content, a forget goes to the owner only by memory ids. Call read_memory to find the claims to remove, then propose forget_memory with their claim_ids and a scope_note, without topic, source or import_source. To forget a whole import, the owner asks for it in a message of their own.', code: 'rejected' };
     }
     let preview: readonly string[] | undefined;
     if (tool.data === 'forget_memory' && host.claims) {
