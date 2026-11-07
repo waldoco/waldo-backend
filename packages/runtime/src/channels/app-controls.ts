@@ -1,4 +1,4 @@
-import { APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_CONNECTIONS_CATALOGUE_REVISION, type AppWearableV1, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_WHY_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_SCHEDULE_REVISION } from '../../../contracts/src/app/controls';
+import { APP_CONTROLS_AGREEMENTS_REVISION, APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_CONNECTIONS_CATALOGUE_REVISION, type AppWearableV1, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_WHY_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_SCHEDULE_REVISION } from '../../../contracts/src/app/controls';
 import type { AppWhyV1 } from '../../../contracts/src/app/why';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import { appControlStepUpAction, appStepUpRefusal, stepUpGated } from './console-step-up';
@@ -17,6 +17,7 @@ import { ownerAccountEmail } from '../identity/owner-account-email';
 import { ownerGoogleSignin } from '../identity/owner-google-signin';
 import { FINDING_URL_MAX } from '../onboarding/findings';
 import { agentMailControlAct, agentMailControls, type AgentMailControls, type AgentMailControlsDeps } from './agent-mail/controls';
+import { agreementsControlAct, agreementsControls } from './agreements';
 import { googlePicturePaths } from './app-google-picture';
 import { chooseProactiveSurface, proactiveSurface, proactiveSurfaceChoices, proactiveSurfaceReceipt, type ChatLinks } from './proactive-surface';
 
@@ -93,6 +94,8 @@ const googleSignin=async(env:PhoneSmsEnv,owner:string,google:{connectAvailable:b
   return signin&&!google.accounts.some(account=>account.email.toLowerCase()===signin.email)?{signin:{email:signin.email}}:{};
 };
 const readsAgentMail=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_AGENT_MAIL_REVISION;
+// Controls revision 18 adds the agreements view and improve_waldo.set; a build below it never names either.
+const readsAgreements=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_AGREEMENTS_REVISION;
 const namesWebSources=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_WELCOME_WEB_REVISION;
 // Controls revision 12 names WhatsApp as a way to prove the number; builds below it never receive it.
 const whatsappProofFor=(request:Request,host:AppControlsHost)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_WHATSAPP_PROOF_REVISION?host.whatsappProof:undefined;
@@ -211,6 +214,12 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
       const {csrf:_csrf,...shown}=controls,parsed=appControlProjectionV1Schema.safeParse({...shown,revision:await controlRevision(controls)});
       await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
     }
+    if(query.data.view==='agreements'){
+      if(!readsAgreements(request))return reply({error:'invalid_query'},400);
+      const controls=agreementsControls(host.storage.kv,host.csrf);
+      const {csrf:_csrf,...shown}=controls,parsed=appControlProjectionV1Schema.safeParse({...shown,revision:await controlRevision(controls)});
+      await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
+    }
     if(query.data.view==='account'){
       const response=await ownerControlsRead('account',owner);if(!response.ok)return reply({error:'projection_unavailable'},503);
       // The revision is the console's own and was taken before identity joins: an email change must not make a deletion read stale.
@@ -285,15 +294,19 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
   if(action.success&&action.data.view==='agent_mail'&&(!host.agentMail||!readsAgentMail(request)))return reply({error:'invalid_action'},400);
   if(action.success&&action.data.action==='proactive_surface.set'&&!choosesSurface(request,host))return reply({error:'invalid_action'},400);
   if(action.success&&action.data.action==='schedule.set'&&!setsSchedules(request))return reply({error:'invalid_action'},400);
-  if(!action.success||!(action.data.view==='day'||action.data.view==='phone'||action.data.view==='agent_mail'||(action.data.view==='connections'&&['google.connect','google.disconnect','granola.connect','granola.disconnect','app.connect','app.disconnect','session.revoke'].includes(action.data.action))))return reply({error:'invalid_action'},400);
+  if(action.success&&action.data.view==='agreements'&&!readsAgreements(request))return reply({error:'invalid_action'},400);
+  if(!action.success||!(action.data.view==='day'||action.data.view==='phone'||action.data.view==='agent_mail'||action.data.view==='agreements'||(action.data.view==='connections'&&['google.connect','google.disconnect','granola.connect','granola.disconnect','app.connect','app.disconnect','session.revoke'].includes(action.data.action))))return reply({error:'invalid_action'},400);
   const form=new FormData();for(const [key,value]of Object.entries(action.data))if(value!==undefined)form.set(key,value);form.set('csrf',host.csrf);
   // The phone view lists its own actions, so its fresh read is the eligibility check; the console view is never built.
-  const phone=action.data.view==='phone',mail=action.data.view==='agent_mail'?host.agentMail:undefined;
+  const phone=action.data.view==='phone',mail=action.data.view==='agent_mail'?host.agentMail:undefined,agreements=action.data.view==='agreements';
   let mailRead:AgentMailControls|undefined;
   const response=await controlAction(form,phone
     ?{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,
       projection:async view=>view==='phone'?phoneControls(host.phone,host.account.owner,host.csrf,host.imessageProof,undefined,whatsappProofFor(request,host)):null,
       act:async(action,fields)=>{await host.assertCurrent();return phoneControlAct(host.phone,host.account.owner,action,fields,host.whatsappUnlinked,host.imessageProof);}}
+    :agreements?{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,
+      projection:async view=>view==='agreements'?agreementsControls(host.storage.kv,host.csrf):null,
+      act:async(action,fields)=>{await host.assertCurrent();return agreementsControlAct(host.storage.kv,action,fields,Date.now);}}
     :mail?{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,
       projection:async view=>view==='agent_mail'?(mailRead=await agentMailControls(mail,host.csrf)):null,
       act:async(action,fields)=>{await host.assertCurrent();return agentMailControlAct(mail,mailRead!,action,fields);}}
