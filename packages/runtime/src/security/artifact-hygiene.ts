@@ -28,10 +28,15 @@ export const artifactMarker = (kind: ArtifactKind): string => `[quarantined: ${k
 // code comes before relaying it accurately, so an id or a date there is quarantined too.
 // Extraction first turns each whitespace run into one space or one newline, so a gap is one character. A gap may be
 // a newline, so a code can join digits that start the next row: the code stays hidden and the relay carries them.
-// A separator is a gap, or a hyphen, dash, dot or middle dot with at most one space on each side ("482 - 913").
+// A separator is a gap, or a hyphen or dash (fullwidth, non-breaking and minus included) with at most one space on each
+// side ("482 - 913"). A dot, middle dot, bullet or katakana middle dot joins only two halves of three or four digits
+// ("482.913"): between shorter groups it is a price ("12.50").
 const GAP = String.raw`[ \n]`;
-const SEP = String.raw`(?: ?[-\u2013\u2014.\u00b7] ?|${GAP})`;
-const EVEN = String.raw`\d{3}${SEP}\d{3}|\d{4}${SEP}\d{4}|\d{2}(?:${SEP}\d{2}){1,3}|\d(?:${SEP}\d){3,7}`;
+const DASH = String.raw`[-\u2010\u2011\u2013\u2014\u2212\uff0d]`;
+const DOT = String.raw`[.\u00b7\u2022\u30fb]`;
+const SEP = String.raw`(?: ?${DASH} ?|${GAP})`;
+const HALVES_SEP = String.raw`(?: ?(?:${DASH}|${DOT}) ?|${GAP})`;
+const EVEN = String.raw`\d{3}${HALVES_SEP}\d{3}|\d{4}${HALVES_SEP}\d{4}|\d{2}(?:${SEP}\d{2}){1,3}|\d(?:${SEP}\d){3,7}`;
 const CODE = String.raw`(?<code>${EVEN}|(?=\d{1,4}${SEP}\d)\d(?:${SEP}?\d){3,7}|\d{4,8})(?!\d)`;
 // Before "is your", nothing anchors where a code starts. An uneven split would reach back into digits ending the line
 // before ("$12.99" then "092893 is your code" relayed 99092893), so only even splits and the plain run apply. A split
@@ -75,9 +80,14 @@ const LINKS: ReadonlyArray<{ kind: Exclude<ArtifactKind, 'otp'>; re: RegExp }> =
   { kind: 'magic_link', re: /^https?:\/\/[^\s"'<>)\]]*[?&]type=(?:magiclink|signup|email_change|invite)/i },
   { kind: 'magic_link', re: /^https?:\/\/[^\s"'<>)\]]*[?&]token_hash=/i },
   { kind: 'password_reset', re: /^https?:\/\/[^\s"'<>)\]]*(?:\/reset[-_]?password|\/password[-_]?reset|reset[-_]?token=|confirmation[-_]?token=)/i },
-  // A link that carries the code itself ("verify?code=482913") signs in with one click.
-  { kind: 'magic_link', re: /^https?:\/\/[^\s"'<>)\]]*[?&](?:code|otp|passcode|verification[-_]?code)=\d{4,8}(?![^&#])/i },
+  // A link that carries the code itself ("verify?code=482913") signs in with one click. Its host or path says so: a shop's
+  // "product?code=4821" is a product code.
+  { kind: 'magic_link', re: /^(?=https?:\/\/[^\s"'<>)\]?#]*(?:verif|log-?in|sign-?in|auth|confirm|activat|magic))https?:\/\/[^\s"'<>)\]]*[?&](?:code|otp|passcode|verification[-_]?code)=\d{4,8}(?![^&#])/i },
 ];
+
+// Words that make a "code" something other than a one-time code.
+const OTHER_CODES = String.raw`(?:and|or|number|order|promo|promotional|discount|coupon|voucher|gift|card|referral|invite|tracking|reference|booking|dress|qr|bar|zip|pin|area|post|postal|source|conduct|country|dial(?:ling)?)`;
+const NOT_A_ONE_TIME_CODE = String.raw`(?!${OTHER_CODES}\b)`;
 
 // In this order. Google's SMS/mail prefix form keeps its prefix in the relay; "… is your code" comes before the
 // keyword forms, which would otherwise take its noun and the digits after it ("482913 is your code\n13 10 2026").
@@ -86,7 +96,8 @@ const OTPS: readonly RegExp[] = [
   // "123456 is your Google verification code", "123-456 is your WhatsApp code", "482913is your code". The code may
   // start right after a word ("Hello482913 is your code"), and the keyword may run into the next word.
   // A code in brackets or quotes, or with up to five words before its noun ("is your Acme Cloud Platform verification code").
-  new RegExp(String.raw`(?<!\d)["'(\[\u201c\u2018]?` + CODE_BEFORE + String.raw`["')\]\u201d\u2019]?\s*is\s+your\s+(?:[\w-]+\s){0,5}(?:code|passcode|otp)`, 'gi'),
+  // The words before the noun never name another kind of number ("is your order number and promo code").
+  new RegExp(String.raw`(?<!\d)["'(\[\u201c\u2018]?` + CODE_BEFORE + String.raw`["')\]\u201d\u2019]?\s*is\s+your\s+(?:${NOT_A_ONE_TIME_CODE}[\w-]+\s){0,5}(?:code|passcode|otp)`, 'gi'),
   // "Your Google verification code is 123456", "login code: 123-456", "security code 123456".
   // Glue on either side of a word must not hide a code, since a table cell can end right against the next one:
   // the phrase starts at the adjective, even mid-word ("Xverification pin 123456"), and the noun may follow it
@@ -97,12 +108,13 @@ const OTPS: readonly RegExp[] = [
   new RegExp(String.raw`(?:code|otp|passcode)` + KEYWORD_END + LEAD + CODE, 'gi'),
 ];
 
-// A code alone on its line (a table row of its own), within STANDALONE_REACH lines after a line that names a code but
-// shows none ("Use this code to sign in:", "Your verification code is below."). Any number of code shape there is taken,
-// so a lone number under the word "code" is quarantined too: the safer failure.
+// A code alone on its line (a table row of its own), within STANDALONE_REACH lines after a line that names a one-time code
+// but shows none ("Use this code to sign in:", "Your verification code is below."). A bracketed or dashed note may follow it
+// ("482913 (expires in 10 minutes)"). Only wording that names a one-time code arms the reach: a promo, dress, QR or bar
+// code, or "code" inside a word ("Barcode", "Unicode"), does not, or the price, year or time under it would be taken.
 const STANDALONE_REACH = 3;
-const STANDALONE_CODE = new RegExp(String.raw`^[ ("'\u201c]*(?<code>${EVEN}|\d{4,8})[ )"'.\u201d]*$`);
-const NAMES_CODE = new RegExp(String.raw`(?:code|otp|passcode|one[- ]?time\s*password)` + KEYWORD_END, 'i');
+const STANDALONE_CODE = new RegExp(String.raw`^[ ("'\u201c]*(?<code>${EVEN}|\d{4,8})(?!\d)[ )"'.\u201d]*(?:(?:\(|${DASH} )[^\n]*)?$`);
+const NAMES_CODE = new RegExp(String.raw`(?:\b(?:verification|one[- ]?time|login|log[- ]?in|sign[- ]?in|security|authentication|access)\s*(?:code|passcode|pin|otp)|\b(?:your|this|the\s+following)\s+(?:code|passcode|otp)|\bcode\s+below|\b(?:otp|passcode)|\bone[- ]?time\s*password)` + KEYWORD_END, 'i');
 const MARKER_START = '[quarantined: ';
 
 // Replace every artifact match with a typed marker. Returns the redacted text plus the distinct

@@ -32,6 +32,16 @@ describe('a code on its own line, a few lines after a line that names one', () =
   ])('is quarantined: %s', (text, code) => hidden(text, code));
 
   it.each([
+    'Use this code to sign in:\n482913 (expires in 10 minutes)',
+    'Your code is below\n482913 - it expires in 10 minutes',
+  ])('is quarantined with a note after it on its line, which stays: %s', (text) => {
+    const found = extractArtifacts(text);
+    expect(found.artifacts).toEqual([{ kind: 'otp', value: '482913' }]);
+    expect(found.text).not.toContain('482913');
+    expect(found.text).toContain('10 minutes');
+  });
+
+  it.each([
     ['a label row, then the code row', '<table><tr><td>Use this code to sign in:</td></tr><tr><td>482913</td></tr></table>'],
     ['a sentence, then the code row', '<p>Your verification code is below.</p><table><tr><td>482913</td></tr></table>'],
     ['a one-time password cell, then the code row', '<table><tr><td>Your one-time password</td></tr><tr><td>482913</td></tr></table>'],
@@ -46,8 +56,21 @@ describe('a code on its own line, a few lines after a line that names one', () =
     'Order summary\n2026',
     'Your code is ready to review\nSee section\n12',
     'We changed our code of conduct.\nRead it here.\nAcme Ltd\nUnit 7\n4821 Main Street',
+    // Codes that are not one-time codes, and "code" inside another word.
+    'Promo code applied\nTotal\n1499',
+    'Dress code: smart casual\nDate\n2026',
+    'Scan the QR code at the gate\nDeparture\n0745',
+    'Barcode label\nItem\n48291301',
+    'Pincode lookup\nArea\n560001',
+    'Unicode table\nCount\n4096',
   ])('leaves a line alone that is not a code by itself, or is too far from the naming line: %s', (text) => {
     expect(extractArtifacts(text).artifacts).toEqual([]);
+  });
+
+  it('keeps a price under a promo code row in read_thread, and relays nothing', async () => {
+    const { body, relays } = await readThread(html('<table><tr><td>Promo code applied</td></tr><tr><td>Total</td></tr><tr><td>1499</td></tr></table>'));
+    expect(body).toContain('1499');
+    expect(relays).toEqual([]);
   });
 
   it('takes no second code from a line after one that already showed its code', () => {
@@ -83,9 +106,14 @@ describe('separators inside a code', () => {
     ['Your code is 482 - 913', '482-913'],
     ['48-29-13 is your verification code', '48-29-13'],
     ['482–913 is your code', '482–913'],
+    ['Your code is 482－913', '482－913'],
+    ['Your code is 482‑913', '482‑913'],
+    ['Your code is 482−913', '482−913'],
+    ['Your code is 482•913', '482•913'],
+    ['Your code is 482・913', '482・913'],
   ])('relay the code as written: %s', (text, code) => hidden(text, code));
 
-  it.each(['Version 4.8.2 is out', 'Score 3–1 at halftime', 'Population 1·2 million', 'Room 482–913'])('leave ordinary text alone: %s', (text) => {
+  it.each(['Version 4.8.2 is out', 'Score 3–1 at halftime', 'Population 1·2 million', 'Room 482–913', 'Promo code: 12.50 off', 'Discount code: 12·50 applied'])('leave ordinary text alone: %s', (text) => {
     expect(extractArtifacts(text).artifacts).toEqual([]);
   });
 });
@@ -97,6 +125,10 @@ describe('a code before "is your"', () => {
     ['“482913” is your sign-in code', '482913'],
     ['482913 is your Acme Cloud Platform verification code', '482913'],
   ])('is quarantined: %s', (text, code) => hidden(text, code));
+
+  it.each(['12345678 is your order number and promo code', '48291301 is your referral code', '4821 is your gift card code'])('leaves a number named as something else alone: %s', (text) => {
+    expect(extractArtifacts(text).artifacts).toEqual([]);
+  });
 });
 
 describe('a code in a plain link', () => {
@@ -107,6 +139,14 @@ describe('a code in a plain link', () => {
 
   it('leaves a link whose code is not digits alone', () => {
     expect(extractArtifacts('Docs: https://example.com/help?code=intro').artifacts).toEqual([]);
+  });
+
+  it.each(['https://shop.example.com/product?code=4821', 'https://shop.example.com/sale?code=482913&utm=mail'])('leaves a shop link whose path says nothing of signing in: %s', (link) => {
+    expect(extractArtifacts(`See ${link}`).artifacts).toEqual([]);
+  });
+
+  it.each(['https://example.com/login?code=482913', 'https://example.com/auth/callback?code=482913', 'https://id.example.com/sign-in/confirm?otp=482913'])('takes a sign-in link with its code: %s', (link) => {
+    expect(extractArtifacts(`Open ${link}`).artifacts).toEqual([{ kind: 'magic_link', value: link }]);
   });
 });
 
