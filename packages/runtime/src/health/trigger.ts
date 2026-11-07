@@ -96,10 +96,12 @@ export const healthTriggerBook = (sql: Sql) => {
       sql.exec('INSERT INTO health_trigger_wakes (day, reason, at) VALUES (?, ?, ?) ON CONFLICT (day, reason) DO UPDATE SET at = max(at, excluded.at), taken = 0', day, reason, at);
     },
     // A wake that is not a zone change: marked once per reason per owner-local day, however many uploads find it. False when
-    // this day already had it, taken by an evaluation or not.
+    // this day already had it, taken by an evaluation or not. A workout is also one wake however many days it spans: an
+    // upload after midnight that re-sends it, or adds its effort rating, finds the mark within the workout's freshness.
     markOnce(day: string, at: number, reason: HealthWakeReason): boolean {
       sql.exec('DELETE FROM health_trigger_wakes WHERE at < ?', at - HEALTH_WAKE_KEEP_MS);
       if (sql.exec('SELECT 1 FROM health_trigger_wakes WHERE day = ? AND reason = ?', day, reason).toArray().length > 0) return false;
+      if (reason === 'workout_ended' && sql.exec('SELECT 1 FROM health_trigger_wakes WHERE reason = ? AND at > ?', reason, at - WORKOUT_FRESH_MS).toArray().length > 0) return false;
       markPending(day, at);
       sql.exec('INSERT INTO health_trigger_wakes (day, reason, at) VALUES (?, ?, ?)', day, reason, at);
       return true;

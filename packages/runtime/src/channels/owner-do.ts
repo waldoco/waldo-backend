@@ -5507,11 +5507,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // An upload or a wearable sync changed the readings; an empty welcome health stage reads them once more.
     // A new stated need changes no reading, so it never spends the welcome's one retry for late health data.
     const healthSamples = async (cause: HealthRecomputeCause = 'readings', woke = false, workout = false) => {
+      // WORKOUT_WAKE: a workout just ended. The time is noted before the recompute is asked for, so a recompute already due
+      // still finds it; the first one that starts after it and finds today's row hands it to the health trigger, so the
+      // trigger never reads the day before the workout.
+      if (workout && this.env.WORKOUT_WAKE === '1') storage.kv.put(WORKOUT_NOTED_KEY, Date.now());
       await recompute.ask();
       if (woke && this.env.WAKE_BRIEF === '1') await wakeNoticed();
-      // WORKOUT_WAKE: a workout just ended. The time is noted, and the first recompute that starts after it and finds today's
-      // row hands it to the health trigger, so the trigger never reads the day before the workout.
-      if (workout && this.env.WORKOUT_WAKE === '1') storage.kv.put(WORKOUT_NOTED_KEY, Date.now());
       if (cause === 'readings' && runtime.welcome.lateHealth()) this.continueWelcome(runtime);
     };
     const healthRecomputeRun = async () => {

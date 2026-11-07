@@ -73,6 +73,25 @@ describe('what the book keeps about a wake', () => {
     });
   });
 
+  it('wakes once per workout: a workout mark within three hours of the last one is refused on any day, across midnight and a DST night', async () => {
+    await withTrigger(async ({ deps }) => {
+      const book = deps().book;
+      // 23:20 on day D in Kolkata, then the same workout re-sent (or its effort rating added) at 00:15 on D+1.
+      const late = Date.parse('2026-10-21T17:50:00Z'), resent = Date.parse('2026-10-21T18:45:00Z');
+      expect(book.markOnce(DAY, late, 'workout_ended')).toBe(true);
+      expect(book.markOnce('2026-10-22', resent, 'workout_ended')).toBe(false);
+      expect(book.markOnce('2026-10-22', resent, 'sleep_debt_building')).toBe(true);
+      // A workout three hours later is a new one, and the next day's first.
+      expect(book.markOnce('2026-10-22', late + WORKOUT_FRESH_MS, 'workout_ended')).toBe(true);
+      // The gap is in epoch time, so the night London's clocks go back (25 Oct) neither shortens nor lengthens it.
+      const beforeChange = Date.parse('2026-10-25T00:30:00Z'), afterChange = Date.parse('2026-10-25T02:20:00Z');
+      expect(book.markOnce('2026-10-25', beforeChange, 'workout_ended')).toBe(true);
+      expect(book.markOnce('2026-10-25', afterChange, 'workout_ended')).toBe(false);
+      expect(book.markOnce('2026-10-25', beforeChange + WORKOUT_FRESH_MS, 'workout_ended')).toBe(false);
+      expect(book.markOnce('2026-10-26', beforeChange + WORKOUT_FRESH_MS, 'workout_ended')).toBe(true);
+    });
+  });
+
   it('still refuses a wake that was already taken by an evaluation, so a later upload the same day does not wake again', async () => {
     await withTrigger(async ({ deps }) => {
       const book = deps().book;
