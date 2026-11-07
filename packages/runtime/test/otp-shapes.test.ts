@@ -133,7 +133,7 @@ describe('a code before "is your"', () => {
     ['482913 is your Acme Cloud Platform verification code', '482913'],
   ])('is quarantined: %s', (text, code) => hidden(text, code));
 
-  it.each(['48291301 is your referral code', '4821 is your gift card code', '12345678 is your order number and promo code'])('leaves a number named as something else alone: %s', (text) => {
+  it.each(['48291301 is your referral code', '12345678 is your order number and promo code'])('leaves a number named as something else alone: %s', (text) => {
     expect(extractArtifacts(text).artifacts).toEqual([]);
   });
 
@@ -145,6 +145,15 @@ describe('a code before "is your"', () => {
     ['482913 is your gift card verification code', '482913'],
     ['482913 is your booking verification code', '482913'],
     ['482913 is your account and login code', '482913'],
+    // A PIN or a card's code is quarantined however it is named.
+    ['4829 is your PIN code', '4829'],
+    ['4829 is your ATM PIN code', '4829'],
+    ['4829 is your UPI PIN code', '4829'],
+    ['4829 is your debit card PIN code', '4829'],
+    ['1234 is your card PIN code', '1234'],
+    ['482913 is your PIN code for card ending 1234', '482913'],
+    ['4829 is your card code', '4829'],
+    ['4821 is your gift card code', '4821'],
   ])('takes a one-time code whatever words come before its noun: %s', (text, code) => {
     const found = extractArtifacts(text);
     expect(found.artifacts).toEqual([{ kind: 'otp', value: code }]);

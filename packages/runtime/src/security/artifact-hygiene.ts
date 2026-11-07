@@ -86,8 +86,9 @@ const LINKS: ReadonlyArray<{ kind: Exclude<ArtifactKind, 'otp'>; re: RegExp }> =
 ];
 
 // The word right before a bare "code" that makes it something other than a one-time code ("promo code", "referral code").
-// It never vetoes an OTP or passcode, or a code a one-time word names ("your gift card verification code").
-const OTHER_CODES = String.raw`(?:number|order|promo|promotional|discount|coupon|voucher|gift|card|referral|invite|tracking|reference|booking|dress|qr|bar|zip|pin|area|post|postal|source|country|dial(?:ling)?)`;
+// It never vetoes an OTP or passcode, or a code a one-time word names ("your gift card verification code"). A PIN code or
+// a card's code is a credential, so neither word is here.
+const OTHER_CODES = String.raw`(?:number|order|promo|promotional|discount|coupon|voucher|gift|referral|invite|tracking|reference|booking|dress|qr|bar|zip|area|post|postal|source|country|dial(?:ling)?)`;
 // "Pincode", "Postcode", "Zip code", "Barcode", "Unicode" name a postal or product number, not a one-time code. "PIN code" is
 // still taken: it can be a card's.
 const COMPOUND_CODE = String.raw`(?<!(?:pin|post|zip|bar|uni)|\b(?:zip|postal?)\s)`;
