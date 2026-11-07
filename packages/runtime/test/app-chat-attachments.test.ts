@@ -235,6 +235,21 @@ describe('what an upload or send is refused', () => {
     });
   });
 
+  it('one owner cannot send another owner\'s upload: not by its id from their object, nor one staged under their name', async () => {
+    let theirs = '';
+    await fixture('attach-owner-a', ON, async ({ upload }) => { theirs = (await uploaded(await upload('photo', 'image/png', bytes(10, 1)))).upload_id; });
+    await fixture('attach-owner-b', ON, async ({ send, staged, state }) => {
+      expect((await send('cross-client-0001', { text: 'look', attachments: [{ upload_id: theirs }] })).status).toBe(409);
+      const { stageAppUpload } = await import('../src/channels/app-uploads');
+      const named = stageAppUpload(state.storage, { owner: 'attach-owner-a', kind: 'photo', mime: 'image/png', name: 'photo.png', data: bytes(10, 1) }, Date.now());
+      if (named === 'capacity') throw new Error('fixture capacity');
+      expect((await send('cross-client-0002', { text: 'look', attachments: [{ upload_id: named.id }] })).status).toBe(409);
+      // Nothing was taken: the upload staged under the other name is still waiting, and no message was admitted.
+      expect(staged().filter(key => key.startsWith('app_upload:'))).toEqual([`app_upload:${named.id}`]);
+      expect([...state.storage.kv.list({ prefix: 'app:inbox-record:' })]).toEqual([]);
+    });
+  });
+
   it('caps the uploads waiting to be sent, and drops one left unsent past its hour', async () => {
     await fixture('attach-capacity', ON, async ({ upload, send, staged, state }) => {
       const waiting: { upload_id: string }[] = [];

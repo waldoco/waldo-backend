@@ -18,7 +18,7 @@ import { openOwnerCeilingUsd } from '../identity/open-signup';
 import { findingStore, observeReads, observedPages, ownerLookupHandlers } from '../onboarding/findings';
 import { consoleLog, consoleTrace } from '../observability/console-correlation';
 import { APP_TURN_DEADLINE_MS, AppInbox, chatRevision, type AppInboxRecord } from './app-inbox';
-import { appMessageBody, appTurnText, appUploadName, appUploadRoom, readAppUpload, stageAppUpload } from './app-uploads';
+import { appMessageBody, appTurnText, appUploadHeaders, appUploadRoom, readAppUpload, stageAppUpload } from './app-uploads';
 import { iMessageComposition, type IMessageEnv, type IMessageReactionHandoff, type IMessageResultReport, type IMessageTurnHandoff } from './imessage/bridge-do';
 import { IMessageFinalOutbox, targetOf } from './imessage/final-outbox';
 import { iMessageApprovalCaller, iMessageCardIsLatest } from './imessage/approval-cards';
@@ -245,7 +245,7 @@ import { approvalHandlers, approveShownHandler } from '../tools/live/raise-appro
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi, telegramReplyDraft } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
-import { APP_CHAT_MEMORY_USED_REVISION, APP_CHAT_RATING_REVISION, APP_CHAT_UPLOAD_KIND_HEADER, APP_CHAT_UPLOAD_KINDS, APP_CHAT_UPLOAD_MAX_BYTES, APP_CHAT_UPLOAD_NAME_HEADER, APP_CHAT_UPLOAD_PATH, APP_CONTRACT_HEADER, appChatUploadResultV1Schema, appContractRevision } from '../../../contracts/src/app/core';
+import { APP_CHAT_MEMORY_USED_REVISION, APP_CHAT_RATING_REVISION, APP_CHAT_UPLOAD_MAX_BYTES, APP_CHAT_UPLOAD_PATH, APP_CONTRACT_HEADER, appChatUploadResultV1Schema, appContractRevision } from '../../../contracts/src/app/core';
 import { APP_AUTONOMY_PATH, APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, APP_UPDATE_BASE, appSubjectFor, appTranscriptPage, appTranscriptPageRead, ownerPrincipalRef, parseAppSend } from './app-api';
 import { appThreadsRequest, askThreadTitle, nameThread, recallReach, redactThreadTitles, threadChainRef, threadOfChain, threadRecord, threadRowsOfChain, threadRowsPrefix, touchThread, type AppThreadsHost } from './app-threads';
 import { stableJson } from '../context-composer/canonical';
@@ -2238,18 +2238,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const answer=(body:object,status:number)=>Response.json(body,{status,headers:{'cache-control':'no-store'}});
     if(this.env.APP_CHAT_ATTACHMENTS!=='1')return answer({error:'unavailable'},404);
     // Everything that can refuse it is asked before the bytes are read.
-    const kind=APP_CHAT_UPLOAD_KINDS.find(known=>known===request.headers.get(APP_CHAT_UPLOAD_KIND_HEADER));
-    if(!kind)return answer({error:'invalid_kind'},400);
-    const mime=(request.headers.get('content-type')??'').split(';')[0]!.trim().toLowerCase();
-    let given:string|null=null;
-    try{const raw=request.headers.get(APP_CHAT_UPLOAD_NAME_HEADER);given=raw===null?null:decodeURIComponent(raw);}catch{return answer({error:'invalid_name'},400);}
-    const named=appUploadName(kind,mime,given);
-    if('refused' in named)return named.refused==='type'?answer({error:'unsupported_type'},415):answer({error:'invalid_name'},400);
+    const asked=appUploadHeaders(request.headers);
+    if('refused' in asked)return answer({error:asked.refused.error},asked.refused.status);
+    const {kind,mime}=asked;
     if(!appUploadRoom(this.ctx.storage,Date.now()))return answer({error:'uploads_waiting'},429);
     const data=new Uint8Array(await request.arrayBuffer());
     if(!data.length)return answer({error:'empty'},400);
     if(data.length>APP_CHAT_UPLOAD_MAX_BYTES)return answer({error:'too_large'},413);
-    const staged=stageAppUpload(this.ctx.storage,{owner:name,kind,mime,name:named.name,data},Date.now());
+    const staged=stageAppUpload(this.ctx.storage,{owner:name,kind,mime,name:asked.name,data},Date.now());
     if(staged==='capacity')return answer({error:'uploads_waiting'},429);
     // The alarm wakes at the upload's expiry, to drop it if no message took it. The key was written with the upload, so the
     // slot only moves earlier and no other lane's wake drops.

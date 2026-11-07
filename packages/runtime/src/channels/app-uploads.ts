@@ -1,5 +1,5 @@
 import { APP_UPLOADS_DUE_KEY } from '../scheduler/alarm-slot';
-import { APP_CHAT_PHOTO_TYPES, APP_CHAT_UPLOAD_TTL_MS, APP_CHAT_UPLOADS_WAITING_MAX, APP_CHAT_VOICE_TYPES, type AppChatUploadKind } from '../../../contracts/src/app/core';
+import { APP_CHAT_PHOTO_TYPES, APP_CHAT_UPLOAD_KIND_HEADER, APP_CHAT_UPLOAD_KINDS, APP_CHAT_UPLOAD_NAME_HEADER, APP_CHAT_UPLOAD_TTL_MS, APP_CHAT_UPLOADS_WAITING_MAX, APP_CHAT_VOICE_TYPES, type AppChatUploadKind } from '../../../contracts/src/app/core';
 
 // A chat attachment from the app, staged in the owner's own object between its upload and its message's turn. Waiting, it
 // expires after APP_CHAT_UPLOAD_TTL_MS; once a message takes it, it has no expiry of its own and lives exactly as long as
@@ -79,6 +79,20 @@ export const appUploadName = (kind: AppChatUploadKind, mime: string, given: stri
   if (typed) return Object.hasOwn(typed, mime) ? { name: `${kind}.${typed[mime]}` } : { refused: 'type' };
   if (!/^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*$/.test(mime)) return { refused: 'type' };
   return given !== null && /^[^/\\\p{Cc}]{1,128}$/u.test(given) && !given.startsWith('.') ? { name: given } : { refused: 'name' };
+};
+
+// What an upload's headers ask for, or why it is refused, read before any of its bytes. The Worker asks first, so a refused
+// upload is never read; the owner object asks again as the authority.
+export type AppUploadRefusal = Readonly<{ status: 400 | 415; error: 'invalid_kind' | 'invalid_name' | 'unsupported_type' }>;
+export const appUploadHeaders = (headers: Headers): Readonly<{ kind: AppChatUploadKind; mime: string; name: string }> | Readonly<{ refused: AppUploadRefusal }> => {
+  const kind = APP_CHAT_UPLOAD_KINDS.find(known => known === headers.get(APP_CHAT_UPLOAD_KIND_HEADER));
+  if (!kind) return { refused: { status: 400, error: 'invalid_kind' } };
+  const mime = (headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
+  let given: string | null;
+  try { const raw = headers.get(APP_CHAT_UPLOAD_NAME_HEADER); given = raw === null ? null : decodeURIComponent(raw); } catch { return { refused: { status: 400, error: 'invalid_name' } }; }
+  const named = appUploadName(kind, mime, given);
+  if ('refused' in named) return { refused: named.refused === 'type' ? { status: 415, error: 'unsupported_type' } : { status: 400, error: 'invalid_name' } };
+  return { kind, mime, name: named.name };
 };
 
 // An app message as the shared turn reads it: its words, or its attachment with the words as the caption. The attachment's
