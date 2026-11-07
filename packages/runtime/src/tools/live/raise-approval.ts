@@ -54,7 +54,7 @@ const NOT_APPROVED: Readonly<Record<Exclude<ApproveShownOutcome['outcome'], 'dec
   not_shown_here: 'That card was not shown in full in this conversation, so the owner\'s words here cannot approve it. Nothing was done. They approve it where it was shown in full, or in the Waldo app.',
   shown_after_message: 'That card reached the owner after the message you are answering, so that message cannot be about it. Nothing was done. Ask the owner whether to go ahead with it.',
   changed_since_shown: 'That card changed after the owner saw it, so nothing was done. Show them the current version and ask again.',
-  app_only: 'That kind of card is approved only on the card itself or in the Waldo app, never in words. Nothing was done. Tell the owner where to approve it.',
+  app_only: 'That kind of card is approved only with its button, never in words. Nothing was done. Tell the owner to tap its button in the Waldo app, where it waits under Approvals.',
   not_waiting: 'That card is not waiting on the owner, so nothing was done.',
 };
 const NOT_THEIR_WORDS = 'Only the owner\'s own message approves a card, and this turn was not started by one of theirs alone (it was started by Waldo, or it quotes or forwards someone else\'s words). Nothing was done. Ask the owner to tell you in a message of their own.';

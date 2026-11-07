@@ -415,12 +415,47 @@ const clipped = (text: string) => text.length > 120 ? `${text.slice(0, 117)}...`
 // The reasoning was written in a turn that read outside text and can name anything, so a card that read the owner's own
 // stores leads with that read, and the reasoning follows it as Waldo's.
 const sentence = (text: string) => /[.!?…]$/.test(text) ? text : `${text}.`;
+// What a held-back call will do and on what, in the owner's words: the card leads with this, never with a tool name and its
+// raw arguments. A tool with no line here is named in words from its name.
+const quotedArg = (args: Record<string, unknown>, key: string): string => {
+  const value = args[key];
+  return typeof value === 'string' && value.trim() ? `: "${value.length > 80 ? `${value.slice(0, 77)}...` : value}"` : '';
+};
+const ACTION_WORDS: Readonly<Record<string, (args: Record<string, unknown>) => string>> = {
+  start_task: (args) => `Start a background task${quotedArg(args, 'title')}`,
+  send_email: (args) => `Send an email${Array.isArray(args.to) ? ` to ${args.to.join(', ')}` : ''}${quotedArg(args, 'subject')}`,
+  send_message: (args) => `Send a message${typeof args.channel === 'string' ? ` on ${args.channel}` : ''}`,
+  write_task: (args) => `Add a task${quotedArg(args, 'title')}`,
+  update_task: (args) => `Change a task${quotedArg(args, 'title')}`,
+  set_reminder: (args) => `Set a reminder${quotedArg(args, 'note')}`,
+  cancel_reminder: (args) => args.all === true ? 'Cancel all your reminders' : 'Cancel a reminder',
+  cancel_task: () => 'Stop a background task',
+  open_loop: (args) => `Track a follow-up${quotedArg(args, 'title')}`,
+  close_loop: () => 'Close a follow-up',
+  browse_act: (args) => `Act on a web page${typeof args.url === 'string' ? ` (${args.url.slice(0, 80)})` : ''}`,
+  call_mcp_tool: (args) => `Run a connected tool${typeof args.tool === 'string' ? ` (${args.tool})` : ''}`,
+  create_artifact: (args) => `Create a document${quotedArg(args, 'name')}`,
+  revise_artifact: () => 'Revise a document',
+  export_artifact: () => 'Export a document',
+  workspace_write: (args) => `Write a file${quotedArg(args, 'path')}`,
+  log_meal: () => 'Log a meal',
+  log_workout: () => 'Log a workout',
+  set_standing_order: (args) => `Set a standing order${quotedArg(args, 'scope')}`,
+  propose_calendar_change: (args) => `Change your calendar${quotedArg(args, 'title')}`,
+  set_proactivity: () => 'Change how often Waldo reaches out',
+  set_schedule_preference: () => 'Change a scheduled behaviour',
+};
+const actionLine = (p: TaintedActionProposal): string => ACTION_WORDS[p.tool]?.(p.args) ?? `Use ${p.tool.replaceAll('_', ' ')}`;
 const describeTaintedAction = (p: TaintedActionProposal) => p.preview?.length
   ? `${PREVIEW_HEADING[p.tool] ?? 'It changes'}: ${p.preview[0]}${p.preview.length > 1 ? ` and ${p.preview.length - 1} more` : ''}`
-  : `Run ${p.tool}: ${clipped(p.reasoning)}`;
+  : `${actionLine(p)}. ${clipped(p.reasoning)}`;
 const reviewTaintedAction = (p: TaintedActionProposal) => !p.preview?.length ? describeTaintedAction(p)
   : `${p.preview.length === 1 ? describeTaintedAction(p) : `${PREVIEW_HEADING[p.tool] ?? 'It changes'}:\n${p.preview.map((line) => `- ${line}`).join('\n')}`}\n\nWaldo's reasoning: ${clipped(p.reasoning)}`;
 const TAINTED_ACTION_WHY = 'It uses content from an email or web page, so it needs your approval before it runs.';
+// The words of a held-back call's card. The app's review adds the exact arguments under Details; a chat card is these words
+// alone, so it reads plainly and fits a surface's buttons, and the arguments stay one step away in the app.
+const taintedCard = (p: TaintedActionProposal) => `Run this action? ${reviewTaintedAction(p)}\n\n${TAINTED_ACTION_WHY}`;
+const chatReview = (entry: LedgerRow): string => entry.kind === 'tainted_action' ? taintedCard(JSON.parse(entry.payload_json) as TaintedActionProposal) : reviewText(entry);
 // Browser and MCP summaries are rebuilt from the payload, so a row stored before masking renders
 // masked too. A payload that no longer parses shows the card title, never the stored summary.
 const summaryOf = (entry: LedgerRow) => {
@@ -458,7 +493,7 @@ const reviewText = (entry: LedgerRow, signed = true): string => {
   if (entry.kind === 'message_send') return `Send this message on ${p.channel}?\n\n${reviewMessage(p)}`;
   if (entry.kind === 'agent_mail_send') return `Send this email as Waldo? ${reviewAgentMail(p, signed)}`;
   if (entry.kind === 'mcp_call') return `Run this MCP tool? ${describeMcp(p)}\n\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}${p.questions?.length ? `\n\nThe server asked (its words):\n${p.questions.map((q: { id: string; message: string }) => `- ${q.message}`).join('\n')}\n\nYour answers:\n${JSON.stringify(maskedValue(p.answers?.responses ?? {}), null, 2)}` : ''}`;
-  if (entry.kind === 'tainted_action') return `Run this action? ${reviewTaintedAction(p)}\n\n${TAINTED_ACTION_WHY}\n\nTool: ${p.tool}\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}`;
+  if (entry.kind === 'tainted_action') return `${taintedCard(p)}\n\nDetails:\nTool: ${p.tool}\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}`;
   if (entry.kind === 'browser_submit') return `Approve this browser action? ${describeBrowser(p)}`;
   if (entry.kind === 'google_task_change') return reviewGoogleTaskChange(googleTaskProposalSchema.parse(p));
   // A calendar change states the change itself, so the same text reads true before the owner decides and after it is done.
@@ -864,7 +899,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const present = async (id: string, raise?: Readonly<{ runRef: string | undefined }>) => {
     const entry = row(id)!;
     const deferrable = raise !== undefined || entry.deferred_at == null;
-    const card = reviewText(entry), buttons = buttonsFor(entry, deferrable), title = CARDS[entry.kind]!.title;
+    const card = chatReview(entry), buttons = buttonsFor(entry, deferrable), title = CARDS[entry.kind]!.title;
     // An email's card also links its console review; the lookup runs while the app card is built, not ahead of the card.
     const reviewing = entry.kind === 'email_send' ? deps.reviewUrl?.().catch(() => null) ?? null : null;
     const digest = `sha256:${await sha256Hex(entry.payload_json)}`;

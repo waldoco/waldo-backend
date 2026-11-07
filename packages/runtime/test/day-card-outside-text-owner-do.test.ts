@@ -136,7 +136,9 @@ it('a change the card turn thinks is wanted reaches the owner as exactly one car
   ], (owned) => {
     expect(JSON.parse(toolOutput('card') ?? '{}')).toMatchObject({ ok: true });
     expect(cards()).toHaveLength(1);
-    expect(cards()[0]!.body.text).toContain('cancel_reminder');
+    // Plain words in chat: the card names the change, never the tool.
+    expect(cards()[0]!.body.text).toContain('Cancel a reminder');
+    expect(cards()[0]!.body.text).not.toContain('cancel_reminder');
     expect(owned.reminders().map(r => r.id)).toEqual([owned.reminder]);
   });
 }, 30_000);

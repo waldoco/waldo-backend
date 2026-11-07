@@ -62,7 +62,8 @@ it('a forwarded "paid" mail closes the owner\'s loop only from the card; the mai
       expect(JSON.parse(toolOutput('close-mail') ?? '{}')).toMatchObject({ ok: true, data: { id: sourced.id, closed: true } });
       expect(status(sourced.id)).toBe('done');
       const card = proof.telegram.find(entry => entry.method === 'sendMessage' && JSON.stringify(entry.body.reply_markup ?? {}).includes('"a:'));
-      expect(card?.body.text).toContain('close_loop');
+      // Plain words in chat: no tool name or raw arguments in front of the owner.
+      expect(card?.body.text).not.toMatch(/close_loop|Args:/);
       expect(card?.body.text.split('\n')[0]).toBe('Run this action? It closes: Pay City Power (due 2026-10-16 18:00), as done');
       expect(status(own.id)).toBe('open');
 

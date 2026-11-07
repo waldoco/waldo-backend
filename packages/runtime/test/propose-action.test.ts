@@ -146,8 +146,9 @@ describe('taint goes to a card', () => {
       expect(row!.status).toBe('open');
       expect(row!.proposal_digest).toBe(await sha256Hex(stableJson(taskArgs)));
       expect(JSON.parse(row!.payload_json)).toMatchObject({ tool: 'write_task', args: taskArgs, source: 'external' });
-      // The card says what will run and why it needs approval.
-      expect(cards[0]).toContain('write_task');
+      // The card says what will run and why it needs approval, in words, with no tool name or raw arguments in chat.
+      expect(cards[0]).toContain('Add a task');
+      expect(cards[0]).not.toMatch(/write_task|Args:/);
       expect(cards[0]).toContain('Pay invoice 44');
       expect(cards[0]).toMatch(/email or web page/);
 

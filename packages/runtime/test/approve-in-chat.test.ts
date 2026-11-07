@@ -478,3 +478,45 @@ describe('the chat a card was raised in', () => {
     });
   });
 });
+
+// A held-back call's card is written in words: what will run, on what, and why. Its exact arguments stay one step away, in the
+// Waldo app's review, never in the chat card, so even a long call's card fits WhatsApp's buttons.
+describe('a held-back call\'s card in plain words', () => {
+  const longArgs = { profile: 'reader', title: 'Five signups', goal: 'Look each one up. '.repeat(120), context: 'Names from the Loops alert. '.repeat(60), done_when: 'One line each.' };
+
+  it('the WhatsApp card names what will run and why, carries no raw arguments, and still goes out with its buttons', async () => {
+    await owner('plain-card-whatsapp', async state => {
+      const f = harness(state, 'whatsapp');
+      const id = await f.desk.proposeTaintedAction({ tool: 'start_task', args: longArgs, args_digest: await sha256Hex(stableJson(longArgs)), reasoning: 'You asked me to research the signups.', source: 'external' });
+      const card = f.messages.at(-1)!;
+      expect(card.text).toMatch(/^Run this action\? Start a background task: "Five signups"/);
+      expect(card.text).toContain('You asked me to research the signups.');
+      expect(card.text).not.toMatch(/Args:|"goal"|\{\s*"/);
+      expect(card.text.length).toBeLessThanOrEqual(1024);
+      expect(card.buttons.length).toBeGreaterThan(0);
+      expect(f.desk.waiting().find(waiting => waiting.approval_id === id)).toBeDefined();
+    });
+  });
+
+  it('the app\'s review keeps the exact arguments, under Details after the words', async () => {
+    await owner('plain-card-app', async state => {
+      const f = harness(state, 'app');
+      const args = { title: 'Pay invoice 44' };
+      const id = await f.desk.proposeTaintedAction({ tool: 'write_task', args, args_digest: await sha256Hex(stableJson(args)), reasoning: 'The vendor asked for it.', source: 'external' });
+      const [approval] = await f.desk.approvals(SHOWN_AT, { id });
+      const review = String(approval!.review);
+      expect(review).toMatch(/^Run this action\? Add a task: "Pay invoice 44"/);
+      expect(review.indexOf('Details:')).toBeGreaterThan(review.indexOf('Pay invoice 44'));
+      expect(review).toContain('"title": "Pay invoice 44"');
+    });
+  });
+});
+
+describe('a typed yes on a card only its button approves', () => {
+  it('is refused as before, and tells the model to point the owner at the card\'s button in the app', async () => {
+    const handler = approveShownHandler({ approveShown: async () => ({ outcome: 'app_only' as const }) });
+    const result = await handler.handle({ approval_id: 'p1' } as never, { trigger: 'user_message', runOrigin: 'owner', ownerMessage: said(), turnId: 't1' } as never);
+    expect(result).toMatchObject({ ok: false, code: 'rejected', error: expect.stringMatching(/Nothing was done/) });
+    expect((result as { error: string }).error).toMatch(/tap its button.*Approvals/);
+  });
+});
