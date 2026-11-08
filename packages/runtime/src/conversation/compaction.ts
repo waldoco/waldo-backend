@@ -31,9 +31,13 @@ const labelled = (settings: CompactionSettings) => (entry: ConversationEntry): C
   return entry.modelProjection.mode === 'replace' ? { ...entry, modelProjection: { mode: 'replace', payload: label + entry.modelProjection.payload } }
     : { ...entry, modelPayload: label + entry.modelPayload };
 };
+// WALDO_CALL_CEILINGS: a chat's history is the conversation layer of a call whose whole input aims at 40k tokens, a summary
+// of at most 2k and a tail of about 20k. The summary's input and a seed read the same budget, as the chain's store loads only
+// about that much behind its summary.
+export const CHAT_HISTORY_BUDGET_TOKENS = 22_000;
 // Only the exact values "on" and "1" turn these on, so an unset or mistyped deploy var keeps the plain window.
-export const compactionSettings = (env: Readonly<{ WALDO_COMPACTION?: string; WALDO_STEPPED_WINDOW?: string }>): CompactionSettings =>
-  ({ ...COMPACTION, enabled: env.WALDO_COMPACTION === 'on', steppedWindow: env.WALDO_STEPPED_WINDOW === '1' });
+export const compactionSettings = (env: Readonly<{ WALDO_COMPACTION?: string; WALDO_STEPPED_WINDOW?: string; WALDO_CALL_CEILINGS?: string }>): CompactionSettings =>
+  ({ ...COMPACTION, enabled: env.WALDO_COMPACTION === 'on', steppedWindow: env.WALDO_STEPPED_WINDOW === '1', ...(env.WALDO_CALL_CEILINGS === '1' ? { budgetTokens: CHAT_HISTORY_BUDGET_TOKENS } : {}) });
 
 export const COMPACTION_SUPERSEDED_MARKER = '[superseded summary]';
 // One compaction per chain and span: the row's id carries the last row it covers.

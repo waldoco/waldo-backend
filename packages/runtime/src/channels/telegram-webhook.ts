@@ -31,6 +31,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_STEPPED_WINDOW?: string;
   // '1' caps standing orders and quests in the prompt and clears a turn's tool results down to the latest three past ~30k tokens.
   WALDO_CONTEXT_CAPS?: string;
+  // '1' holds every chat's history to the conversation layer of the call budget and measures each call against its class's ceiling.
+  WALDO_CALL_CEILINGS?: string;
   WALDO_ENVIRONMENT?: string;
   WALDO_OWNER_DO_NAMESPACE?: string;
   WALDO_RELEASE?: string;

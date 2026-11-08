@@ -40,6 +40,9 @@ export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?
   promptV2?: boolean;
   // WALDO_CONTEXT_CAPS: an owner turn clears its tool results down to the latest few once they pass about 30k tokens.
   contextCaps?: boolean;
+  // WALDO_CALL_CEILINGS: each call is measured against its class's ceiling, and an owner turn clears earlier tool results
+  // once they would carry the call past the hard ceiling.
+  callCeilings?: boolean;
   onAttempts?: (attempts: readonly LLMAttempt[]) => void; held?: () => Promise<boolean> }>;
 
 export const ownerModelAccess = (access: string | OwnerModelAccess): OwnerModelAccess =>
