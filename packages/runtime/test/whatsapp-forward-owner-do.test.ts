@@ -55,7 +55,7 @@ it('a forwarded /fire nightly, /stop, /ledger or approval reply reaches the mode
       for (const text of ['/fire nightly', '/stop', '/ledger', 'a:p12']) expect.soft(JSON.stringify(modelInputs), text).toContain(labelled(text));
       // A reply carries context too, with no forward flag: the owner typed this command, so it runs.
       const before = commands;
-      await deliver(instance, [message('wamid.reply.fire', '/fire nightly', { from: '15550002222', id: 'wamid.original' })]);
+      await deliver(instance, [message('wamid.reply.usage', '/usage', { from: '15550002222', id: 'wamid.original' })]);
       expect.soft(commands - before).toBe(1);
     } finally { net.mockRestore(); await state.storage.deleteAlarm(); }
   });

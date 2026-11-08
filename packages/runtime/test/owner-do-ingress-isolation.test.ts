@@ -967,7 +967,7 @@ it('an owner command typed as a reply to a forward still runs: the text is the o
     const sam = { id: 4242, is_bot: false, first_name: 'Sam' };
     const forwardedNote = { message_id: updateId - 1, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: 'Synthetic forwarded note.', forward_origin: { type: 'user', date: 1_700_000_000, sender_user: sam }, forward_from: sam, forward_date: 1_700_000_000 };
     const before = outbox.length;
-    const response = await instance.fetch(new Request('https://telegram-owner/enqueue', { method: 'POST', headers: { 'x-waldo-inbox-secret': 'hermetic-test-webhook-secret', 'x-waldo-telegram-subject': String(subject), 'x-waldo-do-name': route(subject).doName }, body: JSON.stringify({ update_id: updateId, message: { message_id: updateId, date: 1_700_000_100, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: '/fire nightly', reply_to_message: forwardedNote } }) }));
+    const response = await instance.fetch(new Request('https://telegram-owner/enqueue', { method: 'POST', headers: { 'x-waldo-inbox-secret': 'hermetic-test-webhook-secret', 'x-waldo-telegram-subject': String(subject), 'x-waldo-do-name': route(subject).doName }, body: JSON.stringify({ update_id: updateId, message: { message_id: updateId, date: 1_700_000_100, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text: '/usage', reply_to_message: forwardedNote } }) }));
     expect(response.status).toBe(200);
     await internal.drainInbox();
     await vi.waitFor(async () => {

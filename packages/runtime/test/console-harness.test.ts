@@ -78,6 +78,7 @@ const receipt = (ok: 0 | 1) => [['command', ok], ['machine_turn', ok]];
 const appChat = async (owner: Owner, name: string) => (await (await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main', { headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64) } })))
   .json() as { messages: { role: string; text: string }[] }).messages;
 const ON = { CONSOLE_HARNESS: '1' };
+const NO_DIRECTORY = { SUPABASE_PROJECT_URL: undefined, SUPABASE_PUBLISHABLE_KEY: undefined, WALDO_ROUTER_HMAC_SECRET: undefined };
 
 describe('diagnostics in the console', { timeout: 30_000 }, () => {
   it('says which commands this owner has, with this session\'s token, and is not there with the switch off', async () => {
@@ -175,11 +176,21 @@ describe('diagnostics in the console', { timeout: 30_000 }, () => {
     });
   });
 
-  it('on a deploy without the directory, offers its one owner every command and leaves their fires unspaced, as before', async () => {
-    await consoleOf('harness-no-directory', { ...ON, SUPABASE_PROJECT_URL: undefined, SUPABASE_PUBLISHABLE_KEY: undefined, WALDO_ROUTER_HMAC_SECRET: undefined } as never, async (send, _state, owner) => {
+  it('on a deploy without the directory that names its one owner, offers that owner every command and leaves their fires unspaced', async () => {
+    await consoleOf('harness-no-directory', { ...ON, ...NO_DIRECTORY, WALDO_OWNER_TELEGRAM_ID: '7' } as never, async (send, _state, owner) => {
       vi.spyOn(owner as unknown as { runHarness(): Promise<string> }, 'runHarness').mockResolvedValue('Fired.');
       expect(((await (await send('', undefined, 'GET')).json()) as { commands: string[] }).commands).toEqual(['/trace', '/e2e', '/usage', '/heldrows', '/ledger', '/langfuse', '/fire']);
       expect([await output(await send('/fire fetch')), await output(await send('/fire fetch'))]).toEqual(['Fired.', 'Fired.']);
+    });
+  });
+
+  it('on a deploy that has lost its directory and names no owner, refuses the admin commands and keeps the diagnostics', async () => {
+    await consoleOf('harness-lost-directory', { ...ON, ...NO_DIRECTORY } as never, async (send, _state, owner) => {
+      const ran = vi.spyOn(owner as unknown as { runHarness(): Promise<string> }, 'runHarness');
+      expect(((await (await send('', undefined, 'GET')).json()) as { commands: string[] }).commands).toEqual(['/trace', '/e2e', '/usage', '/heldrows', '/ledger']);
+      for (const command of ['/fire fetch', '/langfuse']) expect([command, (await send(command)).status]).toEqual([command, 403]);
+      expect(ran).not.toHaveBeenCalled();
+      expect(await output(await send('/usage'))).toBe('No model usage recorded yet.');
     });
   });
 
