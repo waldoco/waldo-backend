@@ -12,10 +12,11 @@ import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
 import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
+import { TIMELINE_SEEDED_KEY } from '../src/conversation/one-timeline';
 
 const REPLY = 'Noted.';
 const SUMMARY = 'Earlier on WhatsApp: the owner trains at the gym at 7 every weekday.';
-const model = vi.hoisted(() => ({ asked: [] as string[] }));
+const model = vi.hoisted(() => ({ asked: [] as string[], compacted: [] as string[], summary: '' }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
@@ -23,7 +24,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
       data: { model: request.model, text, ...(tool_calls ? { tool_calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
     if (request.response_format?.name === 'claim_ops') return reply('{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}');
     if (request.response_format) return reply(request.response_format.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : '{}');
-    if (String(request.system ?? '').startsWith('Summarise the earlier part of this conversation')) return reply(SUMMARY);
+    if (String(request.system ?? '').startsWith('Summarise the earlier part of this conversation')) { model.compacted.push(JSON.stringify(request.messages)); return reply(model.summary); }
     model.asked.push(JSON.stringify(request.messages));
     // The owner asks to forget: the model calls forget_memory once, then answers.
     if (String(request.messages.at(-1)?.content ?? '').includes('Forget everything about Priya') && !request.tool_turns?.length)
@@ -43,7 +44,7 @@ const whatsapp = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_P
 const wire = vi.hoisted(() => ({ whatsappTexts: [] as string[] }));
 
 beforeEach(() => {
-  model.asked = []; wire.whatsappTexts = [];
+  model.asked = []; model.compacted = []; model.summary = SUMMARY; wire.whatsappTexts = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -169,6 +170,9 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
       await saysInApp(owner(), state, name, 'What does my week look like?');
       await owner().alarm().catch(() => undefined);
       expect([...state.storage.kv.list({ prefix: 'conv:' })]).toEqual(legacy);
+      // The summary was made from the owner's own words on WhatsApp, labelled as such.
+      expect(model.compacted).toHaveLength(1);
+      expect(model.compacted[0]).toContain('[on WhatsApp] My gym is at 7 every weekday.');
       const seeds = timeline(state).filter(row => row.role === 'compaction');
       expect(seeds).toHaveLength(1);
       expect(timeline(state).some(row => row.role !== 'compaction' && row.appPayload === 'My gym is at 7 every weekday.')).toBe(false);
@@ -191,6 +195,38 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
       expect(timeline(state).filter(row => row.role === 'compaction')).toHaveLength(1);
       await saysOnWhatsApp(owner(), 'And Friday?');
       expect(model.asked.at(-1)).toContain(SUMMARY);
+    });
+  });
+
+  it('a thread\'s compaction never takes the carry: the owner\'s own chain still gets it', async () => {
+    const name = 'one-timeline-cutover-thread';
+    await withOwner(name, {}, async (owner, state, restart) => {
+      await saysOnWhatsApp(owner(), 'My gym is at 7 every weekday.');
+      restart({ ...ON, WALDO_COMPACTION: 'on' });
+      const call = async (path: string, body: unknown) => (await owner().fetch(new Request(`https://telegram-owner/app/v1${path}`, { method: 'POST', headers: appHeaders(name), body: JSON.stringify(body) }))).json() as Promise<Record<string, string>>;
+      const thread = (await call('/threads', { operation_id: '0b6f3c1e-8a2d-4f5b-9c7e-000000000001' })).thread_id!;
+      const { message_id: id } = await call(`/threads/${thread}/messages`, { client_message_id: 'thread-client-01', text: 'Plan the trip.', expected_revision: 1 });
+      await vi.waitFor(() => expect(state.storage.kv.get<AppInboxRecord>(`app:inbox-record:${id}`)?.state).toBe('completed'), { timeout: 10_000, interval: 20 });
+      await owner().alarm().catch(() => undefined);
+      expect(state.storage.kv.get(TIMELINE_SEEDED_KEY)).toBeUndefined();
+      expect(model.compacted).toEqual([]);
+      await saysInApp(owner(), state, name, 'What does my week look like?');
+      await owner().alarm().catch(() => undefined);
+      expect(state.storage.kv.get(TIMELINE_SEEDED_KEY)).toBe(true);
+      expect(model.compacted[0]).toContain('[on WhatsApp] My gym is at 7 every weekday.');
+    });
+  });
+
+  it('a reading the owner wrote on WhatsApp before the cutover may stand in the summary, so the carry lands', async () => {
+    const name = 'one-timeline-cutover-reading';
+    await withOwner(name, {}, async (owner, state, restart) => {
+      await saysOnWhatsApp(owner(), 'My resting heart rate is 52 these days.');
+      restart({ ...ON, WALDO_COMPACTION: 'on' });
+      model.summary = 'Earlier on WhatsApp: the owner said their resting heart rate is 52 these days.';
+      await saysInApp(owner(), state, name, 'How am I doing?');
+      await owner().alarm().catch(() => undefined);
+      expect(timeline(state).filter(row => row.role === 'compaction')).toHaveLength(1);
+      expect(state.storage.kv.get(TIMELINE_SEEDED_KEY)).toBe(true);
     });
   });
 

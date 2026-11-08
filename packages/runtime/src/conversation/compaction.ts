@@ -20,8 +20,9 @@ export type CompactionSettings = typeof COMPACTION;
 const SURFACE_NAMES: Readonly<Record<string, string>> = { whatsapp: 'WhatsApp', telegram: 'Telegram', imessage: 'iMessage' };
 // The label depends only on the row, never on the surface of the turn reading it, so the history's bytes, and the provider's
 // cache of them, are the same whichever surface the owner writes on next. It is for the model's view only and is never stored.
+// Only the owner's rows carry it: on Waldo's own replies the model would learn to write it.
 const labelled = (settings: CompactionSettings) => (entry: ConversationEntry): ConversationEntry => {
-  const name = settings.surfaceLabels && entry.role !== 'compaction' ? SURFACE_NAMES[entry.surface] : undefined;
+  const name = settings.surfaceLabels && entry.role === 'user' ? SURFACE_NAMES[entry.surface] : undefined;
   if (!name) return entry;
   const label = `[on ${name}] `;
   return entry.modelProjection.mode === 'replace' ? { ...entry, modelProjection: { mode: 'replace', payload: label + entry.modelProjection.payload } }
@@ -82,6 +83,8 @@ export const liveCompaction = (tree: ConversationTree, leafId: string, startRef?
   }
   return live;
 };
+
+export const surfaceLabelled = labelled({ ...COMPACTION, surfaceLabels: true });
 
 // The model's view of a chain. Without a live compaction row, or with the switch off, this is the plain window. With one,
 // the summary is always kept and the rows after the span are windowed against what the summary leaves of the budget.

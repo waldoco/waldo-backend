@@ -53,13 +53,18 @@ export const whatsappTimelineContext = (host: WhatsAppTimelineHost, active: () =
 // After the owner's WhatsApp turns, so an owner who only writes on WhatsApp still gets the summary that carries their WhatsApp
 // chain from before. It runs in its own budget, never inside a turn.
 export const compactWhatsAppTimeline = async (host: WhatsAppTimelineHost,
-  runtime: Readonly<{ compactChain(trace: string, context: OwnerContextCapability, scope: RunEffectScope): Promise<void>; log(entry: TurnLogEntry): void }>, alarmEnd?: number): Promise<void> => {
+  runtime: Readonly<{ compactChain(trace: string, context: OwnerContextCapability, scope: RunEffectScope): Promise<void>; log(entry: TurnLogEntry): void }>,
+  abort: AbortController, alarmEnd?: number): Promise<void> => {
   const owner = bound(host);
   if (!owner) return;
   const started = Date.now(), deadline = started + COMPACTION_BUDGET_MS;
   if (alarmEnd !== undefined && alarmEnd < deadline) return;
-  const trace = `compaction:whatsapp:${started}`, abort = new AbortController(), timer = setTimeout(() => abort.abort(), COMPACTION_BUDGET_MS);
-  const within = () => { if (abort.signal.aborted || Date.now() >= deadline) throw new ClosedRunError(); };
+  const trace = `compaction:whatsapp:${started}`, timer = setTimeout(() => abort.abort(), COMPACTION_BUDGET_MS);
+  // Like a turn's scope: the number must still be the bound, linked one under the same owner name when anything commits.
+  const within = () => {
+    if (abort.signal.aborted || Date.now() >= deadline || host.kv.get<string>('whatsapp_subject') !== owner.subject || host.kv.get<boolean>('whatsapp_unlinked') === true
+      || host.kv.get<string>('do_name') !== owner.doName) throw new ClosedRunError();
+  };
   const scope: RunEffectScope = { runId: trace, attempt: trace, deadline, signal: abort.signal, admit: within, commit: work => host.commit(() => { within(); return work(); }) };
   try { await runtime.compactChain(trace, createOwnerTurnContext(await admit(host, scope, owner, started, 'Compact this conversation.')), scope); }
   catch (error) { runtime.log({ trace, hop: 'compaction', ms: Date.now() - started, ok: false, code: error instanceof ClosedRunError ? 'closed' : 'unavailable' }); }

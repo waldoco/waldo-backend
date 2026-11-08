@@ -2444,9 +2444,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       catch (error) { if (error instanceof OvertakenTurnError) overtaken = inbox.requeue(record); else console.error('whatsapp turn outcome unconfirmed'); }
       finally { this.whatsappAttempts.delete(record.attempt!); }
       if (!overtaken && inbox.settle(record, completed)) await this.whatsappNotice(record);
-      ran = true;
+      ran ||= completed;
     }
-    if (ran && oneTimelineEnabled(this.env) && compactionSettings(this.env).enabled && consoleAuth(this.env) !== null) await compactWhatsAppTimeline(this.whatsappTimelineHost(), this.setup('whatsapp'), alarmEnd);
+    if (ran && oneTimelineEnabled(this.env) && compactionSettings(this.env).enabled && consoleAuth(this.env) !== null) {
+      // An app message admitted meanwhile stops it, as it stops the app's own compaction.
+      const abort = new AbortController();
+      this.compactionAbort = abort;
+      try { await compactWhatsAppTimeline(this.whatsappTimelineHost(), this.setup('whatsapp'), abort, alarmEnd); }
+      finally { if (this.compactionAbort === abort) this.compactionAbort = undefined; }
+    }
   }
   private whatsappTimelineHost(): WhatsAppTimelineHost {
     return { env: this.env, kv: this.ctx.storage.kv, physicalDoId: this.ctx.id.toString(), commit: work => this.ctx.storage.transactionSync(work) };
@@ -5008,7 +5014,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return createOwnerTurnContext(await surfaceOwnerAdmission({ scope, lookup, expectedPhysicalDoId: this.ctx.id.toString(), surface: 'telegram', subject, occurrenceKey: occurrence.id, occurredAt: occurrence.admittedAt, text: turn.text }),
         { conversationRef: ownerChainRef('telegram', subject), health: () => health ??= healthContext.latest(turn.traceId), ownerProfile: google.nameLine });
     } } } : undefined;
-    const seed = timelineSeed(this.ctx.storage.kv, kv, () => { const subject = identity.get<string>('whatsapp_subject'); return subject ? surfaceChatRef('whatsapp', subject) : undefined; },
+    const seed = timelineSeed(this.ctx.storage.kv, () => { const subject = identity.get<string>('whatsapp_subject'); return subject ? surfaceChatRef('whatsapp', subject) : undefined; },
       compactionSettings(this.env).budgetTokens / 2);
     // The owner's chain as the app's turns read and write it; on the one timeline, WhatsApp turns read and write it too.
     const ownerHistory = (context: OwnerContextCapability): ConversationStore => ({
