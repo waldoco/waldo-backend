@@ -835,13 +835,17 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     return live;
   };
   // A closed browser card releases the browser task it paused, as a skip does; then its messaging buttons are cleared. One
-  // closed in a turn that read outside text is also told to the owner by the desk in its own fixed words.
+  // closed in a turn that read outside text is also told to the owner by the desk in its own fixed words. A replaced one is
+  // told as replaced, so the owner is not sent to ask again for what is already waiting, and is not told to trust the
+  // replacement either, since that same outside text shaped it.
   const afterWithdrawn = async (id: string, live: readonly Readonly<{ surface: string; message_ref: string }>[]) => {
     const entry = row(id)!;
     if (entry.kind === 'browser_submit') await deps.browserDeny?.(JSON.parse(entry.payload_json) as BrowserSubmitProposal).catch(() => deps.log({ trace: id, hop: 'approval_withdraw', ms: 0, ok: false, code: 'browser_deny_failed' }));
     await clearButtons(id, live);
     if (entry.withdrawn_outside === 1) {
-      await deps.notice?.(`withdrawn:${id}`, `Waldo closed a card while working with an email or web page: ${describeAny(entry)}. Nothing was sent or done. If you still want it, ask Waldo for it again.`)
+      await deps.notice?.(`withdrawn:${id}`, entry.replaced_by
+        ? `Waldo replaced a card while working with an email or web page: ${describeAny(entry)}. Nothing was sent or done. The newer card came out of that work, so read it before you approve it.`
+        : `Waldo closed a card while working with an email or web page: ${describeAny(entry)}. Nothing was sent or done. If you still want it, ask Waldo for it again.`)
         .catch(() => deps.log({ trace: id, hop: 'approval_withdraw_notice', ms: 0, ok: false, code: 'notice_failed' }));
     }
   };
@@ -1088,9 +1092,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const expiredReply = (entry: LedgerRow): ApprovalDecision =>
     ({ toast: 'This proposal expired', message: `That proposal expired, so nothing happened: ${describeAny(entry)}. Ask me again if you still want it.` });
   // Closed in a turn that read outside text, the answer is the desk's own fixed words, with neither the reason nor a pointer
-  // to the newer card.
+  // to the newer card; a replaced one says so rather than sending the owner to ask again.
   const withdrawnReply = (entry: LedgerRow): ApprovalDecision => {
-    if (entry.withdrawn_outside === 1) return { toast: 'Withdrawn', message: `That card was closed while I was working with an email or web page, so nothing was done: ${describeAny(entry)}. Ask me for it again if you still want it.` };
+    if (entry.withdrawn_outside === 1) return { toast: 'Withdrawn', message: entry.replaced_by
+      ? `That card was replaced while I was working with an email or web page, so nothing was done: ${describeAny(entry)}.`
+      : `That card was closed while I was working with an email or web page, so nothing was done: ${describeAny(entry)}. Ask me for it again if you still want it.` };
     const newer = entry.replaced_by ? row(entry.replaced_by) : undefined;
     const waiting = newer && (newer.status === 'open' || newer.status === 'review_only');
     return { toast: 'Withdrawn', message: `I withdrew that card, so nothing was done: ${describeAny(entry)}. ${entry.withdrawn_reason ?? ''}${waiting ? ' The newer version is waiting for you.' : ''}`.trim() };
