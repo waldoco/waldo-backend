@@ -216,6 +216,11 @@ export const HEALTH_COACH_REVISION_V1 = 5;
 // Health revision 6: zones a phone builds on the highest heart rate it has seen in a workout, rather than a measured or entered
 // maximum, name the basis observed_workout_peak, so the model can call them approximate. An older build never sends it.
 export const HEALTH_OBSERVED_PEAK_REVISION_V1 = 6;
+// Health revision 7: a food entry from the phone's health store, as the owner's food app wrote it. Its energy is the value;
+// its grams and meal are kept when the store has them. A food's name is another app's text, so it never travels. An older
+// build never sends one, and a backend that does not know it rejects that reading alone.
+export const HEALTH_NUTRITION_REVISION_V1 = 7;
+const grams = z.number().finite().min(0).max(1_000);
 // Time in five heart-rate zones. The phone reads the beats and buckets them on the bounds it names, so the backend never sees a
 // beat series: lower_bounds_bpm are where zones 2 to 5 start, rising, on the named basis. A provider that reports only zone
 // durations (WHOOP's zone zero folds into zone 1) has no bounds. The zones' time fits inside the session, with a minute's slack.
@@ -283,6 +288,11 @@ export const healthSampleV1Schema = z.discriminatedUnion('signal', [
   z.strictObject({ ...sampleCommon, signal: z.literal('lean_body_mass'), unit: z.literal('kilograms'), value: z.number().finite().min(10).max(250) }),
   // One local hour: 1 when the owner stood and moved in it, 0 when the Watch saw the hour idle.
   z.strictObject({ ...sampleCommon, signal: z.literal('stand_hour'), unit: z.literal('count'), value: z.union([z.literal(0), z.literal(1)]) }),
+  // Revision 7. One food entry, a point record under its store id.
+  z.strictObject({
+    ...sampleCommon, sleep_context: z.never().optional(), signal: z.literal('nutrition'), unit: z.literal('kilocalories'), value: z.number().finite().min(0).max(10_000),
+    protein_g: grams.optional(), carbohydrate_g: grams.optional(), fat_g: grams.optional(), meal: z.enum(['breakfast', 'lunch', 'dinner', 'snack', 'unknown']).optional(),
+  }),
 ]).refine(sample => Date.parse(sample.start_at) <= Date.parse(sample.end_at), 'sample end precedes start')
   .refine(sample => !WINDOW_SIGNALS.includes(sample.signal) || isLocalHourBucket(sample), 'window signals are fixed local-hour buckets')
   .refine(sample => sample.signal !== 'heart_rate_window' || (sample.min <= sample.value && sample.value <= sample.max), 'heart-rate window mean outside its range')
@@ -291,7 +301,7 @@ export const healthSignalV1Schema = z.enum([
   'sleep_duration', 'sleep_efficiency', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'daylight_duration', 'movement_duration',
   'heart_rate_window', 'hrv_window', 'spo2', 'respiratory_rate', 'steps_window', 'active_energy_window', 'workout',
   'wrist_temperature', 'walking_heart_rate_average', 'vo2_max', 'heart_rate_recovery', 'mindful_duration',
-  'body_mass', 'body_fat_percentage', 'lean_body_mass', 'stand_hour',
+  'body_mass', 'body_fat_percentage', 'lean_body_mass', 'stand_hour', 'nutrition',
 ]);
 export const healthSampleDeletionV1Schema = z.strictObject({ sample_id: sampleIdV1, signal: healthSignalV1Schema, revision: epochV1 });
 // anchor_before and anchor_after form an opaque compare-and-set cursor of at most 2048 characters; the app keeps its
