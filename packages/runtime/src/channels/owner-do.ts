@@ -94,7 +94,7 @@ import { APP_COPY_UNTIL, APP_REPLIES, APP_THREAD, SEND_NOW_ONLY, admittedRoute, 
 import { TelegramFinalOutbox, standingOrderFinalId, dayCardFinalId, tookPart, observeSurfaceStatuses, outboxRunNotes, unconfirmedCards, redactMailFollowupEntries, redactCalendarPrepEntries, redactJobReportEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
 import { drawingOn, interruptBook, interruptLimits, reopensAt } from './interruptions';
-import { ANNOUNCEMENT_MESSAGE_FRESH_MS, ANNOUNCEMENTS_CHECKED_KEY, ANNOUNCEMENTS_RETRY_KEY, ANNOUNCEMENTS_RETRY_MS, announcementBook, announcementCardSection, announcementPrompt, announcementsFeedSchema, runAnnouncementPass, switchOn, WHATS_NEW_WINDOW_MS, whatsNewSection, type AnnouncementOutcome, type AnnouncementPrerequisite } from './announcements';
+import { ANNOUNCEMENT_MESSAGE_FRESH_MS, ANNOUNCEMENTS_CHECKED_KEY, ANNOUNCEMENTS_RETRY_KEY, ANNOUNCEMENTS_RETRY_MS, announcementPassKey, requiresOf, type AnnouncementRow, announcementBook, announcementCardSection, announcementPrompt, announcementsFeedSchema, runAnnouncementPass, switchOn, WHATS_NEW_WINDOW_MS, whatsNewSection, type AnnouncementOutcome, type AnnouncementPrerequisite } from './announcements';
 import { armInterventionReview, interventionApplier, interventionEveryMs, interventionSpec, INTERVENTION_REVIEW_ID, lookCause, MOVE_PULL_KEY, movePullAllowed, nextLocalHour, nextLookAt } from './interventions';
 import { DeliveryGateStore } from '../delivery-gate/store';
 import { ownerTurnTrace, type OwnerTurnEnvelope } from './owner-turn-envelope';
@@ -378,6 +378,8 @@ type OwnerRuntime = Readonly<{
   interventionReview(entry: ScheduleEntry): Promise<void>;
   // What's new: once per release, this owner's Waldo decides how and whether to tell them about new capabilities.
   announcementPass(): Promise<void>;
+  // Whether a queued message about these announcements may still go: feature news on and each capability still live.
+  announcementsCurrent(ids: readonly string[]): Promise<boolean>;
   // A phone moved to another time zone or city, or (ARRIVAL_LOOK) says it just arrived home or at the gym: Waldo's next look
   // comes now, inside the owner's day, and knows why.
   placeMoved(): Promise<void>;
@@ -3446,9 +3448,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (this.env.NEXT_DUE_ALARM === '1') this.ctx.storage.kv.put(ALARM_FULL_RELEASE, this.env.WALDO_RELEASE ?? 'unknown');
       // What's new runs once per release, on the owner's chain after this pass, on each owner's own first wake: a deploy's
       // decisions spread over the owners' natural wakes instead of all at once.
-      if (this.env.WHATS_NEW === '1' && this.ctx.storage.kv.get<string>(ANNOUNCEMENTS_CHECKED_KEY) !== (this.env.WALDO_RELEASE ?? 'unknown')
+      if (this.env.WHATS_NEW === '1' && this.ctx.storage.kv.get<string>(ANNOUNCEMENTS_CHECKED_KEY) !== announcementPassKey(this.env.WALDO_RELEASE, Date.now())
         && (this.ctx.storage.kv.get<number>(ANNOUNCEMENTS_RETRY_KEY) ?? 0) <= Date.now())
-        void this.serial(() => announcementPass()).catch(error => log({ trace: 'announcements', hop: 'announcements', ms: 0, ok: false, error: String(error) }));
+        void this.serial(() => announcementPass()).catch(error => {
+          // Whatever stopped the pass (the model, the outbox, a read), it is tried again in an hour, not on every wake.
+          this.ctx.storage.kv.put(ANNOUNCEMENTS_RETRY_KEY, Date.now() + ANNOUNCEMENTS_RETRY_MS);
+          log({ trace: 'announcements', hop: 'announcements', ms: 0, ok: false, error: errorClass(error) });
+        });
       // Messages still waiting for a WhatsApp number that no longer takes proactive work go to the app; they are due now.
       const leftForWhatsApp = whatsappTarget === null ? null : this.leftForWhatsApp(whatsappTarget);
       if (leftForWhatsApp) await finalOutbox.wake(waitingForWhatsApp(leftForWhatsApp));
@@ -3583,6 +3589,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         && this.ctx.storage.kv.get<boolean>(`${surface}_unlinked`) !== true
         && (!r.mailFollowup || (loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume !== 'low' && loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).reviewEligible(r.mailFollowup, this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC')))
         && (!r.calendarPrep || await runtime.calendarPrepCurrent(r.calendarPrep))
+        && (!r.announcement || await runtime.announcementsCurrent(r.announcement.ids))
         && (!r.healthNotice || await healthNoticeCurrent({ now: Date.now(), timezone: this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC',
           enabled: () => schedulePreferences(this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now })).enabled('health_proposals'),
           readHealth: async () => { const rpc = signedRpc(this.env), doName = this.ctx.storage.kv.get<string>('do_name'); return rpc && doName ? rpc('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName }) : null; } }))
@@ -4906,8 +4913,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // Only the server's name: its questions are server text, so they reach the model through search_mcp_tools, stamped external.
     const mcpWaiting = () => { const servers = this.mcp().waitingServers(); return servers.length ? `MCP questions\n- ${servers.join(', ')} asked the owner a question before running a tool; search_mcp_tools shows it.` : ''; };
     const promptLedger = async () =>
-      [loopsSection(loops, clock.timezone), desk.ledger(book.list()), mcpWaiting(), unreadableRemindersLine(book.unreadable()), proactivityLine(loops.proactivity(), this.env.PROACTIVE_GATE === '1'), schedulePreferencesLine(schedPrefs.all(), schedPrefs.healthMode()),
-        whatsNewSection(announced.recent(Date.now() - WHATS_NEW_WINDOW_MS))]
+      [loopsSection(loops, clock.timezone), desk.ledger(book.list()), mcpWaiting(), unreadableRemindersLine(book.unreadable()), proactivityLine(loops.proactivity(), this.env.PROACTIVE_GATE === '1'), schedulePreferencesLine(schedPrefs.all(), schedPrefs.healthMode())]
         .filter((section) => section !== '')
         .join('\n\n');
     const ledger = async () => [await promptLedger(), await healthLogLines()].filter((section) => section !== '').join('\n\n');
@@ -5279,7 +5285,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       } }), ...loopHandlers(loops, closableIn, this.env.PROACTIVE_GATE === '1'), ...schedulePreferenceHandlers(schedPrefs, async () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable: await armableNow(), cancelMachine, alongHeartbeat: lookFollows }), (card, time) => ownerCardTime(cardTimeDeps(Date.now()), card, time, this.env.WAKE_BRIEF === '1')), ...taskToolHandlers({ book: this.jobs(), now: Date.now, timezone: () => clock.timezone, surface: channel, wake: due => armTaskJobsWake(storage, due), fence: id => this.tasks.cancelled(id), log, steer: this.env.WALDO_TASK_STEER === '1',
         // A task started by an app thread's own turn (the call's run scope is that message's attempt) reports in that thread.
         conversationRef: ctx => { const record = this.activeApp; return record && ctx.runScope?.runId === record.id && ctx.runScope.attempt === record.attempt && threadOfChain(record.conversationRef) ? record.conversationRef : null; } })]), undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now()); const trails = forgetTrails(this.ctx.storage.sql, texts) + dayPlanBook(this.ctx.storage.sql).forgetWhy(texts); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + trails + titles.remaining }; }), undefined,
-      (opt) => opt ? [openLoopsPrompt(loops, clock.timezone, opt.loopsRoom), runningTasksLine(this.jobs(), Date.now())].filter(Boolean).join('\n\n') : [standingOrdersPrompt(orders), questsPrompt(quests)].filter(Boolean).join('\n\n'), runs, undefined,
+      (opt) => opt ? [openLoopsPrompt(loops, clock.timezone, opt.loopsRoom), runningTasksLine(this.jobs(), Date.now()),
+        // "What's new?" in the owner's own turns: what is recent and still live by its switch, while feature news is on.
+        whatsNewSection(newsOn() ? announced.recent(Date.now() - WHATS_NEW_WINDOW_MS).filter(row => switchOn(declaredSwitch(this.env, row.capability))) : [])].filter(Boolean).join('\n\n') : [standingOrdersPrompt(orders), questsPrompt(quests)].filter(Boolean).join('\n\n'), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
       undefined, channel, ({ telegram: telegramSkillHost, app: appSkillHost, imessage: imessageSkillHost, whatsapp: whatsappSkillHost } satisfies Record<ChannelKind, OwnerSkillHost>)[channel],
@@ -6221,30 +6229,39 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // opt-out, the owner's limits and once-only; the model holds relevance, wording and timing. No message goes while no
     // interruption limits are in force (PROACTIVE_GATE): the day card carries it then, at no interruption.
     const announcementCall = signedRpc(this.env);
-    const announcementReport = (id: string, outcome: AnnouncementOutcome) => {
+    // Outcome reports are counts only, best effort, and off the owner's chain.
+    const announcementReport = (id: string, outcome: AnnouncementOutcome): void => {
       const doName = identity.get<string>('do_name');
-      return announcementCall && doName ? announcementCall('announcement_report', `announcereport.owner.${doName}.${id}.${outcome}`, { p_do_name: doName, p_id: id, p_outcome: outcome }).then(() => undefined)
-        : Promise.resolve();
+      if (announcementCall && doName) this.ctx.waitUntil(announcementCall('announcement_report', `announcereport.owner.${doName}.${id}.${outcome}`, { p_do_name: doName, p_id: id, p_outcome: outcome })
+        .then(() => undefined, () => undefined));
     };
-    const foldAnnouncements = (ids: readonly string[]) => {
-      for (const id of announced.fold(ids)) this.ctx.waitUntil(announcementReport(id, 'folded').catch(() => undefined));
+    const foldAnnouncements = (ids: readonly string[]) => { for (const id of announced.fold(ids)) announcementReport(id, 'folded'); };
+    // Whether what was decided may still be said, checked again whenever it is about to be: feature news is on for this owner,
+    // and the capability is still live for them (its switch, its prerequisites). A capability turned off since stays unsaid.
+    const newsOn = () => this.env.WHATS_NEW === '1' && loops.proactivity().feature_news !== false;
+    const announcementPrerequisite = (prerequisite: AnnouncementPrerequisite, trace: string) => ({
+      app: async () => this.appBound(), whatsapp: async () => this.whatsappBound(), imessage: async () => this.imessageBound(),
+      google: async () => (await accounts()).length > 0,
+      health: async () => { const read = await healthContext.read(trace); return read !== null && read !== 'unknown'; },
+    } satisfies Record<AnnouncementPrerequisite, () => Promise<boolean>>)[prerequisite]();
+    const stillLive = async (rows: readonly AnnouncementRow[], trace: string) => !newsOn() ? [] : (await Promise.all(rows.map(async row =>
+      switchOn(declaredSwitch(this.env, row.capability)) && (await Promise.all(requiresOf(row).map(prerequisite => announcementPrerequisite(prerequisite, trace)))).every(Boolean) ? [row] : []))).flat();
+    const announcementsCurrent = async (ids: readonly string[]) => {
+      const rows = announced.byIds(ids);
+      return rows.length === ids.length && (await stillLive(rows, 'announcements:send')).length === rows.length;
     };
     const announcementPass = async (): Promise<void> => {
-      const doName = identity.get<string>('do_name'), release = this.env.WALDO_RELEASE ?? 'unknown', environment = this.env.WALDO_ENVIRONMENT ?? 'development';
+      const doName = identity.get<string>('do_name'), pass = announcementPassKey(this.env.WALDO_RELEASE, Date.now()), environment = this.env.WALDO_ENVIRONMENT ?? 'development';
       if (this.env.WHATS_NEW !== '1' || !announcementCall || !doName) return;
-      const trace = `announcements:${release}`;
+      const trace = `announcements:${pass}`;
       await runAnnouncementPass({
-        release, checkedRelease: () => identity.get<string>(ANNOUNCEMENTS_CHECKED_KEY), markChecked: checked => identity.put(ANNOUNCEMENTS_CHECKED_KEY, checked),
+        pass, checkedPass: () => identity.get<string>(ANNOUNCEMENTS_CHECKED_KEY), markChecked: checked => identity.put(ANNOUNCEMENTS_CHECKED_KEY, checked),
         fetch: async () => announcementsFeedSchema.parse(await announcementCall('announcements_for', `announcements.${doName}.${environment}`, { p_do_name: doName, p_environment: environment })),
         book: announced, optedOut: () => loops.proactivity().feature_news === false,
         switchOn: capability => switchOn(declaredSwitch(this.env, capability)),
-        has: prerequisite => ({
-          app: async () => this.appBound(), whatsapp: async () => this.whatsappBound(), imessage: async () => this.imessageBound(),
-          google: async () => (await accounts()).length > 0,
-          health: async () => { const read = await healthContext.read(trace); return read !== null && read !== 'unknown'; },
-        } satisfies Record<AnnouncementPrerequisite, () => Promise<boolean>>)[prerequisite](),
+        has: prerequisite => announcementPrerequisite(prerequisite, trace),
         hold: () => interrupts ? interrupts.book.hold({ consent: reachesOut(), quiet: quiet(), closed: interrupts.closed(), asks: false, urgent: false, limits: interrupts.limits() }) : 'no_limits',
-        decide: async (fresh, canSay) => this.asOwnerJob('heartbeat', trace, async () => responder.prompt(trace, owner, announcementPrompt(fresh, {
+        decide: async (fresh, canSay, attempt) => this.asOwnerJob('heartbeat', `announcements:${attempt}`, async () => responder.prompt(`announcements:${attempt}`, owner, announcementPrompt(fresh, {
           localNow: localIso(Date.now(), clock.timezone), canSay, limits: interrupts ? interrupts.book.line(interrupts.limits()) : '',
           goals: claimStore(storage.sql).claims().filter(claim => claim.kind === 'goal').slice(-12).map(claim => `- ${claim.text}`).join('\n'),
           style: channelStyle(PROACTIVE_READS[channel](storage.kv, proactiveBothDefault(this.env))),
@@ -6252,14 +6269,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         transaction: work => storage.transactionSync(work),
         deliver: async (id, ids, text, commit) => {
           const spend = () => { commit(); interrupts?.book.spend(interrupts.limits(), false, id); };
-          if (finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(spend); return; }
+          // Already queued (a pass retried after its record was written): the interruption was spent then.
+          if (finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
           await finalOutbox.enqueueFenced({ id, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner), announcement: { ids },
             doName, bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], expiresAt: Date.now() + ANNOUNCEMENT_MESSAGE_FRESH_MS }, work => storage.transactionSync(() => { work(); spend(); }));
         },
         report: announcementReport, now: () => Date.now(),
         chose: (code, detail) => {
           // A directory that cannot answer is asked again in an hour, not on every wake.
-          if (code === 'fetch_failed') identity.put(ANNOUNCEMENTS_RETRY_KEY, Date.now() + ANNOUNCEMENTS_RETRY_MS);
+          if (code === 'fetch_failed' || code === 'invalid_decision') identity.put(ANNOUNCEMENTS_RETRY_KEY, Date.now() + ANNOUNCEMENTS_RETRY_MS);
           log({ trace, hop: 'announcements', ms: 0, ok: code !== 'fetch_failed', code, ...(detail ? { detail } : {}) });
         },
       });
@@ -6345,7 +6363,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const verdicts = new Map(await Promise.all(offering.map(async experiment => [experiment.id, await compareExperiment(experiment, quests.today(), readZones)] as const)));
       const questText = questCardContext(card.id, quests, verdicts), questsDue = close ? quests.due().map(quest => quest.id) : [], verdictsOffered = offering.map(experiment => experiment.id);
       // New capabilities waiting to be told: this card carries them, and they count as told once it reaches the owner.
-      const announcing = announced.waiting(), announcementText = announcementCardSection(announcing), announcementIds = announcing.map(row => row.id);
+      const announcing = await stillLive(announced.waiting(now), trace), announcementText = announcementCardSection(announcing), announcementIds = announcing.map(row => row.id);
       const said = await composeDayCard(card, now, clock.timezone, {
         google: client, connectable: !client && google.configured(),
         ledger: await promptLedger(), today: transcript(episodes.since(midnight, 30_000), clock.timezone), updates: updates.unfolded(clock.timezone),
@@ -6388,6 +6406,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           // The day plan records the card sent, and folds the updates it covered, only once it is delivered (settleFinal).
           await finalOutbox.enqueue({ id: queued, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
             doName: identity.get<string>('do_name') ?? '', expiresAt: validUntil(), dayCard: { day, card: card.id, foldUpTo: now, ...(questsDue.length ? { quests: questsDue } : {}), ...(verdictsOffered.length ? { verdicts: verdictsOffered } : {}), ...(announcementIds.length ? { announcements: announcementIds } : {}) } });
+          announced.carded(announcementIds, now);
           plans.waiting(day, card.id);
           await scheduler.rearm();
           log({ trace, hop: 'day_card', ms: Date.now() - started, ok: true, detail: `${card.id} queued`, text: { input: said, output: text } });
@@ -6453,12 +6472,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       if (record.dayCard) {
         // A card the owner never saw keeps its day-plan row unsent and its updates for the next card.
-        if (delivered) { plans.sent(record.dayCard.day, record.dayCard.card); updates.fold(record.dayCard.foldUpTo); quests.checkedIn(record.dayCard.quests ?? [], record.dayCard.verdicts ?? []); foldAnnouncements(record.dayCard.announcements ?? []); }
+        if (delivered) { plans.sent(record.dayCard.day, record.dayCard.card); updates.fold(record.dayCard.foldUpTo); quests.checkedIn(record.dayCard.quests ?? [], record.dayCard.verdicts ?? []); foldAnnouncements(record.dayCard.announcements ?? []); } else announced.uncard(record.dayCard.announcements ?? []);
         log({ trace: record.trace, hop: 'day_card', ms: 0, ok: delivered, detail: `${record.dayCard.card} ${delivered ? 'delivered' : record.reason ?? record.status}` });
       }
       // News of a new capability counts as told once it reached the owner; one that never did waits for the next card.
       if (record.announcement) {
-        if (delivered) for (const id of record.announcement.ids) this.ctx.waitUntil(announcementReport(id, 'messaged').catch(() => undefined));
+        if (delivered) for (const id of record.announcement.ids) announcementReport(id, 'messaged');
         else announced.unsent(record.announcement.ids);
       }
       if (record.standingOrder && runs.byId(record.standingOrder.runId)?.status === 'running') {
@@ -6574,7 +6593,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           doName: identity.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] }, work => storage.transactionSync(() => { work(); commit(); }));
       },
       ended: grant => { welcome.lateWeb(grant); this.continueWelcome(runtime); } });
-    const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, interventionReview, announcementPass, placeMoved, placeArrived, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, interventionReview, announcementPass, announcementsCurrent, placeMoved, placeArrived, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       lookupToolHandlers: () => {
         const unlocated = webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch), this.lookupPages) : null;

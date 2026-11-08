@@ -11,7 +11,10 @@ import type { InterruptHold } from './interruptions';
 // owner's Waldo only reports whether it would be eligible, and says nothing.
 
 // The release this owner's Waldo last finished a pass on (DO KV).
-export const ANNOUNCEMENTS_CHECKED_KEY = 'announcements_checked_release_v1';
+export const ANNOUNCEMENTS_CHECKED_KEY = 'announcements_checked_pass_v1';
+// One pass per release and UTC day: a release gets its pass on its first wake, and an announcement created or sent live after a
+// deploy reaches owners within a day without waiting for the next one.
+export const announcementPassKey = (release: string | undefined, now: number): string => `${release ?? 'unknown'}:${new Date(now).toISOString().slice(0, 10)}`;
 // After a directory read fails, the next try waits this long.
 export const ANNOUNCEMENTS_RETRY_KEY = 'announcements_retry_at_v1';
 export const ANNOUNCEMENTS_RETRY_MS = 60 * 60_000;
@@ -50,33 +53,45 @@ export type AnnouncementOutcome = 'eligible' | 'not_live' | 'opted_out' | 'folde
 
 
 type Sql = Pick<SqlStorage, 'exec'>;
-type Row = Readonly<{ id: string; title: string; shipped: string; why: string; capability: string; state: string; decided_at: number }>;
-export type AnnouncementState = 'card' | 'folded' | 'messaged' | 'skipped' | 'opted_out';
+export type AnnouncementRow = Readonly<{ id: string; title: string; shipped: string; why: string; capability: string; requires: string; state: string; decided_at: number }>;
+type Row = AnnouncementRow;
+export type AnnouncementState = 'card' | 'folded' | 'messaged' | 'skipped';
+// A card that carries announcements holds them this long: a later card or a retry written meanwhile does not carry them again.
+// A card that never reaches the owner releases them sooner (uncard).
+export const ANNOUNCEMENT_CARD_HOLD_MS = 24 * 60 * 60_000;
+export const requiresOf = (row: Pick<Row, 'requires'>): readonly AnnouncementPrerequisite[] =>
+  row.requires.split(',').filter((value): value is AnnouncementPrerequisite => (ANNOUNCEMENT_PREREQUISITES as readonly string[]).includes(value));
 
 export const announcementBook = (sql: Sql) => {
   for (const statement of ANNOUNCEMENTS_TABLE_SCHEMA) sql.exec(statement);
   return {
     known: (): ReadonlySet<string> => new Set(sql.exec<{ id: string }>('SELECT id FROM announcements').toArray().map(row => row.id)),
     record(announcement: Announcement, state: AnnouncementState, at: number): void {
-      sql.exec('INSERT INTO announcements (id, title, shipped, why, capability, state, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING',
-        announcement.id, announcement.title, announcement.shipped, announcement.why, announcement.capability, state, at);
+      sql.exec('INSERT INTO announcements (id, title, shipped, why, capability, requires, state, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING',
+        announcement.id, announcement.title, announcement.shipped, announcement.why, announcement.capability, announcement.requires.join(','), state, at);
     },
-    // Waiting for a card: the oldest first.
-    waiting: (): readonly Row[] => sql.exec<Row>("SELECT * FROM announcements WHERE state = 'card' ORDER BY decided_at, id").toArray(),
-    // A card that names these is being written: they go with it if it reaches the owner.
+    // Waiting for a card and not held by one already on its way: the oldest first.
+    waiting: (now: number): readonly Row[] => sql.exec<Row>("SELECT * FROM announcements WHERE state = 'card' AND (carded_at IS NULL OR carded_at <= ?) ORDER BY decided_at, id",
+      now - ANNOUNCEMENT_CARD_HOLD_MS).toArray(),
+    // A card that names these is on its way: they go with it if it reaches the owner, and no other card carries them meanwhile.
     carded(ids: readonly string[], at: number): void {
       for (const id of ids) sql.exec("UPDATE announcements SET carded_at = ? WHERE id = ? AND state = 'card'", at, id);
+    },
+    // That card ended without reaching the owner: the next card may carry them.
+    uncard(ids: readonly string[]): void {
+      for (const id of ids) sql.exec("UPDATE announcements SET carded_at = NULL WHERE id = ? AND state = 'card'", id);
     },
     // The card reached the owner: what it carried counts as told. Returns the ids folded.
     fold(ids: readonly string[]): readonly string[] {
       return ids.filter(id => sql.exec("UPDATE announcements SET state = 'folded' WHERE id = ? AND state = 'card' RETURNING id", id).toArray().length > 0);
     },
+    byIds: (ids: readonly string[]): readonly Row[] => ids.flatMap(id => sql.exec<Row>('SELECT * FROM announcements WHERE id = ?', id).toArray()),
     // A message that ended without reaching the owner: what it carried waits for the next card instead.
     unsent(ids: readonly string[]): void {
       for (const id of ids) sql.exec("UPDATE announcements SET state = 'card' WHERE id = ? AND state = 'messaged'", id);
     },
     // What's new for this owner: what the team shipped that is live for them, decided on since `since`, newest first.
-    recent: (since: number): readonly Row[] => sql.exec<Row>("SELECT * FROM announcements WHERE state != 'opted_out' AND decided_at >= ? ORDER BY decided_at DESC, id LIMIT 5", since).toArray(),
+    recent: (since: number): readonly Row[] => sql.exec<Row>('SELECT * FROM announcements WHERE decided_at >= ? ORDER BY decided_at DESC, id LIMIT 5', since).toArray(),
   };
 };
 export type AnnouncementBook = ReturnType<typeof announcementBook>;
@@ -132,10 +147,12 @@ export const whatsNewSection = (rows: readonly Pick<Row, 'id' | 'title' | 'shipp
 export type AnnouncementPassCode = 'checked' | 'fetch_failed' | 'nothing_new' | 'dry_run' | 'decided' | 'invalid_decision' | `held_${InterruptHold}`;
 
 export type AnnouncementPassDeps = Readonly<{
-  release: string;
-  // The release this owner last finished a pass on; the pass is marked done only once everything in it settled.
-  checkedRelease(): string | undefined;
-  markChecked(release: string): void;
+  // The pass this is: the release, and the day, so an announcement created or sent live after a release is picked up within a
+  // day. It names the message too.
+  pass: string;
+  // The pass this owner last finished; a pass is marked done only once everything in it settled.
+  checkedPass(): string | undefined;
+  markChecked(pass: string): void;
   fetch(): Promise<readonly Announcement[]>;
   book: AnnouncementBook;
   optedOut(): boolean;
@@ -144,18 +161,20 @@ export type AnnouncementPassDeps = Readonly<{
   // Why an unasked message cannot go now, or null when it can. Null limits (no interruption budget in force) means no message
   // goes: the capability waits for the card, where it costs no interruption.
   hold(): InterruptHold | 'no_limits' | null;
-  decide(fresh: readonly Announcement[], canSay: boolean): Promise<string>;
+  // The decision turn; `attempt` is unique to this try, so a retried pass asks afresh.
+  decide(fresh: readonly Announcement[], canSay: boolean, attempt: string): Promise<string>;
   transaction(work: () => void): void;
   // Queues the message under its id, `commit` in the same transaction, and spends one interruption in it. It is reported as
   // messaged once it reaches the owner; one that never does goes back to waiting for the card (book.unsent).
   deliver(id: string, ids: readonly string[], text: string, commit: () => void): Promise<void>;
-  report(id: string, outcome: AnnouncementOutcome): Promise<void>;
+  // Off the owner's chain and best effort: a report never holds a turn or the owner's own state.
+  report(id: string, outcome: AnnouncementOutcome): void;
   now(): number;
   chose(code: AnnouncementPassCode, detail?: string): void;
 }>;
 
 export const runAnnouncementPass = async (deps: AnnouncementPassDeps): Promise<AnnouncementPassCode> => {
-  if (deps.checkedRelease() === deps.release) return 'checked';
+  if (deps.checkedPass() === deps.pass) return 'checked';
   let feed: readonly Announcement[];
   try { feed = await deps.fetch(); } catch { deps.chose('fetch_failed'); return 'fetch_failed'; }
   const known = deps.book.known();
@@ -166,23 +185,25 @@ export const runAnnouncementPass = async (deps: AnnouncementPassDeps): Promise<A
   const optedOut = deps.optedOut();
   const eligible: Announcement[] = [];
   for (const announcement of fresh) {
-    // Feature news off is honoured before anything else, and before any model call.
-    if (optedOut) {
-      if (announcement.live) deps.transaction(() => deps.book.record(announcement, 'opted_out', deps.now()));
-      reports.push([announcement.id, 'opted_out']);
-    } else if (!(await liveFor(announcement))) reports.push([announcement.id, 'not_live']);
+    // Feature news off is honoured before anything else, and before any model call. Nothing is kept, so turning it back on
+    // lets the owner hear what is still new.
+    if (optedOut) reports.push([announcement.id, 'opted_out']);
+    else if (!(await liveFor(announcement))) reports.push([announcement.id, 'not_live']);
     else if (!announcement.live) reports.push([announcement.id, 'eligible']);
     else eligible.push(announcement);
   }
   let code: AnnouncementPassCode = fresh.length === 0 ? 'nothing_new' : 'dry_run';
   if (eligible.length > 0) {
     const held = deps.hold();
-    const chosen = parseAnnouncementDecision(await deps.decide(eligible, held === null));
-    code = chosen === 'invalid' ? 'invalid_decision' : 'decided';
-    const decisionOf = (id: string) => (chosen === 'invalid' ? undefined : chosen.items.find(item => item.id === id)?.decision) ?? 'card';
+    const chosen = parseAnnouncementDecision(await deps.decide(eligible, held === null, `${deps.pass}:${deps.now()}`));
+    // No decision is no decision: nothing is kept, and the pass is tried again later, rather than code choosing to tell them.
+    if (chosen === 'invalid') { deps.chose('invalid_decision'); return 'invalid_decision'; }
+    code = 'decided';
+    // An announcement the model left out of its answer takes the default, the card.
+    const decisionOf = (id: string) => chosen.items.find(item => item.id === id)?.decision ?? 'card';
     // A message held by the owner's limits, or one with no text, waits for the card instead.
-    const say = chosen !== 'invalid' && held === null && chosen.say ? eligible.filter(item => decisionOf(item.id) === 'say') : [];
-    if (held !== null && eligible.some(item => decisionOf(item.id) === 'say')) code = held === 'no_limits' ? code : `held_${held}`;
+    const say = held === null && chosen.say ? eligible.filter(item => decisionOf(item.id) === 'say') : [];
+    if (held !== null && held !== 'no_limits' && eligible.some(item => decisionOf(item.id) === 'say')) code = `held_${held}`;
     const now = deps.now();
     const cardOrSkip = () => {
       for (const item of eligible) {
@@ -193,15 +214,14 @@ export const runAnnouncementPass = async (deps: AnnouncementPassDeps): Promise<A
       }
     };
     if (say.length > 0) {
-      await deps.deliver(`announcement:${deps.release}:${say.map(item => item.id).join('+')}`.slice(0, 200), say.map(item => item.id), (chosen as AnnouncementDecision).say!, () => {
+      await deps.deliver(`announcement:${deps.pass}:${say.map(item => item.id).join('+')}`.slice(0, 200), say.map(item => item.id), chosen.say!, () => {
         for (const item of say) deps.book.record(item, 'messaged', now);
         cardOrSkip();
       });
     } else deps.transaction(cardOrSkip);
   }
-  // Outcome reports are counts only and best effort: a report that fails never holds the owner's own state.
-  for (const [id, outcome] of reports) await deps.report(id, outcome).catch(() => undefined);
-  deps.markChecked(deps.release);
+  for (const [id, outcome] of reports) deps.report(id, outcome);
+  deps.markChecked(deps.pass);
   deps.chose(code, String(fresh.length));
   return code;
 };

@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ANNOUNCEMENTS_CHECKED_KEY, ANNOUNCEMENTS_RETRY_KEY } from '../src/channels/announcements';
+import { announcementPassKey, ANNOUNCEMENTS_CHECKED_KEY, ANNOUNCEMENTS_RETRY_KEY } from '../src/channels/announcements';
 import { appSubjectFor } from '../src/channels/app-api';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { traceBook } from '../src/channels/harness';
@@ -84,6 +84,8 @@ const appChat = async (owner: Owner, name: string) => {
   const response = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main', { headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64) } }));
   return (await response.json() as { messages: { role: string; text: string }[] }).messages.filter(message => message.role === 'assistant').map(message => message.text);
 };
+// Outcome reports leave off the owner's chain; this lets them land before a test reads them.
+const reported = () => new Promise(resolve => setTimeout(resolve, 50));
 const dueBrief = async (state: DurableObjectState) => {
   dayPlanBook(state.storage.sql).save(localIso(Date.now(), 'UTC').slice(0, 10), { card: 'card:brief', time: '00:00', reason: 'planned' });
   await new Scheduler(state.storage.sql, state.storage, productionDeps())
@@ -96,7 +98,7 @@ describe('what\'s new in the owner object', () => {
       const first = owner();
       await first.setup('app').ready;
       await first.setup('app').announcementPass();
-      expect([model.decisions, stateOf(state), state.storage.kv.get(ANNOUNCEMENTS_CHECKED_KEY)]).toEqual([1, { family: 'card' }, 'r1']);
+      expect([model.decisions, stateOf(state), state.storage.kv.get(ANNOUNCEMENTS_CHECKED_KEY)]).toEqual([1, { family: 'card' }, announcementPassKey('r1', Date.now())]);
       expect(model.requests.find(request => request.includes(DECIDE))).toContain('coordinate plans with your family');
 
       await dueBrief(state);
@@ -106,12 +108,12 @@ describe('what\'s new in the owner object', () => {
       expect(await appChat(first, 'announce-golden')).toContain(CARD_TEXT);
       expect(stateOf(state)).toEqual({ family: 'folded' });
       expect(wire.reports).toEqual(['family:folded']);
-      // Asked "what's new?" later, Waldo answers from what is live for this owner.
-      expect(await first.setup('app').ledger()).toContain('Family coordination');
+      // Day cards and other machine turns do not carry what was already told.
+      expect(await first.setup('app').ledger()).not.toContain('Family coordination');
 
       const next = owner({ release: 'r2' });
       await next.setup('app').announcementPass();
-      expect([model.decisions, wire.feeds, state.storage.kv.get(ANNOUNCEMENTS_CHECKED_KEY)]).toEqual([1, 2, 'r2']);
+      expect([model.decisions, wire.feeds, state.storage.kv.get(ANNOUNCEMENTS_CHECKED_KEY)]).toEqual([1, 2, announcementPassKey('r2', Date.now())]);
     });
     expect(wire.telegramSent).toBe(0);
   });
@@ -150,6 +152,7 @@ describe('what\'s new in the owner object', () => {
   it('with the switch off nothing is said or kept, the owner is reported not live, and the next release looks again', async () => {
     await withOwner('announce-off', async (owner, state) => {
       await owner({ switches: { TRUSTED_COORDINATION: '0' } }).setup('app').announcementPass();
+      await reported();
       expect([model.decisions, stateOf(state), wire.reports]).toEqual([0, {}, ['family:not_live']]);
       await owner({ release: 'r2' }).setup('app').announcementPass();
       expect([model.decisions, stateOf(state)]).toEqual([1, { family: 'card' }]);
@@ -160,6 +163,7 @@ describe('what\'s new in the owner object', () => {
     wire.feed = [{ ...FAMILY, capability: 'TELEGRAM_BOT_TOKEN' }];
     await withOwner('announce-undeclared', async (owner, state) => {
       await owner().setup('app').announcementPass();
+      await reported();
       expect([model.decisions, stateOf(state), wire.reports]).toEqual([0, {}, ['family:not_live']]);
     });
   });
@@ -172,7 +176,8 @@ describe('what\'s new in the owner object', () => {
       state.storage.sql.exec('INSERT INTO proactivity (id, settings) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET settings = excluded.settings',
         JSON.stringify({ quiet_start: null, quiet_end: null, volume: 'normal', feature_news: false }));
       await runtime.setup('app').announcementPass();
-      expect([model.decisions, stateOf(state), wire.reports]).toEqual([0, { family: 'opted_out' }, ['family:opted_out']]);
+      await reported();
+      expect([model.decisions, stateOf(state), wire.reports]).toEqual([0, {}, ['family:opted_out']]);
     });
   });
 
@@ -180,6 +185,7 @@ describe('what\'s new in the owner object', () => {
     wire.feed = [{ ...FAMILY, live: false }];
     await withOwner('announce-dry-run', async (owner, state) => {
       await owner().setup('app').announcementPass();
+      await reported();
       expect([model.decisions, stateOf(state), wire.reports]).toEqual([0, {}, ['family:eligible']]);
     });
   });
@@ -199,6 +205,42 @@ describe('what\'s new in the owner object', () => {
       expect(await appChat(runtime, 'announce-say')).toContain('Now I can plan with your family\'s Waldo. Want me to set that up?');
       expect(wire.reports).toEqual(['family:messaged']);
       expect(state.storage.kv.get<{ count: number }>('proactive_interrupts_v1')).toMatchObject({ count: 1 });
+    });
+  });
+
+  it('turning feature news off after the decision keeps it out of the next card, and it stays waiting', async () => {
+    await withOwner('announce-late-opt-out', async (owner, state) => {
+      const runtime = owner();
+      await runtime.setup('app').announcementPass();
+      expect(stateOf(state)).toEqual({ family: 'card' });
+      state.storage.sql.exec('INSERT INTO proactivity (id, settings) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET settings = excluded.settings',
+        JSON.stringify({ quiet_start: null, quiet_end: null, volume: 'normal', feature_news: false }));
+      await dueBrief(state);
+      await runtime.alarm();
+      expect(await appChat(runtime, 'announce-late-opt-out')).toContain(CARD_TEXT);
+      expect(model.requests.at(-1)).not.toContain('not heard about yet');
+      expect([stateOf(state), wire.reports]).toEqual([{ family: 'card' }, []]);
+    });
+  });
+
+  it('a capability switched off after the decision is not said: the card leaves it out and a queued message does not go', async () => {
+    model.decision = '{"items":[{"id":"family","decision":"say"}],"say":"Now I can plan with your family\'s Waldo."}';
+    await withOwner('announce-switched-off', async (owner, state) => {
+      const on = owner({ gate: true });
+      await on.setup('app').ready;
+      dayPlanBook(state.storage.sql).save(localIso(Date.now(), 'UTC').slice(0, 10), { card: 'card:brief', time: '00:00', reason: 'planned' });
+      await on.setup('app').announcementPass();
+      expect(stateOf(state)).toEqual({ family: 'messaged' });
+      const off = owner({ gate: true, switches: { TRUSTED_COORDINATION: '0' } });
+      await new Promise(resolve => setTimeout(resolve, 400));
+      await off.alarm();
+      expect(await appChat(off, 'announce-switched-off')).not.toContain('Now I can plan with your family\'s Waldo.');
+      expect(wire.reports).toEqual([]);
+      // Back to waiting, and the card that follows leaves it out while the switch is off.
+      expect(stateOf(state)).toEqual({ family: 'card' });
+      await dueBrief(state);
+      await off.alarm();
+      expect(model.requests.at(-1)).not.toContain('not heard about yet');
     });
   });
 

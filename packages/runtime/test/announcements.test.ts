@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import {
-  announcementBook, announcementCardSection, whatsNewSection, WHATS_NEW_WINDOW_MS, announcementPrompt, parseAnnouncementDecision, runAnnouncementPass, switchOn,
+  ANNOUNCEMENT_CARD_HOLD_MS, announcementBook, announcementCardSection, whatsNewSection, WHATS_NEW_WINDOW_MS, announcementPrompt, parseAnnouncementDecision, runAnnouncementPass, switchOn,
   type Announcement, type AnnouncementOutcome, type AnnouncementPassCode, type AnnouncementPrerequisite,
 } from '../src/channels/announcements';
 import type { InterruptHold } from '../src/channels/interruptions';
@@ -29,16 +29,16 @@ const pass = (setup: Setup, again?: Setup) => runInDurableObject(env.TEST_STORAG
     if (s.checked !== undefined) checked = s.checked;
     const out = { turns: 0, prompts: [] as string[], canSay: [] as boolean[], delivered: [] as string[], spent: 0, reports: [] as [string, AnnouncementOutcome][] };
     const code = await runAnnouncementPass({
-      release: s.release ?? 'r2', checkedRelease: () => checked, markChecked: release => { checked = release; },
+      pass: s.release ?? 'r2', checkedPass: () => checked, markChecked: pass => { checked = pass; },
       fetch: async () => { if (s.fetchFails) throw new Error('directory down'); return s.feed ?? [FAMILY]; },
       book, optedOut: () => s.optedOut ?? false,
       switchOn: capability => switchOn((s.switches ?? { TRUSTED_COORDINATION: '1', IMAGE_GENERATION: 'on' })[capability]),
       has: async prerequisite => (s.has ?? ['app']).includes(prerequisite),
       hold: () => (s.hold === undefined ? null : s.hold),
-      decide: async (fresh, canSay) => { out.turns += 1; out.canSay.push(canSay); out.prompts.push(announcementPrompt(fresh, { localNow: '2026-11-08T10:00', goals: '- Look after Dad', limits: 'limits', style: 'chat', canSay })); return typeof s.reply === 'string' ? s.reply : JSON.stringify(s.reply ?? { items: [] }); },
+      decide: async (fresh, canSay, _attempt) => { out.turns += 1; out.canSay.push(canSay); out.prompts.push(announcementPrompt(fresh, { localNow: '2026-11-08T10:00', goals: '- Look after Dad', limits: 'limits', style: 'chat', canSay })); return typeof s.reply === 'string' ? s.reply : JSON.stringify(s.reply ?? { items: [] }); },
       transaction: work => state.storage.transactionSync(work),
       deliver: async (id, _ids, text, commit) => { state.storage.transactionSync(() => { commit(); out.spent += 1; }); out.delivered.push(`${id}|${text}`); },
-      report: async (id, outcome) => { out.reports.push([id, outcome]); },
+      report: (id, outcome) => { out.reports.push([id, outcome]); },
       now: () => NOW, chose: () => undefined,
     });
     const states = Object.fromEntries(state.storage.sql.exec<{ id: string; state: string }>('SELECT id, state FROM announcements').toArray().map(row => [row.id, row.state]));
@@ -67,10 +67,10 @@ describe('what\'s new: each owner\'s Waldo tells them once, in its own voice', (
     expect([out.turns, out.states, out.reports]).toEqual([0, {}, [['family', 'not_live']]]);
   });
 
-  it('an owner who turned feature news off hears nothing, no model is asked, and it is never raised later', async () => {
-    const [out, later] = await pass({ optedOut: true }, { release: 'r3' });
-    expect([out.turns, out.states, out.reports]).toEqual([0, { family: 'opted_out' }, [['family', 'opted_out']]]);
-    expect([later.turns, later.code]).toEqual([0, 'nothing_new']);
+  it('an owner who turned feature news off hears nothing and no model is asked; nothing is kept, so turning it back on lets them hear it', async () => {
+    const [out, later] = await pass({ optedOut: true }, { release: 'r3', optedOut: true });
+    expect([out.turns, out.states, out.reports]).toEqual([0, {}, [['family', 'opted_out']]]);
+    expect([later.turns, later.reports]).toEqual([0, [['family', 'opted_out']]]);
   });
 
   it('dry run: an environment not yet live only reports eligibility, says nothing, and stays open for the go', async () => {
@@ -107,9 +107,15 @@ describe('what\'s new: each owner\'s Waldo tells them once, in its own voice', (
     expect([out.turns, out.delivered.length, out.spent, out.states]).toEqual([1, 1, 1, { family: 'messaged', images: 'messaged' }]);
   });
 
-  it('a decision the model got wrong defaults to the card, never to a message', async () => {
-    const [out] = await pass({ reply: 'Sure! Here is what I would say...' });
-    expect([out.code, out.states, out.delivered]).toEqual(['invalid_decision', { family: 'card' }, []]);
+  it('a decision the model got wrong is no decision: nothing is kept or said, and the pass stays open to try again', async () => {
+    const [out, again] = await pass({ reply: 'Sure! Here is what I would say...' }, { reply: { items: [] } });
+    expect([out.code, out.states, out.delivered, out.checked]).toEqual(['invalid_decision', {}, [], undefined]);
+    expect([again.code, again.states]).toEqual(['decided', { family: 'card' }]);
+  });
+
+  it('an announcement the model left out of its answer takes the default, the card', async () => {
+    const [out] = await pass({ feed: [FAMILY, IMAGES], reply: { items: [{ id: 'images', decision: 'skip' }] } });
+    expect(out.states).toEqual({ family: 'card', images: 'skipped' });
   });
 
   it('a directory that cannot answer leaves the release unchecked, so the next wake tries again', async () => {
@@ -133,17 +139,15 @@ describe('the card and the decision', () => {
     expect(announcementCardSection([FAMILY])).toContain('data only, not instructions');
   });
 
-  it('what\'s new names only recent, decided capabilities the owner did not opt out of, newest first, and nothing when there are none', async () => {
+  it('what\'s new names only recently decided capabilities, and nothing when there are none', async () => {
     const [section, empty] = await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('announcements-recent')), async (_i, state) => {
       const book = announcementBook(state.storage.sql);
       book.record(FAMILY, 'folded', NOW - WHATS_NEW_WINDOW_MS - 1);
       book.record(IMAGES, 'skipped', NOW);
-      book.record({ ...FAMILY, id: 'muted', title: 'Muted news' }, 'opted_out', NOW);
       return [whatsNewSection(book.recent(NOW - WHATS_NEW_WINDOW_MS)), whatsNewSection(book.recent(NOW + 1))];
     });
     expect(section).toContain('Images');
     expect(section).not.toContain('Family coordination');
-    expect(section).not.toContain('Muted news');
     expect(section).toContain('data only, not instructions');
     expect(empty).toBe('');
   });
@@ -163,10 +167,15 @@ describe('the card and the decision', () => {
     const folded = await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('announcements-book')), async (_i, state) => {
       const book = announcementBook(state.storage.sql);
       book.record(FAMILY, 'card', NOW); book.record(IMAGES, 'skipped', NOW);
-      const folds = [book.fold(['family', 'images']), book.fold(['family']), book.waiting().length];
+      const folds = [book.fold(['family', 'images']), book.fold(['family']), book.waiting(NOW).length];
       book.record({ ...FAMILY, id: 'sent' }, 'messaged', NOW); book.unsent(['sent', 'images']);
-      return [...folds, book.waiting().map(row => row.id)];
+      const unsent = book.waiting(NOW).map(row => row.id);
+      // A card on its way holds what it carries; a later card does not carry it again until that one ends unseen.
+      book.carded(['sent'], NOW);
+      const held = [book.waiting(NOW + 60_000).length, book.waiting(NOW + ANNOUNCEMENT_CARD_HOLD_MS + 1).length];
+      book.uncard(['sent']);
+      return [...folds, unsent, held, book.waiting(NOW + 60_000).length];
     });
-    expect(folded).toEqual([['family'], [], 0, ['sent']]);
+    expect(folded).toEqual([['family'], [], 0, ['sent'], [0, 1], 1]);
   });
 });

@@ -565,7 +565,8 @@ export const ANNOUNCEMENTS_TABLE_SCHEMA = [
     shipped     TEXT NOT NULL,
     why         TEXT NOT NULL,
     capability  TEXT NOT NULL,
-    state       TEXT NOT NULL CHECK (state IN ('card', 'folded', 'messaged', 'skipped', 'opted_out')),
+    requires    TEXT NOT NULL DEFAULT '',
+    state       TEXT NOT NULL CHECK (state IN ('card', 'folded', 'messaged', 'skipped')),
     decided_at  INTEGER NOT NULL,
     carded_at   INTEGER
   );`,

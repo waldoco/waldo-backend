@@ -64,7 +64,7 @@ select is(pg_temp.outcome('do-ann-user', 'family', 'folded'), true, 'a later rep
 select is(pg_temp.outcome('do-ann-user2', 'family', 'opted_out'), true, 'a second owner reports');
 select throws_ok($$ select pg_temp.outcome('do-ann-user', 'family', 'Hello, here is the message') $$, '23514', null, 'an outcome is one known word, never text');
 select is(pg_temp.report('do-ann-user', 'family'), null, 'a non-admin sees no report');
-select is(pg_temp.report('do-ann-admin', 'family'), jsonb_build_object('live_in', '["staging"]'::jsonb, 'owners', 3, 'outcomes', '{"folded": 1, "opted_out": 1}'::jsonb),
+select is(pg_temp.report('do-ann-admin', 'family'), jsonb_build_object('live_in', '["staging"]'::jsonb, 'owners', (select count(*) from waldo.owners where state = 'active'), 'outcomes', '{"folded": 1, "opted_out": 1}'::jsonb),
   'the admin report is counts by outcome, the active owner count and where it is live');
 
 delete from waldo.owners where do_name = 'do-ann-user2';
@@ -72,9 +72,9 @@ select is((select count(*) from waldo.announcement_outcomes), 1::bigint, 'deleti
 delete from waldo.owners where do_name = 'do-ann-admin';
 select is((select created_by from waldo.announcements where id = 'family'), null, 'deleting the authoring admin keeps the announcement, unattributed');
 
-select ok((select bool_and(relforcerowsecurity) and not bool_or(has_table_privilege('anon', oid, 'select') or has_table_privilege('authenticated', oid, 'insert')
-  or has_table_privilege('authenticated', oid, 'update') or has_table_privilege('anon', oid, 'insert'))
-  from pg_class where oid in ('waldo.announcements'::regclass, 'waldo.announcement_outcomes'::regclass)),
+select ok((select bool_and(relforcerowsecurity) and not bool_or(has_table_privilege(r.role, c.oid, 'select,insert,update,delete,truncate,references,trigger'))
+  from pg_class c cross join (values ('anon'), ('authenticated')) r(role)
+  where c.oid in ('waldo.announcements'::regclass, 'waldo.announcement_outcomes'::regclass)),
   'both tables force row level security and grant nothing to anon or signed-in users: the signed functions are the only path');
 select * from finish();
 rollback;
