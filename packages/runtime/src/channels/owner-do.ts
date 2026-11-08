@@ -105,6 +105,7 @@ import { adminRead, adminAction } from './dashboard-admin';
 import { pinProxyIntentRoute } from '../connectors/proxy-intent-route';
 import { ProxyIntentError, type ProxyIntent } from '../connectors/proxy-intent';
 import { compactionSettings } from '../conversation/compaction';
+import { contextBudget, ignoredSettings } from '../conversation/context-budget';
 import { eventAdmission } from './event-admission';
 import { DurableObject } from 'cloudflare:workers';
 import { workspaceOwnerHost, workspaceRequest, workspaceUploadLease } from './workspace-host';
@@ -203,8 +204,8 @@ import { healthLogBook, healthLogHandlers, healthSection, sleepNeedHandler } fro
 import { healthContextBook, healthZoneWords, toContextHealthMaterial, type HealthContextRow } from './health-context';
 import { localIso, localToEpoch, reminderBook, reminderHandlers, unreadableRemindersLine } from './reminders';
 import { medicationBook, medicationHandlers } from './medications';
-import { STANDING_ORDERS_PROMPT_CHARS, standingOrderBook, standingOrderFireText, standingOrderHandlers, standingOrdersPrompt } from './standing-orders';
-import { compareExperiment, experimentHandlers, QUESTS_PROMPT_CHARS, questBook, questCardContext, questHandler, questsPrompt, type QuestBook, type ReadZones } from './quests';
+import { standingOrderBook, standingOrderFireText, standingOrderHandlers, standingOrdersPrompt } from './standing-orders';
+import { compareExperiment, experimentHandlers, questBook, questCardContext, questHandler, questsPrompt, type QuestBook, type ReadZones } from './quests';
 import { standingGrants, type StandingGrants } from './standing-grants';
 import { appAutonomyRequest } from './app-autonomy';
 import { autonomyHandlers } from './autonomy-tools';
@@ -4977,7 +4978,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const uncompacted = { ...compactionSettings(this.env), enabled: false };
     const kv = durableConversationStore(storage, uncompacted);
     // WALDO_CONTEXT_CAPS: the always-on standing orders and quests are capped, and an owner turn's tool results are cleared
-    // down to the latest few past about 30k tokens.
+    // down to the latest few past a size. The sizes, and the call ceilings', are the deploy's context budget.
+    const budget = contextBudget(this.env), ignored = ignoredSettings(this.env);
+    if (ignored.length) console.log(JSON.stringify({ hop: 'context_budget', ok: false, code: 'setting_ignored', detail: ignored.join(',') }));
     const contextCaps = this.env.WALDO_CONTEXT_CAPS === '1';
     const callCeilings = this.env.WALDO_CALL_CEILINGS === '1';
     const plans = dayPlanBook(storage.sql);
@@ -5392,7 +5395,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const modelAccess: OwnerModelAccess = { openaiApiKey: key ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), primary: modelProviderSetting(this.env.WALDO_MODEL_PROVIDER), health: this.providerHealth, onAttempts, held: () => this.openHold().held() };
     const responder = createTelegramResponder(
-      { ...modelAccess, floorReply: retryFloor, ...(this.env.WALDO_TOOL_LOADER === 'harness' ? { toolLoader: 'harness' as const } : this.env.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true } : {}), ...(this.env.WALDO_PROMPT_V2 === '1' ? { promptV2: true } : {}), ...(contextCaps ? { contextCaps: true } : {}), ...(callCeilings ? { callCeilings: true } : {}) }, legacyStore, memory, log,
+      { ...modelAccess, floorReply: retryFloor, ...(this.env.WALDO_TOOL_LOADER === 'harness' ? { toolLoader: 'harness' as const } : this.env.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true } : {}), ...(this.env.WALDO_PROMPT_V2 === '1' ? { promptV2: true } : {}), ...(contextCaps ? { contextCaps: budget } : {}), ...(callCeilings ? { callCeilings: budget } : {}) }, legacyStore, memory, log,
       { download, transcribe: selectTranscriber(this.env)?.transcribe, ...(this.env.WALDO_FILE_TOOLS === '1' ? { keeper: (runScope: RunEffectScope) => uploadKeeper(() => openWorkspace({ runScope }), identity.get<string>('do_name') ?? String(owner)) } : {}) }, clock, replayHandlers = surfaceHandlers([...workspaceTools, ...reminderHandlers(book), ...(meds ? medicationHandlers(meds) : []), ...healthLogHandlers(healthLogs), ...(this.env.HEALTH_COACHING === '1' ? [sleepNeedHandler(payload => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', 'settings_write', payload), () => this.setup('app').healthSamples('settings'))] : []), getHealthHandler(healthRead, clock), ...(this.env.SCREEN_TIME === '1' ? [getScreenTimeHandler(screenTimeReadBook(signedRpc(this.env), identity.get<string>('do_name') ?? null), clock)] : []), ...(this.env.DEVICE_PLACE === '1' ? [getDeviceContextHandler(deviceContextReadBook(signedRpc(this.env), identity.get<string>('do_name') ?? null), clock)] : []), ...(this.env.DEVICE_CALENDAR === '1' ? [queryPhoneCalendarHandler(phoneCalendarReader(this.deviceCalendar(), google), clock)] : []), ...weatherTools(this.env, signedRpc(this.env), identity.get<string>('do_name') ?? null, clock, typeof caches === 'undefined' ? null : cacheApiWeatherCache(caches.default)), ...standingOrderHandlers(orders), questHandler(quests), ...experimentHandlers(quests, readZones), ...(this.env.AUTONOMY_OWN_CALENDAR === '1' ? autonomyHandlers(grants, desk, { now: () => deps.now(), timezone: () => clock.timezone, surface: channel,
         account: async requested => (await google.client('calendar', undefined, undefined, requested).catch(() => null))?.account?.email ?? null }) : []), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...(this.env.APPROVE_IN_CHAT === '1' ? [approveShownHandler(desk)] : []), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
         // Owner-ruled OTP parity (September 27, 2026): the extracted artifact goes to the owner
@@ -5436,7 +5439,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       } }), ...loopHandlers(loops, closableIn, this.env.PROACTIVE_GATE === '1'), ...schedulePreferenceHandlers(schedPrefs, async () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable: await armableNow(), cancelMachine, alongHeartbeat: lookFollows }), (card, time) => ownerCardTime(cardTimeDeps(Date.now()), card, time, this.env.WAKE_BRIEF === '1'), (zone) => confirmZone(zone, Date.now(), undefined, true)), ...taskToolHandlers({ book: this.jobs(), now: Date.now, timezone: () => clock.timezone, surface: channel, wake: due => armTaskJobsWake(storage, due), fence: id => this.tasks.cancelled(id), log, steer: this.env.WALDO_TASK_STEER === '1',
         // A task started by an app thread's own turn (the call's run scope is that message's attempt) reports in that thread.
         conversationRef: ctx => { const record = this.activeApp; return record && ctx.runScope?.runId === record.id && ctx.runScope.attempt === record.attempt && threadOfChain(record.conversationRef) ? record.conversationRef : null; } })]), undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now()); const trails = forgetTrails(this.ctx.storage.sql, texts) + dayPlanBook(this.ctx.storage.sql).forgetWhy(texts); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + trails + titles.remaining }; }), undefined,
-      (opt) => opt ? [openLoopsPrompt(loops, clock.timezone, opt.loopsRoom), runningTasksLine(this.jobs(), Date.now())].filter(Boolean).join('\n\n') : [standingOrdersPrompt(orders, ...(contextCaps ? [STANDING_ORDERS_PROMPT_CHARS] : [])), questsPrompt(quests, ...(contextCaps ? [QUESTS_PROMPT_CHARS] : []))].filter(Boolean).join('\n\n'), runs, undefined,
+      (opt) => opt ? [openLoopsPrompt(loops, clock.timezone, opt.loopsRoom), runningTasksLine(this.jobs(), Date.now())].filter(Boolean).join('\n\n') : [standingOrdersPrompt(orders, ...(contextCaps ? [budget.standingOrdersChars] : [])), questsPrompt(quests, ...(contextCaps ? [budget.questsChars] : []))].filter(Boolean).join('\n\n'), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
       undefined, channel, ({ telegram: telegramSkillHost, app: appSkillHost, imessage: imessageSkillHost, whatsapp: whatsappSkillHost } satisfies Record<ChannelKind, OwnerSkillHost>)[channel],

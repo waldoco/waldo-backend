@@ -39,12 +39,16 @@
   // so the provider reads the same leading history from its cache turn after turn; "0" drops the oldest row every turn, and
   // is the rollback.
   // WALDO_CONTEXT_CAPS: "1" caps the standing orders and quests every turn reads (the rest named, or listed by title) and
-  // clears a turn's tool results down to the latest three past about 30k tokens; "0" is the rollback.
+  // clears a turn's tool results down to the latest few past a size (the context budget below); "0" is the rollback.
   // WALDO_COMPACTION_WAKE: "1" runs a compaction in its own alarm pass after the one that ran the owner's turns; "0" runs
   // it at the end of that pass, and is the rollback.
-  // WALDO_CALL_CEILINGS: "1" holds every chat's history to 22k tokens, the conversation layer of a 40k call, clears a
-  // turn's earlier tool results once its tool turns would carry the call past 80k, and logs each call against its class's
-  // ceiling; "0" is the rollback.
+  // WALDO_CALL_CEILINGS: "1" holds every chat's history to the history budget (22k tokens by default), the conversation
+  // layer of a chat call, clears a turn's earlier tool results once its tool turns would carry the call past the hard
+  // ceiling, and logs each call against its class's ceiling; "0" is the rollback.
+  // The context budget's sizes (src/conversation/context-budget.ts), read while those switches are on: the history budget,
+  // the chat, job and hard ceilings in tokens, the share of the budget a stepped cut keeps, and the caps' clear-at characters,
+  // results kept, and standing-order and quest characters. Each is fixed per deploy so the cached prefix holds; a value that
+  // is not a valid size reads as its default.
   // WALDO_TIMEZONE_ASK: "1" tells a turn whose time zone the owner has not confirmed to ask for it when it fits; "0" is the
   // rollback.
   // WALDO_SWITCHES: every feature switch and tuning knob, one JSON var, because Cloudflare caps a Worker at 128 vars and
@@ -120,6 +124,15 @@
       "WALDO_CONTEXT_CAPS": "0",
       "WALDO_COMPACTION_WAKE": "0",
       "WALDO_CALL_CEILINGS": "0",
+      "WALDO_HISTORY_BUDGET_TOKENS": "22000",
+      "WALDO_CHAT_CEILING_TOKENS": "40000",
+      "WALDO_JOB_CEILING_TOKENS": "25000",
+      "WALDO_HARD_CEILING_TOKENS": "80000",
+      "WALDO_STEPPED_WINDOW_TARGET": "0.5",
+      "WALDO_TOOL_RESULTS_CLEAR_AT_CHARS": "120000",
+      "WALDO_TOOL_RESULTS_KEEP_LATEST": "3",
+      "WALDO_STANDING_ORDERS_CHARS": "3000",
+      "WALDO_QUESTS_CHARS": "3000",
       "WALDO_TIMEZONE_ASK": "0",
       "WALDO_STREAM_REPLIES": "off",
       "HEALTH_PROVISIONAL_SCORES": "0",
@@ -347,6 +360,15 @@
           "WALDO_CONTEXT_CAPS": "1",
           "WALDO_COMPACTION_WAKE": "1",
           "WALDO_CALL_CEILINGS": "1",
+          "WALDO_HISTORY_BUDGET_TOKENS": "22000",
+          "WALDO_CHAT_CEILING_TOKENS": "40000",
+          "WALDO_JOB_CEILING_TOKENS": "25000",
+          "WALDO_HARD_CEILING_TOKENS": "80000",
+          "WALDO_STEPPED_WINDOW_TARGET": "0.5",
+          "WALDO_TOOL_RESULTS_CLEAR_AT_CHARS": "120000",
+          "WALDO_TOOL_RESULTS_KEEP_LATEST": "3",
+          "WALDO_STANDING_ORDERS_CHARS": "3000",
+          "WALDO_QUESTS_CHARS": "3000",
           "WALDO_TIMEZONE_ASK": "1",
           "WALDO_STREAM_REPLIES": "on",
           "HEALTH_PROVISIONAL_SCORES": "1",

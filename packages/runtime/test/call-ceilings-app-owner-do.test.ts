@@ -7,9 +7,10 @@ import { afterEach, expect, it, vi } from 'vitest';
 import type { ConversationEntry } from '@waldo/contracts';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { canonicalOwnerConversationStore } from '../src/conversation/canonical-owner-store';
-import { CHAT_HISTORY_BUDGET_TOKENS, COMPACTION_INSTRUCTION } from '../src/conversation/compaction';
+import { COMPACTION_INSTRUCTION } from '../src/conversation/compaction';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
+import { CONTEXT_BUDGET } from '../src/conversation/context-budget';
 
 const OWNER_ID = '3b8d0f4e-61a2-4c7b-9e05-8d2a6c1f3b97';
 const BASE = 'https://directory.fixture.invalid';
@@ -55,7 +56,7 @@ const directory = () => vi.stubGlobal('fetch', async (input: RequestInfo | URL, 
 
 // Sixteen rounds that together run to nearly three of the chat's budgets, so compaction is due after the first turn.
 const ROUNDS = 16;
-const filler = (n: number, side: string) => `${side} ${n}: ${'harbour '.repeat(Math.ceil((CHAT_HISTORY_BUDGET_TOKENS * 4 * 2.7) / ROUNDS / 2 / 8))}`;
+const filler = (n: number, side: string) => `${side} ${n}: ${'harbour '.repeat(Math.ceil((CONTEXT_BUDGET.historyTokens * 4 * 2.7) / ROUNDS / 2 / 8))}`;
 const row = (id: string, parentId: string | null, role: 'user' | 'assistant', text: string, at: number): ConversationEntry => ({
   id, ownerId: PRINCIPAL, chatId: CHAT, parentId, threadAnchorId: null, surface: 'app', modelPayload: text, appPayload: text,
   modelProjection: { mode: 'include' }, role, ...(role === 'user' ? { inputOrigin: 'owner' as const } : {}), createdAt: at,
@@ -101,10 +102,10 @@ it('an app chat is held to the conversation layer, and its summary reads past it
       for (const text of ['What is on today?', 'And tomorrow?']) await turn(owner, state, name, text);
       const histories = historyTokens(logs);
       expect(histories).toHaveLength(2);
-      for (const history of histories) expect(history).toBeLessThanOrEqual(CHAT_HISTORY_BUDGET_TOKENS * 1.1);
+      for (const history of histories) expect(history).toBeLessThanOrEqual(CONTEXT_BUDGET.historyTokens * 1.1);
       const summaries = model.requests.filter(request => request.system === COMPACTION_INSTRUCTION);
       expect(summaries).toHaveLength(1);
-      expect(tokens(summaries[0]!)).toBeGreaterThan(CHAT_HISTORY_BUDGET_TOKENS * 1.5);
+      expect(tokens(summaries[0]!)).toBeGreaterThan(CONTEXT_BUDGET.historyTokens * 1.5);
       const compacted = [...state.storage.kv.list<ConversationEntry>({ prefix: `${PREFIX}conv:` })].map(([, entry]) => entry).filter(entry => entry.role === 'compaction');
       expect(compacted).toHaveLength(1);
     } finally { await state.storage.deleteAlarm(); await state.storage.deleteAll(); }
