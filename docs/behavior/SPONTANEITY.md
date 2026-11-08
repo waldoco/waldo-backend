@@ -51,10 +51,17 @@ New moments are inputs to that layer, never a second path to the owner.
   - An app build below revision 9 never gets the card; its chat carries the card's words and asks it to update.
   - Source: `channels/calendar-plan.ts`; the `calendar_plan` branch of the approval desk.
 
+- **A finished workout can reshape the rest of the day (`WORKOUT_WAKE`).**
+  - An app health upload that commits a workout which ended within the last three hours tells the owner's object `workout: true` and nothing else. Its time, type and detail never leave the health plane. Source: `workoutJustEnded` in `health/wake-notice.ts`.
+  - The owner's object notes when the notice came. The first recompute that starts after it and finds today's row hands `workout_ended` to the health trigger beside the reasons it reads from the rows, and the note is deleted. After three hours it is ignored. Source: `noted` in `health/recompute.ts` and `workoutStillFresh` in `health/wake-notice.ts`.
+  - The health trigger is the proactive look for health: it reads the zone words and what is coming, and proposes one change to the rest of the day around recovery, or nothing. A finished workout on its own needs no change. Its delivery gate, quiet hours, the proactive interrupt limits, its dedupe and the owner's health proposals preference all apply. It has no route or budget of its own. Source: `healthTriggerPrompt` in `health/trigger.ts`.
+  - Code holds only the limits: one wake per workout (none within three hours of the last, on any day, and one a day); a workout is "just finished" for three hours, so a run held longer drops it; no note on a day with nothing coming; and nothing while the switch or the owner's preference is off.
+  - WHOOP syncs do not say `workout` yet, until the owner rules on WHOOP's API terms of 6 October 2026 (waldoco/waldo-backend#1980).
+
 ## Not built: follow-ups for the proactive layer's seams
 
-- **Workout ended, and meeting ended or meeting notes ready.** These are inputs to the proactive layer's look (`intervention-review`) or triage, under `PROACTIVE_GATE`. They are not a separate `/signals` route with its own budget.
-- **Arrived or left a place.** This needs device context, which is in scope under consent and an ADR, so it waits for that ADR.
+- **Meeting ended or meeting notes ready.** These are inputs to the proactive layer's look (`intervention-review`) or triage, under `PROACTIVE_GATE`. They are not a separate `/signals` route with its own budget.
+- **Arrived or left a place.** The device-context ADR (`docs/proposals/ADR_DEVICE_CONTEXT_2026-11-05.md`) adds no trigger in v1 and rejects geofences and arrival moments as a fixed rule about what matters. Building one waits for the owner to change that ruling.
 - **Model-scheduled check-backs.** A "look again at HH:MM" belongs on the look's own one-shot schedule (`nextLookAt`), under the same limits.
 - **Oura and other cloud wearables.** Only the app upload and WHOOP say `woke` today.
 
