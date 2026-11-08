@@ -60,6 +60,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WAKE_BRIEF: gap('no trial uploads a night or runs the wake turn; the Brief cases run at their planned time; staging has it on'),
   WAKE_BRIEF_FRESH_MIN: inert('how fresh a night\'s end must be to count as a wake; no trial uploads a night'),
   WAKE_BRIEF_TURNS_PER_DAY: inert('caps the wake turns a day; no trial runs one'),
+  WORKOUT_WAKE: gap('no trial uploads a finished workout; the health-trigger cases wake on their own reasons; staging has it on'),
   CALENDAR_PLAN: gap('no trial offers propose_calendar_plan or approves a day plan; staging has it on'),
   BRIEF_DAY_PLAN: gap('the Brief cases run without the time-blocked plan; no case judges it yet; staging has it on'),
   MAIL_SOURCE_FOLLOWUPS: gap('the mail follow-up sweep is not run in a trial'),
