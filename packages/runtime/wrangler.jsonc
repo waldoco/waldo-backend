@@ -40,6 +40,8 @@
   // is the rollback.
   // WALDO_CONTEXT_CAPS: "1" caps the standing orders and quests every turn reads (the rest named, or listed by title) and
   // clears a turn's tool results down to the latest three past about 30k tokens; "0" is the rollback.
+  // WALDO_COMPACTION_WAKE: "1" runs a compaction in its own alarm pass after the one that ran the owner's turns; "0" runs
+  // it at the end of that pass, and is the rollback.
   // WALDO_CALL_CEILINGS: "1" holds every chat's history to 22k tokens, the conversation layer of a 40k call, clears a
   // turn's earlier tool results once its tool turns would carry the call past 80k, and logs each call against its class's
   // ceiling; "0" is the rollback.
@@ -114,6 +116,7 @@
       "WALDO_COMPACTION": "off",
       "WALDO_STEPPED_WINDOW": "0",
       "WALDO_CONTEXT_CAPS": "0",
+      "WALDO_COMPACTION_WAKE": "0",
       "WALDO_CALL_CEILINGS": "0",
       "WALDO_STREAM_REPLIES": "off",
       "HEALTH_PROVISIONAL_SCORES": "0",
@@ -337,6 +340,7 @@
           "WALDO_COMPACTION": "on",
           "WALDO_STEPPED_WINDOW": "1",
           "WALDO_CONTEXT_CAPS": "1",
+          "WALDO_COMPACTION_WAKE": "1",
           "WALDO_CALL_CEILINGS": "1",
           "WALDO_STREAM_REPLIES": "on",
           "HEALTH_PROVISIONAL_SCORES": "1",

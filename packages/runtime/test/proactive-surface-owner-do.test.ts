@@ -507,6 +507,31 @@ describe('the app and WhatsApp', { timeout: 20_000 }, () => {
   });
 });
 
+// What Waldo sends on its own knocks on a closed WhatsApp window with the unasked template, which says Waldo has an update; the
+// reply template says the owner asked for it, which a check-back or an event notice never was.
+const event = (owner: Owner, id: string) => owner.fetch(new Request('https://telegram-owner/event', { method: 'POST', body: JSON.stringify({ subject: 'fixture', kind: 'incident', title: 'Deploy finished' }), headers: {
+  'x-waldo-origin': 'https://waldo.fixture.invalid', 'x-waldo-event-source': 'uptime', 'x-waldo-event-notify': '1', 'x-waldo-event-delivery': `id:${id}`, 'x-waldo-event-digest': 'a'.repeat(64),
+} }));
+describe('the template a closed window is knocked with', { timeout: 20_000 }, () => {
+  it('a check-back knocks with the unasked template', async () => {
+    await withOwner('knock-check-back', async (owner, state, ctx) => {
+      await dueCheckBack(state);
+      await schedulePass(owner, state);
+      reportMachineJobs(state.storage.sql);
+      await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
+      expect(wire.whatsapp).toEqual(['template:waldo_proactive_update']);
+    }, { app: false, surface: 'whatsapp', window: 'closed' });
+  });
+
+  it('an event notice knocks with the unasked template', async () => {
+    await withOwner('knock-event', async (owner) => {
+      expect((await event(owner, 'knock-ev')).status).toBe(200);
+      expect(wire.whatsapp).toEqual(['template:waldo_proactive_update']);
+    }, { app: false, surface: 'whatsapp', window: 'closed', env: { OWNER_SURFACE_DEFAULT: '1' } });
+  });
+});
+
 describe('falling back to the app', { timeout: 20_000 }, () => {
   it.each([
     ['WhatsApp is unlinked', 'unlink'],
