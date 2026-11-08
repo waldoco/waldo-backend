@@ -17,6 +17,8 @@ import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
 import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 import { TIMELINE_CARRIED_KEY } from '../src/conversation/one-timeline';
+import { TelegramOwnerInbox } from '../src/channels/telegram-owner-inbox';
+import { persistInboxWake } from '../src/scheduler/alarm-slot';
 
 const REPLY = 'Noted.';
 const BRIEF = 'Clear morning, one call at 3.';
@@ -39,6 +41,14 @@ vi.mock('../src/channels/telegram-turn', async load => {
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
+const telegram = vi.hoisted(() => ({ texts: [] as string[] }));
+vi.mock('../src/channels/telegram-api', async load => {
+  const original = await load<typeof import('../src/channels/telegram-api')>();
+  return { ...original, createTelegramCaller: () => async (method: string, payload: { chat_id?: number; text?: string }) => {
+    if (method === 'sendMessage' && payload.text) telegram.texts.push(payload.text);
+    return method === 'sendMessage' ? { message_id: 91, chat: { id: payload.chat_id } } : true;
+  } };
+});
 const { OwnerDO } = await import('../src/channels/owner-do');
 type Owner = InstanceType<typeof OwnerDO>;
 
@@ -50,7 +60,7 @@ const whatsapp = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_P
 const wire = vi.hoisted(() => ({ whatsappTexts: [] as string[] }));
 
 beforeEach(() => {
-  model.asked = []; model.compacted = []; model.summary = SUMMARY; model.hold = undefined; wire.whatsappTexts = [];
+  model.asked = []; model.compacted = []; model.summary = SUMMARY; model.hold = undefined; wire.whatsappTexts = []; telegram.texts = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -106,6 +116,19 @@ const saysOnWhatsApp = async (owner: Owner, text: string, extra: Readonly<Record
   const sent = wire.whatsappTexts.length;
   await drainWhatsAppTurns(owner);
   expect(wire.whatsappTexts.length).toBe(sent + 1);
+};
+let update = 0;
+const TELEGRAM = { TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', TELEGRAM_WEBHOOK_SECRET: 'synthetic-inbox-secret' };
+// A message the owner writes on Telegram, admitted and run as its turn.
+const admitOnTelegram = async (state: DurableObjectState, name: string, text: string) => {
+  const id = ++update + 7000;
+  await new TelegramOwnerInbox(state.storage, persistInboxWake).admit({ bot: '7', subject: '7', doName: name }, id,
+    JSON.stringify({ update_id: id, message: { message_id: id, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, date: 1, text } }));
+};
+const drainTelegram = (owner: Owner) => (owner as unknown as { drainInbox(): Promise<void> }).drainInbox();
+const saysOnTelegram = async (owner: Owner, state: DurableObjectState, name: string, text: string) => {
+  await admitOnTelegram(state, name, text);
+  await drainTelegram(owner);
 };
 const appHeaders = (name: string) => ({ 'x-waldo-do-name': name, 'x-waldo-app-session-hash': SESSION, 'content-type': 'application/json' });
 const saysInApp = async (owner: Owner, state: DurableObjectState, name: string, text: string) => {
@@ -317,6 +340,23 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
     });
   });
 
+  it('a forget reaches a fact the cutover summary carried from Telegram, even paraphrased', async () => {
+    const name = 'one-timeline-forget-carried-telegram';
+    await withOwner(name, TELEGRAM, async (owner, state, restart) => {
+      state.storage.kv.put('telegram_subject', '7');
+      await saysOnTelegram(owner(), state, name, 'My sister Priya lands Thursday at 6pm.');
+      restart({ ...ON, ...TELEGRAM, WALDO_COMPACTION: 'on' });
+      model.summary = 'Earlier on Telegram: the owner\'s sister arrives on Thursday evening.';
+      await saysInApp(owner(), state, name, 'What does my week look like?');
+      await owner().alarm().catch(() => undefined);
+      expect(timeline(state).filter(row => row.role === 'compaction')).toHaveLength(1);
+      await saysInApp(owner(), state, name, 'Forget everything about Priya.');
+      await saysOnTelegram(owner(), state, name, 'What is on Thursday?');
+      expect(model.asked.at(-1)).toContain('What is on Thursday?');
+      expect(model.asked.at(-1)).not.toContain('sister arrives on Thursday evening');
+    });
+  });
+
   it('a forget asked for in the app clears what was said on WhatsApp from every later turn, on either surface', async () => {
     const name = 'one-timeline-forget';
     await withOwner(name, ON, async (owner, state) => {
@@ -349,6 +389,120 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
       expect(model.asked.at(-1)).not.toContain('My gym is at 7 every weekday.');
       expect(timeline(state).map(row => row.appPayload)).not.toContain('My gym is at 7 every weekday.');
       expect(JSON.stringify([...state.storage.kv.list({ prefix: 'conv:' })])).toContain('My gym is at 7 every weekday.');
+    });
+  });
+
+  it('what the owner said on Telegram is in the app\'s next turn, labelled, and the reverse', async () => {
+    const name = 'one-timeline-telegram';
+    await withOwner(name, { ...ON, ...TELEGRAM }, async (owner, state) => {
+      state.storage.kv.put('telegram_subject', '7');
+      await saysOnTelegram(owner(), state, name, 'My flight lands at 9.');
+      await saysInApp(owner(), state, name, 'When do I land?');
+      expect(model.asked.at(-1)).toContain('[on Telegram] My flight lands at 9.');
+      await saysInApp(owner(), state, name, 'Book the hotel near the airport.');
+      await saysOnTelegram(owner(), state, name, 'Which hotel was it?');
+      expect(model.asked.at(-1)).toContain('Book the hotel near the airport.');
+      expect(timeline(state).filter(row => row.surface === 'telegram').map(row => row.appPayload)).toContain('My flight lands at 9.');
+    });
+  });
+
+  it('the owner\'s Telegram chain from before reaches the timeline through the cutover summary, labelled', async () => {
+    const name = 'one-timeline-telegram-cutover';
+    await withOwner(name, TELEGRAM, async (owner, state, restart) => {
+      state.storage.kv.put('telegram_subject', '7');
+      await saysOnTelegram(owner(), state, name, 'My gym is at 7 every weekday.');
+      const legacy = JSON.stringify([...state.storage.kv.list({ prefix: 'conv:' })]);
+      expect(legacy).toContain('My gym is at 7 every weekday.');
+      restart({ ...ON, ...TELEGRAM, WALDO_COMPACTION: 'on' });
+      await saysInApp(owner(), state, name, 'What does my week look like?');
+      await owner().alarm().catch(() => undefined);
+      expect(JSON.stringify([...state.storage.kv.list({ prefix: 'conv:' })])).toBe(legacy);
+      expect(model.compacted.find(input => input.includes('[on Telegram] My gym is at 7 every weekday.'))).toBeDefined();
+      expect(state.storage.kv.get(TIMELINE_CARRIED_KEY)).toBeDefined();
+    });
+  });
+
+  it('an owner who only writes on Telegram gets the carry from a compaction after their Telegram turn', async () => {
+    const name = 'one-timeline-telegram-only-writer';
+    await withOwner(name, TELEGRAM, async (owner, state, restart) => {
+      state.storage.kv.put('telegram_subject', '7');
+      await saysOnTelegram(owner(), state, name, 'My gym is at 7 every weekday.');
+      restart({ ...ON, ...TELEGRAM, WALDO_COMPACTION: 'on' });
+      await saysOnTelegram(owner(), state, name, 'Plan my week.');
+      expect(timeline(state).filter(row => row.role === 'compaction')).toHaveLength(1);
+      expect(model.compacted.find(input => input.includes('[on Telegram] My gym is at 7 every weekday.'))).toBeDefined();
+    });
+  });
+
+  it('a Telegram message admitted while the owner\'s chain is being summarised stops the summary, which writes nothing', async () => {
+    const name = 'one-timeline-telegram-abort';
+    await withOwner(name, TELEGRAM, async (owner, state, restart) => {
+      state.storage.kv.put('telegram_subject', '7');
+      await saysOnTelegram(owner(), state, name, 'My gym is at 7 every weekday.');
+      restart({ ...ON, ...TELEGRAM, WALDO_COMPACTION: 'on' });
+      let stopped = false;
+      model.hold = async signal => {
+        model.hold = undefined;
+        const ended = new Promise<void>(resolve => {
+          signal?.addEventListener('abort', () => { stopped = true; resolve(); }, { once: true });
+          setTimeout(resolve, 8_000);
+        });
+        const enqueued = await owner().fetch(new Request('https://telegram-owner/enqueue', {
+          method: 'POST', headers: { 'x-waldo-inbox-secret': 'synthetic-inbox-secret', 'x-waldo-telegram-subject': '7', 'x-waldo-do-name': name },
+          body: JSON.stringify({ update_id: 9901, message: { message_id: 9901, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, date: 1, text: 'One more thing.' } }) }));
+        expect(enqueued.status).toBe(200);
+        await ended;
+      };
+      await saysInApp(owner(), state, name, 'What does my week look like?');
+      await vi.waitFor(() => expect(model.compacted).toHaveLength(1), { timeout: 10_000, interval: 20 });
+      await vi.waitFor(() => expect(stopped).toBe(true), { timeout: 10_000, interval: 20 });
+      expect(timeline(state).filter(row => row.role === 'compaction')).toEqual([]);
+    });
+  });
+
+  it('a Telegram turn with another message waiting leaves the compaction to the last turn', async () => {
+    const name = 'one-timeline-telegram-queue';
+    await withOwner(name, TELEGRAM, async (owner, state, restart) => {
+      state.storage.kv.put('telegram_subject', '7');
+      await saysOnTelegram(owner(), state, name, 'My gym is at 7 every weekday.');
+      restart({ ...ON, ...TELEGRAM, WALDO_COMPACTION: 'on' });
+      await admitOnTelegram(state, name, 'Plan my week.');
+      await admitOnTelegram(state, name, 'And Friday?');
+      await drainTelegram(owner());
+      expect(model.compacted).toEqual([]);
+      await drainTelegram(owner());
+      expect(model.compacted).toHaveLength(1);
+    });
+  });
+
+  it('a button tap on Telegram while the owner\'s chain is being summarised leaves the summary to finish', async () => {
+    const name = 'one-timeline-telegram-tap';
+    await withOwner(name, TELEGRAM, async (owner, state, restart) => {
+      state.storage.kv.put('telegram_subject', '7');
+      await saysOnTelegram(owner(), state, name, 'My gym is at 7 every weekday.');
+      restart({ ...ON, ...TELEGRAM, WALDO_COMPACTION: 'on' });
+      model.hold = async () => {
+        model.hold = undefined;
+        const tapped = await owner().fetch(new Request('https://telegram-owner/enqueue', {
+          method: 'POST', headers: { 'x-waldo-inbox-secret': 'synthetic-inbox-secret', 'x-waldo-telegram-subject': '7', 'x-waldo-do-name': name },
+          body: JSON.stringify({ update_id: 9902, callback_query: { id: 'tap-1', data: 'noop', from: { id: 7, is_bot: false }, message: { message_id: 1, chat: { id: 7, type: 'private' } } } }) }));
+        expect(tapped.status).toBe(200);
+      };
+      await saysInApp(owner(), state, name, 'What does my week look like?');
+      // A tap that ended the summary would leave no summary row.
+      await vi.waitFor(() => expect(timeline(state).filter(row => row.role === 'compaction')).toHaveLength(1), { timeout: 10_000, interval: 20 });
+    });
+  });
+
+  it('an owner who chose WhatsApp first keeps Telegram on its own chain too', async () => {
+    const name = 'one-timeline-telegram-whatsapp-first';
+    await withOwner(name, { ...ON, ...TELEGRAM }, async (owner, state) => {
+      state.storage.kv.put('telegram_subject', '7');
+      state.storage.kv.put(PROACTIVE_SURFACE_KEY, 'whatsapp');
+      await saysOnTelegram(owner(), state, name, 'My flight lands at 9.');
+      await saysInApp(owner(), state, name, 'When do I land?');
+      expect(model.asked.at(-1)).not.toContain('My flight lands at 9.');
+      expect(JSON.stringify([...state.storage.kv.list({ prefix: 'conv:' })])).toContain('My flight lands at 9.');
     });
   });
 
