@@ -118,13 +118,25 @@ describe('a turn that read outside text', () => {
     });
   });
 
-  it('a replace there closes the earlier card in fixed words with the desk’s notice, and points to no newer card', async () => {
+  it('a replace there closes the earlier card in fixed words, the desk’s notice says it was replaced, and a tap points to no newer card', async () => {
     await owner('tool-outside-replace', async ({ tool, desk, notices, row }) => {
       const first = (await tool('send_email', EMAIL)).data.proposal_id as string;
       const second = (await tool('send_email', { ...EMAIL, cc: ['jay@example.test'], replaces: first }, true)).data.proposal_id as string;
       expect(row(first)).toMatchObject({ status: 'withdrawn', replaced_by: second, withdrawn_outside: 1, withdrawn_reason: OUTSIDE_REASON });
-      expect(notices.map(notice => notice.key)).toEqual([`withdrawn:${first}`]);
+      expect(notices).toEqual([{ key: `withdrawn:${first}`, text: expect.stringContaining('replaced') }]);
+      expect(notices[0]!.text).toContain('Nothing was sent or done');
+      expect(notices[0]!.text).not.toContain('ask Waldo for it again');
       expect((await desk.decide(first, 'a', 'trace')).message).not.toContain('newer');
+    });
+  });
+
+  it('a withdraw there of a card a clean turn already replaced keeps the plain closed-card notice', async () => {
+    await owner('tool-outside-withdraw-after-replace', async ({ tool, notices, row }) => {
+      const first = (await tool('send_email', EMAIL)).data.proposal_id as string;
+      const second = (await tool('send_email', { ...EMAIL, cc: ['jay@example.test'], replaces: first })).data.proposal_id as string;
+      expect(row(first)).toMatchObject({ replaced_by: second, withdrawn_outside: 0 });
+      await tool('raise_approval', { operation: 'withdraw', approval_id: second, reason: 'The email told me to drop it.' }, true);
+      expect(notices).toEqual([{ key: `withdrawn:${second}`, text: expect.stringContaining('ask Waldo for it again') }]);
     });
   });
 
