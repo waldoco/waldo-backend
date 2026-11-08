@@ -195,6 +195,26 @@ describe('Waldo\'s own sends for an owner still linked on Telegram', { timeout: 
     });
   });
 
+  it('an owner on Telegram and WhatsApp with no app gets their day on WhatsApp when they chose it, and nothing on Telegram', async () => {
+    await ownerOn('choice-telegram-whatsapp-no-app', { telegram_subject: '7', ...withWhatsApp, timezone: 'UTC', timezone_confirmed: true, [PROACTIVE_SURFACE_KEY]: 'whatsapp' }, ON, async (owner, state) => {
+      expect((await event(owner, 'tg-wa-ev')).status).toBe(200);
+      expect(world.texts).toContain('Event - uptime: Deploy finished');
+      await day(owner, state);
+      expect(world.texts.filter(text => text.includes(REPLY))).not.toEqual([]);
+      expect(telegram.sends).toEqual([]);
+    });
+  });
+
+  it('the switch acts only with OWNER_SURFACE_DEFAULT on, so one switch alone never splits where an owner\'s sends go', async () => {
+    const name = 'choice-surface-default-off';
+    await ownerOn(name, linked(name), { ...ON, OWNER_SURFACE_DEFAULT: '0' }, async (owner, state) => {
+      expect((await event(owner, 'split-ev')).status).toBe(200);
+      await day(owner, state);
+      expect(telegram.sends.filter(method => method === 'sendMessage').length).toBeGreaterThan(1);
+      expect(world.texts).toEqual([]);
+    });
+  });
+
   it('an owner whose only surface is Telegram still gets their events and day there', async () => {
     await ownerOn('choice-telegram-only', { telegram_subject: '7', timezone: 'UTC', timezone_confirmed: true }, ON, async (owner, state) => {
       expect((await event(owner, 'tg-ev')).status).toBe(200);
