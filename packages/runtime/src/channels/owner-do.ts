@@ -360,7 +360,7 @@ type OwnerRuntime = Readonly<{
   macFollowup: ReturnType<typeof createTelegramResponder>['prompt'];
   finalOutbox: TelegramFinalOutbox;
   settleFinal(record: FinalRecord): Promise<void>;
-  // The app's push to the owner's devices: fixed text, within the day's budget, never in quiet hours.
+  // The app's push to the owner's devices, within its kind's daily ceiling and never in quiet hours (expo-push.ts).
   push: ReturnType<typeof ownerPush>;
   fire(entry: ScheduleEntry): Promise<void | 'delivery_pending'>;
   beat(entry: ScheduleEntry): Promise<void | 'delivery_pending'>;

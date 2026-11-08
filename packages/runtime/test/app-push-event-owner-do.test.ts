@@ -75,6 +75,7 @@ it('an app owner\'s event notice reaches Main chat and raises one event push wit
     expect(JSON.stringify(wire.pushes)).not.toContain('4512');
     // A redelivery of the same event raises nothing again.
     expect((await event(owner, 'push-ev-1')).status).toBe(200);
+    await new Promise(resolve => setTimeout(resolve, 50));
     expect(wire.pushes).toHaveLength(1);
   });
 });
