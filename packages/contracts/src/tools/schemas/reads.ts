@@ -367,7 +367,12 @@ export const readMemoryArgsSchema = z.strictObject({
   // Also read what used to be true: claims a later fact replaced, each with the dates it held. For a question about the past
   // ("when did I", "what changed"); the replaced ones are history, never current.
   include_replaced: z.boolean().optional(),
-}).refine((args) => args.ids === undefined || args.query === undefined, { error: 'read by ids or by query, not both', path: ['ids'] });
+  // The people memory holds, each as a card (name, ring, relation, next date, last contact); with query, those whose name or
+  // claims match it. Or one person (an id from a card) with what memory holds about them.
+  people: z.boolean().optional(),
+  person: z.int().positive().optional(),
+}).refine((args) => args.ids === undefined || args.query === undefined, { error: 'read by ids or by query, not both', path: ['ids'] })
+  .refine((args) => [args.ids, args.people || undefined, args.person].filter((value) => value !== undefined).length <= 1, { error: 'read ids, people or one person, not more than one', path: ['people'] });
 export type ReadMemoryArgs = z.infer<typeof readMemoryArgsSchema>;
 // A read shows each claim whole with its provenance; aliases are search keys and stay out. Untrusted claims never
 // return. A claim past the read's byte budget is named in omitted_claim_ids, never cut.
