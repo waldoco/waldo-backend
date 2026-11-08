@@ -42,7 +42,7 @@ export const whatsappTimelineContext = (host: WhatsAppTimelineHost, active: () =
     // A turn left out keeps the WhatsApp chain it ran on before.
     if (!turn.text || !joined()) return undefined;
     const running = active(), owner = bound(host);
-    if (!running || scope !== running.scope || !owner || turn.surface !== 'whatsapp' || turn.conversationRef !== surfaceChatRef('whatsapp', owner.subject)) throw new ClosedRunError();
+    if (!running || scope !== running.scope || !owner || turn.conversationRef !== surfaceChatRef('whatsapp', owner.subject)) throw new ClosedRunError();
     // The composer runs on every tool round; one health read serves the whole turn.
     let health: Promise<ContextHealthMaterial | null> | undefined;
     return createOwnerTurnContext(await admit(host, scope, owner, running.admittedAt, turn.text),
