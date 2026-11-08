@@ -112,6 +112,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_ENVIRONMENT: inert('names the deployment'),
   PREP_PUSH_NAMES: inert('the app push text raised after a prep note is delivered; the model never sees it'),
   UPDATE_PUSH_NAMES: inert('the app push text raised after an update is delivered; the model never sees it'),
+  EVENT_PUSH: inert('the app push raised after an event notice reaches the app chat; no model turn runs for it'),
   WALDO_PUBLIC_ORIGIN: inert(IDENTITY),
   WALDO_OWNER_DO_NAMESPACE: inert(IDENTITY),
   WALDO_RELEASE: inert('release stamp'),

@@ -342,6 +342,8 @@ type OwnerRuntime = Readonly<{
   probeCapture: ProbeCaptureSlot;
   probeGuard: { suppressMemory: boolean; stripLiveTools: boolean };
   desk: ApprovalDesk;
+  // One push to the owner's app devices, within its day's budget and never in quiet hours (expo-push.ts).
+  push: ReturnType<typeof ownerPush>;
   quests: QuestBook;
   // The owner's standing grants, and a grant's uses today as the effect ledger counts them.
   autonomy: Readonly<{ grants: StandingGrants; usesToday(grant: StandingGrantRecord): Promise<number> }>;
@@ -2822,7 +2824,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (notify) {
         const url = typeof envelope.url === 'string' ? envelope.url.slice(0, 300) : '';
         const text = `Event - ${summary}${url ? `\n${url}` : ''}`;
-        sent = OUTSIDE_TURN_NOTICE[surface].by === 'transcript' ? await this.serial(() => this.notifyOwner(surface, runtime, text)) : await this.notifyOwner(surface, runtime, text);
+        const transcript = OUTSIDE_TURN_NOTICE[surface].by === 'transcript';
+        sent = transcript ? await this.serial(() => this.notifyOwner(surface, runtime, text)) : await this.notifyOwner(surface, runtime, text);
+        // Once its row is in the app chat, the notice raises one push, unless the owner turned Waldo's volume down. The sender
+        // holds quiet hours and the day's budget, and never throws.
+        if (sent === 'sent' && transcript && this.env.EVENT_PUSH === '1' && loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume !== 'low') await runtime.push('event');
         // Refused at the gate (its own line names why) or by the directory, or no route outside a turn: nothing left the Worker,
         // a definite non-send, not an unknown one.
         if(sent==='blocked'||sent==='unroutable'){
@@ -6407,7 +6413,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           doName: identity.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] }, work => storage.transactionSync(() => { work(); commit(); }));
       },
       ended: grant => { welcome.lateWeb(grant); this.continueWelcome(runtime); } });
-    const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, interventionReview, placeMoved, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, push, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, interventionReview, placeMoved, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       lookupToolHandlers: () => {
         const unlocated = webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch), this.lookupPages) : null;

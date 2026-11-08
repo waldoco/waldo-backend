@@ -108,6 +108,22 @@ describe('pushNotification for an update to the day', () => {
   });
 });
 
+describe('pushNotification for an event notice', () => {
+  it('accepts the event trigger alone', () => {
+    expect(pushNotificationSchema.safeParse({ trigger: 'event' }).success).toBe(true);
+  });
+
+  it.each([
+    ['a card ref', { trigger: 'event', card_ref: 'card:brief' }],
+    ['a zone word', { trigger: 'event', recovery_zone: 'mixed' }],
+    ['a variant', { trigger: 'event', variant: 'morning' }],
+    ['an approval id', { trigger: 'event', approval_id: 'p0001' }],
+    ['the event\'s title', { trigger: 'event', title: 'Deploy finished' }],
+  ] as const)('rejects %s', (_shape, payload) => {
+    expect(pushNotificationSchema.safeParse(payload).success).toBe(false);
+  });
+});
+
 describe('accountEventKind', () => {
   it('is exactly the three ADR-0067 notice events, in order', () => {
     expect(accountEventKindSchema.options).toEqual(['bind', 'rebind', 'unlink']);
