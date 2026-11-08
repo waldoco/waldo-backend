@@ -10,7 +10,7 @@ afterEach(() => { Object.assign(COMPACTION, defaults); });
 
 const row = (id: string, parentId: string | null, role: 'user' | 'assistant', text: string, createdAt = 0): ConversationEntry => ({
   id, ownerId: 'owner', chatId: 'owner', parentId, threadAnchorId: null, surface: 'app', modelPayload: text, appPayload: text,
-  modelProjection: { mode: 'include' }, role, ...(role === 'user' ? { inputOrigin: 'owner' as const } : {}), createdAt,
+  modelProjection: { mode: 'include' }, role, ...(role === 'user' ? { inputOrigin: 'owner' as const, ownerWordsOnly: true as const } : {}), createdAt,
 });
 // n rounds of owner question and reply, each side `chars` long; ids u1, a1, u2, a2, ...
 const chain = (rounds: number, chars = 100): ConversationTree => {

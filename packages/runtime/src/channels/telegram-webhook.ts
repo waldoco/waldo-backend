@@ -27,6 +27,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_COST_LEDGER_SYNC?: string;
   // 'on' turns conversation compaction on for the app chat; anything else keeps the plain window.
   WALDO_COMPACTION?: string;
+  // '1' runs the compaction a drain makes due in a later alarm pass of its own, never in the pass that ran the owner's turns.
+  WALDO_COMPACTION_WAKE?: string;
   WALDO_ENVIRONMENT?: string;
   WALDO_OWNER_DO_NAMESPACE?: string;
   WALDO_RELEASE?: string;

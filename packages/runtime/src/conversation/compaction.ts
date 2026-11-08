@@ -205,9 +205,14 @@ export const planWithout = (plan: CompactionPlan, drop: (message: ConversationMo
 
 // The row itself: a child of the last row it covers, beside the first row it does not, on the same thread, so no stored
 // row changes and the chain's leaf stays where the last turn left it.
+// A row the summary read that may carry outside text: an input not entirely in the owner's own words (forwarded, quoted,
+// machine-made, or stored before inputs were stamped), or a reply or an earlier summary already marked.
+const carriesOutside = (entry: ConversationEntry): boolean =>
+  entry.role === 'user' ? !(entry.inputOrigin === 'owner' && entry.ownerWordsOnly === true) : entry.readOutside === true;
 export const compactionRow = (plan: CompactionPlan, summary: string, ownerId: string, now: number): ConversationEntry => ({
   id: compactionId(plan.covers.to_id), ownerId, chatId: plan.toEntry.chatId, parentId: plan.toEntry.id, threadAnchorId: plan.toEntry.threadAnchorId,
   surface: plan.toEntry.surface, modelPayload: summary, appPayload: '', modelProjection: { mode: 'include' }, role: 'compaction', covers: plan.covers, createdAt: now,
+  ...(plan.sources.some(carriesOutside) ? { readOutside: true as const } : {}),
 });
 
 // A superseded or forgotten summary keeps its id and covers for audit and nothing of its text.
