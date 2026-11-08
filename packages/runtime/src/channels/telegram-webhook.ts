@@ -273,6 +273,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // (default 180, at least 30) and raise drift or an anomaly it judges worth one message or card, under the owner's limits.
   PROACTIVE_INTERVENTIONS?: string;
   PROACTIVE_REVIEW_EVERY_MIN?: string;
+  // '1': on the first wake of each release, the owner's Waldo reads the team's announcements and decides how and whether to
+  // tell its owner about each new capability that is live for them (announcements.ts). Off unless "1".
+  WHATS_NEW?: string;
   // '1' lets an update push say what changed (titles, times, names), checked at the send; anything else sends the fixed line.
   UPDATE_PUSH_NAMES?: string;
   WALDO_EGRESS_ALLOWLIST?: string;

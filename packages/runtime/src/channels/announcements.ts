@@ -10,6 +10,14 @@ import type { InterruptHold } from './interruptions';
 // relevant, how to put it and when are the model's call. An environment the admin has not yet sent live is a dry run: the
 // owner's Waldo only reports whether it would be eligible, and says nothing.
 
+// The release this owner's Waldo last finished a pass on (DO KV).
+export const ANNOUNCEMENTS_CHECKED_KEY = 'announcements_checked_release_v1';
+// After a directory read fails, the next try waits this long.
+export const ANNOUNCEMENTS_RETRY_KEY = 'announcements_retry_at_v1';
+export const ANNOUNCEMENTS_RETRY_MS = 60 * 60_000;
+// A message waits this long for the owner (a closed WhatsApp window waits for their reply); unsent, it goes to the card.
+export const ANNOUNCEMENT_MESSAGE_FRESH_MS = 3 * 24 * 60 * 60_000;
+
 export const ANNOUNCEMENT_PREREQUISITES = ['app', 'whatsapp', 'imessage', 'google', 'health'] as const;
 export type AnnouncementPrerequisite = (typeof ANNOUNCEMENT_PREREQUISITES)[number];
 
@@ -24,6 +32,17 @@ export const announcementSchema = z.object({
 });
 export type Announcement = z.infer<typeof announcementSchema>;
 export const announcementsFeedSchema = z.array(announcementSchema).max(20);
+
+// What an admin writes once. The database checks the same shape and refuses anything else.
+export const ANNOUNCEMENT_ENVIRONMENTS = ['preview', 'staging', 'production'] as const;
+export const announcementDraftSchema = z.strictObject({
+  id: announcementSchema.shape.id, release: z.string().min(1).max(64), title: announcementSchema.shape.title, shipped: announcementSchema.shape.shipped,
+  why: announcementSchema.shape.why, capability: announcementSchema.shape.capability, requires: z.array(z.enum(ANNOUNCEMENT_PREREQUISITES)).max(5).default([]),
+  environments: z.array(z.enum(ANNOUNCEMENT_ENVIRONMENTS)).min(1).max(3),
+});
+export type AnnouncementDraft = z.infer<typeof announcementDraftSchema>;
+export const announcementReportSchema = z.strictObject({ live_in: z.array(z.string()), owners: z.number(), outcomes: z.record(z.string(), z.number()) });
+export type AnnouncementReport = z.infer<typeof announcementReportSchema>;
 
 // The outcome an owner's Waldo reports for one announcement: one word, never text. eligible, not_live and opted_out come from a
 // dry run or a capability not yet live for the owner; folded, messaged and skipped from a live decision.
@@ -52,8 +71,12 @@ export const announcementBook = (sql: Sql) => {
     fold(ids: readonly string[]): readonly string[] {
       return ids.filter(id => sql.exec("UPDATE announcements SET state = 'folded' WHERE id = ? AND state = 'card' RETURNING id", id).toArray().length > 0);
     },
-    // What the owner has been told about, or may still be: the answer to "what's new?".
-    told: (): readonly Row[] => sql.exec<Row>("SELECT * FROM announcements WHERE state IN ('card', 'folded', 'messaged', 'skipped') ORDER BY decided_at DESC, id LIMIT 20").toArray(),
+    // A message that ended without reaching the owner: what it carried waits for the next card instead.
+    unsent(ids: readonly string[]): void {
+      for (const id of ids) sql.exec("UPDATE announcements SET state = 'card' WHERE id = ? AND state = 'messaged'", id);
+    },
+    // What's new for this owner: what the team shipped that is live for them, decided on since `since`, newest first.
+    recent: (since: number): readonly Row[] => sql.exec<Row>("SELECT * FROM announcements WHERE state != 'opted_out' AND decided_at >= ? ORDER BY decided_at DESC, id LIMIT 5", since).toArray(),
   };
 };
 export type AnnouncementBook = ReturnType<typeof announcementBook>;
@@ -99,9 +122,11 @@ export const announcementCardSection = (rows: readonly Pick<Row, 'id' | 'title' 
   'Tell the owner about these in this card, briefly and in your own words, tied to their day or what they are working on, with one way it could help them. They are told once: after this card they are not raised again unless the owner asks.',
 ].join('\n\n');
 
-// For "what's new?": what the owner's Waldo has announced or will, newest first.
-export const announcementsKnownSection = (rows: readonly Pick<Row, 'id' | 'title' | 'shipped' | 'why'>[]): string =>
-  rows.length === 0 ? 'Nothing new has been announced to this owner yet.' : fenced('capabilities the Waldo team shipped that are live for this owner, product copy', copyOf(rows)).trimStart();
+// For "what's new?": the ledger names what the team shipped for this owner in the last 30 days, so Waldo answers from what is
+// live for them and never from plans. Nothing at all when nothing is that recent.
+export const WHATS_NEW_WINDOW_MS = 30 * 24 * 60 * 60_000;
+export const whatsNewSection = (rows: readonly Pick<Row, 'id' | 'title' | 'shipped' | 'why'>[]): string => rows.length === 0 ? ''
+  : `What's new: capabilities the Waldo team shipped recently that are live for this owner, for when they ask what's new.${fenced('product copy from the Waldo team', copyOf(rows))}`;
 
 // What a pass did, as bounded codes for traces: never a word of the copy or the message.
 export type AnnouncementPassCode = 'checked' | 'fetch_failed' | 'nothing_new' | 'dry_run' | 'decided' | 'invalid_decision' | `held_${InterruptHold}`;
@@ -121,8 +146,9 @@ export type AnnouncementPassDeps = Readonly<{
   hold(): InterruptHold | 'no_limits' | null;
   decide(fresh: readonly Announcement[], canSay: boolean): Promise<string>;
   transaction(work: () => void): void;
-  // Queues the message under its id, `commit` in the same transaction, and spends one interruption in it.
-  deliver(id: string, text: string, commit: () => void): Promise<void>;
+  // Queues the message under its id, `commit` in the same transaction, and spends one interruption in it. It is reported as
+  // messaged once it reaches the owner; one that never does goes back to waiting for the card (book.unsent).
+  deliver(id: string, ids: readonly string[], text: string, commit: () => void): Promise<void>;
   report(id: string, outcome: AnnouncementOutcome): Promise<void>;
   now(): number;
   chose(code: AnnouncementPassCode, detail?: string): void;
@@ -167,11 +193,10 @@ export const runAnnouncementPass = async (deps: AnnouncementPassDeps): Promise<A
       }
     };
     if (say.length > 0) {
-      await deps.deliver(`announcement:${deps.release}:${say.map(item => item.id).join('+')}`.slice(0, 200), (chosen as AnnouncementDecision).say!, () => {
+      await deps.deliver(`announcement:${deps.release}:${say.map(item => item.id).join('+')}`.slice(0, 200), say.map(item => item.id), (chosen as AnnouncementDecision).say!, () => {
         for (const item of say) deps.book.record(item, 'messaged', now);
         cardOrSkip();
       });
-      for (const item of say) reports.push([item.id, 'messaged']);
     } else deps.transaction(cardOrSkip);
   }
   // Outcome reports are counts only and best effort: a report that fails never holds the owner's own state.

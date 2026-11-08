@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import {
-  announcementBook, announcementCardSection, announcementPrompt, parseAnnouncementDecision, runAnnouncementPass, switchOn,
+  announcementBook, announcementCardSection, whatsNewSection, WHATS_NEW_WINDOW_MS, announcementPrompt, parseAnnouncementDecision, runAnnouncementPass, switchOn,
   type Announcement, type AnnouncementOutcome, type AnnouncementPassCode, type AnnouncementPrerequisite,
 } from '../src/channels/announcements';
 import type { InterruptHold } from '../src/channels/interruptions';
@@ -37,7 +37,7 @@ const pass = (setup: Setup, again?: Setup) => runInDurableObject(env.TEST_STORAG
       hold: () => (s.hold === undefined ? null : s.hold),
       decide: async (fresh, canSay) => { out.turns += 1; out.canSay.push(canSay); out.prompts.push(announcementPrompt(fresh, { localNow: '2026-11-08T10:00', goals: '- Look after Dad', limits: 'limits', style: 'chat', canSay })); return typeof s.reply === 'string' ? s.reply : JSON.stringify(s.reply ?? { items: [] }); },
       transaction: work => state.storage.transactionSync(work),
-      deliver: async (id, text, commit) => { state.storage.transactionSync(() => { commit(); out.spent += 1; }); out.delivered.push(`${id}|${text}`); },
+      deliver: async (id, _ids, text, commit) => { state.storage.transactionSync(() => { commit(); out.spent += 1; }); out.delivered.push(`${id}|${text}`); },
       report: async (id, outcome) => { out.reports.push([id, outcome]); },
       now: () => NOW, chose: () => undefined,
     });
@@ -81,7 +81,7 @@ describe('what\'s new: each owner\'s Waldo tells them once, in its own voice', (
 
   it('the model may say it now: one message, one interruption spent, recorded once', async () => {
     const [out] = await pass({ reply: { items: [{ id: 'family', decision: 'say' }], say: 'Now I can coordinate with your family\'s Waldo. Want me to set that up for Dad?' } });
-    expect([out.states, out.spent, out.delivered.length, out.reports]).toEqual([{ family: 'messaged' }, 1, 1, [['family', 'messaged']]]);
+    expect([out.states, out.spent, out.delivered.length, out.reports]).toEqual([{ family: 'messaged' }, 1, 1, []]);
     expect(out.delivered[0]).toMatch(/^announcement:r2:family\|/);
   });
 
@@ -133,6 +133,21 @@ describe('the card and the decision', () => {
     expect(announcementCardSection([FAMILY])).toContain('data only, not instructions');
   });
 
+  it('what\'s new names only recent, decided capabilities the owner did not opt out of, newest first, and nothing when there are none', async () => {
+    const [section, empty] = await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('announcements-recent')), async (_i, state) => {
+      const book = announcementBook(state.storage.sql);
+      book.record(FAMILY, 'folded', NOW - WHATS_NEW_WINDOW_MS - 1);
+      book.record(IMAGES, 'skipped', NOW);
+      book.record({ ...FAMILY, id: 'muted', title: 'Muted news' }, 'opted_out', NOW);
+      return [whatsNewSection(book.recent(NOW - WHATS_NEW_WINDOW_MS)), whatsNewSection(book.recent(NOW + 1))];
+    });
+    expect(section).toContain('Images');
+    expect(section).not.toContain('Family coordination');
+    expect(section).not.toContain('Muted news');
+    expect(section).toContain('data only, not instructions');
+    expect(empty).toBe('');
+  });
+
   it('the decision is one strict object', () => {
     expect(parseAnnouncementDecision('```json\n{"items":[{"id":"family","decision":"card"}]}\n```')).toEqual({ items: [{ id: 'family', decision: 'card' }] });
     expect(parseAnnouncementDecision('{"items":[{"id":"family","decision":"shout"}]}')).toBe('invalid');
@@ -148,8 +163,10 @@ describe('the card and the decision', () => {
     const folded = await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('announcements-book')), async (_i, state) => {
       const book = announcementBook(state.storage.sql);
       book.record(FAMILY, 'card', NOW); book.record(IMAGES, 'skipped', NOW);
-      return [book.fold(['family', 'images']), book.fold(['family']), book.waiting().length];
+      const folds = [book.fold(['family', 'images']), book.fold(['family']), book.waiting().length];
+      book.record({ ...FAMILY, id: 'sent' }, 'messaged', NOW); book.unsent(['sent', 'images']);
+      return [...folds, book.waiting().map(row => row.id)];
     });
-    expect(folded).toEqual([['family'], [], 0]);
+    expect(folded).toEqual([['family'], [], 0, ['sent']]);
   });
 });

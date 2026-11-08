@@ -89,6 +89,7 @@ const TABLES: Record<string, Row> = {
   calendar_last_seen: exempt('Google event ids, start and end times, an all-day flag, an HMAC of the title under a random per-object key (never the title) and an attendee count; rows expire two weeks after the event was last seen'),
   google_delta_shown: exempt('dedupe keys: a Google message id, or an event id with a digest of the version last shown, and when; no sender, subject, title or body; rows expire after fourteen days'),
   observed_mail: exempt('provider source/thread/message IDs, update-card row pointer, observation time and judged/attached flags; no sender/subject/snippet/body; unattached pointers expire after seven days'),
+  announcements: exempt('the Waldo team\'s product copy for each announcement and this owner\'s decision code and times; no owner text or message'),
   loop_mail_sources: exempt('loop/source/message IDs, due/timezone, fixed delivery-state code and revisit time; source-derived title lives in loops and source text in update_cards'),
   // Text the owner made or the runtime stored, not reached by a literal forget
   loop_governor_runs: gap('has a reason TEXT column; its writer was not traced'),
