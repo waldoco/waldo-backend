@@ -3,14 +3,14 @@ import { z } from 'zod';
 // Task workers: the brain hands long, parallel or untrusted work to a worker that holds no authority (no memory, send or
 // approve tools) and returns a structured result the brain applies once. A worker sees only its brief, never the
 // conversation, so every part of the brief must stand on its own.
-export const TASK_PROFILES = ['reader', 'errand', 'code'] as const;
+export const TASK_PROFILES = ['reader', 'errand', 'code', 'web', 'private'] as const;
 export const taskProfileSchema = z.enum(TASK_PROFILES);
 export type TaskProfile = z.infer<typeof taskProfileSchema>;
 
 export const taskJobIdSchema = z.string().regex(/^job_[0-9a-f]{12}$/);
 
 export const startTaskArgsSchema = z.strictObject({
-  profile: taskProfileSchema.describe('reader: mail, calendar, Drive, web. errand: also a browser; submits need approval. code: unavailable.'),
+  profile: taskProfileSchema.describe('web: the public web only (search and pages). private: mail, calendar, Drive and files, no web. reader: both. errand: both and a browser; submits need approval. code: unavailable. After outside content in this conversation, web and private start at once; reader and errand need the owner\'s card.'),
   // A label the owner and later turns read: one short line, so it cannot run on or start a line of its own.
   title: z.string().min(1).max(80).regex(/^[^\r\n\u2028\u2029]*$/, 'One line.'),
   goal: z.string().min(1),

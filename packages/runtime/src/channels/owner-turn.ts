@@ -295,7 +295,7 @@ export const createOwnerResponder = (
   };
   // Memory checks a span against the text the model read, so it gets that text and the spans the owner did not write.
   const memoryView = (parts: readonly InboundPart[]) => { const shown = renderForModel(parts); return { text: shown.text, sourceQuoteRanges: shown.foreignRanges }; };
-  const memoryContext = () => ({ ...(backgroundSourceTaint === 'external' ? { memoryOutside: true } : {}), ...(activeOwnerTurn ? { ownerInitiated:true, memoryTurn: {
+  const memoryContext = () => ({ ...(backgroundSourceTaint === 'external' ? { memoryOutside: true } : {}), ...(activeOwnerTurn ? { ownerInitiated:true, askedIn: { surface: activeOwnerTurn.surface, conversation_ref: activeOwnerTurn.conversationRef }, memoryTurn: {
     ownerId: safety.authenticatedUserId, conversationRef: activeOwnerTurn.conversationRef,
     current: { message_ref: activeOwnerTurn.messageRef?.id ?? activeOwnerTurn.traceId, ...memoryView(activeOwnerTurn.parts) },
     recent: [...recentOwnerTurns.values()].filter(turn => !barrier().holds(turn.text)).concat(control.heard().map((steer, index) => ({ message_ref: `${traceId}-steer-${index}`, text: steer.text, sourceQuoteRanges: steer.foreignRanges }))),
