@@ -45,6 +45,7 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_TOOL_RESULTS_KEEP_LATEST?: string;
   WALDO_STANDING_ORDERS_CHARS?: string;
   WALDO_QUESTS_CHARS?: string;
+  WALDO_TIMEZONE_ASK?: string;
   WALDO_ENVIRONMENT?: string;
   WALDO_OWNER_DO_NAMESPACE?: string;
   WALDO_RELEASE?: string;

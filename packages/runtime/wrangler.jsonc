@@ -49,6 +49,8 @@
   // the chat, job and hard ceilings in tokens, the share of the budget a stepped cut keeps, and the caps' clear-at characters,
   // results kept, and standing-order and quest characters. Each is fixed per deploy so the cached prefix holds; a value that
   // is not a valid size reads as its default.
+  // WALDO_TIMEZONE_ASK: "1" tells a turn whose time zone the owner has not confirmed to ask for it when it fits; "0" is the
+  // rollback.
   // WALDO_SWITCHES: every feature switch and tuning knob, one JSON var, because Cloudflare caps a Worker at 128 vars and
   // secrets together. Each entry seam flattens it into env (src/switches.ts). A new switch goes in it, as a string, in
   // both environments; only the vars guard-switches-binding.mjs lists stay flat.
@@ -131,6 +133,7 @@
       "WALDO_TOOL_RESULTS_KEEP_LATEST": "3",
       "WALDO_STANDING_ORDERS_CHARS": "3000",
       "WALDO_QUESTS_CHARS": "3000",
+      "WALDO_TIMEZONE_ASK": "0",
       "WALDO_STREAM_REPLIES": "off",
       "HEALTH_PROVISIONAL_SCORES": "0",
       "HEALTH_SOLO_NOTICE": "0",
@@ -364,6 +367,7 @@
           "WALDO_TOOL_RESULTS_KEEP_LATEST": "3",
           "WALDO_STANDING_ORDERS_CHARS": "3000",
           "WALDO_QUESTS_CHARS": "3000",
+          "WALDO_TIMEZONE_ASK": "1",
           "WALDO_STREAM_REPLIES": "on",
           "HEALTH_PROVISIONAL_SCORES": "1",
           "HEALTH_SOLO_NOTICE": "1",
