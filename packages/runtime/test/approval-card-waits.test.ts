@@ -135,7 +135,7 @@ describe('an approval card the surface cannot send now', () => {
 
       f.tick(HOUR); f.writes();
       await f.desk.ownerWrote();
-      expect(f.attempts).toEqual([expect.stringContaining('Run this action?')]);
+      expect(f.attempts).toEqual([expect.stringMatching(/^Do this\? /)]);
       expect(f.attempts[0]).toContain('approved in the Waldo app');
       expect(f.shown(id).map(row => [row.surface, row.approvable])).toEqual([['app', 1], ['whatsapp', 0]]);
 
@@ -323,6 +323,80 @@ describe('a waiting approval card the owner can no longer be shown', () => {
       expect(out.message).toContain('when you next write');
       expect(f.holds).toEqual([]);
       expect(f.status(id)).toBe('card_unconfirmed');
+    });
+  });
+});
+
+// Meta can refuse a card after accepting it: a failed status for its message id (the window's 131047, or undeliverable). The
+// owner never saw it, so that presentation is retired and, with no approvable presentation left, the card waits again.
+describe('a WhatsApp card Meta accepted and then failed to deliver', () => {
+  const shownOnce = async (f: ReturnType<typeof fixture>, title: string) => {
+    const id = await f.desk.propose(hold(title));
+    f.tick(HOUR); f.writes(); await f.desk.ownerWrote();
+    return { id, wamid: f.shown(id)[0]!.message_ref };
+  };
+
+  it('a late failure retires the presentation, and the card waits for the owner\'s next message, which sends it again', async () => {
+    await owner('card-failed-waits', async state => {
+      const f = fixture(state);
+      const { id, wamid } = await shownOnce(f, 'Focus');
+      expect(f.status(id)).toBe('open');
+      expect(f.desk.cardNotDelivered(wamid)).toBe(true);
+      expect(f.status(id)).toBe('card_unconfirmed');
+      expect(f.desk.placement(id)).toMatchObject({ waitsHere: true });
+      // A tap on the undelivered card's buttons cannot decide it: that presentation is retired.
+      await f.reply(`a:${id}`);
+      expect(f.holds).toEqual([]);
+      f.tick(HOUR); f.writes(); await f.desk.ownerWrote();
+      expect(f.attempts.filter(text => text.includes('Add "Focus"') && !text.startsWith('Done'))).toHaveLength(2);
+      expect(f.status(id)).toBe('open');
+      await f.reply(`a:${id}`);
+      expect(f.holds).toEqual(['Focus']);
+    });
+  });
+
+  it('is sent again once only: a repeated failure, or a late arrival of the first card, changes nothing', async () => {
+    await owner('card-failed-once', async state => {
+      const f = fixture(state);
+      const { id, wamid } = await shownOnce(f, 'Review');
+      expect(f.desk.cardNotDelivered(wamid)).toBe(true);
+      expect(f.desk.cardNotDelivered(wamid)).toBe(false);
+      f.tick(HOUR); f.writes(); await f.desk.ownerWrote();
+      const second = f.shown(id).find(row => row.message_ref !== wamid)!.message_ref;
+      expect(f.desk.cardNotDelivered(wamid)).toBe(false);
+      await f.desk.ownerWrote();
+      expect(f.attempts).toHaveLength(2);
+      expect(f.status(id)).toBe('open');
+      expect(second).not.toBe(wamid);
+    });
+  });
+
+  it('an unknown message id, or a card already decided, changes nothing', async () => {
+    await owner('card-failed-unknown', async state => {
+      const f = fixture(state);
+      const { id, wamid } = await shownOnce(f, 'Plan');
+      expect(f.desk.cardNotDelivered('wamid.unknown')).toBe(false);
+      expect(f.status(id)).toBe('open');
+      await f.reply(`a:${id}`);
+      expect(f.status(id)).toBe('done');
+      const sends = f.attempts.length;
+      f.desk.cardNotDelivered(wamid);
+      expect(f.status(id)).toBe('done');
+      await f.desk.ownerWrote();
+      expect(f.attempts).toHaveLength(sends);
+    });
+  });
+
+  it('a card still approvable in the app does not wait again; only the failed chat presentation is retired', async () => {
+    await owner('card-failed-app', async state => {
+      const f = fixture(state, { app: true });
+      const id = await f.desk.proposeTaintedAction(await tainted());
+      f.tick(HOUR); f.writes(); await f.desk.ownerWrote();
+      const chat = f.shown(id).find(row => row.surface === 'whatsapp')!;
+      expect(f.desk.cardNotDelivered(chat.message_ref)).toBe(true);
+      expect(f.status(id)).toBe('open');
+      await f.desk.ownerWrote();
+      expect(f.shown(id).filter(row => row.surface === 'whatsapp')).toHaveLength(1);
     });
   });
 });

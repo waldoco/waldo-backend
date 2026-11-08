@@ -196,7 +196,7 @@ it('a worker\'s browser step that needs the owner stops the task as a proposal, 
   const applied = await until(() => runInDurableObject(stub, (_instance, state) => jobs(state.storage.sql)[0]!), job => job.status === 'applied');
   expect(applied).toMatchObject({ id: jobId, status: 'applied', outcome: 'blocked' });
   const applyBody = seen.bodies.find(body => body.includes('A background task you started has finished'))!;
-  expect(applyBody).toContain('propose it with propose_action');
+  expect(applyBody).toContain('any other change you propose with propose_action');
   expect(applyBody).toContain('fixture.invalid/book');
   // The card was refused before it was made: the next round of the apply turn carries the refusal.
   expect(seen.bodies.some(body => body.includes('browse_act cannot run from an approval on this Waldo, so no card was made'))).toBe(true);
@@ -286,7 +286,7 @@ it('R-4: when no model answers the owner, the floor reply promises a time and th
     expect(job!.due_at).toBeGreaterThan(Date.now());
     // The floor reply the owner gets names the promised time; the job holding that promise was written first.
     const queued = (state.storage.kv.get<{ id: string; payload: { text: string } }[]>(FINAL_OUTBOX_KEY) ?? []).map(record => record.payload.text.replaceAll('&#39;', "'"));
-    expect(queued.some(text => /^I can't answer properly right now\. I'll come back to you by \d\d:\d\d\.$/.test(text))).toBe(true);
+    expect(queued.some(text => /^I can't answer properly right now\. I'll come back to you by \d{1,2}(:\d\d)?[ap]m\.$/.test(text))).toBe(true);
     // The first try is due; the owner's alarm runs it.
     state.storage.sql.exec('UPDATE task_jobs SET due_at = ? WHERE id = ?', Date.now(), job!.id);
     await state.storage.put(TASK_JOBS_DUE_KEY, Date.now());

@@ -1,6 +1,8 @@
 import type { LLMAttachment } from '@waldo/contracts';
 import type { InboundPart } from './owner-inbound-turn';
 import type { TelegramMedia } from './telegram-polling';
+import type { RunEffectScope } from './run-effect-scope';
+import { keptNote, type UploadKeeper } from './upload-keeper';
 
 // Telegram bots can download files up to 20 MB.
 export const TELEGRAM_DOWNLOAD_LIMIT_BYTES = 20 * 1024 * 1024;
@@ -15,8 +17,12 @@ const FILE_EXTENSIONS: Readonly<Record<string, string>> = {
 };
 
 export type TelegramFileDownloader = (fileId: string) => Promise<Uint8Array>;
-export type Transcriber = (audio: Uint8Array, filename: string, mimeType: string) => Promise<string>;
-export type MediaReaders = Readonly<{ download?: TelegramFileDownloader; transcribe?: Transcriber }>;
+// signal: when given, the provider's request ends with it, so a turn cut short leaves no transcription still running.
+export type Transcriber = (audio: Uint8Array, filename: string, mimeType: string, signal?: AbortSignal) => Promise<string>;
+// keep: present with WALDO_FILE_TOOLS on. Every photo and document is then downloaded and kept in the owner's workspace,
+// whatever its type; the model still gets the readable ones attached.
+// keeper: the host's factory for it, bound to the running turn's scope.
+export type MediaReaders = Readonly<{ download?: TelegramFileDownloader; transcribe?: Transcriber; keep?: UploadKeeper; keeper?: (scope: RunEffectScope) => UploadKeeper }>;
 
 export type LoadedMedia = Readonly<{ parts: readonly InboundPart[]; attachment?: LLMAttachment }>;
 const noted = (text: string): readonly InboundPart[] => [{ authorship: 'media_note', text }];
@@ -53,30 +59,40 @@ export const toBase64 = (bytes: Uint8Array): string => {
 
 // The note joins the conversation so later turns know what was shared; the bytes ride only on the turn
 // that received them. A transcript is its own part: the speaker may be someone other than the owner.
-export const loadTelegramMedia = async (media: TelegramMedia, { download, transcribe }: MediaReaders): Promise<LoadedMedia> => {
-  const what = `${media.forwarded ? 'forwarded ' : ''}${label(media)}`;
+export const loadTelegramMedia = async (media: TelegramMedia, { download, transcribe, keep }: MediaReaders): Promise<LoadedMedia> => {
+  const noun = `${media.forwarded ? 'forwarded ' : ''}${label(media)}`, what = `${/^[aeiou]/.test(noun) ? 'an' : 'a'} ${noun}`;
   if (media.kind === 'voice' || media.kind === 'audio') return transcribeMedia(media, what, download, transcribe);
   const readable = readableAs(media);
-  if (!readable) return { parts: noted(`[Owner sent a ${what}. This file type cannot be read yet.]`) };
-  if (media.fileSize !== null && media.fileSize > TELEGRAM_DOWNLOAD_LIMIT_BYTES) return { parts: noted(`[Owner sent a ${what} larger than 20 MB, which cannot be downloaded here.]`) };
-  if (!download) return { parts: noted(`[Owner sent a ${what}, but file reading is not set up here.]`) };
+  if (keep && download && (media.fileSize === null || media.fileSize <= TELEGRAM_DOWNLOAD_LIMIT_BYTES)) return keepMedia(media, what, readable, download, keep);
+  if (!readable) return { parts: noted(`[Owner sent ${what}. This file type cannot be read yet.]`) };
+  if (media.fileSize !== null && media.fileSize > TELEGRAM_DOWNLOAD_LIMIT_BYTES) return { parts: noted(`[Owner sent ${what} larger than 20 MB, which cannot be downloaded here.]`) };
+  if (!download) return { parts: noted(`[Owner sent ${what}, but file reading is not set up here.]`) };
   try {
     const bytes = await download(media.fileId);
-    if (bytes.length > TELEGRAM_DOWNLOAD_LIMIT_BYTES) return { parts: noted(`[Owner sent a ${what} larger than 20 MB, which cannot be read here.]`) };
-    return { parts: noted(`[Owner sent a ${what}, attached.]`), attachment: { ...readable, data_base64: toBase64(bytes) } };
+    if (bytes.length > TELEGRAM_DOWNLOAD_LIMIT_BYTES) return { parts: noted(`[Owner sent ${what} larger than 20 MB, which cannot be read here.]`) };
+    return { parts: noted(`[Owner sent ${what}, attached.]`), attachment: { ...readable, data_base64: toBase64(bytes) } };
   } catch {
-    return { parts: noted(`[Owner sent a ${what}, but it could not be downloaded.]`) };
+    return { parts: noted(`[Owner sent ${what}, but it could not be downloaded.]`) };
   }
 };
 
+const keepMedia = async (media: TelegramMedia, what: string, readable: Omit<LLMAttachment, 'data_base64'> | null, download: TelegramFileDownloader, keep: UploadKeeper): Promise<LoadedMedia> => {
+  let bytes: Uint8Array;
+  try { bytes = await download(media.fileId); } catch { return { parts: noted(`[Owner sent ${what}, but it could not be downloaded.]`) }; }
+  if (bytes.length > TELEGRAM_DOWNLOAD_LIMIT_BYTES) return { parts: noted(`[Owner sent ${what} larger than 20 MB, which cannot be read here.]`) };
+  const filename = readable?.filename ?? media.fileName ?? 'file';
+  const kept = await keep({ bytes, filename, mime: readable?.mime_type ?? media.mimeType, key: `media:${media.fileId}`, ...(media.forwarded ? { forwarded: true } : {}) });
+  return { parts: noted(keptNote(what, kept, readable !== null)), ...(readable ? { attachment: { ...readable, data_base64: toBase64(bytes) } } : {}) };
+};
+
 const transcribeMedia = async (media: TelegramMedia, what: string, download?: TelegramFileDownloader, transcribe?: Transcriber): Promise<LoadedMedia> => {
-  if (media.fileSize !== null && media.fileSize > TELEGRAM_DOWNLOAD_LIMIT_BYTES) return { parts: noted(`[Owner sent a ${what} larger than 20 MB, which cannot be downloaded here.]`) };
-  if (!download || !transcribe) return { parts: noted(`[Owner sent a ${what}, but voice reading is not set up here.]`) };
+  if (media.fileSize !== null && media.fileSize > TELEGRAM_DOWNLOAD_LIMIT_BYTES) return { parts: noted(`[Owner sent ${what} larger than 20 MB, which cannot be downloaded here.]`) };
+  if (!download || !transcribe) return { parts: noted(`[Owner sent ${what}, but voice reading is not set up here.]`) };
   try {
     const text = (await transcribe(await download(media.fileId), media.fileName ?? 'audio', media.mimeType ?? 'application/octet-stream')).trim();
     // Telegram marks a forward, so a forwarded recording is someone else speaking, whatever it says.
-    return { parts: text.length > 0 ? [...noted(`[Owner sent a ${what}.]`), { authorship: media.forwarded ? 'forwarded' : 'file_transcript', text }] : noted(`[Owner sent a ${what} with no speech that could be made out.]`) };
+    return { parts: text.length > 0 ? [...noted(`[Owner sent ${what}.]`), { authorship: media.forwarded ? 'forwarded' : 'file_transcript', text }] : noted(`[Owner sent ${what} with no speech that could be made out.]`) };
   } catch {
-    return { parts: noted(`[Owner sent a ${what}, but it could not be transcribed.]`) };
+    return { parts: noted(`[Owner sent ${what}, but it could not be transcribed.]`) };
   }
 };

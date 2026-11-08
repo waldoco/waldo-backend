@@ -13,7 +13,7 @@ import { claimStore, type ClaimStore } from '../src/memory/claims';
 import { episodeIndex } from '../src/channels/episodes';
 import { memoryHandlers } from '../src/tools/live/memory';
 import { searchEpisodesHandler } from '../src/tools/live/search-episodes';
-import { messagingSystemPrompt, VOICE_VERSION, type SurfacePresentation } from '../src/prompt/messaging-behavior';
+import { messagingSystemPrompt, VOICE_VERSION, voiceVersion, type SurfacePresentation } from '../src/prompt/messaging-behavior';
 import { CALENDAR_PREP_FORMAT } from '../src/channels/event-briefs';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { TURN_CONTEXT_HEADER } from '../src/prompt/turn-prompt';
@@ -27,14 +27,19 @@ const presentation = (surface: string): SurfacePresentation => ({ surface, deliv
 
 // The provider caches a prompt by its exact leading bytes, so a system prompt that moves bills every later call in full.
 // Everything current for one message (clock, memory, open loops, health, connections) rides that message instead.
+// Version 2 of the behavior prompt (WALDO_PROMPT_V2) holds to the same: its text is as stable as version 1's.
 describe.each([
-  ['telegram', undefined],
-  ['app', presentation('app')],
-  ['whatsapp', presentation('whatsapp')],
-  ['imessage', presentation('imessage')],
-] as const)('%s', (surface, surfacePresentation) => {
+  ['telegram', undefined, false],
+  ['app', presentation('app'), false],
+  ['whatsapp', presentation('whatsapp'), false],
+  ['imessage', presentation('imessage'), false],
+  ['telegram', undefined, true],
+  ['app', presentation('app'), true],
+  ['whatsapp', presentation('whatsapp'), true],
+  ['imessage', presentation('imessage'), true],
+] as const)('%s, prompt v2 %s', (surface, surfacePresentation, v2) => {
   it('sends byte-identical system prompts and the same tool menu across rounds and turns while clock, memory and open loops change', async () => {
-    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`stable-prefix-${surface}`)), async (_instance, state) => {
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`stable-prefix-${surface}${v2 ? '-v2' : ''}`)), async (_instance, state) => {
       let minute = 0;
       const clock = { timezone: 'Asia/Kolkata', now: () => new Date(Date.UTC(2026, 9, 15, 1, 23 + minute, 30)) };
       const memory = claimStore(state.storage.sql);
@@ -71,7 +76,7 @@ describe.each([
           : { model: request.model, text: 'Done.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 };
         return { ok: true, data };
       } };
-      const args: Parameters<typeof createOwnerResponder> = ['fixture'];
+      const args: Parameters<typeof createOwnerResponder> = [v2 ? { openaiApiKey: 'fixture', promptV2: true } : 'fixture'];
       args[2] = memory; args[4] = clock; args[5] = handlers as never; args[10] = gateway; args[13] = standingOrders;
       const responder = createOwnerResponder(...args);
       const turn = (n: number, text: string) => responder.respond(ownerTyped({ traceId: `stable-prefix-${surface}-${n}`, conversationRef: `${surface}-1`, surface, text, memoryWrites: false, ...(surfacePresentation ? { presentation: surfacePresentation } : {}) }), time);
@@ -83,7 +88,7 @@ describe.each([
       expect(calls).toHaveLength(8);
       // One system prompt for every round of both turns, and it is the stable behaviour text with nothing per-turn in it.
       expect(new Set(calls.map((entry) => entry.system)).size).toBe(1);
-      expect(calls[0]!.system.startsWith(messagingSystemPrompt(handlers.map((handler) => handler.name), surfacePresentation))).toBe(true);
+      expect(calls[0]!.system.startsWith(messagingSystemPrompt(handlers.map((handler) => handler.name), surfacePresentation, { v2 }))).toBe(true);
       expect(calls[0]!.system).not.toMatch(/local time:|Prefers aisle seats|Check the visa appointment/);
 
       // The per-turn facts ride the owner's message, built once per turn: an open loop recorded in round one changes no
@@ -195,8 +200,8 @@ it('rebuilds the turn context mid-turn when a forget lands, and only then', asyn
 
 // A background decision reads the same behaviour text as an owner turn, so its clock and memory ride the job's text as a
 // turn context; the system prompt holds no per-call fact and stays byte-identical from one decision to the next.
-it('background decisions send the stable behaviour text as the system prompt, with clock and memory in the turn context', async () => {
-  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('stable-prefix-decision')), async (_instance, state) => {
+it.each([false, true])('background decisions send the stable behaviour text as the system prompt, with clock and memory in the turn context (prompt v2 %s)', async (v2) => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`stable-prefix-decision${v2 ? '-v2' : ''}`)), async (_instance, state) => {
     let minute = 0;
     const clock = { timezone: 'Asia/Kolkata', now: () => new Date(Date.UTC(2026, 9, 15, 1, 23 + minute, 30)) };
     const memory = claimStore(state.storage.sql);
@@ -207,7 +212,7 @@ it('background decisions send the stable behaviour text as the system prompt, wi
       sent.push({ system: request.system ?? '', message: String(request.messages.at(-1)?.content ?? '') });
       return { ok: true, data: { model: request.model, text: '{"kind":"no_op","text":""}', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 } };
     } };
-    const args: Parameters<typeof createOwnerResponder> = ['fixture'];
+    const args: Parameters<typeof createOwnerResponder> = [v2 ? { openaiApiKey: 'fixture', promptV2: true } : 'fixture'];
     args[2] = memory; args[3] = (entry) => { hops.push(entry); }; args[4] = clock; args[10] = gateway;
     const responder = createOwnerResponder(...args);
     const decide = (id: string) => responder.prompt(id, 'owner', '[Meeting prep decision] Aisle seat on the flight?', time, 'telegram', [], async () => undefined, CALENDAR_PREP_FORMAT);
@@ -216,7 +221,7 @@ it('background decisions send the stable behaviour text as the system prompt, wi
     await decide('decision-2');
 
     expect(sent).toHaveLength(2);
-    expect(sent[0]!.system).toBe(messagingSystemPrompt([]));
+    expect(sent[0]!.system).toBe(messagingSystemPrompt([], undefined, { v2 }));
     expect(sent[1]!.system).toBe(sent[0]!.system);
     expect(sent[0]!.message.startsWith('[Meeting prep decision] Aisle seat on the flight?\n\n' + TURN_CONTEXT_HEADER)).toBe(true);
     expect(sent[0]!.message).toContain('at 06:53');
@@ -224,7 +229,7 @@ it('background decisions send the stable behaviour text as the system prompt, wi
     expect(sent[0]!.message).toContain('Prefers aisle seats');
     const decisions = hops.filter((hop) => hop.hop === 'llm_background_decision');
     expect(decisions).toHaveLength(2);
-    for (const hop of decisions) expect(hop.shape?.voice_version).toBe(VOICE_VERSION);
+    for (const hop of decisions) expect(hop.shape?.voice_version).toBe(voiceVersion(v2));
   });
 });
 
@@ -436,7 +441,7 @@ it('rebuilds the turn context mid-turn when health sharing is withdrawn', async 
 // assembled in a different order, send the same system prompt.
 it('two turns admitting the same deferred tools in a different order send byte-identical system prompts', async () => {
   const quiet = async () => ({ ok: true as const, data: {}, source_taint: null });
-  const deferred = (['list_reminders', 'cancel_reminder', 'set_proactivity', 'set_schedule_preference', 'search_episodes', 'read_tool_output'] as const)
+  const deferred = (['list_responsibilities', 'close_responsibility', 'set_proactivity', 'set_schedule_preference', 'search_episodes', 'read_tool_output'] as const)
     .map((name) => ({ name, description: `${name}.`, schema: z.object({}), trigger_allowlist: allowlist(name), autonomy_gated: false, handle: quiet }));
   const systems: string[] = [];
   const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {

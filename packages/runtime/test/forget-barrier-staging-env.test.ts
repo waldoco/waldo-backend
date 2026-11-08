@@ -1,9 +1,12 @@
 import { env } from 'cloudflare:workers';
+import { withSwitches } from '../src/switches';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
 import config from '../wrangler.jsonc?raw';
 import { parseJsonc } from '../../../scripts/jsonc.mjs';
+import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
+import { HEY144_GOALS_SCHEMA_MIGRATION } from '../src/do-schema';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 import { holdTopic } from './helpers/pending-topic';
@@ -13,7 +16,7 @@ import { holdTopic } from './helpers/pending-topic';
 // forget is still cleaning.
 const OWNER_ID = '6d2f0a8e-41c7-4b9e-a3d5-8e1c7f2b9a04';
 const BASE = 'https://directory.fixture.invalid';
-const STAGING = (parseJsonc(config) as { env: { staging: { vars: { WALDO_FORGET_BARRIER?: string } } } }).env.staging.vars;
+const STAGING = (flatConfig(parseJsonc(config)) as { env: { staging: { vars: { WALDO_FORGET_BARRIER?: string } } } }).env.staging.vars;
 
 const model = vi.hoisted(() => ({ requests: [] as LLMGatewayRequest['request'][], calls: [] as { name: string; arguments: string }[], modes: [] as unknown[] }));
 vi.mock('../src/channels/telegram-turn', async load => {
@@ -59,8 +62,8 @@ const readMemoryTurn = async (name: string, barrier: string | undefined) => {
     memory.add({ kind: 'fact', text: 'Drinks coffee black', evidence: 'coffee', source: 'stated', origin: 'owner', source_ref: 'owner, tg-1' }, '2026-10-21T08:00:00Z');
     memory.add({ kind: 'fact', text: 'Climbs on Thursdays', evidence: 'climbs', source: 'stated', origin: 'owner', source_ref: 'owner, tg-2' }, '2026-10-21T08:00:00Z');
     // A goal whose JSON the redaction will not rewrite in place keeps the forget cleaning through the turn's own pass.
-    state.storage.sql.exec('CREATE TABLE IF NOT EXISTS goals (id TEXT PRIMARY KEY, description TEXT)');
-    state.storage.sql.exec('INSERT INTO goals (id, description) VALUES (?, ?)', 'g1', '{ "note": "less coffee" }');
+    for (const statement of HEY144_GOALS_SCHEMA_MIGRATION.up) state.storage.sql.exec(statement);
+    state.storage.sql.exec("INSERT INTO goals (id, user_id, description, created_at, updated_at) VALUES ('g1', ?, ?, '2026-10-21T08:00:00Z', '2026-10-21T08:00:00Z')", OWNER_ID, '{ "note": "less coffee" }');
     holdTopic(state.storage.sql, 'coffee', '2026-10-21T08:00:00Z');
     const owner = new OwnerDO(state, { ...env, WALDO_FORGET_BARRIER: barrier, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     model.calls.push({ name: 'read_memory', arguments: JSON.stringify({ limit: 10 }) });
@@ -81,10 +84,11 @@ it('the staging Worker runs owner turns on the item rule: a held memory item is 
   expect(modes).toEqual(['items']);
   expect(output).toContain('Climbs on Thursdays');
   expect(output).not.toMatch(/coffee/i);
+  expect(JSON.stringify(model.requests), 'the held goal is no quest line in the prompt').not.toMatch(/coffee/i);
 });
 
 it('the production Worker keeps the earlier whole-read rule', async () => {
-  expect((env as { WALDO_FORGET_BARRIER?: string }).WALDO_FORGET_BARRIER).toBe('off');
-  const { modes } = await readMemoryTurn('forget-barrier-production-env', (env as { WALDO_FORGET_BARRIER?: string }).WALDO_FORGET_BARRIER);
+  expect((withSwitches(env) as { WALDO_FORGET_BARRIER?: string }).WALDO_FORGET_BARRIER).toBe('off');
+  const { modes } = await readMemoryTurn('forget-barrier-production-env', (withSwitches(env) as { WALDO_FORGET_BARRIER?: string }).WALDO_FORGET_BARRIER);
   expect(modes).toEqual(['reads']);
 });

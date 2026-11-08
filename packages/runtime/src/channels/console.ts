@@ -151,7 +151,7 @@ export const grantHeaders = (doName: string, request: Request): Record<string, s
   return { 'x-waldo-do-name': doName, ...(current ? { cookie: `${CONSOLE_COOKIE}=${current}` } : {}) };
 };
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'spot.pin', 'spot.unpin', 'spot.edit', 'spot.area', 'node.forget', 'node.confirm', 'node.correct', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'schedule.resume', 'card.retry', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'granola.connect', 'granola.disconnect', 'session.signout', 'session.signout.all', 'session.revoke', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'health_memory.set', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'agent_mail.claim', 'agent_mail.release'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'spot.pin', 'spot.unpin', 'spot.edit', 'spot.area', 'spot.quiet', 'spot.unquiet', 'node.forget', 'node.confirm', 'node.correct', 'person.confirm', 'person.rename', 'person.ring', 'person.forget', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'schedule.resume', 'card.retry', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'granola.connect', 'granola.disconnect', 'session.signout', 'session.signout.all', 'session.revoke', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'health_memory.set', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'agent_mail.claim', 'agent_mail.release'] as const;
 // made: where the owner made a memory pin or edit, recorded on the claim it writes (app:claim.edit); absent, the console's own.
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string; made?: string }>;
 
@@ -181,7 +181,6 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'proactivity.set': 'Saved. Waldo will reach out on your new settings.',
   'proactive_surface.set': 'Saved. Waldo sends its next messages there.',
   'health_memory.set': 'Saved. Notes Waldo keeps on its own include health only while this is on; what you ask it to remember is kept either way.',
-  'schedule.set': 'Saved. That scheduled behavior is updated.',
   'schedule.reset': 'Reset. Every scheduled behavior is back to its default (on).',
   'invite.create': 'Invite saved. Send the code to the intended person yourself; Waldo did not email anyone.',
   'invite.member': 'Invite saved. Send the code yourself; Waldo did not email anyone.',
@@ -194,6 +193,9 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'spot.unpin': 'Unpinned. Waldo still remembers it and finds it when it matters.',
   'spot.edit': 'Saved in your words. Waldo uses this from now on; the old version is kept as history.',
   'spot.area': 'Moved. Waldo keeps it in the area you chose.',
+  'spot.quiet': 'Okay. Waldo keeps it and uses it when you ask, but will not bring it up on its own.',
+  'spot.unquiet': 'Okay. Waldo may bring it up on its own again when it matters.',
+  'spot.quiet.failed': 'Nothing changed. Refresh and try again.',
   'spot.area.failed': 'Nothing was moved. Pick one of the listed areas, then refresh Memory and try again.',
   'spot.edit.failed': 'Nothing was changed. The text must be 1 to 1,000 characters and hold no password, key or token.',
   'spot.forget': 'Removed from long-term memory and blocked from relearning. Waldo no longer sees it; older copies are cleared from storage in the background.',
@@ -202,6 +204,12 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'node.forget.incomplete': 'The pattern was hidden and blocked from relearning, but retained conversation text could not be fully redacted. Supporting Spots remain. Ask Waldo in chat to inspect the incomplete removal; no dashboard retry target is available.',
   'node.forget': 'Pattern removed and its name blocked from relearning. What Waldo read behind it goes with it; anything you said yourself stays - forget that too to remove it. The current chat may still mention it until the conversation moves on.',
   'node.confirm': 'Confirmed. Waldo now treats this pattern as yours.',
+  'person.confirm': 'Confirmed. Waldo now knows them as someone you know.',
+  'person.rename': 'Renamed. Waldo now uses the name you gave.',
+  'person.rename.failed': 'Nothing was changed. The name must be 1 to 120 characters and hold no password, key or token.',
+  'person.ring': 'Saved. Waldo now keeps them where you put them.',
+  'person.ring.failed': 'Nothing was changed. Choose inner, close or wider.',
+  'person.forget': 'Forgotten: everything Waldo held about them, and their name and addresses are blocked from relearning, unless someone else you know shares the name. Older copies are cleared from storage in the background. Their mail and calendar events stay in Gmail and Google Calendar.',
   'node.correct': 'Corrected. Waldo now keeps your words instead, and will not bring back its earlier read.',
   'node.correct.failed': 'Nothing was changed. The text must be 1 to 140 characters and hold no password, key or token.',
   'schedule.resume': 'Resumed. It runs now.',
@@ -239,7 +247,7 @@ export type ConsoleView = Readonly<{
   usage: readonly Readonly<{ model: string; calls: number; input: number; cached: number; output: number; usd: number }>[];
   csrf: string;
   notice: string | null;
-  google: Readonly<{ accounts: readonly Readonly<{ id: string; email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean }>[]; connectAvailable: boolean }>;
+  google: Readonly<{ accounts: readonly Readonly<{ id: string; email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean; drive?: boolean; docs?: boolean; sheets?: boolean; slides?: boolean }>[]; connectAvailable: boolean }>;
   // Granola, read from the owner's MCP connections. Only the app's read fills it; the console lists every server under mcp.
   granola?: Readonly<{ connectAvailable: boolean; connection: Readonly<{ status: 'active' | 'reauth_needed'; connected_at: number }> | null }>;
   // Every catalogue app as a Connections tile. Only the app's read fills it.
@@ -265,6 +273,8 @@ export type ConsoleView = Readonly<{
   ledger: string;
   proactivity: Proactivity;
   schedules: SchedulePreferences;
+  // WAKE_BRIEF: a wake may bring the Brief earlier than its time, so the owner's Brief time is the latest it comes.
+  wakeBrief?: boolean;
   // Jobs the scheduler paused after their own runs failed, as the owner knows them, with the retry's local time.
   pausedJobs: readonly Readonly<{ id: string; name: string; until: string }>[];
   files: readonly StoredFile[];
@@ -358,7 +368,7 @@ export const waitingMaySend = (item: ApprovalItem | undefined): boolean =>
 
 const APPROVAL_LABELS: Readonly<Record<string, string>> = {
   calendar_change: 'Calendar adjustment', email_send: 'Email send', message_send: 'Message send', agent_mail_send: 'Email as Waldo',
-  browser_submit: 'Browser action', mcp_call: 'MCP tool call', google_task_change: 'Google task change',
+  browser_submit: 'Browser action', mcp_call: 'MCP tool call', google_task_change: 'Google task change', standing_grant: 'Standing grant',
 };
 const reviewDetails = (review: ApprovalReview): string => {
   if (review.kind === 'email_send') return `<div class="approval-review"><div>To: ${esc(review.to.join(', '))}</div>${review.cc.length ? `<div>CC: ${esc(review.cc.join(', '))}</div>` : ''}${review.bcc.length ? `<div>BCC: ${esc(review.bcc.join(', '))}</div>` : ''}<div>Subject: ${esc(review.subject)}</div><pre>${esc(review.body)}</pre></div>`;

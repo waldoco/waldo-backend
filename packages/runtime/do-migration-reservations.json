@@ -72,6 +72,18 @@
     {
       "version": 16,
       "name": "history-archive"
+    },
+    {
+      "version": 17,
+      "name": "reply-memory-used"
+    },
+    {
+      "version": 18,
+      "name": "goal-quests"
+    },
+    {
+      "version": 19,
+      "name": "experiments"
     }
   ]
 }

@@ -15,6 +15,11 @@ import {
   SCHEDULE_RUNS_RUNNING_MIGRATION,
   HISTORY_ARCHIVE_MIGRATION,
   HISTORY_ARCHIVE_TABLE_SCHEMA,
+  REPLY_MEMORY_USED_MIGRATION,
+  GOAL_QUESTS_MIGRATION,
+  EXPERIMENTS_MIGRATION,
+  EXPERIMENTS_TABLE_SCHEMA,
+  REPLY_MEMORY_USED_TABLE_SCHEMA,
   SCHEDULE_RUNS_SCHEMA_MIGRATION,
   TASK_JOBS_SCHEMA_MIGRATION,
   applyDoMigration,
@@ -207,7 +212,7 @@ describe('HEY-10 DO SQLite schema root', () => {
         tables: listTables(state.storage.sql),
       };
     });
-    expect(DO_SCHEMA_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 8, 12, 13, 14, 15, 16]);
+    expect(DO_SCHEMA_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 8, 12, 13, 14, 15, 16, 17, 18, 19]);
     expect(result.applied).toEqual([
       { version: 1, name: 'hey10-base-context-schema' },
       { version: 2, name: 'hey144-goals-schema' },
@@ -217,6 +222,9 @@ describe('HEY-10 DO SQLite schema root', () => {
       { version: 14, name: 'calendar-last-seen' },
       { version: 15, name: 'schedule-runs-running-index' },
       { version: 16, name: 'history-archive' },
+      { version: 17, name: 'reply-memory-used' },
+      { version: 18, name: 'goal-quests' },
+      { version: 19, name: 'experiments' },
     ]);
     expect(result.tables).toContain('calendar_last_seen');
     expect(result.tables).toContain('task_jobs');
@@ -247,6 +255,9 @@ describe('HEY-10 DO SQLite schema root', () => {
       const objects = () => state.storage.sql.exec<{ name: string; sql: string }>("SELECT name, sql FROM sqlite_master WHERE name LIKE 'history_archive%' ORDER BY name").toArray();
       provisionDoSchema(state.storage);
       const provisioned = objects();
+      applyDoMigration(state.storage, EXPERIMENTS_MIGRATION, 'down');
+      applyDoMigration(state.storage, GOAL_QUESTS_MIGRATION, 'down');
+      applyDoMigration(state.storage, REPLY_MEMORY_USED_MIGRATION, 'down');
       applyDoMigration(state.storage, HISTORY_ARCHIVE_MIGRATION, 'down');
       const down = objects();
       for (const statement of HISTORY_ARCHIVE_TABLE_SCHEMA) state.storage.sql.exec(statement);
@@ -256,6 +267,40 @@ describe('HEY-10 DO SQLite schema root', () => {
     expect(result.down).toEqual([]);
     expect(result.written).toEqual(result.provisioned);
     expect(result.version).toBe(15);
+  });
+
+  it('creates the reply memory-used table from the chain with the same DDL its writer runs, and its down drops it', async () => {
+    const result = await runInDurableObject(freshStub(), (_instance, state) => {
+      const objects = () => state.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE name LIKE 'reply_memory_used%' ORDER BY name").toArray().map(row => row.name);
+      provisionDoSchema(state.storage);
+      const provisioned = objects();
+      applyDoMigration(state.storage, EXPERIMENTS_MIGRATION, 'down');
+      applyDoMigration(state.storage, GOAL_QUESTS_MIGRATION, 'down');
+      applyDoMigration(state.storage, REPLY_MEMORY_USED_MIGRATION, 'down');
+      const down = objects();
+      for (const statement of REPLY_MEMORY_USED_TABLE_SCHEMA) state.storage.sql.exec(statement);
+      return { provisioned, down, written: objects(), version: getSchemaVersion(state.storage.sql) };
+    });
+    expect(result.provisioned).toEqual(['reply_memory_used', 'reply_memory_used_by_time']);
+    expect(result.down).toEqual([]);
+    expect(result.written).toEqual(result.provisioned);
+    expect(result.version).toBe(16);
+  });
+
+  it('creates the experiments table from the chain with the same DDL its writer runs, and its down drops it', async () => {
+    const result = await runInDurableObject(freshStub(), (_instance, state) => {
+      const objects = () => state.storage.sql.exec<{ name: string; sql: string }>("SELECT name, sql FROM sqlite_master WHERE name LIKE 'experiments%' ORDER BY name").toArray();
+      provisionDoSchema(state.storage);
+      const provisioned = objects();
+      applyDoMigration(state.storage, EXPERIMENTS_MIGRATION, 'down');
+      const down = objects();
+      for (const statement of EXPERIMENTS_TABLE_SCHEMA) state.storage.sql.exec(statement);
+      return { provisioned, down, written: objects(), version: getSchemaVersion(state.storage.sql) };
+    });
+    expect(result.provisioned.map(row => row.name)).toEqual(['experiments', 'experiments_one_running']);
+    expect(result.down).toEqual([]);
+    expect(result.written).toEqual(result.provisioned);
+    expect(result.version).toBe(18);
   });
 
   it('drops the memory hall tables a V1 database created, and its down restores them empty', async () => {
@@ -270,6 +315,9 @@ describe('HEY-10 DO SQLite schema root', () => {
       const atV1 = objects();
       provisionDoSchema(state.storage);
       const current = objects();
+      applyDoMigration(state.storage, EXPERIMENTS_MIGRATION, 'down');
+      applyDoMigration(state.storage, GOAL_QUESTS_MIGRATION, 'down');
+      applyDoMigration(state.storage, REPLY_MEMORY_USED_MIGRATION, 'down');
       applyDoMigration(state.storage, HISTORY_ARCHIVE_MIGRATION, 'down');
       applyDoMigration(state.storage, SCHEDULE_RUNS_RUNNING_MIGRATION, 'down');
       applyDoMigration(state.storage, CALENDAR_LAST_SEEN_MIGRATION, 'down');
@@ -284,7 +332,7 @@ describe('HEY-10 DO SQLite schema root', () => {
     expect(result.version).toBe(12);
   });
 
-  it('keeps the V2 goal columns required for contract-safe reads', async () => {
+  it('keeps the V2 goal columns required for contract-safe reads, and adds the quest columns', async () => {
     const stub = freshStub();
 
     const columns = await runInDurableObject(stub, (_instance, state) => {
@@ -303,6 +351,10 @@ describe('HEY-10 DO SQLite schema root', () => {
       { table_name: 'goals', column_name: 'active' },
       { table_name: 'goals', column_name: 'created_at' },
       { table_name: 'goals', column_name: 'updated_at' },
+      { table_name: 'goals', column_name: 'plan' },
+      { table_name: 'goals', column_name: 'state' },
+      { table_name: 'goals', column_name: 'check_in_days' },
+      { table_name: 'goals', column_name: 'last_check_in_at' },
     ]);
   });
 

@@ -4,7 +4,8 @@ import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { md5Hex } from '../channels/md5';
 import { ownerModels, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { fenced } from '../prompt/turn-prompt';
-import { numericHealthIn } from '../scribe/sanitiser';
+import { PARK_WORDS } from '../prompt/fixed-lines';
+import { numericHealthInJsonText } from '../scribe/sanitiser';
 import { deferDelay, TURN_OUTCOME } from './brain';
 import { applyInterrupted, carriesForgotten, jobResult, MACHINE_ORIGIN, taskBrief, type JobBook, type JobRow, type MachineBrief, type MachineJob, type TaskBrief } from './jobs';
 
@@ -18,7 +19,7 @@ export type MachineItem = Readonly<{ ref: string; detail: string }>;
 // A brief persists with its job, and the owner's health values are never stored: an item that carries one keeps its ref,
 // so the worker can still look it up, and drops its words.
 export const HEALTH_DETAIL_DROPPED = '(detail not kept: it carries health values; read it by its ref if you need it)';
-const keptItem = (item: MachineItem): MachineItem => numericHealthIn(item.detail) ? { ref: item.ref, detail: HEALTH_DETAIL_DROPPED } : item;
+const keptItem = (item: MachineItem): MachineItem => numericHealthInJsonText(item.detail) ? { ref: item.ref, detail: HEALTH_DETAIL_DROPPED } : item;
 
 export type MachineSpec = Readonly<{
   job: MachineJob; scope: string; key: string; surface: string;
@@ -85,6 +86,12 @@ export type MachineHandler = Readonly<{
   noNews?(row: JobRow, settle: () => void): void | Promise<void>;
   // The apply runs on an empty result too: the job's judgment does not rest on the worker's findings alone.
   decidesOnEmpty?: boolean;
+  // The job parked before its worker reported: a job whose worker's own writes are its news (the look-up's findings) still
+  // tells the owner what it got done. It calls `settle` as `apply` does. Without it a parked job settles silently.
+  parked?(row: JobRow, io: Readonly<{ trace: string; current(): Promise<void>; settle(): void }>): Promise<MachineApplied>;
+  // The apply's gate held the card (quiet hours, volume, follow-ups off): the job waits for the gate instead of dropping the
+  // news, and does not settle on a hold; the lane settles it once the news is too old, HELD_WINDOW_MS after the report.
+  deferHeld?: boolean;
   // The job left the lane, however it ended (applied, parked, dropped): for work waiting on it, never for a message.
   ended?(row: JobRow): void;
 }>;
@@ -92,11 +99,25 @@ export type MachineAppliers = Readonly<Partial<Record<MachineJob, MachineHandler
 
 // A report that no model could apply is retried for an hour.
 export const APPLY_RETRY_MS = 60 * 60_000;
+// A card held by its gate is asked again every half hour, for a day and a half after the report.
+export const HELD_RETRY_MS = 30 * 60_000;
+export const HELD_WINDOW_MS = 36 * 60 * 60_000;
+
+// With WALDO_TASK_NOTES=1, a machine job that stopped (parked, or its worker failed or was blocked with nothing to show)
+// tells the owner once a day per job, outside quiet hours, so background work never drops out of sight. `note` queues the
+// line under its key with `settle` in the same commit; a key already queued only settles.
+export type MachineNote = (key: string, text: string, settle: () => void) => Promise<void>;
+const MACHINE_WORK: Readonly<Record<MachineJob, string>> = {
+  heartbeat: 'check-back on your open loops', update_sweep: 'scan of your mail and calendar for updates',
+  meeting_prep: 'prep for an upcoming meeting', owner_lookup: 'look-up of your public profile', intervention: 'look across your day',
+};
+export const machineStoppedNote = (job: MachineJob, why: string): string => `My background ${MACHINE_WORK[job]} stopped before it finished, because ${why}. I'll try it again on its next run.`;
+const DAY_MS = 24 * 60 * 60_000;
 
 // The jobs lane's apply step for a machine job. The owner never asked for this work, so nothing here tells them about it
 // unless the job found something: a parked job, an empty result and an apply that never got a model all settle silently.
 export const applyMachineJob = async (row: JobRow, deps: Readonly<{
-  book: JobBook; now(): number; appliers: MachineAppliers; hop(row: JobRow, name: string, fields?: Partial<TurnLogEntry>): void;
+  book: JobBook; now(): number; appliers: MachineAppliers; hop(row: JobRow, name: string, fields?: Partial<TurnLogEntry>): void; note?: MachineNote;
 }>): Promise<void> => {
   try { await applyOnce(row, deps); } finally {
     const after = deps.book.get(row.id);
@@ -139,15 +160,26 @@ const applyOnce = async (row: JobRow, deps: Parameters<typeof applyMachineJob>[1
     if (deps.now() - row.updated_at < APPLY_RETRY_MS && book.postpone(row.id, deps.now() + deferDelay(row.deferrals))) return deps.hop(row, 'machine_apply_deferred', { ok: false });
     return quietly('machine_dropped', { ok: false, code: 'apply_unavailable' });
   };
-  if (row.park_reason) return quietly('machine_parked', { ok: false, code: row.park_reason });
+  // A job that stopped tells the owner when this deploy says so; otherwise it settles silently, as one that found nothing.
+  const stopped = async (name: string, fields: Partial<TurnLogEntry>, why: string) => {
+    // Waldo's own look is unasked by nature: a stopped one is not worth a message outside the owner's limits.
+    if (!deps.note || job === 'intervention') return quietly(name, fields);
+    try { await deps.note(`machine:${job}:stopped:${Math.floor(deps.now() / DAY_MS)}`, machineStoppedNote(job, why), settle); }
+    catch (error) { if (error instanceof ClosedRunError) return; throw error; }
+    done(name, { ...fields, detail: 'noted' });
+  };
+  const handler = deps.appliers[job];
+  if (row.park_reason && !handler?.parked) return stopped('machine_parked', { ok: false, code: row.park_reason }, PARK_WORDS[row.park_reason]);
   // A pass lost inside the apply turn left its intent: the turn may have raised a card or opened a loop, so it is not run
   // again. The owner never asked for this work, so nothing names it; the trigger's next tick asks again.
   if (applyInterrupted(row)) return quietly('machine_apply_uncertain', { ok: false });
-  const handler = deps.appliers[job];
-  const result = jobResult(row)!;
+  const result = row.park_reason ? null : jobResult(row)!;
+  if (result && !handler?.parked && (result.status === 'failed' || result.status === 'blocked') && !result.findings.length && !result.proposals.length) {
+    return stopped('machine_stopped', { ok: false, code: result.status }, result.status === 'blocked' ? 'something it needed was not available' : 'it ran into an error');
+  }
   // The worker made the judgment; an empty result is how it says nothing here is worth the owner's attention. It says
   // nothing about an item it was not shown, so a job with one goes to the brain's apply, which can see it.
-  if (!result.findings.length && !result.proposals.length && !taskBrief(row).machine!.withheld?.length && !handler?.decidesOnEmpty) {
+  if (result && !result.findings.length && !result.proposals.length && !taskBrief(row).machine!.withheld?.length && !handler?.decidesOnEmpty) {
     if (!handler?.noNews) return quietly('machine_no_news');
     try { await handler.noNews(row, settle); } catch (error) { return unavailable(error); }
     return done('machine_no_news');
@@ -157,10 +189,16 @@ const applyOnce = async (row: JobRow, deps: Parameters<typeof applyMachineJob>[1
   let outcome: MachineApplied;
   if (!book.beginApply(row.id)) return;
   applied = true;
+  const io = { trace: `task:${row.id}:apply`, current, settle };
   try {
-    outcome = await handler.apply(row, result, { trace: `task:${row.id}:apply`, current, settle });
+    outcome = await (result ? handler.apply(row, result, io) : handler.parked!(row, io));
   } catch (error) { return unavailable(error); }
-  if (outcome === 'delivered') done('machine_applied');
-  else if (outcome === 'skipped') done('machine_skipped');
-  else done('machine_held', { code: outcome.held });
+  const parked = row.park_reason ? { code: row.park_reason } : {};
+  if (outcome === 'delivered') done('machine_applied', parked);
+  else if (outcome === 'skipped') done('machine_skipped', parked);
+  else if (handler?.deferHeld) {
+    if (deps.now() - row.updated_at < HELD_WINDOW_MS && book.postpone(row.id, deps.now() + HELD_RETRY_MS)) return deps.hop(row, 'machine_apply_deferred', { ok: true, code: outcome.held });
+    try { settle(); } catch (error) { if (error instanceof ClosedRunError) return; throw error; }
+    done('machine_held', { code: outcome.held });
+  } else done('machine_held', { code: outcome.held });
 };

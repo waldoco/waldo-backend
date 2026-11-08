@@ -9,14 +9,14 @@ import { APP_CONTRACT_HEADER } from '../../contracts/src/app/core';
 import { claimStore, turnMemoryPrompt } from '../src/memory/claims';
 import { ownerProfilePrompt } from '../src/memory/owner-profile';
 import { numericHealthIn } from '../src/scribe/sanitiser';
-import { consentLedger } from '../src/onboarding/consent-ledger';
+import { consentLedger, CURRENT_CONSENT_VERSION } from '../src/onboarding/consent-ledger';
 import { findingStore } from '../src/onboarding/findings';
 import { recordSignupName } from '../src/onboarding/first-run';
 import { episodeIndex } from '../src/channels/episodes';
 
 let sequence = 0;
 type Calls = { acts: unknown[]; admitted: string[]; rpc: number; hidden: (readonly string[])[] };
-type Fakes = Partial<Pick<OwnerOnboardingDeps, 'rpc' | 'act' | 'admit' | 'chat' | 'assertCurrent' | 'hideText' | 'lookupOffered' | 'agreementsOffered' | 'now' | 'signedInRecently'>>;
+type Fakes = Partial<Pick<OwnerOnboardingDeps, 'rpc' | 'act' | 'admit' | 'chat' | 'assertCurrent' | 'hideText' | 'stopLookup' | 'lookupOffered' | 'agreementsOffered' | 'now' | 'signedInRecently'>>;
 const NO_CHAT: ChatChannels = { offered: async () => false, linked: async () => 'unknown', issue: async () => null };
 const owner = <T>(fn: (o: { storage: DurableObjectStorage; calls: Calls; send(path: string, body?: unknown, method?: string, contract?: string): Promise<Response>; act(body: Record<string, unknown>): Promise<Response> }) => Promise<T>, fakes: Fakes = {}) =>
   runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`app-onboarding-${sequence++}`)), async (_instance, state) => {
@@ -25,7 +25,7 @@ const owner = <T>(fn: (o: { storage: DurableObjectStorage; calls: Calls; send(pa
     const deps: OwnerOnboardingDeps = {
       storage: state.storage, doName: 'owner-name', now: fakes.now ?? (() => clock++), assertCurrent: fakes.assertCurrent ?? (async () => {}), chat: fakes.chat ?? NO_CHAT,
       signedInRecently: fakes.signedInRecently ?? (async () => true),
-      lookupOffered: fakes.lookupOffered ?? true, agreementsOffered: fakes.agreementsOffered ?? true, hideText: fakes.hideText ?? (async texts => { calls.hidden.push(texts); }),
+      lookupOffered: fakes.lookupOffered ?? true, agreementsOffered: fakes.agreementsOffered ?? true, hideText: fakes.hideText ?? (async texts => { calls.hidden.push(texts); }), stopLookup: fakes.stopLookup ?? (() => {}),
       rpc: fakes.rpc ?? (async () => { calls.rpc += 1; return { consents: [] }; }),
       act: fakes.act ?? (async action => { calls.acts.push(action); if (action.action === 'timezone.set') state.storage.kv.put('timezone_confirmed', true); return true; }),
       admit: fakes.admit ?? (async client => { calls.admitted.push(client); return true; }),
@@ -59,6 +59,21 @@ describe('first run', () => {
     expect(await (await send('/app/v1/consents')).json()).toMatchObject({ age_attested_18_plus: true, consents: [
       { purpose: 'terms', status: 'granted', version: 1 }, { purpose: 'privacy_notice', status: 'granted', version: 1 }, { purpose: 'owner_lookup', status: 'granted', version: 1 }] });
   }));
+  it('lists the copy version each agreement is at now, only to a build that reads onboarding revision 3', () => owner(async ({ send, act }) => {
+    await act({ action: 'start' }); await act(agree);
+    const keys = ['active', 'granted_at', 'purpose', 'status', 'version', 'withdrawn_at'];
+    for (const contract of [undefined, 'onboarding=2', 'approvals=3']) {
+      const list = appConsentListV1Schema.parse(await (await send('/app/v1/consents', undefined, 'GET', contract)).json());
+      for (const consent of list.consents) expect(Object.keys(consent).sort(), contract).toEqual(keys);
+    }
+    const current = appConsentListV1Schema.parse(await (await send('/app/v1/consents', undefined, 'GET', 'onboarding=3')).json());
+    expect(current.consents.map(consent => [consent.purpose, consent.current_version])).toEqual(Object.entries(CURRENT_CONSENT_VERSION));
+  }));
+  it('names the copy that would be required while the agreements are held back', () => owner(async ({ send }) => {
+    const list = appConsentListV1Schema.parse(await (await send('/app/v1/consents', undefined, 'GET', 'onboarding=3')).json());
+    expect(list.agreements_offered).toBe(false);
+    expect(list.consents.map(consent => consent.current_version)).toEqual(Object.values(CURRENT_CONSENT_VERSION));
+  }, { agreementsOffered: false }));
   it('keeps the three answers as owner memory, never as a fourth question', () => owner(async ({ storage, act }) => {
     await act({ action: 'start' }); await act(agree);
     await act({ action: 'name.set', name: 'Sam' });

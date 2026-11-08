@@ -1,6 +1,8 @@
 import { iMessageBindingSchema, opaqueIMessageIdSchema, type IMessageStandardReaction } from '@waldo/contracts';
 import { createOwnerTurnContext, type OwnerContextSources } from '../../context-composer/owner-turn';
 import { surfaceOwnerAdmission } from '../../identity/surface-owner-admission';
+import { selectTranscriber } from '../../llm/transcriber';
+import type { Transcriber } from '../telegram-media';
 import { ClosedRunError, type RunEffectScope } from '../run-effect-scope';
 import { bindingDigest, bindingFromAuthority, iMessageComposition, type IMessageBridgeDO, type IMessageEnv, type IMessageReactionHandoff, type IMessageTurnHandoff } from './bridge-do';
 import { sha256Hex } from './crypto';
@@ -9,6 +11,8 @@ import { IMESSAGE_BUSY_RETRY_MS, IMessageFinalOutbox, type IMessageOutboxRecord 
 import { IMessageOwnerInbox, type IMessageInboxRecord } from './owner-inbox';
 import { IMESSAGE_MEDIA_REPLIES, iMessageMediaNotes, iMessageMediaSchema, openIMessageMedia, photonAttachmentSource, type OpenedIMessageMedia } from './photon-media';
 import { ownerWords, type InboundPart } from '../owner-inbound-turn';
+import { uploadKeeper } from '../upload-keeper';
+import { workspaceOwnerHost } from '../workspace-host';
 import type { TapbackPort } from '../../tools/live/react-to-message';
 import { HEALTH_SPAN_MARKER, redactNumericHealth } from '../../scribe/sanitiser';
 import { STANDARD_REACTION_EMOJI } from '../reactions';
@@ -97,6 +101,11 @@ export const iMessageTurnParts = (record: Pick<IMessageInboxRecord, 'updateId' |
   return { updateId: record.updateId, parts: [...ownerWords(record.text), ...notes, ...(opened?.parts ?? [])], attachments: opened?.attachments ?? [] };
 };
 
+// The files an iMessage turn opened, for the turn being answered: the same run and the same update id. Update ids are
+// numbered per channel from the same base, so a turn on another channel can carry the same one; its run is never this one.
+export const openedForTurn = <Opened extends { updateId: number; runId: string }>(opened: Opened | null, turn: Readonly<{ updateId: number; runScope?: Readonly<{ runId: string }> }>): Opened | null =>
+  opened !== null && opened.updateId === turn.updateId && opened.runId === turn.runScope?.runId ? opened : null;
+
 /** The text an iMessage turn runs on and is admitted as: the owner's words, or for files alone the notes the model reads for them. */
 export const iMessageTurnText = (record: Pick<IMessageInboxRecord, 'text' | 'media'>): string =>
   record.text || iMessageMediaNotes(record.media?.files ?? []).map(note => note.text).join('\n');
@@ -120,6 +129,8 @@ export const iMessageOwnerContext = async (host: OwnerHost, record: IMessageInbo
  * reply instead, frozen as the turn's reply in the transaction that closes it, so the event is answered once and settled.
  */
 export type OpenedIMessageTurnMedia = Extract<OpenedIMessageMedia, { kind: 'opened' }>;
+/** IMESSAGE_VOICE: the transcriber an iMessage voice note is heard with, the one owner chat uses; absent, voice gets the fixed reply. */
+export const iMessageTranscriber = (env: IMessageEnv): Transcriber | undefined => env.IMESSAGE_VOICE === '1' ? selectTranscriber(env)?.transcribe : undefined;
 export const openIMessageTurnMedia = async (host: OwnerHost, record: IMessageInboxRecord, scope: RunEffectScope)
   : Promise<Readonly<{ kind: 'text' | 'answered' }> | OpenedIMessageTurnMedia> => {
   if (record.unreadable) {
@@ -127,8 +138,11 @@ export const openIMessageTurnMedia = async (host: OwnerHost, record: IMessageInb
     return { kind: 'answered' };
   }
   if (!record.media) return { kind: 'text' };
+  const keep = host.env.WALDO_FILE_TOOLS === '1'
+    ? uploadKeeper(() => workspaceOwnerHost(host.env, host.storage, host.id.toString(), record.ownerDoName, fetch, scope), record.ownerDoName) : undefined;
+  const transcribe = iMessageTranscriber(host.env);
   const opened = await openIMessageMedia(record.media, { enabled: host.env.IMESSAGE_MEDIA === '1', source: photonAttachmentSource(host.env),
-    sender: record.binding.subject, signal: scope.signal, admit: scope.admit });
+    sender: record.binding.subject, signal: scope.signal, admit: scope.admit, ...(keep ? { keep } : {}), ...(transcribe ? { transcribe } : {}) });
   if (opened.kind === 'opened') return opened;
   scope.commit(() => { new IMessageFinalOutbox(host.storage).freeze(record, opened.text); new IMessageOwnerInbox(host.storage).closeFinal(record); });
   return { kind: 'answered' };
@@ -192,6 +206,20 @@ export const drainIMessageOutbox = async (host: OwnerHost, maxAgeMs: number): Pr
       outbox.retryLater(row.replyRef, maxAgeMs, outcome.kind === 'busy' ? IMESSAGE_BUSY_RETRY_MS : undefined);
     }
   }
+};
+
+/**
+ * A /stop's answer handed to its bridge now, outside the owner's queue, where the turn it stopped may still be unwinding. It
+ * keeps its place: an earlier message still waiting for that bridge, a busy bridge or a failed handoff leaves it frozen for
+ * the drain, which sends it in order.
+ */
+export const handOffIMessageStopAnswer = async (host: OwnerHost, replyRef: string): Promise<void> => {
+  const outbox = new IMessageFinalOutbox(host.storage), row = outbox.get(replyRef);
+  if (!row || row.state !== 'frozen' || outbox.waitingAhead(replyRef)) return;
+  let outcome;
+  try { outcome = await handOff(host, row); } catch { return; }
+  if (outcome.kind === 'queued') outbox.markQueued(replyRef);
+  else if (outcome.kind === 'terminal') outbox.settle(replyRef, row.commandId, outcome.result);
 };
 
 /**

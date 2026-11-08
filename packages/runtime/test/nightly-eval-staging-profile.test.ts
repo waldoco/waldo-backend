@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import config from '../wrangler.jsonc?raw';
+import { parseJsonc } from '../../../scripts/jsonc.mjs';
+import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
 import { ANTHROPIC_CLAUDE_OPUS_5_5_MODEL, ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, OWNER_MODELS, OPENAI_GPT_6_1_SOL_MODEL, OPENAI_PROVIDER, PROVIDER_OF, WALDO_AUXILIARY_FALLBACK_MODEL, WALDO_AUXILIARY_MODEL, WALDO_CHAT_FALLBACK_MODEL, WALDO_CHAT_MODEL, type LLMResponse } from '@waldo/contracts';
 import { scriptedGateway, type ScriptRule } from '../src/testing/scripted-gateway';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
@@ -20,6 +23,12 @@ const CLOUDFLARE = { CLOUDFLARE_ACCOUNT_ID: 'acct', CLOUDFLARE_API_TOKEN: 'cf-to
 const LIVE = { WALDO_EVAL_MODE: 'live', OPENAI_API_KEY: 'sk-test-0000000000000000000000', ANTHROPIC_API_KEY: 'ant-key', WALDO_EVAL_JUDGE_MODEL: ANTHROPIC_CLAUDE_OPUS_5_5_MODEL, WALDO_EVAL_MAX_CALLS: '600', WALDO_EVAL_PROFILE: 'staging' };
 
 describe('the staging profile', () => {
+  it('reads staging\'s switches by name, flattened out of WALDO_SWITCHES exactly as the Worker reads them', () => {
+    expect(STAGING).toEqual((flatConfig(parseJsonc(config)) as { env: { staging: { vars: Record<string, string> } } }).env.staging.vars);
+    expect(STAGING).not.toHaveProperty('WALDO_SWITCHES');
+    expect(STAGING.DEVICE_WEATHER).toBe('1');
+  });
+
   it('classifies every variable the staging block of wrangler.jsonc sets, and nothing it no longer sets', () => {
     expect(unclassifiedVars(STAGING)).toEqual([]);
     expect(staleClasses(STAGING)).toEqual([]);
@@ -57,7 +66,7 @@ describe('the staging profile', () => {
     for (const value of ['anthropic', '']) {
       const claude = () => ({ ...STAGING, WALDO_MODEL_PROVIDER: value });
       expect(stagingProfile(claude()).model, value).toBe(ANTHROPIC_CLAUDE_SONNET_5_5_MODEL);
-      expect(nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_PROFILE: 'staging' }, claude).candidate, value).toBe('recorded+staging+semantic+selection');
+      expect(nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_PROFILE: 'staging' }, claude).candidate, value).toBe('recorded+staging+semantic+selection+prompt_v2');
       expect(() => nightlyConfig({ ...LIVE, ...CLOUDFLARE }, claude), value).toThrow(/staging runs Claude/);
     }
   });
@@ -71,7 +80,7 @@ describe('the staging profile', () => {
 describe('the staging profile in the run settings', () => {
   it('turns the loader, compaction, the forget barrier, semantic recall, memory selection and the fallback route on, and names them on the card', () => {
     const run = nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_PROFILE: 'staging' });
-    expect(run).toMatchObject({ toolLoader: 'harness', forgetBarrier: 'items', profile: 'staging', memorySelection: true, candidate: 'recorded+staging+semantic+selection' });
+    expect(run).toMatchObject({ toolLoader: 'harness', forgetBarrier: 'items', profile: 'staging', memorySelection: true, candidate: 'recorded+staging+semantic+selection+prompt_v2' });
     expect(run.embeddings).toBeTypeOf('function');
     expect(run.compaction?.enabled).toBe(true);
     expect(run.fallbackKey).toBeTypeOf('string');
@@ -99,7 +108,7 @@ describe('the staging profile in the run settings', () => {
   it('holds the judge apart from the fallback models the trials can now meet', () => {
     expect(() => nightlyConfig({ ...LIVE, WALDO_EVAL_JUDGE_MODEL: WALDO_CHAT_FALLBACK_MODEL }, OPENAI_STAGING)).toThrow(/judge must differ/);
     expect(() => nightlyConfig({ ...LIVE, WALDO_EVAL_JUDGE_MODEL: WALDO_AUXILIARY_FALLBACK_MODEL }, OPENAI_STAGING)).toThrow(/judge must differ/);
-    expect(nightlyConfig({ ...LIVE, ...CLOUDFLARE }, OPENAI_STAGING)).toMatchObject({ toolLoader: 'harness', candidate: `${WALDO_CHAT_MODEL}+staging+semantic+selection` });
+    expect(nightlyConfig({ ...LIVE, ...CLOUDFLARE }, OPENAI_STAGING)).toMatchObject({ toolLoader: 'harness', candidate: `${WALDO_CHAT_MODEL}+staging+semantic+selection+prompt_v2` });
     // Without the profile a trial never meets a fallback model, so the earlier rule stands.
     const { WALDO_EVAL_PROFILE: _profile, ...plain } = LIVE;
     expect(() => nightlyConfig({ ...plain, WALDO_EVAL_JUDGE_MODEL: WALDO_CHAT_FALLBACK_MODEL })).not.toThrow();
@@ -108,12 +117,12 @@ describe('the staging profile in the run settings', () => {
   it('gives the trials an embedder when staging turns semantic recall on, and names the leg on the card', () => {
     const on = () => ({ ...OPENAI_STAGING(), MEMORY_SEMANTIC_RECALL: '1', MEMORY_SELECTION: '0' });
     const recorded = nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_PROFILE: 'staging' }, on);
-    expect(recorded.candidate).toBe('recorded+staging+semantic');
+    expect(recorded.candidate).toBe('recorded+staging+semantic+prompt_v2');
     expect(recorded.embeddings).toBeTypeOf('function');
     expect(() => nightlyConfig(LIVE, on)).toThrow(/CLOUDFLARE_ACCOUNT_ID is required/);
     expect(() => nightlyConfig({ ...LIVE, CLOUDFLARE_ACCOUNT_ID: 'acct' }, on)).toThrow(/CLOUDFLARE_API_TOKEN is required/);
     const live = nightlyConfig({ ...LIVE, ...CLOUDFLARE }, on);
-    expect(live.candidate).toBe(`${WALDO_CHAT_MODEL}+staging+semantic`);
+    expect(live.candidate).toBe(`${WALDO_CHAT_MODEL}+staging+semantic+prompt_v2`);
     expect(live.embeddings).toBeTypeOf('function');
     expect(nightlyConfig({ ...LIVE, ...CLOUDFLARE }, () => ({ ...on(), MEMORY_SEMANTIC_RECALL: '0' })).embeddings).toBeUndefined();
   });
@@ -127,7 +136,7 @@ describe('the staging profile in the run settings', () => {
   });
 
   it('shows the trials option B\'s memory when staging selects it, or when asked outside the profile, and names it on the card', () => {
-    expect(nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_PROFILE: 'staging' }, () => ({ ...STAGING, MEMORY_SELECTION: '1', MEMORY_SEMANTIC_RECALL: '0' }))).toMatchObject({ memorySelection: true, candidate: 'recorded+staging+selection' });
+    expect(nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_PROFILE: 'staging' }, () => ({ ...STAGING, MEMORY_SELECTION: '1', MEMORY_SEMANTIC_RECALL: '0' }))).toMatchObject({ memorySelection: true, candidate: 'recorded+staging+selection+prompt_v2' });
     expect(nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_MEMORY_SELECTION: 'on' })).toMatchObject({ memorySelection: true, candidate: 'recorded+selection' });
     expect(nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_MEMORY_SELECTION: 'off' })).not.toHaveProperty('memorySelection');
     expect(() => nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_MEMORY_SELECTION: 'yes' })).toThrow(/must be on or off/);
@@ -144,21 +153,28 @@ const availability = { name: 'query_availability', arguments: { date_range: { fr
 const offered = (gateway: ReturnType<typeof scriptedGateway>) => gateway.requests().filter((request) => request.request.response_format === undefined).flatMap((request) => (request.request.tools ?? []).map((tool) => tool.name));
 
 describe('the harness loader in a trial', () => {
-  const rules: readonly ScriptRule[] = [{ match: /free tomorrow/, rounds: [
-    { toolCalls: [{ name: 'find_tools', arguments: { groups: ['calendar'] } }] },
-    { toolCalls: [{ name: 'use_tool', arguments: { name: 'query_availability', arguments: availability.arguments } }] },
-    { text: 'One meeting.' },
+  const rules: readonly ScriptRule[] = [{ match: /standing orders/, rounds: [
+    { toolCalls: [{ name: 'find_tools', arguments: { groups: ['settings'] } }] },
+    { toolCalls: [{ name: 'use_tool', arguments: { name: 'list_standing_orders', arguments: {} } }] },
+    { text: 'None set.' },
   ] }];
 
   it('reaches a deferred tool through find_tools and use_tool, and counts the rounds', async () => {
     const gateway = scriptedGateway({ rules });
-    const run = await runTrial(scenario([{ say: 'What is free tomorrow?' }]), { gateway, budget: callBudget(50), toolLoader: 'harness' });
+    const run = await runTrial(scenario([{ say: 'Do I have any standing orders?' }]), { gateway, budget: callBudget(50), toolLoader: 'harness' });
     expect(run.status).toBe('ran');
-    expect(run.tools).toEqual([{ name: 'query_availability', ok: true }]);
+    expect(run.tools).toEqual([{ name: 'list_standing_orders', ok: true }]);
     expect(offered(gateway)).toEqual(expect.arrayContaining(['find_tools', 'use_tool']));
-    expect(offered(gateway)).not.toContain('query_availability');
+    expect(offered(gateway)).not.toContain('list_standing_orders');
     expect(run.metrics).toMatchObject({ rounds: 3, find_tools: 1, use_tool: 1, groups_loaded: 1 });
     expect(run.metrics.peak_result_chars).toBeGreaterThan(0);
+  });
+
+  it('offers free time in the first round under the loader: one call, no find_tools', async () => {
+    const gateway = scriptedGateway({ rules: [{ match: /free tomorrow/, rounds: [{ toolCalls: [availability] }, { text: 'One meeting.' }] }] });
+    const run = await runTrial(scenario([{ say: 'What is free tomorrow?' }]), { gateway, budget: callBudget(50), toolLoader: 'harness' });
+    expect(run.tools).toEqual([{ name: 'query_availability', ok: true }]);
+    expect(run.metrics).toMatchObject({ rounds: 2, find_tools: 0, use_tool: 0, groups_loaded: 0 });
   });
 
   it('offers the deferred tool directly when no loader is set', async () => {

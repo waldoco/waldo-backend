@@ -113,6 +113,8 @@ it.each(['cancel', 'revision', 'timezone', 'disconnect', 'new-account', 'scope-r
         if (mode === 'subject') state.storage.kv.put('telegram_subject', '8');
         if (mode === 'new-bot') config.TELEGRAM_BOT_TOKEN = '8:synthetic-fixture';
         if (mode === 'disabled') config.CALENDAR_GROUNDED_PREP = '0';
+        // A changed config reaches the owner as a new object, as a deploy brings one.
+        if (mode === 'new-bot' || mode === 'disabled') owner = new OwnerDO(state, config);
         if (mode === 'owner-opt-out') loopBook(state.storage.sql, { newId: () => 'fixture', now: () => now }).setProactivity({ quiet_start: '20:00', quiet_end: '08:00', volume: 'normal', followups: false });
         if (mode === 'low-volume') loopBook(state.storage.sql, { newId: () => 'fixture', now: () => now }).setProactivity({ quiet_start: '20:00', quiet_end: '08:00', volume: 'low' });
         if (mode === 'uncertain-restart') {

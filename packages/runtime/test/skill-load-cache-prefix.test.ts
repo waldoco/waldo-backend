@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, ANTHROPIC_PROVIDER, type LLMRequest } from '@waldo/contracts';
 import config from '../wrangler.jsonc?raw';
 import { parseJsonc } from '../../../scripts/jsonc.mjs';
+import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
 import { appSubjectFor } from '../src/channels/app-api';
 import { GOOGLE_CONSENT_SCOPES } from '../src/connectors/google';
 import { AnthropicMessagesAdapter } from '../src/llm/anthropic';
@@ -32,7 +33,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
 const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '6c2e9b14-3a7d-4f05-9e81-2b4c6d8f0a13';
-const STAGING = (parseJsonc(config) as { env: { staging: { vars: Record<string, string> } } }).env.staging.vars;
+const STAGING = (flatConfig(parseJsonc(config)) as { env: { staging: { vars: Record<string, string> } } }).env.staging.vars;
 // Identity, channel and deploy-label vars are the test pool's own; everything that shapes the owner's model request is staging's.
 const settings = Object.fromEntries(Object.entries(STAGING).filter(([key]) => !/^(IMESSAGE_|WHATSAPP_|WALDO_OWNER_|WALDO_PUBLIC_ORIGIN|GMAIL_PUSH|PHOTON_|LANGFUSE_|WALDO_EGRESS|WALDO_COST_LEDGER|AGENT_MAIL|WALDO_RELEASE|WALDO_ENVIRONMENT)/.test(key)));
 const BYTES_PER_TOKEN = 4;

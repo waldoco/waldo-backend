@@ -19,19 +19,20 @@ export const HEALTH_PROVIDER_SOURCES_V1 = ['whoop'] as const;
 export const HEALTH_PROVIDER_REVISION_V1 = 2;
 export const healthSourceV1Schema = z.enum(['apple', 'samsung', 'health_connect', ...HEALTH_PROVIDER_SOURCES_V1]);
 export const isHealthProviderSourceV1 = (source: string): boolean => (HEALTH_PROVIDER_SOURCES_V1 as readonly string[]).includes(source);
-// A cloud provider has its own consent notice, so its grants carry their own copy version. Copy 3 is WHOOP's: it says that
-// Waldo stores the owner's WHOOP data and that an AI model provider, a third party the owner opts into with the
-// model-processing grant, processes it to plan the owner's day, which is the express authorization WHOOP's terms ask for.
+// A cloud provider has its own consent notice, so its grants carry their own copy version. Copy 4 is WHOOP's: Waldo stores
+// the owner's WHOOP data, an AI model provider (a third party the owner opts into with the model-processing grant) processes
+// it to plan the owner's day, and the notice says in words that these two yeses are the owner's express authorization that
+// WHOOP's API terms require. By owner ruling, the owner's own consent when connecting is that authorization.
 // A new grant carries the current version of its source's copy, never another's, so a stored grant shows which notice it
 // rested on. A stored grant keeps the version it was written on, so reading one back accepts every version its source has
-// had (WHOOP's first grants were written on copy 2). The app owns the wording; a changed notice takes the next number.
-export const HEALTH_PROVIDER_CONSENT_VERSION_V1 = 3;
+// had (WHOOP's grants were written on copies 2 and 3 before). The app owns the wording; a changed notice takes the next number.
+export const HEALTH_PROVIDER_CONSENT_VERSION_V1 = 4;
 type HealthSourceV1 = z.infer<typeof healthSourceV1Schema>;
 const CONSENT_COPY_V1: Readonly<Record<HealthSourceV1, Readonly<{ current: number; had: readonly number[] }>>> = {
   apple: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
   samsung: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
   health_connect: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
-  whoop: { current: HEALTH_PROVIDER_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1] },
+  whoop: { current: HEALTH_PROVIDER_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1, 3, HEALTH_PROVIDER_CONSENT_VERSION_V1] },
 };
 export const healthConsentVersionV1 = (source: HealthSourceV1): number => CONSENT_COPY_V1[source].current;
 const currentCopyOfItsSource = (row: { source: HealthSourceV1; version: number }) => row.version === CONSENT_COPY_V1[row.source].current;
@@ -215,6 +216,11 @@ export const HEALTH_COACH_REVISION_V1 = 5;
 // Health revision 6: zones a phone builds on the highest heart rate it has seen in a workout, rather than a measured or entered
 // maximum, name the basis observed_workout_peak, so the model can call them approximate. An older build never sends it.
 export const HEALTH_OBSERVED_PEAK_REVISION_V1 = 6;
+// Health revision 7: a food entry from the phone's health store, as the owner's food app wrote it. Its energy is the value;
+// its grams and meal are kept when the store has them. A food's name is another app's text, so it never travels. An older
+// build never sends one, and a backend that does not know it rejects that reading alone.
+export const HEALTH_NUTRITION_REVISION_V1 = 7;
+const grams = z.number().finite().min(0).max(1_000);
 // Time in five heart-rate zones. The phone reads the beats and buckets them on the bounds it names, so the backend never sees a
 // beat series: lower_bounds_bpm are where zones 2 to 5 start, rising, on the named basis. A provider that reports only zone
 // durations (WHOOP's zone zero folds into zone 1) has no bounds. The zones' time fits inside the session, with a minute's slack.
@@ -282,6 +288,11 @@ export const healthSampleV1Schema = z.discriminatedUnion('signal', [
   z.strictObject({ ...sampleCommon, signal: z.literal('lean_body_mass'), unit: z.literal('kilograms'), value: z.number().finite().min(10).max(250) }),
   // One local hour: 1 when the owner stood and moved in it, 0 when the Watch saw the hour idle.
   z.strictObject({ ...sampleCommon, signal: z.literal('stand_hour'), unit: z.literal('count'), value: z.union([z.literal(0), z.literal(1)]) }),
+  // Revision 7. One food entry, a point record under its store id.
+  z.strictObject({
+    ...sampleCommon, sleep_context: z.never().optional(), signal: z.literal('nutrition'), unit: z.literal('kilocalories'), value: z.number().finite().min(0).max(10_000),
+    protein_g: grams.optional(), carbohydrate_g: grams.optional(), fat_g: grams.optional(), meal: z.enum(['breakfast', 'lunch', 'dinner', 'snack', 'unknown']).optional(),
+  }),
 ]).refine(sample => Date.parse(sample.start_at) <= Date.parse(sample.end_at), 'sample end precedes start')
   .refine(sample => !WINDOW_SIGNALS.includes(sample.signal) || isLocalHourBucket(sample), 'window signals are fixed local-hour buckets')
   .refine(sample => sample.signal !== 'heart_rate_window' || (sample.min <= sample.value && sample.value <= sample.max), 'heart-rate window mean outside its range')
@@ -290,7 +301,7 @@ export const healthSignalV1Schema = z.enum([
   'sleep_duration', 'sleep_efficiency', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'daylight_duration', 'movement_duration',
   'heart_rate_window', 'hrv_window', 'spo2', 'respiratory_rate', 'steps_window', 'active_energy_window', 'workout',
   'wrist_temperature', 'walking_heart_rate_average', 'vo2_max', 'heart_rate_recovery', 'mindful_duration',
-  'body_mass', 'body_fat_percentage', 'lean_body_mass', 'stand_hour',
+  'body_mass', 'body_fat_percentage', 'lean_body_mass', 'stand_hour', 'nutrition',
 ]);
 export const healthSampleDeletionV1Schema = z.strictObject({ sample_id: sampleIdV1, signal: healthSignalV1Schema, revision: epochV1 });
 // anchor_before and anchor_after form an opaque compare-and-set cursor of at most 2048 characters; the app keeps its

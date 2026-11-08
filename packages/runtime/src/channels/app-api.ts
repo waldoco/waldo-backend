@@ -1,16 +1,24 @@
-import type { ConversationEntry } from '@waldo/contracts';
+import { isHealthChart, type ConversationEntry, type ConversationHealthChart } from '@waldo/contracts';
 import { iMessageSendUrl } from './imessage/send-url';
-import { APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appAuthOptionsV1Schema, appCodeRequestSchema, appContractHeaderV1Schema, appIdTokenRequestV1Schema, appIMessageLinkCodeV1Schema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
+import { appUploadHeaders } from './app-uploads';
+import { APP_CHAT_UPLOAD_KIND_HEADER, APP_CHAT_UPLOAD_MAX_BYTES, APP_CHAT_UPLOAD_NAME_HEADER, APP_CHAT_UPLOAD_PATH, APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appAuthOptionsV1Schema, appCodeRequestSchema, appContractHeaderV1Schema, appIdTokenRequestV1Schema, appIMessageLinkCodeV1Schema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
 import type { AppApprovalCards } from './approvals';
+import { appQuickRepliesPart } from './surfaces/app';
 import { consoleAuth, sessionFamily, signedInRecently, type ConsoleAuth } from '../identity/console-auth';
 import { readOwnerDemand } from '../health/calendar-demand-route';
-import { notifyOwnerHealthSamples, notifyOwnerZoneChange } from '../health/zone-change-route';
+import { notifyOwnerHealthSamples, notifyOwnerPlaceArrived, notifyOwnerPlaceMoved, notifyOwnerZoneChange, type ArrivalPlace } from '../health/zone-change-route';
+import { wakeFreshMs } from '../health/wake-notice';
 import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { signedRpc } from '../identity/owner-directory';
 import { dailyScoresFor } from '../health/scores';
 import { APP_HEALTH_PATH, handleAppHealth } from './app-health';
+import { APP_DEVICE_CONTEXT_PATH, handleAppDeviceContext } from './app-device-context';
 import { APP_SCREEN_TIME_PATH, handleAppScreenTime } from './app-screen-time';
 import { APP_CALENDAR_DAY_PATH } from './app-calendar-day';
+import { APP_TODAY_PATH, appToday } from './app-today';
+import { APP_GOOGLE_PICTURE_PATH_V1 } from '../../../contracts/src/app/controls';
+import { replyChartSeriesPartV1Schema } from '../../../contracts/src/app/parts';
+import type { ChartSeriesPart } from '../tools/live/show-chart';
 import { appDeviceMutationResultV1Schema, appDeviceRegisterV1Schema, appDeviceRevokeV1Schema, appDevicesResultV1Schema } from '../../../contracts/src/app/devices';
 import { APP_ONBOARDING_PATHS } from './app-onboarding';
 import { APP_PROVIDERS_PATH, handleAppHealthProviders } from '../health/providers/app-providers';
@@ -20,6 +28,8 @@ import { publicOrigin, type PublicOriginEnv } from '../connectors/public-origin'
 import { APP_RATING_SUFFIX } from './app-rating';
 import { openSignupCaps, openSignupFor, type OpenSignupEnv } from '../identity/open-signup';
 import { markOpenOwner } from '../identity/open-owner-hold';
+import { APP_DEVICE_CALENDAR_PATH } from './device-calendar';
+import { DEVICE_CALENDAR_MAX_REQUEST_BYTES_V1 } from '../../../contracts/src/app/device-context';
 
 export const APP_PATH = '/app/v1';
 const APP_IMESSAGE_LINK_CODE_PATH = `${APP_PATH}/channels/imessage/link-code`;
@@ -28,12 +38,15 @@ export const APP_THREADS_PATH = `${APP_PATH}/threads`;
 export const APP_CHAT_SEND_PATH = `${APP_CHAT_PATH}/messages`;
 export const APP_APPROVALS_PATH = `${APP_PATH}/approvals`;
 export const APP_APPROVAL_DECISIONS_PATH = `${APP_APPROVALS_PATH}/decisions`;
+export const APP_AUTONOMY_PATH = `${APP_PATH}/autonomy`;
+export const APP_AUTONOMY_CHANGES_PATH = `${APP_AUTONOMY_PATH}/changes`;
 export const APP_DEVICES_PATH = `${APP_PATH}/devices`;
 const MAX_BODY_BYTES = 8192;
 
 // APP_ID_TOKEN_SIGNIN "1" serves Sign in with Apple and Google; otherwise the route answers 404 and the app offers the email code.
-type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string }>;
+type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string; DEVICE_PLACE?: string; DEVICE_CALENDAR?: string; WAKE_BRIEF?: string; WAKE_BRIEF_FRESH_MIN?: string; APP_CHAT_ATTACHMENTS?: string; WORKOUT_WAKE?: string; ARRIVAL_LOOK?: string }>;
 
+const UPLOAD_READ_MS = 60_000;
 // Errors before authentication share one shape so the app cannot learn who is invited.
 const fail = (status: 401 | 403 | 404 | 405 | 413 | 429 | 503) => Response.json({ error: 'unavailable' }, { status, headers: { 'cache-control': 'no-store', ...(status === 429 ? { 'retry-after': '60' } : {}) } });
 const ok = (body: object, status = 200) => Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
@@ -45,10 +58,10 @@ const readJson = async (request: Request): Promise<Record<string, unknown> | nul
   let text: string; try { text = new TextDecoder('utf-8', {fatal:true,ignoreBOM:true}).decode(bytes); } catch { return null; }
   try { const value: unknown = JSON.parse(text); return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null; } catch { return null; }
 };
-export const readBoundedBody = async (request:Request, max:number):Promise<Uint8Array|null> => {
+export const readBoundedBody = async (request:Request, max:number, timeoutMs=5000):Promise<Uint8Array|null> => {
   if (!request.body) return new Uint8Array();
   const reader=request.body.getReader(), chunks:Uint8Array[]=[]; let size=0, expired=false;
-  const timer=setTimeout(()=>{expired=true;void reader.cancel();},5000);
+  const timer=setTimeout(()=>{expired=true;void reader.cancel();},timeoutMs);
   try { for(;;){const part=await reader.read();if(expired)return null;if(part.done)break;size+=part.value.byteLength;if(size>max){await reader.cancel();return null;}chunks.push(part.value);} }
   catch{return null;} finally{clearTimeout(timer);reader.releaseLock();}
   const bytes=new Uint8Array(size);let at=0;for(const chunk of chunks){bytes.set(chunk,at);at+=chunk.byteLength;}return bytes;
@@ -242,9 +255,11 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     const secret = env.WALDO_ROUTER_HMAC_SECRET, doName = who.doName;
     if (url.pathname === APP_PROVIDERS_PATH || url.pathname.startsWith(`${APP_PROVIDERS_PATH}/`)) return handleAppHealthProviders({ request, url, doName, owners, secret, mayConnect: async () => (await import('./console-step-up')).APP_STEP_UP_ROUTES[`${APP_PROVIDERS_PATH}/connect`]?.gated === false || await signedIn() });
     return handleAppHealth({ request, url, doName, rpc: signedRpc(env), readBody: readBoundedBody, defer, compute: dailyScoresFor(env.HEALTH_PROVISIONAL_SCORES), trainingLoad: env.HEALTH_TRAINING_LOAD === '1', coaching: env.HEALTH_COACHING === '1',
+      ...(env.WAKE_BRIEF === '1' ? { wakeFreshMs: wakeFreshMs(env.WAKE_BRIEF_FRESH_MIN) } : {}),
+      ...(env.WORKOUT_WAKE === '1' ? { workoutWake: true } : {}),
       ...(secret ? { readDemand: (range: { from: string; to: string; timezone: string }) => readOwnerDemand(owners, secret, doName, range),
         notifyZoneChange: (day: string) => notifyOwnerZoneChange(owners, secret, doName, day),
-        notifySamples: () => notifyOwnerHealthSamples(owners, secret, doName),
+        notifySamples: (woke?: boolean, workout?: boolean) => notifyOwnerHealthSamples(owners, secret, doName, 'readings', woke, workout),
         notifySettings: () => notifyOwnerHealthSamples(owners, secret, doName, 'settings') } : {}) });
   }
   // Screen time spends its own per-owner budget. Off, the routes are not there.
@@ -253,12 +268,57 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-screen-time:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
     return handleAppScreenTime({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody });
   }
+  // Device context spends its own per-owner budget. Off, the routes are not there.
+  if (url.pathname === APP_DEVICE_CONTEXT_PATH || url.pathname.startsWith(`${APP_DEVICE_CONTEXT_PATH}/`)) {
+    if (env.DEVICE_PLACE !== '1') return fail(404);
+    try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-device-context:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
+    const secret = env.WALDO_ROUTER_HMAC_SECRET;
+    return handleAppDeviceContext({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody, ...(secret ? { moved: () => notifyOwnerPlaceMoved(owners, secret, who.doName) } : {}), ...(secret && env.ARRIVAL_LOOK === '1' ? { arrived: (place: ArrivalPlace) => notifyOwnerPlaceArrived(owners, secret, who.doName, place) } : {}), ...(defer ? { defer } : {}) });
+  }
+  // A chat attachment spends its own per-owner budget and is bounded at the attachment cap before it is read; a voice note or
+  // photo comes from a phone, so the read may take up to a minute. Off, the route is not there.
+  if (url.pathname === APP_CHAT_UPLOAD_PATH) {
+    if (env.APP_CHAT_ATTACHMENTS !== '1') return fail(404);
+    if (request.method !== 'POST') return fail(405);
+    try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-upload:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
+    const length = request.headers.get('content-length');
+    if (length && (!/^\d+$/.test(length) || Number(length) > APP_CHAT_UPLOAD_MAX_BYTES)) return fail(413);
+    const asked = appUploadHeaders(request.headers);
+    if ('refused' in asked) return Response.json({ error: asked.refused.error }, { status: asked.refused.status, headers: { 'cache-control': 'no-store' } });
+    const body = await readBoundedBody(request, APP_CHAT_UPLOAD_MAX_BYTES, UPLOAD_READ_MS);
+    if (!body) return fail(413);
+    const forwarded = new Request(`https://telegram-owner${APP_CHAT_UPLOAD_PATH}`, { method: 'POST', body, headers: {
+      'x-waldo-do-name': who.doName, 'x-waldo-app-session-hash': await linkCodeHash(sessionIdOf(who.credential)!),
+      'content-type': request.headers.get('content-type') ?? '', [APP_CHAT_UPLOAD_KIND_HEADER]: request.headers.get(APP_CHAT_UPLOAD_KIND_HEADER) ?? '',
+      ...(request.headers.has(APP_CHAT_UPLOAD_NAME_HEADER) ? { [APP_CHAT_UPLOAD_NAME_HEADER]: request.headers.get(APP_CHAT_UPLOAD_NAME_HEADER)! } : {}),
+    } });
+    try { return await owners.get(owners.idFromName(who.doName)).fetch(forwarded); } catch { return fail(503); }
+  }
+  // The phone's calendar spends its own per-owner budget and is answered by the owner's object, which holds its consent and
+  // events. Off, the routes are not there.
+  if (url.pathname === APP_DEVICE_CALENDAR_PATH || url.pathname.startsWith(`${APP_DEVICE_CALENDAR_PATH}/`)) {
+    if (env.DEVICE_CALENDAR !== '1') return fail(404);
+    if (!['GET', 'POST'].includes(request.method)) return fail(405);
+    try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-device-calendar:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
+    const length = request.headers.get('content-length');
+    if (length && (!/^\d+$/.test(length) || Number(length) > DEVICE_CALENDAR_MAX_REQUEST_BYTES_V1)) return fail(413);
+    const body = request.method === 'POST' ? await readBoundedBody(request, DEVICE_CALENDAR_MAX_REQUEST_BYTES_V1) : new Uint8Array();
+    if (!body) return fail(413);
+    const key = request.headers.get('idempotency-key');
+    const forwarded = new Request(`https://telegram-owner${url.pathname}`, {
+      method: request.method,
+      headers: { 'x-waldo-do-name': who.doName, 'x-waldo-app-session-hash': await linkCodeHash(sessionIdOf(who.credential)!), 'content-type': request.headers.get('content-type') ?? '',
+        ...(key === null ? {} : { 'idempotency-key': key }) },
+      ...(request.method === 'POST' ? { body } : {}),
+    });
+    try { return await owners.get(owners.idFromName(who.doName)).fetch(forwarded); } catch { return fail(503); }
+  }
   // A stop is a control on a message already paid for, so it counts as a read, not a send. Anything but a POST already does.
   const stop = url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) && url.pathname.endsWith('/cancel');
   const rating = url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) && url.pathname.endsWith(APP_RATING_SUFFIX);
   const linkCode = url.pathname === APP_IMESSAGE_LINK_CODE_PATH;
   const onboarding = APP_ONBOARDING_PATHS.includes(url.pathname);
-  const bucket = request.method !== 'POST' || stop || linkCode ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : onboarding ? 'app-onboarding' : url.pathname === `${APP_PATH}/auth/renew` ? 'app-renew' : url.pathname.startsWith(APP_DEVICES_PATH) ? 'app-devices' : 'app-chat-send';
+  const bucket = url.pathname === APP_TODAY_PATH ? 'app-today' : request.method !== 'POST' || stop || linkCode ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : url.pathname === APP_AUTONOMY_CHANGES_PATH ? 'app-autonomy-change' : onboarding ? 'app-onboarding' : url.pathname === `${APP_PATH}/auth/renew` ? 'app-renew' : url.pathname.startsWith(APP_DEVICES_PATH) ? 'app-devices' : 'app-chat-send';
   try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `${bucket}:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
 
   if (url.pathname === `${APP_PATH}/session`) {
@@ -316,9 +376,20 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     try { return ok({ ...await sessionView(auth, who.doName, credential, true), credential }); } catch { return fail(503); }
   }
 
-  if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === APP_THREADS_PATH || url.pathname.startsWith(`${APP_THREADS_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`) || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_APPROVAL_DECISIONS_PATH || url.pathname === APP_CALENDAR_DAY_PATH || onboarding) {
+  // One read for the surfaces outside the app: the owner's own calendar day, approvals and day view, each asked of the Durable
+  // Object as this session and build would ask it, on the route's own budget above (app-today), apart from the app's reads.
+  if (url.pathname === APP_TODAY_PATH) {
+    if (request.method !== 'GET') return fail(405);
+    if (url.search) return Response.json({ error: 'invalid_request' }, { status: 400, headers: { 'cache-control': 'no-store' } });
+    const contract = request.headers.get(APP_CONTRACT_HEADER), owner = owners.get(owners.idFromName(who.doName));
+    const headers = { 'x-waldo-do-name': who.doName, 'x-waldo-app-session-hash': await linkCodeHash(sessionIdOf(who.credential)!), 'x-waldo-app-origin': publicOrigin(env, url),
+      ...(appContractHeaderV1Schema.safeParse(contract).success ? { [APP_CONTRACT_HEADER]: contract! } : {}) };
+    return appToday((path, signal) => owner.fetch(new Request(`https://telegram-owner${path}`, { headers, signal })));
+  }
+
+  if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === APP_THREADS_PATH || url.pathname.startsWith(`${APP_THREADS_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`) || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_APPROVAL_DECISIONS_PATH || url.pathname === APP_AUTONOMY_PATH || url.pathname === APP_AUTONOMY_CHANGES_PATH || url.pathname === APP_CALENDAR_DAY_PATH || url.pathname.startsWith(`${APP_GOOGLE_PICTURE_PATH_V1}/`) || onboarding) {
     const sending = url.pathname === APP_CHAT_SEND_PATH;
-    if ((rating ? request.method !== 'PUT' : !['GET', 'POST'].includes(request.method)) || ((url.pathname === APP_CHAT_PATH || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_CALENDAR_DAY_PATH) && request.method !== 'GET') || ((sending || url.pathname === APP_APPROVAL_DECISIONS_PATH) && request.method !== 'POST')) return fail(405);
+    if ((rating ? request.method !== 'PUT' : !['GET', 'POST'].includes(request.method)) || ((url.pathname === APP_CHAT_PATH || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_AUTONOMY_PATH || url.pathname === APP_CALENDAR_DAY_PATH) && request.method !== 'GET') || ((sending || url.pathname === APP_APPROVAL_DECISIONS_PATH || url.pathname === APP_AUTONOMY_CHANGES_PATH) && request.method !== 'POST')) return fail(405);
     const mutating = request.method === 'POST' || request.method === 'PUT';
     const maxBytes = APP_SEND_MAX_WIRE_BYTES;
     const length = request.headers.get('content-length');
@@ -364,15 +435,25 @@ export const appTranscriptPageRead = (cursor: string | null, limit: number) => {
     return false;
   };
 };
-// consoleLink is the one-time console link sent in answer to a message (channels/console-link.ts), shown under the newest reply
-// to it and before that reply's receipt line, which stays last.
-export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor: string | null, limit: number, cards: (parentId: string) => AppApprovalCards = () => NO_CARDS,
-  consoleLink: (parentId: string) => string | null = () => null, rating: (messageId: string) => 'up' | 'down' | undefined = () => undefined): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
+// The rows one page of the transcript shows, oldest first, and where they sit among the rows that can be shown.
+const transcriptWindow = (entries: readonly ConversationEntry[], cursor: string | null, limit: number) => {
   const shown = entries.filter(shownRow);
   const { taken, size, before: beforeId } = pageWindow(cursor, limit);
   const before = beforeId !== null ? shown.findIndex(entry => entry.id === beforeId) : -1;
   const end = beforeId !== null ? Math.max(before, 0) : Math.max(shown.length - taken, 0);
-  const start = Math.max(end - size, 0);
+  return { shown, start: Math.max(end - size, 0), end };
+};
+export const appTranscriptPageRows = (entries: readonly ConversationEntry[], cursor: string | null, limit: number): readonly ConversationEntry[] => {
+  const { shown, start, end } = transcriptWindow(entries, cursor, limit);
+  return shown.slice(start, end);
+};
+// consoleLink is the one-time console link sent in answer to a message (channels/console-link.ts), shown under the newest reply
+// to it and before that reply's receipt line, which stays last.
+export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor: string | null, limit: number, cards: (parentId: string) => AppApprovalCards = () => NO_CARDS,
+  consoleLink: (parentId: string) => string | null = () => null, rating: (messageId: string) => 'up' | 'down' | undefined = () => undefined,
+  memoryUsed: (turnId: string) => readonly Readonly<{ id: string; text: string }>[] | undefined = () => undefined, charts = false,
+  healthCharts: (chart: ConversationHealthChart) => ChartSeriesPart | undefined = () => undefined): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
+  const { shown, start, end } = transcriptWindow(entries, cursor, limit);
   const newestReply = new Map(shown.filter(entry => entry.role === 'assistant' && entry.parentId).map(entry => [entry.parentId!, entry.id]));
   const messages = shown.slice(start, end).reverse().map(entry => {
     const newest = entry.parentId && newestReply.get(entry.parentId) === entry.id ? entry.parentId : null;
@@ -383,12 +464,25 @@ export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor:
     // A reader that cannot parse a part shows only `text`, and a decided card is no longer a part, so a reply that presented cards is never textless.
     const stored = entry.appPayload.trim() || !presented.fallbacks.length ? entry.appPayload : presented.fallbacks.join('\n\n');
     const tail = entry.receipt && stored.endsWith(`\n\n${entry.receipt.line}`) ? `\n\n${entry.receipt.line}` : '', body = stored.slice(0, stored.length - tail.length);
-    const text = link ? `${body.trim() ? `${body}\n\n` : ''}${link}${tail}` : stored;
+    // A card this build cannot read is told in words, after the reply's own words and before its receipt line.
+    const withheld = presented.withheld?.length && entry.appPayload.trim() ? [body, ...presented.withheld].join('\n\n') : body;
+    // A chart reaches a build below chat=8 as its alt text, in the same place, and so does one that no longer fits the part.
+    // A health chart is drawn only from this read's live points (chat=11 and the switch on); without them it is its words.
+    const drawn = (entry.charts ?? []).map(chart => ({ chart, part: isHealthChart(chart)
+      ? replyChartSeriesPartV1Schema.safeParse(healthCharts(chart))
+      : replyChartSeriesPartV1Schema.safeParse({ type: 'chart_series', title: chart.title, unit: chart.unit,
+        series: chart.series.map(series => ({ label: series.label, points: [...series.points] })), alt_text: chart.alt_text, fallback_text: chart.alt_text }) }));
+    const chartWords = drawn.filter(({ part }) => !charts || !part.success).map(({ chart }) => chart.alt_text).filter(words => words.trim());
+    const told = chartWords.length ? [withheld, ...chartWords].filter(Boolean).join('\n\n') : withheld;
+    const text = link ? `${told.trim() ? `${told}\n\n` : ''}${link}${tail}` : told === body ? stored : `${told}${tail}`;
     const operation = entry.operation ? [{ type: 'operation' as const, operation_id: entry.operation.id, state: entry.operation.state, message: text }] : [];
     const receipt = entry.receipt ? [{ type: 'receipt' as const, items: [...entry.receipt.items], more: entry.receipt.more, fallback_text: entry.receipt.line }] : [];
+    const replies = entry.quickReplies?.length ? [appQuickRepliesPart(entry.quickReplies)].filter(part => part !== null) : [];
+    const chartParts = charts ? drawn.flatMap(({ part }) => part.success ? [part.data] : []) : [];
     const rated = entry.role === 'assistant' ? rating(entry.id) : undefined;
-    return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...operation, ...presented.live, ...receipt], channel: entry.surface, parent_id: entry.parentId,
-      ...(entry.createdAt === undefined ? {} : { created_at: entry.createdAt }), ...(rated === undefined ? {} : { rating: rated }) };
+    const used = entry.role === 'assistant' && entry.parentId ? memoryUsed(entry.parentId) : undefined;
+    return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...operation, ...presented.live, ...(presented.offers ?? []), ...replies, ...chartParts, ...receipt], channel: entry.surface, parent_id: entry.parentId,
+      ...(entry.createdAt === undefined ? {} : { created_at: entry.createdAt }), ...(rated === undefined ? {} : { rating: rated }), ...(used === undefined ? {} : { memory_used: [...used] }) };
   });
   return { messages, next_cursor: start > 0 ? `before:${shown[start]!.id}` : null };
 };

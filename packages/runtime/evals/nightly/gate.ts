@@ -22,11 +22,11 @@ export type GateResult = Readonly<{ ok: boolean; failures: readonly string[] }>;
 // reading case, to 62 by the owner look-up case, to 79 by the seventeen personality cases, to 81 by the background-task
 // and late-answer scenarios, to 83 by two forget cases, to 84 by the spoofed "paid" mail case, to 85 by the long
 // conversation compaction is measured on, to 94 by the nine health cases, to 100 by the six Brief and health-only-day cases, and to 103 by the
-// three other day-card cases, none blocked, and to 110 by the seven relevance cases, one blocked until the memory stubs exist (so up to 4 blocked). A PR that adds, removes or unblocks a scenario moves these numbers
+// three other day-card cases, none blocked, and to 110 by the seven relevance cases, one blocked until the memory stubs exist (so up to 4 blocked), and to 111 by the plan-not-interview voice case, to 112 by the capacity Close, to 113 by the Brief a WhatsApp copy repeats word for word, to 114 by the capacity budget Brief. The tone set holds it at 114: three tone cases in, three older cases they supersede out (the small-move health note's silence, the moderate-day Brief, and the changed state with nothing at stake). A PR that adds, removes or unblocks a scenario moves these numbers
 // in the same diff. Live mode has no pass-rate floor until a live baseline is recorded.
 export const NIGHTLY_THRESHOLDS: Readonly<Record<'recorded' | 'live', GateThresholds>> = {
-  recorded: { min_scenarios: 110, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null },
-  live: { min_scenarios: 110, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null },
+  recorded: { min_scenarios: 114, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null },
+  live: { min_scenarios: 114, max_blocked: 3, max_harness_errors: 0, max_incomplete: 0, min_pass_rate: null },
 };
 
 // A subset run is held to the size of its own subset, not the catalogue's.

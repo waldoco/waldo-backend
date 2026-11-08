@@ -14,10 +14,12 @@ import { parseIMessageConnectorPolicy, type IMessageConnectorPolicy } from './po
 import { HEALTH_SPAN_MARKER, redactNumericHealth } from '../../scribe/sanitiser';
 import { PhotonTokens, photonConfig, photonDoName, type PhotonEnv, type PhotonFinish, type PhotonStatus } from './photon';
 import { iMessageMediaOf, type IMessageMedia, type PhotonMediaEnv } from './photon-media';
+import type { TranscriberEnv } from '../../llm/transcriber';
 import type { IMessageMessageTarget, IMessageTapback } from './final-outbox';
 import { heartbeatBodySchema, parseJson, pullBodySchema, resultBodySchema } from './wire';
 import { configuredPublicOrigin, type PublicOriginEnv } from '../../connectors/public-origin';
 import { CONSOLE_IMESSAGE_PATH } from './console';
+import { withSwitches } from '../../switches';
 
 export type IMessageEnv = OwnerDirectoryEnv & PhotonEnv & PublicOriginEnv & Readonly<{
   WALDO_ENVIRONMENT?: string;
@@ -33,7 +35,10 @@ export type IMessageEnv = OwnerDirectoryEnv & PhotonEnv & PublicOriginEnv & Read
   IMESSAGE_WALDO_ADDRESS?: string;
   /** "1": photos and files on Photon are fetched for the model. Otherwise each gets one reply that it was not opened. */
   IMESSAGE_MEDIA?: string;
-}> & PhotonMediaEnv;
+  /** "1": a voice note sent alone is fetched from Photon and transcribed. Otherwise it gets one reply to type it or use the app. */
+  IMESSAGE_VOICE?: string;
+  WALDO_FILE_TOOLS?: string;
+}> & PhotonMediaEnv & TranscriberEnv;
 
 /** Composition gate: every piece must be present, otherwise the connector is disabled (no fallback). */
 export const iMessageComposition = (env: IMessageEnv): { policy: IMessageConnectorPolicy; environment: string; wrappingKey: string } | null => {
@@ -133,7 +138,7 @@ export class IMessageBridgeDO extends DurableObject<IMessageEnv> {
   // After a failed drain the work still pending waits this long, whatever host request re-arms in between. Memory only: an
   // evicted bridge retries once early.
   private retryNotBefore = 0;
-  constructor(ctx: DurableObjectState, env: IMessageEnv) { super(ctx, env); }
+  constructor(ctx: DurableObjectState, env: IMessageEnv) { super(ctx, withSwitches(env)); }
 
   private composition() { return iMessageComposition(this.env); }
   private store(policy: IMessageConnectorPolicy): BridgeStore { return this.storeCache ??= new BridgeStore(this.ctx.storage, policy); }

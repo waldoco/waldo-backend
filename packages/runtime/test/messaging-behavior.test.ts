@@ -222,7 +222,7 @@ describe('the rules that pulled against each other are gone', () => {
   // sent every round, and is the only text on-mode adds.
   it('adds only the tool-search line with tool search on', () => {
     for (const [surface, prompt] of prompts()) {
-      const on = messagingSystemPrompt(HOTEL_TURN_TOOLS, SURFACES.find((item) => item.surface === surface), true);
+      const on = messagingSystemPrompt(HOTEL_TURN_TOOLS, SURFACES.find((item) => item.surface === surface), { toolSearch: true });
       expect(bytes(on) - bytes(prompt), surface).toBe(bytes(TOOL_SEARCH_LINE) + 2);
       expect(bytes(on), surface).toBeLessThanOrEqual(19_850 + bytes(TOOL_SEARCH_LINE) + 2);
     }
@@ -233,6 +233,60 @@ describe('the rules that pulled against each other are gone', () => {
     const canary_tokens = ['1111111111111111', '2222222222222222', '3333333333333333'];
     expect(sanitise({ payload: prompt, destination: 'system_prompt', canary_tokens, source_taint: null })).toMatchObject({ ok: true, payload: prompt });
     expect(sanitiseVerifyOnly({ payload: prompt, destination: 'system_prompt', canary_tokens, source_taint: null })).toMatchObject({ ok: true, payload: prompt });
+  });
+});
+
+// Version 2 (WALDO_PROMPT_V2) is judged by the nightly scenarios its rules map to (evals/nightly/rules.ts), not by its words;
+// these hold only what a prompt must be on every surface: unchanged by the sanitiser, no rule said twice, inside its budget.
+describe('messagingSystemPrompt, version 2', () => {
+  const v2Prompts = (): readonly (readonly [string, string])[] => [
+    ['no surface', messagingSystemPrompt(HOTEL_TURN_TOOLS, undefined, { v2: true })],
+    ...SURFACES.map((surface) => [surface.surface, messagingSystemPrompt(HOTEL_TURN_TOOLS, surface, { v2: true })] as const),
+  ];
+
+  it('leaves version 1 as it was while the switch is off', () => {
+    for (const [surface, prompt] of prompts()) expect(messagingSystemPrompt(HOTEL_TURN_TOOLS, SURFACES.find((item) => item.surface === surface))).toBe(prompt);
+  });
+
+  it.each(v2Prompts())('%s: passes the system-prompt sanitiser unchanged', (_surface, prompt) => {
+    const canary_tokens = ['1111111111111111', '2222222222222222', '3333333333333333'];
+    expect(sanitise({ payload: prompt, destination: 'system_prompt', canary_tokens, source_taint: null })).toMatchObject({ ok: true, payload: prompt });
+  });
+
+  it.each(v2Prompts())('%s: says no rule twice', (_surface, prompt) => {
+    const rules = prompt.split('\n').filter((line) => line.startsWith('- '));
+    expect(rules.length - new Set(rules).size).toBe(0);
+  });
+
+  // Version 2 carries the brand voice guide: its character, four tones, words and names, the health gate and loop, and its
+  // evidence proposals (one true reason, no wit near health, the quiet Brief, a weekly sense of interruptions, standing
+  // preferences beside undo, the health pull path). The cap sits just above the longest delivered text.
+  it('keeps every delivered version 2 text under 25,900 bytes', () => {
+    expect(Math.max(...v2Prompts().map(([, prompt]) => bytes(prompt)))).toBeLessThanOrEqual(25_900);
+  });
+
+  // The version and the background switch are separate options: neither may stand in for the other.
+  it.each([[true, false], [false, true], [true, true]])('v2 %s with background %s: each option changes only its own part', (v2, background) => {
+    const tools = ['get_context', 'web_search', 'start_task', 'cancel_task'];
+    const lines = (prompt: string) => new Set(prompt.split('\n'));
+    const plain = lines(messagingSystemPrompt(tools));
+    const backgroundOnly = [...lines(messagingSystemPrompt(tools, undefined, { background: true }))].filter((line) => !plain.has(line));
+    const prompt = messagingSystemPrompt(tools, undefined, { v2, background });
+    expect(backgroundOnly.length).toBeGreaterThan(0);
+    expect(prompt.includes('\nBeing ahead of them\n')).toBe(v2);
+    for (const line of backgroundOnly) expect(lines(prompt).has(line), line).toBe(background);
+  });
+
+  // The line saying a mid-turn message reaches the running turn is given only where the host delivers that.
+  it('tells only a surface that delivers mid-turn messages that the owner can steer', () => {
+    const rules = (prompt: string) => new Set(prompt.split('\n').filter((line) => line.startsWith('- ')));
+    const telegram = SURFACES.find((item) => item.surface === 'telegram')!;
+    const withSteer = rules(messagingSystemPrompt(HOTEL_TURN_TOOLS, { ...telegram, delivery: { ...telegram.delivery, steer: true } }, { v2: true }));
+    const without = rules(messagingSystemPrompt(HOTEL_TURN_TOOLS, telegram, { v2: true }));
+    const added = [...withSteer].filter((line) => !without.has(line));
+    expect(added).toHaveLength(1);
+    expect(rules(messagingSystemPrompt(HOTEL_TURN_TOOLS, undefined, { v2: true })).has(added[0]!)).toBe(true);
+    for (const surface of SURFACES) expect(rules(messagingSystemPrompt(HOTEL_TURN_TOOLS, surface, { v2: true })).has(added[0]!), surface.surface).toBe(false);
   });
 });
 

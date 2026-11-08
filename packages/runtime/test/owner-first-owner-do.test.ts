@@ -45,7 +45,8 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 type Owner = Readonly<{ fetch(request: Request): Promise<Response>; alarm(): Promise<void> }>;
-const withAppOwner = (name: string, ownerFirst: '0' | '1', run: (owner: Owner, state: DurableObjectState) => Promise<void>) =>
+// ownerFirst 'in-switches' turns the switch on only inside WALDO_SWITCHES, as a deployed config carries it.
+const withAppOwner = (name: string, ownerFirst: '0' | '1' | 'in-switches', run: (owner: Owner, state: DurableObjectState, instance: InstanceType<typeof OwnerDO>) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (instance, state) => {
     const poolAlarm = vi.spyOn(instance as InstanceType<typeof OwnerDO>, 'alarm').mockResolvedValue(undefined);
     claimStore(state.storage.sql); ensureSchema(state.storage); traceBook(state.storage.sql);
@@ -54,8 +55,11 @@ const withAppOwner = (name: string, ownerFirst: '0' | '1', run: (owner: Owner, s
     state.storage.kv.put('timezone', 'UTC');
     state.storage.kv.put('timezone_confirmed', true);
     const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, WALDO_OWNER_FIRST: ownerFirst }) as unknown as Owner;
-    try { await run(owner, state); } finally { model.release?.(); logged.mockRestore(); await state.storage.deleteAlarm(); poolAlarm.mockRestore(); }
+    const ownerFirstVar = ownerFirst === 'in-switches'
+      ? { WALDO_SWITCHES: { ...(env as unknown as { WALDO_SWITCHES: Record<string, string> }).WALDO_SWITCHES, WALDO_OWNER_FIRST: '1' } }
+      : { WALDO_OWNER_FIRST: ownerFirst };
+    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, ...ownerFirstVar }) as unknown as Owner;
+    try { await run(owner, state, instance as InstanceType<typeof OwnerDO>); } finally { model.release?.(); logged.mockRestore(); await state.storage.deleteAlarm(); poolAlarm.mockRestore(); }
   });
 
 // Two finished tasks the job book holds for their apply turns, as workers would leave them.
@@ -87,6 +91,16 @@ const sendWhileFirstReportRuns = async (owner: Owner, state: DurableObjectState,
 it('owner-first on: the owner message runs right after the apply turn in flight, before the next report', async () => {
   await withAppOwner('owner-first-on', '1', async (owner, state) => {
     await sendWhileFirstReportRuns(owner, state, 'owner-first-on');
+    expect(model.turns).toEqual(['report:first', 'owner', 'report:second']);
+  });
+});
+
+it('a switch carried only in WALDO_SWITCHES reaches the owner object, as every deployed switch now does', async () => {
+  // The object the runtime built from the test pool's env reads the production value, which wrangler.jsonc nests.
+  expect('WALDO_OWNER_FIRST' in env).toBe(false);
+  await withAppOwner('owner-first-in-switches', 'in-switches', async (owner, state, instance) => {
+    expect((instance as unknown as { env: Record<string, unknown> }).env.WALDO_OWNER_FIRST).toBe('0');
+    await sendWhileFirstReportRuns(owner, state, 'owner-first-in-switches');
     expect(model.turns).toEqual(['report:first', 'owner', 'report:second']);
   });
 });

@@ -376,13 +376,13 @@ export const TASK_JOBS_TABLE_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS task_jobs (
     id              TEXT PRIMARY KEY,
     kind            TEXT NOT NULL CHECK (kind IN ('task', 'retry_turn', 'approval_replay')),
-    profile         TEXT CHECK (profile IS NULL OR profile IN ('reader', 'errand', 'code')),
+    profile         TEXT CHECK (profile IS NULL OR profile IN ('reader', 'errand', 'code', 'web', 'private')),
     idempotency_key TEXT NOT NULL UNIQUE,
     origin          TEXT NOT NULL,
     surface         TEXT NOT NULL,
     brief_json      TEXT NOT NULL,
     brief_digest    TEXT NOT NULL,
-    status          TEXT NOT NULL CHECK (status IN ('queued', 'running', 'reported', 'applied', 'cancelled', 'parked')),
+    status          TEXT NOT NULL CHECK (status IN ('queued', 'running', 'awaiting_owner', 'reported', 'applied', 'cancelled', 'parked')),
     attempt         INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
     lease_token     TEXT,
     lease_until     INTEGER,
@@ -396,12 +396,13 @@ export const TASK_JOBS_TABLE_SCHEMA = [
     taint           TEXT CHECK (taint IS NULL OR taint = 'external'),
     result_json     TEXT,
     outcome         TEXT CHECK (outcome IS NULL OR outcome IN ('done', 'partial', 'blocked', 'failed')),
-    park_reason     TEXT CHECK (park_reason IS NULL OR park_reason IN ('crashed', 'provider_unavailable', 'uncertain_effect', 'deadline', 'brief_changed')),
+    park_reason     TEXT CHECK (park_reason IS NULL OR park_reason IN ('crashed', 'provider_unavailable', 'uncertain_effect', 'deadline', 'brief_changed', 'no_progress')),
     cancel_reason   TEXT CHECK (cancel_reason IS NULL OR cancel_reason IN ('owner', 'forgotten')),
     rounds          INTEGER NOT NULL DEFAULT 0 CHECK (rounds >= 0),
     cost_usd        REAL NOT NULL DEFAULT 0 CHECK (cost_usd >= 0),
     notes_sent      INTEGER NOT NULL DEFAULT 0 CHECK (notes_sent >= 0),
     last_note_at    INTEGER,
+    park_retries    INTEGER NOT NULL DEFAULT 0 CHECK (park_retries >= 0),
     created_at      INTEGER NOT NULL,
     updated_at      INTEGER NOT NULL,
     settled_at      INTEGER,
@@ -495,6 +496,64 @@ export const HISTORY_ARCHIVE_MIGRATION: DoMigration = {
   down: ['DROP INDEX IF EXISTS history_archive_by_ref;', 'DROP INDEX IF EXISTS history_archive_by_source;', 'DROP TABLE IF EXISTS history_archive;'],
 };
 
+// The notes one owner message's reply looked at: claim ids only, never text, read back as the claims stand now. The writer
+// runs this DDL itself too and keeps only the newest rows.
+export const REPLY_MEMORY_USED_TABLE_SCHEMA = [
+  'CREATE TABLE IF NOT EXISTS reply_memory_used (turn_id TEXT PRIMARY KEY, claim_ids TEXT NOT NULL, at INTEGER NOT NULL);',
+  'CREATE INDEX IF NOT EXISTS reply_memory_used_by_time ON reply_memory_used (at);',
+] as const;
+
+export const REPLY_MEMORY_USED_MIGRATION: DoMigration = {
+  version: 17,
+  name: 'reply-memory-used',
+  up: REPLY_MEMORY_USED_TABLE_SCHEMA,
+  down: ['DROP INDEX IF EXISTS reply_memory_used_by_time;', 'DROP TABLE IF EXISTS reply_memory_used;'],
+};
+
+// Quests (ADR-0064 amendment): a goal's plan, its state (active, ambient or completed; null on a goal written before quests,
+// which reads from active) and the owner's check-in pace with the last check-in. The quest book adds any column it finds
+// missing itself, as the OwnerDO runs no migration runner.
+export const GOAL_QUEST_COLUMNS = [
+  ['plan', 'ALTER TABLE goals ADD COLUMN plan TEXT CHECK (plan IS NULL OR length(plan) BETWEEN 1 AND 500);'],
+  ['state', "ALTER TABLE goals ADD COLUMN state TEXT CHECK (state IS NULL OR state IN ('active', 'ambient', 'completed'));"],
+  ['check_in_days', 'ALTER TABLE goals ADD COLUMN check_in_days INTEGER CHECK (check_in_days IS NULL OR check_in_days BETWEEN 1 AND 28);'],
+  ['last_check_in_at', 'ALTER TABLE goals ADD COLUMN last_check_in_at TEXT;'],
+] as const;
+
+export const GOAL_QUESTS_MIGRATION: DoMigration = {
+  version: 18,
+  name: 'goal-quests',
+  up: GOAL_QUEST_COLUMNS.map(([, ddl]) => ddl),
+  down: GOAL_QUEST_COLUMNS.map(([column]) => `ALTER TABLE goals DROP COLUMN ${column};`).reverse(),
+};
+
+// Personal experiments inside a quest (ADR-0064 health-quests amendment): one change tried for 7 to 28 days from the owner's
+// local start day, at most one running per quest, then kept, dropped or stopped. offered_at is when a Close offering the
+// verdict reached the owner. The quest book creates the table itself, as the OwnerDO runs no migration runner.
+export const EXPERIMENTS_TABLE_SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS experiments (
+    id          TEXT PRIMARY KEY,
+    quest_id    TEXT NOT NULL,
+    change      TEXT NOT NULL CHECK (length(change) BETWEEN 1 AND 300),
+    days        INTEGER NOT NULL CHECK (days BETWEEN 7 AND 28),
+    started_on  TEXT NOT NULL,
+    state       TEXT NOT NULL CHECK (state IN ('running', 'kept', 'dropped', 'stopped')),
+    reason      TEXT CHECK (reason IS NULL OR length(reason) BETWEEN 1 AND 500),
+    decided_on  TEXT,
+    offered_at  TEXT,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+  );`,
+  "CREATE UNIQUE INDEX IF NOT EXISTS experiments_one_running ON experiments (quest_id) WHERE state = 'running';",
+] as const;
+
+export const EXPERIMENTS_MIGRATION: DoMigration = {
+  version: 19,
+  name: 'experiments',
+  up: EXPERIMENTS_TABLE_SCHEMA,
+  down: ['DROP INDEX IF EXISTS experiments_one_running;', 'DROP TABLE IF EXISTS experiments;'],
+};
+
 // Versions 3-7 and 9-11 (the responsibility domain, canonical authority, planning harness,
 // execution writer, judgment authority and common execution migrations) were applied only by the
 // retired RunLoopDO and are retired: their numbers stay reserved in do-migration-reservations.json
@@ -508,6 +567,9 @@ export const DO_SCHEMA_MIGRATIONS = [
   CALENDAR_LAST_SEEN_MIGRATION,
   SCHEDULE_RUNS_RUNNING_MIGRATION,
   HISTORY_ARCHIVE_MIGRATION,
+  REPLY_MEMORY_USED_MIGRATION,
+  GOAL_QUESTS_MIGRATION,
+  EXPERIMENTS_MIGRATION,
 ] as const;
 
 export const DO_SCHEMA_VERSION = DO_SCHEMA_MIGRATIONS.at(-1)!.version;
@@ -600,6 +662,10 @@ const REQUIRED_COLUMNS: Readonly<Record<DoProductTable, readonly string[]>> = {
     'progress',
     'deadline',
     'active',
+    'plan',
+    'state',
+    'check_in_days',
+    'last_check_in_at',
     'created_at',
     'updated_at',
   ],

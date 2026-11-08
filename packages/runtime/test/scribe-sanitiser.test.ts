@@ -1319,6 +1319,38 @@ describe('Scribe sanitiser', () => {
   });
 });
 
+describe('percent escapes decode where they sit, whatever else the string carries', () => {
+  const encoded = (text: string) => [...text].map((character) => `%${character.charCodeAt(0).toString(16).padStart(2, '0')}`).join('');
+  const SECRET = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
+  const atEach = (text: string) => [
+    ['internal_context', inspect([{ role: 'user', content: text }], 'internal_context')],
+    ['memory_block', inspect(text, 'memory_block')],
+  ] as const;
+
+  it.each([
+    ['a canary beside a stray percent', `50% off today, ref ${encoded(CANARIES[0]!)}`],
+    ['a secret beside a stray percent', `50% off today, ref ${encoded(SECRET)}`],
+    ['a canary after a byte that is not UTF-8', `ref %FF${encoded(CANARIES[0]!)}`],
+    ['a secret after a cut-off multibyte sequence in the same run', `ref %E0%A4${encoded(` ${SECRET}`)}`],
+    ['a canary beside a malformed escape', `20%DEALS ref ${encoded(CANARIES[0]!)}`],
+  ])('denies %s in internal_context and memory_block', (_shape, text) => {
+    for (const [destination, result] of atEach(text)) expect(result, destination).toMatchObject({ ok: false, check: 'canary_token' });
+  });
+
+  it('carriesSecretOrCanary reads the escapes beside a stray percent', () => {
+    expect(carriesSecretOrCanary(`50% off, ${encoded(CANARIES[1]!)}`, [...CANARIES])).toBe(true);
+    expect(carriesSecretOrCanary(`50% off, ${encoded(SECRET)}`)).toBe(true);
+  });
+
+  it.each([
+    '50% off at https://example.com/sale?q=winter%20coats',
+    'Flat 20%DEALS, see https://example.com/a%2Fb',
+    'up 12% on %E0%A4%A8%E0%A4%AE',
+  ])('passes ordinary text with a stray percent and real escapes: %s', (text) => {
+    for (const [destination, result] of atEach(text)) expect(result, destination).toMatchObject({ ok: true });
+  });
+});
+
 describe('issue #152 - malformed percent escapes are plain text, not a payload deny', () => {
   // Live RCA 2026-09-25 (trace 6adaddf55019f408e0545d3dac134f7b): strict decodeURIComponent on
   // "20%DEALS"-shaped text threw and decodedViews converted the throw into invalid_payload,
@@ -1456,6 +1488,28 @@ function inspectTrusted(payload: SanitiseInput['payload'], destination: Sanitise
   return sanitise({ payload, destination, canary_tokens: [...CANARIES], source_taint: null });
 }
 
+describe('a card number written in digits that are not ASCII', () => {
+  const fullwidth = (text: string) => text.replace(/[0-9]/g, (digit) => String.fromCharCode(0xff10 + Number(digit)));
+  const arabicIndic = (text: string) => text.replace(/[0-9]/g, (digit) => String.fromCharCode(0x0660 + Number(digit)));
+  const mathematical = (text: string) => text.replace(/[0-9]/g, (digit) => String.fromCodePoint(0x1d7ce + Number(digit)));
+
+  it.each([
+    ['fullwidth', fullwidth('4111 1111 1111 1111')],
+    ['Arabic-Indic', arabicIndic('4111-1111-1111-1111')],
+    ['mathematical', mathematical('4111111111111111')],
+  ])('is redacted like an ASCII one: %s', (_script, card) => {
+    for (const destination of ['memory_block', 'send_message'] as const) {
+      expect(inspect(`card ${card} on file`, destination), destination).toMatchObject({ ok: true, payload: 'card [REDACTED_CREDIT_CARD] on file', redactions: [{ kind: 'credit_card', count: 1 }] });
+    }
+    expect(inspectExternal({ body: `card ${card} on file` })).toMatchObject({ ok: true, payload: { body: 'card [REDACTED_CREDIT_CARD] on file' } });
+  });
+
+  it('leaves text with non-ASCII digits and no card untouched', () => {
+    const text = `Invoice ${fullwidth('2026')} paid, ${arabicIndic('12')} items`;
+    expect(inspect(text, 'memory_block')).toMatchObject({ ok: true, payload: text, redactions: [] });
+  });
+});
+
 describe('structured tool identifier integrity', () => {
   const id = 'aaaaaaaa-aaaa-4aaa-4111-111111111114';
   const url = `https://local.invalid/console/workspace/file?id=${id}&revision=1`;
@@ -1476,7 +1530,7 @@ describe('structured tool identifier integrity', () => {
     expect(inspectTrusted({ id: '4111 1111 1111 1114', file_id: '4111 1111 1111 1114', url: '4111 1111 1111 1114' })).toMatchObject({ ok: true, payload: { id: '[REDACTED_CREDIT_CARD]', file_id: '[REDACTED_CREDIT_CARD]', url: '[REDACTED_CREDIT_CARD]' } });
   });
   it('keeps persistence redaction and deny-level checks on identifier fields', () => {
-    expect(inspectTrusted({ file_id: id }, 'memory_block')).toMatchObject({ ok: true, payload: { file_id: 'aaaaaaaa-aaaa-4aaa-[REDACTED_CREDIT_CARD]' } });
+    expect(inspectTrusted({ file_id: id, body: 'card 4111 1111 1111 1114' }, 'memory_block')).toMatchObject({ ok: true, payload: { file_id: id, body: 'card [REDACTED_CREDIT_CARD]' } });
     expect(inspectTrusted({ url: 'https://local.invalid/?token=1111111111111111' })).toMatchObject({ ok: false, check: 'canary_token' });
     expect(inspectTrusted({ file_id: 'sk-proj-abcdefghijklmnopqrstuvwx' })).toMatchObject({ ok: false, check: 'canary_token' });
   });
@@ -1501,17 +1555,16 @@ describe('structured tool identifier integrity', () => {
     const bad = `https://4111-1111-1111-1114.attacker.example/console/workspace/file?id=${id}&revision=1`;
     expect(JSON.stringify(inspectExternal({ delivery: { url: bad } }))).not.toContain('4111-1111-1111-1114');
   });
-  it('tainted content still redacts everything outside the allowlisted key + exact shape', () => {
+  it('tainted content still redacts card numbers and URLs outside the allowlisted key + exact shape', () => {
     const result = inspectExternal({ file_id: id, url: 'https://a.example/?c=4111111111111111', note_id: id, body: 'card 4111 1111 1111 1114' });
     expect(JSON.stringify(result)).not.toContain('4111111111111111');
     expect(JSON.stringify(result)).not.toContain('4111 1111 1111 1114');
-    expect(JSON.stringify(result)).not.toContain(`"note_id":"${id}"`);
   });
-  it('does not preserve identifiers under non-allowlisted keys, or serialized receipts with other shapes', () => {
-    const result = inspectTrusted({ id, user_id: id, thing_id: id });
-    expect(JSON.stringify(result)).not.toContain(id);
+  // A uuid is an identifier wherever it sits, so no key has to vouch for it; the card text around it is what gets redacted.
+  it('keeps an identifier under any key and in a serialized receipt, and redacts the card text beside it', () => {
+    expect(inspectTrusted({ id, user_id: id, thing_id: id })).toMatchObject({ ok: true, payload: { id, user_id: id, thing_id: id }, redactions: [] });
     const tainted = inspectExternal([{ output: JSON.stringify({ note_id: id, url: 'https://a.example/?c=4111111111111111' }) }]);
-    expect(JSON.stringify(tainted)).not.toContain(id);
+    expect(JSON.stringify(tainted)).toContain(id);
     expect(JSON.stringify(tainted)).not.toContain('4111111111111111');
   });
 });

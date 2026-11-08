@@ -7,14 +7,19 @@ import { toolsWhere } from '../tools/records';
 // readings anywhere else.
 export const HEALTH_WITHHELD = '[health withheld from diagnostics]';
 
-// get_health sits in the core brain; the rest of the owner's health reads and logs, get_screen_time included, sit in the health brain.
-const HEALTH_TOOLS: ReadonlySet<string> = new Set<string>(['get_health', ...toolsWhere((record) => record.brain === 'health')]);
+// get_health sits in the core brain; the rest of the owner's health reads and logs sit in the health brain. The phone brain's tools
+// (get_screen_time, get_device_context, get_weather) have their output (screen time, the phones' zones and cities, the weather
+// there) withheld from diagnostics the same way. The medicines brain's tools carry the owner's medicine names, times and dose
+// statuses, and quests carry the owner's own targets and progress, so both brains are withheld too. show_chart's points are
+// numbers no prose floor can read as health, so its call is withheld whole too.
+const HEALTH_TOOLS: ReadonlySet<string> = new Set<string>(['get_health', 'show_chart', 'show_health_chart', ...toolsWhere((record) => record.brain === 'health' || record.brain === 'phone' || record.brain === 'quests' || record.brain === 'medicines')]);
 // Owner turns, child agents and task workers (brain-side task_tool_<name>) each log a tool call under its name.
 const TOOL_HOP = /^(?:subagent_|task_)?tool_(.+)$/;
 
 // The openings of the health blocks the prompt builders write: the composer's and the REASONS builder's derived health
-// context, the owner turn's shared-health label and the owner-logged meals and workouts. Each block is one paragraph.
-const HEALTH_BLOCK = /^\s*(?:Form zone:|Recovery zone:|Shared health today\b|Recent health logs\b)/;
+// context, the owner turn's shared-health label, the owner-logged meals and workouts and the capacity note a day card reads
+// (prompt/capacity.ts). Each block is one paragraph.
+const HEALTH_BLOCK = /^\s*(?:Form zone:|Recovery zone:|Shared health today\b|Recent health logs\b|Capacity note:)/;
 const PARAGRAPHS = /(\n[ \t]*\n)/;
 
 const scrubProse = (text: string): string => redactNumericHealth(

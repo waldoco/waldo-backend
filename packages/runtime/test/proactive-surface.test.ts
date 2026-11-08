@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { SEND_NOW_ONLY } from '../src/channels/delivery-routes';
 import { APP_PROACTIVE_SURFACE_RECEIPTS_V1 } from '../../contracts/src/app/controls';
-import { chooseProactiveSurface, PROACTIVE_SURFACE_KEY, PROACTIVE_SURFACES, proactiveSurfaceChoices, proactiveSurfaceReceipt, WHATSAPP_COPY_PREFIX, WHATSAPP_SUBJECTS_KEY, proactiveSurface, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, setProactiveSurface, UNREACHABLE_CHECK_BACK, wantedTargets,
-  waitingForWhatsApp, whatsappSubjects, withCopy, type ProactiveSurface } from '../src/channels/proactive-surface';
+import { chooseProactiveSurface, PROACTIVE_SURFACE_KEY, PROACTIVE_SURFACES, proactiveReads, proactiveSurfaceChoices, proactiveSurfaceReceipt, WHATSAPP_COPY_PREFIX, WHATSAPP_SUBJECTS_KEY, proactiveSurface, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, setProactiveSurface, UNREACHABLE_CHECK_BACK, wantedTargets,
+  unaskedRecord, waitingForWhatsApp, whatsappSubjects, withCopy, type ProactiveSurface } from '../src/channels/proactive-surface';
 import { appCaller } from '../src/channels/surfaces/app';
 import type { FinalRecord } from '../src/channels/telegram-final-outbox';
 
@@ -28,6 +28,61 @@ describe('the owner\'s proactive surface setting', () => {
     setProactiveSurface(kv, 'both');
     for (const value of ['telegram', 'imessage', 'iMessage', 'APP', ' app', '', 'app|both']) expect(setProactiveSurface(kv, value)).toBe(false);
     expect(kv.map.get(PROACTIVE_SURFACE_KEY)).toBe('both');
+  });
+});
+
+describe('the default under PROACTIVE_BOTH_DEFAULT', () => {
+  it('is both for an owner with WhatsApp bound who has chosen nothing, and the app otherwise', () => {
+    const kv = memoryKv();
+    expect(proactiveSurface(kv, true)).toBe('app');
+    kv.put('whatsapp_subject', '15550001111');
+    expect(proactiveSurface(kv, false)).toBe('app');
+    expect(proactiveSurface(kv, true)).toBe('both');
+    kv.put(PROACTIVE_SURFACE_KEY, 'junk');
+    expect(proactiveSurface(kv, true)).toBe('both');
+  });
+
+  it('never overrides a stored choice, the app included', () => {
+    const kv = memoryKv();
+    kv.put('whatsapp_subject', '15550001111');
+    for (const value of PROACTIVE_SURFACES) { kv.put(PROACTIVE_SURFACE_KEY, value); expect(proactiveSurface(kv, true)).toBe(value); }
+  });
+
+  it('stores the owner\'s choice of the shown default, so it outlives the switch; with the switch off nothing changes', () => {
+    const links = { whatsapp: true, imessage: false };
+    const kv = memoryKv();
+    kv.put('whatsapp_subject', '15550001111');
+    expect(chooseProactiveSurface(kv, 'app', links, true)).toBe('saved');
+    expect(kv.map.get(PROACTIVE_SURFACE_KEY)).toBe('app');
+    const fresh = memoryKv();
+    fresh.put('whatsapp_subject', '15550001111');
+    expect(chooseProactiveSurface(fresh, 'both', links, true)).toBe('saved');
+    expect(fresh.map.get(PROACTIVE_SURFACE_KEY)).toBe('both');
+    expect(chooseProactiveSurface(fresh, 'both', links, true)).toBe('unchanged');
+    const off = memoryKv();
+    expect(chooseProactiveSurface(off, 'app', links, false)).toBe('unchanged');
+    expect(off.map.has(PROACTIVE_SURFACE_KEY)).toBe(false);
+  });
+
+  it('reads as a chat wherever a chat gets the same message, since the chat has no card beside it', () => {
+    const kv = memoryKv();
+    kv.put('whatsapp_subject', '15550001111');
+    expect(proactiveReads(kv, true)).toBe('chat');
+    expect(proactiveReads(kv, false)).toBe('cards');
+    kv.put(PROACTIVE_SURFACE_KEY, 'both');
+    expect(proactiveReads(kv, false)).toBe('cards');
+  });
+});
+
+describe('which messages are Waldo\'s own initiative', () => {
+  const record = (extra: Partial<FinalRecord>): FinalRecord => ({ id: 'r1', trace: 't', payload: { chat_id: 1, text: 'x' }, digest: 'd', ownerSubject: '1', doName: 'n', status: 'pending', dueAt: 0, createdAt: 0, attempts: 0, ...extra });
+  it('is a day card, an update, meeting prep, a pause notice, a mail follow-up, a health note or a copy of an app message', () => {
+    for (const kind of [{ dayCard: { day: '2026-11-05', card: 'card:brief', foldUpTo: 0 } }, { update: { recordId: 1 } }, { calendarPrep: {} }, { scheduleNotice: { scheduleId: 's', until: 0 } }, { mailFollowup: {} }, { healthNotice: { day: '2026-11-05' } }, { id: `${WHATSAPP_COPY_PREFIX}app-1` }])
+      expect(unaskedRecord(record(kind as Partial<FinalRecord>))).toBe(true);
+  });
+  it('is not a reminder, a standing order\'s report or a check-back the owner set up, nor a reply', () => {
+    for (const kind of [{ reminder: { id: 'r', occurrence: 1, runId: 'x', schedulerRunId: null, once: true } }, { standingOrder: { runId: 'x', gate: 'act_and_report' } }, { heartbeat: {} }, {}])
+      expect(unaskedRecord(record(kind as Partial<FinalRecord>))).toBe(false);
   });
 });
 
@@ -113,6 +168,17 @@ describe('where proactive work goes', () => {
   it('never lets iMessage take the work first, whatever list asks for it', () => {
     expect(proactiveTargets(['imessage', 'app'], { app: true, imessage: true })).toEqual(['app']);
     expect(proactiveTargets(['imessage'], { app: false, whatsapp: false, imessage: true })).toEqual([]);
+  });
+});
+
+describe('how the owner reads proactive work', () => {
+  it('beside the cards in the app and alone in a chat; with the switch on, alone wherever a chat also gets the same message', () => {
+    const kv = memoryKv();
+    expect(proactiveReads(kv)).toBe('cards');
+    const reads = (setting: ProactiveSurface) => { setProactiveSurface(kv, setting); return proactiveReads(kv); };
+    expect(PROACTIVE_SURFACES.map(reads)).toEqual(['cards', 'chat', 'cards', 'cards']);
+    const readsWithSwitch = (setting: ProactiveSurface) => { setProactiveSurface(kv, setting); return proactiveReads(kv, true); };
+    expect(PROACTIVE_SURFACES.map(readsWithSwitch)).toEqual(['cards', 'chat', 'chat', 'chat']);
   });
 });
 

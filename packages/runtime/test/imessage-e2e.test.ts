@@ -1,6 +1,6 @@
 import { env, evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
-import { INTERRUPTED_NOTICES } from '../src/prompt/fixed-lines';
+import { clockWords, INTERRUPTED_NOTICES } from '../src/prompt/fixed-lines';
 import worker from '../src/index';
 import { consoleAccess } from '../src/channels/console';
 import { routerSignature } from '../src/identity/owner-directory';
@@ -376,7 +376,7 @@ it('a card made outside an iMessage turn waits for the owner\'s next message, an
   await runInDurableObject(w.ownerStub, async (_i, state) => {
     expect(state.storage.sql.exec<{ status: string }>("SELECT status FROM ledger WHERE kind = 'calendar_change'").toArray()).toEqual([{ status: 'open' }]);
   });
-});
+}, 20_000);
 
 const outbox = async (stub: DurableObjectStub) => runInDurableObject(stub, async (_i, state) => new IMessageFinalOutbox(state.storage).records());
 const inbox = async (stub: DurableObjectStub) => runInDurableObject(stub, async (_i, state) => new IMessageOwnerInbox(state.storage).records());
@@ -493,7 +493,7 @@ const expectNotice = (delivery: Delivery) => {
 // A turn no model answers (all failed, or one wrote nothing) gets the floor: a time the retry job keeps (R-4), never the error.
 const expectFloor = (delivery: Delivery) => {
   const text = JSON.parse(delivery.body).text as string;
-  expect(text).toMatch(/^I can't answer properly right now\. I'll come back to you by \d\d:\d\d\.$/);
+  expect(text).toMatch(/^I can't answer properly right now\. I'll come back to you by \d{1,2}(:\d\d)?[ap]m\.$/);
   expect(text).not.toContain('upstream-detail-9f2');
 };
 
@@ -2034,10 +2034,60 @@ it('an iMessage-only owner\'s background task reports on iMessage, and its worke
   });
 });
 
+// The task finishes, the owner's next iMessage turn already tells them the result, and then the jobs lane applies the report.
+// The report turn reads that iMessage exchange from the episode index, so the model can see the owner was told and send nothing.
+it('with WALDO_TASK_PICKUP on, an iMessage task report reads the iMessage exchange since the task finished, and its SKIP sends nothing more', async () => {
+  const w = await world();
+  await iMessageOnly(w);
+  type Rpc = { env: Record<string, unknown>; taskClaim(...args: unknown[]): Promise<unknown>; taskReport(...args: unknown[]): Promise<string> };
+  const jobId = await runInDurableObject(w.ownerStub, async (instance, state) => {
+    (instance as unknown as Rpc).env.WALDO_TASK_PICKUP = '1';
+    const book = jobBook(state.storage.sql, { now: Date.now, newId: () => 'imsgtask0002', newToken: () => 'tok-imsg-2' });
+    const { job } = book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'imsg-turn:call-2', origin: 'imsg-turn', surface: 'imessage',
+      brief: { title: 'Inbox since Monday', goal: 'Find client mail that waits on a reply.', context: '', done_when: 'Who waits.', effort: 'standard', timezone: 'UTC', started_at: Date.now() },
+      dueAt: Date.now(), deadlineAt: Date.now() + 3_600_000 });
+    const ticket = book.startAttempt(job.id)!;
+    expect(await (instance as unknown as Rpc).taskClaim(ticket)).not.toBe('fenced');
+    expect(await (instance as unknown as Rpc).taskReport(ticket, { kind: 'result', result: { status: 'done', summary: 'Asha waits on the quote.', findings: [], proposals: [], left: [] } }, [], { rounds: 1, costUsd: 0 })).toBe('accepted');
+    // The lane waits until the owner's turn below has run.
+    state.storage.sql.exec('UPDATE task_jobs SET due_at = ? WHERE id = ?', Date.now() + 3_600_000, job.id);
+    await state.storage.delete(TASK_JOBS_DUE_KEY);
+    return job.id;
+  });
+  await new Promise(resolve => setTimeout(resolve, 5));
+  const told = 'Your inbox check is back: Asha is still waiting on the quote.';
+  proof.reply = told;
+  try { await replyFor(w, 'Anything back from the inbox check?'); await sendNext(w); } finally { proof.reply = 'Scripted owner reply.'; }
+  await w.pump(2);
+  expect(sentTexts(w).filter(text => text === told)).toHaveLength(1);
+
+  const before = proof.turns.length, sent = w.host.nativeSends.length;
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    state.storage.sql.exec('UPDATE task_jobs SET due_at = ? WHERE id = ?', Date.now(), jobId);
+    await armTaskJobsWake(state.storage, Date.now());
+  });
+  proof.reply = 'SKIP';
+  try { await runDurableObjectAlarm(w.ownerStub); await w.settle(); } finally { proof.reply = 'Scripted owner reply.'; }
+  await new Promise(resolve => setTimeout(resolve, 300));
+  await w.pump();
+
+  const report = proof.turns.slice(before).find(turn => turn.includes('A background task you started has finished'));
+  expect(report, 'the lane ran the report turn').toBeDefined();
+  expect(report).toContain('Anything back from the inbox check?');
+  expect(report).toContain(told);
+  expect((await w.host.pull()).delivery).toBeNull();
+  expect(w.host.nativeSends).toHaveLength(sent);
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    expect(jobBook(state.storage.sql, { now: Date.now, newId: () => 'unused', newToken: () => 'unused' }).get(jobId)).toMatchObject({ status: 'applied' });
+    const hops = state.storage.sql.exec<{ hop: string }>("SELECT hop FROM trace_log WHERE hop IN ('task_reported', 'task_applied') ORDER BY id").toArray().map(row => row.hop);
+    expect(hops.slice(-2)).toEqual(['task_reported', 'task_applied']);
+  });
+});
+
 // R-4 on iMessage. When no model answers an iMessage-only owner, the floor reply promises a time in the owner's own zone, and
 // the retried turn's late answer comes back on iMessage. If the retry finds no model either, the owner is still told.
 const OWNER_ZONE = 'Asia/Kolkata';
-const zoneTime = (at: number, timeZone: string) => new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(at));
+const zoneTime = (at: number, timeZone: string) => clockWords(new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(at)));
 type RetryRow = { id: string; status: string; park_reason: string | null; brief_json: string };
 const retryRows = (w: Awaited<ReturnType<typeof world>>) => runInDurableObject(w.ownerStub, async (_i, state) =>
   state.storage.sql.exec<RetryRow>("SELECT id, status, park_reason, brief_json FROM task_jobs WHERE kind = 'retry_turn'").toArray());

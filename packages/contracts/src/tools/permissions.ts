@@ -42,6 +42,8 @@ export const toolNameSchema = z.enum([
   'draft_document',
   'create_artifact',
   'revise_artifact',
+  // restore_artifact: bring back a kept earlier revision as a new one, so a revise can be undone.
+  'restore_artifact',
   'export_artifact',
   'draft_email',
   'send_email',
@@ -84,6 +86,8 @@ export const toolNameSchema = z.enum([
   'log_meal',
   'log_workout',
   'list_health_logs',
+  // delete_health_log: remove one meal or workout log by id, the undo for log_meal and log_workout.
+  'delete_health_log',
   'set_sleep_need',
   // track/log/list/stop_medication: the owner's medicines, on the health plane; owner turns only, offered while MEDICATIONS is on.
   'track_medication',
@@ -95,12 +99,18 @@ export const toolNameSchema = z.enum([
   'set_standing_order',
   'list_standing_orders',
   'cancel_standing_order',
+  // The owner's standing grants: ask for one (a card the owner approves), end one, or pause them all. Owner turns only.
+  'propose_standing_grant',
+  'revoke_standing_grant',
+  'pause_autonomy',
   // workspace 50-52 (files slice): owner-private file store, owner-initiated (user_message) only; list/read stamped external.
   'workspace_list',
   'workspace_read',
   'workspace_search',
   'workspace_write',
   'workspace_render',
+  // extract_archive: unpack a workspace zip into a folder beside it (WALDO_FILE_TOOLS).
+  'extract_archive',
   'skills_list',
   'skills_install',
   'skills_disable',
@@ -128,10 +138,39 @@ export const toolNameSchema = z.enum([
   'connect_app',
   // send_agent_mail: propose an email Waldo sends as itself from the owner's Waldo address; the owner approves it on a card.
   'send_agent_mail',
+  // offer_replies: short answers the owner can tap for the one question a planning card asks; they go out with the card.
+  'offer_replies',
   // search_history: the owner's past runs, tasks, scheduled runs and decided cards, hot and archived; owner turns only, read-only.
   'search_history',
   // get_screen_time: the owner's daily screen-time summaries as their phone sent them; offered while SCREEN_TIME is on.
   'get_screen_time',
+  // get_device_context: each of the owner's phones' time zone and city as the phone last sent them; offered while DEVICE_PLACE is on.
+  'get_device_context',
+  // get_weather: today's and tomorrow's weather where the owner's phones last were, from Apple Weather; offered while DEVICE_WEATHER is on.
+  'get_weather',
+  // propose_calendar_plan: a day plan's new blocks on one card the owner approves in one tap; offered while CALENDAR_PLAN is on.
+  'propose_calendar_plan',
+  // set_quest: start or change one of the owner's quests (ADR-0064 GoalRecord); the owner's own chat turn only.
+  'set_quest',
+  // set_experiment and review_experiment: one change tried inside a quest and its zone comparison with the owner's usual
+  // (ADR-0064 health-quests amendment); the owner's own chat turn only.
+  'set_experiment',
+  'review_experiment',
+  // check_task: how one background task the model started stands, and its result while the owner has not heard it yet.
+  'check_task',
+  // query_phone_calendar: the events on the owner's phone calendars as the phone last sent them; offered while DEVICE_CALENDAR is on.
+  'query_phone_calendar',
+  // steer_task: change a running background task's work, as a correction or an addition, keeping its id (WALDO_TASK_STEER).
+  'steer_task',
+  // show_chart: a chart in the owner's app reply (the app.v1 chart_series part), with words for a build that draws none.
+  'show_chart',
+  // show_health_chart: a chart of the owner's own readings in their app reply; the reply keeps the query, never the values,
+  // and the app's read draws it live. Offered while HEALTH_CHARTS is on.
+  'show_health_chart',
+  // read_import/import_memories: the owner's own messages in a ChatGPT or Claude export they uploaded, and what Waldo keeps
+  // from them as its read, quoted from the owner's words, until the owner confirms it. Owner chat turns only.
+  'read_import',
+  'import_memories',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -146,7 +185,10 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'get_crs',
     'get_health',
     'get_screen_time',
+    'get_device_context',
+    'get_weather',
     'query_calendar',
+    'query_phone_calendar',
     'connect_service',
     'get_communication',
     'search_communication',
@@ -162,8 +204,8 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'send_message',
     'skills_load',
   ],
-  fetch_alert: ['get_crs', 'get_health', 'get_screen_time', 'read_memory', 'propose_action', 'send_message', 'skills_load'],
-  patrol: ['get_crs', 'get_health', 'get_screen_time', 'read_memory', 'search_connector', 'propose_action', 'skills_load'],
+  fetch_alert: ['get_crs', 'get_health', 'get_screen_time', 'get_device_context', 'get_weather', 'read_memory', 'propose_action', 'send_message', 'skills_load'],
+  patrol: ['get_crs', 'get_health', 'get_screen_time', 'get_device_context', 'get_weather', 'read_memory', 'search_connector', 'propose_action', 'skills_load'],
   pre_brief_sweep: [
     'get_crs',
     'get_health',
@@ -187,6 +229,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'get_health',
     'get_screen_time',
     'query_calendar',
+    'query_phone_calendar',
     'connect_service',
     'get_communication',
     'search_communication',
@@ -206,7 +249,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'search_tools',
     'skills_load',
   ],
-  handoff_plan: ['get_crs', 'get_health', 'get_screen_time', 'query_calendar', 'connect_service', 'get_tasks', 'propose_action', 'skills_load'],
+  handoff_plan: ['get_crs', 'get_health', 'get_screen_time', 'get_device_context', 'get_weather', 'query_calendar', 'query_phone_calendar', 'connect_service', 'get_tasks', 'propose_action', 'skills_load'],
   // The mutation cluster: execute_action + writes + send_message, reachable only after
   // explicit user approval through propose_action (ADR-0008).
   handoff_act: [
@@ -233,14 +276,17 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'propose_action',
     'skills_load',
   ],
-  intervention: ['get_crs', 'get_health', 'get_screen_time', 'read_memory', 'update_task', 'propose_action', 'skills_load'],
+  intervention: ['get_crs', 'get_health', 'get_screen_time', 'get_device_context', 'get_weather', 'query_phone_calendar', 'read_memory', 'update_task', 'propose_action', 'skills_load'],
   // Everything except execute_code (ADR-0050) — no trigger ever gets the full surface.
   user_message: [
     'use_mac',
     'get_crs',
     'get_health',
     'get_screen_time',
+    'get_device_context',
+    'get_weather',
     'query_calendar',
+    'query_phone_calendar',
     'connect_service',
     'send_console_link',
     'connect_app',
@@ -277,10 +323,14 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'draft_document',
     'create_artifact',
     'revise_artifact',
+    'restore_artifact',
     'export_artifact',
     'draft_email',
     'send_email',
     'send_agent_mail',
+    'offer_replies',
+    'show_chart',
+    'show_health_chart',
     'propose_schedule',
     'write_sheet_cell',
     'propose_action',
@@ -296,6 +346,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'list_reminders',
     'cancel_reminder',
     'propose_calendar_change',
+    'propose_calendar_plan',
     'propose_google_task_change',
     'open_loop',
     'close_loop',
@@ -304,10 +355,14 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'track_responsibility',
     'set_proactivity',
     'set_schedule_preference',
+    'set_quest',
+    'set_experiment',
+    'review_experiment',
     'read_tool_output',
     'log_meal',
     'log_workout',
     'list_health_logs',
+    'delete_health_log',
     'set_sleep_need',
     'track_medication',
     'log_medication',
@@ -316,19 +371,27 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'set_standing_order',
     'list_standing_orders',
     'cancel_standing_order',
+    'propose_standing_grant',
+    'revoke_standing_grant',
+    'pause_autonomy',
     'workspace_list',
     'workspace_read',
     'workspace_search',
     'workspace_write',
     'workspace_render',
+    'extract_archive',
     'skills_list',
     'skills_install',
     'skills_disable',
     'skills_load',
     'start_task',
     'cancel_task',
+    'check_task',
+    'steer_task',
     'record_owner_finding',
     'list_owner_findings',
+    'read_import',
+    'import_memories',
     'search_history',
   ],
   dreaming_mode: ['read_memory', 'search_episodes', 'skills_load'],

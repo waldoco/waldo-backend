@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { EXTERNAL_ORIGIN_TOOLS, TOOL_PERMISSIONS, buildSessionState, taintGateBlocksDirectExecution, toolNameSchema, type ToolHandler, type ToolName, type TriggerType } from '@waldo/contracts';
 import { approvalDesk } from '../src/channels/approvals';
 import { googleTaskHandlers } from '../src/tools/live/tasks';
-import { googleHandlers } from '../src/tools/live/google';
+import { calendarPlanHandler, googleHandlers } from '../src/tools/live/google';
 import { sendAgentMailHandler } from '../src/tools/live/agent-mail';
 import { sendMessageHandler } from '../src/tools/live/messaging';
 import { TAINT_REFUSED_CAUSE, TOOL_ARG_SCHEMAS, taintedCallNeedsOwnerApproval, taintedCallRefused, recordNeedsOwnerCard } from '../src/hooks/registry';
@@ -40,14 +40,15 @@ const WRITES: Readonly<Record<string, readonly (readonly [ToolName, Record<strin
   'health logs': [
     ['log_meal', { description: 'Lunch at the client office', calories_estimate: 2400 }],
     ['log_workout', { type: 'run', duration_minutes: 30 }],
+    ['delete_health_log', { id: 7 }],
   ],
   'workspace writes': [
-    ['workspace_write', { path: 'notes/vendor.md', text: 'Wire the deposit to the new account.', mime: 'text/markdown', expected_revision: 0 }],
     ['workspace_render', { source_file_id: 'f1', source_revision: 1, path: 'out/vendor.pdf', expected_revision: 0, format: 'pdf' }],
+    ['extract_archive', { file_id: 'abcdefab-cdef-4abc-8abc-000000000001', revision: 1 }],
   ],
   artifacts: [
-    ['create_artifact', { name: 'Vendor brief', kind: 'document', body_markdown: 'Pay the new account.' }],
     ['revise_artifact', { artifact_id: 'a1', expected_revision: 1, body_markdown: 'Pay the new account.' }],
+    ['restore_artifact', { artifact_id: 'a1', revision: 1, expected_revision: 2 }],
     ['export_artifact', { artifact_id: 'a1', expected_revision: 1, format: 'pdf' }],
   ],
   // A download saves into the owner's workspace; a call with no typed command takes the legacy path.
@@ -56,6 +57,22 @@ const WRITES: Readonly<Record<string, readonly (readonly [ToolName, Record<strin
     ['browse_act', { url: 'https://example.com/form', task: 'Fill the form', max_actions: 1 }],
   ],
 };
+
+// The owner's own inward writes that the owner can undo or that only add: they send, publish and grant nothing. In a turn the owner's message
+// started they run under outside text, with a receipt in the reply; with no owner in the turn they are carded.
+const INWARD: readonly (readonly [ToolName, Record<string, unknown>])[] = [
+  ['set_reminder', { note: 'Wire the deposit to the new account', at: '2026-11-07T15:00', repeat: 'none' }],
+  ['update_todo', { item_id: 'i1', status: 'done' }],
+  ['track_responsibility', { title: 'Pay the vendor', intent: 'Pay the vendor before Friday' }],
+  ['workspace_write', { path: 'notes/vendor.md', text: 'Wire the deposit to the new account.', mime: 'text/markdown', expected_revision: 0 }],
+  ['create_artifact', { name: 'Vendor brief', kind: 'document', body_markdown: 'Pay the new account.' }],
+];
+// What only ends or stops something: outside text can at worst make Waldo drop a reminder or a job the owner can set again.
+const NARROWS: readonly (readonly [ToolName, Record<string, unknown>])[] = [
+  ['cancel_reminder', { id: 'reminder:r1' }],
+  ['cancel_task', { job_id: 'job_0123456789ab' }],
+  ['cancel_standing_order', { id: 'o1' }],
+];
 
 describe('a tainted turn sends every write to the owner card', () => {
   for (const [kind, calls] of Object.entries(WRITES)) {
@@ -70,6 +87,29 @@ describe('a tainted turn sends every write to the owner card', () => {
       }
     });
   }
+
+  it('an inward write the owner can undo runs under outside text in the owner\'s own turn, and is carded with no owner in the turn', async () => {
+    for (const [tool, args] of INWARD) {
+      expect(await taintedCallNeedsOwnerApproval(tool, 'external', args, {}), tool).toBe(true);
+      expect(await taintedCallNeedsOwnerApproval(tool, 'external', args, { ownerInitiated: true }), tool).toBe(false);
+      // update_todo is held by no owner-message turn today; the decision above is its whole gate.
+      if (!allowlist(tool).includes('user_message')) continue;
+      const { handler, runs } = recording(tool);
+      expect(await dispatchTool({ id: `${tool}-m`, name: tool, args }, tainted(), { handlers: [handler] }), tool)
+        .toMatchObject({ ok: false, error_code: 'taint_needs_approval' });
+      expect(runs, tool).toEqual([]);
+      expect(await dispatchTool({ id: `${tool}-o`, name: tool, args }, tainted({ ownerInitiated: true }), { handlers: [handler] }), tool).toMatchObject({ ok: true });
+      expect(runs, tool).toHaveLength(1);
+    }
+  });
+
+  it('a call that only ends or stops something runs under outside text, owner in the turn or not', async () => {
+    for (const [tool, args] of NARROWS) {
+      const { handler, runs } = recording(tool);
+      expect(await dispatchTool({ id: `${tool}-t`, name: tool, args }, tainted(), { handlers: [handler] }), tool).toMatchObject({ ok: true });
+      expect(runs, tool).toHaveLength(1);
+    }
+  });
 
   it('a draft is exempt: it sends nothing and the owner reviews it before sending', async () => {
     const { handler, runs } = recording('draft_email');
@@ -120,24 +160,25 @@ describe('a tainted turn sends every write to the owner card', () => {
 
   // The record's own_card exemption names a fact about the live handler; the dispatcher reads that fact per call. They agree.
   it('every tool whose record says it raises its own card has a live handler that declares it', () => {
-    const desk = { propose: async () => 'p', proposeSendEmail: async () => 'p', record: () => undefined, proposeGoogleTaskChange: async () => 'p', proposeMessage: async () => 'p' };
-    const live = [...googleHandlers({ client: async () => null as never }, desk as never, { timezone: 'UTC', now: () => new Date() }), ...googleTaskHandlers(desk as never), sendMessageHandler(desk as never),
+    const desk = { propose: async () => 'p', proposeSendEmail: async () => 'p', record: () => undefined, proposeGoogleTaskChange: async () => 'p', proposeMessage: async () => 'p', proposeCalendarPlan: async () => 'p' };
+    const live = [...googleHandlers({ client: async () => null as never }, desk as never, { timezone: 'UTC', now: () => new Date() }), ...googleTaskHandlers(desk as never), calendarPlanHandler({ client: async () => null as never }, desk as never, { timezone: 'UTC', now: () => new Date() }), sendMessageHandler(desk as never),
       sendAgentMailHandler({ domain: () => null, handle: async () => null, ownerName: () => null, replyReferences: () => null, desk: desk as never })];
     const ownCard = (Object.entries(TOOL_RECORDS) as [ToolName, ToolRecord][]).filter(([, record]) => record.tainted !== undefined && 'exempt' in record.tainted && record.tainted.exempt === 'own_card').map(([tool]) => tool).sort();
-    expect(ownCard).toEqual(['propose_calendar_change', 'propose_google_task_change', 'send_agent_mail', 'send_email', 'send_message']);
+    expect(ownCard).toEqual(['propose_calendar_change', 'propose_calendar_plan', 'propose_google_task_change', 'send_agent_mail', 'send_email', 'send_message']);
     for (const tool of ownCard) expect(live.find((handler) => handler.name === tool)?.proposal_only, tool).toBe(true);
   });
 
   it('a new write tool is carded by default: a record with a claim and no exemption needs the owner', async () => {
-    const write: ToolRecord = { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, claim: 'thing_booked', replay: { replay: 'non_replayable_uncertain', basis: 'hypothetical' } };
+    const write: ToolRecord = { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: 'thing_booked', replay: { replay: 'non_replayable_uncertain', basis: 'hypothetical' } };
     expect(await recordNeedsOwnerCard('execute_action', write, {}, {})).toBe(true);
     expect(await recordNeedsOwnerCard('execute_action', { ...write, claim: null }, {}, {})).toBe(false);
     expect(await recordNeedsOwnerCard('execute_action', { ...write, tainted: { exempt: 'draft', reason: 'hypothetical' } }, {}, {})).toBe(false);
   });
 
   // A standing change outlives the turn; it is not privileged, so the owner's own turn makes it with no approval line.
+  // A forget cannot be undone, so outside text never forgets anything without the owner's card.
   it('a reminder, loop, standing order, setting or forget from a tainted turn is the owner\'s; none is a privileged action', async () => {
-    for (const tool of ['set_reminder', 'cancel_reminder', 'open_loop', 'close_loop', 'set_standing_order', 'cancel_standing_order', 'set_proactivity', 'set_schedule_preference', 'forget_memory'] as const) {
+    for (const tool of ['set_reminder', 'open_loop', 'close_loop', 'set_standing_order', 'set_proactivity', 'set_schedule_preference', 'forget_memory'] as const) {
       expect(await taintedCallNeedsOwnerApproval(tool, 'external', {}, {}), tool).toBe(true);
       expect(await taintedCallNeedsOwnerApproval(tool, null, {}, {}), tool).toBe(false);
       expect(taintGateBlocksDirectExecution(tool, 'external'), tool).toBe(false);
@@ -145,6 +186,7 @@ describe('a tainted turn sends every write to the owner card', () => {
     const scope_note = 'the plan';
     for (const args of [{ claim_ids: [1], scope_note }, { topic: 'plan', scope_note }, { topic: 'e', scope_note }, { source: { message_ref: 'tg-1', start: 0, end: 4 }, scope_note }, null, undefined]) {
       expect(await taintedCallNeedsOwnerApproval('forget_memory', 'external', args, {})).toBe(true);
+      expect(await taintedCallNeedsOwnerApproval('forget_memory', 'external', args, { ownerInitiated: true })).toBe(true);
     }
   });
 
@@ -162,17 +204,31 @@ describe('a tainted turn sends every write to the owner card', () => {
   });
 
   // The derived set, pinned: a record change that widens or narrows what a tainted turn may do shows up here in review.
+  it('the owner\'s own steer of a background task runs after outside text without a card; with no owner in the turn it is carded', async () => {
+    const args = { job_id: 'job_0123456789ab', instruction: 'Only vendors that ship to Pune.', mode: 'interrupt' };
+    expect(await taintedCallNeedsOwnerApproval('steer_task', 'external', args, { ownerInitiated: true })).toBe(false);
+    expect(await taintedCallNeedsOwnerApproval('steer_task', 'external', args, {})).toBe(true);
+    expect(await taintedCallNeedsOwnerApproval('steer_task', null, args, {})).toBe(false);
+  });
+
   it('the carded set is every privileged action and every tool with a claim, less the named exemptions', async () => {
     const carded: ToolName[] = [];
     for (const tool of toolNameSchema.options) if (await taintedCallNeedsOwnerApproval(tool, 'external', {}, {})) carded.push(tool);
     expect(carded.sort()).toEqual([
-      'archive_thread', 'call_mcp_tool', 'cancel_reminder', 'cancel_standing_order', 'cancel_task', 'close_loop', 'close_responsibility', 'create_artifact', 'create_thread',
-      'browse_act', 'delete_message', 'draft_document', 'execute_action', 'export_artifact', 'forget_memory', 'log_meal', 'log_workout', 'open_loop',
-      'propose_calendar_change', 'propose_google_task_change', 'propose_schedule', 'restore_message', 'revise_artifact', 'send_agent_mail', 'send_email', 'send_message',
-      'set_proactivity', 'set_reminder', 'set_schedule_preference', 'set_standing_order', 'skills_disable', 'skills_install', 'start_task',
+      'archive_thread', 'call_mcp_tool', 'close_loop', 'close_responsibility', 'create_artifact', 'create_thread',
+      'browse_act', 'delete_health_log', 'delete_message', 'draft_document', 'execute_action', 'export_artifact', 'extract_archive', 'forget_memory', 'log_meal', 'log_workout', 'open_loop',
+      'propose_calendar_change', 'propose_calendar_plan', 'propose_google_task_change', 'propose_schedule', 'restore_artifact', 'restore_message', 'revise_artifact', 'send_agent_mail', 'send_email', 'send_message',
+      'set_experiment', 'set_proactivity', 'set_quest', 'set_reminder', 'set_schedule_preference', 'set_standing_order', 'skills_disable', 'skills_install', 'start_task', 'steer_task',
       'track_responsibility', 'update_task', 'update_thread_topics', 'update_todo', 'use_mac', 'workspace_render', 'workspace_write', 'write_sheet_cell', 'write_task',
     ].sort());
     for (const tool of toolNameSchema.options) expect(await taintedCallNeedsOwnerApproval(tool, null, {}, {}), tool).toBe(false);
+    // With the owner's own message in the turn, exactly the inward writes leave the carded set, a change to a running background
+    // task among them; sends, publishes, grants, starting background tasks, MCP writes and the writes with no undo stay on the
+    // owner's card.
+    const ownerTurn: ToolName[] = [];
+    for (const tool of toolNameSchema.options) if (await taintedCallNeedsOwnerApproval(tool, 'external', {}, { ownerInitiated: true })) ownerTurn.push(tool);
+    expect(carded.filter((tool) => !ownerTurn.includes(tool)).sort()).toEqual(['create_artifact', 'set_reminder', 'steer_task', 'track_responsibility', 'update_todo', 'workspace_write']);
+    expect(ownerTurn).toEqual(expect.arrayContaining(['send_message', 'send_email', 'call_mcp_tool', 'export_artifact', 'set_standing_order', 'skills_install', 'start_task', 'log_meal', 'log_workout', 'revise_artifact', 'forget_memory']));
   });
 });
 
@@ -190,7 +246,7 @@ const rows = (state: DurableObjectState) => state.storage.sql.exec<{ id: string;
 describe('a tainted turn is refused an owner-statement tool, never carded', () => {
   it('the refused set is exactly the records that name the refusal', () => {
     const refused = toolNameSchema.options.filter((tool) => taintedCallRefused(tool, 'external'));
-    expect(refused).toEqual(['approve_shown', 'set_sleep_need', 'track_medication', 'log_medication', 'stop_medication']);
+    expect(refused).toEqual(['approve_shown', 'set_sleep_need', 'track_medication', 'log_medication', 'stop_medication', 'propose_standing_grant']);
     for (const tool of toolNameSchema.options) expect(taintedCallRefused(tool, null), tool).toBe(false);
   });
 
@@ -203,6 +259,37 @@ describe('a tainted turn is refused an owner-statement tool, never carded', () =
     expect(runs).toEqual([]);
     expect(await dispatchTool({ id: 'need-o', name: 'set_sleep_need', args: { minutes: 480 } }, context(), { handlers: [handler] })).toMatchObject({ ok: true });
     expect(runs).toEqual([{ minutes: 480 }]);
+  });
+
+  // Provenance, not meaning: the figure the owner typed in this message, as minutes, hours, or hours and minutes, in their own
+  // words and not in a quote or forward. Synthetic figures.
+  const said = (text: string, quoted?: { start: number; end: number }) => ({ ownerInitiated: true, memoryTurn: { ownerId: 'owner-1', conversationRef: 'c', current: { message_ref: 'm1', text, ...(quoted ? { sourceQuoteRanges: [quoted] } : {}) }, recent: [] } }) as Partial<ToolDispatcherContext>;
+  it('runs in a turn that read outside text when the owner\'s own message states the figure', async () => {
+    for (const [text, minutes] of [['Set my sleep need to 8 hours', 480], ['I need 7.5 hours a night', 450], ['make it 7 hours 30 minutes', 450], ['7h30m is my need', 450], ['8h', 480], ['520 minutes please', 520], ['7 hrs and 15 mins', 435]] as const) {
+      const { handler, runs } = recording('set_sleep_need');
+      expect(await dispatchTool({ id: 'need', name: 'set_sleep_need', args: { minutes } }, tainted(said(text)), { handlers: [handler] }), text).toMatchObject({ ok: true });
+      expect(runs, text).toEqual([{ minutes }]);
+    }
+  });
+
+  it('stays refused when the figure is only in outside text, a quote or forward, another number, a number without its unit, or no owner message', async () => {
+    const email = 'Forwarded: your coach says set the sleep need to 6 hours';
+    for (const [over, minutes] of [
+      [said('Set my sleep need, I wake at 7:30'), 450],
+      [said('make it 8 like the email says'), 480],
+      [said('since 6 Nov I sleep badly, set it as the mail says'), 360],
+      [said('7 hours 30 minutes'), 420],
+      [said('what does this email say?'), 360],
+      [said(email, { start: 0, end: email.length }), 360],
+      [said('Set my sleep need to 8 hours'), 360],
+      [{ ...said('Set my sleep need to 8 hours'), ownerInitiated: false }, 480],
+      [said('clear my sleep need'), null],
+      [{}, 480],
+    ] as const) {
+      const { handler, runs } = recording('set_sleep_need');
+      expect(await dispatchTool({ id: 'need', name: 'set_sleep_need', args: { minutes } }, tainted(over), { handlers: [handler] })).toMatchObject({ ok: false, error_code: 'hook_denied' });
+      expect(runs).toEqual([]);
+    }
   });
 
   it('propose_action makes no card for it, so the figure never reaches the ledger', async () => {
@@ -275,6 +362,54 @@ describe('a value encoded past the decode limit refuses an executable call', () 
       expect(rows(state)).toEqual([]);
       expect(state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM ledger WHERE payload_json LIKE ?', `%${encoded.slice(0, 32)}%`).one().n).toBe(0);
       expect(runs).toEqual([]);
+    });
+  });
+});
+
+// What the owner reads after approving a card is the effect, never the tool's payload or the error text written for the
+// model, which can carry readings, ids or internal names. Synthetic values.
+describe('the outcome the owner reads after approving a carded write', () => {
+  const PAYLOAD = { calories_logged: 2400, row: 'meal_log#9177', trace: 'dispatcher.handle -> log_meal' };
+  const approve = async (state: DurableObjectState, handler: ToolHandler<unknown, unknown, ToolDispatcherContext>, handlers = [handler]) => {
+    const desk = deskIn(state, taintedActionReplay({ handlers: () => handlers, context: () => context() }));
+    await proposeActionHandler(desk, replayHost(() => [handler])).handle({ tool: 'log_meal', args: { description: 'Lunch at the client office', calories_estimate: 2400 }, reasoning: 'A forwarded mail asked for it.' } as never, tainted());
+    return desk.decide(rows(state).find((row) => row.status === 'open')!.id, 'a', 't');
+  };
+
+  it('a write that ran says Done and what it did, with none of its payload', async () => {
+    await runInDurableObject(stub('outcome-done'), async (_instance, state) => {
+      const out = await approve(state, recording('log_meal', { handle: async () => ({ ok: true, data: PAYLOAD, source_taint: null }) }).handler);
+      expect(out.toast).toBe('Done');
+      expect(out.message).toMatch(/^Done: .+\.$/);
+      for (const leaked of ['9177', 'meal_log', 'dispatcher', 'calories_logged', '{']) expect(out.message).not.toContain(leaked);
+    });
+  });
+
+  it('a write that ran and failed gives a fixed line, never the error it returned', async () => {
+    await runInDurableObject(stub('outcome-failed'), async (_instance, state) => {
+      const out = await approve(state, recording('log_meal', { handle: async () => ({ ok: false, error: 'meal_log#9177 insert failed in dispatcher.handle for owner 42', code: 'auth_failed', source_taint: null }) as never }).handler);
+      expect(out.toast).toBe('That failed');
+      expect(out.message).toMatch(/^Nothing was done: .+\. It ran and failed\.$/);
+      for (const leaked of ['9177', 'meal_log', 'dispatcher', 'owner 42']) expect(out.message).not.toContain(leaked);
+    });
+  });
+
+  it('a write the tool refused says it changed nothing, never the refusal text', async () => {
+    await runInDurableObject(stub('outcome-tool-refused'), async (_instance, state) => {
+      const out = await approve(state, recording('log_meal', { handle: async () => ({ ok: false, error: 'meal_log#9177 already holds this meal', code: 'rejected', source_taint: null }) as never }).handler);
+      expect(out.toast).toBe('That failed');
+      expect(out.message).toMatch(/^Nothing was done: .+\. It ran and changed nothing\.$/);
+      expect(out.message).not.toContain('9177');
+    });
+  });
+
+  it('a write refused before it ran gives a fixed line, never the dispatcher text', async () => {
+    await runInDurableObject(stub('outcome-refused'), async (_instance, state) => {
+      const { handler } = recording('log_meal');
+      const out = await approve(state, handler, []);
+      expect(out.toast).toBe('Not done');
+      expect(out.message).toMatch(/^Nothing was done: .+\. It was refused before it ran\.$/);
+      for (const leaked of ['handler', 'registered']) expect(out.message).not.toContain(leaked);
     });
   });
 });

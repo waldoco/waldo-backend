@@ -74,8 +74,10 @@ const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/;
 export type SleepStages = Readonly<Record<(typeof STAGES)[number], number>>;
 // samsungWriter is whether Samsung Health wrote the reading, as the read says it; false when another app did or none was recorded.
 // A workout's activity, and its zones and effort as the read returns them; detail is the rest of what it stored, unchecked,
-// for a reader that checks it. Null for any other signal.
-export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; samsungWriter: boolean; workout?: WorkoutDetail | null }>;
+// for a reader that checks it. Null for any other signal. A food entry's grams likewise, each null when not a finite number.
+export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; samsungWriter: boolean; workout?: WorkoutDetail | null; nutrition?: NutritionGrams | null }>;
+const MACROS = ['protein_g', 'carbohydrate_g', 'fat_g'] as const;
+export type NutritionGrams = Readonly<Record<(typeof MACROS)[number], number | null>>;
 export type WorkoutDetail = Pick<WorkoutLoad, 'zoneSeconds' | 'zonesFromObservedPeak' | 'effort'> & Readonly<{ activity: string | null; detail: Readonly<Record<string, unknown>> }>;
 type Source = Readonly<{ source: string; epoch: number; truncated: boolean; readings: readonly Reading[] }>;
 export type Series = Readonly<{ readAt: string; sources: readonly Source[] }>;
@@ -102,6 +104,10 @@ const workoutDetailOf = (activity: unknown, raw: unknown): WorkoutDetail => {
     detail: r ?? {},
   };
 };
+const nutritionOf = (raw: unknown): NutritionGrams => {
+  const r = asRecord(raw);
+  return Object.fromEntries(MACROS.map(key => [key, typeof r?.[key] === 'number' && Number.isFinite(r[key]) && r[key] >= 0 ? r[key] : null])) as NutritionGrams;
+};
 // A reading the database returned that does not have the shape the math needs is dropped, never repaired.
 const reading = (raw: unknown): Reading | null => {
   const r = asRecord(raw);
@@ -112,6 +118,7 @@ const reading = (raw: unknown): Reading | null => {
     stages: r.signal === 'sleep_duration' ? stagesOf(r.stages) : null,
     samsungWriter: r.samsung_writer === true,
     workout: r.signal === 'workout' ? workoutDetailOf(r.activity, r.workout) : null,
+    nutrition: r.signal === 'nutrition' ? nutritionOf(r.nutrition) : null,
   };
 };
 

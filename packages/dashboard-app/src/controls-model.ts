@@ -14,7 +14,11 @@ export type DayRecord = Base<'day', {
   proactive_surface?: ProactiveSurface;
   // Whether notes Waldo keeps on its own include health. Absent from a Worker that does not say.
   health_memory?: boolean;
+  // What schedule.set changes: each schedule's switch, and the Brief and Close times. Absent from a Worker that does not say.
+  schedule_controls?: ScheduleControl[];
 }>;
+export const SCHEDULE_IDS = ['daily_brief', 'followups', 'event_briefs', 'nightly', 'heartbeat', 'card:brief', 'card:close'] as const;
+export type ScheduleControl = { id: (typeof SCHEDULE_IDS)[number]; on: boolean; accepts: 'on_off' | 'time'; time: string | null; no_later_than: boolean };
 export type ProactiveSurface = { value: 'app' | 'whatsapp' | 'both' | 'app_imessage'; app_linked: boolean; whatsapp_linked: boolean; imessage_linked?: boolean; telegram_linked: boolean };
 export type ConnectionsRecord = Base<'connections', {
   google: { connectAvailable: boolean; accounts: { id: string; email: string; calendar: boolean; mail: boolean; tasks: boolean; health: 'access_granted' | 'needs_reconnect' }[] };
@@ -76,7 +80,7 @@ export type AgentMailRecord = Base<'agent_mail', {
 }>;
 type Records = { day: DayRecord; connections: ConnectionsRecord; waiting: WaitingRecord; activity: ActivityRecord; profile: ProfileRecord; setup: SetupRecord; usage: UsageRecord; files: FilesRecord; imessage: IMessageRecord; devices: DevicesRecord; phone: PhoneRecord; agent_mail: AgentMailRecord };
 export type ControlRecord = Records[ControlsView];
-export type ControlAction = 'card.retry' | 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'spot.pin' | 'spot.unpin' | 'spot.edit' | 'spot.area' | 'node.forget' | 'node.confirm' | 'node.correct' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'health_memory.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
+export type ControlAction = 'card.retry' | 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'spot.pin' | 'spot.unpin' | 'spot.edit' | 'spot.area' | 'node.forget' | 'node.confirm' | 'node.correct' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'schedule.set' | 'health_memory.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
   | (typeof IMESSAGE_TOP)[number] | (typeof IMESSAGE_ROW)[number] | 'device.pair' | (typeof DEVICE_ROW)[number] | (typeof PHONE_ACTIONS)[number] | (typeof AGENT_MAIL_ACTIONS)[number];
 export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string; subject?: string; chat?: string; phone?: string; query_kind?: string; body?: string; severity?: string; code?: string; notice?: string };
 export type ActionReceipt = { state: 'recorded' | 'incomplete' | 'rejected' | 'unconfirmed'; message: string; navigation?: string; signed_out?: boolean };
@@ -125,6 +129,8 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
     const surface = data.proactive_surface;
     if (surface !== undefined && (!obj(surface) || !['app', 'whatsapp', 'both', 'app_imessage'].includes(String(surface.value)) || ![surface.app_linked, surface.whatsapp_linked, surface.telegram_linked].every(value => typeof value === 'boolean') || (surface.imessage_linked !== undefined && typeof surface.imessage_linked !== 'boolean'))) throw shapeError();
     if (data.health_memory !== undefined && typeof data.health_memory !== 'boolean') throw shapeError();
+    const schedules = data.schedule_controls;
+    if (schedules !== undefined && (!Array.isArray(schedules) || !schedules.every(row => obj(row) && SCHEDULE_IDS.includes(row.id as ScheduleControl['id']) && typeof row.on === 'boolean' && ['on_off', 'time'].includes(String(row.accepts)) && optionalClock(row.time) && typeof row.no_later_than === 'boolean'))) throw shapeError();
     return { ...base, view: 'day', data: {
       timezone: data.timezone,
       date:data.date,
@@ -133,6 +139,7 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
       proactivity: { quiet_start: data.proactivity.quiet_start, quiet_end: data.proactivity.quiet_end, volume: data.proactivity.volume },
       ...(obj(surface) ? { proactive_surface: { value: surface.value, app_linked: surface.app_linked, whatsapp_linked: surface.whatsapp_linked, ...(surface.imessage_linked === undefined ? {} : { imessage_linked: surface.imessage_linked }), telegram_linked: surface.telegram_linked } } : {}),
       ...(typeof data.health_memory === 'boolean' ? { health_memory: data.health_memory } : {}),
+      ...(Array.isArray(schedules) ? { schedule_controls: schedules.map(row => ({ id: row.id, on: row.on, accepts: row.accepts, time: row.time, no_later_than: row.no_later_than })) } : {}),
     } } as Records[V];
   }
   if (expected === 'connections') {

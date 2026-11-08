@@ -4,9 +4,9 @@ import { describe, expect, it } from 'vitest';
 import type { TaskResult } from '@waldo/contracts';
 import { consentLedger } from '../src/onboarding/consent-ledger';
 import { CURRENT_CONSENT_VERSION } from '../src/onboarding/consent-ledger';
-import { LOOKUP_DEADLINE_MS, LOOKUP_MAX_ROUNDS, LOOKUP_START_DELAY_MS, lookupPending, openLookup, startLookup, type LookupDeps } from '../src/onboarding/lookup';
+import { LOOKUP_DEADLINE_MS, LOOKUP_MAX_ROUNDS, LOOKUP_START_DELAY_MS, lookupApplier, lookupPending, openLookup, startLookup, type LookupApplierDeps, type LookupDeps } from '../src/onboarding/lookup';
 import { jobBook, taskBrief, type JobBook } from '../src/tasks/jobs';
-import { applyMachineJob } from '../src/tasks/machine';
+import { applyMachineJob, HELD_RETRY_MS, HELD_WINDOW_MS, type MachineHeld } from '../src/tasks/machine';
 import { fenced } from '../src/prompt/turn-prompt';
 import { taskBriefText } from '../src/tasks/worker-loop';
 import { jobTools, LOOKUP_READER, MACHINE_READER } from '../src/tasks/profiles';
@@ -64,7 +64,7 @@ describe('starting the owner look-up', () => {
     startLookup(d, identity);
     expect([...jobTools(openLookup(book)!)].sort()).toEqual(['browse_page', 'list_owner_findings', 'read_tool_output', 'record_owner_finding', 'web_search']);
     expect(LOOKUP_READER).not.toContain('get_communication');
-    expect(jobTools({ origin: 'machine:heartbeat', profile: 'reader' })).toEqual(MACHINE_READER);
+    expect(jobTools({ origin: 'machine:heartbeat', profile: 'reader', brief_json: '{}', checkpoint_json: null })).toEqual(MACHINE_READER);
   }));
 
   it('starts nothing without a live yes: not offered, never granted, withdrawn, or no name yet', () => withOwner(({ book, deps }) => {
@@ -123,18 +123,135 @@ describe('whether a look-up is pending', () => {
 
 describe('when the look-up job ends', () => {
   const result: TaskResult = { status: 'done', summary: 'Two findings recorded.', findings: [], proposals: [], left: [] };
-  it('tells the work waiting on it once, whether it applied or parked, and never sends the owner anything', () => withOwner(async ({ book, deps }) => {
+  type Told = { id: string; trace: string; text: string };
+  const applier = (over: Partial<LookupApplierDeps> = {}) => {
+    const told: Told[] = [], ended: number[] = [];
+    const deps: LookupApplierDeps = { found: () => ({ count: 2, sources: ['example.org', 'github.com'] }), consented: () => true, gate: () => null, deliver: async (id, trace, text, commit) => { commit(); told.push({ id, trace, text }); }, ended: (grant) => { ended.push(grant); }, ...over };
+    return { told, ended, handler: lookupApplier(deps) };
+  };
+  const reported = (book: JobBook, d: LookupDeps) => {
+    agree(d.consent, T0);
+    startLookup(d, identity);
+    const row = openLookup(book)!;
+    expect(book.report(book.startAttempt(row.id)!, result, { rounds: 3, costUsd: 0.01 })).toBe('accepted');
+    return row.id;
+  };
+  const apply = (book: JobBook, id: string, handler: ReturnType<typeof lookupApplier>, hops: string[] = [], now = T0) =>
+    applyMachineJob(book.get(id)!, { book, now: () => now, hop: (_row, name) => { hops.push(name); }, appliers: { owner_lookup: handler } });
+
+  it('tells the owner what it found, counted from the findings it recorded, and lets the web stage read them', () => withOwner(async ({ book, deps }) => {
+    const id = reported(book, deps());
+    const since: number[] = [];
+    const { told, ended, handler } = applier({ found: (at) => { since.push(at); return { count: 2, sources: ['example.org', 'github.com'] }; } });
+    const hops: string[] = [];
+    await apply(book, id, handler, hops);
+    expect(told).toHaveLength(1);
+    expect(told[0]).toMatchObject({ id: `lookup:${id}`, trace: `task:${id}:apply` });
+    expect(told[0]!.text).toContain('2');
+    expect(since).toEqual([T0]);
+    expect(book.get(id)!.status).toBe('applied');
+    expect(ended).toEqual([T0]);
+    expect(hops).toContain('machine_applied');
+  }));
+
+  it('names the sites it read and says the findings can be gone through here in the chat, not on a screen the app lacks', () => withOwner(async ({ book, deps }) => {
+    const id = reported(book, deps());
+    const { told, handler } = applier();
+    await apply(book, id, handler);
+    expect(told[0]!.text).toContain('example.org');
+    expect(told[0]!.text).toContain('github.com');
+    expect(told[0]!.text).toMatch(/tell me here which to keep, correct or forget/);
+    expect(told[0]!.text).not.toContain('What Waldo knows');
+  }));
+
+  it('caps the sites it names and counts the rest; a card with nothing found names none and promises nothing to review', () => withOwner(async ({ book, deps }) => {
+    const id = reported(book, deps());
+    const many = ['a.example', 'b.example', 'c.example', 'd.example', 'e.example', 'f.example'];
+    const { told, handler } = applier({ found: () => ({ count: 6, sources: many }) });
+    await apply(book, id, handler);
+    expect(told[0]!.text).toContain('a.example');
+    expect(told[0]!.text).not.toContain('f.example');
+    expect(told[0]!.text).toMatch(/and 2 more/);
+  }));
+
+  it('an owner who withdrew the look-up after its worker reported hears nothing about it, and the job still settles', () => withOwner(async ({ book, deps }) => {
+    const d = deps();
+    const id = reported(book, d);
+    d.consent.withdraw('owner_lookup', T0 + 1);
+    const { told, ended, handler } = applier({ consented: () => d.consent.active('owner_lookup') });
+    await apply(book, id, handler);
+    expect(told).toEqual([]);
+    expect(book.get(id)!.status).toBe('applied');
+    expect(ended).toEqual([T0]);
+  }));
+
+  it('a worker that failed says it could not finish, not that it finished with nothing', () => withOwner(async ({ book, deps }) => {
     const d = deps();
     agree(d.consent, T0);
     startLookup(d, identity);
     const row = openLookup(book)!;
-    const ticket = book.startAttempt(row.id)!;
-    expect(book.report(ticket, result, { rounds: 3, costUsd: 0.01 })).toBe('accepted');
-    const ended: string[] = [], hops: string[] = [];
-    await applyMachineJob(book.get(row.id)!, { book, now: () => T0, hop: (_row, name) => { hops.push(name); },
-      appliers: { owner_lookup: { decidesOnEmpty: true, apply: async (_row, _result, io) => { io.settle(); return 'skipped'; }, ended: (after) => { ended.push(after.status); } } } });
-    expect(ended).toEqual(['applied']);
-    expect(hops).toContain('machine_skipped');
-    expect(hops).not.toContain('machine_applied');
+    expect(book.report(book.startAttempt(row.id)!, { status: 'failed', summary: 'Search kept erroring.', findings: [], proposals: [], left: [] }, { rounds: 1, costUsd: 0 })).toBe('accepted');
+    const { told, handler } = applier({ found: () => ({ count: 0, sources: [] }) });
+    await apply(book, row.id, handler);
+    expect(told[0]!.text).toMatch(/couldn't finish/);
+  }));
+
+  it('says so honestly when it found nothing, rather than staying silent', () => withOwner(async ({ book, deps }) => {
+    const id = reported(book, deps());
+    const { told, handler } = applier({ found: () => ({ count: 0, sources: [] }) });
+    await apply(book, id, handler);
+    expect(told).toHaveLength(1);
+    expect(told[0]!.text).not.toMatch(/\d/);
+  }));
+
+  it('holds the card while the owner\'s update gate is closed and sends it once the gate opens, never dropping it', () => withOwner(async ({ book, deps }) => {
+    const id = reported(book, deps());
+    const at = book.get(id)!.updated_at;
+    let gate: MachineHeld | null = 'held_quiet';
+    const { told, ended, handler } = applier({ gate: () => gate });
+    const hops: string[] = [];
+    await apply(book, id, handler, hops, at);
+    expect(told).toEqual([]);
+    expect(book.get(id)).toMatchObject({ status: 'reported', due_at: at + HELD_RETRY_MS });
+    expect(hops).toContain('machine_apply_deferred');
+    expect(ended).toEqual([]);
+    expect(book.due().map(row => row.id)).toEqual([]);
+    gate = null;
+    await apply(book, id, handler, hops, at + HELD_RETRY_MS);
+    expect(told).toHaveLength(1);
+    expect(book.get(id)!.status).toBe('applied');
+    expect(ended).toEqual([T0]);
+  }));
+
+  it('lets a card the gate held all day and a half go, settling the job and naming why', () => withOwner(async ({ book, deps }) => {
+    const id = reported(book, deps());
+    const at = book.get(id)!.updated_at;
+    const { told, ended, handler } = applier({ gate: () => 'held_preference' });
+    const hops: string[] = [];
+    await apply(book, id, handler, hops, at + HELD_WINDOW_MS + 1);
+    expect(told).toEqual([]);
+    expect(book.get(id)!.status).toBe('applied');
+    expect(hops).toContain('machine_held');
+    expect(ended).toEqual([T0]);
+  }));
+
+  it('says one thing looks like the owner, and several look like them', () => withOwner(async ({ book, deps }) => {
+    const one = applier({ found: () => ({ count: 1, sources: ['example.org'] }) });
+    await apply(book, reported(book, deps()), one.handler);
+    expect(one.told[0]!.text).toContain('found one thing that looks like you, from example.org.');
+  }));
+
+  it('a look-up that parked before it finished (its deadline) still says what it recorded', () => withOwner(async ({ book, deps }) => {
+    const d = deps();
+    agree(d.consent, T0);
+    startLookup(d, identity);
+    const id = openLookup(book)!.id;
+    expect(book.park(id, 'deadline')).toBe(true);
+    const { told, ended, handler } = applier();
+    await apply(book, id, handler);
+    expect(book.get(id)!.status).toBe('parked');
+    expect(told).toHaveLength(1);
+    expect(told[0]!.text).toContain('2');
+    expect(ended).toEqual([T0]);
   }));
 });

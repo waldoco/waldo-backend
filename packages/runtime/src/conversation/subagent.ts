@@ -18,23 +18,17 @@ import { runToolLoop, type LoopExit, type ToolLoopEvent, type ToolLoopStep } fro
 export const SUBAGENT_ROUND_SHARE = 0.6;
 export const SUBAGENT_MAX_SPAWNS_PER_TURN = 5;
 
-// The child tool set: reads and research only. No sends, no writes, no delegation, no
-// gated/privileged tools - so the autonomy gate can never fire inside a child and a child can
-// never act on the owner's behalf.
-// browse_page is deliberately NOT in v1: the browser tools' external-origin contract lands
-// separately (#220), and a child must not hold a tool whose taint boundary is unresolved.
-export const CHILD_TOOL_NAMES: readonly ToolName[] = [
-  'get_context',
-  'read_memory',
-  'search_episodes',
-  'web_search',
-];
-
-// What a task may ask a child to use: read tools whose handlers only read. Browsing keeps an
-// unresolved taint boundary, delegation keeps depth flat, and the rest of the table is effects.
-const NOT_FOR_CHILDREN: readonly ToolName[] = ['delegate_task', 'browse_page', 'read_tool_output'];
+// What a child may use: every read tool whose handler only reads, page reads included (browse_page is external-origin, so a
+// child's page read taints its report). Delegation keeps depth flat, read_tool_output pages the parent's own store, and the
+// rest of the table is effects, so the autonomy gate never fires inside a child and a child never acts for the owner.
+const NOT_FOR_CHILDREN: readonly ToolName[] = ['delegate_task', 'read_tool_output'];
 export const CHILD_READ_TOOLS: readonly ToolName[] = (Object.keys(TOOL_REPLAY_CLASS) as ToolName[])
   .filter((name) => TOOL_REPLAY_CLASS[name].replay === 'safe_read' && !NOT_FOR_CHILDREN.includes(name));
+// A child's default tools: every read but the owner's health and medicine reads. A child's report reaches the parent as
+// outside data, where the scribe withholds readings, so the parent reads those itself. Its own copy, so a test can widen
+// the default without touching the read set.
+const PARENT_HEALTH_READS: readonly ToolName[] = ['get_health', 'get_crs', 'get_master_metrics', 'list_health_logs', 'list_medications'];
+export const CHILD_TOOL_NAMES: readonly ToolName[] = CHILD_READ_TOOLS.filter((name) => !PARENT_HEALTH_READS.includes(name));
 
 // Effects a child task performs belong in the parent's typed receipts: the reply may claim only
 // receipted effects. Today the child set is read-only, so none exist. A child tool with a
@@ -150,7 +144,7 @@ export const delegateTaskHandler = (
   return {
     name: 'delegate_task',
     description:
-      'Spawn a subagent for a self-contained research or reading subtask whose answer this reply needs. It runs with read-only tools inside this turn and reports back; several can run in one turn. Pass item_id to attach the task to a todo step, tools to widen its read tools. For work that should outlive this reply, use start_task, one of the follow-ups and background work tools. Keep owner-facing replies for yourself.',
+      'Spawn a subagent for a self-contained research or reading subtask whose answer this reply needs, done in about a minute. It runs with read-only tools inside this turn and reports back; several can run in one turn. Pass item_id to attach the task to a todo step, tools to widen its read tools. For work that will take minutes or should outlive this reply, use start_task, one of the follow-ups and background work tools. Keep owner-facing replies for yourself.',
     schema: delegateTaskArgsSchema,
     trigger_allowlist: ['user_message'],
     autonomy_gated: false,

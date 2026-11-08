@@ -1,12 +1,13 @@
 import { z } from 'zod';
 import { appProactiveSurfaceV1Schema } from './onboarding';
 import { messagingSurfaceV1Schema } from './surfaces';
+import { appWhyV1Schema } from './why';
 
 const text = z.string();
 const count = z.int().nonnegative();
 const revision = z.string().regex(/^[a-f0-9]{64}$/);
 export const appControlRequestIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,80}$/);
-export const appControlViewV1Schema = z.enum(['day', 'connections', 'activity', 'account', 'constellation', 'phone', 'days', 'agent_mail']);
+export const appControlViewV1Schema = z.enum(['day', 'connections', 'activity', 'account', 'constellation', 'phone', 'days', 'agent_mail', 'people']);
 const activityCursor = z.string().regex(/^[0-9]+$/).refine(value => Number.isSafeInteger(Number(value)) && Number(value) > 0);
 export const APP_MEMORY_PAGE_MAX_V1 = 50;
 const memoryPageSize = z.string().regex(/^[0-9]{1,9}$/).refine(value => Number(value) >= 1 && Number(value) <= APP_MEMORY_PAGE_MAX_V1);
@@ -19,7 +20,13 @@ export const APP_CONTROLS_MEMORY_REVISION = 2;
 // An edited claim's text, trimmed. A pinned line rides every turn, so it stays well inside the profile block's room.
 export const APP_CLAIM_TEXT_MAX_V1 = 1000;
 const claimId = /^memory:claim:[1-9][0-9]{0,15}$/;
-const CLAIM_ACTIONS: readonly string[] = ['claim.pin', 'claim.unpin', 'claim.edit'];
+// Controls revision 15 (`controls=15`) is the "what Waldo knows" page: the owner can also confirm, forget or dismiss a claim,
+// and ask Waldo to bring one up less (claim.quiet; claim.unquiet takes that back) without deleting it. Each of the five names
+// one claim and carries no value. A claim item then also carries held_as, bring_up, source_url and actions, below.
+// Builds below 15 never receive the fields and are refused the actions.
+export const APP_CONTROLS_CLAIM_CONTROLS_REVISION = 15;
+const CLAIM_REVISION_15_ACTIONS: readonly string[] = ['claim.confirm', 'claim.forget', 'claim.dismiss', 'claim.quiet', 'claim.unquiet'];
+const CLAIM_ACTIONS: readonly string[] = ['claim.pin', 'claim.unpin', 'claim.edit', ...CLAIM_REVISION_15_ACTIONS];
 // The owner's own word on one constellation node: confirm it, replace it with their correction, or forget it. A correction is
 // stored as what the owner said, so it is kept short like a node.
 export const APP_NODE_CORRECTION_MAX_V1 = 140;
@@ -30,6 +37,19 @@ const APP_PHONE_E164 = /^\+[1-9]\d{6,14}$/;
 export const APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1 = 64;
 const agentMailNoticeVersion = z.string().regex(/^[A-Za-z0-9._-]{1,64}$/);
 const NODE_ACTIONS: readonly string[] = ['node.confirm', 'node.correct', 'node.forget'];
+// Controls revision 22 (`controls=22`): the people view, the people in the owner's memory (ADR_PEOPLE_MAP_2026-11-07 §7). The
+// list names each person once; with id (memory:person:<n>) it is one person and the claims about them, which keep their own
+// claim actions in the constellation view. A person takes person.confirm (they are someone the owner knows), person.rename
+// (their name, in value), person.ring (inner, close or wider, in value) and person.forget (them and everything about them).
+// An action carries the revision of that person's read (id=memory:person:<n>), never the list's, and is refused once the person
+// no longer offers it. The one-person read returns at most APP_MEMORY_PAGE_MAX_V1 of their claims; claims counts them all.
+// A build below 22 is refused the view and the actions; it still sees every claim about a person in the constellation view.
+export const APP_CONTROLS_PEOPLE_REVISION = 22;
+export const APP_PERSON_NAME_MAX_V1 = 120;
+export const APP_PEOPLE_MAX_V1 = 200;
+const personId = /^memory:person:[1-9][0-9]{0,15}$/;
+export const APP_PERSON_ACTIONS_V1 = ['person.confirm', 'person.rename', 'person.ring', 'person.forget'] as const;
+const PERSON_ACTIONS: readonly string[] = APP_PERSON_ACTIONS_V1;
 // One of the owner's local days, as the days view names it.
 const historyDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 // The constellation keys page the owner's memory graph: limit is required for claims and interpretations,
@@ -40,15 +60,42 @@ export const appControlQueryV1Schema = z.strictObject({
   max_nodes: memoryPageSize.optional(), max_links: memoryPageSize.optional(), date: historyDay.optional(),
 }).superRefine((query, ctx) => {
   if (query.view !== 'activity' && (query.trace_before !== undefined || query.runs_before !== undefined)) ctx.addIssue({ code: 'custom', message: 'Activity cursors require the activity view' });
-  if (query.view !== 'constellation' && (query.memory_view ?? query.cursor ?? query.limit ?? query.id ?? query.max_nodes ?? query.max_links) !== undefined) ctx.addIssue({ code: 'custom', message: 'Memory paging requires the constellation view' });
+  if (query.view === 'people' && query.id !== undefined && !personId.test(query.id)) ctx.addIssue({ code: 'custom', path: ['id'], message: 'The people view names one person, memory:person:<n>' });
+  if (query.view !== 'constellation' && (query.memory_view ?? query.cursor ?? query.limit ?? query.max_nodes ?? query.max_links ?? (query.view === 'people' ? undefined : query.id)) !== undefined) ctx.addIssue({ code: 'custom', message: 'Memory paging requires the constellation view' });
   if (query.view !== 'days' && query.date !== undefined) ctx.addIssue({ code: 'custom', message: 'date requires the days view' });
 });
 // A signed-in device, as its connections row names it for session.revoke.
 const sessionRef = z.string().regex(/^sess_[a-f0-9]{64}$/);
 // A catalogue app's id, as its connections tile and the app actions name it.
 export const APP_CONNECTOR_ID_V1 = /^[a-z][a-z0-9-]{1,31}$/;
+// Controls revision 16 (`controls=16`): the day view lists schedule_controls and takes schedule.set. Each of the five schedules
+// turns on or off; the Brief and the Close each take the local time they come every day (both follow daily_brief's switch).
+// A build below 16 never receives the field and is refused the action.
+export const APP_CONTROLS_SCHEDULE_REVISION = 16;
+export const APP_SCHEDULE_IDS_V1 = ['daily_brief', 'followups', 'event_briefs', 'nightly', 'heartbeat'] as const;
+export const APP_SCHEDULE_TIME_IDS_V1 = ['card:brief', 'card:close'] as const;
+const APP_CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
+// Controls revision 18 (`controls=18`): the day view lists the owner's quests, the goals they chose to work toward with
+// Waldo, in their own words. active ones shape the Brief and the Close and get check-ins every check_in_days days, next on
+// next_check_in (the owner's local day; null when none is scheduled); ambient ones are kept in mind without check-ins;
+// completed ones stay listed for 30 days. Read-only: the owner starts and changes a quest in chat. Builds below 18 never
+// receive the field.
+export const APP_CONTROLS_QUESTS_REVISION = 18;
+export const APP_QUESTS_MAX_V1 = 20;
+export const APP_QUEST_CHECK_IN_DAYS_MAX_V1 = 28;
+const questText = text.min(1).max(500);
+export const appQuestV1Schema = z.strictObject({
+  id: z.string().regex(/^quest:[a-z0-9]{1,40}$/), title: questText, state: z.enum(['active', 'ambient', 'completed']),
+  plan: questText.nullable(), usual: questText.nullable(), target: questText.nullable(), progress: questText.nullable(),
+  deadline: historyDay.nullable(), check_in_days: z.int().min(1).max(APP_QUEST_CHECK_IN_DAYS_MAX_V1).nullable(), next_check_in: historyDay.nullable(),
+}).refine(quest => quest.next_check_in === null || (quest.state === 'active' && quest.check_in_days !== null), { error: 'Only an active quest with a pace has a next check-in', path: ['next_check_in'] });
+export type AppQuestV1 = z.infer<typeof appQuestV1Schema>;
+const isScheduleId = (id: unknown): boolean => (APP_SCHEDULE_IDS_V1 as readonly unknown[]).includes(id);
+const isScheduleTimeId = (id: unknown): boolean => (APP_SCHEDULE_TIME_IDS_V1 as readonly unknown[]).includes(id);
+const scheduleSetValid = (id: string | undefined, value: string | undefined): boolean =>
+  (isScheduleId(id) && (value === 'on' || value === 'off')) || (isScheduleTimeId(id) && APP_CLOCK.test(value ?? ''));
 export const appControlActionV1Schema = z.strictObject({
-  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'imessage.enroll', 'card.retry', 'google.disconnect', 'agent_mail.claim', 'agent_mail.release', 'proactive_surface.set']),
+  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'claim.confirm', 'claim.forget', 'claim.dismiss', 'claim.quiet', 'claim.unquiet', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'imessage.enroll', 'card.retry', 'google.disconnect', 'agent_mail.claim', 'agent_mail.release', 'proactive_surface.set', 'schedule.set', 'person.confirm', 'person.rename', 'person.ring', 'person.forget']),
   id: text.max(256).optional(), value: text.max(4096).optional(),
   quiet_start: text.max(5).optional(), quiet_end: text.max(5).optional(), volume: z.enum(['low', 'normal', 'high']).optional(),
   confirmation: z.literal('DELETE').optional(),
@@ -98,9 +145,19 @@ export const appControlActionV1Schema = z.strictObject({
   if (claim && !claimId.test(action.id ?? '')) ctx.addIssue({ code: 'custom', path: ['id'], message: 'A claim action names one claim, memory:claim:<n>' });
   if (claim && (action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation) !== undefined) ctx.addIssue({ code: 'custom', message: 'A claim action carries only its id and value' });
   if (action.action === 'claim.pin' && action.value !== 'profile' && action.value !== 'facts') ctx.addIssue({ code: 'custom', path: ['value'], message: 'claim.pin names the block, profile or facts' });
+  if (CLAIM_REVISION_15_ACTIONS.includes(action.action) && action.value !== undefined) ctx.addIssue({ code: 'custom', path: ['value'], message: `${action.action} carries no value` });
   if (action.action === 'claim.unpin' && action.value !== undefined) ctx.addIssue({ code: 'custom', path: ['value'], message: 'claim.unpin carries no value' });
   const edited = action.value?.trim() ?? '';
   if (action.action === 'claim.edit' && (edited.length === 0 || edited.length > APP_CLAIM_TEXT_MAX_V1)) ctx.addIssue({ code: 'custom', path: ['value'], message: `claim.edit carries the new text, 1 to ${APP_CLAIM_TEXT_MAX_V1} characters` });
+  // The owner's word on one person in the people view.
+  const person = PERSON_ACTIONS.includes(action.action);
+  if (person !== (action.view === 'people')) ctx.addIssue({ code: 'custom', path: ['view'], message: 'The people view takes only the person actions, and they only it' });
+  if (person && !personId.test(action.id ?? '')) ctx.addIssue({ code: 'custom', path: ['id'], message: 'A person action names one person, memory:person:<n>' });
+  if (person && (action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation) !== undefined) ctx.addIssue({ code: 'custom', message: 'A person action carries only its id and value' });
+  if ((action.action === 'person.confirm' || action.action === 'person.forget') && action.value !== undefined) ctx.addIssue({ code: 'custom', path: ['value'], message: `${action.action} carries no value` });
+  const renamed = action.value?.trim() ?? '';
+  if (action.action === 'person.rename' && (renamed.length === 0 || renamed.length > APP_PERSON_NAME_MAX_V1)) ctx.addIssue({ code: 'custom', path: ['value'], message: `person.rename carries the name, 1 to ${APP_PERSON_NAME_MAX_V1} characters` });
+  if (action.action === 'person.ring' && !['inner', 'close', 'wider'].includes(action.value ?? '')) ctx.addIssue({ code: 'custom', path: ['value'], message: 'person.ring names inner, close or wider' });
   // The owner's word on one constellation node: confirm it, correct it in their own words, or forget it.
   const node = NODE_ACTIONS.includes(action.action);
   if (node && !nodeId.test(action.id ?? '')) ctx.addIssue({ code: 'custom', path: ['id'], message: 'A node action names one node, memory:node:<n>' });
@@ -124,6 +181,9 @@ export const appControlActionV1Schema = z.strictObject({
   // Where Waldo writes first, from the day view: one of the surfaces in value and nothing else (revision 11).
   if (action.action === 'proactive_surface.set' && (action.view !== 'day' || !appProactiveSurfaceV1Schema.safeParse(action.value).success
     || (action.id ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation ?? action.code ?? action.notice) !== undefined)) ctx.addIssue({ code: 'custom', path: ['value'], message: 'proactive_surface.set starts from the day view and names one surface in value, nothing else' });
+  // Revision 16: one of the five schedules on or off, or the time the Brief or the Close comes each day, from the day view.
+  if (action.action === 'schedule.set' && (action.view !== 'day' || !scheduleSetValid(action.id, action.value)
+    || (action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation ?? action.code ?? action.notice ?? action.account) !== undefined)) ctx.addIssue({ code: 'custom', path: ['value'], message: 'schedule.set starts from the day view and names a schedule with on or off, or card:brief or card:close with an HH:MM time, nothing else' });
   if (agentMail && ((action.action === 'agent_mail.claim' ? undefined : action.value) ?? action.id ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation ?? action.code) !== undefined) ctx.addIssue({ code: 'custom', message: 'agent_mail.claim carries only the handle and the notice version; agent_mail.release carries nothing' });
 });
 
@@ -155,6 +215,9 @@ export const APP_CONTROLS_MEMORY_SIGNAL_REVISION = 8;
 // and its latest names the newest revision's Main chat row, or is null when that revision reached the owner outside the app.
 // The original row stays in the chat and in day history. Below 9 neither field is sent and latest stays the original delivery.
 export const APP_CONTROLS_DAY_CARD_REVISION = 9;
+// Controls revision 14 (`controls=14`): a day card whose writing proposed changes carries why, the steps behind those
+// proposals ("Why this changed", ./why), the same steps their approval cards carry. Below 14 it is never sent.
+export const APP_CONTROLS_WHY_REVISION = 14;
 const ownerName = text.min(1).max(80);
 export const APP_CARD_STATE_REASON_MAX_V1 = 120;
 export const APP_CARD_RETRIES_PER_DAY_V1 = 3;
@@ -181,12 +244,21 @@ const openLoop = z.strictObject({ id: text.min(1).max(100), title: workTitle, du
 // found for the next main card, so an empty page does not mean nothing changed.
 const updates = z.strictObject({ items: z.array(latestDelivery).max(APP_OVERVIEW_PAGE_MAX_V1), total: count, checked_at: z.int().positive().nullable() })
   .refine(page => page.total >= page.items.length, { error: 'total counts every update card today', path: ['total'] });
+export const appScheduleControlV1Schema = z.strictObject({
+  id: z.enum([...APP_SCHEDULE_IDS_V1, ...APP_SCHEDULE_TIME_IDS_V1]), on: z.boolean(), accepts: z.enum(['on_off', 'time']),
+  time: z.string().regex(APP_CLOCK).nullable(), no_later_than: z.boolean(),
+}).superRefine((row, ctx) => {
+  if ((row.accepts === 'time') !== isScheduleTimeId(row.id)) ctx.addIssue({ code: 'custom', path: ['accepts'], message: 'The Brief and the Close take a time; the five schedules turn on or off' });
+  if ((row.time !== null) !== (row.accepts === 'time')) ctx.addIssue({ code: 'custom', path: ['time'], message: 'time comes exactly with accepts time' });
+  if (row.no_later_than && row.id !== 'card:brief') ctx.addIssue({ code: 'custom', path: ['no_later_than'], message: 'Only the Brief comes earlier on waking' });
+});
 // timezone_confirmed is true once the owner set the zone themselves (timezone.set); absent from a Worker that does not say.
 export const appControlDayDataV1Schema = z.strictObject({
   timezone: text, timezone_confirmed: z.boolean().optional(), date: text, name: ownerName.optional(), memory_revision: count.optional(),
   cards: z.array(z.strictObject({ id: text, name: text, defaultTime: text, time: text.nullable(), reason: text, sent: z.boolean(), pin: text.nullable(), latest: latestDelivery.nullable().optional(),
     state: appDayCardStateV1Schema.optional(), state_reason: text.min(1).max(APP_CARD_STATE_REASON_MAX_V1).optional(),
-    retries_left: z.int().min(0).max(APP_CARD_RETRIES_PER_DAY_V1).optional(), revision: z.int().min(1).optional(), revised_at: z.int().positive().optional() })
+    retries_left: z.int().min(0).max(APP_CARD_RETRIES_PER_DAY_V1).optional(), revision: z.int().min(1).optional(), revised_at: z.int().positive().optional(),
+    why: appWhyV1Schema.optional() })
     .refine(card => card.state === undefined || card.sent === (card.state === 'sent' || card.state === 'skipped'), { error: 'state and sent disagree', path: ['state'] })
     .refine(card => (card.revision === undefined) === (card.revised_at === undefined), { error: 'revision and revised_at come together', path: ['revision'] })),
   proactivity: z.strictObject({ quiet_start: text.nullable(), quiet_end: text.nullable(), volume: z.enum(['low', 'normal', 'high']) }),
@@ -197,8 +269,14 @@ export const appControlDayDataV1Schema = z.strictObject({
   // Controls revision 11: where Waldo writes first (value) and what the owner can choose now (choices). A choice is offered
   // only while every chat it names is linked. value can name a chat that has since been unlinked; Waldo then writes in the
   // app until it is linked again.
+  // Controls revision 16: each schedule as the owner can change it. accepts on_off: on says whether it runs. accepts time: the
+  // Brief or the Close, with the local time it comes each day, on while daily_brief is; today's own planned time stays on its
+  // card. no_later_than: the Brief comes by its time and earlier when the owner wakes before then (only the Brief carries it).
+  schedule_controls: z.array(appScheduleControlV1Schema).max(APP_SCHEDULE_IDS_V1.length + APP_SCHEDULE_TIME_IDS_V1.length)
+    .refine(rows => new Set(rows.map(row => row.id)).size === rows.length, 'A schedule is listed once').optional(),
   proactive_surface: z.strictObject({ value: appProactiveSurfaceV1Schema, choices: z.array(appProactiveSurfaceV1Schema).min(1).max(appProactiveSurfaceV1Schema.options.length)
     .refine(choices => new Set(choices).size === choices.length, 'A choice is listed once') }).optional(),
+  quests: z.array(appQuestV1Schema).max(APP_QUESTS_MAX_V1).optional(),
 });
 // Controls revision 6 (`controls=6`) adds the days view: the owner's last 14 local days as the app Home showed them, and one of
 // them in detail with its update cards and the night before it. It is read-only. An older revision asking for it gets
@@ -241,11 +319,40 @@ export const appConnectorTileV1Schema = z.strictObject({
   id: z.string().regex(APP_CONNECTOR_ID_V1), label: text.min(1).max(60), about: text.min(1).max(500), consent: text.min(1).max(1000).nullable(),
   connectAvailable: z.boolean(), connection: z.strictObject({ status: z.enum(['active', 'reauth_needed']), connected_at: z.int().positive() }).nullable(),
 });
+// Controls revision 17 (`controls=17`): each Google account may carry picture and says whether Waldo may read its Drive,
+// Docs, Sheets and Slides (drive, docs, sheets, slides, like calendar, mail and tasks: true only where the account's saved
+// grant lets Waldo read it), and the view carries wearables. A build below it receives none of them.
+export const APP_CONTROLS_CONNECTIONS_CATALOGUE_REVISION = 17;
+// A Google account's profile picture is served by Waldo, so the phone never calls Google's image host. picture is this path,
+// fetched from the same origin with the app session's bearer like any other app route, and is privately cacheable for an
+// hour. The answer is the image with its own image type, or a JSON 404 when Waldo holds no picture; the key changes when the picture
+// does, so the app may cache the image by path. null or absent: Waldo holds no picture for the account, and the app shows
+// its own fallback.
+export const APP_GOOGLE_PICTURE_PATH_V1 = '/app/v1/connections/google/pictures';
+export const APP_GOOGLE_PICTURE_MEDIA_V1 = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'] as const;
+const googlePicture = z.string().regex(/^\/app\/v1\/connections\/google\/pictures\/[a-f0-9]{32}$/);
+export const appGooglePictureRouteV1 = { method: 'GET', path: `${APP_GOOGLE_PICTURE_PATH_V1}/{key}`, authenticated: true, success_status: 200, response_media: APP_GOOGLE_PICTURE_MEDIA_V1 } as const;
+// A wearable, as the Wearables section lists it: a source of body readings the owner can connect, a device (a watch, a ring, a strap) or, later, a single reading (body temperature,
+// weight). access says how it is reached: healthkit and samsung-health are a permission on the phone, so Waldo lists them
+// for their platform and the app knows their state; oauth is a cloud account Waldo syncs and reports in connection; manual
+// is a reading the owner enters. available is whether this Waldo can connect it now; an unavailable entry is one Waldo
+// lists before it can connect it. connection is Waldo's own state and is null for a phone permission, or for an account
+// that is not connected. connected_at is epoch ms, or null when Waldo did not record it.
+export const APP_WEARABLES_MAX_V1 = 32;
+export const appWearableV1Schema = z.strictObject({
+  id: z.string().regex(/^[a-z][a-z0-9_]{0,39}$/), kind: z.enum(['device', 'reading']), label: text.min(1).max(60),
+  access: z.enum(['healthkit', 'samsung-health', 'oauth', 'manual']), platform: z.enum(['ios', 'android']).nullable(), available: z.boolean(),
+  connection: z.strictObject({ status: z.enum(['active', 'reauth_needed', 'consent_required']), connected_at: z.int().positive().nullable() }).nullable(),
+}).refine(wearable => wearable.platform === (wearable.access === 'healthkit' ? 'ios' : wearable.access === 'samsung-health' ? 'android' : null), { error: 'healthkit is ios, samsung-health is android, and nothing else names a platform', path: ['platform'] })
+  .refine(wearable => wearable.connection === null || wearable.access === 'oauth', { error: 'only a cloud account carries Waldo\'s connection state', path: ['connection'] });
 export const appControlConnectionsDataV1Schema = z.strictObject({
   // signin: the owner signs in with Google and that account is not connected yet, so the app can offer to connect that same
   // account with google.connect account 'signin'. Its presence is the capability: a backend without it never offers it, and
   // an older app reads the view tolerantly and drops it. email is the owner's own confirmed address.
-  google: z.strictObject({ connectAvailable: z.boolean(), accounts: z.array(z.strictObject({ id: text, email: text, calendar: z.boolean(), mail: z.boolean(), tasks: z.boolean(), health: z.enum(['needs_reconnect', 'access_granted']) })), signin: z.strictObject({ email: z.email().max(254) }).optional() }),
+  google: z.strictObject({ connectAvailable: z.boolean(), accounts: z.array(z.strictObject({ id: text, email: text, calendar: z.boolean(), mail: z.boolean(), tasks: z.boolean(), health: z.enum(['needs_reconnect', 'access_granted']), picture: googlePicture.nullable().optional(),
+    drive: z.boolean().optional(), docs: z.boolean().optional(), sheets: z.boolean().optional(), slides: z.boolean().optional() })), signin: z.strictObject({ email: z.email().max(254) }).optional() }),
+  wearables: z.array(appWearableV1Schema).max(APP_WEARABLES_MAX_V1)
+    .refine(wearables => new Set(wearables.map(wearable => wearable.id)).size === wearables.length, 'A wearable is listed once').optional(),
   // Present from a Worker that reads Granola. connection is null until the owner connects it; reauth_needed means Waldo
   // can no longer read it and connecting again fixes that. connected_at is epoch ms.
   granola: z.strictObject({ connectAvailable: z.boolean(), connection: z.strictObject({ status: z.enum(['active', 'reauth_needed']), connected_at: z.int().positive() }).nullable() }).optional(),
@@ -280,6 +387,15 @@ const memoryClaim = z.strictObject({
   // Controls revision 2: the block this claim is pinned to, shown on every turn, or null. Revision 2 also reads source
   // waldo_confirmed for a claim the nightly model confirmed, which stays Waldo's read; revision 1 reads it as confirmed.
   pinned: z.enum(['profile', 'facts']).nullable().optional(),
+  // Controls revision 15. held_as: owner_said for a claim the owner said or confirmed, waldo_thinks for one Waldo read or
+  // inferred ("Waldo thinks...", to confirm or correct). recorded_at is when Waldo learned it. bring_up: less once the owner
+  // asked Waldo not to raise it unprompted. source_url: the page a kept look-up finding came from, shown as plain text and
+  // never as a link target to follow without the owner's tap; null for a claim with no web source. actions: what this claim
+  // can be sent now, so the app never offers confirm on something the owner said.
+  held_as: z.enum(['owner_said', 'waldo_thinks']).optional(),
+  bring_up: z.enum(['normal', 'less']).optional(),
+  source_url: z.string().max(2048).nullable().optional(),
+  actions: z.array(z.enum(['claim.pin', 'claim.unpin', 'claim.edit', 'claim.confirm', 'claim.forget', 'claim.dismiss', 'claim.quiet', 'claim.unquiet'])).optional(),
 });
 // Where a node's support came from, when Waldo read it from a connected source; empty for a node resting on what the owner
 // said. confirmation is confirmed once the owner confirmed the node's own wording, and waldos_read until then, whoever wrote
@@ -431,6 +547,53 @@ export const APP_PROACTIVE_SURFACE_RECEIPTS_V1 = {
   imessage_not_linked: { state: 'rejected', message: 'Link iMessage first, then choose it here.' },
   unchecked: { state: 'rejected', message: 'Waldo could not check your linked chats just now. Try again in a moment.' },
 } as const satisfies Readonly<Record<string, Readonly<{ state: 'recorded' | 'rejected'; message: string }>>>;
+// A local HH:MM as the owner reads it: 7:10am, 9:30pm, 12:05am.
+export const appClock12V1 = (time: string): string => {
+  const [hours, minutes] = time.split(':').map(Number) as [number, number];
+  return `${hours % 12 || 12}:${String(minutes).padStart(2, '0')}${hours < 12 ? 'am' : 'pm'}`;
+};
+// The receipt for each on/off outcome of schedule.set. The app tells them apart by these exact messages, so they are contract.
+export const APP_SCHEDULE_RECEIPTS_V1 = {
+  on: { state: 'recorded', message: 'On. Waldo picks this up again from its next time.' },
+  off: { state: 'recorded', message: 'Off. Waldo stops this until you turn it back on.' },
+  already_on: { state: 'recorded', message: 'That is already on.' },
+  already_off: { state: 'recorded', message: 'That is already off.' },
+  unavailable: { state: 'rejected', message: 'That cannot be changed right now. Try again later.' },
+} as const satisfies Readonly<Record<string, Readonly<{ state: 'recorded' | 'rejected'; message: string }>>>;
+// What a new time means for today: planned (it comes at the new time today), now (the new time has passed and today's had not
+// gone, so it goes now), sent (today's went out), busy (today's is being made, held, waiting or paused, and is left as it is), passed (the
+// time has passed and nothing was due today), quiet (it falls in quiet hours and waits for them to end), off (daily_brief is
+// off), zone (the day cards wait for the owner to confirm their time zone), unchanged (that is already its time).
+export type AppScheduleTimeTodayV1 = 'planned' | 'now' | 'sent' | 'busy' | 'passed' | 'quiet' | 'off' | 'zone' | 'unchanged';
+const SCHEDULE_TODAY: Readonly<Record<Exclude<AppScheduleTimeTodayV1, 'unchanged'>, string>> = {
+  planned: '', now: " Today's is on its way now.", sent: " Today's already went out, so this starts tomorrow.",
+  busy: " Today's stays as it is, so this starts tomorrow.", passed: ' That time has passed today, so this starts tomorrow.',
+  quiet: ' That is inside your quiet hours, so it waits until they end.', off: ' Your day cards are off; it comes at this time once you turn them on.',
+  zone: ' Your day cards start once you confirm your time zone.',
+};
+export const appScheduleTimeReceiptV1 = (outcome: Readonly<{ card: (typeof APP_SCHEDULE_TIME_IDS_V1)[number]; time: string; today: AppScheduleTimeTodayV1; noLaterThan: boolean }>) => {
+  const name = outcome.card === 'card:brief' ? 'Brief' : 'Close', at = appClock12V1(outcome.time);
+  const when = outcome.noLaterThan ? `by ${at}` : `at ${at}`;
+  if (outcome.today === 'unchanged') return { state: 'recorded' as const, message: `Your ${name} already comes ${when}.` };
+  return { state: 'recorded' as const, message: `Saved. Your ${name} comes ${when}${outcome.noLaterThan ? ', earlier when you wake before then' : ''}.${SCHEDULE_TODAY[outcome.today]}` };
+};
+// A person as the people view shows them. held_as: yours once the owner said or confirmed something about them, waldo_thinks
+// while Waldo only read them (from mail, an import, its own inference), to confirm or forget. relations: how the claims about
+// them name them, newest first. next_date: the soonest day a claim about them comes round (a birthday), with that claim's
+// id and words. last_contact: when they last wrote to the owner or met them, as far as Waldo saw. actions: what this person
+// can be sent now.
+const appPersonV1Schema = z.strictObject({
+  id: z.string().regex(personId), name: text.min(1).max(APP_PERSON_NAME_MAX_V1), other_names: z.array(text.max(APP_PERSON_NAME_MAX_V1)).max(10),
+  ring: z.enum(['inner', 'close', 'wider']).nullable(), ring_by: z.enum(['model', 'owner']).nullable(), relations: z.array(text.max(60)).max(3),
+  next_date: z.strictObject({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), claim_id: z.string().regex(claimId), text }).nullable(),
+  last_contact: z.strictObject({ at: text, via: z.enum(['mail', 'meeting']) }).nullable(),
+  held_as: z.enum(['yours', 'waldo_thinks']), claims: z.int().positive(), actions: z.array(z.enum(APP_PERSON_ACTIONS_V1)),
+});
+export type AppPersonV1 = z.infer<typeof appPersonV1Schema>;
+export const appControlPeopleDataV1Schema = z.union([
+  z.strictObject({ people: z.array(appPersonV1Schema).max(APP_PEOPLE_MAX_V1), more: z.boolean() }),
+  z.strictObject({ person: appPersonV1Schema, claims: z.array(memoryClaim).max(APP_MEMORY_PAGE_MAX_V1) }),
+]);
 const envelope = { version: z.literal(1), state: z.literal('available'), revision };
 export const appControlProjectionV1Schema = z.discriminatedUnion('view', [
   z.strictObject({ ...envelope, view: z.literal('day'), data: appControlDayDataV1Schema }),
@@ -441,6 +604,7 @@ export const appControlProjectionV1Schema = z.discriminatedUnion('view', [
   z.strictObject({ ...envelope, view: z.literal('phone'), data: appControlPhoneDataV1Schema }),
   z.strictObject({ ...envelope, view: z.literal('days'), data: z.union([appControlDaysDataV1Schema, appControlDayHistoryDataV1Schema]) }),
   z.strictObject({ ...envelope, view: z.literal('agent_mail'), data: appControlAgentMailDataV1Schema }),
+  z.strictObject({ ...envelope, view: z.literal('people'), data: appControlPeopleDataV1Schema }),
 ]);
 // revocation is sent only on a recorded app.disconnect receipt for an app Waldo had signed in to.
 export const appControlReceiptV1Schema = z.strictObject({
@@ -458,6 +622,7 @@ export type AppControlProjectionV1 = z.infer<typeof appControlProjectionV1Schema
 export type AppControlViewV1 = z.infer<typeof appControlViewV1Schema>;
 export type AppControlResultV1 = z.infer<typeof appControlResultV1Schema>;
 export type AppChannelStatusV1 = z.infer<typeof appChannelStatusV1Schema>;
+export type AppWearableV1 = z.infer<typeof appWearableV1Schema>;
 export type AppWelcomeBuildV1 = z.infer<typeof appWelcomeBuildV1Schema>;
 export type AppNodeSourceV1 = z.infer<typeof appNodeSourceV1Schema>;
 export type AppNodeSourceV13 = z.infer<typeof appNodeSourceV13Schema>;

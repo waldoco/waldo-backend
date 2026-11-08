@@ -19,6 +19,8 @@ export const outsideView = (store: ClaimStore): ClaimStore => {
     ...store,
     claims: (status) => store.claims(status).filter(outsideSafe),
     recall: (query, limit, near) => store.recall(query, limit, near).filter(outsideSafe),
+    recallReplaced: (query, limit) => store.recallReplaced(query, limit).filter(outsideSafe),
+    replacedClaims: (limit) => store.replacedClaims(limit).filter(outsideSafe),
     nodes,
     edges: () => { const kept = new Set(nodes().map((node) => node.id)); return store.edges().filter((edge) => kept.has(edge.from_id) && kept.has(edge.to_id)); },
     statements: () => { const statements = store.statements(), kept = new Set(nodes().flatMap((node) => nodeStatementIds(statements, node.id))); return statements.filter((claim) => kept.has(claim.id)); },

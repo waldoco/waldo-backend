@@ -42,10 +42,10 @@ const harness = (name: string, work: (world: World) => Promise<void>) =>
     const instance = new OwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: 'fictional-telegram-token', OPENAI_API_KEY: 'fictional-model-key',
       WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' });
     const replies = () => sent.map(row => row.text).filter(text => text.startsWith('Reply to turn'));
-    try { await work({ instance, state, inbox: new WhatsAppOwnerInbox(state.storage), sent, typing, replies }); } finally { await state.storage.deleteAlarm(); }
+    try { await work({ instance, state, inbox: new WhatsAppOwnerInbox(state.storage, undefined, 0, false), sent, typing, replies }); } finally { await state.storage.deleteAlarm(); }
   });
-// Plain texts in a row join into one turn (whatsapp-merge-owner-do); a test about a second turn sends its second message as a
-// forward, which never joins.
+// These owner objects run with WHATSAPP_REPLY_MERGE unset, so every message is its own turn, and the test's own inbox claims
+// the same way; joining messages is whatsapp-merge-owner-do's subject.
 const post = (instance: OwnerDO, id: string, body: string, forwarded = false) => instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
   method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT },
   body: JSON.stringify({ messages: [{ from: SUBJECT, id, type: 'text', text: { body }, ...(forwarded ? { context: { forwarded: true } } : {}) }] }),

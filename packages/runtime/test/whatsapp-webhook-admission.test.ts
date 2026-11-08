@@ -13,7 +13,7 @@ const body = (senders: string[]) => JSON.stringify({ entry: [{ changes: [{ value
 const request = async (payload: string) => new Request('https://w.test/whatsapp/webhook', { method: 'POST', body: payload, headers: { 'x-hub-signature-256': await sign('appsecret', payload) } });
 const directory: OwnerDirectory = { byPresence: async (_p, subject) => ({ doName: `do-${subject}`, subject, timezone: null }), redeem: async () => null };
 const env = (fetch: (url: string, init?: RequestInit) => Promise<Response>): WhatsAppWebhookEnv => ({
-  WHATSAPP_APP_SECRET: 'appsecret',
+  WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_PHONE_NUMBER_ID: 'pn1',
   OWNER_DO: { idFromName: (name: string) => name, get: (name: string) => ({ fetch: (url: string, init?: RequestInit) => fetch(`${name}|${url}`, init) }) } as unknown as DurableObjectNamespace,
 });
 const handle = async (payload: string, e: WhatsAppWebhookEnv) => {

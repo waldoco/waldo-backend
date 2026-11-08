@@ -38,7 +38,8 @@ export const healthStage = (book: HealthReadBook, timezone: () => string, now: (
   if (consent.kind === 'read_failed') return settled('unavailable');
   if (consent.kind !== 'granted') return settled('skipped');
   const zone = timezone(), to = localDayOf(new Date(now()), zone), from = shiftDay(to, -(WELCOME_HEALTH_DAYS - 1));
-  const signals = Object.keys(SIGNALS) as HealthReadSignal[];
+  // Food is read only by get_health, in the turn that asked, and never compiled into what Waldo knows.
+  const signals = (Object.keys(SIGNALS) as HealthReadSignal[]).filter((signal) => SIGNALS[signal].stored !== 'nutrition');
   const parsed = parseSeries(await book.series({ from, to, signals: signals.map((signal) => SIGNALS[signal].stored) }));
   if (parsed.kind === 'no_consent') return settled('skipped');
   if (parsed.kind === 'failed') return settled('unavailable');
@@ -213,8 +214,8 @@ export const ownerWelcome = (deps: Readonly<{
   wanted: () => { const build = welcomeBuild(deps.sql, deps.now); return build.due().length > 0 || build.reopenable().length > 0; },
   // Health readings may have landed since an empty health stage: take it up once more, within a day of it settling.
   lateHealth: (): boolean => deps.transaction(() => welcomeBuild(deps.sql, deps.now).lateHealth(deps.v2 !== undefined)),
-  // The look-up ended: a web stage that settled without it reads the findings once (second build only).
-  lateWeb: (): boolean => deps.v2 !== undefined && deps.transaction(() => welcomeBuild(deps.sql, deps.now).lateWeb()),
+  // The look-up under this grant ended: a web stage that settled without it reads the findings once (second build only).
+  lateWeb: (grant: number): boolean => deps.v2 !== undefined && deps.transaction(() => welcomeBuild(deps.sql, deps.now).lateWeb(grant)),
   // A Google account was connected: calendar and mail read again once, within a day of settling (second build only).
   googleConnected: (): boolean => deps.v2 !== undefined && deps.transaction(() => welcomeBuild(deps.sql, deps.now).googleConnected()),
   run: () => runWelcome({

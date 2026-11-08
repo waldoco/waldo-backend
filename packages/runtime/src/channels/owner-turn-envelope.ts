@@ -56,12 +56,14 @@ export type OwnerResponder = Readonly<{
   // `ownerModel` runs the job on the model the owner's own turn uses (still clamped past the spend ceiling): for a job that
   // answers the owner's own message late, never for one Waldo starts itself.
   // `attachments` reach the model with `said` on this turn only, as an owner turn's files do; they are never stored.
-  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string, sourceTaint?: 'external', ownerModel?: boolean, attachments?: readonly LLMAttachment[]): Promise<string>;
+  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string, sourceTaint?: 'external', ownerModel?: boolean, attachments?: readonly LLMAttachment[], directTools?: readonly ToolName[]): Promise<string>;
   // done is false when the conversation was not consolidated and must be offered again.
   // policy.health false keeps no health notes from this pass, or from the migration.
   consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>, policy?: Readonly<{ health: boolean }>): Promise<Readonly<{ done: boolean; detail: string }>>;
   // The model's reply over the day's calendar and mail changes (outside content), applied by the caller. Absent on fakes.
-  sourceClaims?(trace: string, updates: string, policy?: Readonly<{ health: boolean }>): Promise<string>;
+  sourceClaims?(trace: string, updates: string, policy?: Readonly<{ health: boolean; people?: boolean }>): Promise<string>;
+  // CAPACITY_PLAN: the model's raw answer keeping the owner's capacity note, applied by the caller. Absent on fakes.
+  capacity?(trace: string, input: string): Promise<string>;
   migrate(trace: string, input: string, policy?: Readonly<{ health: boolean }>): Promise<string>;
   // With a gate, promote makes no model call when the memory it would read has the digest `last`, and hands the digest of
   // the memory it leaves to `promoted` once a promotion is applied.
@@ -85,6 +87,13 @@ export type OwnerResponder = Readonly<{
 
 // Host-selected surface, never inferred from owner text or transport payload.
 export const ownerTurnTrace = (surface: string, updateId: number): string => surface === 'telegram' ? `tg-${updateId}` : `${surface}-${updateId}`;
+// The inverse, for a stored turn's id or its reply's (`<trace>-reply`); null for anything else (scheduled and machine rows).
+export const surfaceOfTrace = (entryId: string): string | null => {
+  const found = /^([a-z]{1,16})-\d+(?:-reply)?$/.exec(entryId);
+  return found ? (found[1] === 'tg' ? 'telegram' : found[1]!) : null;
+};
+// The entry-id prefix of a surface's turns, which a stored row can be filtered by.
+export const traceSurfacePrefix = (surface: string): string => ownerTurnTrace(surface, 0).slice(0, -1);
 
 export const ownerTurnAttachments = (turn: Pick<OwnerTurnEnvelope, 'attachment' | 'attachments'>): readonly LLMAttachment[] | undefined => {
   if (turn.attachment !== undefined && turn.attachments !== undefined) throw new Error('ambiguous turn media');

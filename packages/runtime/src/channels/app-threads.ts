@@ -1,6 +1,6 @@
 import {
   APP_THREAD_MAX_V1, appThreadArchiveV1Schema, appThreadCreateV1Schema, appThreadDeleteV1Schema, appThreadIdV1Schema, appThreadListQueryV1Schema,
-  appThreadReadQueryV1Schema, appThreadRenameV1Schema, appThreadSendV1Schema, type AppThreadOperationResultV1, type AppThreadV1,
+  appThreadReadQueryV1Schema, appThreadRenameV1Schema, appThreadSendV1Schema, APP_CHAT_TASK_CARDS_REVISION, type AppTaskCardV1, type AppThreadOperationResultV1, type AppThreadV1,
 } from '../../../contracts/src/app/threads';
 import { literalTextRedactor } from '../../../contracts/src/runtime/conversation-entry';
 import { carriesTopic } from '../memory/forget-guard';
@@ -18,7 +18,7 @@ export type ThreadRecord = Readonly<{
   title_asked?: true;
 }>;
 type OperationRecord = Readonly<{ digest: string; result: AppThreadOperationResultV1 }>;
-type Admitted = Readonly<{ kind: 'admitted' | 'duplicate'; record: Readonly<{ id: string; state: string }> }> | Readonly<{ kind: 'conflict' | 'capacity' }>;
+type Admitted = Readonly<{ kind: 'admitted' | 'duplicate'; record: Readonly<{ id: string; state: string }> }> | Readonly<{ kind: 'conflict' | 'capacity' | 'upload_unavailable' }>;
 
 // A thread's conversation is its own chain, owner:<principal>:<thread id>; main's is owner:<principal>.
 export const threadChainRef = (principal: string, thread: string) => `owner:${principal}:${thread}`;
@@ -97,11 +97,14 @@ export type AppThreadsHost = Readonly<{
   now(): number;
   principal: string;
   messages: Readonly<{
-    // Admits a message into the owner's inbox; `assertCurrent` runs inside the admission and throws to refuse it.
-    admit(conversationRef: string, clientId: string, text: string, assertCurrent: () => void, revision: number): Promise<Admitted>;
+    // Admits a message into the owner's inbox; `assertCurrent` runs inside the admission and throws to refuse it. `upload`:
+    // the staged attachment the message takes.
+    admit(conversationRef: string, clientId: string, text: string, assertCurrent: () => void, revision: number, upload?: string): Promise<Admitted>;
     receipt(conversationRef: string, clientId: string, revision?: number): unknown;
     cancel(conversationRef: string, clientId: string): unknown;
     history(thread: string, cursor: string | null, limit: number): Promise<ReturnType<typeof appTranscriptPage>>;
+    // The cards the owner's background tasks started in this thread wait on; asked only for a build that reads chat revision 9.
+    taskCards?(thread: string): readonly AppTaskCardV1[];
     preview(thread: string): string | null;
     // Erases the thread's transcript, recall, earlier tool results and messages inside the delete's transaction, and
     // answers how many messages went.
@@ -154,7 +157,7 @@ const messages = async (request: Request, host: AppThreadsHost, id: string, rest
     if (request.method !== 'POST') return problem(405, 'method_not_allowed');
     const sent = appThreadSendV1Schema.safeParse(await bodyOf(request));
     if (!sent.success) return problem(400, 'invalid_request');
-    const { client_message_id: clientId, text, expected_revision: expected } = sent.data;
+    const { client_message_id: clientId, text, expected_revision: expected, attachments } = sent.data;
     let result: Admitted;
     try {
       result = await host.messages.admit(ref, clientId, text, () => {
@@ -163,12 +166,12 @@ const messages = async (request: Request, host: AppThreadsHost, id: string, rest
         if (refused) throw refused;
         if (thread!.state === 'archived') throw new ThreadRefusal(409, 'thread_archived');
         if (thread!.revision !== expected) throw new ThreadRefusal(409, 'thread_revision_conflict');
-      }, expected);
+      }, expected, attachments?.[0]?.upload_id);
     } catch (error) {
       if (error instanceof ThreadRefusal) return problem(error.status, error.code);
       throw error;
     }
-    if (!('record' in result)) return problem(result.kind === 'conflict' ? 409 : 503, result.kind);
+    if (!('record' in result)) return problem(result.kind === 'capacity' ? 503 : 409, result.kind);
     if (result.kind === 'admitted') host.storage.transactionSync(() => touchThread(host.storage.kv, id, host.now()));
     return answer({ accepted: true, message_id: result.record.id, state: result.record.state }, 202);
   }
@@ -219,7 +222,8 @@ export const appThreadsRequest = async (request: Request, host: AppThreadsHost):
     const refused = refusal(thread);
     if (refused) return problem(refused.status, refused.code);
     const history = await host.messages.history(id, page.data.cursor ?? null, page.data.limit ?? 20);
-    return answer({ thread: view(host, thread!), history });
+    const cards = chatRevision(request) >= APP_CHAT_TASK_CARDS_REVISION ? host.messages.taskCards?.(id) ?? [] : [];
+    return answer({ thread: view(host, thread!), history, ...(cards.length ? { task_cards: cards } : {}) });
   }
   if (request.method !== 'POST' || !['rename', 'archive', 'delete'].includes(action)) return problem(404, 'not_found');
   const raw = await bodyOf(request);
