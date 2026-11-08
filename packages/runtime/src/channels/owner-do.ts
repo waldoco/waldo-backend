@@ -799,7 +799,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private surfaceRouting(): boolean { return this.env.OWNER_SURFACE_DEFAULT === '1'; }
   // Waldo's own sends follow the owner's choice among the app and WhatsApp even while Telegram is linked; Telegram keeps
   // them while neither is bound. iMessage takes no notice outside a turn, so it never displaces Telegram here.
-  // It needs OWNER_SURFACE_DEFAULT too: ownerSurface() answers Telegram without it, and the alarm pass must agree.
+  // It needs OWNER_SURFACE_DEFAULT too: ownerSurface() answers Telegram without it, and once the owner's timezone is confirmed
+  // the alarm pass routes the day where ownerSurface() sends event notices.
   private proactiveOverTelegram(): boolean { return this.surfaceRouting() && this.env.PROACTIVE_OVER_TELEGRAM === '1'; }
   // A notice outside any turn, on `surface` as OUTSIDE_TURN_NOTICE declares. A transcript write is made under the turn queue
   // the caller holds, as every other writer of that transcript does. 'blocked': it certainly did not leave (the gate refused,

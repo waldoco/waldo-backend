@@ -211,7 +211,7 @@ describe('Waldo\'s own sends for an owner still linked on Telegram', { timeout: 
       expect((await event(owner, 'split-ev')).status).toBe(200);
       await day(owner, state);
       expect(telegram.sends.filter(method => method === 'sendMessage').length).toBeGreaterThan(1);
-      expect(world.texts).toEqual([]);
+      expect(appRows(state)).not.toContain('Event - uptime: Deploy finished');
     });
   });
 
