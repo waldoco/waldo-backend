@@ -8,6 +8,8 @@ import { CONVERSATION_INPUT_BUDGET_TOKENS, estimateMessageTokens, steppedWindowS
 export const COMPACTION = {
   enabled: false,
   budgetTokens: CONVERSATION_INPUT_BUDGET_TOKENS,
+  // What a summary reads. It stays apart from the window's budget, so a smaller window compacts sooner without summarising less.
+  summaryInputTokens: CONVERSATION_INPUT_BUDGET_TOKENS,
   triggerFraction: 0.7,
   tailFraction: 0.5,
   minOwnerRows: 10,
@@ -31,9 +33,12 @@ const labelled = (settings: CompactionSettings) => (entry: ConversationEntry): C
   return entry.modelProjection.mode === 'replace' ? { ...entry, modelProjection: { mode: 'replace', payload: label + entry.modelProjection.payload } }
     : { ...entry, modelPayload: label + entry.modelPayload };
 };
+// WALDO_CALL_CEILINGS: a chat's history is the conversation layer of a call whose whole input aims at 40k tokens, a summary
+// of at most 2k and a tail of about 20k.
+export const CHAT_HISTORY_BUDGET_TOKENS = 22_000;
 // Only the exact values "on" and "1" turn these on, so an unset or mistyped deploy var keeps the plain window.
-export const compactionSettings = (env: Readonly<{ WALDO_COMPACTION?: string; WALDO_STEPPED_WINDOW?: string }>): CompactionSettings =>
-  ({ ...COMPACTION, enabled: env.WALDO_COMPACTION === 'on', steppedWindow: env.WALDO_STEPPED_WINDOW === '1' });
+export const compactionSettings = (env: Readonly<{ WALDO_COMPACTION?: string; WALDO_STEPPED_WINDOW?: string; WALDO_CALL_CEILINGS?: string }>): CompactionSettings =>
+  ({ ...COMPACTION, enabled: env.WALDO_COMPACTION === 'on', steppedWindow: env.WALDO_STEPPED_WINDOW === '1', ...(env.WALDO_CALL_CEILINGS === '1' ? { budgetTokens: CHAT_HISTORY_BUDGET_TOKENS } : {}) });
 
 export const COMPACTION_SUPERSEDED_MARKER = '[superseded summary]';
 // One compaction per chain and span: the row's id carries the last row it covers.
@@ -149,7 +154,7 @@ export type CompactionPlan = Readonly<{ input: readonly ConversationModelMessage
 // fraction of the budget, so the tail starts with an owner message. The call's input is the live summary first, then the
 // span rows that fit the input budget, in chain order; rows that do not fit are counted as `gap`, and `covers` names the
 // first original row the summary carries, through the previous summary when there is one.
-export const compactionPlan = (tree: ConversationTree, leafId: string, live: ConversationEntry | null, settings: CompactionSettings = COMPACTION, inputBudgetTokens: number = settings.budgetTokens): CompactionPlan | null => {
+export const compactionPlan = (tree: ConversationTree, leafId: string, live: ConversationEntry | null, settings: CompactionSettings = COMPACTION, inputBudgetTokens: number = settings.summaryInputTokens): CompactionPlan | null => {
   const path = tree.path(leafId);
   const rows = (live ? path.slice(path.findIndex((entry) => entry.id === live.covers!.to_id) + 1) : path)
     .map((entry) => ({ entry, message: conversationModelMessages([labelled(settings)(entry)])[0] ?? null }));

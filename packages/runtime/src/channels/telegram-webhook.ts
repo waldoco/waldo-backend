@@ -33,6 +33,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_CONTEXT_CAPS?: string;
   // '1' runs the compaction a drain makes due in a later alarm pass of its own, never in the pass that ran the owner's turns.
   WALDO_COMPACTION_WAKE?: string;
+  // '1' holds every chat's history to the conversation layer of the call budget and measures each call against its class's ceiling.
+  WALDO_CALL_CEILINGS?: string;
   // '1' tells a turn whose time zone the owner has not confirmed to ask for it when it fits.
   WALDO_TIMEZONE_ASK?: string;
   WALDO_ENVIRONMENT?: string;
