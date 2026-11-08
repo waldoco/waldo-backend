@@ -2685,6 +2685,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       stopped = this.whatsappStops(claimed, subject, inbox);
     }); } catch (error) { if (error instanceof WhatsAppInboxFull) return new Response('unavailable', { status: 503 }); throw error; }
     if (changed) return new Response('unavailable', { status: 503 });
+    // On the timeline the owner's WhatsApp turn shares the chain a compaction in flight is summarising: it ends that compaction,
+    // which writes nothing, as an app message does.
+    if (claimed.some(whatsappTurnMessage) && oneTimelineEnabled(this.env) && this.whatsappOnTimeline()) this.compactionAbort?.abort();
     if (stopped) await this.whatsappStopped(stopped);
     // Settling boots the runtime, so it waits until after the ack, in the serial queue ahead of this message's turn.
     if (rebound) { this.runtimes = {}; if (retired.length) this.ctx.waitUntil(this.serial(() => this.settleRetiredWhatsApp(retired, 'whatsapp'))); }
@@ -5077,7 +5080,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return createOwnerTurnContext(await surfaceOwnerAdmission({ scope, lookup, expectedPhysicalDoId: this.ctx.id.toString(), surface: 'telegram', subject, occurrenceKey: occurrence.id, occurredAt: occurrence.admittedAt, text: turn.text }),
         { conversationRef: ownerChainRef('telegram', subject), health: () => health ??= healthContext.latest(turn.traceId), ownerProfile: google.nameLine });
     } } } : undefined;
-    const seed = timelineSeed(this.ctx.storage.kv, () => { const subject = identity.get<string>('whatsapp_subject'); return subject ? surfaceChatRef('whatsapp', subject) : undefined; },
+    const seed = timelineSeed(this.ctx.storage.kv, () => { const subject = identity.get<string>('whatsapp_subject'); return subject && this.whatsappOnTimeline() ? surfaceChatRef('whatsapp', subject) : undefined; },
       compactionSettings(this.env).budgetTokens / 2);
     // The owner's chain as the app's turns read and write it; on the one timeline, WhatsApp turns read and write it too.
     const ownerHistory = (context: OwnerContextCapability): ConversationStore => ({

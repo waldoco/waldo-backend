@@ -6,31 +6,46 @@ import { windowModelMessages } from './window';
 // chat, each row keeping the surface it was written on.
 export const oneTimelineEnabled = (env: Readonly<{ WALDO_ONE_TIMELINE?: string }>): boolean => env.WALDO_ONE_TIMELINE === '1';
 
-// The cutover is forward-only. The owner's WhatsApp chain from before stays stored as it is, and reaches the timeline once, through
-// the next summary of the owner's own chain: the owner's own words in it, labelled with their surface, newest kept within the
-// budget. Waldo's replies are left out. The owner's words are what must not be lost, and a reply can carry a relayed reading
-// the summary's health floor would refuse every time. unchanged() and mark() run inside the commit that writes the summary, so
-// the carry is marked exactly when the summary lands, and a legacy row a forget rewrote meanwhile stops it.
+// The cutover is forward-only. The owner's WhatsApp chain stays stored as it is, and what it holds past the carried mark reaches
+// the timeline through the next summary of the owner's own chain: the messages the owner wrote in their own words, labelled
+// with their surface, newest kept within the budget. Waldo's replies, and owner messages that carried someone else's words or
+// were stored before inputs were stamped, are left out: what is carried counts as the owner's words for the summary's health
+// floor. The mark is the key of the last legacy row carried, so rows the WhatsApp chain gains while its turns are off the
+// timeline are carried when they rejoin. unchanged() and mark() run inside the commit that writes the summary, so the mark
+// moves exactly when the summary lands, and a carried row a forget rewrote meanwhile stops it.
 export type TimelineSeed = Readonly<{
   read(): Readonly<{ messages: readonly ConversationModelMessage[]; rows: number }> | null;
   unchanged(): boolean;
   mark(): void;
 }>;
-export const TIMELINE_SEEDED_KEY = 'one_timeline_seeded_v1';
-export const timelineSeed = (kv: Pick<DurableObjectStorage['kv'], 'get' | 'put' | 'list'>, chatId: () => string | undefined, budgetTokens: number): TimelineSeed => {
-  let seen: string | null = null;
-  const ownerRows = (id: string) => [...kv.list<ConversationEntry>({ prefix: 'conv:' })].map(([, entry]) => entry)
-    .filter(entry => entry.chatId === id && entry.role === 'user' && entry.inputOrigin === 'owner');
+export const TIMELINE_CARRIED_KEY = 'one_timeline_carried_v1';
+type Kv = Pick<DurableObjectStorage['kv'], 'get' | 'put' | 'list'>;
+export const timelineSeed = (kv: Kv, chatId: () => string | undefined, budgetTokens: number): TimelineSeed => {
+  let seen: Readonly<{ rows: string; last: string }> | null = null;
+  const since = (id: string) => {
+    const after = kv.get<string>(TIMELINE_CARRIED_KEY);
+    const listed = [...kv.list<ConversationEntry>({ prefix: 'conv:', ...(after ? { startAfter: after } : {}) })];
+    const rows = listed.map(([, entry]) => entry)
+      .filter(entry => entry.chatId === id && entry.role === 'user' && entry.inputOrigin === 'owner' && entry.ownerWordsOnly === true);
+    return { rows, last: listed.at(-1)?.[0] };
+  };
   return {
     read() {
+      seen = null;
       const id = chatId();
-      if (!id || kv.get<boolean>(TIMELINE_SEEDED_KEY)) return null;
-      const rows = ownerRows(id);
-      seen = JSON.stringify(rows);
+      if (!id) return null;
+      const { rows, last } = since(id);
+      if (!last) return null;
       const messages = windowModelMessages(conversationModelMessages(rows.map(surfaceLabelled)), budgetTokens).messages;
-      return messages.length ? { messages, rows: rows.length } : null;
+      // Nothing to carry up to here: the mark moves on, so the next read starts after it.
+      if (!messages.length) { kv.put(TIMELINE_CARRIED_KEY, last); return null; }
+      seen = { rows: JSON.stringify(rows), last };
+      return { messages, rows: rows.length };
     },
-    unchanged() { const id = chatId(); return seen !== null && id !== undefined && JSON.stringify(ownerRows(id)) === seen; },
-    mark() { kv.put(TIMELINE_SEEDED_KEY, true); },
+    unchanged() {
+      const id = chatId();
+      return seen !== null && id !== undefined && JSON.stringify(since(id).rows) === seen.rows;
+    },
+    mark() { if (seen) kv.put(TIMELINE_CARRIED_KEY, seen.last); },
   };
 };

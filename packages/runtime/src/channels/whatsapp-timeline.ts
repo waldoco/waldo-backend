@@ -11,8 +11,8 @@ import type { OwnerContextIntegration, OwnerHistoryFactory } from './owner-turn'
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import type { TurnLogEntry } from './telegram-listener';
 
-// The owner's WhatsApp turns on the one timeline: admitted as the owner the directory binds to the number, run on the owner's
-// own chain (the one their app chat uses), and followed by the same compaction as app turns.
+// The owner's WhatsApp turns on the one timeline, while `joined` says they are on it: admitted as the owner the directory binds
+// to the number, run on the owner's own chain (the one their app chat uses), and followed by the same compaction as app turns.
 export type WhatsAppTimelineHost = Readonly<{ env: OwnerDirectoryEnv; kv: Pick<DurableObjectStorage['kv'], 'get'>; physicalDoId: string; commit<T>(work: () => T): T }>;
 
 const bound = (host: WhatsAppTimelineHost) => {
@@ -51,8 +51,8 @@ export const whatsappTimelineContext = (host: WhatsAppTimelineHost, active: () =
   history, timelineSeed,
 });
 
-// After the owner's WhatsApp turns, so an owner who only writes on WhatsApp still gets the summary that carries their WhatsApp
-// chain from before. It runs in its own budget, never inside a turn.
+// After the owner's WhatsApp turns on the timeline, so an owner there who only writes on WhatsApp still gets the summary that
+// carries their WhatsApp chain. It runs in its own budget, never inside a turn.
 export const compactWhatsAppTimeline = async (host: WhatsAppTimelineHost,
   runtime: Readonly<{ compactChain(trace: string, context: OwnerContextCapability, scope: RunEffectScope): Promise<void>; log(entry: TurnLogEntry): void }>,
   abort: AbortController, alarmEnd?: number): Promise<void> => {
