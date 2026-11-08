@@ -88,7 +88,7 @@ describe('an event notice in the app chat', { timeout: 30_000 }, () => {
     await ownerOn('event-push-app', ON, async (owner, state, name) => {
       expect((await event(owner, 'push-1')).status).toBe(200);
       expect(await appChat(owner, name)).toEqual([NOTICE]);
-      expect(wire.pushes).toEqual([{ body: PUSHES.event.body, data: { trigger: 'event' } }]);
+      expect(wire.pushes).toEqual([{ body: PUSHES.chat.body, data: { trigger: 'chat' } }]);
       expect(wire.writtenAtPush).toEqual([true]);
       expect(JSON.stringify(wire.pushes)).not.toContain(TITLE);
       expect(runs(state)).toEqual(['completed']);

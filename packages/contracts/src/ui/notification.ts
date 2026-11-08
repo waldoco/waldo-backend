@@ -12,10 +12,11 @@ import { cardIdSchema } from './card';
 // An approval push says only that something waits and which approval opens: the id, never why.
 // An update push says the owner's day changed and, when Waldo revised a day card for it, which card opens. Its data never
 // carries a zone word; the change itself is in the push's text, which the sender checks (no health value, no mail body).
-// An event push says only that an event notice is in the app chat: no card, no zone word, never the event's own words.
+// A chat push says only that something new is in the app chat (an event notice, a message WhatsApp's window holds): no
+// card, no zone word, never the message's own words.
 export const pushNotificationSchema = z
   .strictObject({
-    trigger: triggerTypeSchema.or(z.literal('approval')).or(z.literal('update')).or(z.literal('event')),
+    trigger: triggerTypeSchema.or(z.literal('approval')).or(z.literal('update')).or(z.literal('chat')),
     variant: briefVariantSchema.optional(),
     card_ref: cardIdSchema.optional(),
     approval_id: approvalIdV1Schema.optional(),
@@ -40,8 +41,8 @@ export const pushNotificationSchema = z
     { error: 'an update push carries no zone word', path: ['trigger'] },
   )
   .refine(
-    (payload) => payload.trigger !== 'event' || [payload.card_ref, payload.form_zone, payload.recovery_zone, payload.load_zone].every((key) => key === undefined),
-    { error: 'an event push carries no card and no zone word', path: ['trigger'] },
+    (payload) => payload.trigger !== 'chat' || [payload.card_ref, payload.form_zone, payload.recovery_zone, payload.load_zone].every((key) => key === undefined),
+    { error: 'a chat push carries no card and no zone word', path: ['trigger'] },
   );
 export type PushNotification = z.infer<typeof pushNotificationSchema>;
 

@@ -108,17 +108,17 @@ describe('pushNotification for an update to the day', () => {
   });
 });
 
-describe('pushNotification for an event notice', () => {
-  it('accepts the event trigger alone', () => {
-    expect(pushNotificationSchema.safeParse({ trigger: 'event' }).success).toBe(true);
+describe('pushNotification for something new in the app chat', () => {
+  it('accepts the chat trigger alone', () => {
+    expect(pushNotificationSchema.safeParse({ trigger: 'chat' }).success).toBe(true);
   });
 
   it.each([
-    ['a card ref', { trigger: 'event', card_ref: 'card:brief' }],
-    ['a zone word', { trigger: 'event', recovery_zone: 'mixed' }],
-    ['a variant', { trigger: 'event', variant: 'morning' }],
-    ['an approval id', { trigger: 'event', approval_id: 'p0001' }],
-    ['the event\'s title', { trigger: 'event', title: 'Deploy finished' }],
+    ['a card ref', { trigger: 'chat', card_ref: 'card:brief' }],
+    ['a zone word', { trigger: 'chat', recovery_zone: 'mixed' }],
+    ['a variant', { trigger: 'chat', variant: 'morning' }],
+    ['an approval id', { trigger: 'chat', approval_id: 'p0001' }],
+    ['the message\'s words', { trigger: 'chat', title: 'Deploy finished' }],
   ] as const)('rejects %s', (_shape, payload) => {
     expect(pushNotificationSchema.safeParse(payload).success).toBe(false);
   });

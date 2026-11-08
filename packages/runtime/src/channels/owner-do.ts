@@ -2828,7 +2828,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         sent = transcript ? await this.serial(() => this.notifyOwner(surface, runtime, text)) : await this.notifyOwner(surface, runtime, text);
         // Once its row is in the app chat, the notice raises one push, unless the owner turned Waldo's volume down. The sender
         // holds quiet hours and the day's budget, and never throws.
-        if (sent === 'sent' && transcript && this.env.EVENT_PUSH === '1' && loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume !== 'low') await runtime.push('event');
+        if (sent === 'sent' && transcript && this.env.EVENT_PUSH === '1' && loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume !== 'low') await runtime.push('chat');
         // Refused at the gate (its own line names why) or by the directory, or no route outside a turn: nothing left the Worker,
         // a definite non-send, not an unknown one.
         if(sent==='blocked'||sent==='unroutable'){

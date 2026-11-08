@@ -7,14 +7,14 @@ const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 // Each push has a fixed line per trigger and the ids the app opens, never health or email content. An approval push names
 // the approval it opens, which the caller adds; the text never says what it suggests or why. A prep or update push may carry
 // a body code writes in place of its fixed line, naming a meeting by pushTitle and its time (channels/event-briefs.ts
-// prepPushBody, channels/update-sweep.ts updatePushLine). An update push may name the day card it revised. An event push is its
-// fixed line only: an event's title is written by whatever sent it.
+// prepPushBody, channels/update-sweep.ts updatePushLine). An update push may name the day card it revised. A chat push is its
+// fixed line only: what is new in the chat may be written by whatever sent it (an event's title).
 export const PUSHES = {
   brief: { body: 'Your Daily Brief is ready', data: { trigger: 'brief', variant: 'morning', card_ref: 'card:brief' } },
   approval: { body: 'Waldo has a suggestion for your day', data: { trigger: 'approval' } },
   prep: { body: 'Waldo has a note before your next meeting', data: { trigger: 'pre_activity_spot' } },
   update: { body: 'Waldo has an update to your day', data: { trigger: 'update' } },
-  event: { body: 'Waldo has something new for you', data: { trigger: 'event' } },
+  chat: { body: 'Waldo has something new for you', data: { trigger: 'chat' } },
 } as const satisfies Record<string, Readonly<{ body: string; data: Omit<PushNotification, 'approval_id'> }>>;
 export type PushKind = keyof typeof PUSHES;
 
