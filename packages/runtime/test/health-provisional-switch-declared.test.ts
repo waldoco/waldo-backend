@@ -117,6 +117,12 @@ describe('WAKE_BRIEF, BRIEF_DAY_PLAN and CALENDAR_PLAN in the Worker config', ()
   });
 });
 
+describe('WORKOUT_WAKE in the Worker config', () => {
+  it('is off in production until a judged trial uploads a finished workout, and on in staging', () => {
+    expect([parsed.vars.WORKOUT_WAKE, parsed.env.staging.vars.WORKOUT_WAKE]).toEqual(['0', '1']);
+  });
+});
+
 describe('SCREEN_TIME in the Worker config', () => {
   it('is on in staging, where migration 20261103120000 is applied (4 Nov 2026), and off in production', () => {
     expect(parsed.vars.SCREEN_TIME).toBe('0');
@@ -135,6 +141,13 @@ describe('DEVICE_CALENDAR in the Worker config', () => {
   it('is off in production and on in staging; it needs no migration: the owner object keeps the consent and the events', () => {
     expect(parsed.vars.DEVICE_CALENDAR).toBe('0');
     expect(parsed.env.staging.vars.DEVICE_CALENDAR).toBe('1');
+  });
+});
+
+describe('ARRIVAL_LOOK in the Worker config', () => {
+  it('is off in production and on in staging, where the deploy applies migration 20261107100000 first', () => {
+    expect(parsed.vars.ARRIVAL_LOOK).toBe('0');
+    expect(parsed.env.staging.vars.ARRIVAL_LOOK).toBe('1');
   });
 });
 

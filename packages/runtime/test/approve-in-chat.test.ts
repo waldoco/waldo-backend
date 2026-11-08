@@ -264,7 +264,7 @@ describe('the owner approves a card shown here by telling Waldo to go ahead', ()
         await f.desk.proposeTaintedAction({ tool: 'create_task', args, args_digest: await sha256Hex(stableJson(args)), reasoning: 'The email asked for it.', source: 'external' }),
       ];
       for (const id of kinds) {
-        expect(await f.desk.approveShown(id, said(), 'trace')).toEqual({ outcome: 'app_only' });
+        expect(await f.desk.approveShown(id, said(), 'trace')).toEqual({ outcome: 'app_only', link: expect.stringContaining(id) });
         expect(f.status(id)).toBe('open');
       }
     });
@@ -458,5 +458,34 @@ describe('APPROVE_IN_CHAT in the Worker config', () => {
     const parsed = flatConfig(parseJsonc(config)) as { vars: Vars; env: { staging: { vars: Vars } } };
     expect(parsed.vars.APPROVE_IN_CHAT).toBe('0');
     expect(parsed.env.staging.vars.APPROVE_IN_CHAT).toBe('1');
+  });
+});
+
+// A message landing in a chat between a card shown there and the owner's answer would read as what their "yes" answers. The jobs
+// lane holds a finished task's report while such a card waits, by asking where one waits.
+describe('where a card the owner can approve in words waits', () => {
+  it('names the chat a waiting card was shown in, and none once it is decided or when words cannot approve it', async () => {
+    await owner('words-awaited-main', async state => {
+      const f = harness(state, 'whatsapp');
+      expect(f.desk.wordsAwaited()).toEqual([]);
+      const id = await f.desk.proposeSendMessage(message());
+      expect(f.desk.wordsAwaited()).toEqual([null]);
+      await f.desk.approveShown(id, said(), 'trace');
+      expect(f.desk.wordsAwaited()).toEqual([]);
+    });
+    await owner('words-awaited-off', async state => {
+      const f = harness(state, 'whatsapp', { inWords: false });
+      await f.desk.proposeSendMessage(message());
+      expect(f.desk.wordsAwaited()).toEqual([]);
+    });
+  });
+
+  it('an app card shown in a thread names that thread', async () => {
+    await owner('words-awaited-thread', async state => {
+      const f = harness(state, 'app', { thread: () => 'owner:prn_1:thr_1' });
+      const id = await f.desk.proposeSendMessage(message());
+      expect(f.desk.placement(id)).toMatchObject({ chatApprovable: true });
+      expect(f.desk.wordsAwaited()).toEqual(['owner:prn_1:thr_1']);
+    });
   });
 });

@@ -174,6 +174,15 @@ describe('getHealthArgsSchema', () => {
     expect(getHealthArgsSchema.safeParse({ signals: ['body_weight'], from: '2026-10-01', to: '2026-10-07' }).success).toBe(false);
   });
 
+  it('asks for the food the owner\'s app logged, and types its energy in kcal and its macros in grams', () => {
+    expect(getHealthArgsSchema.safeParse({ signals: ['food_energy', 'protein', 'carbs', 'fat'], from: '2026-10-01', to: '2026-10-07' }).success).toBe(true);
+    expect(getHealthArgsSchema.safeParse({ signals: ['sodium'], from: '2026-10-01', to: '2026-10-07' }).success).toBe(false);
+    const available = { state: 'available', timezone: 'Asia/Kolkata', from: '2026-10-01', to: '2026-10-01', read_at: '2026-10-02T03:00:00.000Z', freshness: 'fresh', coverage: 1,
+      signals: [{ signal: 'protein', unit: 'g', source: 'apple', method: null, days: [{ day: '2026-10-01', value: 120 }] }] };
+    expect(getHealthResultSchema.safeParse(available).success).toBe(true);
+    expect(getHealthResultSchema.safeParse({ ...available, signals: [{ ...available.signals[0], unit: 'oz' }] }).success).toBe(false);
+  });
+
   it('lists workout sessions with what the watch measured, bounded, and refuses one that cannot be a session', () => {
     const base = { state: 'available', timezone: 'Asia/Kolkata', from: '2026-10-01', to: '2026-10-01', read_at: '2026-10-02T03:00:00.000Z', freshness: 'fresh', coverage: 1,
       signals: [{ signal: 'workouts', unit: 'minutes', source: 'apple', method: null, days: [{ day: '2026-10-01', value: 58 }] }] };

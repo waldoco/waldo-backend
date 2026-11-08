@@ -146,7 +146,7 @@ export class TelegramPollingAdapter {
       : message.document
         ? { kind: 'document', fileId: message.document.file_id, fileName: message.document.file_name ?? null, mimeType: message.document.mime_type ?? null, fileSize: message.document.file_size ?? null }
         : message.voice
-          ? { kind: 'voice', fileId: message.voice.file_id, fileName: 'voice.ogg', mimeType: message.voice.mime_type ?? 'audio/ogg', fileSize: message.voice.file_size ?? null }
+          ? { kind: 'voice', fileId: message.voice.file_id, fileName: message.voice.file_name ?? 'voice.ogg', mimeType: message.voice.mime_type ?? 'audio/ogg', fileSize: message.voice.file_size ?? null }
           : message.audio
             ? { kind: 'audio', fileId: message.audio.file_id, fileName: message.audio.file_name ?? 'audio', mimeType: message.audio.mime_type ?? null, fileSize: message.audio.file_size ?? null }
             : undefined;

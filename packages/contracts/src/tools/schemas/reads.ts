@@ -33,6 +33,8 @@ export const healthReadSignalSchema = z.enum([
   'sleep_light', 'sleep_deep', 'sleep_rem', 'sleep_awake', 'sleep_efficiency', 'respiratory_rate', 'spo2', 'wrist_temperature',
   'walking_hr', 'hr_recovery', 'vo2_max', 'steps', 'active_energy', 'mindful',
   'body_mass', 'body_fat', 'lean_body_mass', 'stand_hours',
+  // Food the owner's own app logged to the phone's health store: energy and the three macros, each a day's sum.
+  'food_energy', 'protein', 'carbs', 'fat',
 ]);
 export type HealthReadSignal = z.infer<typeof healthReadSignalSchema>;
 const healthReadDaySchema = z.iso.date();
@@ -49,7 +51,7 @@ export const getHealthArgsSchema = z
   .refine((args) => dayOrdinal(args.to) - dayOrdinal(args.from) < HEALTH_READ_MAX_DAYS, { error: `at most ${HEALTH_READ_MAX_DAYS} days`, path: ['to'] });
 export type GetHealthArgs = z.infer<typeof getHealthArgsSchema>;
 
-export const healthReadUnitSchema = z.enum(['minutes', 'ms', 'bpm', 'minute_of_day', 'ratio', 'percent', 'breaths_per_minute', 'celsius', 'ml_per_kg_min', 'count', 'kcal', 'kg']);
+export const healthReadUnitSchema = z.enum(['minutes', 'ms', 'bpm', 'minute_of_day', 'ratio', 'percent', 'breaths_per_minute', 'celsius', 'ml_per_kg_min', 'count', 'kcal', 'kg', 'g']);
 // One workout as the watch measured it, from the same source as the workouts signal. A part the store holds in a shape this
 // does not admit is left out, never the session. zone_minutes are minutes in heart-rate zones 1 to 5.
 const sport = <Shape extends z.ZodRawShape>(shape: Shape) => z.strictObject(shape).partial();
@@ -406,7 +408,12 @@ export const readMemoryArgsSchema = z.strictObject({
   // Also read what used to be true: claims a later fact replaced, each with the dates it held. For a question about the past
   // ("when did I", "what changed"); the replaced ones are history, never current.
   include_replaced: z.boolean().optional(),
-}).refine((args) => args.ids === undefined || args.query === undefined, { error: 'read by ids or by query, not both', path: ['ids'] });
+  // The people memory holds, each as a card (name, ring, relation, next date, last contact); with query, those whose name or
+  // claims match it. Or one person (an id from a card) with what memory holds about them.
+  people: z.boolean().optional(),
+  person: z.int().positive().optional(),
+}).refine((args) => args.ids === undefined || args.query === undefined, { error: 'read by ids or by query, not both', path: ['ids'] })
+  .refine((args) => [args.ids, args.people || undefined, args.person].filter((value) => value !== undefined).length <= 1, { error: 'read ids, people or one person, not more than one', path: ['people'] });
 export type ReadMemoryArgs = z.infer<typeof readMemoryArgsSchema>;
 // A read shows each claim whole with its provenance; aliases are search keys and stay out. Untrusted claims never
 // return. A claim past the read's byte budget is named in omitted_claim_ids, never cut.

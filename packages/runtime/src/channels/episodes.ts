@@ -66,6 +66,18 @@ export const ftsQuery = (text: string): string | null => {
 export const ownerSpokeSince = (sql: SqlStorage, at: number): boolean =>
   sql.exec("SELECT 1 FROM episodes WHERE speaker IN ('owner', ?, ?, 'quoted') AND at > ? LIMIT 1", OWNER_SAID, OWNER_ANSWERED_OUTSIDE, at).toArray().length > 0;
 
+// What Waldo and the owner said since `at`, oldest first, the newest kept within maxChars: the owner's own words and Waldo's
+// replies, never a quote or a machine note. outside: a reply from a turn that read outside content, or the owner's words
+// answering one, is among them, so a turn that reads this runs as one over outside text.
+export const RECENT_EXCHANGE_CHARS = 4_000;
+export const recentExchange = (index: EpisodeIndex, at: number, maxChars = RECENT_EXCHANGE_CHARS): Readonly<{ text: string; outside: boolean }> => {
+  const said = index.since(at, maxChars).filter((episode) => episode.speaker === 'waldo' || (episode.speaker === 'owner' && episode.own === true));
+  return {
+    text: said.map((episode) => `${episode.speaker === 'owner' ? 'Owner' : 'Waldo'}: ${episode.text}`).join('\n'),
+    outside: said.some((episode) => episode.speaker === 'waldo' ? index.readOutside(episode.entry_id) : episode.answersOutside === true),
+  };
+};
+
 export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
   sql.exec("CREATE VIRTUAL TABLE IF NOT EXISTS episodes USING fts5(entry_id UNINDEXED, speaker UNINDEXED, at UNINDEXED, text, tokenize = 'unicode61 remove_diacritics 2')");
   return {

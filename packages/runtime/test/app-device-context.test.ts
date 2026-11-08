@@ -15,10 +15,12 @@ const limiterKeys: string[] = [];
 const notices: { path: string; sig: string | null; body: string }[] = [];
 let ownerAnswer = 200;
 let devicePlace: string | undefined = '1';
+let arrivalLook: string | undefined;
 const env = () => ({
   ...(devicePlace === undefined ? {} : { DEVICE_PLACE: devicePlace }),
+  ...(arrivalLook === undefined ? {} : { ARRIVAL_LOOK: arrivalLook }),
   OWNER_DO: { idFromName: (n: string) => n, get: () => ({ fetch: async (request: Request) => {
-    notices.push({ path: new URL(request.url).pathname, sig: request.headers.get('x-waldo-moved-sig'), body: await request.text() });
+    notices.push({ path: new URL(request.url).pathname, sig: request.headers.get('x-waldo-moved-sig') ?? request.headers.get('x-waldo-arrived-sig'), body: await request.text() });
     return Response.json({ forwarded: true }, { status: ownerAnswer });
   } }) },
   RESPONSIBILITY_RATE_LIMITER: { limit: async ({ key }: { key: string }) => { limiterKeys.push(key); return { success: true }; } },
@@ -30,7 +32,7 @@ const rpcs: Rpc[] = [];
 let rpcResult: unknown = {};
 const logged: string[] = [];
 beforeEach(() => {
-  rpcs.length = 0; limiterKeys.length = 0; logged.length = 0; notices.length = 0; ownerAnswer = 200; rpcResult = {}; devicePlace = '1';
+  rpcs.length = 0; limiterKeys.length = 0; logged.length = 0; notices.length = 0; ownerAnswer = 200; rpcResult = {}; devicePlace = '1'; arrivalLook = undefined;
   vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
     rpcs.push({ fn: url.split('/rpc/')[1]!, body: JSON.parse(String(init.body)) });
     if (rpcResult instanceof Error) throw rpcResult;
@@ -110,6 +112,34 @@ describe('app device-context routes', () => {
     expect(notices).toHaveLength(1);
     expect(logged).toContain('app device context moved notice');
     expect(logged.join(' ')).not.toMatch(/tdr1w|Testville|Asia\/Kolkata/);
+  });
+
+  it('with ARRIVAL_LOOK on, sends the phone\'s arrival to the database and tells the owner\'s object once, signed with the place word only', async () => {
+    arrivalLook = '1';
+    rpcResult = { request_id: 'dc-place-0001', replayed: false, status: 'accepted', moved: false, arrived: 'gym' };
+    const response = await post('/app/v1/device-context/place', { ...upload, arrived: 'gym' });
+    expect([response.status, await response.json()]).toEqual([200, { request_id: 'dc-place-0001', replayed: false, status: 'accepted' }]);
+    expect(JSON.parse(String(rpcs[0]!.body.p_payload))).toMatchObject({ arrived: 'gym' });
+    expect(notices).toEqual([{ path: '/app/v1/internal/place-arrived', sig: await routerSignature(SECRET, 0, 'placearrived.gym.owner-1'), body: '{"place":"gym"}' }]);
+  });
+
+  it('tells it no arrival with the switch off, on a replay or when the database answers none, and the receipt never carries one', async () => {
+    for (const [look, answer] of [[undefined, { replayed: false, arrived: 'home' }], ['0', { replayed: false, arrived: 'home' }], ['1', { replayed: true, arrived: 'home' }], ['1', { replayed: false, arrived: null }]] as const) {
+      arrivalLook = look;
+      rpcResult = { request_id: 'dc-place-0001', status: 'accepted', moved: false, ...answer };
+      const response = await post('/app/v1/device-context/place', { ...upload, arrived: 'home' });
+      expect([response.status, await response.json()]).toEqual([200, { request_id: 'dc-place-0001', replayed: answer.replayed, status: 'accepted' }]);
+    }
+    expect(notices).toEqual([]);
+  });
+
+  it('refuses an arrival the contract does not name before the database is asked', async () => {
+    arrivalLook = '1';
+    for (const arrived of ['office', true, 'Home']) {
+      const response = await post('/app/v1/device-context/place', { ...upload, arrived });
+      expect(response.status).toBe(400);
+    }
+    expect(rpcs).toEqual([]);
   });
 
   it('forwards a time zone sent alone', async () => {
