@@ -44,7 +44,7 @@ const PREVIEW_CHARS = 200;
 
 export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActionHost = {}): ToolHandler<ProposeActionArgs, unknown, ToolDispatcherContext> => ({
   name: 'propose_action',
-  description: 'Ask the owner to approve one tool call in a turn that has read an email, web page or other outside content: an action, or any change (a reminder, loop, background task, standing order or setting, a health log, a file or document, or a forget by memory ids). Give the exact tool name and the exact arguments you would have passed it; the owner gets a card showing both, and on approval that call runs once. Nothing runs until they approve.',
+  description: 'Ask the owner to approve one tool call in a turn that has read an email, web page or other outside content: an action, or any change (a reminder, loop, background task, standing order or setting, a health log, a file or document, or a forget by memory ids). Give the exact tool name and arguments you would have passed it; the owner gets a card showing both, and on approval that call runs once. Nothing runs until they approve.',
   schema: proposeActionArgsSchema,
   trigger_allowlist: allowlist('propose_action'),
   autonomy_gated: false,
@@ -76,8 +76,9 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
     const frozen = parsed.data as Record<string, unknown>;
     // A topic or span selects by matching the owner's message, and outside text can name any fragment of it (one letter
     // selects everything). Ids are what the owner can check on the card, and the replay admits only those.
-    if (tool.data === 'forget_memory' && (frozen.topic !== undefined || frozen.source !== undefined)) {
-      return { ok: false, error: 'After reading outside content, a forget goes to the owner only by memory ids. Call read_memory to find the claims to remove, then propose forget_memory with their claim_ids and a scope_note, without topic or source.', code: 'rejected' };
+    // A person selects every claim about them, so it is the owner's to name in a message of their own.
+    if (tool.data === 'forget_memory' && (frozen.claim_ids === undefined || frozen.topic !== undefined || frozen.source !== undefined || frozen.person !== undefined)) {
+      return { ok: false, error: 'After reading outside content, a forget goes to the owner only by memory ids. Call read_memory to find the claims to remove, then propose forget_memory with their claim_ids and a scope_note, without topic, source or person. To forget a whole person, the owner asks for it in a message of their own.', code: 'rejected' };
     }
     let preview: readonly string[] | undefined;
     if (tool.data === 'forget_memory' && host.claims) {
@@ -113,7 +114,7 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
     if (digest === null) return { ok: false, error: 'The args could not be frozen as plain JSON.', code: 'invalid_args' };
     const proposal_id = await desk.proposeTaintedAction({
       operation_ref: await ownerEffectOperationRef(ctx), tool: tool.data, args: frozen, args_digest: digest, reasoning: args.reasoning, source: 'external',
-      ...(preview ? { preview } : {}),
+      ...(preview ? { preview } : {}), ...(ctx.askedIn ? { asked_in: ctx.askedIn } : {}),
     }, { why: callWhy(ctx) });
     return {
       ok: true,
@@ -140,7 +141,7 @@ export const taintedActionReplay = (input: Readonly<{
   const callRef = `approval:${approvalRef}`;
   const ctx: ToolDispatcherContext = {
     ...input.context(), toolArgSourceTaint: 'external', turnId: callRef, toolCallId: callRef,
-    approvedTaintedAction: { tool: tool.data, args_digest: proposal.args_digest },
+    approvedTaintedAction: { tool: tool.data, args_digest: proposal.args_digest }, ...(proposal.asked_in ? { askedIn: proposal.asked_in } : {}),
   };
   const result = await dispatchTool({ id: callRef, name: tool.data, args: proposal.args }, ctx, { handlers });
   // The owner reads the outcome. The tool's payload and its error text were written for the model and can carry readings, ids

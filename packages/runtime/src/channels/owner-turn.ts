@@ -1,4 +1,6 @@
-import { createOwnerTurnContext, type OwnerContextCapability } from '../context-composer/owner-turn';
+import { createOwnerTurnContext, ownerChainRef, type OwnerContextCapability } from '../context-composer/owner-turn';
+import { jobPromptKey, jobPromptStub, sameJobPrompt } from '../conversation/job-outcome';
+import type { TimelineSeed } from '../conversation/one-timeline';
 import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
 import { OwnerHeldError } from '../identity/open-owner-hold';
 import { OWNER_REQUEST_HOP } from './harness';
@@ -30,7 +32,7 @@ import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
 import { localTrustedBriefContextComposer, localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, type LocalSystemSkillBinding } from '../llm/run-loop-adapters';
 import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath } from '../conversation/joined-path';
-import { COMPACTION, COMPACTION_INSTRUCTION, compactedHistory, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerExchangeHistory, ownerRowsSince, planWithout, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
+import { COMPACTION, COMPACTION_INSTRUCTION, compactedHistory, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, seedBasePlan, ownerExchangeHistory, ownerRowsSince, planWithout, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
 import { ownerReadings, readingBeyondOwner, sanitise } from '../scribe/sanitiser';
 import { lightRoutePolicy, MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerModels, ownerRoutePolicy, strongRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { MODEL_CALL_TIMEOUT_MS, OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
@@ -45,7 +47,7 @@ import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
 import { fitPromptToBudget } from '../prompt/fit-prompt';
 import { ownerProfilePrompt } from '../memory/owner-profile';
-import { FORGOTTEN, QUIET_NOTE, QUIET_TAG, withoutBringUpLess, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, SOURCE_CLAIMS_SCHEMA, SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput, withoutHealthClaims, type ClaimStore, barrierPrompt, memoryPrompt, RETIRE_RULES } from '../memory/claims';
+import { FORGOTTEN, QUIET_NOTE, QUIET_TAG, withoutBringUpLess, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, knownPeopleBlock, SOURCE_PEOPLE_CLAIMS_SCHEMA, SOURCE_PEOPLE_RULE, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, SOURCE_CLAIMS_SCHEMA, SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput, withoutHealthClaims, type ClaimStore, barrierPrompt, memoryPrompt, RETIRE_RULES } from '../memory/claims';
 import { CAPACITY_INSTRUCTION, CAPACITY_SCHEMA } from '../prompt/capacity';
 import { sha256Hex } from '../context-composer/canonical';
 import { outsideView } from '../memory/outside-view';
@@ -129,6 +131,7 @@ export class OvertakenTurnError extends Error { constructor() { super('owner tur
 class LightStepFailed extends Error {}
 // newerOwnerInput: the owner has sent more since this turn (its run scope) began, so a reply that did nothing yet is dropped for one that answers it all.
 // newerOwnerMessages: the owner's newer messages on this turn's chat, offered to the model at each round of their own turn (second-message.ts).
+// finishedTasks: the background tasks that reported since the owner's own turn started, named at each of its rounds (WALDO_TASK_PICKUP).
 // memoryNotice: a line the next owner reply carries about memory Waldo saved on its own since the owner last heard; the reply
 // as the model reads it back carries modelLine instead. Taken once that reply is saved.
 // asyncTools: the owner's own turn holds no long tool (async-tools.ts); its long work goes to start_task.
@@ -136,13 +139,13 @@ class LightStepFailed extends Error {}
 // lightRoles: the models each role runs on, where the environment sets them.
 // skills: one book for every turn this responder runs, for a host that admits no turn of its own (the eval world). A skill
 // capability is bound to one turn id, so this book must follow the running turn; a pinned one refuses every later turn.
-export type OwnerContextIntegration = Readonly<{ skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; turnCharts?: (turnId: string) => readonly ConversationChart[]; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles;
+export type OwnerContextIntegration = Readonly<{ skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; finishedTasks?: (since: number) => string; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; turnCharts?: (turnId: string) => readonly ConversationChart[]; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; jobOutcomeRows?: boolean; timelineSeed?: TimelineSeed;
   // While an alarm runs machine turns: the time they may run to (the alarm's end less the close margin) and whether the
   // owner's own message is waiting for the chain. Undefined outside an alarm, where a machine turn keeps TURN_TIME_BUDGET_MS.
   machineTime?: () => Readonly<{ deadline: number; yieldNow(): boolean }> | undefined }>;
 // This owner's spend so far this month and the ceiling it is held to, read once when a turn starts.
 export type OwnerSpend = Readonly<{ spentUsd: number; ceilingUsd: number }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; turnCharts?: (turnId: string) => readonly ConversationChart[]; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; machineTime?: OwnerContextIntegration['machineTime'] }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; finishedTasks?: (since: number) => string; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; turnCharts?: (turnId: string) => readonly ConversationChart[]; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; jobOutcomeRows?: boolean; timelineSeed?: TimelineSeed; machineTime?: OwnerContextIntegration['machineTime'] }>;
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 // The typed failure on a tool hop: the ToolError code when the tool returned one, else the loop's coarse code.
@@ -292,7 +295,7 @@ export const createOwnerResponder = (
   };
   // Memory checks a span against the text the model read, so it gets that text and the spans the owner did not write.
   const memoryView = (parts: readonly InboundPart[]) => { const shown = renderForModel(parts); return { text: shown.text, sourceQuoteRanges: shown.foreignRanges }; };
-  const memoryContext = () => ({ ...(backgroundSourceTaint === 'external' ? { memoryOutside: true } : {}), ...(activeOwnerTurn ? { ownerInitiated:true, memoryTurn: {
+  const memoryContext = () => ({ ...(backgroundSourceTaint === 'external' ? { memoryOutside: true } : {}), ...(activeOwnerTurn ? { ownerInitiated:true, askedIn: { surface: activeOwnerTurn.surface, conversation_ref: activeOwnerTurn.conversationRef }, memoryTurn: {
     ownerId: safety.authenticatedUserId, conversationRef: activeOwnerTurn.conversationRef,
     current: { message_ref: activeOwnerTurn.messageRef?.id ?? activeOwnerTurn.traceId, ...memoryView(activeOwnerTurn.parts) },
     recent: [...recentOwnerTurns.values()].filter(turn => !barrier().holds(turn.text)).concat(control.heard().map((steer, index) => ({ message_ref: `${traceId}-steer-${index}`, text: steer.text, sourceQuoteRanges: steer.foreignRanges }))),
@@ -644,7 +647,7 @@ export const createOwnerResponder = (
           const steered = await consumeRound();
           if (steered === null) return { text: STOPPED_REPLY };
           const newer = await newerOwnerMessages();
-          const added = steered + (newer?.note ?? '');
+          const added = steered + (newer?.note ?? '') + (ownerTurnActive ? privateOwner?.finishedTasks?.(ownerTurnStartedAt) ?? '' : '');
           const contextSteering = control.revision();
           const visibleOwnerTexts = new Set(request.messages.filter(message => message.role === 'user').map(message => message.content));
           for (const [id, turn] of recentOwnerTurns) if (!visibleOwnerTexts.has(turn.text)) recentOwnerTurns.delete(id);
@@ -927,7 +930,7 @@ export const createOwnerResponder = (
       onPhase: (phase, previousMs) => log({ trace, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }),
     });
     const jobSkills = jobHost.skills?.(jobContext.invocation.verified_authority.principal_ref, trace, () => jobContext.assertCurrent());
-    const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, privateRunScope, privateSystemSkills, { context: jobContext, ...(jobSkills ? { skills: jobSkills } : {}), ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}), ...(privateOwner?.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner?.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}), ...(privateOwner?.loopIsSourceBound ? { loopIsSourceBound: privateOwner.loopIsSourceBound } : {}), ...(privateOwner?.profileView ? { profileView: true } : {}), ...(privateOwner?.semanticRecall ? { semanticRecall: privateOwner.semanticRecall } : {}), ...(privateOwner?.memorySelection ? { memorySelection: privateOwner.memorySelection } : {}), ...(privateOwner?.memoryUsed ? { memoryUsed: privateOwner.memoryUsed } : {}), ...(privateOwner?.turnCharts ? { turnCharts: privateOwner.turnCharts } : {}), ...(privateOwner?.memoryValidity ? { memoryValidity: true } : {}), ...(privateOwner?.machineTime ? { machineTime: privateOwner.machineTime } : {}) });
+    const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, privateRunScope, privateSystemSkills, { context: jobContext, ...(jobSkills ? { skills: jobSkills } : {}), ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}), ...(privateOwner?.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner?.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}), ...(privateOwner?.loopIsSourceBound ? { loopIsSourceBound: privateOwner.loopIsSourceBound } : {}), ...(privateOwner?.profileView ? { profileView: true } : {}), ...(privateOwner?.semanticRecall ? { semanticRecall: privateOwner.semanticRecall } : {}), ...(privateOwner?.memorySelection ? { memorySelection: privateOwner.memorySelection } : {}), ...(privateOwner?.memoryUsed ? { memoryUsed: privateOwner.memoryUsed } : {}), ...(privateOwner?.turnCharts ? { turnCharts: privateOwner.turnCharts } : {}), ...(privateOwner?.memoryValidity ? { memoryValidity: true } : {}), ...(privateOwner?.machineTime ? { machineTime: privateOwner.machineTime } : {}), ...(privateOwner?.jobOutcomeRows ? { jobOutcomeRows: true } : {}) });
     control.route(scoped.control);
     try { return await work(scoped); }
     finally { control.unroute(scoped.control); }
@@ -981,9 +984,11 @@ export const createOwnerResponder = (
       const readOutside = readOthersWords() || turnLoopCtx?.toolArgSourceTaint === 'external';
       // The charts this turn drew go with its reply, so the app reads them back with it.
       const charts = fromOwner && context ? privateOwner?.turnCharts?.(id) ?? [] : [];
-      const savedEntries = [...(inputStored ? [] : [tree.get(id)!]), { ...told, ...(context ? { appPayload: out, ...(receipt ? { receipt } : {}), ...(charts.length ? { charts } : {}) } : {}), ...(readOutside ? { readOutside: true as const } : {}) }].map(entry => redactConversationEntry(entry, redact));
+      const jobStub = !fromOwner && privateOwner?.jobOutcomeRows ? jobPromptStub(tree.get(id)!, await jobPromptKey(said)) : null;
+      const savedEntries = [...(inputStored ? [] : [jobStub ?? tree.get(id)!]), { ...told, ...(context ? { appPayload: out, ...(receipt ? { receipt } : {}), ...(charts.length ? { charts } : {}) } : {}), ...(readOutside ? { readOutside: true as const } : {}) }].map(entry => redactConversationEntry(entry, redact));
       await conversationStore?.save(savedEntries, publication.leafId, privateRunScope);
       if (told !== answered) tree.replace(told);
+      if (jobStub) tree.replace(jobStub);
       for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); }
       privateRunScope?.admit();
       await assertFresh();
@@ -1038,25 +1043,33 @@ export const createOwnerResponder = (
       const now = Date.now();
       const live = liveCompaction(tree, leafId);
       const lastAttemptAt = (await conversationStore.compactionAttempt?.(ref)) ?? null;
-      if (!compactionDue({ stats, ownerRows: ownerRowsSince(tree, leafId, live?.createdAt ?? null), lastAttemptAt, now }, compaction)) return;
+      if (lastAttemptAt !== null && now - lastAttemptAt < compaction.minIntervalMs) return;
+      // The owner's chain from another surface is carried into the owner's own chain only, never into a thread's.
+      const timeline = ref === ownerChainRef('app', ownerId) ? privateOwner?.timelineSeed : undefined;
+      const seed = timeline?.read() ?? null;
+      if (!seed && !compactionDue({ stats, ownerRows: ownerRowsSince(tree, leafId, live?.createdAt ?? null), lastAttemptAt, now }, compaction)) return;
       privateRunScope?.admit();
       await conversationStore.noteCompactionAttempt?.(ref, now, privateRunScope);
-      const planned = compactionPlan(tree, leafId, live, compaction);
+      const planned = seed ? seedBasePlan(tree, leafId, live, compactionPlan(tree, leafId, live, compaction, compaction.budgetTokens / 2))
+        : compactionPlan(tree, leafId, live, compaction);
       if (!planned || tree.get(compactionId(planned.covers.to_id))) return;
       // A topic forgotten this turn is still in this turn's rows; like the reply, neither the memory flush nor the summary
       // reads a row that carries it.
       const cut = barrier();
-      const plan = planWithout(planned, (message) => cut.shows(message.content));
-      if (!plan) { hop(false, 'held_topic'); return; }
+      const kept = planWithout(planned, (message) => cut.shows(message.content));
+      if (!kept) { hop(false, 'held_topic'); return; }
+      const earlier = seed?.messages.filter((message) => !cut.shows(message.content)) ?? [];
+      const plan = seed ? { ...kept, covers: { ...kept.covers, rows: kept.covers.rows + seed.rows } } : kept;
+      const input = [...earlier, ...plan.input];
       // The memory flush sees the span before the summary takes its place; until it has run, the span stays in the window.
       let ownerWords: string | undefined;
       if (privateOwner?.compactionFlush) {
-        try { ownerWords = (await privateOwner.compactionFlush({ conversationRef: ref, covers: plan.covers, messages: plan.input, entryIds: plan.entryIds }, { save: saveFromSpan }))?.owner; }
+        try { ownerWords = (await privateOwner.compactionFlush({ conversationRef: ref, covers: plan.covers, messages: input, entryIds: plan.entryIds }, { save: saveFromSpan }))?.owner; }
         catch (error) { if (error instanceof ClosedRunError) throw error; hop(false, 'flush_failed'); return; }
         privateRunScope?.admit();
       }
       const started = Date.now();
-      const response = await complete(traceId, 'compaction', COMPACTION_INSTRUCTION, plan.input, undefined, undefined, undefined, undefined, auxiliaryModel);
+      const response = await complete(traceId, 'compaction', COMPACTION_INSTRUCTION, input, undefined, undefined, undefined, undefined, auxiliaryModel);
       const summary = response.text.trim();
       if (response.truncated || summary.length > compaction.maxOutputTokens * BUDGET_CHARS_PER_TOKEN) { hop(false, 'truncated'); return; }
       if (!summary) { hop(false, 'empty'); return; }
@@ -1064,14 +1077,18 @@ export const createOwnerResponder = (
       // source: a reading the owner wrote in the span is ordinary chat, while one whose number came from Waldo's reply (a
       // relayed device reading), shared content, an owner number about something else or nowhere is refused. Without the
       // owner's words, every reading is refused.
-      if (readingBeyondOwner(summary, ownerReadings(ownerWords))) { hop(false, 'numeric_health'); return; }
+      // The carried rows are the owner's own words, so a reading the owner wrote there passes the floor like one in the span.
+      if (readingBeyondOwner(summary, ownerReadings(seed ? [ownerWords, ...earlier.map((message) => message.content)].filter(Boolean).join('\n') : ownerWords))) { hop(false, 'numeric_health'); return; }
       const row = compactionRow(plan, summary, ownerId, Date.now());
       privateRunScope?.admit();
       // A forget can land while the summary is being written, so the commit that writes it reads the topics held then: the
       // summary must not show one (it can name a topic its input did not carry), and no row it was made from may carry one.
       const fence = { sources: plan.sources, admits: () => {
         const held = barrier();
-        return !held.shows(summary) && !plan.input.some((message) => held.shows(message.content));
+        const admitted = !held.shows(summary) && !input.some((message) => held.shows(message.content)) && (timeline === undefined || !seed || timeline.unchanged());
+        // Inside the commit that writes the summary, so the carry is marked exactly when the summary lands.
+        if (admitted && seed) timeline?.mark(ref);
+        return admitted;
       } };
       if (!(await conversationStore.appendCompaction(row, live?.id ?? null, privateRunScope, fence))) { hop(false, 'held_topic'); return; }
       tree.append(row);
@@ -1087,7 +1104,7 @@ export const createOwnerResponder = (
     async compactChain(trace, jobContext, scope) {
       if (privateRunScope !== scope) {
         if (!privateOwner?.history) return;
-        const job = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, scope, privateSystemSkills, { context: jobContext, history: privateOwner.history, ...(privateOwner.compactionFlush ? { compactionFlush: privateOwner.compactionFlush } : {}), ...(privateOwner.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}) });
+        const job = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, scope, privateSystemSkills, { context: jobContext, history: privateOwner.history, ...(privateOwner.compactionFlush ? { compactionFlush: privateOwner.compactionFlush } : {}), ...(privateOwner.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}), ...(privateOwner.timelineSeed ? { timelineSeed: privateOwner.timelineSeed } : {}) });
         return job.compactChain!(trace, jobContext, scope);
       }
       traceId = trace;
@@ -1099,7 +1116,7 @@ export const createOwnerResponder = (
         const capturedTurn = { ...turn, memoryWrites };
         const preparedContext = privateOwner?.contextHost ? await privateOwner.contextHost.prepare(capturedTurn, turn.runScope) : undefined;
         const preparedSkills = privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, preparedContext?.invocation.verified_authority.principal_ref ?? ownerId, turn.runScope) : undefined;
-        const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}), ...(privateOwner?.connectors ? { connectors: privateOwner.connectors } : {}), ...(privateOwner?.dayCards ? { dayCards: privateOwner.dayCards } : {}), ...(privateOwner?.compactionFlush ? { compactionFlush: privateOwner.compactionFlush } : {}), ...(privateOwner?.memoryNotice ? { memoryNotice: privateOwner.memoryNotice } : {}), ...(privateOwner?.newerOwnerInput ? { newerOwnerInput: privateOwner.newerOwnerInput } : {}), ...(privateOwner?.newerOwnerMessages ? { newerOwnerMessages: privateOwner.newerOwnerMessages } : {}), ...(privateOwner?.asyncTools ? { asyncTools: true } : {}), ...(privateOwner?.lightChat ? { lightChat: true } : {}), ...(privateOwner?.lightRoles ? { lightRoles: privateOwner.lightRoles } : {}), ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}), ...(privateOwner?.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner?.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}), ...(privateOwner?.loopIsSourceBound ? { loopIsSourceBound: privateOwner.loopIsSourceBound } : {}), ...(privateOwner?.profileView ? { profileView: true } : {}), ...(privateOwner?.semanticRecall ? { semanticRecall: privateOwner.semanticRecall } : {}), ...(privateOwner?.memorySelection ? { memorySelection: privateOwner.memorySelection } : {}), ...(privateOwner?.memoryUsed ? { memoryUsed: privateOwner.memoryUsed } : {}), ...(privateOwner?.turnCharts ? { turnCharts: privateOwner.turnCharts } : {}), ...(privateOwner?.memoryValidity ? { memoryValidity: true } : {}) });
+        const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}), ...(privateOwner?.connectors ? { connectors: privateOwner.connectors } : {}), ...(privateOwner?.dayCards ? { dayCards: privateOwner.dayCards } : {}), ...(privateOwner?.compactionFlush ? { compactionFlush: privateOwner.compactionFlush } : {}), ...(privateOwner?.memoryNotice ? { memoryNotice: privateOwner.memoryNotice } : {}), ...(privateOwner?.newerOwnerInput ? { newerOwnerInput: privateOwner.newerOwnerInput } : {}), ...(privateOwner?.newerOwnerMessages ? { newerOwnerMessages: privateOwner.newerOwnerMessages } : {}), ...(privateOwner?.finishedTasks ? { finishedTasks: privateOwner.finishedTasks } : {}), ...(privateOwner?.asyncTools ? { asyncTools: true } : {}), ...(privateOwner?.lightChat ? { lightChat: true } : {}), ...(privateOwner?.lightRoles ? { lightRoles: privateOwner.lightRoles } : {}), ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}), ...(privateOwner?.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner?.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}), ...(privateOwner?.loopIsSourceBound ? { loopIsSourceBound: privateOwner.loopIsSourceBound } : {}), ...(privateOwner?.profileView ? { profileView: true } : {}), ...(privateOwner?.semanticRecall ? { semanticRecall: privateOwner.semanticRecall } : {}), ...(privateOwner?.memorySelection ? { memorySelection: privateOwner.memorySelection } : {}), ...(privateOwner?.memoryUsed ? { memoryUsed: privateOwner.memoryUsed } : {}), ...(privateOwner?.turnCharts ? { turnCharts: privateOwner.turnCharts } : {}), ...(privateOwner?.memoryValidity ? { memoryValidity: true } : {}) });
         control.route(scoped.control);
         scopedCompaction = scoped.compactIfDue;
         try { return await scoped.respond(capturedTurn, time); }
@@ -1157,7 +1174,7 @@ export const createOwnerResponder = (
         // saved for this exact id and text instead of asking the model again; request and reply
         // are saved together, so re-adding the request would otherwise fail.
         const replayed = tree.get(`${id}-reply`);
-        if (!decision && replayed && tree.get(id)?.modelPayload === said) return replayed.appPayload;
+        if (!decision && replayed && await sameJobPrompt(tree.get(id)?.modelPayload, said)) return replayed.appPayload;
         if (decision) {
           if (!current || !toolNames || toolNames.length) throw new Error('transient decision requires currentness and no tools');
           const source = promptMemory();
@@ -1198,7 +1215,11 @@ export const createOwnerResponder = (
       if (!memory) return '{"add":[]}';
       // Outside text never sits beside a health note or a node drawn from health: this call reads memory as a job built from
       // outside content does.
-      const raw = await ask(trace, 'memory_nightly_sources', SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput(outsideView(promptMemory()!), updates, policy?.health !== false), { name: 'source_claims', schema: SOURCE_CLAIMS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+      // With the people map on, the pass sees the people memory holds by id, and may say who each claim it adds is about.
+      const people = policy?.people === true;
+      const input = sourceUpdatesInput(outsideView(promptMemory()!), updates, policy?.health !== false);
+      const raw = await ask(trace, 'memory_nightly_sources', people ? `${SOURCE_MEMORY_INSTRUCTION}\n${SOURCE_PEOPLE_RULE}` : SOURCE_MEMORY_INSTRUCTION,
+        people ? `${input}\n\n${knownPeopleBlock(memory)}` : input, { name: 'source_claims', schema: people ? SOURCE_PEOPLE_CLAIMS_SCHEMA : SOURCE_CLAIMS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
       return raw;
     },

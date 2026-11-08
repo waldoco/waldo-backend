@@ -14,7 +14,7 @@ const fixtureArgs: Record<string, unknown> = {
   web_search:{query:'public source'}, browse_page:{url:'https://example.com/',instruction:'Read the source'},
   propose_calendar_change:{action:'create',title:'Focus',start:'2026-10-08T10:00:00Z',end:'2026-10-08T11:00:00Z',reason:'Owner review'},
   query_availability:{date_range:{from:'2026-10-08T10:00:00Z',to:'2026-10-08T18:00:00Z'},duration_minutes:60},
-  set_reminder:{note:'Call mom',at:'2026-10-08T18:00'}, log_meal:{description:'Rice'}, log_workout:{type:'Walking'},
+  set_reminder:{note:'Call mom',at:'2026-10-08T18:00'}, log_meal:{description:'Rice'}, log_workout:{type:'Walking'}, delete_health_log:{id:1},
   open_loop:{title:'Plan the first run',due:null}, search_communication:{query:'renewal'}, get_health:{signals:['sleep'],from:'2026-10-07',to:'2026-10-08'},
 };
 const scenarioNames=['day-brief','meeting-prep','inbox-triage-reply-draft','sourced-research-brief','calendar-focus-proposal','artifact-revision-delivery','weekly-review','follow-up-prep','reminders-and-watches','reviewed-outbound-message','project-catch-up','meal-activity-log-and-planning','memory-correction','travel-prep','decision-brief','intention-to-plan','relationship-upkeep','overload-day','renewals-and-bills','recovery-day'];
