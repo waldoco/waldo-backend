@@ -79,6 +79,17 @@ export const peopleTables = (sql: Sql) => {
       const shared = (name: string) => others.some(other => carriesTopic(other, name) || carriesTopic(name, other));
       return [...namesOf(row).filter(name => !shared(name)), ...listOf(row.addresses)];
     },
+    // The owner's own word on a person: their name, or how close they are. Later model writes never overwrite either.
+    // A renamed person keeps the old name as another of theirs, so mail under it is still them and a forget still bars it.
+    rename(id: number, name: string, at: string): boolean {
+      const row = person(id);
+      if (!row) return false;
+      const aliases = [...new Set([...listOf(row.aliases), ...(same(row.name, name) ? [] : [row.name])])].slice(-10);
+      return sql.exec("UPDATE entities SET name = ?, name_by = 'owner', aliases = ?, last_seen_at = ? WHERE id = ?", name, aliases.length ? JSON.stringify(aliases) : null, at, id).rowsWritten === 1;
+    },
+    setRing(id: number, ring: PersonRing, at: string): boolean {
+      return person(id) !== undefined && sql.exec("UPDATE entities SET ring = ?, ring_by = 'owner', last_seen_at = ? WHERE id = ?", ring, at, id).rowsWritten === 1;
+    },
     // A person is derived: one with no live claim left is deleted, and so are links to claims that are gone or being forgotten.
     prune(): void {
       sql.exec(`DELETE FROM claim_links WHERE claim_id NOT IN (SELECT id FROM claims WHERE status NOT IN ('purging', 'forgotten'))`);
@@ -91,7 +102,6 @@ export type PeopleTables = ReturnType<typeof peopleTables>;
 // A ref that named a living person when it was checked, and no longer did when the write committed.
 export class StalePersonRef extends Error { constructor(readonly ref: number) { super('stale_person_ref'); } }
 export const personAddresses = (row: Pick<Person, 'addresses'>): string[] => listOf(row.addresses);
-export const personAliases = (row: Pick<Person, 'aliases'>): string[] => listOf(row.aliases);
 
 // The next time a dated claim's day comes round, on or after today (YYYY-MM-DD), or null when a fixed date has passed.
 export const nextOccurrence = (onDate: string, today: string): string | null => {
@@ -105,3 +115,18 @@ export const nextOccurrence = (onDate: string, today: string): string | null => 
   }
   return null;
 };
+
+// A person as a card, from the claims about them a reader may see (newest first): how those claims name them, the soonest day
+// one comes round, and when Waldo last saw them write or meet. Shared by read_memory and the app's people view.
+export type PersonCard = Readonly<{
+  person: number; name: string; other_names: string[]; ring: PersonRing | null; ring_by: 'model' | 'owner' | null; relations: string[];
+  next_date: Readonly<{ date: string; claim_id: number; text: string }> | null; last_contact: Readonly<{ at: string; via: string | null }> | null; claims: number;
+}>;
+export const personCard = (row: Person, claims: readonly (Claim & Readonly<{ relation: string | null }>)[], today: string): PersonCard => ({
+  person: row.id, name: row.name, other_names: listOf(row.aliases), ring: row.ring, ring_by: row.ring_by === 'owner' || row.ring_by === 'model' ? row.ring_by : null,
+  relations: [...new Set(claims.flatMap(claim => claim.relation ? [claim.relation] : []))].slice(0, 3),
+  next_date: claims.flatMap(claim => { const date = claim.on_date ? nextOccurrence(claim.on_date, today) : null; return date ? [{ date, claim_id: claim.id, text: claim.text }] : []; })
+    .sort((a, b) => a.date.localeCompare(b.date))[0] ?? null,
+  last_contact: row.last_contact_at ? { at: row.last_contact_at, via: row.last_contact_via } : null,
+  claims: claims.length,
+});
