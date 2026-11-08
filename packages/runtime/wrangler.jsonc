@@ -38,6 +38,8 @@
   // WALDO_STEPPED_WINDOW: "1" cuts a chat's history in steps once it outgrows the budget and holds the start between cuts,
   // so the provider reads the same leading history from its cache turn after turn; "0" drops the oldest row every turn, and
   // is the rollback.
+  // WALDO_CONTEXT_CAPS: "1" caps the standing orders and quests every turn reads (the rest named, or listed by title) and
+  // clears a turn's tool results down to the latest three past about 30k tokens; "0" is the rollback.
   // WALDO_SWITCHES: every feature switch and tuning knob, one JSON var, because Cloudflare caps a Worker at 128 vars and
   // secrets together. Each entry seam flattens it into env (src/switches.ts). A new switch goes in it, as a string, in
   // both environments; only the vars guard-switches-binding.mjs lists stay flat.
@@ -108,6 +110,7 @@
       "WALDO_TOOL_LOADER": "off",
       "WALDO_COMPACTION": "off",
       "WALDO_STEPPED_WINDOW": "0",
+      "WALDO_CONTEXT_CAPS": "0",
       "WALDO_STREAM_REPLIES": "off",
       "HEALTH_PROVISIONAL_SCORES": "0",
       "HEALTH_SOLO_NOTICE": "0",
@@ -322,6 +325,7 @@
           "WALDO_TOOL_LOADER": "harness",
           "WALDO_COMPACTION": "on",
           "WALDO_STEPPED_WINDOW": "1",
+          "WALDO_CONTEXT_CAPS": "1",
           "WALDO_STREAM_REPLIES": "on",
           "HEALTH_PROVISIONAL_SCORES": "1",
           "HEALTH_SOLO_NOTICE": "1",
