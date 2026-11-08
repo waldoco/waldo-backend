@@ -176,6 +176,25 @@ describe('Waldo\'s own sends for an owner still linked on Telegram', { timeout: 
     });
   });
 
+  it('an owner who has not confirmed their timezone keeps today\'s path, so their reminders and Brief still fire', async () => {
+    const name = 'choice-zone-unconfirmed';
+    await ownerOn(name, { ...linked(name), timezone_confirmed: false }, ON, async (owner, state) => {
+      const today = await day(owner, state);
+      expect(dayPlanBook(state.storage.sql).read(today).find(card => card.card === 'card:brief')?.sent).toBe(true);
+      expect(state.storage.sql.exec<{ status: string }>("SELECT status FROM schedule WHERE kind = 'reminder'").toArray().map(row => row.status)).not.toContain('armed');
+    });
+  });
+
+  it('an owner on Telegram and iMessage only gets an event on Telegram, where their scheduled work also goes', async () => {
+    const name = 'choice-telegram-imessage';
+    await ownerOn(name, { telegram_subject: '7', imessage_subject: '1' }, ON, async (owner, state) => {
+      vi.spyOn(owner as unknown as { imessageBound(): boolean }, 'imessageBound').mockReturnValue(true);
+      expect((await event(owner, 'tg-im-ev')).status).toBe(200);
+      expect(eventOutcome(state)).toEqual({ runs: ['completed'], admission: ['completed'] });
+      expect(telegram.sends).toEqual(['sendMessage']);
+    });
+  });
+
   it('an owner whose only surface is Telegram still gets their events and day there', async () => {
     await ownerOn('choice-telegram-only', { telegram_subject: '7', timezone: 'UTC', timezone_confirmed: true }, ON, async (owner, state) => {
       expect((await event(owner, 'tg-ev')).status).toBe(200);

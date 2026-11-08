@@ -792,13 +792,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const bound: Readonly<Record<ProactiveTarget, boolean>> = { app: this.appBound(), whatsapp: this.whatsappBound(), imessage: this.imessageBound() };
     if (this.env.TELEGRAM_BOT_TOKEN && kv.get<boolean>('telegram_unlinked') !== true
       && resolveOwnerTelegramId(kv.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null) > 0
-      && !(this.proactiveOverTelegram() && Object.values(bound).some(Boolean))) return 'telegram';
+      && !(this.proactiveOverTelegram() && (bound.app || bound.whatsapp))) return 'telegram';
     return wantedTargets(proactiveSurface(kv, proactiveBothDefault(this.env))).find(target => bound[target])
       ?? (bound.app ? 'app' : bound.whatsapp ? 'whatsapp' : bound.imessage ? 'imessage' : 'app');
   }
   private surfaceRouting(): boolean { return this.env.OWNER_SURFACE_DEFAULT === '1'; }
-  // Waldo's own sends follow the owner's choice among their other surfaces even while Telegram is linked; Telegram keeps
-  // them only when no other surface is bound.
+  // Waldo's own sends follow the owner's choice among the app and WhatsApp even while Telegram is linked; Telegram keeps
+  // them while neither is bound. iMessage takes no notice outside a turn, so it never displaces Telegram here.
   private proactiveOverTelegram(): boolean { return this.env.PROACTIVE_OVER_TELEGRAM === '1'; }
   // A notice outside any turn, on `surface` as OUTSIDE_TURN_NOTICE declares. A transcript write is made under the turn queue
   // the caller holds, as every other writer of that transcript does. 'blocked': it certainly did not leave (the gate refused,
@@ -3342,8 +3342,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           && this.ctx.storage.kv.get<boolean>('telegram_unlinked') !== true
           && this.env.OWNER_DO && this.env.OWNER_DO.idFromName(doName).toString() === this.ctx.id.toString();
         if (this.whatsappBound()) rememberWhatsAppSubject(this.ctx.storage.kv, this.ctx.storage.kv.get<string>('whatsapp_subject')!);
-        // Telegram runs the pass ahead of every other surface only while the owner's choice is not asked first.
-        const telegramFirst = telegramBound && !this.proactiveOverTelegram();
+        // Telegram runs the pass ahead of every other surface unless the owner's choice is asked first. That needs a confirmed
+        // timezone: a pass on the app holds scheduled work until the owner confirms one, and on Telegram it never did.
+        const telegramFirst = telegramBound && !(this.proactiveOverTelegram() && this.ctx.storage.kv.get<boolean>('timezone_confirmed') === true);
         const appOwner = telegramFirst ? null : await this.appOwnerLookup();
         // A directory that cannot say whether WhatsApp is still bound holds the pass, as an outage of the app lookup does.
         const targets = appOwner?.kind === 'admitted' ? await this.proactiveTargets(auth) : null;
