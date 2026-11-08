@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import type { ConversationEntry } from '@waldo/contracts';
-import { TIMELINE_CARRIED_KEY, timelineSeed } from '../src/conversation/one-timeline';
+import { TIMELINE_CARRIED_KEY, TIMELINE_CARRIED_ROWS_KEY, timelineSeed } from '../src/conversation/one-timeline';
 
 const row = (id: string, role: 'user' | 'assistant', text: string, extra: Partial<ConversationEntry> = {}): ConversationEntry => ({ id, ownerId: 'o', chatId: 'whatsapp-1555', parentId: null,
   threadAnchorId: null, surface: 'whatsapp', modelPayload: text, appPayload: text, modelProjection: { mode: 'include' }, role,
@@ -32,8 +32,9 @@ it('the mark is the last legacy row carried: what the chain gains later is carri
   const kv = kvOf([row('1', 'user', 'My gym is at 7.')]);
   const seed = timelineSeed(kv as never, chat, 10_000);
   expect(texts(seed.read())).toEqual(['[on WhatsApp] My gym is at 7.']);
-  seed.mark();
+  seed.mark('owner:o');
   expect(kv.map.get(TIMELINE_CARRIED_KEY)).toBe('conv:0000000000');
+  expect(kv.map.get(TIMELINE_CARRIED_ROWS_KEY)).toEqual({ 'owner:o': ['conv:0000000000'] });
   expect(seed.read()).toBeNull();
   kv.append(row('2', 'user', 'My dentist is on Tuesday.'));
   expect(texts(seed.read())).toEqual(['[on WhatsApp] My dentist is on Tuesday.']);
