@@ -156,6 +156,15 @@ export const APP_CHAT_RATING_REVISION = 6;
 // text. A reply that looked up nothing, a user row, a thread row and revisions below 7 leave the key out.
 export const APP_CHAT_MEMORY_USED_REVISION = 7;
 export const APP_CHAT_MEMORY_USED_MAX_V1 = 8;
+// Chat revision 8 (`chat=8`): a reply Waldo drew a chart in carries it as a `chart_series` part, after its text and before
+// its receipt. Its `fallback_text` is the chart's `alt_text`. Below 8 no chart part is sent: the reply's `text` carries each
+// chart's alt text instead, after the reply's own words and before its receipt line, so an older build shows what the chart says.
+export const APP_CHAT_CHART_REVISION = 8;
+// Chat revision 11 (`chat=11`): a chart of the owner's own readings is a `chart_series` part too, but the reply keeps only its
+// query. Each read of the chat re-reads the health plane for it, so the points exist only in that response. A build below 11,
+// a read with sharing off or nothing to draw, and a page past its live-read budget get the chart's alt text in `text`, in the
+// same place as below 8.
+export const APP_CHAT_HEALTH_CHART_REVISION = 11;
 export const appMemoryUsedV1Schema = z.strictObject({ id: z.string().regex(/^memory:claim:[1-9][0-9]{0,15}$/), text: z.string().min(1).max(300) });
 // `text` is never empty when `parts` holds anything other than a text part, so a reader that draws only `text`
 // always shows the message. `created_at` is epoch ms when the row was stored; rows stored before the time
