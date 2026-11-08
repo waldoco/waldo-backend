@@ -110,7 +110,7 @@ const appChat = async (owner: Owner, name: string) => {
   return (await response.json() as { messages: { role: string; text: string }[] }).messages.map(({ role, text }) => ({ role, text }));
 };
 // The rows of the owner's timeline, each with the surface it records.
-const timeline = (state: DurableObjectState) => [...state.storage.kv.list<{ role?: string; surface: string; appPayload: string }>({ prefix: 'canonical-owner-v1:' })]
+const timeline = (state: DurableObjectState) => [...state.storage.kv.list<{ role?: string; surface: string; appPayload: string; modelPayload: string }>({ prefix: 'canonical-owner-v1:' })]
   .map(([, row]) => row).filter(row => row && typeof row === 'object' && 'surface' in row);
 const ON = { WALDO_ONE_TIMELINE: '1' } as const;
 
@@ -120,7 +120,9 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
     await withOwner(name, ON, async (owner, state) => {
       await saysOnWhatsApp(owner(), 'My sister Priya lands Thursday at 6pm.');
       await saysInApp(owner(), state, name, 'When does she land?');
-      expect(model.asked.at(-1)).toContain('My sister Priya lands Thursday at 6pm.');
+      // The model reads where it was said; the stored row keeps the owner's words as written.
+      expect(model.asked.at(-1)).toContain('[on WhatsApp] My sister Priya lands Thursday at 6pm.');
+      expect(timeline(state).find(row => row.appPayload === 'My sister Priya lands Thursday at 6pm.')).toMatchObject({ modelPayload: 'My sister Priya lands Thursday at 6pm.' });
     });
   });
 
@@ -210,6 +212,9 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
       await saysOnWhatsApp(owner(), 'My sister Priya lands Thursday at 6pm.');
       await saysInApp(owner(), state, name, 'When does she land?');
       expect(model.asked.at(-1)).not.toContain('Priya lands Thursday');
+      await saysOnWhatsApp(owner(), 'Anything else?');
+      expect(model.asked.at(-1)).toContain('My sister Priya lands Thursday at 6pm.');
+      expect(model.asked.at(-1)).not.toContain('[on WhatsApp]');
     });
   });
 });

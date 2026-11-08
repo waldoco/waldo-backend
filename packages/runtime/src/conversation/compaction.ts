@@ -13,8 +13,20 @@ export const COMPACTION = {
   minOwnerRows: 10,
   minIntervalMs: 3_600_000,
   maxOutputTokens: 2_000,
+  // On the one timeline, a row written on a chat surface other than the app is named with it in the model's view.
+  surfaceLabels: false,
 };
 export type CompactionSettings = typeof COMPACTION;
+const SURFACE_NAMES: Readonly<Record<string, string>> = { whatsapp: 'WhatsApp', telegram: 'Telegram', imessage: 'iMessage' };
+// The label depends only on the row, never on the surface of the turn reading it, so the history's bytes, and the provider's
+// cache of them, are the same whichever surface the owner writes on next. It is for the model's view only and is never stored.
+const labelled = (settings: CompactionSettings) => (entry: ConversationEntry): ConversationEntry => {
+  const name = settings.surfaceLabels && entry.role !== 'compaction' ? SURFACE_NAMES[entry.surface] : undefined;
+  if (!name) return entry;
+  const label = `[on ${name}] `;
+  return entry.modelProjection.mode === 'replace' ? { ...entry, modelProjection: { mode: 'replace', payload: label + entry.modelProjection.payload } }
+    : { ...entry, modelPayload: label + entry.modelPayload };
+};
 // Only the exact value "on" turns it on, so an unset or mistyped deploy var keeps the plain window.
 export const compactionSettings = (env: Readonly<{ WALDO_COMPACTION?: string }>): CompactionSettings => ({ ...COMPACTION, enabled: env.WALDO_COMPACTION === 'on' });
 
@@ -74,7 +86,7 @@ export const liveCompaction = (tree: ConversationTree, leafId: string, startRef?
 // The model's view of a chain. Without a live compaction row, or with the switch off, this is the plain window. With one,
 // the summary is always kept and the rows after the span are windowed against what the summary leaves of the budget.
 export const compactedHistory = (tree: ConversationTree, leafId: string, startRef?: string, settings: CompactionSettings = COMPACTION): Readonly<{ messages: readonly ConversationModelMessage[]; stats: CompactedStats }> => {
-  const entries = chainFrom(tree, leafId, startRef);
+  const entries = chainFrom(tree, leafId, startRef).map(labelled(settings));
   const live = settings.enabled ? liveCompaction(tree, leafId, startRef) : null;
   if (!live) {
     const plain = windowModelMessages(conversationModelMessages(entries), settings.budgetTokens);
@@ -121,7 +133,7 @@ export type CompactionPlan = Readonly<{ input: readonly ConversationModelMessage
 export const compactionPlan = (tree: ConversationTree, leafId: string, live: ConversationEntry | null, settings: CompactionSettings = COMPACTION, inputBudgetTokens: number = settings.budgetTokens): CompactionPlan | null => {
   const path = tree.path(leafId);
   const rows = (live ? path.slice(path.findIndex((entry) => entry.id === live.covers!.to_id) + 1) : path)
-    .map((entry) => ({ entry, message: conversationModelMessages([entry])[0] ?? null }));
+    .map((entry) => ({ entry, message: conversationModelMessages([labelled(settings)(entry)])[0] ?? null }));
   const isRoundStart = (entry: ConversationEntry) => (entry.role ?? (entry.id.endsWith('-reply') ? 'assistant' : 'user')) === 'user';
   // The tail: whole rounds from the newest back while they fit the tail fraction; the newest round stays whatever its size,
   // as the window itself always keeps the current turn.

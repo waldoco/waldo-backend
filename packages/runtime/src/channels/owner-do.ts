@@ -5036,7 +5036,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       compactionSettings(this.env).budgetTokens / 2);
     // The owner's chain as the app's turns read and write it; on the one timeline, WhatsApp turns read and write it too.
     const ownerHistory = (context: OwnerContextCapability): ConversationStore => ({
-      ...indexedConversationStore(canonicalOwnerConversationStore(this.ctx.storage, context, this.logSkippedLoad, threadOfChain(context.conversationRef) ?? undefined, compactionSettings(this.env)), episodes, () => Date.now()),
+      ...indexedConversationStore(canonicalOwnerConversationStore(this.ctx.storage, context, this.logSkippedLoad, threadOfChain(context.conversationRef) ?? undefined,
+        { ...compactionSettings(this.env), surfaceLabels: oneTimelineEnabled(this.env) }), episodes, () => Date.now()),
       recalls: recallReach(this.ctx.storage.kv, context.invocation.verified_authority.principal_ref, threadOfChain(context.conversationRef)) });
     // A WhatsApp turn on the one timeline runs as the owner the directory binds to this number, on the owner's own chain.
     const whatsappContext: OwnerContextIntegration | undefined = channel === 'whatsapp' && oneTimelineEnabled(this.env) && consoleAuth(this.env) !== null ? { contextHost: { prepare: async (turn, scope) => {
