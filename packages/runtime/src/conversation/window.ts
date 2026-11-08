@@ -59,3 +59,17 @@ export const windowModelMessages = (
     stats: { kept: kept.length, dropped: messages.length - kept.length, estimated_tokens: tokens, budget_tokens: budgetTokens },
   };
 };
+
+// A provider reads a request back from its cache only up to the first byte that differs, so a window that drops its oldest
+// row every turn makes every turn a full miss. The stepped window holds its start: it keeps the rows from `from` while they
+// fit the budget, and past it cuts once, to the newest rows within half the budget, so the turns until the next cut all
+// begin with the same rows. Returns the index of the first row kept; the newest row is always kept.
+export const STEPPED_WINDOW_TARGET = 0.5;
+export const steppedWindowStart = (costs: readonly number[], budgetTokens: number, from: number): number => {
+  const after = (start: number) => costs.slice(start).reduce((sum, cost) => sum + cost, 0);
+  if (after(0) <= budgetTokens) return 0;
+  if (from > 0 && from < costs.length && after(from) <= budgetTokens) return from;
+  let start = costs.length - 1, tokens = costs[start]!;
+  while (start > 0 && tokens + costs[start - 1]! <= budgetTokens * STEPPED_WINDOW_TARGET) tokens += costs[--start]!;
+  return start;
+};

@@ -27,6 +27,9 @@ export type ConversationStore = Readonly<{
   // When this chain last tried to compact, success or failure; one bounded value with no content.
   compactionAttempt?(chainRef: string): Promise<number | null>;
   noteCompactionAttempt?(chainRef: string, at: number, scope?: RunEffectScope): Promise<void>;
+  // Where the stepped window of this chain starts: the id of the first row its last cut kept, one bounded value with no content.
+  windowStart?(chainRef: string): Promise<string | null>;
+  noteWindowStart?(chainRef: string, rowId: string, scope?: RunEffectScope): Promise<void>;
   // The compaction settings this chain is read under; a turn's view and its compaction follow them. Absent means off.
   compaction?: CompactionSettings;
 }>;
@@ -35,7 +38,8 @@ type KeyValueStorage = Pick<DurableObjectStorage, 'get' | 'list' | 'put'> & { kv
 
 const entryKey = (seq: number) => `conv:${String(seq).padStart(10, '0')}`;
 
-export const durableConversationStore = (storage: KeyValueStorage): ConversationStore => ({
+export const durableConversationStore = (storage: KeyValueStorage, compaction?: CompactionSettings): ConversationStore => ({
+  ...(compaction ? { compaction } : {}),
   async forgetSourceBatch(topic) {
     const all = await this.forgetSources!(topic);
     const batch = forgetSourceBatch(topic, all.sources);
@@ -67,6 +71,11 @@ export const durableConversationStore = (storage: KeyValueStorage): Conversation
     };
     if (scope) { if (!storage.kv) throw new Error('fenced synchronous history store unavailable'); scope.commit(() => { for (const [key, value] of Object.entries(writes)) storage.kv!.put(key, value); }); }
     else await storage.put<unknown>(writes);
+  },
+  windowStart: async (chainRef) => (await storage.get<string>(`window-start:${chainRef}`)) ?? null,
+  async noteWindowStart(chainRef, rowId, scope) {
+    if (scope) { if (!storage.kv) throw new Error('fenced synchronous history store unavailable'); scope.commit(() => storage.kv!.put(`window-start:${chainRef}`, rowId)); }
+    else await storage.put(`window-start:${chainRef}`, rowId);
   },
 });
 

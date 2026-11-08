@@ -344,6 +344,12 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
       if (scope) { if (!storage.kv) throw new Error('fenced canonical history unavailable'); scope.commit(() => storage.kv!.put(key, at)); }
       else await storage.put(key, at);
     },
+    windowStart: async (chainRef) => (await storage.get<string>(`${prefix}window-start:${chainRef}`)) ?? null,
+    async noteWindowStart(chainRef, rowId, scope) {
+      const key = `${prefix}window-start:${chainRef}`;
+      if (scope) { if (!storage.kv) throw new Error('fenced canonical history unavailable'); scope.commit(() => storage.kv!.put(key, rowId)); }
+      else await storage.put(key, rowId);
+    },
   };
   return store;
 }

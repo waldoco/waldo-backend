@@ -377,6 +377,10 @@ export const createOwnerResponder = (
         tool_turns_bytes: turns?.length ? utf8Bytes(JSON.stringify(turns)) : 0,
         history_messages: Math.max(0, userMessages.length - 1), history_bytes: utf8Bytes(JSON.stringify(userMessages.slice(0, -1))),
         current_bytes: utf8Bytes(userMessages.at(-1)?.content ?? ''), attachments: attachments?.length ?? 0,
+        system_tokens_est: Math.ceil(utf8Bytes(system) / BYTES_PER_TOKEN_EST),
+        history_tokens_est: Math.ceil(utf8Bytes(JSON.stringify(userMessages.slice(0, -1))) / BYTES_PER_TOKEN_EST),
+        current_tokens_est: Math.ceil(utf8Bytes(userMessages.at(-1)?.content ?? '') / BYTES_PER_TOKEN_EST),
+        ...(purpose === 'reply' && historyMoved !== undefined ? { history_moved: historyMoved } : {}),
         ...(typeof systemPrompt === 'string' ? {} : { system_sections: systemPrompt.sections, ...(systemPrompt.contextSections ? { context_sections: systemPrompt.contextSections } : {}) }),
       },
     };
@@ -426,7 +430,11 @@ export const createOwnerResponder = (
   // F1 receipt: the window observer fires only when history was actually dropped (content-free).
   const lastWindow = new Map<string, CompactedStats>();
   let windowingRef = '';
-  const pathObservers = { onWindow: (stats: CompactedStats) => { lastWindow.set(windowingRef, stats); if (stats.dropped > 0) log({ trace: traceId, hop: 'context_window', ms: 0, ok: true, detail: `kept ${stats.kept} dropped ${stats.dropped} ~${stats.estimated_tokens}/${stats.budget_tokens} tokens` }); } };
+  // The stepped window's start as this turn read it, and whether the turn's history starts somewhere else: a moved start
+  // costs the provider's cache everything after the system prompt. The plain window moves whenever it drops a row.
+  let turnWindowFrom: string | undefined;
+  let historyMoved: boolean | undefined;
+  const pathObservers = { onWindow: (stats: CompactedStats) => { lastWindow.set(windowingRef, stats); historyMoved = compaction.steppedWindow ? stats.from !== undefined && stats.from !== turnWindowFrom : stats.dropped > 0; if (stats.dropped > 0) log({ trace: traceId, hop: 'context_window', ms: 0, ok: true, detail: `kept ${stats.kept} dropped ${stats.dropped} ~${stats.estimated_tokens}/${stats.budget_tokens} tokens` }); } };
   // A held topic withholds only the rows that carry it (same guard the forget proof uses); other recall stays available.
   const removedTopics = new Set<string>();
   const heldTopics = () => [...removedTopics, ...(forgettingState ? heldTopicsOf(forgettingState) : [])];
@@ -734,7 +742,8 @@ export const createOwnerResponder = (
             procedure: skillPrompt || (privateSystemSkills ? request.skillPrompt : undefined),
           };
           const rebuilt = (): Readonly<{ prompt: TurnPrompt; suffix: FrozenSuffix }> => {
-            const suffix = (cut.recalled ? fenced('memory recalled for this message', cut.recalled) + (cut.recalled.includes(QUIET_TAG) ? `\n${QUIET_NOTE}\n` : '') : '')
+            const recall = cut.recalled ? fenced('memory recalled for this message', cut.recalled) + (cut.recalled.includes(QUIET_TAG) ? `\n${QUIET_NOTE}\n` : '') : '';
+            const suffix = recall
               + (cut.earlier ? fenced('earlier tool results', cut.earlier) : '')
               + (cut.receipts ? fenced('external workspace receipts', cut.receipts) : '');
             const turnPrompt = assembleTurnPrompt({
@@ -753,7 +762,7 @@ export const createOwnerResponder = (
               loops: cut.loops,
               room: systemRoom,
             });
-            return { prompt: turnPrompt, suffix: { steering: contextSteering, forgets: forgetEpoch, generation, held: heldKey, health: admittedHealth, text: `${suffix}\n\n${turnPrompt.turnContext}`, sections: turnPrompt.contextSections } };
+            return { prompt: turnPrompt, suffix: { steering: contextSteering, forgets: forgetEpoch, generation, held: heldKey, health: admittedHealth, text: `${suffix}\n\n${turnPrompt.turnContext}`, sections: { ...turnPrompt.contextSections, ...(recall ? { recall: utf8Bytes(recall) } : {}) } } };
           };
           const built = reuseSuffix
             ? { prompt: assembleTurnPrompt({ instructions, facts: { clock: turnClockLine ??= ownerClockLine(clock) }, room: systemRoom }), suffix: frozen }
@@ -957,12 +966,16 @@ export const createOwnerResponder = (
       const inputStored = fromOwner && context !== undefined && privateRunScope !== undefined && conversationStore?.persistOwnerInput !== undefined;
       if (inputStored) await conversationStore.persistOwnerInput(userEntry, privateRunScope);
       foldTarget = inputStored ? userEntry : null;
+      const windowFrom = compaction.steppedWindow ? (await conversationStore?.windowStart?.(conversationRef)) ?? undefined : undefined;
+      turnWindowFrom = windowFrom;
+      historyMoved = undefined;
       const publication = await time('joined_path', () => path.submit({
         ...(privateRunScope ? { runScope: privateRunScope } : {}),
         authenticatedOwnerId: ownerId, invocation,
         context: contextInputs(),
         userEntry,
         assistantEntryId: `${id}-reply`,
+        ...(windowFrom ? { windowFrom } : {}),
       })).finally(() => { ownerTurnActive = false; lightFirst = false; turnSpend = undefined; backgroundToolNames = undefined; control.end(); });
       privateRunScope?.admit();
       await assertFresh();
@@ -984,6 +997,8 @@ export const createOwnerResponder = (
       const jobStub = !fromOwner && privateOwner?.jobOutcomeRows ? jobPromptStub(tree.get(id)!, await jobPromptKey(said)) : null;
       const savedEntries = [...(inputStored ? [] : [jobStub ?? tree.get(id)!]), { ...told, ...(context ? { appPayload: out, ...(receipt ? { receipt } : {}) } : {}), ...(readOutside ? { readOutside: true as const } : {}) }].map(entry => redactConversationEntry(entry, redact));
       await conversationStore?.save(savedEntries, publication.leafId, privateRunScope);
+      const cutFrom = lastWindow.get(conversationRef)?.from;
+      if (cutFrom && cutFrom !== windowFrom) await conversationStore?.noteWindowStart?.(conversationRef, cutFrom, privateRunScope);
       if (told !== answered) tree.replace(told);
       if (jobStub) tree.replace(jobStub);
       for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); }
