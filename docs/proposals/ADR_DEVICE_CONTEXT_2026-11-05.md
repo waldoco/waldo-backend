@@ -175,17 +175,18 @@ The owner ruled on §4's open decision: landing after travel, or coming home, ma
   - The look is told why it runs and that "a move is a reason to look, not a reason to speak". It reads `get_device_context`, calendar and mail.
   - It decides `none`, `say` or `act` as on any look.
   - Every limit of the look holds: the owner's consent to unasked messages, the heartbeat preference, quiet hours, the owner's day, the budget and the gap.
-  - A move pulls the look forward at most once per look cadence (`PROACTIVE_REVIEW_EVERY_MIN`, 3 hours by default). The time of the last pull is the only thing kept. A phone whose city keeps flipping, on a border or a train, costs no more looks than the cadence already allows. Looks also stay one per owner-local hour.
+  - A move adds at most one extra look per look cadence (`PROACTIVE_REVIEW_EVERY_MIN`, 3 hours by default). The time of the last pull is the only thing kept, written once the look is armed. A move inside the cadence does not bring the look sooner, but the look already armed is tagged `place_moved`, so it still knows a phone moved. A phone whose city keeps flipping, on a border or a train, costs no more than one extra look per cadence. Looks also stay one per owner-local hour.
   - A move that lands on an hour whose look already ran, or is still running, is looked at in the next owner-local hour.
   - Limits are kept in the owner's set time zone, which a trip can make wrong for a while. The look is told this and weighs the local hour where the phone is before speaking. Holding quiet hours in the device's zone is a later change.
 - **Rollout order:**
   - Deploy the Worker that strips `moved` before applying migration `20261106190000`. An older Worker reads the extra key as a malformed receipt and answers 503.
-  - To roll back, revert the migration first. Its receipts never stored the key, so a replay is safe either way.
+  - To roll back, revert the migration first, then the Worker (an older Worker answers 503 to a receipt carrying `moved`). No restoring migration ships with this amendment: rolling the database back means applying the previous `device_context_place_ingest` definition by hand. Its receipts never stored the key, so a replay is safe either way.
 - **The notice can be replayed.** Like the health notices, it is signed with a fixed time, so a captured one could be sent again. Its only effect is bringing a look forward, at most once per look cadence, and only the Worker can reach the route.
 - **Known follow-ups, not in this amendment:**
   - A move after the Close arms the next Brief's look with `cause_id: place_moved`. Withdrawing place consent overnight does not clear that cause.
   - The look's refs (`now`, `moved`) sit in the owner object's `task_jobs` as timestamps and a fixed phrase. "Nothing new is stored" holds for Supabase.
   - A move look held by quiet hours or the budget loses its cause; the next look runs without it.
+  - A move inside the cadence tags the armed look rather than pulling it (built after the gate's review).
 - **What it does not do:**
   - It adds no geofence, no arrival rule, no "home" or "gym" label and no fine location.
   - Arriving at a named place (the gym, home) is §9.
