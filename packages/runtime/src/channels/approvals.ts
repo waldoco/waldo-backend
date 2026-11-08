@@ -1092,9 +1092,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const expiredReply = (entry: LedgerRow): ApprovalDecision =>
     ({ toast: 'This proposal expired', message: `That proposal expired, so nothing happened: ${describeAny(entry)}. Ask me again if you still want it.` });
   // Closed in a turn that read outside text, the answer is the desk's own fixed words, with neither the reason nor a pointer
-  // to the newer card.
+  // to the newer card; a replaced one says so rather than sending the owner to ask again.
   const withdrawnReply = (entry: LedgerRow): ApprovalDecision => {
-    if (entry.withdrawn_outside === 1) return { toast: 'Withdrawn', message: `That card was closed while I was working with an email or web page, so nothing was done: ${describeAny(entry)}. Ask me for it again if you still want it.` };
+    if (entry.withdrawn_outside === 1) return { toast: 'Withdrawn', message: entry.replaced_by
+      ? `That card was replaced while I was working with an email or web page, so nothing was done: ${describeAny(entry)}.`
+      : `That card was closed while I was working with an email or web page, so nothing was done: ${describeAny(entry)}. Ask me for it again if you still want it.` };
     const newer = entry.replaced_by ? row(entry.replaced_by) : undefined;
     const waiting = newer && (newer.status === 'open' || newer.status === 'review_only');
     return { toast: 'Withdrawn', message: `I withdrew that card, so nothing was done: ${describeAny(entry)}. ${entry.withdrawn_reason ?? ''}${waiting ? ' The newer version is waiting for you.' : ''}`.trim() };

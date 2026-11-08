@@ -126,7 +126,10 @@ describe('a turn that read outside text', () => {
       expect(notices).toEqual([{ key: `withdrawn:${first}`, text: expect.stringContaining('replaced') }]);
       expect(notices[0]!.text).toContain('Nothing was sent or done');
       expect(notices[0]!.text).not.toContain('ask Waldo for it again');
-      expect((await desk.decide(first, 'a', 'trace')).message).not.toContain('newer');
+      const tap = (await desk.decide(first, 'a', 'trace')).message;
+      expect(tap).toContain('replaced');
+      expect(tap).not.toContain('newer');
+      expect(tap).not.toContain('Ask me for it again');
     });
   });
 
