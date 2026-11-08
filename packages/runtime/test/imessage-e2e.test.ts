@@ -76,7 +76,7 @@ async function world(ownerName = `imsg-owner-${crypto.randomUUID()}`, ownerId = 
   const fx = fixtureDirectory({ origin: ORIGIN, secret: SECRET, owners, extra: (fn) => {
     if (fn === 'console_session_touch' || fn === 'console_session_open' || fn === 'console_session_open_for') return Response.json(true);
     if (fn === 'health_context_read' || fn === 'health_plane') return Response.json(null);
-    if (fn === 'admin_overview') return Response.json(null);
+    if (fn === 'admin_check') return Response.json(false);
     return null;
   } });
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
