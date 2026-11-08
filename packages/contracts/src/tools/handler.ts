@@ -132,6 +132,8 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'delegate_task',
   // findings are stored web text about the owner; reading them back keeps the taint they arrived with.
   'list_owner_findings',
+  // read_import: an export's titles are the other assistant's words, and the owner's own messages there may paste anyone's.
+  'read_import',
 ];
 
 // Tools whose result is outside text on some calls only: each result carries its own stamp, and the dispatcher accepts
