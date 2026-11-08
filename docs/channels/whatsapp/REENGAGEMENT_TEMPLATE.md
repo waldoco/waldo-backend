@@ -106,15 +106,13 @@ message keeps waiting until the owner writes (or until its own expiry, a day for
 template when the reply template is unset, since its words are true of any message.
 
 - **Name:** `waldo_proactive_update` (any name matching `^[a-z0-9_]{1,512}$`)
-- **Category:** UTILITY, **language:** `en`
-- **Body, no variables:** `Waldo has an update for you. Reply here to see it.`
-  Alternatives if Meta recategorizes it as marketing: `Waldo has something to tell you about your day. Reply here to read it.`
-  or `You have an update from Waldo. Send any message here to see it.`
-- **No header, footer, media or buttons.**
-- **Risk:** the same as the reply template. A body with no order or account detail can be judged marketing. Accept it only
-  if it reads back APPROVED with category UTILITY.
+- **Category:** submitted as UTILITY; Meta approved it as MARKETING (`previous_category` UTILITY). **Language:** `en`
+- **Body, no variables:** `Waldo has an update about your day or something you asked it to keep track of. Reply here to see it.`
+- **Footer:** `Unlink WhatsApp any time from your Waldo console.` No header, media or buttons.
+- **Marketing category, accepted by the owner on 8 Nov 2026:** it costs more per message than utility, and Meta's
+  per-user marketing limits can refuse or not deliver a knock. The held message still waits for the owner's next message.
 
-Once approved, set in `packages/runtime/wrangler.jsonc`, staging `vars` (both empty today):
+Once approved, set in `packages/runtime/wrangler.jsonc`, staging `vars`:
 
 - `WHATSAPP_PROACTIVE_TEMPLATE` to `waldo_proactive_update`;
 - `WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE` to `en`.
@@ -125,7 +123,7 @@ proactive message without this configuration is `{"hop":"whatsapp_window","ok":f
 ## Staging status
 
 `waldo_update_ready` (`en`) reads back APPROVED and UTILITY with a static body and footer, and staging's `vars` carry it.
-`WHATSAPP_PROACTIVE_TEMPLATE` stays empty until `waldo_proactive_update` is approved.
+`waldo_proactive_update` (`en`) reads back APPROVED and MARKETING, and staging's `vars` carry it.
 
 ## Opt-in comes first
 
