@@ -31,6 +31,7 @@ describe('pushNotification', () => {
     expect(pushNotificationSchema.safeParse({ trigger: 'event' }).success).toBe(true);
     expect(pushNotificationSchema.safeParse({ trigger: 'event', card_ref: 'card:brief' }).success).toBe(false);
     expect(pushNotificationSchema.safeParse({ trigger: 'event', form_zone: 'flagging' }).success).toBe(false);
+    for (const zone of [{ recovery_zone: 'mixed' }, { load_zone: 'heavy' }]) expect(pushNotificationSchema.safeParse({ trigger: 'event', ...zone }).success).toBe(false);
     expect(pushNotificationSchema.safeParse({ trigger: 'event', approval_id: 'appr_01' }).success).toBe(false);
   });
 

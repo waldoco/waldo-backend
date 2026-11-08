@@ -36,7 +36,8 @@ export const PUSH_DAILY_LIMIT = 3;
 // Pushes for anything but a day card or an approval have their own ceiling: a backstop against a runaway sender. Whether one
 // is sent at all is the model's judgment.
 export const PROACTIVE_PUSH_DAILY_LIMIT = 6;
-// Event pushes, which an outside source's notices raise, count apart: a noisy source never uses up the day's prep and update pushes.
+// Event pushes, which an outside source's notices raise, count apart: a noisy source never uses up the day's prep and update
+// pushes. This is a backstop under the owner's own limits (OwnerPushDeps.held), which the deploy can set (EVENT_PUSH_PER_DAY).
 export const EVENT_PUSH_DAILY_LIMIT = 3;
 const CARD_PUSHES: ReadonlySet<PushKind> = new Set(['brief', 'approval']);
 const BUDGET_KEY = 'app_push_budget_v1';
@@ -60,6 +61,11 @@ export type OwnerPushDeps = Readonly<{
   today(): string;
   quiet(): boolean;
   log(code: string, count: number): void;
+  // The owner's own limits on a push of this kind, past quiet hours: why it is held, or null. A push it lets through is
+  // charged to them by spent, when it is counted.
+  held?(kind: PushKind): string | null;
+  spent?(kind: PushKind): void;
+  eventPerDay?: number;
 }>;
 
 const readTargets = (value: unknown): readonly PushTarget[] => {
@@ -88,15 +94,18 @@ export const ownerPush = (deps: OwnerPushDeps) => async (kind: PushKind, approva
     ...(kind === 'update' && cardRef !== undefined ? { card_ref: cardRef } : {}) });
   if (!data.success) return deps.log('invalid_payload', 0);
   if (deps.quiet()) return deps.log('quiet', 0);
+  const held = deps.held?.(kind);
+  if (held) return deps.log(`held_${held}`, 0);
   const card = CARD_PUSHES.has(kind), key = card ? BUDGET_KEY : kind === 'event' ? EVENT_BUDGET_KEY : PROACTIVE_BUDGET_KEY;
   const day = deps.today(), budget = deps.kv.get<{ day: string; sent: number }>(key);
   const sent = budget?.day === day ? budget.sent : 0;
-  const limit = kind === 'event' ? EVENT_PUSH_DAILY_LIMIT : !card ? PROACTIVE_PUSH_DAILY_LIMIT : kind === 'approval' && deps.kv.get<string>(BRIEF_DAY_KEY) !== day ? PUSH_DAILY_LIMIT - 1 : PUSH_DAILY_LIMIT;
+  const limit = kind === 'event' ? deps.eventPerDay ?? EVENT_PUSH_DAILY_LIMIT : !card ? PROACTIVE_PUSH_DAILY_LIMIT : kind === 'approval' && deps.kv.get<string>(BRIEF_DAY_KEY) !== day ? PUSH_DAILY_LIMIT - 1 : PUSH_DAILY_LIMIT;
   if (sent >= limit) return deps.log('daily_limit', 0);
   let devices: readonly PushTarget[];
   try { devices = readTargets(await deps.targets()); } catch { return deps.log('targets_unavailable', 0); }
   if (!devices.length) return deps.log('no_devices', 0);
   deps.kv.put(key, { day, sent: sent + 1 });
+  deps.spent?.(kind);
   if (kind === 'brief') deps.kv.put(BRIEF_DAY_KEY, day);
   let response: Response;
   try {
