@@ -1416,6 +1416,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       skills: (owner, turnId, assertCurrent) => createJobSkillCapability(sql, { owner, custodyKey: seededSkillCustody(sql) ?? owner, turnId, trigger: 'user_message', ownerText: '', assertCurrent, catalog: curatedCatalog(this.env.HEALTH_ACTIONS === '1') }) };
   }
 
+  // A WhatsApp turn runs on the owner's own chain only while the owner's proactive work lands in their app transcript, which
+  // is that chain. Work that goes to WhatsApp first runs on WhatsApp and writes the WhatsApp chain, which a turn on the
+  // owner's chain would no longer read; those turns stay on the WhatsApp chain.
+  private whatsappOnTimeline(): boolean {
+    return this.appBound() && wantedTargets(proactiveSurface(this.ctx.storage.kv, proactiveBothDefault(this.env)))[0] !== 'whatsapp';
+  }
   // The app binding written at the owner's first app message: the local sign that the app is one of their surfaces.
   private appBound(): boolean {
     const kv = this.ctx.storage.kv, doName = kv.get<string>('do_name');
@@ -2499,7 +2505,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (!overtaken && inbox.settle(record, completed)) await this.whatsappNotice(record);
       ran ||= completed;
     }
-    if (ran && oneTimelineEnabled(this.env) && compactionSettings(this.env).enabled && consoleAuth(this.env) !== null) {
+    if (ran && oneTimelineEnabled(this.env) && compactionSettings(this.env).enabled && consoleAuth(this.env) !== null && this.whatsappOnTimeline()) {
       // An app message admitted meanwhile stops it, as it stops the app's own compaction.
       const abort = new AbortController();
       this.compactionAbort = abort;
@@ -5079,7 +5085,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         { ...compactionSettings(this.env), surfaceLabels: oneTimelineEnabled(this.env) }), episodes, () => Date.now()),
       recalls: recallReach(this.ctx.storage.kv, context.invocation.verified_authority.principal_ref, threadOfChain(context.conversationRef)) });
     const whatsappContext = channel === 'whatsapp' && oneTimelineEnabled(this.env) && consoleAuth(this.env) !== null
-      ? whatsappTimelineContext(this.whatsappTimelineHost(), () => this.activeWhatsApp, { health: trace => healthContext.latest(trace), ownerProfile: google.nameLine }, ownerHistory, seed) : undefined;
+      ? whatsappTimelineContext(this.whatsappTimelineHost(), () => this.activeWhatsApp, { health: trace => healthContext.latest(trace), ownerProfile: google.nameLine }, ownerHistory, seed, () => this.whatsappOnTimeline()) : undefined;
     // Past the owner's monthly ceiling a turn degrades: the owner's own turns run on the auxiliary model and paid tools are held.
     // The month total lives beside the cost ledger's deltas, so there is no ceiling while the ledger is off.
     // The forget barrier's rule: items cuts only the forgotten words and items; reads is the earlier whole-read hold.

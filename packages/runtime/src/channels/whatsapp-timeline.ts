@@ -37,9 +37,10 @@ const admit = async (host: WhatsAppTimelineHost, scope: RunEffectScope, owner: R
 // The turn's context leaves its chain to the default, the owner's own.
 export const whatsappTimelineContext = (host: WhatsAppTimelineHost, active: () => Readonly<{ scope: RunEffectScope; admittedAt: number }> | null,
   sources: Pick<OwnerContextSources, 'ownerProfile'> & Readonly<{ health(trace: string): Promise<ContextHealthMaterial | null> }>,
-  history: OwnerHistoryFactory, timelineSeed: TimelineSeed): OwnerContextIntegration => ({
+  history: OwnerHistoryFactory, timelineSeed: TimelineSeed, joined: () => boolean): OwnerContextIntegration => ({
   contextHost: { prepare: async (turn, scope) => {
-    if (!turn.text) return undefined;
+    // A turn left out keeps the WhatsApp chain it ran on before.
+    if (!turn.text || !joined()) return undefined;
     const running = active(), owner = bound(host);
     if (!running || scope !== running.scope || !owner || turn.surface !== 'whatsapp' || turn.conversationRef !== surfaceChatRef('whatsapp', owner.subject)) throw new ClosedRunError();
     // The composer runs on every tool round; one health read serves the whole turn.

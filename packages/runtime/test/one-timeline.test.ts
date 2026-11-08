@@ -9,12 +9,18 @@ import type { AppInboxRecord } from '../src/channels/app-inbox';
 import { traceBook } from '../src/channels/harness';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
+import { dayPlanBook } from '../src/channels/day-cards';
+import { PROACTIVE_SURFACE_KEY } from '../src/channels/proactive-surface';
+import { Scheduler } from '../src/scheduler/multiplexer';
+import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
 import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 import { TIMELINE_SEEDED_KEY } from '../src/conversation/one-timeline';
 
 const REPLY = 'Noted.';
+const BRIEF = 'Clear morning, one call at 3.';
+const CARD_MARK = '[Scheduled card "The Daily Brief"';
 const SUMMARY = 'Earlier on WhatsApp: the owner trains at the gym at 7 every weekday.';
 const model = vi.hoisted(() => ({ asked: [] as string[], compacted: [] as string[], summary: '' }));
 vi.mock('../src/channels/telegram-turn', async load => {
@@ -29,7 +35,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     // The owner asks to forget: the model calls forget_memory once, then answers.
     if (String(request.messages.at(-1)?.content ?? '').includes('Forget everything about Priya') && !request.tool_turns?.length)
       return reply('', [{ call_id: 'forget-priya', name: 'forget_memory', arguments: JSON.stringify({ topic: 'Priya', scope_note: 'my sister' }) }]);
-    return reply(REPLY);
+    return reply(String(request.messages.at(-1)?.content ?? '').includes(CARD_MARK) ? BRIEF : REPLY);
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
@@ -66,9 +72,10 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 // One owner bound to the app and to WhatsApp.
-// `restart` stands in for a new deploy: a fresh owner object on the same storage, with the given switches.
+// `restart` stands in for a new deploy: a fresh owner object on the same storage, with the given switches. `alarm` runs one
+// real alarm pass on the current object; the pool's own alarms stay held.
 const withOwner = (name: string, switches: Readonly<Record<string, string>>,
-  run: (owner: () => Owner, state: DurableObjectState, restart: (next: Readonly<Record<string, string>>) => void) => Promise<void>) =>
+  run: (owner: () => Owner, state: DurableObjectState, restart: (next: Readonly<Record<string, string>>) => void, alarm: () => Promise<void>) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (instance, state) => {
     const poolAlarm = vi.spyOn(instance as Owner, 'alarm').mockResolvedValue(undefined);
     claimStore(state.storage.sql); ensureSchema(state.storage); traceBook(state.storage.sql);
@@ -82,7 +89,7 @@ const withOwner = (name: string, switches: Readonly<Record<string, string>>,
     const make = (set: Readonly<Record<string, string>>) => new OwnerDO(state, { ...env, ...directory, ...whatsapp, TELEGRAM_BOT_TOKEN: undefined, WALDO_OWNER_TELEGRAM_ID: undefined, ...set,
       OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC' } as never);
     let current = make(switches);
-    try { await run(() => current, state, next => { current = make(next); }); }
+    try { await run(() => current, state, next => { current = make(next); }, () => OwnerDO.prototype.alarm.call(current)); }
     finally { await state.storage.deleteAlarm(); poolAlarm.mockRestore(); void (current = make(switches)); }
   });
 
@@ -239,6 +246,29 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
       expect(model.asked.at(-1)).toContain('What is on Thursday?');
       expect(model.asked.at(-1)).not.toContain('Priya');
       expect(timeline(state).some(row => row.appPayload.includes('Priya'))).toBe(false);
+    });
+  });
+
+  it('the Brief, which lands in the app transcript, is in the owner\'s next WhatsApp turn', async () => {
+    await withOwner('one-timeline-brief', { ...ON, WALDO_JOB_OUTCOME_ROWS: '1' }, async (owner, state, _restart, alarm) => {
+      dayPlanBook(state.storage.sql).save(new Date().toISOString().slice(0, 10), { card: 'card:brief', time: '00:00', reason: 'planned by the fixture' });
+      await new Scheduler(state.storage.sql, state.storage, productionDeps())
+        .schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: Date.now() - 1000, dueAt: Date.now() - 1000, recurrence: null });
+      for (let pass = 0; pass < 3; pass++) { await alarm(); await state.storage.deleteAlarm(); }
+      expect(timeline(state).map(row => row.appPayload)).toContain(BRIEF);
+      await saysOnWhatsApp(owner(), 'Thanks. Anything I should prep?');
+      expect(model.asked.at(-1)).toContain(BRIEF);
+    });
+  });
+
+  it('an owner who chose WhatsApp first for proactive work keeps WhatsApp on its own chain, where that work lands', async () => {
+    await withOwner('one-timeline-whatsapp-first', ON, async (owner, state) => {
+      state.storage.kv.put(PROACTIVE_SURFACE_KEY, 'whatsapp');
+      await saysOnWhatsApp(owner(), 'My gym is at 7 every weekday.');
+      await saysInApp(owner(), state, 'one-timeline-whatsapp-first', 'When is my gym?');
+      expect(model.asked.at(-1)).not.toContain('My gym is at 7 every weekday.');
+      expect(timeline(state).map(row => row.appPayload)).not.toContain('My gym is at 7 every weekday.');
+      expect(JSON.stringify([...state.storage.kv.list({ prefix: 'conv:' })])).toContain('My gym is at 7 every weekday.');
     });
   });
 
