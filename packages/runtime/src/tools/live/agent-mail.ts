@@ -73,7 +73,7 @@ export const sendAgentMailHandler = (host: AgentMailToolHost): ToolHandler<SendA
         from: rendered.preview.from, subject: rendered.preview.subject, body: rendered.preview.text, parts_digest: await agentMailPartsDigest(rendered.parts),
       }, { replaces: args.replaces, outside: turnReadOutside(ctx), why: callWhy(ctx), asked: ownerAsked(ctx) });
       const asked = host.desk.askedOutcome?.(proposal_id);
-      if (asked) return { ok: true, data: { proposal_id, status: askedStatus(asked), sent: asked.state === 'done' }, source_taint: null };
+      if (asked) return { ok: true, data: { proposal_id, status: `${askedStatus(asked)}${replacementStatus(host.desk.replacement?.(proposal_id) ?? null)}`, sent: asked.state === 'done' }, source_taint: null };
       return { ok: true, data: { proposal_id, status: `${proposalStatus(host.desk.placement?.(proposal_id), 'review card requested in chat; nothing was sent', 'Nothing was sent.')}${replacementStatus(host.desk.replacement?.(proposal_id) ?? null)}`, sent: false }, source_taint: null };
     } catch (error) {
       if (error instanceof ApprovalReplaceError) return refused(replaceRefusal(args.replaces!, error));

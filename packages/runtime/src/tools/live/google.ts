@@ -465,7 +465,7 @@ export const calendarPlanHandler = (google: GoogleAccess, desk: EffectDesk & Pic
         const proposal_id = await desk.proposeCalendarPlan({ day: args.day, time_zone: timezone, blocks, reason: args.reason, ...(client.account?.email ? { account: client.account.email } : {}), operation_ref: await ownerEffectOperationRef(ctx) },
           { ...(args.replaces ? { replaces: args.replaces } : {}), outside: turnReadOutside(ctx), why: callWhy(ctx), asked: ownerAsked(ctx) });
         const asked = desk.askedOutcome?.(proposal_id);
-        if (asked) return { proposal_id, status: askedStatus(asked), applied: asked.state === 'done' };
+        if (asked) return { proposal_id, status: `${askedStatus(asked)}${replacementStatus(desk.replacement?.(proposal_id) ?? null)}`, applied: asked.state === 'done' };
         return { proposal_id, status: `${proposalStatus(desk.placement?.(proposal_id), 'sent to the owner with Do it / Modify / Not now buttons', 'Nothing has been added.')}${replacementStatus(desk.replacement?.(proposal_id) ?? null)}`, applied: false };
       } catch (error) {
         if (error instanceof ApprovalReplaceError) return { refused: replaceRefusal(args.replaces!, error) };
@@ -703,7 +703,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
           const proposal_id = await desk.propose({...change, ...(client.account?.email ? {account:client.account.email} : {})}, ctx?.turnId, await ownerEffectOperationRef(ctx), { replaces, outside: turnReadOutside(ctx), ...(ctx?.runOrigin ? { origin: ctx.runOrigin } : {}), why: callWhy(ctx), asked: ownerAsked(ctx) });
           // A change the owner asked for, or one their standing grant covers, ran without a card; the reply tells them what was done.
           const asked = desk.askedOutcome?.(proposal_id);
-          if (asked) return { proposal_id, status: askedStatus(asked), applied: asked.state === 'done' };
+          if (asked) return { proposal_id, status: `${askedStatus(asked)}${replacementStatus(desk.replacement?.(proposal_id) ?? null)}`, applied: asked.state === 'done' };
           const granted = desk.grantOutcome?.(proposal_id) ?? null;
           if (granted) return { proposal_id, status: granted.message, applied: granted.state === 'done' };
           return { proposal_id, status: `${proposalStatus(desk.placement?.(proposal_id), 'sent to the owner with Do it / Modify / Not now buttons', 'Nothing has changed.')}${replacementStatus(desk.replacement?.(proposal_id) ?? null)}`, applied: false };
@@ -788,7 +788,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
           ...gate.data.reply, message_id, raw, digest: await sha256Hex(raw), signature, ...(dedupe_key ? { dedupe_key } : {}),
         }, { replaces: args.replaces, outside: turnReadOutside(ctx), why: callWhy(ctx), asked: ownerAsked(ctx) });
         const asked = desk.askedOutcome?.(proposal_id);
-        if (asked) return { ok: true, data: { account: gate.data.account, proposal_id, status: askedStatus(asked), sent: asked.state === 'done' }, source_taint: null };
+        if (asked) return { ok: true, data: { account: gate.data.account, proposal_id, status: `${askedStatus(asked)}${replacementStatus(desk.replacement?.(proposal_id) ?? null)}`, sent: asked.state === 'done' }, source_taint: null };
         return { ok: true, data: { account: gate.data.account, proposal_id, status: `${proposalStatus(desk.placement?.(proposal_id), 'review card requested in chat; nothing was sent', 'Nothing was sent.')}${replacementStatus(desk.replacement?.(proposal_id) ?? null)}`, sent: false }, source_taint: null };
       } catch (error) {
         if (error instanceof ApprovalReplaceError) return { ok: false, code: 'rejected', error: replaceRefusal(args.replaces!, error), source_taint: null };

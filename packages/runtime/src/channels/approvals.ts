@@ -275,10 +275,11 @@ export const turnReadOutside = (ctx: Readonly<{ toolArgSourceTaint?: unknown }> 
 export const ASKED_UNDO = 'The owner can undo it: if they ask, call raise_approval with operation undo and this approval id.';
 export const askedStatus = (outcome: Readonly<{ message: string; undo: boolean }>): string => `${outcome.message}${outcome.undo ? ` ${ASKED_UNDO}` : ''}`;
 // Whether the owner asked for a call in their own words: the turn was started by the owner's own message alone (the host sets
-// ownerMessage only then, never for quotes or forwards) and has read nothing from outside. Whether a call is what the owner
+// ownerMessage only then, never for quotes or forwards), every part of it is their own words (a transcript of a file they sent
+// may be someone else speaking, and a media note describes what someone else made), and the turn has read nothing from outside. Whether a call is what the owner
 // asked for is the model's judgment; what code holds to is that nothing an email, page or tool answer said can reach here.
-export const ownerAsked = (ctx: Readonly<{ ownerMessage?: unknown; runOrigin?: unknown; toolArgSourceTaint?: unknown }> | undefined): boolean =>
-  ctx?.ownerMessage !== undefined && ctx.runOrigin === 'owner' && !turnReadOutside(ctx);
+export const ownerAsked = (ctx: Readonly<{ ownerMessage?: Readonly<{ ownWordsOnly?: boolean }>; runOrigin?: unknown; toolArgSourceTaint?: unknown }> | undefined): boolean =>
+  ctx?.ownerMessage?.ownWordsOnly === true && ctx.runOrigin === 'owner' && !turnReadOutside(ctx);
 // The steps the host kept for the proposing call itself, never another call's.
 export const callWhy = (ctx: Readonly<{ whySteps?: readonly TrailStep[] }> | undefined): readonly TrailStep[] | undefined => ctx?.whySteps;
 // A card Waldo closes in a turn that read outside text gets these fixed words, never a reason the model wrote there.
@@ -336,6 +337,8 @@ export type ApprovalDesk = Readonly<{
   grantOutcome(id: string): Readonly<{ state: 'done' | 'not_done' | 'outcome_unknown'; message: string }> | null;
   // How a request the owner asked for ended when it ran with no card (AUTONOMOUS_BY_DEFAULT); null when it went to a card.
   askedOutcome(id: string): Readonly<{ state: 'done' | 'not_done' | 'outcome_unknown'; message: string; undo: boolean }> | null;
+  // Whether AUTONOMOUS_BY_DEFAULT is on for this desk: only then does the owner's word undo a change (raise_approval undo).
+  autonomous(): boolean;
   // Approved cards whose call runs on the jobs lane and has not settled.
   replays(): readonly string[];
   // The owner's receipt for a settled replay, from the card's own frozen call.
@@ -959,7 +962,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const autonomous = () => deps.autonomous?.() === true;
   // With AUTONOMOUS_BY_DEFAULT every card is decided where it is shown: a chat surface hands nothing to the app.
   const handsOff = (entry: LedgerRow, where: ApprovalSurface) => !autonomous() && HANDS_TO_APP.has(where) && approvedInApp(entry);
-  const approvesInWords = (entry: LedgerRow) => (deps.approvesInChat?.() === true || autonomous()) && (autonomous() || CHAT_APPROVABLE_KINDS.includes(entry.kind));
+  // A standing grant is lasting access: it is approved by a tap on its card, never by the model reading the owner's words.
+  const approvesInWords = (entry: LedgerRow) => (deps.approvesInChat?.() === true || autonomous()) && (autonomous() ? entry.kind !== 'standing_grant' : CHAT_APPROVABLE_KINDS.includes(entry.kind));
   const describeEmail = (p: EmailSendProposal) => `Send email${p.account ? ` from ${p.account}` : ''} to ${p.to.join(', ')}: "${p.subject}"`;
   const describeMessage = (p: MessageSendProposal) => `Send this on ${p.channel}: "${p.content.length > 120 ? `${p.content.slice(0, 117)}...` : p.content}"`;
 
@@ -1984,24 +1988,47 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // dispatched, a replay finds it already handled, and its Undo is the card's. Answers whether it ran; one it does not take is
   // presented as a card. Not taken: a kind outside ASKED_RUN_KINDS, a cancel that cannot be put back (a permanent deletion), and
   // an email whose identical earlier send has an unknown outcome, which the owner decides on its card.
+  // Kept for the proposing turn to read back, the oldest dropped past ASKED_OUTCOMES_KEPT.
+  const ASKED_OUTCOMES_KEPT = 50;
   const askedOutcomes = new Map<string, ApprovalDecision>();
+  // A send identical to an earlier one whose outcome is unknown may already have reached its recipient; the owner decides it
+  // on its card. An email carries this as earlier_unknown_at; a message and an email as Waldo are matched here by their content.
+  const earlierUnknown = (entry: LedgerRow): boolean => {
+    const p = JSON.parse(entry.payload_json) as { earlier_unknown_at?: string; channel?: string; content?: string };
+    if (p.earlier_unknown_at) return true;
+    const unknown = "status IN ('uncertain', 'running') AND id != ?";
+    if (entry.kind === 'message_send') return sql.exec(`SELECT 1 FROM ledger WHERE kind = 'message_send' AND ${unknown} AND json_extract(payload_json, '$.channel') = ? AND json_extract(payload_json, '$.content') = ? LIMIT 1`, entry.id, p.channel ?? null, p.content ?? null).toArray().length > 0;
+    if (entry.kind === 'agent_mail_send') return sql.exec(`SELECT 1 FROM ledger WHERE kind = 'agent_mail_send' AND ${unknown} AND proposal_digest = ? LIMIT 1`, entry.id, entry.proposal_digest ?? null).toArray().length > 0;
+    return false;
+  };
   const runAsked = async (id: string, asked: boolean | undefined): Promise<boolean> => {
     const entry = row(id);
     if (!asked || !autonomous() || !entry || !ASKED_RUN_KINDS.includes(entry.kind)) return false;
-    const p = JSON.parse(entry.payload_json) as { action?: string; earlier_unknown_at?: string };
+    const p = JSON.parse(entry.payload_json) as { action?: string };
     if (entry.kind === 'calendar_change' && p.action === 'cancel' && !deps.undoCancels) return false;
-    if (p.earlier_unknown_at) return false;
+    if (earlierUnknown(entry)) return false;
     const digest = `sha256:${await sha256Hex(entry.payload_json)}`;
+    // The card this revises closes in the commit that opens the run, as present() closes it when the new card is shown, so the
+    // earlier version can no longer be approved and go out as well.
     const opened = commit(() => {
       sql.exec("UPDATE ledger SET status = 'open' WHERE id = ? AND status = 'card_unconfirmed'", id);
-      if (sql.exec<{ changed: number }>('SELECT changes() AS changed').one().changed !== 1) return false;
+      if (sql.exec<{ changed: number }>('SELECT changes() AS changed').one().changed !== 1) return null;
       sql.exec('INSERT INTO approval_presentations (approval_id, surface, message_ref, presented_at, approvable, payload_digest, retired_at, in_full) VALUES (?, ?, ?, ?, 1, ?, NULL, 1)',
         id, 'asked', `asked:${id}`, deps.now(), digest);
-      return true;
+      return { replaced: entry.replaces && replaceableState(entry.replaces) === null ? closeWithdrawn(entry.replaces, REPLACED_REASON, raisedOutside(entry), id) : null };
     });
     if (!opened) return false;
+    if (opened.replaced) await afterWithdrawn(entry.replaces!, opened.replaced);
     deps.log({ trace: id, hop: 'approval_asked_run', ms: 0, ok: true, code: entry.kind });
-    askedOutcomes.set(id, await decideOnce(id, 'a', `asked:${id}`, { surface: 'asked' }));
+    const decision = await decideOnce(id, 'a', `asked:${id}`, { surface: 'asked' });
+    // A run that ended before it acted (an account not connected, a channel not set up) leaves no card behind: the owner never
+    // saw one, so it is settled as not done here rather than left open for another surface to approve.
+    commit(() => {
+      sql.exec("UPDATE ledger SET status = 'failed', decided_at = ? WHERE id = ? AND status = 'open'", deps.now(), id);
+      sql.exec("UPDATE approval_presentations SET retired_at = ? WHERE approval_id = ? AND surface = 'asked' AND retired_at IS NULL", deps.now(), id);
+    });
+    askedOutcomes.set(id, decision);
+    if (askedOutcomes.size > ASKED_OUTCOMES_KEPT) askedOutcomes.delete(askedOutcomes.keys().next().value!);
     return true;
   };
   const raising = new Set<string>();
@@ -2408,6 +2435,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         ...undoable.map((r) => ({ id: r.id, kind: r.kind, summary: summaryOf(r), state: 'done' as const, undoable: r.decided_at !== null && now <= undoUntil(r)!, review: review(r) })),
       ];
     },
+    autonomous,
     askedOutcome(id) {
       const decision = askedOutcomes.get(id), status = row(id)?.status;
       if (!decision) return null;

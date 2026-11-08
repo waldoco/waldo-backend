@@ -890,7 +890,7 @@ export const createOwnerResponder = (
   // The owner's own message that started this turn, for a tool that acts on their word: only a turn started by their message
   // alone, with no quote, forward or other person's words in it. Its ref is the surface's message id, else the host's trace.
   const ownerMessage = () => runOrigin() === 'owner' && activeOwnerTurn
-    ? { ownerMessage: { messageRef: activeOwnerTurn.messageRef?.id ?? activeOwnerTurn.traceId, receivedAt: ownerTurnStartedAt } } : {};
+    ? { ownerMessage: { messageRef: activeOwnerTurn.messageRef?.id ?? activeOwnerTurn.traceId, receivedAt: ownerTurnStartedAt, ownWordsOnly: activeOwnerTurn.parts.every((part) => part.authorship === 'owner') } } : {};
   const quoteContext = async (reply: ReplyContext | undefined): Promise<string> => {
     if (!reply) return '';
     const unavailable = '[Reply target quote unavailable after external-content safety check. Do not infer its contents or approval.]';

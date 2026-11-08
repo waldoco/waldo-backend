@@ -20,7 +20,7 @@ const NOW = Date.UTC(2026, 10, 8, 9, 0, 0);
 const OWNER = 447700900123;
 type Surface = 'whatsapp' | 'imessage' | 'telegram' | 'app';
 
-const harness = (state: DurableObjectState, surface: Surface, options: Readonly<{ autonomous?: boolean; now?: () => number; idPrefix?: string }> = {}) => {
+const harness = (state: DurableObjectState, surface: Surface, options: Readonly<{ autonomous?: boolean; now?: () => number; idPrefix?: string; channelUp?: boolean }> = {}) => {
   const { sql } = state.storage;
   const retired: string[] = [], messages: { text: string; buttons: string[] }[] = [], sent: string[] = [], created: unknown[] = [], cancelled: string[] = [], emails: string[] = [], submitted: string[] = [];
   let n = 0, ref = 0;
@@ -46,7 +46,7 @@ const harness = (state: DurableObjectState, surface: Surface, options: Readonly<
     google: async () => client, newId: () => `${options.idPrefix ?? ''}${++n}`, now, timezone: 'UTC', log: () => undefined,
     commit: work => state.storage.transactionSync(work), effects: ownerEffectLedger(state.storage, now),
     sendMessage: async proposal => { sent.push(proposal.content); return { provider_id: `sent-${sent.length}` }; },
-    canSendMessage: () => true, retire: async (p: { surface: string }) => { retired.push(p.surface); },
+    canSendMessage: () => options.channelUp !== false, retire: async (p: { surface: string }) => { retired.push(p.surface); },
     browserSubmit: async p => { submitted.push(p.action.description); return { status: 'verified_with_receipt', message: 'Paid.', receipt: {} } as never; },
   });
   const status = (id: string) => sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status;
@@ -62,8 +62,10 @@ const PAYMENT = { url: 'https://shop.example/checkout', action: { selector: '#pa
 // A turn the owner started with their own message, before any outside text was read.
 const ownTurn = (over: Partial<ToolDispatcherContext> = {}) => ({
   userId: 'owner', trigger: 'user_message', turnId: `turn-${crypto.randomUUID()}`, runOrigin: 'owner',
-  ownerMessage: { messageRef: 'wamid.owner', receivedAt: NOW + 30_000 }, ...over,
+  ownerMessage: { messageRef: 'wamid.owner', receivedAt: NOW + 30_000, ownWordsOnly: true }, ...over,
 }) as unknown as ToolDispatcherContext;
+const GRANT = { scope: { class: 'calendar.move_own_block' as const, account: 'owner@example.test', window: { from: '08:00', to: '19:00' }, weekdays: [1, 2, 3, 4, 5], min_lead_minutes: 30 },
+  limits: { max_per_day: 3, timezone: 'UTC' }, valid_from: Date.UTC(2026, 10, 9), expires_at: Date.UTC(2026, 10, 30) };
 const APP_HANDOFF = /approve(d)?( it)? in the (Waldo )?app/i;
 
 describe('work the owner asked for runs with no card', () => {
@@ -158,6 +160,59 @@ describe('work the owner asked for runs with no card', () => {
   });
 });
 
+describe('an owner-asked run keeps the desk\'s other guarantees', () => {
+  it('a revised send closes the card it replaces, so the earlier version can no longer go out too', async () => {
+    await owner('asked-replaces', async state => {
+      const f = harness(state, 'whatsapp');
+      const draft = (body: string) => emailProposal({ to: ['sam@example.test'], subject: 'Notes', body, message_id: `<${crypto.randomUUID()}@waldo-send>` });
+      const earlier = await f.desk.proposeSendEmail(await draft('The long version'));
+      expect(f.status(earlier)).toBe('open');
+      const revised = await f.desk.proposeSendEmail(await draft('Short version'), { asked: true, replaces: earlier });
+      expect(f.status(revised)).toBe('done');
+      expect(f.status(earlier)).toBe('withdrawn');
+      expect(f.desk.replacement(revised)).toMatchObject({ approval_id: earlier, replaced: true });
+      await f.tap(`a:${earlier}`);
+      expect(f.emails).toHaveLength(1);
+    });
+  });
+
+  it('a run that could not act leaves no open card behind for another surface to approve', async () => {
+    await owner('asked-not-set-up', async state => {
+      const f = harness(state, 'whatsapp', { channelUp: false });
+      const id = await f.desk.proposeSendMessage(message(), { asked: true });
+      expect(f.sent).toEqual([]);
+      expect(f.desk.askedOutcome(id)).toMatchObject({ state: 'not_done', undo: false });
+      expect(f.status(id)).toBe('failed');
+      expect(await f.desk.waiting()).toEqual([]);
+      expect(f.sql.exec("SELECT 1 FROM approval_presentations WHERE approval_id = ? AND retired_at IS NULL", id).toArray()).toEqual([]);
+    });
+  });
+
+  it('a message identical to one whose outcome is unknown is a card, not a second send', async () => {
+    await owner('asked-earlier-unknown', async state => {
+      const f = harness(state, 'whatsapp');
+      const first = await f.desk.proposeSendMessage(message(), { asked: true });
+      f.sql.exec("UPDATE ledger SET status = 'uncertain' WHERE id = ?", first);
+      const again = await f.desk.proposeSendMessage(message(), { asked: true });
+      expect(f.sent).toHaveLength(1);
+      expect(f.status(again)).toBe('open');
+      expect(f.messages).toHaveLength(1);
+    });
+  });
+
+  it('with the switch off, the owner\'s word undoes nothing', async () => {
+    await owner('undo-off', async state => {
+      const on = harness(state, 'whatsapp');
+      const id = await on.desk.propose(HOLD, 'turn-1', 'op-1', { asked: true });
+      const off = harness(state, 'whatsapp', { autonomous: false, idPrefix: 'off' });
+      const [handler] = approvalHandlers(off.desk);
+      expect(await handler!.handle({ operation: 'undo', approval_id: id } as never, ownTurn())).toMatchObject({ ok: false });
+      expect(on.cancelled).toEqual([]);
+      expect(on.status(id)).toBe('done');
+    });
+  });
+});
+
 describe('what outside content asked for still cards', () => {
   it('a send in a turn that read outside text is a card, and nothing goes out', async () => {
     await owner('outside-send', async state => {
@@ -174,6 +229,9 @@ describe('what outside content asked for still cards', () => {
   it('a run nobody asked for in their own message (a scheduled run, someone else\'s words) is not owner-asked', () => {
     expect(ownerAsked(ownTurn({ runOrigin: 'schedule' } as never))).toBe(false);
     expect(ownerAsked(ownTurn({ ownerMessage: undefined } as never))).toBe(false);
+    // A message carrying the transcript of a file the owner sent, or a note on a photo, may be someone else's words.
+    expect(ownerAsked(ownTurn({ ownerMessage: { messageRef: 'wamid.owner', receivedAt: NOW, ownWordsOnly: false } }))).toBe(false);
+    expect(ownerAsked(ownTurn({ ownerMessage: { messageRef: 'wamid.owner', receivedAt: NOW } }))).toBe(false);
     expect(ownerAsked(ownTurn())).toBe(true);
   });
 
@@ -215,6 +273,16 @@ describe('a payment still cards, and a card left is decided where it is shown', 
       expect(out).toMatchObject({ ok: true });
       expect(f.submitted).toEqual(['Pay £12.00']);
       expect(f.status(id)).not.toBe('open');
+    });
+  });
+
+  it('a lasting-access grant is approved by a tap on its card, never by a typed go-ahead', async () => {
+    await owner('grant-not-in-words', async state => {
+      const f = harness(state, 'whatsapp');
+      const id = await f.desk.proposeStandingGrant(GRANT);
+      expect(f.status(id)).toBe('open');
+      expect((await f.desk.approveShown(id, { messageRef: 'wamid.owner', receivedAt: NOW + 60_000 }, 'trace')).outcome).not.toBe('decided');
+      expect(f.status(id)).toBe('open');
     });
   });
 
