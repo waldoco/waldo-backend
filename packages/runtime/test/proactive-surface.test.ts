@@ -4,6 +4,7 @@ import { APP_PROACTIVE_SURFACE_RECEIPTS_V1 } from '../../contracts/src/app/contr
 import { chooseProactiveSurface, PROACTIVE_SURFACE_KEY, PROACTIVE_SURFACES, proactiveReads, proactiveSurfaceChoices, proactiveSurfaceReceipt, WHATSAPP_COPY_PREFIX, WHATSAPP_SUBJECTS_KEY, proactiveSurface, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, setProactiveSurface, UNREACHABLE_CHECK_BACK, wantedTargets,
   unaskedRecord, waitingForWhatsApp, whatsappSubjects, withCopy, type ProactiveSurface } from '../src/channels/proactive-surface';
 import { appCaller } from '../src/channels/surfaces/app';
+import { templateFor } from '../src/channels/whatsapp-window';
 import type { FinalRecord } from '../src/channels/telegram-final-outbox';
 
 const memoryKv = () => {
@@ -83,6 +84,13 @@ describe('which messages are Waldo\'s own initiative', () => {
   it('is not a reminder, a standing order\'s report or a check-back the owner set up, nor a reply', () => {
     for (const kind of [{ reminder: { id: 'r', occurrence: 1, runId: 'x', schedulerRunId: null, once: true } }, { standingOrder: { runId: 'x', gate: 'act_and_report' } }, { heartbeat: {} }, {}])
       expect(unaskedRecord(record(kind as Partial<FinalRecord>))).toBe(false);
+  });
+  it('news of a new capability is Waldo\'s own initiative: it knocks with the proactive template, never the reply one, and moves with the proactive work', () => {
+    const news = record({ announcement: { ids: ['family'] } });
+    expect(unaskedRecord(news)).toBe(true);
+    expect(templateFor({ reply: { name: 'waldo_update_ready', language: 'en' }, proactive: { name: 'waldo_proactive_update', language: 'en' } }, unaskedRecord(news))).toEqual({ name: 'waldo_proactive_update', language: 'en' });
+    expect(templateFor({ reply: { name: 'waldo_update_ready', language: 'en' }, proactive: null }, unaskedRecord(news))).toBeNull();
+    expect(waitingForWhatsApp(new Set(['1']))(news)).toBe(true);
   });
 });
 
