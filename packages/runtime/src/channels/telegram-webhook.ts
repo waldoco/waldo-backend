@@ -27,6 +27,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_COST_LEDGER_SYNC?: string;
   // 'on' turns conversation compaction on for the app chat; anything else keeps the plain window.
   WALDO_COMPACTION?: string;
+  // '1' cuts chat history in steps and holds the start between cuts, so the provider's cache keeps the leading history.
+  WALDO_STEPPED_WINDOW?: string;
   WALDO_ENVIRONMENT?: string;
   WALDO_OWNER_DO_NAMESPACE?: string;
   WALDO_RELEASE?: string;
