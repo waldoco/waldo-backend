@@ -65,3 +65,20 @@ export const dayShapingContext = (input: Readonly<{ coverage: CoverageFacts | nu
   ...(input.coverage ? [coverageSection(input.coverage), input.brief ? COVERAGE_INSTRUCTION : `${COVERAGE_INSTRUCTION} ${COVERAGE_NOT_HERE}`] : []),
   ...(input.offers ? [FREE_WINDOW_INSTRUCTION, ...(input.brief ? [BRIEF_WINDOWS] : []), ...(input.protocols ? [PROTOCOL_INSTRUCTION] : [])] : []),
 ].join('\n\n');
+
+// BLOCK_LIFECYCLE: Waldo looks after the blocks it placed, and learns from how they went.
+export const BLOCK_LIFECYCLE_INSTRUCTION = [
+  'Look after the blocks Waldo placed (listed above). When a real meeting or commitment lands on one, offer to move the block with propose_calendar_change (action move, its event id) to the next window that suits it, never to delete it; the meeting stays where it is. A block that is no longer needed (its work got done, the reason went away) should not stay as busy time that keeps colleagues out: offer to cancel it.',
+  'A block the owner changed themselves is theirs now: leave it alone, never move, cancel or comment on it.',
+].join(' ');
+
+export const CLOSE_CALIBRATION_INSTRUCTION = [
+  'Sometimes, not every evening and never as a form, ask lightly about one of today\'s blocks: whether it got used, and how long the work really took. One short question at most, only when the answer would sharpen how you plan; most evenings, ask nothing.',
+  'Their answer is a note to remember (how long that kind of work takes them, when they prefer to keep time free), which they can see and correct, never a hidden score.',
+].join(' ');
+
+// For the nightly capacity pass: how the blocks and offers went, and what to keep from them in the capacity note.
+export const CAPACITY_CALIBRATION_INSTRUCTION = [
+  'People underestimate how long work takes (the planning fallacy), and a plan with a specific time is followed more often: keep in the note how long the owner\'s kinds of work really take them and the times they prefer, from what they said in memory about how blocks went and from the outcomes below.',
+  'A pattern of declined offers is a preference (for example, no admin after 6pm, or keeping Friday afternoons free): say it in the note, and that Waldo should offer less often when they keep saying not now. One decline is not a pattern. Never record a time of day as a health fact.',
+].join(' ');

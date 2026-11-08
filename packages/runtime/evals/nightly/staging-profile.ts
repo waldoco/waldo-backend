@@ -102,6 +102,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   DEVICE_CALENDAR: gap('the world serves no phone calendar and the trial offers no query_phone_calendar; staging has it on'),
   CALENDAR_COVERAGE: gap('the coverage facts read Google calendars over two weeks and the phone calendar, which a trial world does not serve; no case judges the coverage question yet'),
   FREE_WINDOW_OFFERS: gap('offers come from the update triage and the intervention look, which a trial does not run; no case judges a free-window offer yet'),
+  BLOCK_LIFECYCLE: gap('Waldo\'s blocks come from the approval ledger and the update sweep, which a trial does not run; no case judges the block lifecycle yet'),
   DEVICE_WEATHER: gap('the world serves no weather and the trial offers no get_weather; staging has it on once the WeatherKit secrets are set'),
   ARRIVAL_LOOK: gap('the world serves no device place, so no phone arrives anywhere; staging has it on'),
   ONBOARDING_LOOKUP: gap('no trial runs onboarding or the background owner look-up; staging has it on'),

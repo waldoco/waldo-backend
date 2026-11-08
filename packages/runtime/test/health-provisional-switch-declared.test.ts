@@ -151,6 +151,13 @@ describe('CALENDAR_COVERAGE and FREE_WINDOW_OFFERS in the Worker config', () => 
   });
 });
 
+describe('BLOCK_LIFECYCLE in the Worker config', () => {
+  it('is off in production and on in staging; it needs no migration', () => {
+    expect(parsed.vars.BLOCK_LIFECYCLE).toBe('0');
+    expect(parsed.env.staging.vars.BLOCK_LIFECYCLE).toBe('1');
+  });
+});
+
 describe('ARRIVAL_LOOK in the Worker config', () => {
   it('is off in production and on in staging, where the deploy applies migration 20261107100000 first', () => {
     expect(parsed.vars.ARRIVAL_LOOK).toBe('0');
