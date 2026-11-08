@@ -34,7 +34,7 @@ import { APP_SESSION_FENCE_PATH, appSessionFenceSignature } from '../identity/ap
 import { calendarDemand, demandCode, forgetDemandDay, type DemandAnswer, type DemandRequest } from '../health/calendar-demand';
 import { CALENDAR_DEMAND_PATH, verifiedDemandRequest } from '../health/calendar-demand-route';
 import { APP_CALENDAR_DAY_PATH, appCalendarDayRequest } from './app-calendar-day';
-import { HEALTH_SAMPLES_PATH, HEALTH_ZONE_CHANGE_PATH, PLACE_MOVED_PATH, verifiedHealthSamples, verifiedPlaceMoved, verifiedZoneChange, type HealthRecomputeCause } from '../health/zone-change-route';
+import { HEALTH_SAMPLES_PATH, HEALTH_ZONE_CHANGE_PATH, PLACE_ARRIVED_PATH, PLACE_MOVED_PATH, verifiedHealthSamples, verifiedPlaceArrived, verifiedPlaceMoved, verifiedZoneChange, type ArrivalPlace, type HealthRecomputeCause } from '../health/zone-change-route';
 import { healthRecompute, HEALTH_RECOMPUTE_ID } from '../health/recompute';
 import { healthSnapshot, type HealthWakeReason } from '../health/wakes';
 import { wakeFreshMs, workoutStillFresh } from '../health/wake-notice';
@@ -94,7 +94,7 @@ import { APP_COPY_UNTIL, APP_REPLIES, APP_THREAD, SEND_NOW_ONLY, admittedRoute, 
 import { TelegramFinalOutbox, standingOrderFinalId, dayCardFinalId, tookPart, observeSurfaceStatuses, outboxRunNotes, unconfirmedCards, redactMailFollowupEntries, redactCalendarPrepEntries, redactJobReportEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
 import { drawingOn, interruptBook, interruptLimits, reopensAt } from './interruptions';
-import { armInterventionReview, interventionApplier, interventionEveryMs, interventionSpec, INTERVENTION_REVIEW_ID, lookMoved, MOVE_PULL_KEY, movePullAllowed, nextLocalHour, nextLookAt } from './interventions';
+import { armInterventionReview, interventionApplier, interventionEveryMs, interventionSpec, INTERVENTION_REVIEW_ID, lookCause, MOVE_PULL_KEY, movePullAllowed, nextLocalHour, nextLookAt } from './interventions';
 import { DeliveryGateStore } from '../delivery-gate/store';
 import { ownerTurnTrace, type OwnerTurnEnvelope } from './owner-turn-envelope';
 import { inboundTurn, ownerWords, renderForModel } from './owner-inbound-turn';
@@ -113,7 +113,7 @@ import { workspaceDownload, workspacePage, workspaceRead } from './console-works
 import { SCHEDULE_KINDS, setProactivityArgsSchema, type ConnectIntent, type ConversationEntry, type OwnerJob, type ScheduleEntry, type StandingGate } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, PROFILE_KINDS, claimStore, profile, type ClaimStore, type PinBlock } from '../memory/claims';
-import { APP_CLAIM_TEXT_MAX_V1, APP_GOOGLE_PICTURE_PATH_V1, APP_NODE_CORRECTION_MAX_V1, APP_SCHEDULE_RECEIPTS_V1, APP_SCHEDULE_TIME_IDS_V1 } from '../../../contracts/src/app/controls';
+import { APP_CLAIM_TEXT_MAX_V1, APP_GOOGLE_PICTURE_PATH_V1, APP_NODE_CORRECTION_MAX_V1, APP_PERSON_NAME_MAX_V1, APP_SCHEDULE_RECEIPTS_V1, APP_SCHEDULE_TIME_IDS_V1 } from '../../../contracts/src/app/controls';
 import { signupName } from '../identity/console-signup';
 import { ownerName, ownerNameGap, recordSignupName } from '../onboarding/first-run';
 import { LOOKUP_RECORD_PREFIX, lookupApplier, lookupPending, openLookup, startLookup } from '../onboarding/lookup';
@@ -185,7 +185,7 @@ import { recallChain, recallChainOn } from '../history/recall-chain';
 import { searchHistoryHandler } from '../tools/live/search-history';
 import { archiveMode, historyArchive, historyArchiveForgetStore, sweepScheduleRuns, type ArchiveDeps, type HistoryArchive } from '../history/archive';
 import { memoryHandlers } from '../tools/live/memory';
-import { LIFE_AREAS, SURFACE_CAPABILITIES_V1, toolNameSchema } from '@waldo/contracts';
+import { LIFE_AREAS, PERSON_RINGS, SURFACE_CAPABILITIES_V1, toolNameSchema } from '@waldo/contracts';
 import { browserOwnerHost, BROWSER_TASK_KEY, type BrowserOwnerConfiguration } from './browser-owner-host';
 import { browserProductionConfiguration, browserOwnerBindingReader } from './browser-production-factory';
 import { browserTrialConsent, BROWSER_TRIAL_PATH, BROWSER_TRIAL_PENDING_KEY, BROWSER_TRIAL_REVOCATION_KEY, type BrowserTrialPreparation } from './browser-trial-consent';
@@ -377,8 +377,10 @@ type OwnerRuntime = Readonly<{
   healthChanged(day: string): Promise<void>;
   // PROACTIVE_INTERVENTIONS: Waldo's own look across the owner's plate, a patrol entry beside the health trigger's.
   interventionReview(entry: ScheduleEntry): Promise<void>;
-  // A phone moved to another time zone or city: Waldo's next look comes now, inside the owner's day, and knows why.
+  // A phone moved to another time zone or city, or (ARRIVAL_LOOK) says it just arrived home or at the gym: Waldo's next look
+  // comes now, inside the owner's day, and knows why.
   placeMoved(): Promise<void>;
+  placeArrived(place: ArrivalPlace): Promise<void>;
   healthTrigger(entry: ScheduleEntry): Promise<HealthTriggerOutcome>;
   watches(entry: ScheduleEntry): Promise<void>;
   cards(entry: ScheduleEntry): Promise<void | 'waiting_on_model'>;
@@ -1902,6 +1904,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     await this.setup('app').placeMoved();
     return Response.json({ok:true},{headers});
   }
+  // Worker-to-DO only (ARRIVAL_LOOK): the owner's phone just arrived home or at the gym. It carries that word, and brings the next look forward.
+  private async placeArrived(request: Request): Promise<Response> {
+    const headers={'cache-control':'no-store'};
+    const place=await verifiedPlaceArrived(request,this.env.WALDO_ROUTER_HMAC_SECRET,name=>this.env.OWNER_DO?.idFromName(name).toString()===this.ctx.id.toString()&&this.ctx.storage.kv.get<string>('do_name')===name);
+    if(!place)return Response.json({error:'unavailable'},{status:403,headers});
+    if(this.env.ARRIVAL_LOOK==='1')await this.setup('app').placeArrived(place);
+    return Response.json({ok:true},{headers});
+  }
   // Worker-to-DO only: a cloud wearable's connect, callback, status, disconnect and webhook hint. Verified like the zone notice.
   private async healthProvider(request: Request): Promise<Response> {
     const headers={'cache-control':'no-store'};
@@ -2067,7 +2077,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const runtime=this.setup('app');
           const host={...session,signedInAt:row.signed_in_at,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
             account:{owner:name,auth,requestUrl:request.url,purgeOwnerFiles:()=>this.purgeOwnerFiles(),eraseOwnerStorage:()=>this.eraseOwnerStorage()},phone:this.env,agentMail:this.agentMailControls(name),whatsappUnlinked:this.whatsappUnlinked,imessageProof:this.imessageProof(name,true),whatsappProof:this.whatsappProof(name),
-            chatLinks:()=>this.proactiveLinks(auth),bothDefault:proactiveBothDefault(this.env),claimControls:this.env.MEMORY_CLAIM_CONTROLS==='1',
+            chatLinks:()=>this.proactiveLinks(auth),bothDefault:proactiveBothDefault(this.env),claimControls:this.env.MEMORY_CLAIM_CONTROLS==='1',people:this.env.PEOPLE_MAP==='1',
             googlePictures:async()=>googlePictures(await this.ctx.storage.get<Record<string,GoogleProfileFact>>('google:profiles')),
             wearables:()=>wearablesCatalogue({whoopConfigured:whoopConfig(this.env)!==null,whoop:async()=>{const whoop=this.providerOwner();return {state:(await whoop.status(true)).state,connected_at:whoop.connectedAt()};}}),
             sessions:async()=>(await auth.listSessions(name)).map(row=>({csrf:row.session,expires:Date.parse(row.expires_at)})),
@@ -2200,6 +2210,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     if(path===HEALTH_SAMPLES_PATH)return this.healthSamples(request);
     if(path===PLACE_MOVED_PATH)return this.placeMoved(request);
+    if(path===PLACE_ARRIVED_PATH)return this.placeArrived(request);
     if(path===HEALTH_PROVIDER_PATH)return this.healthProvider(request);
     if(path.startsWith('/app/v1/'))return this.appRoute(request);
     if(path==='/enqueue-link')return this.enqueueLink(request);
@@ -5231,7 +5242,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
       }, effects, () => ownerName(memory), briefEgress.screen), ...(this.env.CALENDAR_PLAN === '1' ? [calendarPlanHandler(google, desk, clock, briefEgress.screen)] : []), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, connectAppTool, ...progressNoteTools, ...secondMessageTools, ...attachTools, ...tapbackTools, ...replyOfferTools, ...this.recallTools(episodes, memory), ...memoryHandlers({
-        sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner), ...(semantic ? { semantic } : {}), ...(this.env.MEMORY_VALIDITY === '1' ? { validity: true } : {}),
+        sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner), ...(semantic ? { semantic } : {}), ...(this.env.MEMORY_VALIDITY === '1' ? { validity: true } : {}), ...(this.env.PEOPLE_MAP === '1' ? { people: true } : {}),
         // The tool has already deleted the claims and taken custody of the texts. One cleaning pass runs now, so a card waiting
         // to send loses the text before the turn ends; what it cannot clean, the forget purge job retries, and the forget
         // itself never fails on a store.
@@ -5685,7 +5696,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // What the source pass reads with, for the nightly run and the daytime pass alike.
     const sourcesFor = (trace: string): SourcesDeps => {
       const read = responder.sourceClaims!.bind(responder), health = healthMemoryOn(identity);
-      return { kv: storage.kv, updates, claims: memory, transaction: work => storage.transactionSync(work), timezone: clock.timezone, now: Date.now, health, log, ask: text => read(trace, text, { health }) };
+      const people = this.env.PEOPLE_MAP === '1';
+      return { kv: storage.kv, updates, claims: memory, transaction: work => storage.transactionSync(work), timezone: clock.timezone, now: Date.now, health, people, log, ask: text => read(trace, text, { health, people }) };
     };
     const nightlyPass = recordedRun(runs, 'nightly', NIGHTLY_RUN, async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
@@ -6211,27 +6223,34 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (closed !== null) { log({ trace, hop: 'intervention_review', ms: 0, ok: true, code: `held_${closed}` }); return; }
       const made = storage.transactionSync(() => {
         if (workerRouteDown(modelAccess)) return 'held_breaker' as const;
-        const written = enqueueMachine(this.jobs(), interventionSpec({ surface: channel, timezone: clock.timezone, now, moved: lookMoved(entry) }), heldTopicsOf(claimStore(storage.sql)));
+        const written = enqueueMachine(this.jobs(), interventionSpec({ surface: channel, timezone: clock.timezone, now, cause: lookCause(entry) }), heldTopicsOf(claimStore(storage.sql)));
         if (written.code === 'enqueued') holdTaskJobsDue(storage.kv, now);
         return written.code;
       });
       log({ trace, hop: 'intervention_review', ms: Date.now() - now, ok: true, code: made });
       if (made === 'enqueued') await armTaskJobsWake(storage, Date.now());
-      // Looks are one per owner-local hour: a move that lands on this hour's look, or on one still running, is looked at in the next hour.
-      if (lookMoved(entry) && (made === 'existing' || made === 'held_open_job')) await armInterventionReview(scheduler, nextLookAt(nextLocalHour(now, clock.timezone), 0, clock.timezone, day => plans.window(day, clock.timezone)), true, true);
+      // Looks are one per owner-local hour: a move or arrival that lands on this hour's look, or on one still running, is looked at in the next hour.
+      const cause = lookCause(entry);
+      if (cause && (made === 'existing' || made === 'held_open_job')) await armInterventionReview(scheduler, nextLookAt(nextLocalHour(now, clock.timezone), 0, clock.timezone, day => plans.window(day, clock.timezone)), true, cause);
     };
     // The look runs on its cadence; a move brings it to now, or to the owner's next day when theirs is over. Everything after is the
     // look's own: the owner's limits, and the model judging whether the new place changes anything worth saying.
-    const placeMoved = async () => {
+    const lookNow = async (cause: 'place_moved' | 'arrived_home' | 'arrived_gym') => {
       if (!interventions || !schedPrefs.enabled('heartbeat') || !armable('heartbeat')) return;
       const now = Date.now();
       if (!movePullAllowed(identity.get<number>(MOVE_PULL_KEY), now, interventionEveryMs(this.env.PROACTIVE_REVIEW_EVERY_MIN))) {
-        log({ trace: `place_moved:${now}`, hop: 'intervention_review', ms: 0, ok: true, code: 'held_move_within_cadence' });
+        // Not looked at sooner, but the look already armed knows a phone moved, so the move is not lost.
+        const armed = scheduler.lookup(INTERVENTION_REVIEW_ID);
+        if (cause === 'place_moved' && armed.state === 'entry' && lookCause(armed.entry) !== 'place_moved') await armInterventionReview(scheduler, armed.entry.due_at, true, cause);
+        log({ trace: `${cause}:${now}`, hop: 'intervention_review', ms: 0, ok: true, code: cause === 'place_moved' ? 'held_move_within_cadence' : 'held_arrival_within_cadence' });
         return;
       }
+      // The pull is spent only once the look is armed: an arm that throws leaves this cadence's pull for the next move.
+      await armInterventionReview(scheduler, nextLookAt(now, 0, clock.timezone, day => plans.window(day, clock.timezone)), true, cause);
       identity.put(MOVE_PULL_KEY, now);
-      await armInterventionReview(scheduler, nextLookAt(now, 0, clock.timezone, day => plans.window(day, clock.timezone)), true, true);
     };
+    const placeMoved = () => lookNow('place_moved');
+    const placeArrived = (place: ArrivalPlace) => lookNow(place === 'home' ? 'arrived_home' : 'arrived_gym');
     const writeCard = async (entry: ScheduleEntry) => {
       const card = cardFor(entry.id);
       if (card === null) return;
@@ -6495,7 +6514,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           doName: identity.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] }, work => storage.transactionSync(() => { work(); commit(); }));
       },
       ended: grant => { welcome.lateWeb(grant); this.continueWelcome(runtime); } });
-    const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, push, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, interventionReview, placeMoved, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, push, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, interventionReview, placeMoved, placeArrived, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       lookupToolHandlers: () => {
         const unlocated = webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch), this.lookupPages) : null;
@@ -6647,6 +6666,27 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (read.length) await this.forgetPurgeJob().track(memory.purge(read, new Date(now).toISOString()).texts);
         } else if (action === 'node.confirm') {
           if (!storage.transactionSync(() => confirmWelcomeNode(memory, spotId, new Date(now).toISOString(), made ?? 'console:node.confirm'))) return false;
+        } else if (action === 'person.confirm') {
+          if (memory.confirmPerson(spotId, new Date(now).toISOString(), `owner, ${made ?? 'console:person.confirm'}`) === null) return false;
+        } else if (action === 'person.rename') {
+          // The owner's name for someone is kept as their word: the same bound the app holds it to, and the same scribe check.
+          const name = (value ?? '').trim();
+          if (name.length === 0 || name.length > APP_PERSON_NAME_MAX_V1) return 'person.rename.failed';
+          const checked = await sanitise({ payload: { text: name }, destination: 'internal_context', source_taint: null, canary_tokens: newSessionCanaryTokens() });
+          if (!checked.ok) return 'person.rename.failed';
+          if (!memory.people.rename(spotId, name, new Date(now).toISOString())) return false;
+        } else if (action === 'person.ring') {
+          const ring = PERSON_RINGS.find((candidate) => candidate === value);
+          if (!ring) return 'person.ring.failed';
+          if (!memory.people.setRing(spotId, ring, new Date(now).toISOString())) return false;
+        } else if (action === 'person.forget') {
+          // Every claim about them goes to purging, their words into custody, and their name and addresses are barred; the
+          // forget purge job cleans every other store, as for one claim.
+          const chosen = memory.personForget(spotId);
+          if (!chosen) return false;
+          const at = new Date(now).toISOString();
+          for (const text of chosen.texts) memory.barrier(text, at);
+          await this.forgetPurgeJob().track(memory.purge(chosen.ids, at, chosen.texts, chosen.words).texts);
         } else if (action === 'node.correct') {
           // The owner's words become the node's label and summary on every turn: the same bound the app holds them to, and the
           // same scribe check a spot edit crosses, so a credential never enters memory.

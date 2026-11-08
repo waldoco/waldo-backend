@@ -137,6 +137,13 @@ describe('DEVICE_PLACE in the Worker config', () => {
   });
 });
 
+describe('ARRIVAL_LOOK in the Worker config', () => {
+  it('is off in production and on in staging, where the deploy applies migration 20261107100000 first', () => {
+    expect(parsed.vars.ARRIVAL_LOOK).toBe('0');
+    expect(parsed.env.staging.vars.ARRIVAL_LOOK).toBe('1');
+  });
+});
+
 describe('DEVICE_WEATHER in the Worker config', () => {
   it('is off in production and on in staging, where it offers get_weather only once the WeatherKit secrets are set', () => {
     expect(parsed.vars.DEVICE_WEATHER).toBe('0');

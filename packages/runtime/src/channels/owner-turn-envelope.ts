@@ -61,7 +61,7 @@ export type OwnerResponder = Readonly<{
   // policy.health false keeps no health notes from this pass, or from the migration.
   consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>, policy?: Readonly<{ health: boolean }>): Promise<Readonly<{ done: boolean; detail: string }>>;
   // The model's reply over the day's calendar and mail changes (outside content), applied by the caller. Absent on fakes.
-  sourceClaims?(trace: string, updates: string, policy?: Readonly<{ health: boolean }>): Promise<string>;
+  sourceClaims?(trace: string, updates: string, policy?: Readonly<{ health: boolean; people?: boolean }>): Promise<string>;
   // CAPACITY_PLAN: the model's raw answer keeping the owner's capacity note, applied by the caller. Absent on fakes.
   capacity?(trace: string, input: string): Promise<string>;
   migrate(trace: string, input: string, policy?: Readonly<{ health: boolean }>): Promise<string>;

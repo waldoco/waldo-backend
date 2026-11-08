@@ -475,12 +475,12 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
       const briefs = state.storage.sql.exec<{ brief_json: string }>("SELECT brief_json FROM task_jobs WHERE origin = 'machine:intervention'").toArray();
       expect(briefs.map(row => (JSON.parse(row.brief_json) as { machine: { refs: string[] } }).machine.refs)).toEqual([['now', 'moved']]);
       expect(armed(state)).toEqual([{ due_at: AT + 120 * 60_000, moved: null }]);
-      // A city that keeps flipping pulls the look forward once per cadence, no more.
+      // A city that keeps flipping pulls the look forward once per cadence, no more; the look already armed learns a phone moved.
       for (const minutes of [5, 60, 119]) {
         const at = Date.now;
         Date.now = () => AT + minutes * 60_000;
         try { expect((await moved(owner, 'intervention-moved')).status).toBe(200); } finally { Date.now = at; }
-        expect(armed(state)).toEqual([{ due_at: AT + 120 * 60_000, moved: null }]);
+        expect(armed(state)).toEqual([{ due_at: AT + 120 * 60_000, moved: 'place_moved' }]);
       }
       const later = Date.now;
       Date.now = () => AT + 121 * 60_000;
@@ -506,6 +506,30 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
     await owned('intervention-moved-off', { PROACTIVE_INTERVENTIONS: '0' }, async ({ state, owner }) => {
       expect((await moved(owner, 'intervention-moved-off')).status).toBe(200);
       expect(armed(state)).toEqual([]);
+    });
+  });
+
+  it('an arrival at the gym brings the same look to now, knowing where; with ARRIVAL_LOOK off, or for a forged notice, nothing moves', async () => {
+    const arrived = async (owner: Steps['owner'], name: string, place: string, sig?: string) => owner.fetch(new Request('https://telegram-owner/app/v1/internal/place-arrived', { method: 'POST', body: JSON.stringify({ place }),
+      headers: { 'content-type': 'application/json', 'x-waldo-do-name': name, 'x-waldo-arrived-sig': sig ?? await routerSignature(directory.WALDO_ROUTER_HMAC_SECRET, 0, `placearrived.${place}.${name}`) } }));
+    const armed = (state: DurableObjectState) => state.storage.sql.exec<{ due_at: number; payload_json: string }>('SELECT due_at, payload_json FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray()
+      .map(row => ({ due_at: row.due_at, cause: (JSON.parse(row.payload_json) as Record<string, string>).cause_id ?? null }));
+    await owned('intervention-arrived', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120', ARRIVAL_LOOK: '1' }, async ({ state, owner }) => {
+      expect((await arrived(owner, 'intervention-arrived', 'gym', 'forged')).status).toBe(403);
+      expect((await arrived(owner, 'intervention-arrived', 'office')).status).toBe(403);
+      expect(armed(state).map(row => row.cause)).toEqual([null]);
+      expect((await arrived(owner, 'intervention-arrived', 'gym')).status).toBe(200);
+      expect(armed(state)).toEqual([{ due_at: AT, cause: 'arrived_gym' }]);
+      state.storage.kv.put('owner_alarm_last_v1', 1);
+      await owner.alarm();
+      await state.storage.deleteAlarm();
+      const briefs = state.storage.sql.exec<{ brief_json: string }>("SELECT brief_json FROM task_jobs WHERE origin = 'machine:intervention'").toArray();
+      expect(briefs.map(row => (JSON.parse(row.brief_json) as { machine: { refs: string[] } }).machine.refs)).toEqual([['now', 'arrived_gym']]);
+      expect(armed(state)).toEqual([{ due_at: AT + 120 * 60_000, cause: null }]);
+    });
+    await owned('intervention-arrived-off', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
+      expect((await arrived(owner, 'intervention-arrived-off', 'home')).status).toBe(200);
+      expect(armed(state).map(row => row.cause)).toEqual([null]);
     });
   });
 
