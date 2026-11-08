@@ -360,6 +360,8 @@ type OwnerRuntime = Readonly<{
   macFollowup: ReturnType<typeof createTelegramResponder>['prompt'];
   finalOutbox: TelegramFinalOutbox;
   settleFinal(record: FinalRecord): Promise<void>;
+  // The app's push to the owner's devices: fixed text, within the day's budget, never in quiet hours.
+  push: ReturnType<typeof ownerPush>;
   fire(entry: ScheduleEntry): Promise<void | 'delivery_pending'>;
   beat(entry: ScheduleEntry): Promise<void | 'delivery_pending'>;
   noticeFailures(): Promise<void>;
@@ -2873,6 +2875,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const url = typeof envelope.url === 'string' ? envelope.url.slice(0, 300) : '';
         const text = `Event - ${summary}${url ? `\n${url}` : ''}`;
         sent = OUTSIDE_TURN_NOTICE[surface].by === 'transcript' ? await this.serial(() => this.notifyOwner(surface, runtime, text)) : await this.notifyOwner(surface, runtime, text);
+        // In the app the notice is a chat row the owner sees only when they open it, so it raises one push; on any other
+        // surface the message itself is the notification.
+        if (sent === 'sent' && OUTSIDE_TURN_NOTICE[surface].by === 'transcript') this.ctx.waitUntil(runtime.push('event'));
         // Refused at the gate (its own line names why) or by the directory, or no route outside a turn: nothing left the Worker,
         // a definite non-send, not an unknown one.
         if(sent==='blocked'||sent==='unroutable'){
@@ -6490,7 +6495,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           doName: identity.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] }, work => storage.transactionSync(() => { work(); commit(); }));
       },
       ended: grant => { welcome.lateWeb(grant); this.continueWelcome(runtime); } });
-    const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, interventionReview, placeMoved, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, push, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, interventionReview, placeMoved, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       lookupToolHandlers: () => {
         const unlocated = webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch), this.lookupPages) : null;

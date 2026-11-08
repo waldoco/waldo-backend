@@ -13,6 +13,7 @@ export const PUSHES = {
   approval: { body: 'Waldo has a suggestion for your day', data: { trigger: 'approval' } },
   prep: { body: 'Waldo has a note before your next meeting', data: { trigger: 'pre_activity_spot' } },
   update: { body: 'Waldo has an update to your day', data: { trigger: 'update' } },
+  event: { body: 'Waldo has a new notice for you', data: { trigger: 'event' } },
 } as const satisfies Record<string, Readonly<{ body: string; data: Omit<PushNotification, 'approval_id'> }>>;
 export type PushKind = keyof typeof PUSHES;
 
