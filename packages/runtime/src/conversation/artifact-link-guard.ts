@@ -20,10 +20,10 @@ const fullyDecoded = (url: string): string => {
 };
 const carriesArtifactId = (url: string): boolean => /(^|[^a-z0-9])art:/i.test(fullyDecoded(url));
 
-// Trusted receipt contract (core): only a successful create_artifact / revise_artifact result whose
+// Trusted receipt contract (core): only a successful create_artifact / revise_artifact / restore_artifact result whose
 // typed delivery is status 'owner_link', audience 'owner_authenticated' and not stamped external.
 // read_artifact, other tools and external content never grant a link.
-export const RECEIPT_TOOLS: ReadonlySet<string> = new Set(['create_artifact', 'revise_artifact']);
+export const RECEIPT_TOOLS: ReadonlySet<string> = new Set(['create_artifact', 'revise_artifact', 'restore_artifact']);
 export const receiptUrl = (tool: string, result: unknown): string | null => {
   if (!RECEIPT_TOOLS.has(tool)) return null;
   const r = result as { ok?: unknown; source_taint?: unknown; data?: { delivery?: { status?: unknown; audience?: unknown; url?: unknown } } } | null;

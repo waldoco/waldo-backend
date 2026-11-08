@@ -66,6 +66,7 @@ describe('toolName', () => {
       'draft_document',
       'create_artifact',
       'revise_artifact',
+      'restore_artifact',
       'export_artifact',
       'draft_email',
       'send_email',
@@ -103,6 +104,7 @@ describe('toolName', () => {
       'log_meal',
       'log_workout',
       'list_health_logs',
+      'delete_health_log',
       'set_sleep_need',
       'track_medication',
       'log_medication',
@@ -146,6 +148,7 @@ describe('toolName', () => {
       'set_experiment',
       'review_experiment',
       'check_task',
+      'steer_task',
     ]);
   });
 
@@ -314,6 +317,7 @@ describe('TOOL_PERMISSIONS', () => {
         'draft_document',
         'create_artifact',
         'revise_artifact',
+        'restore_artifact',
         'export_artifact',
         'draft_email',
         'send_email',
@@ -350,6 +354,7 @@ describe('TOOL_PERMISSIONS', () => {
         'log_meal',
         'log_workout',
         'list_health_logs',
+        'delete_health_log',
         'set_sleep_need',
         'track_medication',
         'log_medication',
@@ -374,6 +379,7 @@ describe('TOOL_PERMISSIONS', () => {
       'start_task',
       'cancel_task',
       'check_task',
+      'steer_task',
       'record_owner_finding',
       'list_owner_findings',
       'search_history',
