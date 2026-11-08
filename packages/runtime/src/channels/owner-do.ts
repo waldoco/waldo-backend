@@ -5135,7 +5135,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const legacyStore: ConversationStore = { ...indexedConversationStore(kv, episodes, () => Date.now()), recalls: (entryId: string) => recallReach(identity, identity.get<string>('owner_principal_ref'), null)(entryId) };
     const seed = timelineSeed(this.ctx.storage.kv, () => this.chatsOnTimeline()
       ? (['whatsapp', 'telegram'] as const).flatMap(chat => { const subject = identity.get<string>(`${chat}_subject`); return subject ? [surfaceChatRef(chat, subject)] : []; }) : [],
-      compactionSettings(this.env).budgetTokens / 2);
+      compactionSettings(this.env).summaryInputTokens / 2);
     // The owner's chain as the app's turns read and write it; on the one timeline, WhatsApp and Telegram turns do too.
     const ownerHistory = (context: OwnerContextCapability): ConversationStore => ({
       ...indexedConversationStore(canonicalOwnerConversationStore(this.ctx.storage, context, this.logSkippedLoad, threadOfChain(context.conversationRef) ?? undefined,

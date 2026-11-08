@@ -41,8 +41,8 @@
   // WALDO_CONTEXT_CAPS: "1" caps the standing orders and quests every turn reads (the rest named, or listed by title) and
   // clears a turn's tool results down to the latest three past about 30k tokens; "0" is the rollback.
   // WALDO_CALL_CEILINGS: "1" holds every chat's history to 22k tokens, the conversation layer of a 40k call, clears a
-  // turn's earlier tool results once they would carry the call past 80k, and logs each call against its class's ceiling;
-  // "0" is the rollback.
+  // turn's earlier tool results once its tool turns would carry the call past 80k, and logs each call against its class's
+  // ceiling; "0" is the rollback.
   // WALDO_SWITCHES: every feature switch and tuning knob, one JSON var, because Cloudflare caps a Worker at 128 vars and
   // secrets together. Each entry seam flattens it into env (src/switches.ts). A new switch goes in it, as a string, in
   // both environments; only the vars guard-switches-binding.mjs lists stay flat.

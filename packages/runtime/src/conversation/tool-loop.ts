@@ -165,9 +165,11 @@ export async function runToolLoop(input: Readonly<{
   // Clears old results down to the latest TOOL_RESULTS_KEEP_LATEST past TOOL_RESULTS_CLEAR_AT_CHARS, in place of halving
   // them past TOOL_RESULTS_KEEP_CHARS.
   clearToLatest?: boolean;
-  // How many characters of tool results the call's hard ceiling leaves room for, given everything else the request carries.
-  // Past it every result but the newest round's is cleared, ahead of the other rules. Undefined, or absent, sets no ceiling.
-  resultRoomChars?: () => number | undefined;
+  // How many UTF-8 bytes of tool turns (calls, results and cleared notes, as JSON) the call's hard ceiling leaves room for,
+  // given everything else the request carries. Past it every result but the newest round's is cleared, ahead of the other
+  // rules; the newest round is sent whole, so one round's results can still carry a call past the ceiling. Undefined, or
+  // absent, sets no ceiling.
+  resultRoomBytes?: () => number | undefined;
   // Awaited after each round's results, before the next model call: the worker's checkpoint. A throw ends the loop.
   afterRound?: (turns: readonly LLMToolTurn[]) => Promise<void>;
   // Offer the same tool list every round: the list leads the provider's cache prefix, so a change mid-turn re-bills the
@@ -259,8 +261,8 @@ export async function runToolLoop(input: Readonly<{
   const clearOldResults = () => {
     const newest = roundStarts.at(-1) ?? 0;
     let total = turns.slice(cleared).reduce((sum, turn) => sum + turn.output.length, 0);
-    const room = input.resultRoomChars?.();
-    if (room !== undefined && total > room) clearThrough(newest);
+    const room = input.resultRoomBytes?.();
+    if (room !== undefined && new TextEncoder().encode(JSON.stringify(turns)).byteLength > room) clearThrough(newest);
     if (input.clearToLatest) {
       if (total > TOOL_RESULTS_CLEAR_AT_CHARS) clearThrough(Math.min(newest, turns.length - TOOL_RESULTS_KEEP_LATEST));
       return;
