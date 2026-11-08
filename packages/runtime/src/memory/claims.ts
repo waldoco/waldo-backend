@@ -1,8 +1,9 @@
 import { fuseRanked } from './semantic-recall';
 import { numericHealthIn, readingBeyondOwner } from '../scribe/sanitiser';
 type Sql = Pick<SqlStorage, 'exec'>;
-import { LIFE_AREAS, replaceLiteralText, type LifeArea } from '@waldo/contracts';
-import { carriesTopic, forgettableTopic, hidesTopic, startsTopic } from './forget-guard';
+import { LIFE_AREAS, PEOPLE_PER_CLAIM_MAX, PERSON_ADDRESSES_MAX, personLinkSchema, replaceLiteralText, type LifeArea, type PersonWrite } from '@waldo/contracts';
+import { outsideSafe } from './outside-view';
+import { carriesTopic, forgettableTopic, hidesTopic, holdsIn, startsTopic } from './forget-guard';
 import { PASS_HEALTH_MEMORY_RULES } from './health-rules';
 import { RESTORES_DRAINS_MEMORY_RULE } from './restores-drains';
 import { NODE_STATEMENT, nodeConfirmation, nodeSources, nodeStatementIds, nodeSupports, nodeWording, othersWords, statementConfirms, statementRef, supportIds } from './node-sources';
@@ -601,6 +602,7 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
     },
     // The people claims are about. Written only here, beside the claims they hang on.
     people,
+    lastClaimId: (): number => sql.exec<{ id: number }>('SELECT last_insert_rowid() AS id').one().id,
     // The owner's yes to a person: one claim in their own name saying they know them, linked to the person, so the person is
     // theirs on every turn. It says nothing more: who they are to the owner stays in the claims Waldo read, each with its own
     // confirm, and none of those is grounded by this.
@@ -1537,6 +1539,27 @@ export const SOURCE_CLAIMS_SCHEMA = {
   type: 'object', additionalProperties: false, required: ['add'],
   properties: { add: CLAIM_OPS_SCHEMA.properties.add },
 };
+// With the people map on, each claim the source pass adds may say who it is about, with the address the change shows.
+const SOURCE_PERSON = { type: 'object', additionalProperties: false, required: ['ref', 'name', 'role', 'relation', 'addresses'], properties: {
+  ref: { type: ['integer', 'null'] }, name: { type: ['string', 'null'] }, role: { type: 'string', enum: ['subject', 'object', 'mention'] },
+  relation: { type: ['string', 'null'] }, addresses: { type: 'array', items: { type: 'string' } } } };
+const SOURCE_PEOPLE_MAX = 4;
+const ADD_ITEM = CLAIM_OPS_SCHEMA.properties.add.items;
+export const SOURCE_PEOPLE_CLAIMS_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['add'],
+  properties: { add: { type: 'array', items: { ...ADD_ITEM, required: [...ADD_ITEM.required, 'people'], properties: { ...ADD_ITEM.properties, people: { type: 'array', maxItems: SOURCE_PEOPLE_MAX, items: SOURCE_PERSON } } } } },
+};
+export const SOURCE_PEOPLE_RULE = 'When a claim is about a person the owner deals with, list them in people: ref for one in <known_people>, name for someone new, never both; addresses only as the change shows them. Leave people empty for a claim about no one. Who someone is and whether two names are one person are your call; never merge two people because they share a first name.';
+// The people a background pass over outside content may name by id: every person a claim it may read is about, and none whose
+// name a forget is still clearing. The pass may name only these by ref.
+export const knownPeople = (store: ClaimStore) => {
+  const held = holdsIn(store.pendingTopics());
+  return store.people.all().filter(row => !held(row.name) && store.people.claimsOf(row.id).some(claim => outsideSafe(claim) && !held(claim.text, claim.evidence)));
+};
+export const knownPeopleBlock = (store: ClaimStore): string =>
+  `<known_people>\n${knownPeople(store).map(row => `${row.id}: ${fence(row.name)}`).join('\n') || '(none yet)'}\n</known_people>`;
+// What a source pass may write about people: refs it was shown, and addresses that are the From of mail in the same batch.
+export type SourcePeopleScope = Readonly<{ refs: ReadonlySet<number>; addresses: ReadonlySet<string> }>;
 
 // The owner's health notes setting, told to the model: which claims are about health is its judgment, whatever kind it would
 // file one under. The kind filter below backs it for claims filed as health.
@@ -1614,7 +1637,7 @@ export const ground = (evidence: string, sections: ClaimGrounding): GroundingVer
 };
 
 // pin and unpin are unknown[]: older replies and fixtures omit them, and each entry is checked before it is applied.
-type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean; aliases_touch_forgotten?: boolean })[]; corrections?: readonly { old_id: number; kind: string; text: string; evidence: string }[]; retire?: readonly { id: number; replaced_by_text: string | null; evidence: string }[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null; pin?: readonly unknown[]; unpin?: readonly unknown[]; areas?: readonly unknown[] }>;
+type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean; aliases_touch_forgotten?: boolean; people?: unknown })[]; corrections?: readonly { old_id: number; kind: string; text: string; evidence: string }[]; retire?: readonly { id: number; replaced_by_text: string | null; evidence: string }[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null; pin?: readonly unknown[]; unpin?: readonly unknown[]; areas?: readonly unknown[] }>;
 const pinOp = (value: unknown): value is Readonly<{ id: number; block: PinBlock; order: number }> => {
   const op = value as { id?: unknown; block?: unknown; order?: unknown } | null;
   return typeof op === 'object' && op !== null && Number.isSafeInteger(op.id) && PIN_BLOCKS.includes(op.block as PinBlock) && Number.isSafeInteger(op.order);
@@ -1622,7 +1645,7 @@ const pinOp = (value: unknown): value is Readonly<{ id: number; block: PinBlock;
 
 // What this application of claim ops actually did, as counts the caller can report truthfully.
 export type ClaimOutcome = Readonly<{ retired?: number; written: number; held: number; holdReasons: readonly string[]; downgraded: number; corrected: number; confirmed: number; dismissed: number; forgetClaimsAttempted: number; forgetClaimsRemoved: number; forgetNodes: number; forgetAllowed: boolean; purgeIncomplete: readonly string[]; episodesRedacted?: number; pinned: number; unpinned: number }>;
-export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[], ids: readonly number[], topics?: readonly string[]) => void, grounding?: ClaimGrounding, forgetAllowed?: boolean, onOutcome?: (outcome: ClaimOutcome) => void, pinsAllowed?: boolean, retireAllowed?: boolean): string => {
+export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[], ids: readonly number[], topics?: readonly string[]) => void, grounding?: ClaimGrounding, forgetAllowed?: boolean, onOutcome?: (outcome: ClaimOutcome) => void, pinsAllowed?: boolean, retireAllowed?: boolean, peopleScope?: SourcePeopleScope): string => {
   // Background extraction does not infer permission for destructive effects.
   const forgetsAllowed = forgetAllowed === true;
   const ops = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as ClaimOps;
@@ -1678,6 +1701,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   let downgraded = 0;
   let written = 0;
   const admitted = ops.add.filter((claim) => !held.includes(claim) && CLAIM_KINDS.includes(claim.kind as never) && claim.text.trim() && claim.evidence.trim());
+  const createdNow = new Map<string, number>();
   for (const claim of admitted) {
     const replacement = replacements.get(normalizeForGrounding(claim.text));
     if (replacement === 'applied') continue;
@@ -1724,6 +1748,30 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     const sourceRef = origin === 'owner' ? ownerSourceRef(claim.evidence, grounding) ?? ownerTurnRef(evidence) : answering ? ownerSourceRef(claim.evidence, grounding) : undefined;
     store.add({ kind: claim.kind, text: claim.text.trim(), source, evidence: claim.evidence.trim(), aliases, origin: origin ?? undefined, source_ref: sourceRef, area: claim.area }, at);
     written += 1;
+    // Who it is about, as the pass named them: a ref it was shown, or a new name no forget has barred. An address is kept only
+    // when it is the From of mail in this batch, and never added to someone the owner has spoken about. Anything else is dropped.
+    if (peopleScope !== undefined && Array.isArray(claim.people) && claim.people.length) {
+      const id = store.lastClaimId();
+      const barred = (text: string) => aliasForms(text).some((form) => barrierHashes.has(textFingerprint(form)));
+      const links = claim.people.slice(0, PEOPLE_PER_CLAIM_MAX).flatMap((raw: unknown): PersonWrite[] => {
+        const value = (raw ?? {}) as Record<string, unknown>;
+        const link = personLinkSchema.safeParse(Object.fromEntries(Object.entries({ ref: value.ref, name: value.name, role: value.role, relation: value.relation }).filter(([, field]) => field !== null && field !== undefined)));
+        if (!link.success || (link.data.name !== undefined && barred(link.data.name)) || (link.data.relation !== undefined && barred(link.data.relation))) return [];
+        // A name this reply already started is that same person, not a second one.
+        const ref = link.data.ref ?? (link.data.name !== undefined ? createdNow.get(link.data.name.trim().toLowerCase()) : undefined);
+        if (link.data.ref !== undefined && !peopleScope.refs.has(link.data.ref)) return [];
+        const addresses = (Array.isArray(value.addresses) ? value.addresses : []).filter((address): address is string => typeof address === 'string')
+          .map((address) => address.trim().toLowerCase()).filter((address) => peopleScope.addresses.has(address) && !barrierHashes.has(textFingerprint(address)))
+          .slice(0, PERSON_ADDRESSES_MAX);
+        const kept = ref !== undefined && store.people.ownersOwn(ref) ? [] : addresses;
+        const base = ref !== undefined ? { ref, role: link.data.role, ...(link.data.relation ? { relation: link.data.relation } : {}) } : link.data;
+        return [{ ...base, ...(kept.length ? { addresses: kept } : {}) }];
+      });
+      if (id > 0 && links.length) {
+        const linked = store.people.link(id, links, at);
+        links.forEach((link, index) => { if (link.ref === undefined && link.name !== undefined) createdNow.set(link.name.trim().toLowerCase(), linked[index]!); });
+      }
+    }
   }
   // A fact the day showed is no longer true ends here, on the owner's own words: it stays as dated history and is never
   // deleted. Waldo does not end a claim on an outside reader's say-so, or on a quote that is not the owner's.

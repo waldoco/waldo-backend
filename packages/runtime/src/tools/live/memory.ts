@@ -85,7 +85,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         if (blocked(args.text) || blocked(args.evidence_quote) || (args.aliases ?? []).some(blocked)) return fail('This memory matches a forget barrier.');
         // A person the owner asked to forget stays forgotten: neither their name nor an address comes back as a new person.
         const links = deps.people ? args.people ?? [] : [];
-        if (links.some(link => link.name !== undefined && blocked(link.name))) return fail('This memory names a person the owner asked to forget.');
+        if (links.some(link => (link.name !== undefined && blocked(link.name)) || (link.relation !== undefined && blocked(link.relation)))) return fail('This memory names a person the owner asked to forget.');
         const unknown = store.people.unknownRefs(links);
         if (unknown.length) return fail(`Memory has no person with the id${unknown.length > 1 ? 's' : ''} ${unknown.join(', ')}. Read memory with people: true, and pass ref only for a person it lists, or name to start a new one.`);
         // A reading the owner states is theirs to keep. Once the turn has read outside content (mail, a web page, a connected

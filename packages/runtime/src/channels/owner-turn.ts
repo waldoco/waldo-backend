@@ -47,7 +47,7 @@ import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
 import { fitPromptToBudget } from '../prompt/fit-prompt';
 import { ownerProfilePrompt } from '../memory/owner-profile';
-import { FORGOTTEN, QUIET_NOTE, QUIET_TAG, withoutBringUpLess, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, SOURCE_CLAIMS_SCHEMA, SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput, withoutHealthClaims, type ClaimStore, barrierPrompt, memoryPrompt, RETIRE_RULES } from '../memory/claims';
+import { FORGOTTEN, QUIET_NOTE, QUIET_TAG, withoutBringUpLess, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, knownPeopleBlock, SOURCE_PEOPLE_CLAIMS_SCHEMA, SOURCE_PEOPLE_RULE, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, SOURCE_CLAIMS_SCHEMA, SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput, withoutHealthClaims, type ClaimStore, barrierPrompt, memoryPrompt, RETIRE_RULES } from '../memory/claims';
 import { CAPACITY_INSTRUCTION, CAPACITY_SCHEMA } from '../prompt/capacity';
 import { sha256Hex } from '../context-composer/canonical';
 import { outsideView } from '../memory/outside-view';
@@ -1213,7 +1213,11 @@ export const createOwnerResponder = (
       if (!memory) return '{"add":[]}';
       // Outside text never sits beside a health note or a node drawn from health: this call reads memory as a job built from
       // outside content does.
-      const raw = await ask(trace, 'memory_nightly_sources', SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput(outsideView(promptMemory()!), updates, policy?.health !== false), { name: 'source_claims', schema: SOURCE_CLAIMS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+      // With the people map on, the pass sees the people memory holds by id, and may say who each claim it adds is about.
+      const people = policy?.people === true;
+      const input = sourceUpdatesInput(outsideView(promptMemory()!), updates, policy?.health !== false);
+      const raw = await ask(trace, 'memory_nightly_sources', people ? `${SOURCE_MEMORY_INSTRUCTION}\n${SOURCE_PEOPLE_RULE}` : SOURCE_MEMORY_INSTRUCTION,
+        people ? `${input}\n\n${knownPeopleBlock(memory)}` : input, { name: 'source_claims', schema: people ? SOURCE_PEOPLE_CLAIMS_SCHEMA : SOURCE_CLAIMS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
       return raw;
     },
