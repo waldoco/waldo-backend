@@ -295,6 +295,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   PROACTIVE_ACT_AHEAD?: string;
   // An owner who chose no proactive surface and has WhatsApp bound gets proactive work on the app and WhatsApp both.
   PROACTIVE_BOTH_DEFAULT?: string;
+  // '1' has an event notice that reaches the app chat raise one push, under quiet hours and the owner's own limits.
+  EVENT_PUSH?: string;
+  // The most event pushes in an owner's day, a backstop under the owner's limits (default 3).
+  EVENT_PUSH_PER_DAY?: string;
   // "1": Waldo's own sends follow the owner's choice among their other surfaces even while Telegram is linked.
   PROACTIVE_OVER_TELEGRAM?: string;
   // '1' (with PROACTIVE_GATE) has Waldo look across the owner's plate on its own every PROACTIVE_REVIEW_EVERY_MIN minutes
