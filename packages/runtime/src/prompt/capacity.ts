@@ -1,5 +1,6 @@
 import { fence } from '../memory/claims';
 import { MEDICATION_MEMORY_RULE, SLEEP_NEED_MEMORY_RULE } from '../memory/health-rules';
+import { CAPACITY_CALIBRATION_INSTRUCTION } from './day-shaping';
 
 // CAPACITY_PLAN: Waldo learns how much real work the owner can do in a day and keep doing, and when they think best, and keeps
 // it as one plain note in memory. The note shapes their deep work and their weekly reset. The judgment is the model's: code
@@ -32,13 +33,15 @@ export const CAPACITY_NOTE_OPENING = 'Capacity note:';
 export const NO_NOTE = 'Waldo has no capacity note for the owner yet.';
 
 // The pass's own message; the owner's memory and the forget barrier are added by the responder, as for every memory pass.
-export const capacityInput = (input: Readonly<{ now: string; note: string | null; health: string | null; withdrawn: boolean; calendar: string }>): string => [
+export const capacityInput = (input: Readonly<{ now: string; note: string | null; health: string | null; withdrawn: boolean; calendar: string; blocks?: string }>): string => [
   `Now: ${input.now} in the owner's local time.`,
   input.note === null ? 'There is no capacity note yet.' : `The current capacity note:\n<capacity_note>\n${fence(input.note)}\n</capacity_note>`,
   ...(input.withdrawn ? [BODY_WITHDRAWN] : []),
   // Opens as the trace scrub's shared-health block does, so it is withheld whole wherever this text could be traced.
   `Shared health today, their body as zone words:\n${input.health ?? NO_SHARED_HEALTH}`,
   `The shape of their calendar, one line per day in their local time, each marked lived, under way or ahead:\n<calendar_shape>\n${input.calendar}\n</calendar_shape>`,
+  // BLOCK_LIFECYCLE: how Waldo's blocks and window offers went, for calibration.
+  ...(input.blocks === undefined ? [] : [CAPACITY_CALIBRATION_INSTRUCTION, `Waldo's blocks and window offers over the last two weeks, and what became of each:\n<block_outcomes>\n${input.blocks || '- none'}\n</block_outcomes>`]),
 ].join('\n\n');
 
 // What the day cards read with CAPACITY_PLAN on. The note and the blocks travel as the job's context, never in the card's
