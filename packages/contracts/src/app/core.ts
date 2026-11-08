@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import {
   replyApprovalPartV1Schema, replyChartSeriesPartV1Schema, replyFilePartV1Schema, replyQuickRepliesPartV1Schema,
-  replyReceiptPartV1Schema, replyVisibilityV1Schema, replyVoicePartV1Schema, REPLY_TEXT_MAX_CHARS,
+  replyFreeWindowPartV1Schema, replyReceiptPartV1Schema, replyVisibilityV1Schema, replyVoicePartV1Schema, REPLY_TEXT_MAX_CHARS,
 } from './parts';
 
 export const APP_AGENT_VERSION = 'app.v1' as const;
@@ -144,7 +144,7 @@ export const appMessagePartV1Schema = z.union([
   z.strictObject({ type: z.literal('operation'), operation_id: z.string(), state: z.enum(['admitted', 'running', 'completed', 'interrupted', 'revoked']), message: z.string() }),
   z.strictObject({ type: z.literal('artifact'), artifact_id: z.string(), revision: z.int().positive(), title: z.string(), download_path: z.string() }),
   replyApprovalPartV1Schema, replyQuickRepliesPartV1Schema, replyChartSeriesPartV1Schema, replyFilePartV1Schema, replyVoicePartV1Schema,
-  replyReceiptPartV1Schema,
+  replyReceiptPartV1Schema, replyFreeWindowPartV1Schema,
 ]);
 // Chat revision 6 (`chat=6`): a main-chat reply the owner rated carries `rating`, so a rating survives a relaunch. An unrated
 // reply, a user row and every thread row leave the key out, and revisions below 6 never receive it.
@@ -156,6 +156,9 @@ export const APP_CHAT_RATING_REVISION = 6;
 // text. A reply that looked up nothing, a user row, a thread row and revisions below 7 leave the key out.
 export const APP_CHAT_MEMORY_USED_REVISION = 7;
 export const APP_CHAT_MEMORY_USED_MAX_V1 = 8;
+// Chat revision 10 (`chat=10`): a reply that carries a free-window offer's approval part also carries a free_window part naming
+// it (parts.ts). Revisions below 9 receive the approval part alone, which shows the same offer as a full card.
+export const APP_CHAT_FREE_WINDOW_REVISION = 10;
 // Chat revision 8 (`chat=8`): a reply Waldo drew a chart in carries it as a `chart_series` part, after its text and before
 // its receipt. Its `fallback_text` is the chart's `alt_text`. Below 8 no chart part is sent: the reply's `text` carries each
 // chart's alt text instead, after the reply's own words and before its receipt line, so an older build shows what the chart says.

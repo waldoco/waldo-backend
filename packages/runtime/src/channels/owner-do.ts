@@ -242,6 +242,8 @@ import { getScreenTimeHandler, screenTimeReadBook } from '../tools/live/screen-t
 import { deviceContextReadBook, getDeviceContextHandler } from '../tools/live/device-context';
 import { APP_DEVICE_CALENDAR_PATH, deviceCalendarBook, deviceCalendarRequest, type DeviceCalendarBook } from './device-calendar';
 import { phoneCalendarReader, queryPhoneCalendarHandler } from '../tools/live/phone-calendar';
+import { coverageFacts } from './coverage';
+import { dayShapingContext, protocolMovesAllowed } from '../prompt/day-shaping';
 import { weatherTools } from '../tools/live/weather';
 import { cacheApiWeatherCache } from '../connectors/weatherkit';
 import { NUMBERED_REPLY, appApprovalPartFor, appApprovalParts, approvalDesk, endCardWaits, forgetWaitingCards, forgetTrails, ledgerSummary, taskAskRef, withdrawRunCards, type ApprovalDesk, type CallbackQuery } from './approvals';
@@ -1450,7 +1452,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const sql = this.ctx.storage.sql;
     return { admit: () => this.admitOwnerJob(), chain,
       // The job reads the book the owner's chat turns read: the custody key their rows were seeded under.
-      skills: (owner, turnId, assertCurrent) => createJobSkillCapability(sql, { owner, custodyKey: seededSkillCustody(sql) ?? owner, turnId, trigger: 'user_message', ownerText: '', assertCurrent, catalog: curatedCatalog(this.env.HEALTH_ACTIONS === '1') }) };
+      skills: (owner, turnId, assertCurrent) => createJobSkillCapability(sql, { owner, custodyKey: seededSkillCustody(sql) ?? owner, turnId, trigger: 'user_message', ownerText: '', assertCurrent, catalog: curatedCatalog(this.env.HEALTH_ACTIONS === '1', this.env.CALENDAR_COVERAGE === '1' || this.env.FREE_WINDOW_OFFERS === '1') }) };
   }
 
   // A chat turn (WhatsApp, Telegram) runs on the owner's own chain only while the owner's proactive work lands in their app
@@ -2123,7 +2125,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const shows=this.env.MEMORY_USED_SHOWN==='1'&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'chat')>=APP_CHAT_MEMORY_USED_REVISION;
       const charts=appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'chat')>=APP_CHAT_CHART_REVISION;
       const healthCharts=this.env.HEALTH_CHARTS==='1'&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'chat')>=APP_CHAT_HEALTH_CHART_REVISION;
-      try{return Response.json(await this.appChatPage(name,hash,undefined,url.searchParams.get('cursor'),Number(url.searchParams.get('limit')??20),at,rated,appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'approvals'),shows,charts,healthCharts),{headers:{'cache-control':'no-store'}});}
+      try{return Response.json(await this.appChatPage(name,hash,undefined,url.searchParams.get('cursor'),Number(url.searchParams.get('limit')??20),at,rated,appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'approvals'),shows,charts,healthCharts,appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'chat')),{headers:{'cache-control':'no-store'}});}
       catch(error){logAppReadFailure('app_history_read',at.step,error);return fail(503);}
     }
     return fail(404);
@@ -2132,7 +2134,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // a failure stopped at.
   // approvals: the approvals revision the reading build declares, so a card kind it predates comes as words.
   // healthCharts: the reading build draws health charts (chat=11) and the switch is on, so each one is read live for this page.
-  private async appChatPage(name: string, hash: string, thread: string | undefined, cursor: string | null, limit: number, at: { step: string }, rated = false, approvals = 1, memoryUsed = false, charts = false, healthCharts = false) {
+  private async appChatPage(name: string, hash: string, thread: string | undefined, cursor: string | null, limit: number, at: { step: string }, rated = false, approvals = 1, memoryUsed = false, charts = false, healthCharts = false, chat = 1) {
     const entries=await this.appChatRows(name,hash,thread,at,appTranscriptPageRead(cursor,limit));
     at.step='health_charts';
     const healthSeries=healthCharts?await this.healthChartSeries(appTranscriptPageRows(entries,cursor,limit)):new Map<string,HealthSeries>();
@@ -2142,7 +2144,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const ratings=rated&&thread===undefined?replyRatings(this.ctx.storage.sql):undefined;
     // Main chat only, like ratings; each claim is read as it is now, so a forgotten one is gone from the answer.
     const used=memoryUsed&&thread===undefined?memoryUsedFor(memoryUsedBook(this.ctx.storage.sql),()=>[...claimStore(this.ctx.storage.sql).claims(),...claimStore(this.ctx.storage.sql).claims('promoted')],()=>heldTopicsOf(claimStore(this.ctx.storage.sql))):undefined;
-    return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql,approvals),run=>[consoleLinks(run),connectLinks(run)].filter(Boolean).join('\n\n')||null,id=>ratings?.get(id),used,charts,chart=>{const series=healthSeries.get(healthChartKey(chart));return series?healthChartPart(chart,series):undefined;});
+    return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql,approvals,chat,this.env.FREE_WINDOW_OFFERS==='1'),run=>[consoleLinks(run),connectLinks(run)].filter(Boolean).join('\n\n')||null,id=>ratings?.get(id),used,charts,chart=>{const series=healthSeries.get(healthChartKey(chart));return series?healthChartPart(chart,series):undefined;});
   }
   // The readings for the health charts this page shows, each query read live from the health plane once, with consent read once
   // for the page. The points live only in this response. A read that fails, is refused or runs past HEALTH_CHART_READ_MS leaves
@@ -4827,7 +4829,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const grants = standingGrants(storage, { now: () => deps.now(), newId: () => `g${deps.newRunId().replaceAll('-', '').slice(0, 24)}`,
       enabled: () => this.env.AUTONOMY_OWN_CALENDAR === '1', ownerRef });
     const desk = approvalDesk(storage.sql, {
-      effects, googleTasks: () => googleTasks, currentRunRef, appReplyRef: () => this.activeApp?.id, ownerRef, ownerRefAliases, grants,
+      effects, googleTasks: () => googleTasks, currentRunRef, appReplyRef: () => this.activeApp?.id, ownerRef, ownerRefAliases, grants, freeWindowOffers: () => this.env.FREE_WINDOW_OFFERS === '1',
       approvesInChat: () => this.env.APPROVE_IN_CHAT === '1', conversationRef: () => this.activeApp?.conversationRef,
       ownerMessageAt: () => this.activeApp?.admittedAt ?? this.activeWhatsApp?.admittedAt ?? this.activeIMessage?.admittedAt,
       surface: channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work), writesFirstNow, renames: this.env.HEALTH_EASE_WORKOUT === '1', undoCancels: this.env.CALENDAR_UNDO_CANCEL === '1',
@@ -5014,6 +5016,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
     };
     const updates = updateBook(storage.sql);
+    // How Waldo plans the real day (CALENDAR_COVERAGE, FREE_WINDOW_OFFERS): the facts and intent a planning turn reads. A health
+    // move is a candidate only while the owner shares their health and CAPACITY_PLAN is on; a read that fails counts as not shared.
+    // A health move is offered only from the planning Brief, whose calendar proposals pass the deterministic health-word screen.
+    const dayShaping = async (trace: string, brief = false): Promise<string> => {
+      const coverage = this.env.CALENDAR_COVERAGE === '1', offers = this.env.FREE_WINDOW_OFFERS === '1';
+      if (!coverage && !offers) return '';
+      const protocols = protocolMovesAllowed({ brief, offers, capacityPlan: this.env.CAPACITY_PLAN === '1' }) && await healthContext.read(trace).then(read => read !== null && read !== 'unknown', () => false);
+      return dayShapingContext({ offers, protocols, brief, coverage: coverage ? await coverageFacts({ now: Date.now(), timezone: clock.timezone, cache: storage.kv,
+        accounts: async () => await google.state(), readAt: id => updates.calendarReadAt(id),
+        pastEvents: async (email, from, to, limit) => { const reader = await google.client('calendar', undefined, undefined, email); return reader ? reader.events(from, to, limit, true) : null; },
+        phone: this.env.DEVICE_CALENDAR === '1' ? this.deviceCalendar() : null }) : null });
+    };
     // App-only owners get no proactive work on a fallback zone: only the owner's own time-zone choice confirms one.
     const armable = (_kind: ScheduleKind) => channel !== 'app' || identity.get<boolean>('timezone_confirmed') === true;
     // Turning a kind on arms it only where `armable` holds, and the brief sweep only while a Google grant exists.
@@ -5087,7 +5101,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const assertSkillOwnerCurrent = async () => { scope.admit(); };
       // The receipt read runs on every tool round; one failure line per turn keeps the bounded trace table readable.
       let receiptsUnavailableLogged = false;
-      const capability = createScopedCuratedSkillCapability(storage.sql, { owner: skillOwner, custodyKey: seededSkillCustody(storage.sql) ?? custodyFallback, catalog: curatedCatalog(this.env.HEALTH_ACTIONS === '1'), turnId: turn.traceId,
+      const capability = createScopedCuratedSkillCapability(storage.sql, { owner: skillOwner, custodyKey: seededSkillCustody(storage.sql) ?? custodyFallback, catalog: curatedCatalog(this.env.HEALTH_ACTIONS === '1', this.env.CALENDAR_COVERAGE === '1' || this.env.FREE_WINDOW_OFFERS === '1'), turnId: turn.traceId,
         trigger: 'user_message', ownerText: turn.text, assertCurrent: assertSkillOwnerCurrent, assertDispatch }, scope);
       return Object.freeze({ ...capability, ...(admission ? { admission } : {}), taskContext: async (assertSourceCurrent?: () => Promise<void>) => {
         await assertSkillOwnerCurrent();
@@ -6211,7 +6225,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       ...(interrupts ? { interruptions: interrupts } : {}),
       ...(realtime ? { triage: {
         // The owner's goals as their memory holds them; the turn recalls people and the rest of memory as every job does.
-        context: async () => ({ goals: claimStore(storage.sql).claims().filter(claim => claim.kind === 'goal').slice(-12).map(claim => `- ${claim.text}`).join('\n') }),
+        context: async () => ({ goals: claimStore(storage.sql).claims().filter(claim => claim.kind === 'goal').slice(-12).map(claim => `- ${claim.text}`).join('\n'), shaping: await dayShaping('update-triage') }),
         // Owner jobs run one at a time, so the cards raised since the turn started are the ones it offered.
         // A done row is a record of something that ran (a draft), not a card waiting on the owner.
         cardsSince: (at: number) => storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM ledger WHERE created_at >= ? AND status != 'done'", at).one().n,
@@ -6241,7 +6255,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       book: interventions.book, limits: interventions.limits, timezone: () => clock.timezone, now: () => Date.now(),
       consent: reachesOut, quiet, closed: interventions.closed, transaction: work => storage.transactionSync(work),
       context: async () => ({ goals: claimStore(storage.sql).claims().filter(claim => claim.kind === 'goal').slice(-12).map(claim => `- ${claim.text}`).join('\n'),
-        cards: dayCards(), style: channelStyle(PROACTIVE_READS[channel](storage.kv, proactiveBothDefault(this.env))) }),
+        cards: dayCards(), style: channelStyle(PROACTIVE_READS[channel](storage.kv, proactiveBothDefault(this.env))), shaping: await dayShaping('intervention') }),
       turn: async (turn, text, current, tools) => this.asOwnerJob('heartbeat', turn, async () =>
         responder.prompt(turn, owner, text, async (_hop, work) => work(), tools, current, undefined, await healthLogLines(), 'external', true)),
       cardsSince: (at: number) => storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM ledger WHERE created_at >= ? AND status != 'done'", at).one().n,
@@ -6349,10 +6363,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         let text: string, raised: readonly TrailStep[], replies: readonly string[] = [];
         try {
           const proposes = ['propose_calendar_change', ...(planning && this.env.CALENDAR_PLAN === '1' ? ['propose_calendar_plan' as const] : []), 'propose_action', ...(asks ? ['offer_replies' as const] : [])] as const;
+          const shaping = planning ? await dayShaping(trace, true) : '';
           const capacityText = capacity ? [capacityContext(cardCapacityNote(memory, storage.kv, healthMemoryOn(identity), await healthContext.read(trace).then(read => read === 'unknown' ? read : read !== null)), recentBlocks(storage.sql, now, clock.timezone)),
             ...(budget ? [await capacityBudgetContext(now, clock.timezone, client, !client && google.configured(), recentMoves(storage.sql, now, clock.timezone))] : [])].join('\n\n') : undefined;
-          text = (await ledgerJob(trace, said, proposing ? [...OUTSIDE_TEXT_JOB_TOOLS, ...proposes] : undefined, proposing ? proposes : undefined, actAhead || capacity || tomorrow || questText !== null,
-            [capacityText, questText].filter(Boolean).join('\n\n') || undefined)).trim();
+          text = (await ledgerJob(trace, said, proposing ? [...OUTSIDE_TEXT_JOB_TOOLS, ...proposes] : undefined, proposing ? proposes : undefined, actAhead || capacity || tomorrow || questText !== null || shaping !== '',
+            [shaping, capacityText, questText].filter(Boolean).join('\n\n') || undefined)).trim();
         } finally {
           raised = this.whyHolder.collected ?? []; this.whyHolder.collected = undefined;
           if (asks) replies = cardReplies.take(trace);
