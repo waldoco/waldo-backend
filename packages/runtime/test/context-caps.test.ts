@@ -1,8 +1,9 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { STANDING_ORDERS_PROMPT_CHARS, standingOrdersPrompt, type StandingOrder } from '../src/channels/standing-orders';
-import { QUESTS_PROMPT_CHARS, questBook, questsPrompt } from '../src/channels/quests';
+import { standingOrdersPrompt, type StandingOrder } from '../src/channels/standing-orders';
+import { questBook, questsPrompt } from '../src/channels/quests';
+import { CONTEXT_BUDGET } from '../src/conversation/context-budget';
 
 const order = (n: number, trigger: StandingOrder['trigger']): StandingOrder => ({
   id: `so${n}`, scope: `Order ${n}: ${'keep the mornings clear of calls unless the owner says otherwise. '.repeat(8)}`, trigger,
@@ -17,21 +18,21 @@ describe('the standing orders every turn reads', () => {
   it('without a cap, or within it, lists every order in its stored order', () => {
     expect(ids(standingOrdersPrompt(book(orders)))).toEqual(orders.map(({ id }) => id));
     const few = orders.slice(0, 3);
-    expect(standingOrdersPrompt(book(few), STANDING_ORDERS_PROMPT_CHARS)).toBe(standingOrdersPrompt(book(few)));
+    expect(standingOrdersPrompt(book(few), CONTEXT_BUDGET.standingOrdersChars)).toBe(standingOrdersPrompt(book(few)));
   });
 
   it('past the cap keeps every order that applies every turn, fills the rest with scheduled ones, and counts the others', () => {
-    const prompt = standingOrdersPrompt(book(orders), STANDING_ORDERS_PROMPT_CHARS);
+    const prompt = standingOrdersPrompt(book(orders), CONTEXT_BUDGET.standingOrdersChars);
     const shown = ids(prompt);
     expect(shown.slice(0, 3)).toEqual(['so3', 'so6', 'so9']);
     expect(shown.length).toBeLessThan(orders.length);
-    expect(prompt.split('\n').filter((line) => line.startsWith('- [')).join('\n').length).toBeLessThanOrEqual(STANDING_ORDERS_PROMPT_CHARS);
+    expect(prompt.split('\n').filter((line) => line.startsWith('- [')).join('\n').length).toBeLessThanOrEqual(CONTEXT_BUDGET.standingOrdersChars);
     expect(prompt).toContain(`${orders.length - shown.length} more scheduled standing orders are not shown here; each runs with its own instructions when it fires, and in a chat with the owner list_standing_orders reads every one.`);
   });
 
   it('every-turn orders longer than the cap all still show, with no scheduled order beside them', () => {
-    const long = [1, 2].map((n) => ({ ...order(n, 'every_turn'), scope: 'x'.repeat(STANDING_ORDERS_PROMPT_CHARS) }));
-    const prompt = standingOrdersPrompt(book([...long, order(3, 'daily')]), STANDING_ORDERS_PROMPT_CHARS);
+    const long = [1, 2].map((n) => ({ ...order(n, 'every_turn'), scope: 'x'.repeat(CONTEXT_BUDGET.standingOrdersChars) }));
+    const prompt = standingOrdersPrompt(book([...long, order(3, 'daily')]), CONTEXT_BUDGET.standingOrdersChars);
     expect(ids(prompt)).toEqual(['so1', 'so2']);
     expect(prompt).toContain('1 more scheduled standing order is not shown here');
   });
@@ -60,10 +61,10 @@ describe('the open quests every turn reads', () => {
     await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('context-caps-quests')), (_instance, state) => {
       const quests = seeded(state);
       const full = questsPrompt(quests);
-      const capped = questsPrompt(quests, QUESTS_PROMPT_CHARS);
-      expect(full.length).toBeGreaterThan(QUESTS_PROMPT_CHARS);
+      const capped = questsPrompt(quests, CONTEXT_BUDGET.questsChars);
+      expect(full.length).toBeGreaterThan(CONTEXT_BUDGET.questsChars);
       const whole = capped.split('\n').filter((line) => line.includes('plan:'));
-      expect(whole.join('\n').length).toBeLessThanOrEqual(QUESTS_PROMPT_CHARS);
+      expect(whole.join('\n').length).toBeLessThanOrEqual(CONTEXT_BUDGET.questsChars);
       for (let n = 1; n <= 12; n += 1) expect(capped).toContain(`[quest:q${n}] Quest ${n}`);
       expect(capped.length).toBeLessThan(full.length);
       expect(questsPrompt(quests, full.length + 1_000)).toBe(full);

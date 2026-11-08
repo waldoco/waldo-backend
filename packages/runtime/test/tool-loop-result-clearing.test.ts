@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { browsePageArgsSchema, buildSessionState, createArtifactArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, WALDO_CHAT_FALLBACK_MODEL, WALDO_CHAT_MODEL, type LLMToolTurn, type ModelName, type ToolName } from '@waldo/contracts';
-import { runToolLoop, TOOL_OUTPUT_LIMIT, TOOL_RESULTS_CLEAR_AT_CHARS, TOOL_RESULTS_KEEP_CHARS, TOOL_RESULTS_KEEP_LATEST } from '../src/conversation/tool-loop';
+import { runToolLoop, TOOL_OUTPUT_LIMIT, TOOL_RESULTS_KEEP_CHARS } from '../src/conversation/tool-loop';
 import { inMemoryToolOutputStore } from '../src/conversation/tool-output-store';
 import { readToolOutputHandler } from '../src/tools/read-tool-output';
 import { resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
+import { CONTEXT_BUDGET } from '../src/conversation/context-budget';
 
 // A long turn resends every earlier result each round. Old results are cleared first, before anything else gives way:
 // the newest round always reaches the model whole, the calls stay visible, what was cleared stays cleared, and a cleared
@@ -228,7 +229,7 @@ it('with context caps, results past the clear-at size are cleared down to the la
   const rounds = 24;
   let step = 0;
   await runToolLoop({
-    handlers: [bigRead] as never, ctx: ctx(), maxSteps: rounds + 1, clearToLatest: true,
+    handlers: [bigRead] as never, ctx: ctx(), maxSteps: rounds + 1, clearToLatest: { atChars: CONTEXT_BUDGET.clearAtChars, keep: CONTEXT_BUDGET.keepLatest },
     step: async (_tools, turns) => {
       sent.push(turns.map((turn) => ({ ...turn })));
       step += 1;
@@ -238,13 +239,13 @@ it('with context caps, results past the clear-at size are cleared down to the la
   const kept = (turns: readonly LLMToolTurn[]) => turns.filter((turn) => !isCleared(turn.output));
   let cuts = 0;
   for (const [index, turns] of sent.entries()) {
-    expect(size(kept(turns))).toBeLessThanOrEqual(TOOL_RESULTS_CLEAR_AT_CHARS + TOOL_OUTPUT_LIMIT);
+    expect(size(kept(turns))).toBeLessThanOrEqual(CONTEXT_BUDGET.clearAtChars + TOOL_OUTPUT_LIMIT);
     if (index === 0) continue;
     const before = sent[index - 1]!, cut = kept(turns).length < kept(before).length + 1;
     if (!cut) continue;
     cuts += 1;
     // A cut leaves only the latest results, the newest whole, and every cleared one stays cleared.
-    expect(kept(turns).length).toBe(TOOL_RESULTS_KEEP_LATEST);
+    expect(kept(turns).length).toBe(CONTEXT_BUDGET.keepLatest);
     expect(kept(turns).at(-1)).toEqual(turns.at(-1));
   }
   // Between cuts, each request starts with exactly what the one before it sent.

@@ -6,6 +6,7 @@ import { readThreadArgsSchema, triggerTypeSchema, TOOL_PERMISSIONS, type LLMTool
 import type { LLMGatewayAdapter } from '../src/llm/provider';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import { TOOL_OUTPUT_LIMIT } from '../src/conversation/tool-loop';
+import { CONTEXT_BUDGET } from '../src/conversation/context-budget';
 
 // An owner turn that reads one long thread after another, through the real responder: with WALDO_CONTEXT_CAPS the first
 // clearing leaves only the latest three results; without it the turn halves its results as before.
@@ -24,7 +25,7 @@ const clearingIn = (contextCaps: boolean) => runInDurableObject(env.OWNER_DO!.ge
   } };
   const mail = { name: 'read_thread' as const, description: 'Read a mail thread.', schema: readThreadArgsSchema, trigger_allowlist: allowed('read_thread'),
     handle: async () => ({ ok: true as const, data: { body: 'y'.repeat(TOOL_OUTPUT_LIMIT - 300) }, source_taint: 'external' as const }) };
-  const responder = createOwnerResponder({ openaiApiKey: 'fixture', ...(contextCaps ? { contextCaps: true } : {}) }, undefined, undefined, undefined, undefined, [mail] as never, undefined, false, undefined, undefined, gateway);
+  const responder = createOwnerResponder({ openaiApiKey: 'fixture', ...(contextCaps ? { contextCaps: { atChars: CONTEXT_BUDGET.clearAtChars, keep: CONTEXT_BUDGET.keepLatest } } : {}) }, undefined, undefined, undefined, undefined, [mail] as never, undefined, false, undefined, undefined, gateway);
   await responder.respond(ownerTyped({ traceId: `tg-results-${contextCaps}`, conversationRef: 'owner', surface: 'telegram', text: 'Read every planning thread.' }), async (_hop, work) => work());
   const kept = (turns: readonly LLMToolTurn[]) => turns.filter(turn => !turn.output.includes('[cleared: ')).length;
   const firstCleared = sent.find(turns => kept(turns) < turns.length);

@@ -155,10 +155,6 @@ const toolErrorCode = (event: ToolLoopEvent): { error_code?: string } => {
 };
 // Tool definitions are JSON: about four UTF-8 bytes per token on current tokenizers, close enough to compare rounds.
 const BYTES_PER_TOKEN_EST = 4;
-// WALDO_CALL_CEILINGS: what a call's whole input aims at by class, and the ceiling past which an owner's chat turn clears
-// its earlier tool results. A job's apply turn is measured with the jobs until it has its own small context.
-const CALL_CEILING_TOKENS = { chat: 40_000, job: 25_000 } as const;
-const CHAT_HARD_CEILING_TOKENS = 80_000;
 // The reply's system prompt with the byte size of each joined section, so a trace shows what fills it.
 type SystemPrompt = Readonly<{ text: string; sections: Readonly<Partial<Record<SystemSection, number>>>; contextSections?: Readonly<Partial<Record<SystemSection, number>>> }>;
 
@@ -285,8 +281,8 @@ export const createOwnerResponder = (
   let turnSanitise: Readonly<{ forgets: string; memo: TurnSanitiseMemo }> | undefined;
   // The tool loop's context for the turn in flight: the loop marks it external when a result or hosted search was.
   let turnLoopCtx: Readonly<{ toolArgSourceTaint?: unknown; healthShown?: boolean }> | undefined;
-  // The estimated tokens of the owner's reply call apart from its tool turns: tools, system prompt, history and message,
-  // set by its first round. They hold across the turn's rounds, so the room left for tool turns under the ceiling holds too.
+  // The estimated tokens of the owner's reply call apart from its tool turns: tools, system prompt, history and message, as
+  // the latest round sent them, so a tool loaded mid-turn narrows the room its results have under the hard ceiling.
   let replyBaseTokens: number | undefined;
   // The owner's reply when every provider failed: a promise the host keeps (its retry job, written before this text goes
   // out), else the plain line.
@@ -384,8 +380,9 @@ export const createOwnerResponder = (
     };
     const base = layers.tools + layers.system + layers.history + layers.current;
     if (purpose === 'reply' && ownerTurnActive && !light) replyBaseTokens = base;
-    // A late answer to the owner carries the chat's history like a chat turn does.
-    const ceiling = CALL_CEILING_TOKENS[ownerTurnActive || backgroundOwnerModel ? 'chat' : 'job'];
+    // A late answer to the owner carries the chat's history like a chat turn does. A job's apply turn is measured with the
+    // jobs until it has its own small context.
+    const ceiling = access.callCeilings?.[ownerTurnActive || backgroundOwnerModel ? 'chat' : 'job'];
     const shape = {
       system_bytes: utf8Bytes(system), request_bytes: utf8Bytes(input),
       // These calls run on the voice block, so a shift in behaviour or cache share can be traced to a voice bump.
@@ -397,7 +394,7 @@ export const createOwnerResponder = (
         current_bytes: utf8Bytes(userMessages.at(-1)?.content ?? ''), attachments: attachments?.length ?? 0,
         system_tokens_est: layers.system, history_tokens_est: layers.history, current_tokens_est: layers.current,
         ...(purpose === 'reply' && historyMoved !== undefined ? { history_moved: historyMoved } : {}),
-        ...(access.callCeilings && purpose === 'reply' ? { ceiling_tokens: ceiling, over_ceiling: base + Math.ceil((turns?.length ? utf8Bytes(JSON.stringify(turns)) : 0) / BYTES_PER_TOKEN_EST) > ceiling } : {}),
+        ...(ceiling !== undefined && purpose === 'reply' ? { ceiling_tokens: ceiling, over_ceiling: base + Math.ceil((turns?.length ? utf8Bytes(JSON.stringify(turns)) : 0) / BYTES_PER_TOKEN_EST) > ceiling } : {}),
         ...(typeof systemPrompt === 'string' ? {} : { system_sections: systemPrompt.sections, ...(systemPrompt.contextSections ? { context_sections: systemPrompt.contextSections } : {}) }),
       },
     };
@@ -660,8 +657,8 @@ export const createOwnerResponder = (
         // The menu leads the provider's cache prefix, so the owner's turn offers the same one every round, with or without tool search.
         stableMenu: true,
         ...(harnessLoader ? { loader: (tools: readonly LLMTool[]) => harnessToolLoader(tools, backgroundDirect) } : {}),
-        ...(access.contextCaps ? { clearToLatest: true } : {}),
-        ...(access.callCeilings ? { resultRoomBytes: () => replyBaseTokens === undefined ? undefined : Math.max(0, CHAT_HARD_CEILING_TOKENS - replyBaseTokens) * BYTES_PER_TOKEN_EST } : {}),
+        ...(access.contextCaps ? { clearToLatest: access.contextCaps } : {}),
+        ...(access.callCeilings ? { resultRoomBytes: () => replyBaseTokens === undefined ? undefined : Math.max(0, access.callCeilings!.hard - replyBaseTokens) * BYTES_PER_TOKEN_EST } : {}),
         budget: turnBudget,
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
         maxSteps: turnRounds,

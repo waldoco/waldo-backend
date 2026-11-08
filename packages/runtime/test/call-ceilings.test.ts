@@ -4,21 +4,21 @@
 import { expect, it } from 'vitest';
 import { z } from 'zod';
 import { buildSessionState, TOOL_PERMISSIONS, triggerTypeSchema, type LLMToolTurn, type ToolName } from '@waldo/contracts';
-import { CHAT_HISTORY_BUDGET_TOKENS, COMPACTION, compactionSettings } from '../src/conversation/compaction';
+import { COMPACTION, compactionSettings } from '../src/conversation/compaction';
 import { CONVERSATION_INPUT_BUDGET_TOKENS } from '../src/conversation/window';
 import { runToolLoop, TOOL_OUTPUT_LIMIT } from '../src/conversation/tool-loop';
 import { resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
+import { CONTEXT_BUDGET } from '../src/conversation/context-budget';
 
 it('the switch holds every chat chain to the conversation layer budget, and leaves the rest of the settings as they were', () => {
-  expect(CHAT_HISTORY_BUDGET_TOKENS).toBe(22_000);
   expect(compactionSettings({}).budgetTokens).toBe(CONVERSATION_INPUT_BUDGET_TOKENS);
   expect(compactionSettings({ WALDO_CALL_CEILINGS: '0' }).budgetTokens).toBe(CONVERSATION_INPUT_BUDGET_TOKENS);
   expect(compactionSettings({ WALDO_CALL_CEILINGS: 'on' }).budgetTokens).toBe(CONVERSATION_INPUT_BUDGET_TOKENS);
-  expect(compactionSettings({ WALDO_CALL_CEILINGS: '1' })).toEqual({ ...COMPACTION, budgetTokens: CHAT_HISTORY_BUDGET_TOKENS });
+  expect(compactionSettings({ WALDO_CALL_CEILINGS: '1' })).toEqual({ ...COMPACTION, budgetTokens: CONTEXT_BUDGET.historyTokens });
   // What a summary reads stays where it was, so a smaller window compacts sooner without summarising less.
   expect(compactionSettings({ WALDO_CALL_CEILINGS: '1' }).summaryInputTokens).toBe(CONVERSATION_INPUT_BUDGET_TOKENS);
   expect(compactionSettings({ WALDO_CALL_CEILINGS: '1', WALDO_COMPACTION: 'on', WALDO_STEPPED_WINDOW: '1' }))
-    .toEqual({ ...COMPACTION, enabled: true, steppedWindow: true, budgetTokens: CHAT_HISTORY_BUDGET_TOKENS });
+    .toEqual({ ...COMPACTION, enabled: true, steppedWindow: true, budgetTokens: CONTEXT_BUDGET.historyTokens });
 });
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];

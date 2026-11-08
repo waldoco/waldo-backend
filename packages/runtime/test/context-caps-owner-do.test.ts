@@ -3,10 +3,11 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
-import { STANDING_ORDERS_PROMPT_CHARS, standingOrderBook } from '../src/channels/standing-orders';
+import { standingOrderBook } from '../src/channels/standing-orders';
 import { handleWhatsAppWebhook } from '../src/channels/whatsapp-webhook';
 import type { OwnerDirectory } from '../src/identity/owner-directory';
 import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
+import { CONTEXT_BUDGET } from '../src/conversation/context-budget';
 
 const { calls } = vi.hoisted(() => ({ calls: [] as { instructions?: string }[] }));
 vi.mock('openai', () => ({ default: class {
@@ -50,7 +51,7 @@ it.each([['1', true], ['0', false]] as const)('WALDO_CONTEXT_CAPS=%s: the turn\'
       const system = calls.find((call) => (call.instructions ?? '').includes('Standing orders from the owner'))!.instructions!;
       const shown = system.split('\n').filter((line) => /^- \[order:so\d+\]/.test(line));
       if (capped) {
-        expect(shown.join('\n').length).toBeLessThanOrEqual(STANDING_ORDERS_PROMPT_CHARS);
+        expect(shown.join('\n').length).toBeLessThanOrEqual(CONTEXT_BUDGET.standingOrdersChars);
         expect(shown.slice(0, 2).map((line) => line.slice(3, line.indexOf(']')))).toEqual(['order:so1', 'order:so2']);
         expect(system).toContain(`${12 - shown.length} more scheduled standing orders are not shown here`);
       } else {

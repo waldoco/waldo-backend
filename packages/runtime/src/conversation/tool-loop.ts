@@ -87,10 +87,6 @@ const TIME_UP_NOTE = `\n[budget: turn time is up - no more tool calls; ${CLOSING
 // (the call stays, its result becomes a short note), down to half of it at once, so a long turn stays inside the model's
 // input and the cleared prefix stays byte-stable for the rounds after. The newest round is never cleared.
 export const TOOL_RESULTS_KEEP_CHARS = 160_000;
-// With clearToLatest, past this many characters (about 30k tokens) every result but the latest few is cleared at once,
-// never into the newest round, and nothing more is cleared until the results outgrow it again.
-export const TOOL_RESULTS_CLEAR_AT_CHARS = 120_000;
-export const TOOL_RESULTS_KEEP_LATEST = 3;
 // Once every provider that served the turn has let its prompt cache expire, the next request re-bills the whole prefix
 // anyway, so results older than this many latest rounds are cleared then, as Anthropic's tool result clearing keeps the
 // latest three tool uses by default. While any cache may be warm, clearing would re-bill everything after the cleared
@@ -162,9 +158,9 @@ export async function runToolLoop(input: Readonly<{
   // repeatable: whether a resumed call may be offered to run again once its result is cleared. This loop never saw those
   // calls run, so the caller that knows their effect class answers it.
   resume?: Readonly<{ turns: readonly LLMToolTurn[]; repeatable(name: string): boolean }>;
-  // Clears old results down to the latest TOOL_RESULTS_KEEP_LATEST past TOOL_RESULTS_CLEAR_AT_CHARS, in place of halving
-  // them past TOOL_RESULTS_KEEP_CHARS.
-  clearToLatest?: boolean;
+  // Past atChars characters of results, every result but the latest `keep` is cleared at once, never into the newest round,
+  // and nothing more is cleared until the results outgrow it again. In place of halving them past TOOL_RESULTS_KEEP_CHARS.
+  clearToLatest?: Readonly<{ atChars: number; keep: number }>;
   // How many UTF-8 bytes of tool turns (calls, results and cleared notes, as JSON) the call's hard ceiling leaves room for,
   // given everything else the request carries. Past it every result but the newest round's is cleared, ahead of the other
   // rules; the newest round is sent whole, so one round's results can still carry a call past the ceiling. Undefined, or
@@ -264,7 +260,7 @@ export async function runToolLoop(input: Readonly<{
     const room = input.resultRoomBytes?.();
     if (room !== undefined && new TextEncoder().encode(JSON.stringify(turns)).byteLength > room) clearThrough(newest);
     if (input.clearToLatest) {
-      if (total > TOOL_RESULTS_CLEAR_AT_CHARS) clearThrough(Math.min(newest, turns.length - TOOL_RESULTS_KEEP_LATEST));
+      if (total > input.clearToLatest.atChars) clearThrough(Math.min(newest, turns.length - input.clearToLatest.keep));
       return;
     }
     if (total <= TOOL_RESULTS_KEEP_CHARS) return;

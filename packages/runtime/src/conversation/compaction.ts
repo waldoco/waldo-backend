@@ -1,5 +1,6 @@
 import { compactionMessage, conversationModelMessages, type ConversationCovers, type ConversationEntry, type ConversationModelMessage, type ConversationTree } from '@waldo/contracts';
 import type { ClaimGrounding } from '../memory/claims';
+import { CONTEXT_BUDGET, contextBudget } from './context-budget';
 import { CONVERSATION_INPUT_BUDGET_TOKENS, estimateMessageTokens, steppedWindowStart, windowModelMessages, type ConversationWindowStats } from './window';
 
 // A compaction row summarises the oldest part of a chain so the model's view becomes [summary] + [a verbatim tail]; the
@@ -18,8 +19,9 @@ export const COMPACTION = {
   // On the one timeline, a row written on a chat surface other than the app is named with it in the model's view.
   surfaceLabels: false,
   // WALDO_STEPPED_WINDOW: the window cuts in steps and holds its start between them (steppedWindowStart), instead of
-  // dropping the oldest row every turn once the chain outgrows the budget.
+  // dropping the oldest row every turn once the chain outgrows the budget; a cut keeps `steppedTarget` of the budget.
   steppedWindow: false,
+  steppedTarget: CONTEXT_BUDGET.steppedTarget,
 };
 export type CompactionSettings = typeof COMPACTION;
 const SURFACE_NAMES: Readonly<Record<string, string>> = { whatsapp: 'WhatsApp', telegram: 'Telegram', imessage: 'iMessage' };
@@ -33,12 +35,13 @@ const labelled = (settings: CompactionSettings) => (entry: ConversationEntry): C
   return entry.modelProjection.mode === 'replace' ? { ...entry, modelProjection: { mode: 'replace', payload: label + entry.modelProjection.payload } }
     : { ...entry, modelPayload: label + entry.modelPayload };
 };
-// WALDO_CALL_CEILINGS: a chat's history is the conversation layer of a call whose whole input aims at 40k tokens, a summary
-// of at most 2k and a tail of about 20k.
-export const CHAT_HISTORY_BUDGET_TOKENS = 22_000;
-// Only the exact values "on" and "1" turn these on, so an unset or mistyped deploy var keeps the plain window.
-export const compactionSettings = (env: Readonly<{ WALDO_COMPACTION?: string; WALDO_STEPPED_WINDOW?: string; WALDO_CALL_CEILINGS?: string }>): CompactionSettings =>
-  ({ ...COMPACTION, enabled: env.WALDO_COMPACTION === 'on', steppedWindow: env.WALDO_STEPPED_WINDOW === '1', ...(env.WALDO_CALL_CEILINGS === '1' ? { budgetTokens: CHAT_HISTORY_BUDGET_TOKENS } : {}) });
+// Only the exact values "on" and "1" turn these on, so an unset or mistyped deploy var keeps the plain window. Under
+// WALDO_CALL_CEILINGS a chat's history is held to the history budget, the conversation layer of a chat call.
+export const compactionSettings = (env: Readonly<{ WALDO_COMPACTION?: string; WALDO_STEPPED_WINDOW?: string; WALDO_CALL_CEILINGS?: string; WALDO_HISTORY_BUDGET_TOKENS?: string; WALDO_STEPPED_WINDOW_TARGET?: string }>): CompactionSettings => {
+  const budget = contextBudget(env);
+  return { ...COMPACTION, enabled: env.WALDO_COMPACTION === 'on', steppedWindow: env.WALDO_STEPPED_WINDOW === '1', steppedTarget: budget.steppedTarget,
+    ...(env.WALDO_CALL_CEILINGS === '1' ? { budgetTokens: budget.historyTokens } : {}) };
+};
 
 export const COMPACTION_SUPERSEDED_MARKER = '[superseded summary]';
 // One compaction per chain and span: the row's id carries the last row it covers.
@@ -96,9 +99,9 @@ export const liveCompaction = (tree: ConversationTree, leafId: string, startRef?
 };
 
 // The stepped window over rows: it starts at the row `from` names while the rows from it fit, otherwise where it cuts.
-const steppedWindow = (entries: readonly ConversationEntry[], budgetTokens: number, from?: string): Readonly<{ messages: readonly ConversationModelMessage[]; stats: Omit<CompactedStats, 'compacted'> }> => {
+const steppedWindow = (entries: readonly ConversationEntry[], budgetTokens: number, target: number, from?: string): Readonly<{ messages: readonly ConversationModelMessage[]; stats: Omit<CompactedStats, 'compacted'> }> => {
   const rows = entries.map((entry) => conversationModelMessages([entry]));
-  const start = steppedWindowStart(rows.map((messages) => messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0)), budgetTokens, entries.findIndex((entry) => entry.id === from));
+  const start = steppedWindowStart(rows.map((messages) => messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0)), budgetTokens, entries.findIndex((entry) => entry.id === from), target);
   const messages = rows.slice(start).flat();
   return { messages, stats: { kept: messages.length, dropped: rows.slice(0, start).flat().length, estimated_tokens: messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0), budget_tokens: budgetTokens, ...(start > 0 ? { from: entries[start]!.id } : {}), ...(entries[start] ? { head: entries[start]!.id } : {}) } };
 };
@@ -111,7 +114,7 @@ export const surfaceLabelled = labelled({ ...COMPACTION, surfaceLabels: true });
 export const compactedHistory = (tree: ConversationTree, leafId: string, startRef?: string, settings: CompactionSettings = COMPACTION, windowFrom?: string): Readonly<{ messages: readonly ConversationModelMessage[]; stats: CompactedStats }> => {
   const entries = chainFrom(tree, leafId, startRef).map(labelled(settings));
   const live = settings.enabled ? liveCompaction(tree, leafId, startRef) : null;
-  const window = (rows: readonly ConversationEntry[], budgetTokens: number) => settings.steppedWindow ? steppedWindow(rows, budgetTokens, windowFrom) : windowModelMessages(conversationModelMessages(rows), budgetTokens);
+  const window = (rows: readonly ConversationEntry[], budgetTokens: number) => settings.steppedWindow ? steppedWindow(rows, budgetTokens, settings.steppedTarget, windowFrom) : windowModelMessages(conversationModelMessages(rows), budgetTokens);
   if (!live) {
     const plain = window(entries, settings.budgetTokens);
     return { messages: plain.messages, stats: { ...plain.stats, compacted: 0 } };
