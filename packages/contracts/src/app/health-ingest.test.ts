@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  appHealthRoutesV1, checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_COACH_REVISION_V1, HEALTH_OBSERVED_PEAK_REVISION_V1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
+  appHealthRoutesV1, checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_COACH_REVISION_V1, HEALTH_NUTRITION_REVISION_V1, HEALTH_OBSERVED_PEAK_REVISION_V1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
   healthApiErrorV1Schema, healthBaselineV1Schema, healthChangeRejectionReasonV1Schema, healthDriverPhraseV1Schema, healthEnergyWindowV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema,
   healthConsentListV1Schema, healthConsentVersionV1, healthConsentWithdrawV1Schema, healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthSampleV1Schema,
   HEALTH_SCORES_HISTORY_REVISION_V1, healthScoresHistoryQueryV1Schema, healthScoresHistoryResponseV1Schema,
@@ -617,5 +617,33 @@ describe('health revision 5: workouts, body composition and stand hours', () => 
     const request = { ...batch, samples: Array.from({ length: fits }, (_, i) => ({ ...full, sample_id: `HK:1F0E7C9A-0000-4000-8000-${String(i).padStart(12, '0')}` })) };
     expect(healthIngestV1Schema.safeParse(request).success).toBe(true);
     expect(bytes(request)).toBeLessThanOrEqual(HEALTH_INGEST_MAX_REQUEST_BYTES_V1);
+  });
+});
+
+describe('health revision 7: nutrition from the phone\'s health store', () => {
+  // One food entry as the store holds it, written by the owner's food app: energy, its grams and the meal, and never its name.
+  const entry = { ...common, sample_id: 'HK:food-1', signal: 'nutrition', unit: 'kilocalories', value: 612, protein_g: 38.5, carbohydrate_g: 64, fat_g: 21.2, meal: 'lunch' };
+  const night = { source_ref: 'Chicken salad from Joe', session_ref: 'HK:meal', waking_day: '2026-10-10', reducer_version: 'asleep-interval-union.v1', contributor_ids: ['HK:a'],
+    intervals: [{ contributor_id: 'HK:a', start_at: common.start_at, end_at: common.end_at, kind: 'asleep' }] };
+  it('is revision 7', () => expect(HEALTH_NUTRITION_REVISION_V1).toBe(7));
+  it('has a night context that another signal takes, so the refusal below is the food entry\'s own', () => {
+    expect(healthSampleV1Schema.safeParse({ ...common, signal: 'sleep_efficiency', unit: 'ratio', value: 0.91, sleep_context: night }).success).toBe(true);
+  });
+  it('takes a food entry with its energy, and its grams and meal when the store has them', () => {
+    expect(healthSampleV1Schema.safeParse(entry).success).toBe(true);
+    expect(healthSampleV1Schema.safeParse({ ...common, signal: 'nutrition', unit: 'kilocalories', value: 0 }).success).toBe(true);
+    expect(healthSampleV1Schema.safeParse({ ...entry, meal: 'unknown' }).success).toBe(true);
+  });
+  it('refuses a unit or size mistake, a meal outside the five words, and a food name or any other text', () => {
+    rejected(healthSampleV1Schema, [
+      { ...entry, unit: 'kilojoules' }, { ...entry, value: 10_001 }, { ...entry, value: -1 }, { ...entry, protein_g: 1_001 }, { ...entry, carbohydrate_g: -1 },
+      { ...entry, fat_g: Number.NaN }, { ...entry, meal: 'brunch' }, { ...entry, name: 'Chicken salad' }, { ...entry, sodium_mg: 400 },
+      // A night's context is free text from the writing app, and a food entry never has a night.
+      { ...entry, sleep_context: night },
+    ]);
+  });
+  it('lets a deletion name nutrition and checks an entry on its own', () => {
+    expect(healthIngestV1Schema.safeParse({ ...batch, samples: [entry], deletions: [{ sample_id: 'HK:food-0', signal: 'nutrition', revision: 2 }] }).success).toBe(true);
+    expect(checkHealthChangeV1('sample', 1, { ...entry, meal: 'brunch' })).toEqual({ ok: false, rejection: { change: 'sample', index: 1, signal: 'nutrition', reason: 'invalid_sample' } });
   });
 });
