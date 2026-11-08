@@ -100,8 +100,8 @@ described on the same categorization page:
 
 The reply template above says the owner asked for something ("a reply waiting ... on something you asked about"). That is
 untrue for a Brief, a clash card or any other message Waldo starts, so the runtime never uses it for one. Such a message
-(a day card, an update, meeting prep, a pause notice, a mail follow-up, a health note, a check-back on an open loop, an event
-notice, or the WhatsApp copy of an app message) knocks with its own template, configured separately. With none configured it sends no template at all and the
+(a day card, an update, meeting prep, a pause notice, a mail follow-up, a health note, a check-back on an open loop, an
+event notice, or the WhatsApp copy of an app message) knocks with its own template, configured separately. With none configured it sends no template at all and the
 message keeps waiting until the owner writes (or until its own expiry, a day for a copy). A reply may fall back to this
 template when the reply template is unset, since its words are true of any message.
 
