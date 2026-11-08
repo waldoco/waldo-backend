@@ -140,14 +140,14 @@ import { attachFileHandler } from '../tools/live/attach-file';
 import { cardReplyBook, offerRepliesHandler } from '../tools/live/offer-replies';
 import { deliverTurnAttachments, turnAttachmentBook, type AttachmentSend } from './turn-attachments';
 import { HARNESS_MESSAGE_LIMIT, heldRowShapes } from '../memory/held-rows';
-import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
+import { FIRE_TARGETS, parseHarnessCommand, traceBook, type HarnessCommand, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { turnAbortedEntry, type AbortedTurn } from '../observability/turn-aborted';
 import { ownerTraceId, ownerTraceSalt, rowTraces, syncRatingScore, type RatingScoreChange } from '../observability/langfuse-scores';
 import { costRollup, costRollupEnabled } from '../observability/cost-rollup';
 import { MONTHLY_SPEND_CEILING_USD } from '../llm/cost-ledger';
 import { barrierMemory, type ForgetBarrierMode } from '../context-composer/forget-barrier';
-import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
+import { errorClass, gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
 import { nextDailyLocalOccurrence, nextOccurrence, Scheduler } from '../scheduler/multiplexer';
 import { CURATED_PACK_SKILLS } from '../skills/curated-catalog';
 import { FORGET_PURGE_ID, forgetPurge, type ForgetPurge, type ForgetStore } from '../memory/forget-purge';
@@ -300,7 +300,7 @@ import { taskHost, type TaskHost } from '../tasks/brain';
 import { cardWaitsIn, runJobsLane } from '../tasks/lane';
 import { runWatchdog, watchdogJudge, watchdogStore } from '../tasks/watchdog';
 import { consoleWatchdog, DASHBOARD_WATCHDOG_PATH } from './dashboard-watchdog';
-import { consoleHarness, DASHBOARD_HARNESS_PATH, type ConsoleHarnessCommand } from './dashboard-harness';
+import { admitHarnessCommand, consoleHarness, DASHBOARD_HARNESS_PATH, harnessRefusalText, type ConsoleHarnessCommand, type HarnessRefusal } from './dashboard-harness';
 import { enqueueMachine, workerRouteDown, type MachineAppliers } from '../tasks/machine';
 import { modelProviderSetting, ownerModels, type OwnerModelAccess } from '../llm/owner-routes';
 import { finishedTasksNote, runningTasksLine, taskToolHandlers } from '../tasks/tools';
@@ -2897,7 +2897,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (stepUp) return stepUp;
     if (url.pathname === DASHBOARD_ACCESS_LOG_PATH) return this.consoleAccessLog(request, url);
     if (url.pathname === DASHBOARD_HELD_CHANGES_PATH) return this.consoleHeldChanges(request, url);
-    if (url.pathname === DASHBOARD_HARNESS_PATH) return consoleHarness({ request, csrf: session.csrf, enabled: this.env.CONSOLE_HARNESS === '1', limited: kind => this.consoleRateLimited(kind),
+    if (url.pathname === DASHBOARD_HARNESS_PATH) return consoleHarness({ request, csrf: session.csrf, enabled: this.env.CONSOLE_HARNESS === '1',
+      admin: () => this.harnessAdmin(), admit: (command, budget) => this.admitHarness(command, budget),
+      limited: kind => this.consoleRateLimited(kind),
       run: command => this.consoleCommand(command),
       ledger: async () => { const runtime = this.setup(this.ownerSurface()); await runtime.ready; return runtime.ledger(); } });
     if (url.pathname === DASHBOARD_WATCHDOG_PATH) return consoleWatchdog({ request, sql: this.ctx.storage.sql, now: Date.now(), enabled: this.env.WALDO_WATCHDOG === '1', limited: () => this.consoleRateLimited('read') });
@@ -3947,6 +3949,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const commandTrace = ownerTurnTrace(channel, updateId);
       const commandStarted = Date.now();
       const commandWhat = harness ? `/${harness.kind}` : raw.callback_query !== undefined ? 'callback' : '/ledger';
+      // Why a command was answered without running, kept on its receipt.
+      let refused: HarnessRefusal['reason'] | undefined;
       const run = async () => {
         if (harness?.kind === 'console') {
         if (!durable) await this.ctx.storage.put(offsetKey, updateId + 1);
@@ -3957,7 +3961,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       if (harness) {
         if (!durable) await this.ctx.storage.put(offsetKey, updateId + 1);
-        await call('sendMessage', { chat_id: owner, text: (await this.runHarness(harness, updateId, channel)).slice(0, HARNESS_MESSAGE_LIMIT) });
+        const refusal = await this.admitHarness(harness);
+        refused = refusal?.reason;
+        await call('sendMessage', { chat_id: owner, text: refusal ? harnessRefusalText(refusal) : (await this.runHarness(harness, updateId, channel)).slice(0, HARNESS_MESSAGE_LIMIT) });
         return;
       }
       const feedback = raw.callback_query?.data?.match(/^fb:(\d+):([un])$/);
@@ -3972,10 +3978,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       };
       try {
         await run();
-        log({ trace: commandTrace, hop: 'command', ms: Date.now() - commandStarted, ok: true, detail: commandWhat });
+        log({ trace: commandTrace, hop: 'command', ms: Date.now() - commandStarted, ok: true, detail: commandWhat, ...(refused ? { code: `refused_${refused}` } : {}) });
         log({ trace: commandTrace, hop: 'machine_turn', ms: Date.now() - commandStarted, ok: true, detail: 'command' });
       } catch (error) {
-        log({ trace: commandTrace, hop: 'command', ms: Date.now() - commandStarted, ok: false, error: String(error), detail: commandWhat });
+        log({ trace: commandTrace, hop: 'command', ms: Date.now() - commandStarted, ok: false, error: errorClass(error), detail: commandWhat });
         log({ trace: commandTrace, hop: 'machine_turn', ms: Date.now() - commandStarted, ok: false, detail: 'command' });
         throw error;
       }
@@ -4021,9 +4027,22 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       else if (command.target === 'nightly') await this.asOwnerJob('dreaming', trace, () => nightly(entry));
       else await this.asOwnerJob('brief', trace, () => cards(entry));
     } catch (error) {
-      return `Fired ${command.target}; it failed: ${String(error)}\n\n${traces.recent(timezone, null, 10)}`;
+      console.error(JSON.stringify({ hop: 'harness_fire', ok: false, target: command.target, error_class: errorClass(error) }));
+      return `Fired ${command.target}; it failed (${errorClass(error)}).\n\n${traces.recent(timezone, null, 10)}`;
     }
     return `Fired ${command.target}.\n\n${traces.recent(timezone, null, 10)}`;
+  }
+
+  // A deploy without the directory has one owner, who runs it: every command is theirs and fires are not spaced. With the
+  // directory, the admin commands need its admin check, and fires are spaced and capped per owner.
+  private async harnessAdmin(): Promise<boolean> {
+    const auth = consoleAuth(this.env), doName = this.ctx.storage.kv.get<string>('do_name');
+    return auth ? Boolean(doName && await auth.adminOverview(doName)) : true;
+  }
+
+  private async admitHarness(command: HarnessCommand, budget?: () => boolean): Promise<HarnessRefusal | null> {
+    if (!consoleAuth(this.env)) return budget && !budget() ? { reason: 'budget' } : null;
+    return admitHarnessCommand(command, { admin: () => this.harnessAdmin(), kv: this.ctx.storage.kv, now: Date.now, ...(budget ? { budget } : {}) });
   }
 
   // An operator command from the owner console, with the receipt Telegram's commands leave. Reads answer at once, so /trace
@@ -4036,7 +4055,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const started = Date.now(), trace = `console-${crypto.randomUUID()}`, what = `/${command.kind}`;
     const fire = () => this.serial(async () => {
       const found = consoleAuth(this.env) && this.appBound() ? await this.appOwnerLookup() : null;
-      if (found && found.kind !== 'admitted') return 'Waldo could not confirm your account just now, so nothing was fired. Try again in a minute.';
+      if (found && found.kind !== 'admitted') return 'Waldo could not confirm your account just now, so nothing was fired.';
       if (found) { this.scheduledAppDelivery = this.appDeliveryFor(found.authority); this.jobOwner = Promise.resolve(this.appScheduledOwner(found.authority)); }
       return this.runHarness(command, started, channel);
     });
@@ -4046,7 +4065,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'command' });
       return output;
     } catch (error) {
-      log({ trace, hop: 'command', ms: Date.now() - started, ok: false, error: String(error), detail: what });
+      log({ trace, hop: 'command', ms: Date.now() - started, ok: false, error: errorClass(error), detail: what });
       log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: false, detail: 'command' });
       throw error;
     }
@@ -4063,7 +4082,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       await exportTurn({ trace: `langfuse-check-${Date.now()}`, hop: 'turn', ms: 1, ok: true, detail: 'owner self-test' });
       return 'Langfuse self-test export accepted. A telegram.turn trace from user langfuse-check should appear within a minute.';
     } catch (error) {
-      return `Langfuse self-test failed: ${String(error)}`;
+      return `Langfuse self-test failed (${errorClass(error)}).`;
     }
   }
 

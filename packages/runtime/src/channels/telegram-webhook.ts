@@ -71,8 +71,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" lets the app attach one voice note, photo or file to a chat message (APP_CHAT_UPLOAD_PATH). Off, the upload route is
   // not there and a send that names an attachment is refused.
   APP_CHAT_ATTACHMENTS?: string;
-  // "1" serves the operator commands (/trace /e2e /usage /langfuse /heldrows /fire /ledger) to the owner in the console
-  // (DASHBOARD_HARNESS_PATH), so none needs Telegram. Off, the route is not there.
+  // "1" serves the commands Telegram took in the console (DASHBOARD_HARNESS_PATH), so none needs Telegram: the owner's
+  // diagnostics (/trace /e2e /usage /heldrows /ledger), and for admins /langfuse and /fire. Off, the route is not there.
   CONSOLE_HARNESS?: string;
   // "1" lets a typed /stop on WhatsApp stop the running turn at once and the owner's background work, as on Telegram. Off, it
   // waits its turn as any message does.
