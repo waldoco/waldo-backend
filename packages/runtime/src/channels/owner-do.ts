@@ -317,6 +317,10 @@ import { withSwitches } from '../switches';
 const WEBHOOK_UPDATES = ['message', 'callback_query'];
 
 type RawUpdate = { update_id?: number; callback_query?: CallbackQuery; message?: { text?: string; from?: { id: number }; chat?: { id: number } } };
+// A button tap or the owner's own command runs directly, never as a turn. A forward is never the owner's command, so it runs
+// as a turn.
+const telegramDirect = (raw: RawUpdate): boolean =>
+  Boolean(raw.callback_query || (!isForward(raw.message) && (parseHarnessCommand(raw.message?.text) || ['/stop', '/ledger'].includes(raw.message?.text?.trim() ?? ''))));
 
 // scopes null: granted before per-feature scopes, under the owner's 09-23 broad consent.
 // The surface that issued a connect ticket; it decides where the consent page sends the owner back.
@@ -991,8 +995,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // Binding follows authenticated admission, and never replaces a different binding.
       this.ctx.storage.kv.put('do_name', doName); this.ctx.storage.kv.put('telegram_subject', subject);
       if (text === '/stop') await this.stopOwnerWork();
-      // On the timeline the owner's Telegram turn shares the chain a compaction in flight is summarising: it ends that one.
-      if (admitted === 'admitted' && oneTimelineEnabled(this.env) && this.chatsOnTimeline()) this.compactionAbort?.abort();
+      // On the timeline a message that runs as the owner's Telegram turn shares the chain a compaction in flight is
+      // summarising: it ends that one. A button tap or a command does not write the chain.
+      if (admitted === 'admitted' && !telegramDirect(raw) && oneTimelineEnabled(this.env) && this.chatsOnTimeline()) this.compactionAbort?.abort();
       const origin = request.headers.get('x-waldo-origin'); if (origin) this.ctx.storage.kv.put('origin', origin);
       const timezone = request.headers.get('x-waldo-timezone'); if (timezone) this.ctx.storage.kv.put('timezone', timezone);
       if (admitted === 'admitted' && control && this.activeInbox?.runId === control.targetRun) {
@@ -1065,8 +1070,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await this.inbox.transition(row.id, attempt, 'quarantined', 'owner_binding'); return;
       }
       const raw = JSON.parse(row.body) as RawUpdate;
-      // A forward is never the owner's command, so it runs as a turn under this run's scope.
-      const direct = Boolean(raw.callback_query || (!isForward(raw.message) && (parseHarnessCommand(raw.message?.text) || ['/stop', '/ledger'].includes(raw.message?.text?.trim() ?? ''))));
+      const direct = telegramDirect(raw);
       if (direct) await this.turn(raw, 'telegram', true);
       else {
         const expired = new Promise<never>((_, reject) => { abort.signal.addEventListener('abort', () => reject(new ClosedRunError()), { once: true }); timeout = setTimeout(() => reject(new ClosedRunError()), Math.max(0, scope.deadline - Date.now())); });
@@ -1106,8 +1110,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       }
     }
-    if (ran && oneTimelineEnabled(this.env) && compactionSettings(this.env).enabled && consoleAuth(this.env) !== null && this.chatsOnTimeline()) {
-      // An admitted message on any surface stops it, as it stops the app's own compaction.
+    // A message already waiting runs first; the compaction after the last of them catches up.
+    if (ran && oneTimelineEnabled(this.env) && compactionSettings(this.env).enabled && consoleAuth(this.env) !== null && this.chatsOnTimeline()
+      && !(await this.inbox.records()).some(record => record.state === 'admitted')) {
+      // An admitted app, WhatsApp or Telegram message stops it, as it stops the app's own compaction.
       const abort = new AbortController();
       this.compactionAbort = abort;
       try { await compactChatTimeline(this.chatTimelineHost(), 'telegram', this.setup('telegram'), abort, alarmEnd); }
@@ -5100,21 +5106,21 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       await assertOwnerIdentity();
       return curatedSkills(turn, contextOwnerId, `whatsapp:${identity.get<string>('whatsapp_subject')}`, scope, assertOwnerIdentity);
     } };
-    // The owner principal inside every turn. A Telegram turn is admitted through the same surface admission as an app
-    // turn, so its tools, cache key and composed context belong to the directory owner, never to the chat id. Without a
-    // directory (local development) the fixture admission stands; a turn without text (media only) keeps the legacy path.
     // The chains each chat surface keeps for itself, as they were before the one timeline.
     const legacyStore: ConversationStore = { ...indexedConversationStore(kv, episodes, () => Date.now()), recalls: (entryId: string) => recallReach(identity, identity.get<string>('owner_principal_ref'), null)(entryId) };
     const seed = timelineSeed(this.ctx.storage.kv, () => this.chatsOnTimeline()
       ? (['whatsapp', 'telegram'] as const).flatMap(chat => { const subject = identity.get<string>(`${chat}_subject`); return subject ? [surfaceChatRef(chat, subject)] : []; }) : [],
       compactionSettings(this.env).budgetTokens / 2);
-    // The owner's chain as the app's turns read and write it; on the one timeline, WhatsApp turns read and write it too.
+    // The owner's chain as the app's turns read and write it; on the one timeline, WhatsApp and Telegram turns do too.
     const ownerHistory = (context: OwnerContextCapability): ConversationStore => ({
       ...indexedConversationStore(canonicalOwnerConversationStore(this.ctx.storage, context, this.logSkippedLoad, threadOfChain(context.conversationRef) ?? undefined,
         { ...compactionSettings(this.env), surfaceLabels: oneTimelineEnabled(this.env) }), episodes, () => Date.now()),
       recalls: recallReach(this.ctx.storage.kv, context.invocation.verified_authority.principal_ref, threadOfChain(context.conversationRef)) });
     // A chat turn joins the owner's chain while the switch is on and the owner's proactive work lands there.
     const onTimeline = () => oneTimelineEnabled(this.env) && this.chatsOnTimeline();
+    // The owner principal inside every turn. A Telegram turn is admitted through the same surface admission as an app
+    // turn, so its tools, cache key and composed context belong to the directory owner, never to the chat id. Without a
+    // directory (local development) the fixture admission stands; a turn without text (media only) keeps the legacy path.
     const telegramContext: OwnerContextIntegration | undefined = channel === 'telegram' && consoleAuth(this.env) !== null ? { contextHost: { prepare: async (turn, scope) => {
       if (!turn.text) return undefined;
       const occurrence = this.activeInbox;

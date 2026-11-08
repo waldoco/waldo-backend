@@ -11,8 +11,9 @@ import type { OwnerContextIntegration, OwnerHistoryFactory } from './owner-turn'
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import type { TurnLogEntry } from './telegram-listener';
 
-// The owner's WhatsApp turns on the one timeline, while `joined` says they are on it: admitted as the owner the directory binds
-// to the number, run on the owner's own chain (the one their app chat uses), and followed by the same compaction as app turns.
+// The owner's chat turns on the one timeline: admitted as the owner the directory binds to the chat, run on the owner's own
+// chain (the one their app chat uses), and followed by the same compaction as app turns. WhatsApp's context host lives here;
+// Telegram's is the owner object's own, which joins the same chain.
 export type ChatTimelineHost = Readonly<{ env: OwnerDirectoryEnv; kv: Pick<DurableObjectStorage['kv'], 'get'>; physicalDoId: string; commit<T>(work: () => T): T }>;
 // The chat surfaces whose owner turns can run on the owner's own chain.
 export type TimelineChat = 'whatsapp' | 'telegram';

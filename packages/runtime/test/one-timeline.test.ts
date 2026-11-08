@@ -120,11 +120,15 @@ const saysOnWhatsApp = async (owner: Owner, text: string, extra: Readonly<Record
 let update = 0;
 const TELEGRAM = { TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', TELEGRAM_WEBHOOK_SECRET: 'synthetic-inbox-secret' };
 // A message the owner writes on Telegram, admitted and run as its turn.
-const saysOnTelegram = async (owner: Owner, state: DurableObjectState, name: string, text: string) => {
+const admitOnTelegram = async (state: DurableObjectState, name: string, text: string) => {
   const id = ++update + 7000;
   await new TelegramOwnerInbox(state.storage, persistInboxWake).admit({ bot: '7', subject: '7', doName: name }, id,
     JSON.stringify({ update_id: id, message: { message_id: id, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, date: 1, text } }));
-  await (owner as unknown as { drainInbox(): Promise<void> }).drainInbox();
+};
+const drainTelegram = (owner: Owner) => (owner as unknown as { drainInbox(): Promise<void> }).drainInbox();
+const saysOnTelegram = async (owner: Owner, state: DurableObjectState, name: string, text: string) => {
+  await admitOnTelegram(state, name, text);
+  await drainTelegram(owner);
 };
 const appHeaders = (name: string) => ({ 'x-waldo-do-name': name, 'x-waldo-app-session-hash': SESSION, 'content-type': 'application/json' });
 const saysInApp = async (owner: Owner, state: DurableObjectState, name: string, text: string) => {
@@ -420,6 +424,40 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
       await vi.waitFor(() => expect(model.compacted).toHaveLength(1), { timeout: 10_000, interval: 20 });
       await vi.waitFor(() => expect(stopped).toBe(true), { timeout: 10_000, interval: 20 });
       expect(timeline(state).filter(row => row.role === 'compaction')).toEqual([]);
+    });
+  });
+
+  it('a Telegram turn with another message waiting leaves the compaction to the last turn', async () => {
+    const name = 'one-timeline-telegram-queue';
+    await withOwner(name, TELEGRAM, async (owner, state, restart) => {
+      state.storage.kv.put('telegram_subject', '7');
+      await saysOnTelegram(owner(), state, name, 'My gym is at 7 every weekday.');
+      restart({ ...ON, ...TELEGRAM, WALDO_COMPACTION: 'on' });
+      await admitOnTelegram(state, name, 'Plan my week.');
+      await admitOnTelegram(state, name, 'And Friday?');
+      await drainTelegram(owner());
+      expect(model.compacted).toEqual([]);
+      await drainTelegram(owner());
+      expect(model.compacted).toHaveLength(1);
+    });
+  });
+
+  it('a button tap on Telegram while the owner\'s chain is being summarised leaves the summary to finish', async () => {
+    const name = 'one-timeline-telegram-tap';
+    await withOwner(name, TELEGRAM, async (owner, state, restart) => {
+      state.storage.kv.put('telegram_subject', '7');
+      await saysOnTelegram(owner(), state, name, 'My gym is at 7 every weekday.');
+      restart({ ...ON, ...TELEGRAM, WALDO_COMPACTION: 'on' });
+      model.hold = async () => {
+        model.hold = undefined;
+        const tapped = await owner().fetch(new Request('https://telegram-owner/enqueue', {
+          method: 'POST', headers: { 'x-waldo-inbox-secret': 'synthetic-inbox-secret', 'x-waldo-telegram-subject': '7', 'x-waldo-do-name': name },
+          body: JSON.stringify({ update_id: 9902, callback_query: { id: 'tap-1', data: 'noop', from: { id: 7, is_bot: false }, message: { message_id: 1, chat: { id: 7, type: 'private' } } } }) }));
+        expect(tapped.status).toBe(200);
+      };
+      await saysInApp(owner(), state, name, 'What does my week look like?');
+      // A tap that ended the summary would leave no summary row.
+      await vi.waitFor(() => expect(timeline(state).filter(row => row.role === 'compaction')).toHaveLength(1), { timeout: 10_000, interval: 20 });
     });
   });
 
