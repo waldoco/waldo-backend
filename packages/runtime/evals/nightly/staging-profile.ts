@@ -42,7 +42,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_LIGHT_CHAT: gap("the owner's reply takes a light step on the auxiliary model that answers quick chat or hands the turn to the chat model, and task workers run on the chat model; the profile's trials stay on the chat model, and the lc- scenarios run with it on"),
   WALDO_COMPACTION: mapped('the trial\'s chat runs on the canonical store with these compaction settings'),
   WALDO_STEPPED_WINDOW: mapped('the trial\'s chat history is windowed in steps under the same compaction settings'),
-  WALDO_CONTEXT_CAPS: gap('caps the standing orders and quests a turn reads and clears tool results down to the latest three past ~30k tokens; no trial holds that many orders or quests or runs that long a tool loop, so the trials read as they would with it on'),
+  WALDO_CONTEXT_CAPS: gap('caps the standing orders and quests a turn reads and clears tool results down to the latest few past a size (the context budget\'s settings); no trial holds that many orders or quests or runs that long a tool loop, so the trials read as they would with it on'),
   WALDO_COMPACTION_WAKE: inert('moves a compaction to its own alarm pass; what it summarises and what the next turn reads are the same'),
   WALDO_CALL_CEILINGS: mapped('the trial\'s chat history is held to the same budget; the hard ceiling on a turn\'s tool results is not modelled, and no trial\'s results come near it'),
   WALDO_HISTORY_BUDGET_TOKENS: mapped('the trial\'s chat history budget under WALDO_CALL_CEILINGS'),

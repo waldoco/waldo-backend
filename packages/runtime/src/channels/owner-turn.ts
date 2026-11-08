@@ -382,7 +382,7 @@ export const createOwnerResponder = (
     if (purpose === 'reply' && ownerTurnActive && !light) replyBaseTokens = base;
     // A late answer to the owner carries the chat's history like a chat turn does. A job's apply turn is measured with the
     // jobs until it has its own small context.
-    const ceiling = access.callCeilings?.[ownerTurnActive || backgroundOwnerModel ? 'chat' : 'job'];
+    const ceiling = access.callCeilings?.[ownerTurnActive || backgroundOwnerModel ? 'chatCeilingTokens' : 'jobCeilingTokens'];
     const shape = {
       system_bytes: utf8Bytes(system), request_bytes: utf8Bytes(input),
       // These calls run on the voice block, so a shift in behaviour or cache share can be traced to a voice bump.
@@ -657,8 +657,8 @@ export const createOwnerResponder = (
         // The menu leads the provider's cache prefix, so the owner's turn offers the same one every round, with or without tool search.
         stableMenu: true,
         ...(harnessLoader ? { loader: (tools: readonly LLMTool[]) => harnessToolLoader(tools, backgroundDirect) } : {}),
-        ...(access.contextCaps ? { clearToLatest: access.contextCaps } : {}),
-        ...(access.callCeilings ? { resultRoomBytes: () => replyBaseTokens === undefined ? undefined : Math.max(0, access.callCeilings!.hard - replyBaseTokens) * BYTES_PER_TOKEN_EST } : {}),
+        ...(access.contextCaps ? { clearToLatest: { atChars: access.contextCaps.clearAtChars, keep: access.contextCaps.keepLatest } } : {}),
+        ...(access.callCeilings ? { resultRoomBytes: () => replyBaseTokens === undefined ? undefined : Math.max(0, access.callCeilings!.hardCeilingTokens - replyBaseTokens) * BYTES_PER_TOKEN_EST } : {}),
         budget: turnBudget,
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
         maxSteps: turnRounds,

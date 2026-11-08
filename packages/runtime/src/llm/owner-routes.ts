@@ -15,6 +15,7 @@ import { AnthropicMessagesAdapter } from './anthropic';
 import { validModelCredential } from './credential-shape';
 import { OpenAIResponsesAdapter, type OpenAIResponseMetadata } from './openai';
 import { routedGateway, type CircuitBreaker, type LLMAttempt, type LLMGatewayAdapter } from './provider';
+import type { ContextBudget } from '../conversation/context-budget';
 
 // What the owner responder needs to reach the model providers: the OpenAI key alone (callers that predate the second
 // provider), or every provider's key. Credentials stay here and in the adapters; they never reach a prompt, a trace or a store.
@@ -38,11 +39,11 @@ export type FloorPromise = Readonly<{ promise(turn: FloorTurn): string }>;
 export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?: string; primary?: ModelProvider; floorReply?: boolean | FloorPromise; health?: CircuitBreaker; toolSearch?: boolean; toolLoader?: 'harness';
   // WALDO_PROMPT_V2: the owner path's behavior prompt version 2 (prompt/messaging-behavior.ts).
   promptV2?: boolean;
-  // WALDO_CONTEXT_CAPS: an owner turn clears its tool results down to the latest `keep` once they pass atChars characters.
-  contextCaps?: Readonly<{ atChars: number; keep: number }>;
-  // WALDO_CALL_CEILINGS: each call is measured against its class's ceiling in tokens, and an owner turn clears earlier tool
-  // results once they would carry the call past the hard ceiling.
-  callCeilings?: Readonly<{ chat: number; job: number; hard: number }>;
+  // WALDO_CONTEXT_CAPS: an owner turn clears its tool results down to the latest few once they pass a size.
+  contextCaps?: Pick<ContextBudget, 'clearAtChars' | 'keepLatest'>;
+  // WALDO_CALL_CEILINGS: each call is measured against its class's ceiling, and an owner turn clears earlier tool results
+  // once they would carry the call past the hard ceiling.
+  callCeilings?: Pick<ContextBudget, 'chatCeilingTokens' | 'jobCeilingTokens' | 'hardCeilingTokens'>;
   onAttempts?: (attempts: readonly LLMAttempt[]) => void; held?: () => Promise<boolean> }>;
 
 export const ownerModelAccess = (access: string | OwnerModelAccess): OwnerModelAccess =>

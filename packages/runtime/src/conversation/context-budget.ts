@@ -1,6 +1,7 @@
 // The sizes that bound an owner turn's context, read from WALDO_SWITCHES so staging traces can tune them without a code
 // change. Each is fixed for a deploy, so the provider's cache of the stable prefix holds between turns. A value that is not
-// a valid size of its kind reads as the default; the switches test checks both deployed configs carry valid values.
+// a valid size of its kind reads as the default, rather than stopping every owner object over one typo; ignoredSettings
+// names those for the log, and context-budget.test.ts holds both deployed configs to valid values.
 export type ContextBudget = Readonly<{
   // WALDO_CALL_CEILINGS: a chat's history, the conversation layer of a call aiming at the chat ceiling.
   historyTokens: number;
@@ -33,9 +34,15 @@ export const CONTEXT_BUDGET_SETTINGS: Readonly<Record<keyof ContextBudget, strin
 const valid = (key: keyof ContextBudget, value: number): boolean =>
   key === 'steppedTarget' ? value > 0 && value <= 1 : Number.isSafeInteger(value) && value > 0;
 
-export const contextBudget = (env: object): ContextBudget => Object.fromEntries(
-  (Object.keys(CONTEXT_BUDGET) as (keyof ContextBudget)[]).map((key) => {
-    const raw = (env as Readonly<Record<string, unknown>>)[CONTEXT_BUDGET_SETTINGS[key]], value = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN;
-    return [key, valid(key, value) ? value : CONTEXT_BUDGET[key]];
-  }),
-) as ContextBudget;
+const read = (env: object, key: keyof ContextBudget): number | undefined => {
+  const raw = (env as Readonly<Record<string, unknown>>)[CONTEXT_BUDGET_SETTINGS[key]], value = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN;
+  return valid(key, value) ? value : undefined;
+};
+const KEYS = Object.keys(CONTEXT_BUDGET) as (keyof ContextBudget)[];
+
+export const contextBudget = (env: object): ContextBudget =>
+  Object.fromEntries(KEYS.map((key) => [key, read(env, key) ?? CONTEXT_BUDGET[key]])) as ContextBudget;
+
+// The settings a deploy set to a value that is not a valid size, and so read as their defaults.
+export const ignoredSettings = (env: object): readonly string[] =>
+  KEYS.filter((key) => (env as Readonly<Record<string, unknown>>)[CONTEXT_BUDGET_SETTINGS[key]] !== undefined && read(env, key) === undefined).map((key) => CONTEXT_BUDGET_SETTINGS[key]);

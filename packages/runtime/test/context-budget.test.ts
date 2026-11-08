@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import config from '../wrangler.jsonc?raw';
 import { parseJsonc } from '../../../scripts/jsonc.mjs';
 import { flatVars } from '../../../scripts/wrangler-vars.mjs';
-import { CONTEXT_BUDGET, CONTEXT_BUDGET_SETTINGS, contextBudget } from '../src/conversation/context-budget';
+import { CONTEXT_BUDGET, CONTEXT_BUDGET_SETTINGS, contextBudget, ignoredSettings } from '../src/conversation/context-budget';
 import { compactionSettings } from '../src/conversation/compaction';
 import { steppedWindowStart } from '../src/conversation/window';
 
@@ -31,6 +31,13 @@ describe('contextBudget', () => {
     }
     for (const bad of ['0', '-0.5', '1.5', 'half']) expect(contextBudget({ WALDO_STEPPED_WINDOW_TARGET: bad }).steppedTarget, bad).toBe(0.5);
     expect(contextBudget({ WALDO_STEPPED_WINDOW_TARGET: '1' }).steppedTarget).toBe(1);
+  });
+
+  it('names each setting it read as its default because the value was not valid, and no setting that was unset or valid', () => {
+    expect(ignoredSettings({})).toEqual([]);
+    expect(ignoredSettings({ WALDO_HISTORY_BUDGET_TOKENS: '14000', WALDO_STEPPED_WINDOW_TARGET: '0.6' })).toEqual([]);
+    expect(ignoredSettings({ WALDO_HISTORY_BUDGET_TOKENS: '14k', WALDO_TOOL_RESULTS_KEEP_LATEST: '0', WALDO_CHAT_CEILING_TOKENS: '36000' }))
+      .toEqual(['WALDO_HISTORY_BUDGET_TOKENS', 'WALDO_TOOL_RESULTS_KEEP_LATEST']);
   });
 
   it('both deployed configs carry every setting, each a valid value', () => {
