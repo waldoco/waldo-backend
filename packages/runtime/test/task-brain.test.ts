@@ -406,6 +406,26 @@ describe('the task brain host', () => {
     });
   });
 
+  it.each([
+    ['TSH', 'Your TSH is 6.2 mIU/L (0.4-4.0) H.', /6\.2/],
+    ['vitamin D', '25-OH Vitamin D: 18 ng/mL, flagged low.', /\b18\b/],
+    ['haemoglobin', 'Haemoglobin 10.9 g/dL L.', /10\.9/],
+    ['eGFR', 'eGFR 45 mL/min/1.73m2 (>60) L.', /\b45\b/],
+    ['creatinine', 'Serum creatinine 1.6 mg/dL (H).', /1\.6/],
+    ['PSA', 'PSA 6.1 ng/mL (0-4.0) H.', /6\.1/],
+    ['ferritin', 'Ferritin 8 ng/mL, below range.', /\b8 ng/],
+  ])('a %s lab mail read by a reader task: the checkpoint keeps no reading', async (_analyte, body, reading) => {
+    await withHost(async ({ host, ticket, book, handler }) => {
+      const t = ticket();
+      handler.search = async () => ({ messages: [{ from: 'lab@clinic.example', subject: 'Your results', body: `${body} Please book a follow-up.` }] });
+      const model: TaskModel = async () => ({ response: { text: '', tool_calls: [{ call_id: 'c1:search', name: 'search_communication', arguments: JSON.stringify({ query: 'from:lab@clinic.example' }) }] }, event: { trace: 'task:x', hop: 'llm_task', ms: 1, ok: true } });
+      expect(await runTaskAttempt(t, { brain: host, model, sliceEnd: 0 })).toBe('continue');
+      const checkpoint = book.get(t.jobId)!.checkpoint_json!;
+      expect(checkpoint).not.toMatch(reading);
+      expect(JSON.parse(checkpoint).turns[0].output).toBe(UNKEPT_OUTPUT);
+    });
+  });
+
   it('a lab-results mail: no checkpoint or result keeps the reading, and the resumed attempt reads the mail again', async () => {
     await withHost(async ({ host, ticket, book, handler, ran }) => {
       const t = ticket();
@@ -1076,6 +1096,26 @@ describe('a steered task', () => {
     });
   });
 
+  it('a steered task that stops says which changes no worker saw; a stop with no change reads as it did before', async () => {
+    await withHost(async ({ book, ticket }) => {
+      const progress = (text: string) => JSON.parse(/<task_progress>\n(.*)\n<\/task_progress>/s.exec(text)![1]!);
+      const t = ticket();
+      steer(book, t.jobId, 'enqueue', 'Only places with a terrace.', 'turn-2:s1');
+      expect(book.claim(t)).not.toBe('fenced');
+      steer(book, t.jobId, 'enqueue', 'Skip the rooftop place.', 'turn-3:s1');
+      expect(book.park(t.jobId, 'deadline')).toBe(true);
+      const text = parkedApplyText(book.get(t.jobId)!);
+      expect(progress(text).changes).toEqual([{ change: 'Only places with a terrace.', worker_saw_it: true }, { change: 'Skip the rooftop place.', worker_saw_it: false }]);
+      expect(text).toContain('Name each change Waldo made to it that was not done');
+
+      const plain = ticket();
+      expect(book.park(plain.jobId, 'deadline')).toBe(true);
+      const unchanged = parkedApplyText(book.get(plain.jobId)!);
+      expect(progress(unchanged)).not.toHaveProperty('changes');
+      expect(unchanged).not.toContain('Name each change');
+    });
+  });
+
   it('a report at or past the deadline, or with a step still recorded in flight, is accepted as partial and names each change it did not do', async () => {
     await withHost(async ({ book, ticket, clock }) => {
       const late = ticket();
@@ -1181,7 +1221,7 @@ describe('task profiles', () => {
     memory: [...names.filter(name => TOOL_RECORDS[name].brain === 'memory' && name !== 'read_tool_output'), 'read_memory', 'remember'],
     delegation: ['delegate_task', 'use_mac'],
     tasks: ['start_task', 'cancel_task'],
-    health: [...names.filter(name => TOOL_RECORDS[name].brain === 'health'), 'get_health'],
+    health: [...names.filter(name => TOOL_RECORDS[name].brain === 'health' || TOOL_RECORDS[name].brain === 'phone'), 'get_health'],
   };
 
   // Whatever list a tool is missing from, a profile can only read: every tool a worker holds is a safe read, except the

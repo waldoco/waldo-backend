@@ -81,6 +81,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_WATCHDOG: inert('the progress watchdog checks running background jobs; the trial runs no background jobs'),
   PLANNING_BRIEF: gap('the Brief cases run the recap Brief; no case judges a planning Brief yet; staging has it on'),
   OWNER_SURFACE_DEFAULT: inert('where a notice outside any turn goes and which surface the console and harness commands open on; each trial turn names its own surface'),
+  APP_CHAT_ATTACHMENTS: gap('an app message may carry one voice note, photo or file through the shared media reader; the trial sends words only'),
   CONSOLE_HARNESS: inert('operator commands in the owner\'s console; the trial runs no console'),
   WHATSAPP_STOP: inert('a typed /stop on WhatsApp ends the running turn; the trial runs the app surface and sends no stop'),
   CAPACITY_PLAN: gap('the nightly capacity pass is not run in a trial; the cap- case runs the Close with a seeded capacity note'),
@@ -105,6 +106,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   MEMORY_DAYTIME_CONSOLIDATOR: gap('the daytime memory pass is not run in a trial'),
   WALDO_IMESSAGE_PROGRESS: gap('iMessage progress notes; the trial runs the app surface; staging has them off'),
   IMESSAGE_MEDIA: gap('iMessage media; the trial runs the app surface'),
+  IMESSAGE_STOP: inert('a typed /stop on iMessage ends the running turn; the trial runs the app surface and sends no stop'),
   IMESSAGE_VOICE: gap('iMessage voice notes; the trial runs the app surface'),
 
   WALDO_ENVIRONMENT: inert('names the deployment'),

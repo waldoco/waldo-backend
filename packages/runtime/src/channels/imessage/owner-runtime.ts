@@ -209,6 +209,20 @@ export const drainIMessageOutbox = async (host: OwnerHost, maxAgeMs: number): Pr
 };
 
 /**
+ * A /stop's answer handed to its bridge now, outside the owner's queue, where the turn it stopped may still be unwinding. It
+ * keeps its place: an earlier message still waiting for that bridge, a busy bridge or a failed handoff leaves it frozen for
+ * the drain, which sends it in order.
+ */
+export const handOffIMessageStopAnswer = async (host: OwnerHost, replyRef: string): Promise<void> => {
+  const outbox = new IMessageFinalOutbox(host.storage), row = outbox.get(replyRef);
+  if (!row || row.state !== 'frozen' || outbox.waitingAhead(replyRef)) return;
+  let outcome;
+  try { outcome = await handOff(host, row); } catch { return; }
+  if (outcome.kind === 'queued') outbox.markQueued(replyRef);
+  else if (outcome.kind === 'terminal') outbox.settle(replyRef, row.commandId, outcome.result);
+};
+
+/**
  * One attempt to hand a running turn's progress note to the bridge, from inside that turn. Anything but queued settles it on
  * the spot: a note is never retried, so it wakes nothing and cannot land after the reply. A call that threw may still have
  * reached the bridge, so that note settles may_have_completed; a bridge that answered without taking it proves not_started.
