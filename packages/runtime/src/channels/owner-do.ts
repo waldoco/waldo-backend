@@ -4037,7 +4037,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // directory, the admin commands need its admin check, and fires are spaced and capped per owner.
   private async harnessAdmin(): Promise<boolean> {
     const auth = consoleAuth(this.env), doName = this.ctx.storage.kv.get<string>('do_name');
-    return auth ? Boolean(doName && await auth.adminOverview(doName)) : true;
+    return auth ? Boolean(doName && await auth.adminCheck(doName)) : true;
   }
 
   private async admitHarness(command: HarnessCommand, budget?: () => boolean): Promise<HarnessRefusal | null> {

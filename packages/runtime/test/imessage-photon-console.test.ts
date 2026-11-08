@@ -33,7 +33,7 @@ async function world() {
   const fx = fixtureDirectory({ origin: ORIGIN, secret: SECRET, owners, extra: (fn, a) => {
     if (fn === 'console_session_touch' || fn === 'console_auth_throttle') return Response.json(true);
     if (fn === 'health_context_read' || fn === 'health_plane') return Response.json(null);
-    if (fn === 'admin_overview') return Response.json(owners.find((o) => o.do_name === a.p_do_name)?.admin ? { owners: [], invites: [] } : null);
+    if (fn === 'admin_check') return Response.json(owners.find((o) => o.do_name === a.p_do_name)?.admin === true);
     return null;
   } });
   // Photon: token endpoint and the project's Spectrum users. Each create is assigned the next pool number.

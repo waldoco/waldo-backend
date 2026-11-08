@@ -22,7 +22,7 @@ const COPY: Record<PhotonFinish | 'unbound', Readonly<{ status: number; title: s
 
 /** Operator only: any other owner gets a 404, as if the route did not exist. */
 export async function photonStart(env: IMessageEnv & OAuthStateEnv, owner: string, origin: string): Promise<Response> {
-  const admin = await consoleAuth(env)?.adminOverview(owner).then((v) => v !== null).catch(() => false) ?? false;
+  const admin = await consoleAuth(env)?.adminCheck(owner).catch(() => false) ?? false;
   if (!admin) return new Response('not found', { status: 404, headers: TEXT });
   const bindingSecret = oauthStateSecret(env);
   const started = bindingSecret ? await photonConnectStart(env, owner, origin, PHOTON_CALLBACK_PATH).catch(() => null) : null;

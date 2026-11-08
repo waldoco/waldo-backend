@@ -25,7 +25,7 @@ async function readIMessage(env: IMessageEnv, owner: string, csrf: string): Prom
   const auth = consoleAuth(env);
   const [rows, admin, hint, view] = await Promise.all([
     iMessageDirectory(env).list(owner),
-    auth?.adminOverview(owner).then((v) => v !== null).catch(() => false) ?? false,
+    auth?.adminCheck(owner).catch(() => false) ?? false,
     auth?.iMessageHandleHint?.(owner) ?? null,
     iMessageNumberView(env, owner),
   ]);
