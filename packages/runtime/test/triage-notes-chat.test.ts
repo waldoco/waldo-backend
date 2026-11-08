@@ -1,4 +1,4 @@
-// TRIAGE_NOTES: a note triage kept of what a mail says happened is recalled by the owner's chat on every surface, as the
+// TRIAGE_CARES: a note triage kept of what a mail says happened is recalled by the owner's chat on every surface, as the
 // source's, with the mail it came from. The model is scripted; the test reads what each turn was given.
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
@@ -160,7 +160,7 @@ const STORED = `From mail on owner@fixture.invalid (mail:t-form): ${NOTE.line}`;
 describe('a kept note answers the owner on every surface', { timeout: 30_000 }, () => {
   it('in the app: "did I submit the visa form?" reads the note, marked as the source\'s, with its mail', async () => {
     const name = 'triage-notes-app';
-    await withOwner(name, { WALDO_ONE_TIMELINE: '1', GOOGLE_REALTIME_TRIAGE: '1', WALDO_DAY_STATE: '1', TRIAGE_NOTES: '1' }, async (owner, state) => {
+    await withOwner(name, { WALDO_ONE_TIMELINE: '1', GOOGLE_REALTIME_TRIAGE: '1', WALDO_DAY_STATE: '1', TRIAGE_CARES: '1' }, async (owner, state) => {
       keepNote(state);
       await saysInApp(owner(), state, name, 'Did I submit the Schengen visa form?');
       const asked = lastAsked();
@@ -173,7 +173,7 @@ describe('a kept note answers the owner on every surface', { timeout: 30_000 }, 
 
   it('on WhatsApp: the same question reads the same note', async () => {
     const name = 'triage-notes-whatsapp';
-    await withOwner(name, { WALDO_ONE_TIMELINE: '1', GOOGLE_REALTIME_TRIAGE: '1', WALDO_DAY_STATE: '1', TRIAGE_NOTES: '1' }, async (owner, state) => {
+    await withOwner(name, { WALDO_ONE_TIMELINE: '1', GOOGLE_REALTIME_TRIAGE: '1', WALDO_DAY_STATE: '1', TRIAGE_CARES: '1' }, async (owner, state) => {
       keepNote(state);
       await saysOnWhatsApp(owner(), 'Did I submit the Schengen visa form?');
       const ref = RECALLED.exec(lastAsked())?.[1];

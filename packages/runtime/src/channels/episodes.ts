@@ -67,6 +67,10 @@ export const ftsQuery = (text: string): string | null => {
 export const ownerSpokeSince = (sql: SqlStorage, at: number): boolean =>
   sql.exec("SELECT 1 FROM episodes WHERE speaker IN ('owner', ?, ?, 'quoted') AND at > ? LIMIT 1", OWNER_SAID, OWNER_ANSWERED_OUTSIDE, at).toArray().length > 0;
 
+// When the owner next said anything, on any surface, after `at`; null when they have not since.
+export const ownerNextSpoke = (sql: SqlStorage, at: number): number | null =>
+  sql.exec<{ at: number | null }>("SELECT MIN(at) AS at FROM episodes WHERE speaker IN ('owner', ?, ?, 'quoted') AND at > ?", OWNER_SAID, OWNER_ANSWERED_OUTSIDE, at).one().at ?? null;
+
 // What Waldo and the owner said since `at`, oldest first, the newest kept within maxChars: the owner's own words and Waldo's
 // replies, never a quote or a machine note. outside: a reply from a turn that read outside content, or the owner's words
 // answering one, is among them, so a turn that reads this runs as one over outside text.

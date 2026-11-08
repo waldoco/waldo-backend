@@ -1,5 +1,5 @@
 // The triage turn (GOOGLE_REALTIME_TRIAGE) over labelled batches of Google changes: interrupt (tell now), act (raise a card),
-// brief (the next day card carries it), noted (a source-bound note kept, alone or with brief; TRIAGE_NOTES) and silent. Each runs the production triage prompt, tainted external, with
+// brief (the next day card carries it), noted (a source-bound note kept, alone or with brief; TRIAGE_CARES) and silent. Each runs the production triage prompt, tainted external, with
 // its card tools offered. A receipt holds the label, read from the decision the trial records as the owner object would
 // derive it (a raised card is the act); the judge grades the words. Every person, address, mail and event is synthetic.
 import type { Change } from '../../src/channels/update-cards';

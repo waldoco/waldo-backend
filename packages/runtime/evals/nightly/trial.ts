@@ -198,7 +198,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         skills.turn(`${scenario.id}-triage-${turn}`);
         const offered = new Set(world.handlers.map((handler) => handler.name));
         const prompt = triagePrompt(world.localNow(), { changes, ledger: '', feedback: '', volume: 'normal', sourceFollowups: false, cards: '', revisesCards: true,
-          goals: world.goals(), hold: null, left: TRIAGE_INTERRUPTS_PER_DAY, notes: true });
+          goals: world.goals(), hold: null, left: TRIAGE_INTERRUPTS_PER_DAY, notes: true, told: true });
         const carded = () => world.effects().filter((effect) => TRIAGE_CARDS.includes(effect.kind)).length;
         const before = carded();
         const reply = await responder.prompt(`${scenario.id}-triage-${turn}`, 1, prompt, time, triageTools(false, true).filter((name) => offered.has(name)) as never, undefined, undefined, undefined, 'external');

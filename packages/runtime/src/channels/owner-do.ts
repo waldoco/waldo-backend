@@ -120,6 +120,8 @@ import { LOOKUP_RECORD_PREFIX, lookupApplier, lookupPending, openLookup, startLo
 import { ownerAccountEmail } from '../identity/owner-account-email';
 import { DEFAULT_PROACTIVITY, isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine, storedProactivity } from './loops';
 import { sourceNoteBook } from './source-notes';
+import { toldBook } from './triage-told';
+import { peopleInPlay, responseSignals } from './triage-context';
 import { armHeartbeat, HEARTBEAT_EVERY_MS, HEARTBEAT_ID, heartbeatTick, heartbeatEligible, heartbeatWake, settleHeartbeat } from './heartbeat';
 import { heartbeatApplier, heartbeatJobSpec } from './heartbeat-job';
 import { checkBackReply, LOOP_CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS, outsideReminderCheckBackText, reminderFloorText } from './check-back';
@@ -162,7 +164,7 @@ import { egressGuardedCaller, redactSecretUrls } from './egress-guard';
 import { parseEgressAllowlistEnv } from '../hooks/egress-policy';
 import { toolOutputLedger , redactToolOutputLedger } from '../conversation/tool-output-ledger';
 import { heldTopicsOf, holdsIn } from '../memory/forget-guard';
-import { armNightly, backfillEpisodes, consolidationSides, CONSTELLATION_DIGEST_KEY, episodeIndex, indexedConversationStore, type EpisodeIndex, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_THROUGH_KEY, ownerSpokeSince, recentExchange, scrubEpisodeTexts, transcript } from './episodes';
+import { armNightly, backfillEpisodes, consolidationSides, CONSTELLATION_DIGEST_KEY, episodeIndex, indexedConversationStore, type EpisodeIndex, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_THROUGH_KEY, ownerNextSpoke, ownerSpokeSince, recentExchange, scrubEpisodeTexts, transcript } from './episodes';
 import { consolidateSources, type SourcesDeps } from './nightly-sources';
 import { consolidateBacklog as consolidateNightly } from './nightly-backlog';
 import { nightlyDiagnostic } from './nightly-diagnostic';
@@ -177,7 +179,7 @@ import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview,
 import { consoleHealth, DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-health';
 import { DASHBOARD_ACCESS_LOG_PATH, readAccessLog, readAccessLogQuery } from './dashboard-access-log';
 import { DASHBOARD_HELD_CHANGES_PATH, readHeldChanges } from './dashboard-held-changes';
-import { calendarSource, mailSource, reviewMailFollowup, titleDigester, updateBook, type DeltaAccount, type UpdateBook } from './update-cards';
+import { calendarSource, mailSource, reviewMailFollowup, titleDigester, updateBook, type Change, type DeltaAccount, type UpdateBook } from './update-cards';
 import { meetingPrepApplier, meetingPrepSpec } from './meeting-prep';
 import { granolaNotes, prepGranola } from './meeting-prep-granola';
 import { emitObserved, observedEvents, UPDATE_CARD_FRESH_MS, UPDATE_JUDGE_WAKE_KEY, updateSweepApplier, updateSweepCheck, updateSweepTools, type ObservedSubscriber, type SweepGate } from './update-sweep';
@@ -4871,8 +4873,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (copied) log({ trace: 'memory:migration', hop: 'memory_backup', ms: 0, ok: true, detail: copied });
     const files = fileBook(storage.sql);
     const loops = loopBook(storage.sql, { newId: () => deps.newRunId().slice(0, 8), now: () => Date.now() });
-    // TRIAGE_NOTES: what triage keeps on record from the owner's mail and calendar, indexed with the episodes for every surface.
-    const sourceNotes = realtimeTriage(this.env) && this.env.TRIAGE_NOTES === '1' ? sourceNoteBook(storage.sql, episodes) : null;
+    // TRIAGE_CARES: what triage keeps on record from the owner's mail and calendar, indexed with the episodes for every surface,
+    // and what it told them, so it never tells the same thing twice.
+    const cares = realtimeTriage(this.env) && this.env.TRIAGE_CARES === '1';
+    const sourceNotes = cares ? sourceNoteBook(storage.sql, episodes) : null;
+    const toldRecord = cares ? toldBook(storage.sql) : null;
     // The loops each running check-back turn was given, by its turn id: that turn may close, or card a close of, only these.
     const checkBackLoops = new Map<string, ReadonlySet<string>>();
     const closableIn = (turnId: string | undefined) => checkBackLoops.get(turnId ?? '') ?? null;
@@ -6168,11 +6173,20 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       ...(interrupts ? { interruptions: interrupts } : {}),
       ...(realtime ? { triage: {
         // The owner's goals as their memory holds them; the turn recalls people and the rest of memory as every job does. With
-        // notes, the last day of their conversation across surfaces too, bounded (the turn already reads outside text), and
-        // none of it while a forget is still settling.
-        context: async () => ({ goals: claimStore(storage.sql).claims().filter(claim => claim.kind === 'goal').slice(-12).map(claim => `- ${claim.text}`).join('\n'),
-          ...(sourceNotes && !heldTopicsOf(claimStore(storage.sql)).length ? { exchange: recentExchange(episodes, Date.now() - 24 * 3_600_000).text } : {}) }),
+        // TRIAGE_CARES, bounded: the last day of their conversation across surfaces, the people in play and what they did after
+        // recent updates (the turn already reads outside text); the conversation and the people wait while a forget settles.
+        context: async (changes: readonly Change[]) => {
+          const goals = claimStore(storage.sql).claims().filter(claim => claim.kind === 'goal').slice(-12).map(claim => `- ${claim.text}`).join('\n');
+          if (!cares || !toldRecord) return { goals };
+          const settling = heldTopicsOf(claimStore(storage.sql)).length > 0;
+          const ratings = replyRatings(storage.sql);
+          return { goals,
+            signals: responseSignals({ sql: storage.sql, told: toldRecord, timezone: clock.timezone, rating: row => ratings.get(row), nextSpoke: at => ownerNextSpoke(storage.sql, at) }),
+            ...(settling ? {} : { exchange: recentExchange(episodes, Date.now() - 24 * 3_600_000).text, people: peopleInPlay(claimStore(storage.sql).people.all(), changes) }) };
+        },
         ...(sourceNotes ? { notes: { record: sourceNotes.record, loopOpen: (id: string) => loops.get(id)?.status === 'open' } } : {}),
+        ...(toldRecord ? { told: { book: toldRecord,
+          raised: (at: number) => storage.sql.exec<{ id: string }>("SELECT id FROM ledger WHERE created_at >= ? AND status != 'done' ORDER BY created_at", at).toArray().map(row => row.id) } } : {}),
         // Owner jobs run one at a time, so the cards raised since the turn started are the ones it offered.
         // A done row is a record of something that ran (a draft), not a card waiting on the owner.
         cardsSince: (at: number) => storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM ledger WHERE created_at >= ? AND status != 'done'", at).one().n,

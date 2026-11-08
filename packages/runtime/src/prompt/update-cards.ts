@@ -82,17 +82,25 @@ const STYLES: Readonly<Record<ReadsAs, string>> = {
 };
 export const channelStyle = (reads: ReadsAs): string => STYLES[reads];
 
-// TRIAGE_NOTES: the turn may keep a source-bound note of what a change says happened, for the owner to ask about later.
+// TRIAGE_CARES: the turn may keep a source-bound note of what a change says happened, for the owner to ask about later.
 const NOTE = [
   '- note: worth keeping on record, nothing to say now: a confirmation, receipt, submission, booking or change the owner may later ask about ("did I submit that form?", "what is still open with X?"). It reaches no one and spends nothing. Add notes with brief or tell, or with act, when the owner should also hear of it.',
   'A note is {"ref": "<the change\'s source_ref, or its id>", "line": "<what happened, one line>", "loop": "<the open loop id it bears on, if any>"}. Name only a change in this batch. Write what the source says happened, as the source says it ("Confirmation from Google Forms: the visa form was submitted at 15:02"), never as something the owner said, decided or agreed to, and never with a health reading. A note is a record, not a permission: when one shows a loop may be done, name the loop and leave its closing to the owner.',
 ].join('\n');
 // The owner's recent conversation, across surfaces, so the batch is judged against what they are in the middle of.
 const exchangeSection = (exchange: string): string => fenced('the owner\'s recent conversation with Waldo, across surfaces', exchange).trimStart();
+// Who this batch involves, as the owner's memory knows them, and who they were last in touch with.
+const peopleSection = (people: string): string => fenced('people in play: known people in this batch, then those the owner was most recently in touch with', people).trimStart();
+// What the owner did after recent updates and cards: signals of what they find worth hearing, not rules.
+const signalsSection = (signals: string): string =>
+  `What the owner did after Waldo's recent updates and cards (ratings, Likes, whether they wrote soon after, handled the mail, approved or skipped the card). These are signals of what they find worth hearing, not rules; weigh them with everything else:\n<signals>\n${signals}\n</signals>`;
+// TRIAGE_CARES: a change carries when the owner was last told about its source.
+const TOLD = 'A change marked "told the owner" is from a source Waldo already told them about. Never tell them the same thing twice: tell again only for what is new since, and say only that. With act or tell, add "about": the refs of the changes your message or card is about, so only those count as told.';
 export const triagePrompt = (localNow: string, context: Readonly<{ changes: string; ledger: string; feedback: string; volume: 'normal' | 'high'; sourceFollowups?: boolean;
   cards: string; revisesCards: boolean; goals: string; hold: TriageHold | null; left: number;
-  // TRIAGE_NOTES: note is offered, and the turn reads the owner's recent conversation beside their open loops in the ledger.
-  notes?: boolean; exchange?: string;
+  // TRIAGE_CARES: note is offered, and the turn reads the owner's recent conversation beside their open loops in the ledger,
+  // the people in play, what the owner did after recent updates, and when they were last told about each change's source.
+  notes?: boolean; exchange?: string; people?: string; signals?: string; told?: boolean;
   // The owner's own interruption limits, when they replace triage's budget: what is left today and whether a question waits.
   limits?: string;
   // PROACTIVE_ACT_AHEAD: the worker prepared the move; style says how a message reads on the owner's surface.
@@ -102,6 +110,8 @@ export const triagePrompt = (localNow: string, context: Readonly<{ changes: stri
   `<ledger>\n${context.ledger}\n</ledger>`,
   ...(context.goals ? [fenced('what the owner is working towards, from their memory', context.goals).trimStart()] : []),
   ...(context.exchange ? [exchangeSection(context.exchange)] : []),
+  ...(context.people ? [peopleSection(context.people)] : []),
+  ...(context.signals ? [signalsSection(context.signals)] : []),
   ...(context.feedback ? [`How the owner rated recent update cards. Send more like the useful ones and fewer like the rest:\n<feedback>\n${context.feedback}\n</feedback>`] : []),
   context.cards || 'No day card has reached the owner today.',
   ...(context.notes ? ['First ask what this batch changes for the owner\'s day, their plans and the work they have open: the loops in the ledger, what they are in the middle of with Waldo, the people they are dealing with. Mail that moves something they are doing forward matters for that reason; mail that touches nothing they are doing seldom does.'] : []),
@@ -114,12 +124,13 @@ export const triagePrompt = (localNow: string, context: Readonly<{ changes: stri
   '- brief: worth knowing, not now. The next day card carries it.',
   ...(context.notes ? [NOTE] : []),
   '- silent: noise, newsletters, changes Waldo made itself (check the ledger), and what the owner already handled. Nothing carries it.',
+  ...(context.told ? [TOLD] : []),
   context.hold ? HOLDS[context.hold] : context.limits ? `${context.limits} Act and a tell that messages or pushes each spend one.` : `Waldo can interrupt the owner ${context.left === 1 ? 'once more' : `${context.left} more times`} today; act and a tell that messages or pushes each spend one.`,
   ...(context.revisesCards ? [] : ['The owner reads Waldo where a card cannot be edited: a revision goes out as a new message, so write it as a short note of what changed in the card.']),
   `A short update leads with the change itself ("${LEAD_EXAMPLE}"), with no header line. The day cards are card:brief (the Daily Brief), card:midday (the Check-in) and card:close (the Close).`,
   'Waldo writes the push itself from one calendar change: give that event\'s id ("id" in its change) and the push names the meeting and its new time. Without an id, or for a mail, the push only says there is an update to their day.',
   context.notes
-    ? 'Reply with one JSON object and nothing else: {"decision": "act" | "tell" | "brief" | "note" | "silent", "say": "...", "revise": {"card": "card:brief", "text": "..."}, "push": {"event": "<event id>"}, "notes": [{"ref": "...", "line": "...", "loop": "..."}]}. say, revise and push go only with tell; use say or revise, not both. notes go with note, and may go with act, tell or brief, never with silent.'
+    ? 'Reply with one JSON object and nothing else: {"decision": "act" | "tell" | "brief" | "note" | "silent", "say": "...", "revise": {"card": "card:brief", "text": "..."}, "push": {"event": "<event id>"}, "notes": [{"ref": "...", "line": "...", "loop": "..."}], "about": ["<ref>"]}. say, revise and push go only with tell; use say or revise, not both. notes go with note, and may go with act, tell or brief, never with silent. about goes only with act or tell.'
     : 'Reply with one JSON object and nothing else: {"decision": "act" | "tell" | "brief" | "silent", "say": "...", "revise": {"card": "card:brief", "text": "..."}, "push": {"event": "<event id>"}}. say, revise and push go only with tell; use say or revise, not both.',
   ...(context.limits ? ['With act or tell you may add "urgent": true when it truly cannot wait for the next day card, and "asks": true when your message asks the owner a question.'] : []),
 ].join('\n\n');
