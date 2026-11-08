@@ -517,10 +517,14 @@ const whatsappQuietMs = (value: string | undefined): number => {
 // once it is no longer fresh.
 const WORKOUT_NOTED_KEY = 'health_workout_noted_v1';
 
-// What an app chain's compaction needs from the turn that made it due, and the chains a drain asked to compact in a later pass.
+// What an app chain's compaction needs from the turn that made it due, and the chains a drain asked to compact in a later
+// pass, each with when it was asked.
 type AppCompaction = Pick<AppInboxRecord, 'id' | 'owner' | 'sessionHash' | 'conversationRef' | 'threadRevision'>;
-type CompactionPending = Readonly<{ app: readonly AppCompaction[]; chats: readonly TimelineChat[] }>;
+type CompactionPending = Readonly<{ app: readonly (AppCompaction & Readonly<{ at: number }>)[]; chats: readonly Readonly<{ chat: TimelineChat; at: number }>[] }>;
 const COMPACTION_PENDING_KEY = 'compaction_pending_v1';
+// The wake for pending compactions lands this long after it is armed, so the pass that asked for one finishes without
+// counting it as due, and the next pass takes it.
+const COMPACTION_WAKE_DELAY_MS = 2_000;
 
 export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly ownerBrowser: ReturnType<typeof ownerBrowserRuntime>;
@@ -2413,24 +2417,37 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // WALDO_COMPACTION_WAKE: a drain that makes chains due leaves their compaction to a later alarm pass of its own, so the pass
   // that ran the owner's turns never also waits on a summary call.
   private compactionWake(): boolean { return this.env.WALDO_COMPACTION_WAKE === '1'; }
+  // A chain asked for again replaces its earlier ask, so it waits for the pass after the turn that asked last.
   private async askCompaction(asked: Readonly<{ app?: AppCompaction; chat?: TimelineChat }>): Promise<void> {
-    const kv = this.ctx.storage.kv, pending = kv.get<CompactionPending>(COMPACTION_PENDING_KEY) ?? { app: [], chats: [] };
+    const kv = this.ctx.storage.kv, pending = kv.get<CompactionPending>(COMPACTION_PENDING_KEY) ?? { app: [], chats: [] }, at = Date.now();
     kv.put(COMPACTION_PENDING_KEY, {
-      app: asked.app ? [...pending.app.filter(record => record.conversationRef !== asked.app!.conversationRef), asked.app] : pending.app,
-      chats: asked.chat && !pending.chats.includes(asked.chat) ? [...pending.chats, asked.chat] : pending.chats,
+      app: asked.app ? [...pending.app.filter(record => record.conversationRef !== asked.app!.conversationRef), { ...asked.app, at }] : pending.app,
+      chats: asked.chat ? [...pending.chats.filter(entry => entry.chat !== asked.chat), { chat: asked.chat, at }] : pending.chats,
     } satisfies CompactionPending);
-    await armCompactionWake(this.ctx.storage, Date.now());
+    await armCompactionWake(this.ctx.storage, at + COMPACTION_WAKE_DELAY_MS);
   }
-  // The compaction lane: chains a drain asked for before this pass began, never the ones its own drains ask for. A message
-  // waiting on the app stops the app chains as it does after a drain; the chain's next eligible reply asks again.
+  // The compaction lane runs the chains asked for before this pass began, never one this pass's own drains asked for. A
+  // chain waits, still pending, while an owner message is admitted that would otherwise queue behind its summary call: an app
+  // message for the app chains, a Telegram or WhatsApp message for the owner's chain on the timeline (the Telegram inbox
+  // drains after this lane). Whatever waits re-arms the wake.
   private async compactDue(passStart: number, alarmEnd?: number): Promise<void> {
-    const kv = this.ctx.storage.kv, due = kv.get<number | null>(COMPACTION_DUE_KEY);
-    if (typeof due !== 'number' || due > passStart) return;
-    const pending = kv.get<CompactionPending>(COMPACTION_PENDING_KEY);
+    const kv = this.ctx.storage.kv, pending = kv.get<CompactionPending>(COMPACTION_PENDING_KEY);
+    if (!pending) { kv.delete(COMPACTION_DUE_KEY); return; }
+    const left = { app: pending.app.filter(entry => entry.at >= passStart), chats: pending.chats.filter(entry => entry.at >= passStart) };
+    for (const record of pending.app.filter(entry => entry.at < passStart)) {
+      if (this.appInbox.records().some(row => row.state === 'admitted')) left.app.push(record);
+      else await this.compactApp(record, alarmEnd);
+    }
+    for (const entry of pending.chats.filter(entry => entry.at < passStart)) {
+      if ((await this.inbox.records()).some(record => record.state === 'admitted') || this.whatsappInbox().records().some(record => record.state === 'admitted')) left.chats.push(entry);
+      else await this.compactTimeline(entry.chat, alarmEnd, true);
+    }
+    // Written only once the work is done: a pass cut off before here leaves every request for the next one.
     kv.delete(COMPACTION_DUE_KEY);
-    kv.delete(COMPACTION_PENDING_KEY);
-    for (const record of pending?.app ?? []) { if (this.appInbox.records().some(row => row.state === 'admitted')) break; await this.compactApp(record, alarmEnd); }
-    for (const chat of pending?.chats ?? []) await this.compactTimeline(chat, alarmEnd, true);
+    if (!left.app.length && !left.chats.length) { kv.delete(COMPACTION_PENDING_KEY); return; }
+    kv.put(COMPACTION_PENDING_KEY, left satisfies CompactionPending);
+    console.log(JSON.stringify({ hop: 'compaction', ok: true, code: 'deferred', detail: `app=${left.app.length} chats=${left.chats.length}` }));
+    await armCompactionWake(this.ctx.storage, Date.now() + COMPACTION_WAKE_DELAY_MS);
   }
   // The model may name a thread once, from its first exchange; see askThreadTitle for when the title lands.
   private async titleThread(thread: string, rows: string): Promise<void> {

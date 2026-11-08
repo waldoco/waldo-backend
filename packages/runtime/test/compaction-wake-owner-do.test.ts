@@ -144,7 +144,7 @@ it('the turn that makes a chain due arms a compaction wake and runs no summary c
     expect(typeof state.storage.kv.get(COMPACTION_DUE_KEY)).toBe('number');
     const alarm = await state.storage.getAlarm();
     expect(alarm).not.toBeNull();
-    expect(alarm!).toBeLessThanOrEqual(Date.now() + 1_000);
+    expect(alarm!).toBeLessThanOrEqual(Date.now() + 3_000);
 
     await owner.alarm();
     await drained(owner);
@@ -159,23 +159,46 @@ it('the turn that makes a chain due arms a compaction wake and runs no summary c
   });
 });
 
-it('a pass runs only the compactions asked for before it began, never one its own drains asked for', async () => {
+type Pending = { app: { at: number }[]; chats: { chat: string; at: number }[] };
+const PENDING = 'compaction_pending_v1';
+
+it('a pass runs only the compactions asked for before it began, and keeps one asked for since for the next pass', async () => {
   directory();
   const name = 'compaction-wake-later';
   await inOwner(name, async (state) => {
     const owner = await ownerFor(name, state, 'on');
     await seed(state);
     await turn(owner, state, name, 'What is on today?');
-    // Asked for after this pass starts: the pass leaves it, and its wake, for the next one.
-    const later = Date.now() + 60_000;
-    state.storage.kv.put(COMPACTION_DUE_KEY, later);
+    const asked = state.storage.kv.get<Pending>(PENDING)!;
+    expect(asked.app).toHaveLength(1);
+    // As if this pass's own drain had just asked for the chain again.
+    state.storage.kv.put(PENDING, { ...asked, app: [{ ...asked.app[0]!, at: Date.now() + 60_000 }] });
     await owner.alarm();
     await drained(owner);
     expect(compactions()).toHaveLength(0);
-    expect(state.storage.kv.get(COMPACTION_DUE_KEY)).toBe(later);
-    state.storage.kv.put(COMPACTION_DUE_KEY, Date.now() - 1);
+    expect(state.storage.kv.get<Pending>(PENDING)!.app).toHaveLength(1);
+    expect(typeof state.storage.kv.get(COMPACTION_DUE_KEY)).toBe('number');
+    state.storage.kv.put(PENDING, asked);
     await owner.alarm();
     await drained(owner);
     expect(compactions()).toHaveLength(1);
+    expect(state.storage.kv.get(PENDING)).toBeUndefined();
+  });
+});
+
+it('the owner\'s chain waits for a Telegram message already admitted, and is taken once none is', async () => {
+  directory();
+  const name = 'compaction-wake-telegram';
+  await inOwner(name, async (state) => {
+    const owner = await ownerFor(name, state, 'on');
+    state.storage.kv.put(PENDING, { app: [], chats: [{ chat: 'telegram', at: Date.now() - 1_000 }] });
+    state.storage.kv.put('telegram_owner_inbox_v1', [{ id: 'row-1', digest: 'd', sequence: 1, updateId: 1, body: '{"update_id":1}', admittedAt: Date.now(), state: 'admitted', bot: 'fixture-bot', subject: '7', doName: name }]);
+    await (owner as unknown as { compactDue(passStart: number): Promise<void> }).compactDue(Date.now());
+    expect(state.storage.kv.get<Pending>(PENDING)!.chats.map(entry => entry.chat)).toEqual(['telegram']);
+    state.storage.kv.delete('telegram_owner_inbox_v1');
+    await (owner as unknown as { compactDue(passStart: number): Promise<void> }).compactDue(Date.now());
+    expect(state.storage.kv.get(PENDING)).toBeUndefined();
+    // Taking the chain set the Telegram runtime up; let it finish before the object is cleared.
+    await (owner as unknown as { setup(surface: string): { ready: Promise<unknown> } }).setup('telegram').ready;
   });
 });

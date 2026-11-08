@@ -37,7 +37,8 @@ export type ConversationEntry = Readonly<{
   ownerWordsOnly?: true;
   // A Waldo reply written by a turn that had read outside content (mail, a web page, a connected tool's result, someone
   // else's words): what it says may carry that content. A compaction row has it when any row it summarised had it or was an
-  // input not entirely in the owner's own words. Absent on every other row, and on rows stored before it was kept.
+  // input not entirely in the owner's own words; there it labels the summary for the model and taints no turn that reads it.
+  // Absent on every other row, and on rows stored before it was kept.
   readOutside?: true;
   // Epoch ms when the path that appends the entry made it. Rows stored before the time was kept have none.
   createdAt?: number;
