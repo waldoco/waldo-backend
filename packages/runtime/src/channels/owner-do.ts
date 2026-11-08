@@ -270,7 +270,7 @@ import { WHATSAPP_LINK_PATH, whatsappLinkDirectory } from '../identity/whatsapp-
 import { WA_LAST_INBOUND_ID_KEY, WHATSAPP_PARTIAL_NOTICE, whatsappAckId, whatsappForwarded, claimNewWhatsAppMessages, plainOwnerText, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim, whatsappTurnMessage, type WaIngressMessage } from './whatsapp-api';
 import { whatsAppWaldoNumber } from './whatsapp-send-url';
 import { forgetWhatsAppContext, noteWhatsAppReaction, recordWhatsAppSent, takeWhatsAppReactionNotes, whatsappSentText } from './whatsapp-context';
-import { bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, templateFor, whatsappProactiveTemplateConfig, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
+import { SEND_UNASKED, bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, templateFor, whatsappProactiveTemplateConfig, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler, executeMcp, McpConnectError, type McpGoogleAuth, type McpGoogleResolution } from '../tools/live/mcp';
 import { connectorsLine, mcpConnections, McpRefusal, MCP_FINISH_PATH, MCP_START_PATH, type ConnectOutcome, type McpConnections } from '../connectors/mcp-connections';
@@ -830,7 +830,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // the caller holds, as every other writer of that transcript does. 'blocked': it certainly did not leave (the gate refused,
   // or the directory does not admit the owner or cannot say); 'unroutable': the surface takes no notice outside a turn;
   // 'held': WhatsApp keeps it until it can deliver. A throw is an outcome nobody can know.
-  private async notifyOwner(surface: ChannelKind, runtime: OwnerRuntime, text: string): Promise<'sent' | 'held' | 'blocked' | 'unroutable'> {
+  // unasked: a notice of Waldo's own (an event), which a closed WhatsApp window is knocked for with the unasked template; a
+  // notice the owner started (a connect they finished) keeps the reply template.
+  private async notifyOwner(surface: ChannelKind, runtime: OwnerRuntime, text: string, unasked = false): Promise<'sent' | 'held' | 'blocked' | 'unroutable'> {
     const route = OUTSIDE_TURN_NOTICE[surface];
     if (route.by === 'none') return 'unroutable';
     if (route.by === 'transcript') {
@@ -839,7 +841,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       await this.appDeliveryFor(found.authority)(text);
       return 'sent';
     }
-    const ack = await runtime.api.sendMessage({ chat_id: runtime.owner, text });
+    const ack = await runtime.api.sendMessage({ chat_id: runtime.owner, text, ...(unasked ? { [SEND_UNASKED]: true } : {}) } as Parameters<typeof runtime.api.sendMessage>[0]);
     if (ack === undefined) return 'blocked';
     if (whatsappHeld(ack)) return 'held';
     if (!route.acknowledged(ack)) throw new Error('notification_unacknowledged');
@@ -2928,7 +2930,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (notify) {
         const url = typeof envelope.url === 'string' ? envelope.url.slice(0, 300) : '';
         const text = `Event - ${summary}${url ? `\n${url}` : ''}`;
-        sent = OUTSIDE_TURN_NOTICE[surface].by === 'transcript' ? await this.serial(() => this.notifyOwner(surface, runtime, text)) : await this.notifyOwner(surface, runtime, text);
+        sent = OUTSIDE_TURN_NOTICE[surface].by === 'transcript' ? await this.serial(() => this.notifyOwner(surface, runtime, text, true)) : await this.notifyOwner(surface, runtime, text, true);
         // Refused at the gate (its own line names why) or by the directory, or no route outside a turn: nothing left the Worker,
         // a definite non-send, not an unknown one.
         if(sent==='blocked'||sent==='unroutable'){
