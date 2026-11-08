@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { appHealthRoutesV1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, healthApiErrorV1Schema, healthDriverPhraseV1Schema, healthIngestV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema } from '../../contracts/src/app/health-ingest';
+import { appHealthRoutesV1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, healthApiErrorV1Schema, healthDriverPhraseV1Schema, healthIngestV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema } from '../../contracts/src/app/health-ingest';
 import { handleApp } from '../src/channels/app-api';
 import { healthScoresView } from '../src/channels/app-health';
 import { md5Hex } from '../src/channels/md5';
@@ -113,12 +113,12 @@ describe('app health routes: signed database calls', () => {
     expect([response.status, await response.json(), rpcs]).toEqual([400, { error: 'invalid_request' }, []]);
   });
   it('takes a WHOOP grant only on the WHOOP notice\'s copy version, and a device grant only on the device copy', async () => {
-    const whoopGrant = { ...grant, request_id: 'consent-grant-w01', source: 'whoop', version: 3 };
-    for (const refused of [{ ...whoopGrant, version: 2 }, { ...grant, version: 3 }]) {
+    const whoopGrant = { ...grant, request_id: 'consent-grant-w01', source: 'whoop', version: HEALTH_PROVIDER_CONSENT_VERSION_V1 };
+    for (const refused of [{ ...whoopGrant, version: 2 }, { ...whoopGrant, version: 3 }, { ...grant, version: HEALTH_PROVIDER_CONSENT_VERSION_V1 }]) {
       expect((await post('/app/v1/health/consents', refused, { 'idempotency-key': refused.request_id })).status, JSON.stringify(refused)).toBe(400);
     }
     expect(rpcs).toEqual([]);
-    rpcResult = { consent: { ...consent, source: 'whoop', version: 3 }, replayed: false, deletion_routed: false };
+    rpcResult = { consent: { ...consent, source: 'whoop', version: HEALTH_PROVIDER_CONSENT_VERSION_V1 }, replayed: false, deletion_routed: false };
     const accepted = await post('/app/v1/health/consents', whoopGrant, { 'idempotency-key': whoopGrant.request_id });
     expect([accepted.status, rpcs.map(call => call.fn)]).toEqual([200, ['health_consent_grant']]);
   });

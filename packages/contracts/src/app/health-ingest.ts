@@ -19,19 +19,20 @@ export const HEALTH_PROVIDER_SOURCES_V1 = ['whoop'] as const;
 export const HEALTH_PROVIDER_REVISION_V1 = 2;
 export const healthSourceV1Schema = z.enum(['apple', 'samsung', 'health_connect', ...HEALTH_PROVIDER_SOURCES_V1]);
 export const isHealthProviderSourceV1 = (source: string): boolean => (HEALTH_PROVIDER_SOURCES_V1 as readonly string[]).includes(source);
-// A cloud provider has its own consent notice, so its grants carry their own copy version. Copy 3 is WHOOP's: it says that
-// Waldo stores the owner's WHOOP data and that an AI model provider, a third party the owner opts into with the
-// model-processing grant, processes it to plan the owner's day, which is the express authorization WHOOP's terms ask for.
+// A cloud provider has its own consent notice, so its grants carry their own copy version. Copy 4 is WHOOP's: Waldo stores
+// the owner's WHOOP data, an AI model provider (a third party the owner opts into with the model-processing grant) processes
+// it to plan the owner's day, and the notice says in words that these two yeses are the owner's express authorization that
+// WHOOP's API terms require. By owner ruling, the owner's own consent when connecting is that authorization.
 // A new grant carries the current version of its source's copy, never another's, so a stored grant shows which notice it
 // rested on. A stored grant keeps the version it was written on, so reading one back accepts every version its source has
-// had (WHOOP's first grants were written on copy 2). The app owns the wording; a changed notice takes the next number.
-export const HEALTH_PROVIDER_CONSENT_VERSION_V1 = 3;
+// had (WHOOP's grants were written on copies 2 and 3 before). The app owns the wording; a changed notice takes the next number.
+export const HEALTH_PROVIDER_CONSENT_VERSION_V1 = 4;
 type HealthSourceV1 = z.infer<typeof healthSourceV1Schema>;
 const CONSENT_COPY_V1: Readonly<Record<HealthSourceV1, Readonly<{ current: number; had: readonly number[] }>>> = {
   apple: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
   samsung: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
   health_connect: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
-  whoop: { current: HEALTH_PROVIDER_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1] },
+  whoop: { current: HEALTH_PROVIDER_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1, 3, HEALTH_PROVIDER_CONSENT_VERSION_V1] },
 };
 export const healthConsentVersionV1 = (source: HealthSourceV1): number => CONSENT_COPY_V1[source].current;
 const currentCopyOfItsSource = (row: { source: HealthSourceV1; version: number }) => row.version === CONSENT_COPY_V1[row.source].current;
