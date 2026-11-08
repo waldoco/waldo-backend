@@ -481,7 +481,7 @@ export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor:
     const chartParts = charts ? drawn.flatMap(({ part }) => part.success ? [part.data] : []) : [];
     const rated = entry.role === 'assistant' ? rating(entry.id) : undefined;
     const used = entry.role === 'assistant' && entry.parentId ? memoryUsed(entry.parentId) : undefined;
-    return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...operation, ...presented.live, ...replies, ...chartParts, ...receipt], channel: entry.surface, parent_id: entry.parentId,
+    return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...operation, ...presented.live, ...(presented.offers ?? []), ...replies, ...chartParts, ...receipt], channel: entry.surface, parent_id: entry.parentId,
       ...(entry.createdAt === undefined ? {} : { created_at: entry.createdAt }), ...(rated === undefined ? {} : { rating: rated }), ...(used === undefined ? {} : { memory_used: [...used] }) };
   });
   return { messages, next_cursor: start > 0 ? `before:${shown[start]!.id}` : null };

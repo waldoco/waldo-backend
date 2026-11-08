@@ -135,6 +135,19 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" serves /app/v1/device/calendar (the owner's phone-calendar consent and each phone's latest snapshot), hands the
   // changes between snapshots to the update judge, and offers query_phone_calendar. Off unless "1".
   DEVICE_CALENDAR?: string;
+  // "1" gives the Brief, the update triage and the intervention look the coverage facts (connected calendars and when each was
+  // read, whether the phone calendar is shared, events per weekday over two weeks) and the judgment of whether that is the
+  // owner's whole day. Off unless "1".
+  CALENDAR_COVERAGE?: string;
+  // "1" lets the update triage and the intervention look offer the one thing that deserves a free window, on a calendar card
+  // (a line answered Do it / Not now / Keep it free when the window opens soon), and with CAPACITY_PLAN and shared health one
+  // grade A or B health move a day. Off unless "1".
+  FREE_WINDOW_OFFERS?: string;
+  // "1" lists Waldo's blocks (from the approval ledger; each carries Waldo's private waldoBlock key on Google) for the update triage, the intervention look and the Brief with how
+  // to look after them (offer to move one a meeting lands on, offer to cancel one no longer needed, leave one the owner
+  // changed alone), lets the Close sometimes ask how a block went, and feeds the blocks' and offers' outcomes to the nightly
+  // capacity note. Off unless "1".
+  BLOCK_LIFECYCLE?: string;
   // "1" with DEVICE_PLACE "1": a place upload that says the phone just arrived home or at the gym (places the owner named on the
   // phone) brings Waldo's next look forward, as a move to another city does. Off unless "1".
   ARRIVAL_LOOK?: string;
