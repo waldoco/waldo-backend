@@ -87,10 +87,10 @@ import { secondMessageEnabled, secondMessages, type OwnerChat } from './second-m
 import { asyncToolsEnabled, lightChatEnabled, lightChatRoles } from './async-tools';
 import { jobOutcomeRowsEnabled } from '../conversation/job-outcome';
 import { oneTimelineEnabled, timelineSeed } from '../conversation/one-timeline';
-import { compactChatTimeline, whatsappTimelineContext, type ChatTimelineHost } from './whatsapp-timeline';
+import { compactChatTimeline, whatsappTimelineContext, type ChatTimelineHost, type TimelineChat } from './whatsapp-timeline';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, TELEGRAM_TURN_DEADLINE_MS, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
-import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, NO_SCHEDULE_WAKE, TASK_JOBS_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armTaskJobsWake, armWhatsappPendingWake, commitTaskJobsWake, holdTaskJobsDue, heldLane, nothingDueBy, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
+import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, COMPACTION_DUE_KEY, armCompactionWake, NO_SCHEDULE_WAKE, TASK_JOBS_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armTaskJobsWake, armWhatsappPendingWake, commitTaskJobsWake, holdTaskJobsDue, heldLane, nothingDueBy, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
 import { APP_COPY_UNTIL, APP_REPLIES, APP_THREAD, SEND_NOW_ONLY, admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
 import { TelegramFinalOutbox, standingOrderFinalId, dayCardFinalId, tookPart, observeSurfaceStatuses, outboxRunNotes, unconfirmedCards, redactMailFollowupEntries, redactCalendarPrepEntries, redactJobReportEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
@@ -529,6 +529,15 @@ const whatsappQuietMs = (value: string | undefined): number => {
 // When an upload last said a workout just ended (WORKOUT_WAKE): held until a recompute hands it to the trigger, and ignored
 // once it is no longer fresh.
 const WORKOUT_NOTED_KEY = 'health_workout_noted_v1';
+
+// What an app chain's compaction needs from the turn that made it due, and the chains a drain asked to compact in a later
+// pass, each with when it was asked.
+type AppCompaction = Pick<AppInboxRecord, 'id' | 'owner' | 'sessionHash' | 'conversationRef' | 'threadRevision'>;
+type CompactionPending = Readonly<{ app: readonly (AppCompaction & Readonly<{ at: number }>)[]; chats: readonly Readonly<{ chat: TimelineChat; at: number }>[] }>;
+const COMPACTION_PENDING_KEY = 'compaction_pending_v1';
+// The wake for pending compactions lands this long after it is armed, so the pass that asked for one finishes without
+// counting it as due, and the next pass takes it.
+const COMPACTION_WAKE_DELAY_MS = 2_000;
 
 export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly ownerBrowser: ReturnType<typeof ownerBrowserRuntime>;
@@ -1139,11 +1148,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // A message already waiting runs first; the compaction after the last of them catches up.
     if (ran && oneTimelineEnabled(this.env) && compactionSettings(this.env).enabled && consoleAuth(this.env) !== null && this.chatsOnTimeline()
       && !(await this.inbox.records()).some(record => record.state === 'admitted')) {
-      // An admitted app, WhatsApp or Telegram message stops it, as it stops the app's own compaction.
-      const abort = new AbortController();
-      this.compactionAbort = abort;
-      try { await compactChatTimeline(this.chatTimelineHost(), 'telegram', this.setup('telegram'), abort, alarmEnd); }
-      finally { if (this.compactionAbort === abort) this.compactionAbort = undefined; }
+      await this.compactTimeline('telegram', alarmEnd);
     }
   }
 
@@ -2432,13 +2437,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     for(const [thread,rows] of untitled){try{await this.titleThread(thread,rows);}catch{console.error(JSON.stringify({hop:'thread_title',ok:false,code:'unavailable'}));}}
     // Compacted last, once every reply is delivered and its run settled. A message already waiting goes first: its own
     // reply asks again.
-    for(const record of compactable.values()){if(this.appInbox.records().some(row=>row.state==='admitted'))break;await this.compactApp(record,alarmEnd);}
+    for(const record of compactable.values()){
+      if(this.compactionWake()){if(compactionSettings(this.env).enabled)await this.askCompaction({app:{id:record.id,owner:record.owner,sessionHash:record.sessionHash,conversationRef:record.conversationRef,threadRevision:record.threadRevision}});continue;}
+      if(this.appInbox.records().some(row=>row.state==='admitted'))break;await this.compactApp(record,alarmEnd);
+    }
     await this.rearmWithSchedule();
   }
   // A chain's compaction job, after the turn that made it due. Its own scope and deadline, the owner admitted again through
   // the session the turn ran under, and the thread's fence; off unless WALDO_COMPACTION=on. Anything that ends it early
   // writes no summary, and the chain's next eligible reply asks again.
-  private async compactApp(record: AppInboxRecord, alarmEnd?: number): Promise<void> {
+  private async compactApp(record: AppCompaction, alarmEnd?: number): Promise<void> {
     if(!compactionSettings(this.env).enabled)return;
     const started=Date.now(),deadline=started+COMPACTION_BUDGET_MS;
     if(alarmEnd!==undefined&&alarmEnd<deadline)return;
@@ -2454,6 +2462,50 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       await runtime.compactChain(trace,context,scope);
     }catch(error){runtime.log({trace,hop:'compaction',ms:Date.now()-started,ok:false,code:error instanceof ClosedRunError?'closed':'unavailable'});}
     finally{clearTimeout(timer);abort.abort();if(this.compactionAbort===abort)this.compactionAbort=undefined;}
+  }
+  // The owner's chain after their turns on a chat surface on the timeline. An app, WhatsApp or Telegram message admitted
+  // meanwhile stops it, as it stops the app's own compaction.
+  private async compactTimeline(chat: TimelineChat, alarmEnd?: number, inline = !this.compactionWake()): Promise<void> {
+    if (!inline) return this.askCompaction({ chat });
+    const abort = new AbortController();
+    this.compactionAbort = abort;
+    try { await compactChatTimeline(this.chatTimelineHost(), chat, this.setup(chat), abort, alarmEnd); }
+    finally { if (this.compactionAbort === abort) this.compactionAbort = undefined; }
+  }
+  // WALDO_COMPACTION_WAKE: a drain that makes chains due leaves their compaction to a later alarm pass of its own, so the pass
+  // that ran the owner's turns never also waits on a summary call.
+  private compactionWake(): boolean { return this.env.WALDO_COMPACTION_WAKE === '1'; }
+  // A chain asked for again replaces its earlier ask, so it waits for the pass after the turn that asked last.
+  private async askCompaction(asked: Readonly<{ app?: AppCompaction; chat?: TimelineChat }>): Promise<void> {
+    const kv = this.ctx.storage.kv, pending = kv.get<CompactionPending>(COMPACTION_PENDING_KEY) ?? { app: [], chats: [] }, at = Date.now();
+    kv.put(COMPACTION_PENDING_KEY, {
+      app: asked.app ? [...pending.app.filter(record => record.conversationRef !== asked.app!.conversationRef), { ...asked.app, at }] : pending.app,
+      chats: asked.chat ? [...pending.chats.filter(entry => entry.chat !== asked.chat), { chat: asked.chat, at }] : pending.chats,
+    } satisfies CompactionPending);
+    await armCompactionWake(this.ctx.storage, at + COMPACTION_WAKE_DELAY_MS);
+  }
+  // The compaction lane runs the chains asked for before this pass began, never one this pass's own drains asked for. A
+  // chain waits, still pending, while an owner message is admitted that would otherwise queue behind its summary call: an app
+  // message for the app chains, a Telegram or WhatsApp message for the owner's chain on the timeline (the Telegram inbox
+  // drains after this lane). Whatever waits re-arms the wake.
+  private async compactDue(passStart: number, alarmEnd?: number): Promise<void> {
+    const kv = this.ctx.storage.kv, pending = kv.get<CompactionPending>(COMPACTION_PENDING_KEY);
+    if (!pending) { kv.delete(COMPACTION_DUE_KEY); return; }
+    const left = { app: pending.app.filter(entry => entry.at >= passStart), chats: pending.chats.filter(entry => entry.at >= passStart) };
+    for (const record of pending.app.filter(entry => entry.at < passStart)) {
+      if (this.appInbox.records().some(row => row.state === 'admitted')) left.app.push(record);
+      else await this.compactApp(record, alarmEnd);
+    }
+    for (const entry of pending.chats.filter(entry => entry.at < passStart)) {
+      if ((await this.inbox.records()).some(record => record.state === 'admitted') || this.whatsappInbox().records().some(record => record.state === 'admitted')) left.chats.push(entry);
+      else await this.compactTimeline(entry.chat, alarmEnd, true);
+    }
+    // Written only once the work is done: a pass cut off before here leaves every request for the next one.
+    kv.delete(COMPACTION_DUE_KEY);
+    if (!left.app.length && !left.chats.length) { kv.delete(COMPACTION_PENDING_KEY); return; }
+    kv.put(COMPACTION_PENDING_KEY, left satisfies CompactionPending);
+    console.log(JSON.stringify({ hop: 'compaction', ok: true, code: 'deferred', detail: `app=${left.app.length} chats=${left.chats.length}` }));
+    await armCompactionWake(this.ctx.storage, Date.now() + COMPACTION_WAKE_DELAY_MS);
   }
   // The model may name a thread once, from its first exchange; see askThreadTitle for when the title lands.
   private async titleThread(thread: string, rows: string): Promise<void> {
@@ -2593,11 +2645,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       ran ||= completed;
     }
     if (ran && oneTimelineEnabled(this.env) && compactionSettings(this.env).enabled && consoleAuth(this.env) !== null && this.chatsOnTimeline()) {
-      // An app message admitted meanwhile stops it, as it stops the app's own compaction.
-      const abort = new AbortController();
-      this.compactionAbort = abort;
-      try { await compactChatTimeline(this.chatTimelineHost(), 'whatsapp', this.setup('whatsapp'), abort, alarmEnd); }
-      finally { if (this.compactionAbort === abort) this.compactionAbort = undefined; }
+      await this.compactTimeline('whatsapp', alarmEnd);
     }
   }
   private chatTimelineHost(): ChatTimelineHost {
@@ -3410,6 +3458,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // Set by a pass whose directory could not answer: the pass mark stays, so its retry wake runs in full.
   private passOwed = false;
   private async alarmWork(held: AlarmLane | null = null, retrying: AlarmLane | null = null, alarmEnd?: number, resumed = false): Promise<void> {
+    const passStart = Date.now();
     await this.browserReady;
     await this.whatsappTurns(alarmEnd);
     if (held === 'pass') return;
@@ -3426,6 +3475,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const entered = await this.serialWithin(alarmEnd, async () => {
       await lane('app', () => this.drainApp(alarmEnd));
       await lane('imessage', () => this.drainIMessage(alarmEnd));
+      await lane('compaction', () => this.compactDue(passStart, alarmEnd));
       if (await this.nothingDue(retrying, resumed)) { console.log(JSON.stringify({ hop: 'alarm', ok: true, code: 'nothing_due' })); await this.rearmEveryWake(); return; }
       // Directory-backed owner alarms require the same physical binding as owner ingress.
       // Keep retained work and transport recovery wakes; do not boot provider work on an orphan.

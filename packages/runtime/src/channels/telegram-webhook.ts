@@ -31,6 +31,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_STEPPED_WINDOW?: string;
   // '1' caps standing orders and quests in the prompt and clears a turn's tool results down to the latest three past ~30k tokens.
   WALDO_CONTEXT_CAPS?: string;
+  // '1' runs the compaction a drain makes due in a later alarm pass of its own, never in the pass that ran the owner's turns.
+  WALDO_COMPACTION_WAKE?: string;
   WALDO_ENVIRONMENT?: string;
   WALDO_OWNER_DO_NAMESPACE?: string;
   WALDO_RELEASE?: string;
