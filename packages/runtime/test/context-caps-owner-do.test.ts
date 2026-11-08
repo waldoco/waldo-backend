@@ -1,5 +1,5 @@
-// WALDO_CONTEXT_CAPS through a real owner object: a WhatsApp turn's system prompt carries the owner's standing orders up to
-// the cap and names how many more list_standing_orders reads; with the switch off it carries every one, as before.
+// WALDO_CONTEXT_CAPS through a real owner object: a WhatsApp turn's system prompt carries the owner's every-turn orders and
+// scheduled ones up to the cap, and counts the scheduled ones left out; with the switch off it carries every one, as before.
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
@@ -41,7 +41,9 @@ it.each([['1', true], ['0', false]] as const)('WALDO_CONTEXT_CAPS=%s: the turn\'
     const net = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ messages: [{ id: 'wamid.out' }] }));
     let n = 0;
     const orders = standingOrderBook(state.storage.sql, { schedule: async () => undefined, cancel: async () => undefined } as never, { timezone: 'UTC', now: () => new Date() } as never, () => `so${++n}`);
-    for (let index = 0; index < 12; index += 1) await orders.set({ scope: `Rule ${index}: ${'keep my mornings free of calls before ten unless I say otherwise. '.repeat(6)}`, trigger: 'every_turn', gate: 'act_and_report', escalation: 'message_owner' });
+    for (let index = 0; index < 12; index += 1) await orders.set(index < 2
+      ? { scope: `Rule ${index}: ${'keep my mornings free of calls before ten unless I say otherwise. '.repeat(6)}`, trigger: 'every_turn', gate: 'confirm_first', escalation: 'message_owner' }
+      : { scope: `Digest ${index}: ${'sum up what moved on my plate and what is still open. '.repeat(6)}`, trigger: 'daily', at: '21:00', gate: 'act_and_report', escalation: 'message_owner' });
     const instance = new OwnerDO(state, { ...env, WALDO_CONTEXT_CAPS: caps, OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' });
     try {
       await deliver(instance, doName, 'What do my rules say about mornings?');
@@ -49,10 +51,11 @@ it.each([['1', true], ['0', false]] as const)('WALDO_CONTEXT_CAPS=%s: the turn\'
       const shown = system.split('\n').filter((line) => /^- \[order:so\d+\]/.test(line));
       if (capped) {
         expect(shown.join('\n').length).toBeLessThanOrEqual(STANDING_ORDERS_PROMPT_CHARS);
-        expect(system).toContain(`${12 - shown.length} more standing orders are not shown here; list_standing_orders reads every one.`);
+        expect(shown.slice(0, 2).map((line) => line.slice(3, line.indexOf(']')))).toEqual(['order:so1', 'order:so2']);
+        expect(system).toContain(`${12 - shown.length} more scheduled standing orders are not shown here`);
       } else {
         expect(shown).toHaveLength(12);
-        expect(system).not.toContain('more standing orders are not shown');
+        expect(system).not.toContain('more scheduled standing orders');
       }
     } finally { net.mockRestore(); await state.storage.deleteAlarm(); }
   });

@@ -12,28 +12,37 @@ const book = (orders: readonly StandingOrder[]) => ({ list: () => orders }) as u
 
 describe('the standing orders every turn reads', () => {
   const orders = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => order(n, n % 3 === 0 ? 'every_turn' : 'daily'));
+  const ids = (prompt: string) => prompt.split('\n').filter((line) => line.startsWith('- [')).map((line) => line.slice(3, line.indexOf(']')));
 
-  it('without a cap lists every order, as before', () => {
-    const prompt = standingOrdersPrompt(book(orders));
-    for (const { id } of orders) expect(prompt).toContain(`[${id}]`);
+  it('without a cap, or within it, lists every order in its stored order', () => {
+    expect(ids(standingOrdersPrompt(book(orders)))).toEqual(orders.map(({ id }) => id));
+    const few = orders.slice(0, 3);
+    expect(standingOrdersPrompt(book(few), STANDING_ORDERS_PROMPT_CHARS)).toBe(standingOrdersPrompt(book(few)));
   });
 
-  it('with a cap fits within it, every-turn orders first, and names how many more list_standing_orders reads', () => {
+  it('past the cap keeps every order that applies every turn, fills the rest with scheduled ones, and counts the others', () => {
     const prompt = standingOrdersPrompt(book(orders), STANDING_ORDERS_PROMPT_CHARS);
-    const lines = prompt.split('\n').filter((line) => line.startsWith('- ['));
-    expect(lines.slice(0, 3).map((line) => line.slice(3, line.indexOf(']')))).toEqual(['so3', 'so6', 'so9']);
-    expect(lines.join('\n').length).toBeLessThanOrEqual(STANDING_ORDERS_PROMPT_CHARS);
-    expect(lines.length).toBeLessThan(orders.length);
-    expect(prompt).toContain(`${orders.length - lines.length} more standing orders are not shown here; list_standing_orders reads every one.`);
+    const shown = ids(prompt);
+    expect(shown.slice(0, 3)).toEqual(['so3', 'so6', 'so9']);
+    expect(shown.length).toBeLessThan(orders.length);
+    expect(prompt.split('\n').filter((line) => line.startsWith('- [')).join('\n').length).toBeLessThanOrEqual(STANDING_ORDERS_PROMPT_CHARS);
+    expect(prompt).toContain(`${orders.length - shown.length} more scheduled standing orders are not shown here; each runs with its own instructions when it fires, and in a chat with the owner list_standing_orders reads every one.`);
   });
 
-  it('a single order longer than the cap is still shown', () => {
-    const long = { ...order(1, 'every_turn'), scope: 'x'.repeat(STANDING_ORDERS_PROMPT_CHARS + 100) };
-    expect(standingOrdersPrompt(book([long]), STANDING_ORDERS_PROMPT_CHARS)).toContain('[so1]');
+  it('every-turn orders longer than the cap all still show, with no scheduled order beside them', () => {
+    const long = [1, 2].map((n) => ({ ...order(n, 'every_turn'), scope: 'x'.repeat(STANDING_ORDERS_PROMPT_CHARS) }));
+    const prompt = standingOrdersPrompt(book([...long, order(3, 'daily')]), STANDING_ORDERS_PROMPT_CHARS);
+    expect(ids(prompt)).toEqual(['so1', 'so2']);
+    expect(prompt).toContain('1 more scheduled standing order is not shown here');
   });
 
-  it('under the cap is unchanged', () => {
-    expect(standingOrdersPrompt(book(orders.slice(0, 2)), STANDING_ORDERS_PROMPT_CHARS)).toBe(standingOrdersPrompt(book(orders.slice(0, 2))));
+  it('a scheduled order that ends exactly at the cap shows', () => {
+    const first = order(1, 'every_turn');
+    const firstLine = standingOrdersPrompt(book([first])).split('\n')[1]!;
+    const filler = order(2, 'daily');
+    const fillerLine = standingOrdersPrompt(book([filler])).split('\n')[1]!;
+    const cap = firstLine.length + 1 + fillerLine.length;
+    expect(ids(standingOrdersPrompt(book([first, filler, order(3, 'daily')]), cap))).toEqual(['so1', 'so2']);
   });
 });
 
