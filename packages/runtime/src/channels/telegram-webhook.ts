@@ -86,6 +86,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WAKE_BRIEF?: string;
   WAKE_BRIEF_FRESH_MIN?: string;
   WAKE_BRIEF_TURNS_PER_DAY?: string;
+  // WORKOUT_WAKE: an upload with a workout that just ended wakes the health trigger once that day, which may propose one change
+  // to the rest of the day around recovery, or none. Off unless "1"; the owner's health proposals preference still governs it.
+  WORKOUT_WAKE?: string;
   // "1" has the morning Brief end with the rest of the day laid out in time blocks after its paragraph. Off unless "1".
   BRIEF_DAY_PLAN?: string;
   // "1" offers propose_calendar_plan to owner turns and the planning Brief: a day plan's new blocks on one card, added in one
@@ -115,9 +118,15 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   MEDICATIONS?: string;
   // "1" serves /app/v1/screen-time and offers get_screen_time, which reads the daily summaries the owner's phone sent. Off unless "1".
   SCREEN_TIME?: string;
+  // '1': memory keeps people (who claims are about, rings, dates that come round); read_memory reads them and forget_memory
+  // forgets one person. Off unless '1'.
+  PEOPLE_MAP?: string;
   // "1" serves /app/v1/device-context (the owner's place consent and the latest coarse place per phone) and offers
   // get_device_context, which reads each phone's zone and city. Off unless "1".
   DEVICE_PLACE?: string;
+  // "1" with DEVICE_PLACE "1": a place upload that says the phone just arrived home or at the gym (places the owner named on the
+  // phone) brings Waldo's next look forward, as a move to another city does. Off unless "1".
+  ARRIVAL_LOOK?: string;
   // "1" with DEVICE_PLACE "1" and the four WeatherKit secrets set offers get_weather: today's and tomorrow's weather where the
   // owner's phones last were, from WeatherKit asked with the cell's centre only. Off unless "1".
   DEVICE_WEATHER?: string;
@@ -184,6 +193,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_ASYNC_TOOLS?: string;
   // "1": a background job's request row keeps only a key, never the job's prompt (conversation/job-outcome.ts).
   WALDO_JOB_OUTCOME_ROWS?: string;
+  // "1": the owner's WhatsApp turns read and write the owner's own chain, the one their app chat uses (conversation/one-timeline.ts).
+  WALDO_ONE_TIMELINE?: string;
   // "1": the owner's own reply takes a light step that answers quick chat or hands the turn to the strong role, and every task
   // worker runs on the chat model (async-tools.ts).
   WALDO_LIGHT_CHAT?: string;

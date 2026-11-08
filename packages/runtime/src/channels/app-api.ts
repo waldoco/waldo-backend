@@ -6,7 +6,7 @@ import type { AppApprovalCards } from './approvals';
 import { appQuickRepliesPart } from './surfaces/app';
 import { consoleAuth, sessionFamily, signedInRecently, type ConsoleAuth } from '../identity/console-auth';
 import { readOwnerDemand } from '../health/calendar-demand-route';
-import { notifyOwnerHealthSamples, notifyOwnerPlaceMoved, notifyOwnerZoneChange } from '../health/zone-change-route';
+import { notifyOwnerHealthSamples, notifyOwnerPlaceArrived, notifyOwnerPlaceMoved, notifyOwnerZoneChange, type ArrivalPlace } from '../health/zone-change-route';
 import { wakeFreshMs } from '../health/wake-notice';
 import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { signedRpc } from '../identity/owner-directory';
@@ -40,7 +40,7 @@ export const APP_DEVICES_PATH = `${APP_PATH}/devices`;
 const MAX_BODY_BYTES = 8192;
 
 // APP_ID_TOKEN_SIGNIN "1" serves Sign in with Apple and Google; otherwise the route answers 404 and the app offers the email code.
-type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string; DEVICE_PLACE?: string; WAKE_BRIEF?: string; WAKE_BRIEF_FRESH_MIN?: string; APP_CHAT_ATTACHMENTS?: string }>;
+type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string; DEVICE_PLACE?: string; WAKE_BRIEF?: string; WAKE_BRIEF_FRESH_MIN?: string; APP_CHAT_ATTACHMENTS?: string; WORKOUT_WAKE?: string; ARRIVAL_LOOK?: string }>;
 
 const UPLOAD_READ_MS = 60_000;
 // Errors before authentication share one shape so the app cannot learn who is invited.
@@ -252,9 +252,10 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     if (url.pathname === APP_PROVIDERS_PATH || url.pathname.startsWith(`${APP_PROVIDERS_PATH}/`)) return handleAppHealthProviders({ request, url, doName, owners, secret, mayConnect: async () => (await import('./console-step-up')).APP_STEP_UP_ROUTES[`${APP_PROVIDERS_PATH}/connect`]?.gated === false || await signedIn() });
     return handleAppHealth({ request, url, doName, rpc: signedRpc(env), readBody: readBoundedBody, defer, compute: dailyScoresFor(env.HEALTH_PROVISIONAL_SCORES), trainingLoad: env.HEALTH_TRAINING_LOAD === '1', coaching: env.HEALTH_COACHING === '1',
       ...(env.WAKE_BRIEF === '1' ? { wakeFreshMs: wakeFreshMs(env.WAKE_BRIEF_FRESH_MIN) } : {}),
+      ...(env.WORKOUT_WAKE === '1' ? { workoutWake: true } : {}),
       ...(secret ? { readDemand: (range: { from: string; to: string; timezone: string }) => readOwnerDemand(owners, secret, doName, range),
         notifyZoneChange: (day: string) => notifyOwnerZoneChange(owners, secret, doName, day),
-        notifySamples: (woke?: boolean) => notifyOwnerHealthSamples(owners, secret, doName, 'readings', woke),
+        notifySamples: (woke?: boolean, workout?: boolean) => notifyOwnerHealthSamples(owners, secret, doName, 'readings', woke, workout),
         notifySettings: () => notifyOwnerHealthSamples(owners, secret, doName, 'settings') } : {}) });
   }
   // Screen time spends its own per-owner budget. Off, the routes are not there.
@@ -268,7 +269,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     if (env.DEVICE_PLACE !== '1') return fail(404);
     try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-device-context:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
     const secret = env.WALDO_ROUTER_HMAC_SECRET;
-    return handleAppDeviceContext({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody, ...(secret ? { moved: () => notifyOwnerPlaceMoved(owners, secret, who.doName) } : {}), ...(defer ? { defer } : {}) });
+    return handleAppDeviceContext({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody, ...(secret ? { moved: () => notifyOwnerPlaceMoved(owners, secret, who.doName) } : {}), ...(secret && env.ARRIVAL_LOOK === '1' ? { arrived: (place: ArrivalPlace) => notifyOwnerPlaceArrived(owners, secret, who.doName, place) } : {}), ...(defer ? { defer } : {}) });
   }
   // A chat attachment spends its own per-owner budget and is bounded at the attachment cap before it is read; a voice note or
   // photo comes from a phone, so the read may take up to a minute. Off, the route is not there.

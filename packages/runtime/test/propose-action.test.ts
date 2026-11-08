@@ -565,7 +565,7 @@ describe('taint goes to a card', () => {
         expect(await dispatchTool({ id: 'c1', name: 'forget_memory', args }, tainted({ memoryTurn } as never), { handlers })).toMatchObject({ ok: false, error_code: 'taint_needs_approval' });
       }
       const propose = proposeActionHandler(desk, { replayable: (tool) => handlers.some((h) => h.name === tool) });
-      for (const args of [byTopic, bySpan, { claim_ids: [1], topic: 'tea', scope_note: 'tea' }]) {
+      for (const args of [byTopic, bySpan, { claim_ids: [1], topic: 'tea', scope_note: 'tea' }, { claim_ids: [1], person: 1, scope_note: 'tea' }, { person: 1, scope_note: 'tea' }]) {
         expect(await propose.handle({ tool: 'forget_memory', args, reasoning: 'r' } as never, tainted({ toolCallId: 'p1' }))).toMatchObject({
           ok: false, code: 'rejected', error: expect.stringMatching(/read_memory[\s\S]*claim_ids/),
         });
