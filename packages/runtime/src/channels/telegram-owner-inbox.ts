@@ -1,3 +1,4 @@
+import type { AbortedTurn } from '../observability/turn-aborted';
 import type { OwnerTraceIdentity } from '../observability/owner-trace-identity';
 // An inbox record is admission evidence, not evidence that an effect completed.
 export const OWNER_INBOX_KEY = 'telegram_owner_inbox_v1';
@@ -113,14 +114,17 @@ export class TelegramOwnerInbox {
       await this.persist(txn, rows, this.due(rows)); return true;
     });
   }
-  async recover(liveAttempts: ReadonlySet<string>): Promise<void> {
-    await this.storage.transaction(async txn => {
+  // Returns each turn this cut off, with the last state it persisted.
+  async recover(liveAttempts: ReadonlySet<string>): Promise<AbortedTurn[]> {
+    return this.storage.transaction(async txn => {
+      const aborted: AbortedTurn[] = [];
       const rows = ((await txn.get<InboxRecord[]>(OWNER_INBOX_KEY)) ?? []).filter(r => r.state === 'admitted' || r.state === 'claimed' || r.state === 'awaiting_delivery' || r.state === 'consumed' || r.state === 'quarantined' || r.admittedAt + RETENTION_MS > this.now());
       for (const row of rows) if ((row.state === 'claimed' || row.state === 'consumed') && (!row.attempt || !liveAttempts.has(row.attempt))) {
         if (row.state === 'claimed' && row.control?.kind === 'steer' && row.closedAt === undefined) ordinaryAdmission(row);
-        else { row.state = 'quarantined'; row.reason = 'recovered_uncertain'; row.body = ''; }
+        else { aborted.push({ updateId: row.updateId, phase: row.state }); row.state = 'quarantined'; row.reason = 'recovered_uncertain'; row.body = ''; }
       }
       await this.persist(txn, rows, this.due(rows));
+      return aborted;
     });
   }
 }

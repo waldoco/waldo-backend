@@ -316,3 +316,31 @@ describe('Connect iMessage from the app', () => {
     expect((await handleApp(authed(), withAddress(), fakeAuth({ issueProviderLinkCode: async () => null } as never).auth))!.status).toBe(503);
   });
 });
+
+describe('a chat attachment upload at the Worker', () => {
+  const upload = (headers: Record<string, string>) => new Request('https://w.test/app/v1/chat/uploads', {
+    method: 'POST', body: new Uint8Array(1024).fill(7), headers: { authorization: `Bearer ${CREDENTIAL}`, ...headers } });
+  const on = () => ({ ...(env() as object), APP_CHAT_ATTACHMENTS: '1' }) as never;
+
+  it('refuses an upload its headers already rule out without reading its bytes or reaching the owner object', async () => {
+    for (const [headers, status, error] of [
+      [{ 'content-type': 'image/png', 'x-waldo-upload-kind': 'sticker' }, 400, 'invalid_kind'],
+      [{ 'content-type': 'image/png' }, 400, 'invalid_kind'],
+      [{ 'content-type': 'image/png', 'x-waldo-upload-kind': 'voice' }, 415, 'unsupported_type'],
+      [{ 'content-type': 'application/pdf', 'x-waldo-upload-kind': 'file', 'x-waldo-upload-name': '%E0%A4%A' }, 400, 'invalid_name'],
+      [{ 'content-type': 'application/pdf', 'x-waldo-upload-kind': 'file' }, 400, 'invalid_name'],
+    ] as const) {
+      forwards.length = 0;
+      const request = upload(headers);
+      const response = (await handleApp(request, on(), fakeAuth().auth))!;
+      expect([error, response.status, await response.json(), request.bodyUsed, forwards.length]).toEqual([error, status, { error }, false, 0]);
+    }
+  });
+
+  it('forwards an upload whose headers pass to the owner object, with its kind and name', async () => {
+    forwards.length = 0;
+    const response = (await handleApp(upload({ 'content-type': 'application/pdf', 'x-waldo-upload-kind': 'file', 'x-waldo-upload-name': 'lease.pdf' }), on(), fakeAuth().auth))!;
+    expect(await response.json()).toEqual({ forwarded: true });
+    expect([forwards[0]!.headers.get('x-waldo-upload-kind'), forwards[0]!.headers.get('x-waldo-upload-name'), (await forwards[0]!.arrayBuffer()).byteLength]).toEqual(['file', 'lease.pdf', 1024]);
+  });
+});

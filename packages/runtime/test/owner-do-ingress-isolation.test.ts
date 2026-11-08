@@ -199,6 +199,8 @@ it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:00.000Z', '2026-10-04T18:
     const runtime = instance as unknown as { setup(channel: string): { ready: Promise<void> }; serial(work: () => Promise<void>): Promise<void> };
     await runtime.setup('telegram').ready;
     await runtime.serial(async () => undefined);
+    // Each clock case reuses this owner object and its trace table.
+    state.storage.sql.exec('DELETE FROM trace_log WHERE trace = ?', `tg-${updateId}`);
     const inbox = new TelegramOwnerInbox(state.storage, persistInboxWake);
     await inbox.admit({ bot: 'hermetic-test-bot-token', subject: String(subject), doName: route(subject).doName }, updateId, 'PRIVATE_INTERRUPTED_REQUEST');
     await inbox.claim(`hermetic-test-bot-token:telegram:${updateId}`, 'interrupted-attempt', 'interrupted-run', Date.now() + 150_000);
@@ -222,6 +224,7 @@ it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:00.000Z', '2026-10-04T18:
     expect(notices[0]!.expiresAt).toBeUndefined();
     expect((await new TelegramOwnerInbox(state.storage, persistInboxWake).records()).find(row => row.updateId === updateId))
       .toMatchObject({ state: 'quarantined', reason: 'recovered_uncertain', body: '', outcomeNoticeQueued: true });
+    expect(state.storage.sql.exec("SELECT trace, ok, note FROM trace_log WHERE hop = 'turn_aborted'").toArray()).toEqual([{ trace: `tg-${updateId}`, ok: 0, note: 'claimed' }]);
     await armAlarm(state.storage, vi.getRealSystemTime() + 3_600_000);
   });
   await evictDurableObject(stub);
@@ -232,6 +235,7 @@ it.each(['2026-10-04T12:00:00.000Z', '2026-10-04T18:29:00.000Z', '2026-10-04T18:
     await instance.alarm(); await instance.alarm();
     expect(outbox.filter(item => item.method === 'sendMessage' && String(item.body.text).includes(INTERRUPTED_NOTICES.uncertain))).toHaveLength(1);
     expect(state.storage.kv.get<number>('interruption-fixture-effect-count')).toBe(1);
+    expect(state.storage.sql.exec("SELECT trace, ok, note FROM trace_log WHERE hop = 'turn_aborted'").toArray()).toHaveLength(1);
     // With scheduled behaviors off nothing else calls the model, so any call after the crash cut is a replay.
     expect(modelInputs.slice(callsBefore).map(describeCall), worldNote(state)).toEqual([]);
     expect(await new TelegramOwnerInbox(state.storage, persistInboxWake).claim(`hermetic-test-bot-token:telegram:${updateId}`, 'retry', 'retry-run', Date.now() + 150_000)).toBeNull();
