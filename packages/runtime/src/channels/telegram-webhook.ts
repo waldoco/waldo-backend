@@ -124,9 +124,20 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   MEDICATIONS?: string;
   // "1" serves /app/v1/screen-time and offers get_screen_time, which reads the daily summaries the owner's phone sent. Off unless "1".
   SCREEN_TIME?: string;
+  // '1': app owner turns are offered show_health_chart, and app chat reads at chat=11 draw health charts from a live read.
+  HEALTH_CHARTS?: string;
+  // '1': memory keeps people (who claims are about, rings, dates that come round); read_memory reads them and forget_memory
+  // forgets one person. Off unless '1'.
+  PEOPLE_MAP?: string;
   // "1" serves /app/v1/device-context (the owner's place consent and the latest coarse place per phone) and offers
   // get_device_context, which reads each phone's zone and city. Off unless "1".
   DEVICE_PLACE?: string;
+  // "1" serves /app/v1/device/calendar (the owner's phone-calendar consent and each phone's latest snapshot), hands the
+  // changes between snapshots to the update judge, and offers query_phone_calendar. Off unless "1".
+  DEVICE_CALENDAR?: string;
+  // "1" with DEVICE_PLACE "1": a place upload that says the phone just arrived home or at the gym (places the owner named on the
+  // phone) brings Waldo's next look forward, as a move to another city does. Off unless "1".
+  ARRIVAL_LOOK?: string;
   // "1" with DEVICE_PLACE "1" and the four WeatherKit secrets set offers get_weather: today's and tomorrow's weather where the
   // owner's phones last were, from WeatherKit asked with the cell's centre only. Off unless "1".
   DEVICE_WEATHER?: string;

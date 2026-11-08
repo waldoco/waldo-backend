@@ -27,7 +27,9 @@ export const changeLines = (changes: readonly Change[]): string => changes.map((
 export type ChangeBefore = Readonly<{ start: string; end: string; all_day: boolean; title_changed: boolean; attendees?: number }>;
 // ref: the event or message a reader opens the change by.
 // read, archived, starred: what the owner did with a mail already seen. more: how many new mails one read left unopened.
-export type Change = Readonly<{ source: 'calendar' | 'mail'; kind: 'added' | 'changed' | 'cancelled' | 'new' | MailLabelChange['change'] | 'more'; detail: string; source_message_id?: string; source_ref?: string; ref?: string; before?: ChangeBefore }>;
+// uid: a calendar event's iCal UID, kept beside the detail (never shown), so a phone change and a Google change to the same
+// meeting in one batch are said once.
+export type Change = Readonly<{ source: 'calendar' | 'mail'; kind: 'added' | 'changed' | 'cancelled' | 'new' | MailLabelChange['change'] | 'more'; detail: string; source_message_id?: string; source_ref?: string; ref?: string; before?: ChangeBefore; uid?: string }>;
 // What the owner did with a mail is context for a judgment, never the reason for one.
 export const CONTEXT_KINDS: readonly Change['kind'][] = ['read', 'archived', 'starred'];
 // A cursor that moved between the read and its write: the write is rolled back and the next tick reads again.
@@ -225,7 +227,7 @@ export type UpdateBook = ReturnType<typeof updateBook>;
 const toChange = (item: CalendarChange, since: number): Change => {
   const { status, created, ...event } = item;
   const kind = status === 'cancelled' ? 'cancelled' : Date.parse(created) >= since ? 'added' : 'changed';
-  return { source: 'calendar', kind, detail: JSON.stringify(calendarPromptProjection(event)), ref: `event:${event.id}` };
+  return { source: 'calendar', kind, detail: JSON.stringify(calendarPromptProjection(event)), ref: `event:${event.id}`, ...(event.ical_uid ? { uid: event.ical_uid } : {}) };
 };
 
 // Whether a change can move the owner's load on one local day: a calendar event that overlaps that day, or one Google

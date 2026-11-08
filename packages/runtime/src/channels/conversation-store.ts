@@ -1,5 +1,5 @@
 import type { RunEffectScope } from './run-effect-scope';
-import { literalTextRedactor, redactConversationEntry, type ConversationEntry, type ConversationTree } from '@waldo/contracts';
+import { conversationChartTexts, literalTextRedactor, redactConversationEntry, type ConversationEntry, type ConversationTree } from '@waldo/contracts';
 import { redactSecretUrls } from './egress-guard';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import { forgetSourceBatch, type ForgetSource, type ForgetBatch } from '../memory/selective-forget';
@@ -168,7 +168,7 @@ const conversationSourcesFromRows = (legacy: Map<string, ConversationEntry>, can
   }
   return { sources, incomplete };
 };
-const entryTexts = (entry: ConversationEntry): readonly string[] => [entry.modelPayload, entry.appPayload, ...(entry.modelProjection.mode === 'replace' ? [entry.modelProjection.payload] : []), ...(entry.quickReplies ?? [])];
+const entryTexts = (entry: ConversationEntry): readonly string[] => [entry.modelPayload, entry.appPayload, ...(entry.modelProjection.mode === 'replace' ? [entry.modelProjection.payload] : []), ...(entry.quickReplies ?? []), ...(entry.charts ?? []).flatMap(conversationChartTexts)];
 
 // The original rows a compaction row covers: the chain from to_id back to from_id, inclusive, by the parent links a turn
 // reads, which are the links the span was cut from. A walk that never reaches from_id has not seen the whole span: null.
