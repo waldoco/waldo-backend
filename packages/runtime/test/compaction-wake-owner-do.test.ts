@@ -237,6 +237,8 @@ it('with NEXT_DUE_ALARM on, the compaction wake still runs its lane', async () =
     await seed(state);
     await turn(owner, state, name, 'What is on today?');
     expect(compactions()).toHaveLength(0);
+    // The release's full pass is behind it, so this pass is one that runs only what is due.
+    state.storage.kv.put('owner_alarm_full_release_v1', env.WALDO_RELEASE ?? 'unknown');
     await owner.alarm();
     await drained(owner);
     expect(compactions()).toHaveLength(1);
