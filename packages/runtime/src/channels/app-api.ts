@@ -28,6 +28,8 @@ import { publicOrigin, type PublicOriginEnv } from '../connectors/public-origin'
 import { APP_RATING_SUFFIX } from './app-rating';
 import { openSignupCaps, openSignupFor, type OpenSignupEnv } from '../identity/open-signup';
 import { markOpenOwner } from '../identity/open-owner-hold';
+import { APP_DEVICE_CALENDAR_PATH } from './device-calendar';
+import { DEVICE_CALENDAR_MAX_REQUEST_BYTES_V1 } from '../../../contracts/src/app/device-context';
 
 export const APP_PATH = '/app/v1';
 const APP_IMESSAGE_LINK_CODE_PATH = `${APP_PATH}/channels/imessage/link-code`;
@@ -42,7 +44,7 @@ export const APP_DEVICES_PATH = `${APP_PATH}/devices`;
 const MAX_BODY_BYTES = 8192;
 
 // APP_ID_TOKEN_SIGNIN "1" serves Sign in with Apple and Google; otherwise the route answers 404 and the app offers the email code.
-type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string; DEVICE_PLACE?: string; WAKE_BRIEF?: string; WAKE_BRIEF_FRESH_MIN?: string; APP_CHAT_ATTACHMENTS?: string; WORKOUT_WAKE?: string; ARRIVAL_LOOK?: string }>;
+type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string; DEVICE_PLACE?: string; DEVICE_CALENDAR?: string; WAKE_BRIEF?: string; WAKE_BRIEF_FRESH_MIN?: string; APP_CHAT_ATTACHMENTS?: string; WORKOUT_WAKE?: string; ARRIVAL_LOOK?: string }>;
 
 const UPLOAD_READ_MS = 60_000;
 // Errors before authentication share one shape so the app cannot learn who is invited.
@@ -290,6 +292,25 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
       'content-type': request.headers.get('content-type') ?? '', [APP_CHAT_UPLOAD_KIND_HEADER]: request.headers.get(APP_CHAT_UPLOAD_KIND_HEADER) ?? '',
       ...(request.headers.has(APP_CHAT_UPLOAD_NAME_HEADER) ? { [APP_CHAT_UPLOAD_NAME_HEADER]: request.headers.get(APP_CHAT_UPLOAD_NAME_HEADER)! } : {}),
     } });
+    try { return await owners.get(owners.idFromName(who.doName)).fetch(forwarded); } catch { return fail(503); }
+  }
+  // The phone's calendar spends its own per-owner budget and is answered by the owner's object, which holds its consent and
+  // events. Off, the routes are not there.
+  if (url.pathname === APP_DEVICE_CALENDAR_PATH || url.pathname.startsWith(`${APP_DEVICE_CALENDAR_PATH}/`)) {
+    if (env.DEVICE_CALENDAR !== '1') return fail(404);
+    if (!['GET', 'POST'].includes(request.method)) return fail(405);
+    try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-device-calendar:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
+    const length = request.headers.get('content-length');
+    if (length && (!/^\d+$/.test(length) || Number(length) > DEVICE_CALENDAR_MAX_REQUEST_BYTES_V1)) return fail(413);
+    const body = request.method === 'POST' ? await readBoundedBody(request, DEVICE_CALENDAR_MAX_REQUEST_BYTES_V1) : new Uint8Array();
+    if (!body) return fail(413);
+    const key = request.headers.get('idempotency-key');
+    const forwarded = new Request(`https://telegram-owner${url.pathname}`, {
+      method: request.method,
+      headers: { 'x-waldo-do-name': who.doName, 'x-waldo-app-session-hash': await linkCodeHash(sessionIdOf(who.credential)!), 'content-type': request.headers.get('content-type') ?? '',
+        ...(key === null ? {} : { 'idempotency-key': key }) },
+      ...(request.method === 'POST' ? { body } : {}),
+    });
     try { return await owners.get(owners.idFromName(who.doName)).fetch(forwarded); } catch { return fail(503); }
   }
   // A stop is a control on a message already paid for, so it counts as a read, not a send. Anything but a POST already does.

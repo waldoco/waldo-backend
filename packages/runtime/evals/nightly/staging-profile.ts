@@ -98,6 +98,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   PEOPLE_MAP: gap('the trial memory holds no people; test/people-map.test.ts measures the store, the reads and forgetting a person; staging has it on'),
   SCREEN_TIME: gap('the world serves no screen time and the trial offers no get_screen_time; staging has it on'),
   DEVICE_PLACE: gap('the world serves no device place and the trial offers no get_device_context; staging has it on'),
+  DEVICE_CALENDAR: gap('the world serves no phone calendar and the trial offers no query_phone_calendar; staging has it on'),
   DEVICE_WEATHER: gap('the world serves no weather and the trial offers no get_weather; staging has it on once the WeatherKit secrets are set'),
   ARRIVAL_LOOK: gap('the world serves no device place, so no phone arrives anywhere; staging has it on'),
   ONBOARDING_LOOKUP: gap('no trial runs onboarding or the background owner look-up; staging has it on'),

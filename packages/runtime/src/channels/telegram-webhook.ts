@@ -126,6 +126,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" serves /app/v1/device-context (the owner's place consent and the latest coarse place per phone) and offers
   // get_device_context, which reads each phone's zone and city. Off unless "1".
   DEVICE_PLACE?: string;
+  // "1" serves /app/v1/device/calendar (the owner's phone-calendar consent and each phone's latest snapshot), hands the
+  // changes between snapshots to the update judge, and offers query_phone_calendar. Off unless "1".
+  DEVICE_CALENDAR?: string;
   // "1" with DEVICE_PLACE "1": a place upload that says the phone just arrived home or at the gym (places the owner named on the
   // phone) brings Waldo's next look forward, as a move to another city does. Off unless "1".
   ARRIVAL_LOOK?: string;
