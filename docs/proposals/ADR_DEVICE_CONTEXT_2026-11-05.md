@@ -202,7 +202,7 @@ trigger type, no new interrupt channel, and the owner's limits unchanged.
 - **What travels.**
   - A place upload may carry `arrived: "home" | "gym"` beside its reading. The contract allows those two words and nothing else.
   - The database answers it back only for a reading observed within the hour that is not superseded, while the owner lets
-    Waldo's model read place (`model_processing`). It stores it nowhere: not in the place row and not in the receipt.
+    Waldo's model read place (`model_processing`). Supabase stores it nowhere: not in the place row and not in the receipt.
   - The Worker strips it from the app's receipt, as it does `moved`. On an upload that was not a replay, with `ARRIVAL_LOOK` on,
     it sends the owner's object a signed notice carrying the word alone. A failed notice costs the upload nothing.
 - **What it does.**
@@ -214,6 +214,14 @@ trigger type, no new interrupt channel, and the owner's limits unchanged.
   - It reads place, calendar, health and memory as any look does. It decides `none`, `say` or `act`, under every limit of the
     look: consent to unasked messages, the heartbeat preference, quiet hours, the owner's day, the budget, the gap, and one look
     per owner-local hour.
+- **Where the cause word is kept.** On the owner's object only, the word `arrived_home` or `arrived_gym` (never a position, an
+  arrival time or a label the owner chose) is kept as the look's cause:
+  - in the look's one schedule row (`payload_refs.cause_id`), until the look runs or is armed again;
+  - in that look's job row (`CAUSES` in `channels/interventions.ts`), which leaves with the other settled machine jobs: only the
+    newest `MACHINE_SETTLED_KEPT` and any settled within `MACHINE_SETTLED_KEPT_MS` (48 hours) stay;
+  - in the owner's turn log when a pull is held within the cadence (trace `arrived_home:<ms>`, code
+    `held_arrival_within_cadence`), kept as the owner's other log lines are.
+  - A move uses the same three places with the word `place_moved`.
 - **Why "within the hour".** An arrival is "just now". One the phone delivers later has already happened, so it is kept as a
   place and not told. This is a freshness fact, like a workout's three hours, not a judgment about what matters.
 - **Rollout:**
