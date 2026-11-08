@@ -23,6 +23,7 @@ import { sendMessageHandler } from '../src/tools/live/messaging';
 import { approvalReplayContext, FORGET_CARD_MAX_IDS, proposeActionHandler, taintedActionReplay } from '../src/tools/live/propose-action';
 import { memoryHandlers } from '../src/tools/live/memory';
 import { claimStore } from '../src/memory/claims';
+import { importRef } from '../src/memory/import-ref';
 import { jobBook, taskBrief } from '../src/tasks/jobs';
 import { taskToolHandlers } from '../src/tasks/tools';
 import { loopBook, loopHandlers } from '../src/channels/loops';
@@ -573,6 +574,30 @@ describe('taint goes to a card', () => {
       expect(rows('tainted_action')).toEqual([]);
       expect(hidden).toEqual([]);
       expect(store.claims().map((claim) => claim.text)).toEqual(['Prefers tea']);
+    });
+  });
+
+  it('a tainted forget by import source never runs: no card, no replay, and a card without ids is refused, not thrown', async () => {
+    await runInDurableObject(stub('forget-import'), async (_instance, state) => {
+      const store = claimStore(state.storage.sql);
+      store.add({ kind: 'preference', text: 'Prefers tea', source: 'stated', evidence: 'tea', origin: 'owner', source_ref: 'owner, tg-1' }, '2026-10-20T09:00:00Z');
+      for (const text of ['Trains for the Pune half', 'Learning Kannada']) store.add({ kind: 'goal', text, source: 'inferred', evidence: text, origin: 'agent', source_ref: importRef('chatgpt', 'd1', 'conv-1') }, '2026-10-20T09:00:00Z');
+      const hidden: string[][] = [];
+      const handlers = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'chat-1', hideHistory: async (texts) => { hidden.push([...texts]); } });
+      const { desk, rows } = deskIn(state);
+      const propose = proposeActionHandler(desk, { replayable: (tool) => handlers.some((h) => h.name === tool), claims: () => store.allClaims() });
+      for (const args of [{ claim_ids: [1], import_source: 'chatgpt', scope_note: 'tea' }, { import_source: 'chatgpt', scope_note: 'the import' }]) {
+        expect(await propose.handle({ tool: 'forget_memory', args, reasoning: 'r' } as never, tainted({ toolCallId: 'p1' }))).toMatchObject({
+          ok: false, code: 'rejected', error: expect.stringMatching(/claim_ids[\s\S]*import_source/),
+        });
+      }
+      expect(rows('tainted_action')).toEqual([]);
+      // Even an approval that matched such a call would not widen past the ids the owner saw.
+      const forget = handlers.find((h) => h.name === 'forget_memory')!;
+      const replay = { authenticatedUserId: 'owner-1', trigger: 'user_message', toolArgSourceTaint: 'external', approvedTaintedAction: { tool: 'forget_memory', args_digest: 'd' } } as never;
+      expect(await forget.handle({ claim_ids: [1], import_source: 'chatgpt', scope_note: 'tea' } as never, replay)).toMatchObject({ ok: false });
+      expect(hidden).toEqual([]);
+      expect(store.claims().map((claim) => claim.text).sort()).toEqual(['Learning Kannada', 'Prefers tea', 'Trains for the Pune half']);
     });
   });
 

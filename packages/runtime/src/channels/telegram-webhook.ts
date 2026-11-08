@@ -27,6 +27,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_COST_LEDGER_SYNC?: string;
   // 'on' turns conversation compaction on for the app chat; anything else keeps the plain window.
   WALDO_COMPACTION?: string;
+  // '1' cuts chat history in steps and holds the start between cuts, so the provider's cache keeps the leading history.
+  WALDO_STEPPED_WINDOW?: string;
+  // '1' caps standing orders and quests in the prompt and clears a turn's tool results down to the latest three past ~30k tokens.
+  WALDO_CONTEXT_CAPS?: string;
   WALDO_ENVIRONMENT?: string;
   WALDO_OWNER_DO_NAMESPACE?: string;
   WALDO_RELEASE?: string;
@@ -118,12 +122,30 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   MEDICATIONS?: string;
   // "1" serves /app/v1/screen-time and offers get_screen_time, which reads the daily summaries the owner's phone sent. Off unless "1".
   SCREEN_TIME?: string;
+  // '1': app owner turns are offered show_health_chart, and app chat reads at chat=11 draw health charts from a live read.
+  HEALTH_CHARTS?: string;
   // '1': memory keeps people (who claims are about, rings, dates that come round); read_memory reads them and forget_memory
   // forgets one person. Off unless '1'.
   PEOPLE_MAP?: string;
   // "1" serves /app/v1/device-context (the owner's place consent and the latest coarse place per phone) and offers
   // get_device_context, which reads each phone's zone and city. Off unless "1".
   DEVICE_PLACE?: string;
+  // "1" serves /app/v1/device/calendar (the owner's phone-calendar consent and each phone's latest snapshot), hands the
+  // changes between snapshots to the update judge, and offers query_phone_calendar. Off unless "1".
+  DEVICE_CALENDAR?: string;
+  // "1" gives the Brief, the update triage and the intervention look the coverage facts (connected calendars and when each was
+  // read, whether the phone calendar is shared, events per weekday over two weeks) and the judgment of whether that is the
+  // owner's whole day. Off unless "1".
+  CALENDAR_COVERAGE?: string;
+  // "1" lets the update triage and the intervention look offer the one thing that deserves a free window, on a calendar card
+  // (a line answered Do it / Not now / Keep it free when the window opens soon), and with CAPACITY_PLAN and shared health one
+  // grade A or B health move a day. Off unless "1".
+  FREE_WINDOW_OFFERS?: string;
+  // "1" lists Waldo's blocks (from the approval ledger; each carries Waldo's private waldoBlock key on Google) for the update triage, the intervention look and the Brief with how
+  // to look after them (offer to move one a meeting lands on, offer to cancel one no longer needed, leave one the owner
+  // changed alone), lets the Close sometimes ask how a block went, and feeds the blocks' and offers' outcomes to the nightly
+  // capacity note. Off unless "1".
+  BLOCK_LIFECYCLE?: string;
   // "1" with DEVICE_PLACE "1": a place upload that says the phone just arrived home or at the gym (places the owner named on the
   // phone) brings Waldo's next look forward, as a move to another city does. Off unless "1".
   ARRIVAL_LOOK?: string;

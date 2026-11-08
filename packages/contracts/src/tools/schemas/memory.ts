@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { lifeAreaSchema } from '../../memory/area';
+import { importSourceSchema } from './imports';
 import { claimOnDateSchema, PEOPLE_PER_CLAIM_MAX, personLinkSchema } from '../../memory/people';
 
 // A claim id as a bare number or as the model reads it at the head of a pinned or recalled memory line (c12).
@@ -22,8 +23,10 @@ export const forgetMemoryArgsSchema = z.strictObject({
   claim_ids: z.array(claimIdSchema).min(1).optional(),
   topic: z.string().trim().min(1).optional(),
   source: z.strictObject({ message_ref: z.string().min(1), start: z.int().nonnegative(), end: z.int().positive() }).refine(span => span.end > span.start, 'end must follow start').optional(),
+  // Every claim brought in from that assistant's export, whether or not the owner has confirmed it since.
+  import_source: importSourceSchema.optional(),
   // One person and everything memory holds about them: their claims, their name and the addresses Waldo knew them by.
   person: z.int().positive().optional(),
   scope_note: z.string().trim().min(1),
-}).refine(args => args.claim_ids !== undefined || args.topic !== undefined || args.source !== undefined || args.person !== undefined, 'a forget selector is required');
+}).refine(args => args.claim_ids !== undefined || args.topic !== undefined || args.source !== undefined || args.import_source !== undefined || args.person !== undefined, 'a forget selector is required');
 export type ForgetMemoryArgs = z.infer<typeof forgetMemoryArgsSchema>;
