@@ -1381,8 +1381,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return found.kind === 'admitted' ? this.appScheduledOwner(found.authority) : found;
     }
     // A Telegram presence admits the owner when there is one; an owner whose only surface is WhatsApp is admitted by that presence.
+    // Under the owner's choice (PROACTIVE_BY_CHOICE), the surface that delivers the work admits it: WhatsApp, then iMessage, and a
+    // Telegram link only when neither is bound.
     const telegram = kv.get<string>('telegram_subject');
-    const provider = telegram && /^\d+$/.test(telegram) && kv.get<boolean>('telegram_unlinked') !== true ? 'telegram' : this.whatsappBound() ? 'whatsapp' : null;
+    const onTelegram = !!telegram && /^\d+$/.test(telegram) && kv.get<boolean>('telegram_unlinked') !== true;
+    const provider = this.proactiveByChoice()
+      ? (this.whatsappBound() ? 'whatsapp' : this.imessageBound() ? null : onTelegram ? 'telegram' : null)
+      : (onTelegram ? 'telegram' : this.whatsappBound() ? 'whatsapp' : null);
     if (!provider) return this.imessageBound() ? this.imessageScheduledOwner(doName) : { kind: 'dormant' };
     const subject = kv.get<string>(`${provider}_subject`)!;
     try {
@@ -3368,7 +3373,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const imessageOnly = (!telegramBound || byChoice) && appOwner?.kind !== 'admitted' && this.imessageOnly();
         if (imessageOnly) channel = 'imessage';
         telegramAnswers = !!(telegramBound && byChoice && (whatsappTarget !== null || whatsappOnly || imessageOnly) && this.env.TELEGRAM_BOT_TOKEN);
-        if (!telegramBound && whatsappTarget === null && !whatsappOnly && !imessageOnly) {
+        // Under the owner's choice, a Telegram-linked owner the directory cannot place just now is held, as any app owner is: the
+        // fallback below would send their proactive work on Telegram, with a copy, for want of an answer.
+        const unplaced = byChoice && (appOwner?.kind === 'retry' || targets === 'retry');
+        if ((!telegramBound || unplaced) && whatsappTarget === null && !whatsappOnly && !imessageOnly) {
           // No surface is left to run a transport pass, so a record that ended without its job being settled (an unlink whose
           // own settle failed) is settled here, and asked for again until it is.
           const owing = (): readonly string[] => new TelegramFinalOutbox(this.ctx.storage.kv).records().filter(r => r.status !== 'pending' && r.status !== 'accepted' && r.status !== 'attempting' && r.settled === false).map(r => r.id);

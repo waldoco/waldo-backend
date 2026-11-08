@@ -69,11 +69,11 @@ const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', S
 type Authority = 'current' | 'revoked' | 'outage' | 'error';
 type Sent = { chat_id: number; text: string; reply_markup?: unknown };
 // authorityAfter: the directory answers 'current' this many times, then `authority`.
-const wire = { authority: 'current' as Authority, authorityAfter: 0, asked: 0, presence: true, telegram: 'ok' as 'ok' | 'fails', telegramSent: [] as Sent[], previews: [] as unknown[], whatsappSent: [] as string[] };
+const wire = { authority: 'current' as Authority, authorityAfter: 0, asked: 0, presence: true, telegram: 'ok' as 'ok' | 'fails', telegramSent: [] as Sent[], previews: [] as unknown[], whatsappSent: [] as string[], presenceDown: false, admittedBy: [] as string[] };
 
 beforeEach(() => {
   fixture.event = null; fixture.changes = []; fixture.requests = [];
-  wire.authority = 'current'; wire.authorityAfter = 0; wire.asked = 0; wire.presence = true; wire.telegram = 'ok'; wire.telegramSent = []; wire.previews = []; wire.whatsappSent = [];
+  wire.authority = 'current'; wire.authorityAfter = 0; wire.asked = 0; wire.presence = true; wire.telegram = 'ok'; wire.telegramSent = []; wire.previews = []; wire.whatsappSent = []; wire.presenceDown = false; wire.admittedBy = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -88,8 +88,8 @@ beforeEach(() => {
     if (fn === 'app_session_authority') return Response.json({ owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
     if (fn === 'health_log_recent') return Response.json([]);
     if (fn === 'health_context_read') return Response.json(null);
-    if (fn === 'assert_channel_presence') return Response.json(wire.presence);
-    if (fn === 'common_owner_authority') return presenceAuthority(OWNER_ID, init?.body);
+    if (fn === 'assert_channel_presence') return wire.presenceDown ? new Response('upstream unavailable', { status: 503 }) : Response.json(wire.presence);
+    if (fn === 'common_owner_authority') { wire.admittedBy.push(asked.p_provider!); return presenceAuthority(OWNER_ID, init?.body); }
     if (/^https:\/\/api\.telegram\.org\/bot[^/]+\/sendMessage$/.test(url)) {
       const sent = JSON.parse(String(init?.body)) as Sent & { link_preview_options?: unknown };
       wire.previews.push(sent.link_preview_options);
@@ -573,7 +573,7 @@ describe('with the owner\'s choice deciding, for an owner still linked on Telegr
     }, ON);
   });
 
-  it('while the directory cannot say, sends no day card to Telegram and keeps a message for the app waiting, while a Telegram reply still goes out', async () => {
+  it('while the directory cannot say, holds the pass: nothing goes to Telegram, and once it answers the reply and the app\'s message go out', async () => {
     await withOwner('choice-outage', async (owner, state, ctx) => {
       dayPlanBook(state.storage.sql).save(DAY, { card: 'card:brief', time: '00:00', reason: 'planned' });
       await due(state, 'card:brief', 'brief');
@@ -582,15 +582,34 @@ describe('with the owner\'s choice deciding, for an owner still linked on Telegr
       wire.authority = 'outage';
       await schedulePass(owner, state);
       await outboxPass(owner, state, ctx);
-      await outboxPass(owner, state, ctx);
-      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: REPLY_TEXT }]);
-      expect(outbox(state).map(record => [record.id, record.status])).toEqual([['nudge:app-1', 'pending'], ['turn:telegram-1', 'delivered']]);
+      // The reply to the owner's Telegram message waits with the rest, a minute at most, rather than the pass falling back to Telegram.
+      expect(wire.telegramSent).toEqual([]);
+      expect(outbox(state).map(record => [record.id, record.status])).toEqual([['nudge:app-1', 'pending'], ['turn:telegram-1', 'pending']]);
       wire.authority = 'current';
       ctx.now += 120_000;
       await outboxPass(owner, state, ctx);
-      expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: NUDGE_TEXT, channel: 'app' }]);
+      await outboxPass(owner, state, ctx);
+      expect(outbox(state).map(record => [record.id, record.status])).toEqual([['nudge:app-1', 'delivered'], ['turn:telegram-1', 'delivered']]);
       expect(wire.telegramSent).toEqual([{ chat_id: 7, text: REPLY_TEXT }]);
+      expect((await appChat(owner, ctx)).map(row => row.text)).toContain(NUDGE_TEXT);
     }, ON);
+  });
+
+  it('holds the pass while only the WhatsApp presence cannot be checked, rather than sending a Telegram copy, and delivers once it can', async () => {
+    await withOwner('choice-presence-down', async (owner, state, ctx) => {
+      dayPlanBook(state.storage.sql).save(DAY, { card: 'card:brief', time: '00:00', reason: 'planned' });
+      await due(state, 'card:brief', 'brief');
+      wire.presenceDown = true;
+      await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
+      expect({ telegram: wire.telegramSent, whatsapp: wire.whatsappSent }).toEqual({ telegram: [], whatsapp: [] });
+      wire.presenceDown = false;
+      ctx.now += 120_000;
+      await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
+      expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: CARD_TEXT, channel: 'app' }]);
+      expect({ telegram: wire.telegramSent, whatsapp: wire.whatsappSent }).toEqual({ telegram: [], whatsapp: [CARD_TEXT] });
+    }, { ...ON, whatsapp: true });
   });
 
   it('sends nothing on Telegram for an owner the directory no longer admits: the choice opens no way around a revoked account', async () => {
@@ -613,6 +632,8 @@ describe('with the owner\'s choice deciding, for an owner still linked on Telegr
       await outboxPass(owner, state, ctx);
       expect(wire.whatsappSent).toEqual([CARD_TEXT]);
       expect(wire.telegramSent).toEqual([]);
+      // The card's job was admitted through WhatsApp, the surface that delivered it, not through the Telegram link.
+      expect(new Set(wire.admittedBy)).toEqual(new Set(['whatsapp']));
     }, { app: false, byChoice: true, whatsapp: true });
   });
 
