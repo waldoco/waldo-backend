@@ -13,7 +13,7 @@ const holds = (id: string, final_state: Record<string, unknown>, at = 0) => scen
 
 describe('the memory final-pass cases', () => {
   it('sit in the nightly catalogue with a receipt and a rubric each', () => {
-    expect(MEMORY_FINAL_SCENARIOS.map((entry) => entry.id)).toEqual(['m20-time-question-replaced-fact', 'm21-update-then-what-changed', 'm22-forgotten-holds-across-surfaces', 'm23-bring-up-less', 'm24-inferred-shown-as-guess', 'm26-save-readings-request', 'm27-honest-unknown']);
+    expect(MEMORY_FINAL_SCENARIOS.map((entry) => entry.id)).toEqual(['m20-time-question-replaced-fact', 'm21-update-then-what-changed', 'm22-forgotten-holds-across-surfaces', 'm23-bring-up-less', 'm24-inferred-shown-as-guess', 'm26-save-readings-request', 'm27-honest-unknown', 'm28-restores-kept-in-their-words', 'm29-restores-drains-shape-the-brief', 'm30-no-inferred-drain']);
     for (const entry of MEMORY_FINAL_SCENARIOS) {
       expect(NIGHTLY_SCENARIOS).toContain(entry);
       expect(entry.receipts?.length, entry.id).toBeGreaterThan(0);
@@ -90,6 +90,19 @@ describe('the memory final-pass cases', () => {
     const reading = (status: string) => row(9, { status, text: 'Slept 5h 17m, HRV 41.5 ms last night.' });
     expect(holds('m26-save-readings-request', { memory: [row(1, { text: 'The owner likes tea.' })] })).toBe(true);
     for (const status of ['active', 'superseded', 'dismissed']) expect(holds('m26-save-readings-request', { memory: [reading(status)] }), status).toBe(false);
+  });
+
+  it('m28 needs an owner claim about Kabir, and Waldo\'s own read does not count', () => {
+    expect(holds('m28-restores-kept-in-their-words', { memory: [row(9, { text: 'An evening walk with their brother Kabir resets the owner.' })] })).toBe(true);
+    expect(holds('m28-restores-kept-in-their-words', { memory: [row(9, { text: 'An evening walk with their brother Kabir resets the owner.', origin: 'agent' })] })).toBe(false);
+    expect(holds('m28-restores-kept-in-their-words', { memory: [] })).toBe(false);
+  });
+
+  it('m29 and m30 fail when a new claim names the vendor or Rohan, and a seeded one is fine', () => {
+    expect(holds('m29-restores-drains-shape-the-brief', { memory: [row(2008, { seeded: true, text: 'The owner says long calls with the vendor wear them out.' })] }, 1)).toBe(true);
+    expect(holds('m29-restores-drains-shape-the-brief', { memory: [row(9, { text: 'The vendor drains the owner.', origin: 'agent' })] }, 1)).toBe(false);
+    expect(holds('m30-no-inferred-drain', { memory: [row(1, { text: 'The owner likes tea.' })] })).toBe(true);
+    expect(holds('m30-no-inferred-drain', { memory: [row(9, { text: 'Late syncs with Rohan wear the owner out.', origin: 'agent' })] })).toBe(false);
   });
 
   it('keeps the invariants on a quiet turn: nothing written, nothing sent', async () => {
