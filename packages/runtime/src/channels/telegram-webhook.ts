@@ -29,6 +29,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_COMPACTION?: string;
   // '1' cuts chat history in steps and holds the start between cuts, so the provider's cache keeps the leading history.
   WALDO_STEPPED_WINDOW?: string;
+  // '1' caps standing orders and quests in the prompt and clears a turn's tool results down to the latest three past ~30k tokens.
+  WALDO_CONTEXT_CAPS?: string;
   // '1' tells a turn whose time zone the owner has not confirmed to ask for it when it fits.
   WALDO_TIMEZONE_ASK?: string;
   WALDO_ENVIRONMENT?: string;
