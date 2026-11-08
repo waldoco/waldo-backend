@@ -68,9 +68,9 @@ describe('the texted code on staging', () => {
 });
 
 describe('the WhatsApp knock templates on staging', () => {
-  it('knocks with the approved reply template, and has no proactive one until Meta approves it', () => {
+  it('knocks with the approved reply template, and with the approved proactive one for what Waldo starts', () => {
     expect(whatsappTemplateConfig(STAGING)).toEqual({ name: 'waldo_update_ready', language: 'en' });
-    expect(whatsappProactiveTemplateConfig(STAGING)).toBeNull();
+    expect(whatsappProactiveTemplateConfig(STAGING)).toEqual({ name: 'waldo_proactive_update', language: 'en' });
   });
 
   it('configures none in production', () => {
