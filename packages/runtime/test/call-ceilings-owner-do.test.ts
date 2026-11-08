@@ -80,18 +80,18 @@ it('the history budget and chat ceiling come from their settings, and a stepped 
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName)), async (_instance, state) => {
     const net = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ messages: [{ id: 'wamid.out' }] }));
     const logs = vi.spyOn(console, 'log');
-    const instance = new OwnerDO(state, { ...env, WALDO_CALL_CEILINGS: '1', WALDO_STEPPED_WINDOW: '1', WALDO_HISTORY_BUDGET_TOKENS: '14000', WALDO_CHAT_CEILING_TOKENS: '36000',
+    const instance = new OwnerDO(state, { ...env, WALDO_CALL_CEILINGS: '1', WALDO_STEPPED_WINDOW: '1', WALDO_HISTORY_BUDGET_TOKENS: '8000', WALDO_CHAT_CEILING_TOKENS: '36000',
       OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' });
     try {
-      const said = Array.from({ length: 24 }, (_, index) => `Note ${index}: ${'the venue changed again and the caterer needs the final count by Thursday. '.repeat(51).trim()}`);
+      const said = Array.from({ length: 12 }, (_, index) => `Note ${index}: ${'the venue changed again and the caterer needs the final count by Thursday. '.repeat(51).trim()}`);
       for (const [index, text] of said.entries()) await deliver(instance, `wamid.stepped.${index}`, text, doName);
       const shapes = replyShapes(logs);
       expect(shapes).toHaveLength(said.length);
       for (const shape of shapes) {
-        expect(shape.history_tokens_est!).toBeLessThanOrEqual(14_000 * 1.1);
+        expect(shape.history_tokens_est!).toBeLessThanOrEqual(8_000 * 1.1);
         expect(shape.ceiling_tokens).toBe(36_000);
       }
-      expect(shapes.at(-1)!.history_tokens_est!).toBeGreaterThan(14_000 * 0.3);
+      expect(shapes.at(-1)!.history_tokens_est!).toBeGreaterThan(8_000 * 0.3);
       const replies = calls.filter((body) => JSON.stringify(body.input).includes('Note '));
       expect(replies).toHaveLength(said.length);
       for (const [index, body] of replies.entries()) {
