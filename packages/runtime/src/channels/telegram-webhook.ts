@@ -88,6 +88,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WAKE_BRIEF?: string;
   WAKE_BRIEF_FRESH_MIN?: string;
   WAKE_BRIEF_TURNS_PER_DAY?: string;
+  // WORKOUT_WAKE: an upload with a workout that just ended wakes the health trigger once that day, which may propose one change
+  // to the rest of the day around recovery, or none. Off unless "1"; the owner's health proposals preference still governs it.
+  WORKOUT_WAKE?: string;
   // "1" has the morning Brief end with the rest of the day laid out in time blocks after its paragraph. Off unless "1".
   BRIEF_DAY_PLAN?: string;
   // "1" offers propose_calendar_plan to owner turns and the planning Brief: a day plan's new blocks on one card, added in one
@@ -186,6 +189,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_ASYNC_TOOLS?: string;
   // "1": a background job's request row keeps only a key, never the job's prompt (conversation/job-outcome.ts).
   WALDO_JOB_OUTCOME_ROWS?: string;
+  // "1": the owner's WhatsApp turns read and write the owner's own chain, the one their app chat uses (conversation/one-timeline.ts).
+  WALDO_ONE_TIMELINE?: string;
   // "1": the owner's own reply takes a light step that answers quick chat or hands the turn to the strong role, and every task
   // worker runs on the chat model (async-tools.ts).
   WALDO_LIGHT_CHAT?: string;

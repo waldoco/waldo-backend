@@ -13,11 +13,24 @@ export const COMPACTION = {
   minOwnerRows: 10,
   minIntervalMs: 3_600_000,
   maxOutputTokens: 2_000,
+  // On the one timeline, a row written on a chat surface other than the app is named with it in the model's view.
+  surfaceLabels: false,
   // WALDO_STEPPED_WINDOW: the window cuts in steps and holds its start between them (steppedWindowStart), instead of
   // dropping the oldest row every turn once the chain outgrows the budget.
   steppedWindow: false,
 };
 export type CompactionSettings = typeof COMPACTION;
+const SURFACE_NAMES: Readonly<Record<string, string>> = { whatsapp: 'WhatsApp', telegram: 'Telegram', imessage: 'iMessage' };
+// The label depends only on the row, never on the surface of the turn reading it, so the history's bytes, and the provider's
+// cache of them, are the same whichever surface the owner writes on next. It is for the model's view only and is never stored.
+// Only the owner's rows carry it: on Waldo's own replies the model would learn to write it.
+const labelled = (settings: CompactionSettings) => (entry: ConversationEntry): ConversationEntry => {
+  const name = settings.surfaceLabels && entry.role === 'user' ? SURFACE_NAMES[entry.surface] : undefined;
+  if (!name) return entry;
+  const label = `[on ${name}] `;
+  return entry.modelProjection.mode === 'replace' ? { ...entry, modelProjection: { mode: 'replace', payload: label + entry.modelProjection.payload } }
+    : { ...entry, modelPayload: label + entry.modelPayload };
+};
 // Only the exact values "on" and "1" turn these on, so an unset or mistyped deploy var keeps the plain window.
 export const compactionSettings = (env: Readonly<{ WALDO_COMPACTION?: string; WALDO_STEPPED_WINDOW?: string }>): CompactionSettings =>
   ({ ...COMPACTION, enabled: env.WALDO_COMPACTION === 'on', steppedWindow: env.WALDO_STEPPED_WINDOW === '1' });
@@ -85,11 +98,13 @@ const steppedWindow = (entries: readonly ConversationEntry[], budgetTokens: numb
   return { messages, stats: { kept: messages.length, dropped: rows.slice(0, start).flat().length, estimated_tokens: messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0), budget_tokens: budgetTokens, ...(start > 0 ? { from: entries[start]!.id } : {}), ...(entries[start] ? { head: entries[start]!.id } : {}) } };
 };
 
+export const surfaceLabelled = labelled({ ...COMPACTION, surfaceLabels: true });
+
 // The model's view of a chain. Without a live compaction row, or with the switch off, this is the plain window. With one,
 // the summary is always kept and the rows after the span are windowed against what the summary leaves of the budget.
 // windowFrom is the start the chain's last turn kept, read by the stepped window only.
 export const compactedHistory = (tree: ConversationTree, leafId: string, startRef?: string, settings: CompactionSettings = COMPACTION, windowFrom?: string): Readonly<{ messages: readonly ConversationModelMessage[]; stats: CompactedStats }> => {
-  const entries = chainFrom(tree, leafId, startRef);
+  const entries = chainFrom(tree, leafId, startRef).map(labelled(settings));
   const live = settings.enabled ? liveCompaction(tree, leafId, startRef) : null;
   const window = (rows: readonly ConversationEntry[], budgetTokens: number) => settings.steppedWindow ? steppedWindow(rows, budgetTokens, windowFrom) : windowModelMessages(conversationModelMessages(rows), budgetTokens);
   if (!live) {
@@ -137,7 +152,7 @@ export type CompactionPlan = Readonly<{ input: readonly ConversationModelMessage
 export const compactionPlan = (tree: ConversationTree, leafId: string, live: ConversationEntry | null, settings: CompactionSettings = COMPACTION, inputBudgetTokens: number = settings.budgetTokens): CompactionPlan | null => {
   const path = tree.path(leafId);
   const rows = (live ? path.slice(path.findIndex((entry) => entry.id === live.covers!.to_id) + 1) : path)
-    .map((entry) => ({ entry, message: conversationModelMessages([entry])[0] ?? null }));
+    .map((entry) => ({ entry, message: conversationModelMessages([labelled(settings)(entry)])[0] ?? null }));
   const isRoundStart = (entry: ConversationEntry) => (entry.role ?? (entry.id.endsWith('-reply') ? 'assistant' : 'user')) === 'user';
   // The tail: whole rounds from the newest back while they fit the tail fraction; the newest round stays whatever its size,
   // as the window itself always keeps the current turn.
@@ -176,6 +191,17 @@ export const compactionPlan = (tree: ConversationTree, leafId: string, live: Con
     toEntry: span[span.length - 1]!.entry,
     entryIds: span.map((row) => row.entry.id),
   };
+};
+
+// The plan a summary carrying the owner's earlier chain from another surface is built on. That chain is not on this one, so it
+// rides beside the plan, never among its sources. With no plan yet (one round on the chain), the summary covers the chain's
+// first row and carries it too. With a live summary and nothing new to fold there is none, since a second summary of the same span
+// would take the live one's id, so the earlier chain waits for the next compaction.
+export const seedBasePlan = (tree: ConversationTree, leafId: string, live: ConversationEntry | null, planned: CompactionPlan | null): CompactionPlan | null => {
+  if (planned || live) return planned;
+  const root = tree.path(leafId)[0]!;
+  const message = conversationModelMessages([root])[0];
+  return message ? { input: [message], sources: [root], covers: { from_id: root.id, to_id: root.id, rows: 1 }, gap: 0, toEntry: root, entryIds: [root.id] } : null;
 };
 
 // What a summary was made from, checked again in the commit that writes it, after the model call: each source row must
