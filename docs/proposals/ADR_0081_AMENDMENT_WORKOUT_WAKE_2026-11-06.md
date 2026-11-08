@@ -16,6 +16,8 @@ still booked, a late heavy commitment) goes unremarked until the Close.
    deliver late, ADR-0010) sends the owner's object one signed word, `workout: true`, beside `woke: true` when both hold. No time,
    type, duration or detail leaves the health plane. A new statement (`healthworkout` and `healthwokeworkout`) is signed, and the
    existing ones are unchanged. Only a sample the ingest took counts: one the database rejected never says a workout just ended.
+   A WHOOP sync or webhook that commits a workout which ended within the last three hours says the same, under the owner's ruling
+   of 7 November 2026 on WHOOP's terms.
 2. **The wake.** The owner's object notes when the notice arrived. The first recompute that *starts* after that, and finds
    today's row, hands `workout_ended` to the trigger beside the reasons it reads from the rows, even when the run changed no row.
    A run already under way when the upload landed may have read the rows before the workout was in them, so it never takes it.
@@ -53,7 +55,6 @@ Both are removed by account deletion with the rest of the owner's object.
   and account deletion removes them with the object, as ADR-0082's lifecycle already requires of owner state.
 - **Arrivals.** By the owner's ruling of 7 November, arriving home or at the gym brings Waldo's existing look forward, as a
   move to another city does (device-context ADR §9, waldoco/waldo-backend#2006). It does not wake the health trigger.
-- **WHOOP.** Its syncs do not say `workout`, pending the owner's ruling on WHOOP's API terms of 6 October 2026.
 
 ## Freshness, and what is not anchored
 
