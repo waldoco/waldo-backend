@@ -20,6 +20,14 @@ describe('react_to_message arguments', () => {
     for (const reaction of ['🔥', '❤️', '‼️', '👍🏽', '👩‍💻', '❤️‍🔥', '🇮🇳', '1️⃣']) expect(reactToMessageArgsSchema.safeParse({ reaction }).success, reaction).toBe(true);
   });
 
+  it('accepts each delivery: with the reply, at once, or instead of the reply', () => {
+    for (const delivery of ['with_reply', 'now', 'instead_of_reply']) expect(reactToMessageArgsSchema.safeParse({ reaction: '👀', delivery }).success, delivery).toBe(true);
+  });
+
+  it('rejects an unknown delivery, a timed one and a null one', () => {
+    for (const delivery of ['later', 'before_reply', '', null, 30]) expect(reactToMessageArgsSchema.safeParse({ reaction: '👀', delivery }).success, JSON.stringify(delivery)).toBe(false);
+  });
+
   it('rejects text, two emoji, an unknown tapback, a custom emoji object and any field naming a target', () => {
     const rejected = [{}, { reaction: '' }, { reaction: 'heart' }, { reaction: '🔥🔥' }, { reaction: 'nice 👍' }, { reaction: '🇮' }, { reaction: { kind: 'custom', emoji: '🔥' } }, { reaction: 'love', messageGuid: 'm1' },
       { reaction: 'love', chatGuid: 'iMessage;-;someone' }, { reaction: 'love', action: 'remove' }, null];

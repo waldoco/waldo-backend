@@ -94,6 +94,9 @@ export type ToolDispatcherContext = HookRuntimeContext & {
   turnReads?: TrailRead[];
   // Set by the tool loop once a request has shown the model the owner's health readings (conversation/health-fence).
   healthShown?: boolean;
+  // Set by a local tool loop, through the dispatch options: a call that is the turn's whole answer (a reaction standing in for the reply) closes the turn
+  // with this as its reply once its round's calls have run, without another model call.
+  closeTurn?: (reply: string) => void;
   claimedWhy?: unknown;
   whySteps?: readonly TrailStep[];
   // Where the owner asked: the surface and conversation of the owner's own turn, or of the turn whose card an approved replay
@@ -182,6 +185,8 @@ export type DispatchToolOptions<Ctx extends ToolDispatcherContext> = {
   extraHooks?: HookRegistry<Ctx>;
   maxResultJsonChars?: number;
   offload?: ToolOutputStore;
+  // Handed to the handler as ctx.closeTurn, leaving the caller's ctx (and what hooks write back to it) as it is.
+  closeTurn?: (reply: string) => void;
   trustedEffect?: Readonly<{
     prepare(input: Readonly<{ tool: ToolName; args: unknown }>): Promise<TrustedToolEffect>;
   }>;
@@ -366,7 +371,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     } else {
       ctx.runScope?.admit();
       const store = options.offload;
-      handlerResult = await handler.handle(args, { ...ctx, toolCallId: call.id, ...(claimedWhy === undefined ? {} : { claimedWhy }), ...(store ? { keepOutput: (text: string) => keepGuarded(call.id, text, ctx, store) } : {}) });
+      handlerResult = await handler.handle(args, { ...ctx, toolCallId: call.id, ...(claimedWhy === undefined ? {} : { claimedWhy }), ...(store ? { keepOutput: (text: string) => keepGuarded(call.id, text, ctx, store) } : {}), ...(options.closeTurn ? { closeTurn: options.closeTurn } : {}) });
     }
   } catch (error) {
     // A trusted adapter can have crossed its side-effect boundary before an unexpected throw.

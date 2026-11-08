@@ -232,6 +232,10 @@ export function messagingSystemPrompt(tools: readonly string[], presentation?: S
 // The voice a reply call ran on, for its trace.
 export const voiceVersion = (v2: boolean): number => (v2 ? VOICE_V2_VERSION : VOICE_VERSION);
 
+// When a reaction says it better than words is the model's call; this only frames it, and the tool's description says which
+// deliveries this surface sends.
+export const REACTING = "Reacting: a reaction on the owner's message can say more than a sentence would. When their message needs no words back (a thanks, an ok, a joke that landed), a reaction alone can be your whole answer. When your answer will take a while, a quick reaction first shows you are on it. Never react in place of an answer, a decision or a check they are waiting for, or when they shared something about their health, their safety or a hard moment.";
+
 // Reactions are available where the host reacts on its own (Telegram) or where the model's reaction tool is offered this
 // turn, so the line can never deny a tool the model holds.
 export function surfacePresentationPrompt(presentation: SurfacePresentation, tools: readonly string[] = []): string {
@@ -240,6 +244,7 @@ export function surfacePresentationPrompt(presentation: SurfacePresentation, too
     'Current surface presentation (host-owned delivery facts; this does not grant approval or change task/source authority):',
     `Surface: ${presentation.surface}. Approval delivery: ${presentation.delivery.approval}.`,
     `Reactions: ${reactions ? 'available' : 'unavailable'}. Attachment sending: ${presentation.delivery.attachments ? 'available' : 'unavailable'}.`,
+    ...(tools.includes('react_to_message') ? [REACTING] : []),
     'Commands: none.',
     'Only describe cards, buttons, reactions, files and commands this host actually delivers. Keep shared reasoning, task context and approval semantics; do not flatten another surface to this one.',
     'Continue from the supplied shared task, decisions, execution and file receipts regardless of surface; do not ask the owner to retell context already supplied. If shared context is unavailable, say what is missing instead of inventing progress or restarting an uncertain effect.',

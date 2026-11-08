@@ -1,17 +1,18 @@
-import { iMessageStandardReactionSchema, reactToMessageArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type IMessageStandardReaction, type ReactToMessageArgs, type ReactToMessageResult, type ToolHandler, type ToolResult } from '@waldo/contracts';
+import { iMessageStandardReactionSchema, reactToMessageArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type IMessageStandardReaction, type ReactionDelivery, type ReactToMessageArgs, type ReactToMessageResult, type ToolHandler, type ToolResult } from '@waldo/contracts';
 import { ClosedRunError, type RunEffectScope } from '../../channels/run-effect-scope';
 import { STANDARD_REACTION_EMOJI } from '../../channels/reactions';
 import type { ToolDispatcherContext } from '../dispatcher';
 
 // The surface's side of a reaction. ready: its host sends one now, read fresh on every call. freeze: the reaction's intent,
 // committed under the turn's scope before any send; conflict when this turn already froze a different one. A surface that
-// takes any emoji (WhatsApp) is given the emoji; one that sends only the standard tapbacks (iMessage) is given the tapback.
+// takes any emoji (WhatsApp) is given the emoji and how it goes, and sends it mid-turn with sendNow (false when it did not
+// go); one that sends only the standard tapbacks (iMessage) is given the tapback, which leaves with the reply.
 export type TapbackPort = Readonly<{ ready(): Promise<boolean> } & (
   | { anyEmoji?: false; freeze(reaction: IMessageStandardReaction, scope: RunEffectScope): 'queued' | 'conflict' }
-  | { anyEmoji: true; freeze(emoji: string, scope: RunEffectScope): 'queued' | 'conflict' })>;
+  | { anyEmoji: true; freeze(emoji: string, scope: RunEffectScope, delivery: ReactionDelivery): 'queued' | 'conflict'; sendNow(scope: RunEffectScope): Promise<boolean> })>;
 
 const DESCRIPTION = "Tapback the owner's message you are answering. It goes out with your reply; queued:false means none will.";
-const EMOJI_DESCRIPTION = "React to the owner's message you are answering with one emoji (or a tapback name). It goes out after your reply; queued:false means none will.";
+const EMOJI_DESCRIPTION = "React to the owner's message you are answering with one emoji (or a tapback name); one reaction per turn. delivery: with_reply (default) sends it after your reply; now sends it at once, before you carry on; instead_of_reply makes it your whole answer and ends your turn, with no text sent. queued:false means none will go.";
 
 const unqueued = (reason: Extract<ReactToMessageResult, { queued: false }>['reason']): ToolResult<ReactToMessageResult> => ({ ok: true, data: { queued: false, reason }, source_taint: null });
 const plain = (emoji: string) => emoji.replace(/\uFE0F/g, '');
@@ -35,10 +36,19 @@ export const reactToMessageHandler = (port: TapbackPort): ToolHandler<ReactToMes
     try { ready = await port.ready(); } catch (error) { if (error instanceof ClosedRunError) throw error; ready = false; }
     if (!ready) return unqueued('unavailable');
     const tapback = iMessageStandardReactionSchema.safeParse(args.reaction);
+    const delivery = args.delivery ?? 'with_reply';
     if (port.anyEmoji) {
+      // A turn whose loop cannot close on the reaction keeps its reply, so the reaction cannot stand for it.
+      if (delivery === 'instead_of_reply' && !ctx.closeTurn) return unqueued('unavailable');
+      const emoji = tapback.success ? STANDARD_REACTION_EMOJI[tapback.data] : args.reaction;
       ctx.runScope.admit();
-      return port.freeze(tapback.success ? STANDARD_REACTION_EMOJI[tapback.data] : args.reaction, ctx.runScope) === 'queued' ? { ok: true, data: { queued: true }, source_taint: null } : unqueued('already_reacted');
+      if (port.freeze(emoji, ctx.runScope, delivery) === 'conflict') return unqueued('already_reacted');
+      if (delivery === 'now' && !await port.sendNow(ctx.runScope)) return unqueued('unavailable');
+      if (delivery === 'instead_of_reply') ctx.closeTurn!(emoji);
+      return { ok: true, data: { queued: true }, source_taint: null };
     }
+    // A tapback leaves with the reply, so it can neither go first nor stand in for it here.
+    if (delivery !== 'with_reply') return unqueued('unavailable');
     // An emoji this surface has a tapback for goes as that tapback; any other emoji it cannot send.
     const reaction = tapback.success ? tapback.data : tapbackFor(args.reaction);
     if (!reaction) return unqueued('unavailable');

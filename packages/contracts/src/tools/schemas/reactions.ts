@@ -8,14 +8,17 @@ const reactionEmojiSchema = z.string().max(32).refine((value) => ONE_EMOJI.test(
 
 // react_to_message: a reaction on the owner's message the turn answers, offered only where the surface's host sends one.
 // The host picks the message, so the model names only the reaction: a standard tapback (all iMessage sends) or, where the
-// surface takes any emoji (WhatsApp), one emoji. queued is not sent: the reaction leaves with the turn's reply, and a
-// reason says why it will not.
-export const reactToMessageArgsSchema = z.strictObject({ reaction: z.union([iMessageStandardReactionSchema, reactionEmojiSchema]) });
+// surface takes any emoji (WhatsApp), one emoji. delivery, absent meaning with_reply: the reaction leaves with the turn's
+// reply; now sends it at once, before the reply; instead_of_reply makes it the turn's whole answer, with no text sent.
+// queued means the reaction stands for this turn; a reason says why it will not.
+export const reactionDeliverySchema = z.enum(['with_reply', 'now', 'instead_of_reply']);
+export type ReactionDelivery = z.infer<typeof reactionDeliverySchema>;
+export const reactToMessageArgsSchema = z.strictObject({ reaction: z.union([iMessageStandardReactionSchema, reactionEmojiSchema]), delivery: reactionDeliverySchema.optional() });
 export type ReactToMessageArgs = z.infer<typeof reactToMessageArgsSchema>;
 
 export const reactToMessageResultSchema = z.union([
   z.strictObject({ queued: z.literal(true) }),
-  // unavailable: this host does not send this reaction now. already_reacted: this turn queued a different one.
+  // unavailable: this host does not send this reaction, or this delivery, now. already_reacted: this turn queued a different one.
   z.strictObject({ queued: z.literal(false), reason: z.enum(['unavailable', 'not_owner_turn', 'already_reacted']) }),
 ]);
 export type ReactToMessageResult = z.infer<typeof reactToMessageResultSchema>;
