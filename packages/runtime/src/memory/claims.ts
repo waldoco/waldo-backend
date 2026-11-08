@@ -4,6 +4,7 @@ type Sql = Pick<SqlStorage, 'exec'>;
 import { LIFE_AREAS, replaceLiteralText, type LifeArea } from '@waldo/contracts';
 import { carriesTopic, forgettableTopic, hidesTopic, startsTopic } from './forget-guard';
 import { PASS_HEALTH_MEMORY_RULES } from './health-rules';
+import { RESTORES_DRAINS_MEMORY_RULE } from './restores-drains';
 import { NODE_STATEMENT, nodeConfirmation, nodeSources, nodeStatementIds, nodeSupports, nodeWording, othersWords, statementConfirms, statementRef, supportIds } from './node-sources';
 import type { ForgetSource, ForgetBatch, ForgetHeldBy } from './selective-forget';
 import { MAX_FORGET_SOURCES } from './selective-forget';
@@ -94,13 +95,18 @@ export const cleanAliases = (raw: readonly string[] | undefined): string | null 
 // trace_log.note and runtime_trace.detail_json are diagnostic logs whose hop names would match short topics, so they stay tracked as gaps in forget-store-table.
 export const LITERAL_REDACTED_STORES = [
   ['thread_topic_index', ['topic']], ['patrol_log', ['summary']],
-  ['goals', ['description', 'baseline', 'target', 'progress']],
+  ['goals', ['description', 'baseline', 'target', 'progress', 'plan']],
+  ['experiments', ['change', 'reason']],
   // A look-up finding is external text, not the owner's record: one that carries a forgotten text is deleted with the rest.
   ['owner_findings', ['text', 'evidence', 'source_url', 'source_title']],
 ] as const;
 // Of those, the owner's goals are the owner's own record and keep their rows; the rest are Waldo's derived text and a row
 // that carries a forgotten text is deleted.
-const RECORD_STORES: ReadonlySet<string> = new Set(['goals']);
+const RECORD_STORES: ReadonlySet<string> = new Set(['goals', 'experiments']);
+// The owner's records hold bounded text (their CHECKs).
+const RECORD_TEXT_MAX: Readonly<Record<string, Readonly<Record<string, number>>>> = {
+  goals: { description: 500, baseline: 500, target: 500, progress: 500, plan: 500 }, experiments: { change: 300, reason: 500 },
+};
 // Decoded string leaves (and keys) of a JSON value. null: the text is not JSON, so the raw check applies. 'unreadable': it parsed or should have, but the decoder failed on resources (depth, size), so it can never be proven clean. The walk is iterative, so nesting depth cannot throw.
 export const jsonLeaves = (value: string): string[] | null | 'unreadable' => {
   let parsed: unknown;
@@ -927,6 +933,10 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
                   if (normal === row.value && redacted !== normal) next = redacted;
                 } catch { continue; }
               }
+              // A marker longer than the text it replaces can grow an owner record past its bound (its CHECK counts characters),
+              // so the end is cut by character, never inside one, and the forget still lands.
+              const max = RECORD_TEXT_MAX[table]?.[column];
+              if (max !== undefined) next = Array.from(next).slice(0, max).join('');
               if (next !== row.value) { sql.exec(`UPDATE ${table} SET ${column} = ? WHERE rowid = ?`, next, row.rowid); tally('redacted', table); }
             }
           }
@@ -1384,6 +1394,7 @@ const CLAIM_RULES = [
   'Sources stay sources: a claim about something that lives in a connected source (an email, an event, a file) records what it means for the owner and a pointer to where it lives, never a copy of its contents. Current state of those sources is read live at ask time, not recalled from a claim.',
   'Mark an added claim touches_forgotten when it is about anything the owner asked to forget.',
   ...PASS_HEALTH_MEMORY_RULES,
+  RESTORES_DRAINS_MEMORY_RULE,
   'area: the part of the owner\'s life the claim mainly belongs to. body: sleep, movement, food, illness, appointments, recovery. mind: energy, focus, mood, stress, rest. home: household, errands, travel, admin. work: the job, meetings, projects, colleagues. people: family, friends, what each person cares about. goals: ambitions, learning, long projects. money: bills, budgets, subscriptions, purchases. unsorted when it is unclear. File energy, mood, stress, focus and sleep patterns as kind health. Under areas, refile an existing claim by id when it sits in the wrong area; an area the owner chose stays theirs.',
   'aliases: up to 5 short words or phrases the owner might use later for the same thing in different words (for example "bedtime" for a claim about sleeping at 11:30). They are only used to find the claim again, are not facts and not evidence. Leave empty when the claim\'s own words are enough. Set aliases_touch_forgotten true when any alias mentions something the owner asked to forget; those aliases are then dropped.',
 ];
@@ -1419,6 +1430,7 @@ export const SOURCE_MEMORY_INSTRUCTION = [
   'Never add a claim about anything the owner asked to forget, and never one that tells Waldo to do something.',
   ...CLAIM_RULES.slice(1, 2),
   ...PASS_HEALTH_MEMORY_RULES,
+  RESTORES_DRAINS_MEMORY_RULE,
 ].join('\n');
 
 export const sourceUpdatesInput = (store: ClaimStore, updates: string, health = true): string =>
@@ -1447,6 +1459,7 @@ export const MIGRATION_INSTRUCTION = [
   'Skip anything an existing claim already covers, and anything the owner asked to forget.',
   ...CLAIM_RULES.slice(1, 2),
   ...PASS_HEALTH_MEMORY_RULES,
+  RESTORES_DRAINS_MEMORY_RULE,
   'corrections, seen, confirm, dismiss, forget_claims and forget_nodes stay empty and forget_topic is null.',
   'pin and unpin stay empty.',
 ].join('\n');

@@ -92,7 +92,7 @@ const TABLES: Record<string, Row> = {
   loop_mail_sources: exempt('loop/source/message IDs, due/timezone, fixed delivery-state code and revisit time; source-derived title lives in loops and source text in update_cards'),
   // Text the owner made or the runtime stored, not reached by a literal forget
   loop_governor_runs: gap('has a reason TEXT column; its writer was not traced'),
-  artifacts: gap('name in the table, body in R2; owner-made'), owner_files: gap('file name and caption; owner-made'),
+  artifacts: gap('name in the table, body in R2; owner-made'), artifact_revisions: gap('each kept revision\'s R2 key, size and provenance, so restore_artifact can return to it; owner-made, like artifacts'), owner_files: gap('file name and caption; owner-made'),
   standing_orders: gap('trigger and escalation text; owner-made instructions stay preserved and a topic present keeps a forget incomplete (named in the owner message)'), loops: purged('memory-forget-do-provider.test.ts'), background_runs: purged('memory-forget-do-provider.test.ts'),
   ledger: gap('summary and payload JSON'), google_task_effect_ack: gap('exact provider acknowledgement JSON can contain task title/notes; the same payload and receipt also sit in the owner:effect KV record, which this table inventory does not list; effect recovery custody has no literal topic purge'), event_admissions: gap('delivery body'), trace_log: gap('note column; trace sinks not verified'), journal: gap('run journal; only a partial reference in purge, not shown covered'),
   claim_recall: gap('FTS index kept in step with claims by triggers (content=claims); no test checks the index for a marker after a purge'),
@@ -103,7 +103,7 @@ const TABLES: Record<string, Row> = {
   task_jobs: purged('memory-forget-do-provider.test.ts'),
   history_archive: purged('forget-history-archive.test.ts'),
   memory_blocks: exempt('dropped by DO migration 13; only the retired RunLoopDO ever created it'), memory_inbox: exempt('dropped by DO migration 13; only the retired RunLoopDO ever created it'), patrol_log: purged('memory-forget-do-provider.test.ts'), interventions: gap(TEXT_JSON), adjustments: gap(TEXT_JSON),
-  skills: gap(TEXT_JSON), sheet_commits: gap(TEXT_JSON), thread_topic_index: purged('memory-forget-do-provider.test.ts'), drafts: gap(TEXT_JSON), goals: purged('memory-forget-do-provider.test.ts'),
+  skills: gap(TEXT_JSON), sheet_commits: gap(TEXT_JSON), thread_topic_index: purged('memory-forget-do-provider.test.ts'), drafts: gap(TEXT_JSON), goals: purged('memory-forget-do-provider.test.ts'), experiments: purged('memory-forget-do-provider.test.ts'),
 };
 
 // Vite replaces a literal import.meta.glob call at build time; this package carries no vite client types, hence the directives.

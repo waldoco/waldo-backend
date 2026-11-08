@@ -1,11 +1,12 @@
 import type { ConversationEntry } from '@waldo/contracts';
 import { iMessageSendUrl } from './imessage/send-url';
-import { APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appAuthOptionsV1Schema, appCodeRequestSchema, appContractHeaderV1Schema, appIdTokenRequestV1Schema, appIMessageLinkCodeV1Schema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
+import { appUploadHeaders } from './app-uploads';
+import { APP_CHAT_UPLOAD_KIND_HEADER, APP_CHAT_UPLOAD_MAX_BYTES, APP_CHAT_UPLOAD_NAME_HEADER, APP_CHAT_UPLOAD_PATH, APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appAuthOptionsV1Schema, appCodeRequestSchema, appContractHeaderV1Schema, appIdTokenRequestV1Schema, appIMessageLinkCodeV1Schema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
 import type { AppApprovalCards } from './approvals';
 import { appQuickRepliesPart } from './surfaces/app';
 import { consoleAuth, sessionFamily, signedInRecently, type ConsoleAuth } from '../identity/console-auth';
 import { readOwnerDemand } from '../health/calendar-demand-route';
-import { notifyOwnerHealthSamples, notifyOwnerZoneChange } from '../health/zone-change-route';
+import { notifyOwnerHealthSamples, notifyOwnerPlaceArrived, notifyOwnerPlaceMoved, notifyOwnerZoneChange, type ArrivalPlace } from '../health/zone-change-route';
 import { wakeFreshMs } from '../health/wake-notice';
 import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { signedRpc } from '../identity/owner-directory';
@@ -39,8 +40,9 @@ export const APP_DEVICES_PATH = `${APP_PATH}/devices`;
 const MAX_BODY_BYTES = 8192;
 
 // APP_ID_TOKEN_SIGNIN "1" serves Sign in with Apple and Google; otherwise the route answers 404 and the app offers the email code.
-type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string; DEVICE_PLACE?: string; WAKE_BRIEF?: string; WAKE_BRIEF_FRESH_MIN?: string }>;
+type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string; DEVICE_PLACE?: string; WAKE_BRIEF?: string; WAKE_BRIEF_FRESH_MIN?: string; APP_CHAT_ATTACHMENTS?: string; WORKOUT_WAKE?: string; ARRIVAL_LOOK?: string }>;
 
+const UPLOAD_READ_MS = 60_000;
 // Errors before authentication share one shape so the app cannot learn who is invited.
 const fail = (status: 401 | 403 | 404 | 405 | 413 | 429 | 503) => Response.json({ error: 'unavailable' }, { status, headers: { 'cache-control': 'no-store', ...(status === 429 ? { 'retry-after': '60' } : {}) } });
 const ok = (body: object, status = 200) => Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
@@ -52,10 +54,10 @@ const readJson = async (request: Request): Promise<Record<string, unknown> | nul
   let text: string; try { text = new TextDecoder('utf-8', {fatal:true,ignoreBOM:true}).decode(bytes); } catch { return null; }
   try { const value: unknown = JSON.parse(text); return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null; } catch { return null; }
 };
-export const readBoundedBody = async (request:Request, max:number):Promise<Uint8Array|null> => {
+export const readBoundedBody = async (request:Request, max:number, timeoutMs=5000):Promise<Uint8Array|null> => {
   if (!request.body) return new Uint8Array();
   const reader=request.body.getReader(), chunks:Uint8Array[]=[]; let size=0, expired=false;
-  const timer=setTimeout(()=>{expired=true;void reader.cancel();},5000);
+  const timer=setTimeout(()=>{expired=true;void reader.cancel();},timeoutMs);
   try { for(;;){const part=await reader.read();if(expired)return null;if(part.done)break;size+=part.value.byteLength;if(size>max){await reader.cancel();return null;}chunks.push(part.value);} }
   catch{return null;} finally{clearTimeout(timer);reader.releaseLock();}
   const bytes=new Uint8Array(size);let at=0;for(const chunk of chunks){bytes.set(chunk,at);at+=chunk.byteLength;}return bytes;
@@ -250,9 +252,10 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     if (url.pathname === APP_PROVIDERS_PATH || url.pathname.startsWith(`${APP_PROVIDERS_PATH}/`)) return handleAppHealthProviders({ request, url, doName, owners, secret, mayConnect: async () => (await import('./console-step-up')).APP_STEP_UP_ROUTES[`${APP_PROVIDERS_PATH}/connect`]?.gated === false || await signedIn() });
     return handleAppHealth({ request, url, doName, rpc: signedRpc(env), readBody: readBoundedBody, defer, compute: dailyScoresFor(env.HEALTH_PROVISIONAL_SCORES), trainingLoad: env.HEALTH_TRAINING_LOAD === '1', coaching: env.HEALTH_COACHING === '1',
       ...(env.WAKE_BRIEF === '1' ? { wakeFreshMs: wakeFreshMs(env.WAKE_BRIEF_FRESH_MIN) } : {}),
+      ...(env.WORKOUT_WAKE === '1' ? { workoutWake: true } : {}),
       ...(secret ? { readDemand: (range: { from: string; to: string; timezone: string }) => readOwnerDemand(owners, secret, doName, range),
         notifyZoneChange: (day: string) => notifyOwnerZoneChange(owners, secret, doName, day),
-        notifySamples: (woke?: boolean) => notifyOwnerHealthSamples(owners, secret, doName, 'readings', woke),
+        notifySamples: (woke?: boolean, workout?: boolean) => notifyOwnerHealthSamples(owners, secret, doName, 'readings', woke, workout),
         notifySettings: () => notifyOwnerHealthSamples(owners, secret, doName, 'settings') } : {}) });
   }
   // Screen time spends its own per-owner budget. Off, the routes are not there.
@@ -265,7 +268,27 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   if (url.pathname === APP_DEVICE_CONTEXT_PATH || url.pathname.startsWith(`${APP_DEVICE_CONTEXT_PATH}/`)) {
     if (env.DEVICE_PLACE !== '1') return fail(404);
     try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-device-context:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
-    return handleAppDeviceContext({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody });
+    const secret = env.WALDO_ROUTER_HMAC_SECRET;
+    return handleAppDeviceContext({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody, ...(secret ? { moved: () => notifyOwnerPlaceMoved(owners, secret, who.doName) } : {}), ...(secret && env.ARRIVAL_LOOK === '1' ? { arrived: (place: ArrivalPlace) => notifyOwnerPlaceArrived(owners, secret, who.doName, place) } : {}), ...(defer ? { defer } : {}) });
+  }
+  // A chat attachment spends its own per-owner budget and is bounded at the attachment cap before it is read; a voice note or
+  // photo comes from a phone, so the read may take up to a minute. Off, the route is not there.
+  if (url.pathname === APP_CHAT_UPLOAD_PATH) {
+    if (env.APP_CHAT_ATTACHMENTS !== '1') return fail(404);
+    if (request.method !== 'POST') return fail(405);
+    try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-upload:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
+    const length = request.headers.get('content-length');
+    if (length && (!/^\d+$/.test(length) || Number(length) > APP_CHAT_UPLOAD_MAX_BYTES)) return fail(413);
+    const asked = appUploadHeaders(request.headers);
+    if ('refused' in asked) return Response.json({ error: asked.refused.error }, { status: asked.refused.status, headers: { 'cache-control': 'no-store' } });
+    const body = await readBoundedBody(request, APP_CHAT_UPLOAD_MAX_BYTES, UPLOAD_READ_MS);
+    if (!body) return fail(413);
+    const forwarded = new Request(`https://telegram-owner${APP_CHAT_UPLOAD_PATH}`, { method: 'POST', body, headers: {
+      'x-waldo-do-name': who.doName, 'x-waldo-app-session-hash': await linkCodeHash(sessionIdOf(who.credential)!),
+      'content-type': request.headers.get('content-type') ?? '', [APP_CHAT_UPLOAD_KIND_HEADER]: request.headers.get(APP_CHAT_UPLOAD_KIND_HEADER) ?? '',
+      ...(request.headers.has(APP_CHAT_UPLOAD_NAME_HEADER) ? { [APP_CHAT_UPLOAD_NAME_HEADER]: request.headers.get(APP_CHAT_UPLOAD_NAME_HEADER)! } : {}),
+    } });
+    try { return await owners.get(owners.idFromName(who.doName)).fetch(forwarded); } catch { return fail(503); }
   }
   // A stop is a control on a message already paid for, so it counts as a read, not a send. Anything but a POST already does.
   const stop = url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) && url.pathname.endsWith('/cancel');

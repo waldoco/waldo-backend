@@ -32,6 +32,9 @@ export type FinalRecord = {
   expiresAt?: number; bot?: string;
   // The app thread this message belongs in (a task started there); the app route writes it there while the thread is open.
   appThread?: string;
+  // An answer to work the owner asked for (a task's report), addressed to the chat they asked in: it goes there whichever surface
+  // takes Waldo's own proactive messages.
+  answersOwner?: true;
   // accepted: every part was accepted by a surface that confirms arrival later (WhatsApp); not yet delivered, not settled.
   receiptUrls?: string[]; ownerSubject: string; doName: string; status: 'pending' | 'attempting' | 'accepted' | 'delivered' | 'quarantined' | 'blocked';
   dueAt: number; createdAt: number; attempts: number; settled?: boolean; messageId?: number; deliveredAt?: number; reason?: string;
@@ -66,8 +69,9 @@ export type FinalRecord = {
   reaction?: { message_id: number; emoji: string };
   reminder?: { id: string; occurrence: number; runId: string; schedulerRunId: string | null; once: boolean };
   // A day card on a surface where sends can wait: once it is delivered the day plan records it sent and folds the updates
-  // written up to foldUpTo, the time the card was written.
-  dayCard?: { day: string; card: CardId; foldUpTo: number };
+  // written up to foldUpTo, the time the card was written, the quests it checked in on count as checked in and the
+  // experiments whose verdict it offered count as offered.
+  dayCard?: { day: string; card: CardId; foldUpTo: number; quests?: readonly string[]; verdicts?: readonly string[] };
   // A standing order's report: the order's run finishes when the report is delivered, or when it ends unsent.
   standingOrder?: { runId: string; gate: StandingGate };
 };
