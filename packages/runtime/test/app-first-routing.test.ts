@@ -625,6 +625,30 @@ describe('with the owner\'s choice deciding, for an owner still linked on Telegr
     }, ON);
   });
 
+  it('a Google grant that dies during a read on Telegram keeps its button there while the directory does not admit the owner on the app', async () => {
+    await withOwner('choice-reconnect-not-admitted', async (owner, state, ctx) => {
+      wire.authority = 'revoked';
+      fixture.deadGrant = true;
+      const client = await (owner.setup('telegram') as unknown as { google: { client(feature: string): Promise<{ events(): Promise<unknown> } | null> } }).google.client('calendar');
+      await expect(client!.events()).rejects.toThrow();
+      await vi.waitFor(() => expect(wire.telegramSent).toEqual([{ chat_id: 7, text: expect.stringContaining('owner@example.test'), reply_markup: expect.anything() }]), { timeout: 5_000, interval: 20 });
+      expect(outbox(state).filter(record => record.id.startsWith('google-reauth:'))).toEqual([]);
+      wire.authority = 'current';
+      expect(await appChat(owner, ctx)).toEqual([]);
+    }, ON);
+  });
+
+  it('a notice queued in a WhatsApp turn, for an owner whose choice is the app alone, goes to the app rather than nowhere', async () => {
+    await withOwner('choice-notice-whatsapp', async (owner, state, ctx) => {
+      state.storage.kv.put('proactive_surface_v1', 'app');
+      await queue(state, ctx, 'telegram', { id: 'withdrawn:wa-1', trace: 'withdrawn-wa-1', payload: { chat_id: Number(WHATSAPP), text: WITHDRAWN_TEXT }, ownerSubject: WHATSAPP, bot: undefined, notice: true } as Partial<FinalRecord>);
+      for (let pass = 0; pass < 2; pass++) await outboxPass(owner, state, ctx);
+      expect(outbox(state).map(record => [record.id, record.status])).toEqual([['withdrawn:wa-1', 'delivered']]);
+      expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: WITHDRAWN_TEXT, channel: 'app' }]);
+      expect({ whatsapp: wire.whatsappSent, telegram: wire.telegramSent }).toEqual({ whatsapp: [], telegram: [] });
+    }, { ...ON, whatsapp: true });
+  });
+
   it('a notice of Waldo\'s own queued for Telegram in a turn there (a reconnect notice, the approvals desk\'s notice) goes to the app, and the turn\'s reply to Telegram', async () => {
     await withOwner('choice-notices', async (owner, state, ctx) => {
       await queue(state, ctx, 'telegram');

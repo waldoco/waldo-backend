@@ -3398,10 +3398,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (this.env.NEXT_DUE_ALARM === '1') this.ctx.storage.kv.put(ALARM_FULL_RELEASE, this.env.WALDO_RELEASE ?? 'unknown');
       // Messages still waiting for a WhatsApp number that no longer takes proactive work go to the app; they are due now.
       const leftForWhatsApp = whatsappTarget === null ? null : this.leftForWhatsApp(whatsappTarget);
-      if (leftForWhatsApp) await finalOutbox.wake(waldoFirstWaitingFor(leftForWhatsApp));
-      // Scheduled messages queued for Telegram before the owner's choice decided go to the app, now.
+      if (leftForWhatsApp) await finalOutbox.wake(waldoFirstWaitingFor(leftForWhatsApp, this.proactiveByChoice()));
+      // Waldo's own messages queued for Telegram before the owner's choice decided, or by a turn there since, go to the app, now.
       const leftForTelegram = telegramAnswers && this.appBound() ? new Set([this.ctx.storage.kv.get<string>('telegram_subject')!]) : null;
-      if (leftForTelegram) await finalOutbox.wake(waldoFirstWaitingFor(leftForTelegram));
+      if (leftForTelegram) await finalOutbox.wake(waldoFirstWaitingFor(leftForTelegram, true));
       await lane('mac', () => this.drainMacDeliveries(appWithTelegramCopy ? 'app' : channel));
       await lane('mail', () => this.drainAgentMail(appWithTelegramCopy ? 'app' : channel, alarmEnd));
       await lane('jobs', () => this.drainJobs(channel, alarmEnd));
@@ -3452,10 +3452,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           return found.kind;
         }, () => Date.now() + APP_ADMISSION_RETRY_MS));
         // Messages left waiting for a WhatsApp number that no longer takes proactive work go to the app.
-        if (leftForWhatsApp) routes.push(this.linkingAppRows(this.outboxRoute('app', waldoFirstWaitingFor(leftForWhatsApp))));
-        // So do scheduled messages left waiting for Telegram; whatever else is addressed there (the answers to what the owner wrote
+        if (leftForWhatsApp) routes.push(this.linkingAppRows(this.outboxRoute('app', waldoFirstWaitingFor(leftForWhatsApp, this.proactiveByChoice()))));
+        // So do Waldo's own messages left waiting for Telegram; whatever else is addressed there (the answers to what the owner wrote
         // on Telegram) still goes there.
-        if (leftForTelegram) routes.push(this.linkingAppRows(this.outboxRoute('app', waldoFirstWaitingFor(leftForTelegram))));
+        if (leftForTelegram) routes.push(this.linkingAppRows(this.outboxRoute('app', waldoFirstWaitingFor(leftForTelegram, true))));
         if (telegramAnswers) routes.push(this.outboxRoute('telegram'));
         // An answer to work asked for on WhatsApp goes to that chat while the number is bound, whatever takes proactive work. Once
         // the number is unbound it goes to the app, so the answer is never left with no route.
@@ -4407,7 +4407,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const googleProfiles = async () => (await storage.get<Record<string, GoogleProfileFact>>('google:profiles')) ?? {};
     const health = async () => (await storage.get<Record<string, string>>('google:health')) ?? {};
     const googleBooks = <T,>(work: () => Promise<T>) => this.googleBooks(work);
-    // A dead grant's notice where no connect button can go (the app, iMessage, WhatsApp): plain text, no link, through the
+    // A dead grant's notice where no connect button can go (the app, iMessage, WhatsApp, or Telegram once the app takes the owner's
+    // proactive messages): plain text, no link, through the
     // delivery outbox, which takes it to the surface the owner's proactive messages reach: the app transcript for an owner the
     // directory admits there, otherwise WhatsApp (held until its window opens) or iMessage. Each failure episode queues its own record, which names the grant only by a digest. It is queued in the
     // object's serial order, so no alarm pass is draining the outbox meanwhile; a grant that recovered by then gets none, and
@@ -4440,9 +4441,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
         if (!transition.send) return;
         // A new ticket revokes the owner's open ones, so where no button can carry it (a surface that declares connect
-        // guidance) nothing is minted. Nor anywhere once the owner's choice decides and the app is bound: the notice is Waldo's
-        // own, and the delivery outbox takes it where their proactive messages go.
-        if (connectGuidance[channel] !== undefined || (this.proactiveByChoice() && this.appBound())) { this.ctx.waitUntil(this.serial(() => queueReauthNotice(id))); return; }
+        // guidance) nothing is minted. Nor anywhere once the owner's choice decides and the directory admits them on the app:
+        // the notice is Waldo's own, and the delivery outbox takes it to the app. Otherwise the button stays where it was.
+        if (connectGuidance[channel] !== undefined || (this.proactiveByChoice() && this.appBound() && (await this.appOwnerLookup()).kind === 'admitted')) { this.ctx.waitUntil(this.serial(() => queueReauthNotice(id))); return; }
         const account = (await accounts()).find((known) => known.id === id);
         const url = await google.connectUrl('calendar');
         const sent = url !== null && (await deliverConnectLink(url, 'reconnect', account?.email));

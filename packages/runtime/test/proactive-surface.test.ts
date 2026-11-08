@@ -252,6 +252,13 @@ describe('messages still waiting for WhatsApp', () => {
     expect(waldoFirstWaitingFor(new Set())(record())).toBe(false);
   });
 
+  it('include a notice of Waldo\'s own only when asked to, as under the owner\'s choice', () => {
+    const notice = record({ id: 'withdrawn:p1', reminder: undefined, notice: true });
+    expect(waldoFirstWaitingFor(new Set(['15550001111']))(notice)).toBe(false);
+    expect(waldoFirstWaitingFor(new Set(['15550001111']), true)(notice)).toBe(true);
+    expect(waldoFirstWaitingFor(new Set(['15550001111']), true)(record({ id: 'turn:wa-1', reminder: undefined, inbox: { id: 'in-1', runId: 'run-2', attempt: 'a' } }))).toBe(false);
+  });
+
   it('never include a message WhatsApp took any part of: it is on the owner\'s phone in part, so the app must not get the rest alone', () => {
     const waiting = waldoFirstWaitingFor(new Set(['15550001111']));
     expect(waiting(record({ providerMessageIds: [null, 'wamid.2'], deliveredParts: 1 }))).toBe(false);
