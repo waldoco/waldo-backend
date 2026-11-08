@@ -264,7 +264,7 @@ describe('the owner approves a card shown here by telling Waldo to go ahead', ()
         await f.desk.proposeTaintedAction({ tool: 'create_task', args, args_digest: await sha256Hex(stableJson(args)), reasoning: 'The email asked for it.', source: 'external' }),
       ];
       for (const id of kinds) {
-        expect(await f.desk.approveShown(id, said(), 'trace')).toEqual({ outcome: 'app_only' });
+        expect(await f.desk.approveShown(id, said(), 'trace')).toEqual({ outcome: 'app_only', link: expect.stringContaining(id) });
         expect(f.status(id)).toBe('open');
       }
     });

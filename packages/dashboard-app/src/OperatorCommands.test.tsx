@@ -7,7 +7,7 @@ import type { OverviewV1 } from './model';
 
 const HARNESS = '/console/dashboard/api/v1/harness';
 const CSRF = 'c'.repeat(64);
-const offer = { version: 1, csrf: CSRF, commands: ['/trace', '/e2e', '/usage', '/langfuse', '/heldrows', '/fire', '/ledger'] };
+const offer = { version: 1, csrf: CSRF, commands: ['/trace', '/e2e', '/usage', '/heldrows', '/ledger', '/langfuse', '/fire'] };
 const activity = { version: 1, view: 'activity', state: 'available', csrf: 'd'.repeat(64), revision: 'a'.repeat(64), data: {
   last_request: null, steps: [], trace: [], runs: [], page: { trace_before: null, runs_before: null, trace_applied: null, runs_applied: null }, ledger: '',
 } };
@@ -38,7 +38,7 @@ const mount = async (harness: () => Response, read: () => Response = () => Respo
 
 afterEach(() => { vi.unstubAllGlobals(); document.body.innerHTML = ''; window.location.hash = ''; });
 
-describe('operator commands on Patrol', () => {
+describe('diagnostics on Patrol', () => {
   it('runs a command as the signed-in owner with the session token and shows what it answered', async () => {
     const { host, root, posts, run } = await mount(() => Response.json({ output: 'llm_reply ok 3ms' }));
     await run('/trace');
@@ -49,13 +49,21 @@ describe('operator commands on Patrol', () => {
 
   it('lists the commands this Waldo takes and reads the token from its own offer, not another view\'s', async () => {
     const { host, root, calls } = await mount(() => Response.json({ output: '' }));
-    expect(host.querySelector('.operator-panel')?.textContent).toContain('/trace, /e2e, /usage, /langfuse, /heldrows, /fire, /ledger');
+    expect(host.querySelector('.operator-panel')?.textContent).toContain('/trace, /e2e, /usage, /heldrows, /ledger, /langfuse, /fire');
     expect(host.querySelector('.operator-panel')?.textContent).not.toMatch(/telegram/i);
     expect(calls.filter(url => url === HARNESS)).toHaveLength(1);
     await act(async () => root.unmount());
   });
 
-  it('is not shown on a Waldo without operator commands', async () => {
+  it('offers an owner who is not an admin only the diagnostics their read listed, with no word of /fire', async () => {
+    const { host, root } = await mount(() => Response.json({ output: '' }), () => Response.json({ ...offer, commands: ['/trace', '/e2e', '/usage', '/heldrows', '/ledger'] }));
+    expect(host.querySelector('#operator-commands-title')?.textContent).toBe('Diagnostics');
+    expect(host.querySelector('.operator-panel')?.textContent).toContain('/trace, /e2e, /usage, /heldrows, /ledger.');
+    expect(host.querySelector('.operator-panel')?.textContent).not.toContain('/fire');
+    await act(async () => root.unmount());
+  });
+
+  it('is not shown on a Waldo without diagnostics', async () => {
     const { host, root } = await mount(() => Response.json({ output: '' }), () => Response.json({ error: 'not_found' }, { status: 404 }));
     expect(host.querySelector('.operator-panel')).toBeNull();
     expect(host.textContent).toContain('Access log');
@@ -63,10 +71,12 @@ describe('operator commands on Patrol', () => {
   });
 
   it('says plainly when the commands were turned off meanwhile, when a command is unknown, when it is busy and when it failed', async () => {
-    for (const [status, said] of [[403, 'Your console session changed. Reload the page and try again.'], [404, 'Operator commands are off on this Waldo.'], [400, 'Waldo doesn’t know that command.'], [429, 'Too many commands just now. Wait a minute and try again.'], [503, 'The command didn’t finish. Try again.']] as const) {
-      const { host, root, run } = await mount(() => Response.json({ error: 'x' }, { status }));
+    for (const [status, said, error, retry] of [[403, 'Your console session changed. Reload the page and try again.', 'forbidden', null], [403, 'That command is for Waldo admins.', 'admin_only', null],
+      [404, 'Diagnostics are off on this Waldo.', 'not_found', null], [400, 'Waldo doesn’t know that command.', 'invalid_command', null], [429, 'Too many commands just now. Wait a minute and try again.', 'rate_limited', '60'],
+      [429, 'Too many just now. Try again in 10 minutes.', 'rate_limited', '600'], [429, 'Too many just now. Try again in 24 hours.', 'rate_limited', '86400'], [429, 'Too many commands just now. Wait a minute and try again.', 'rate_limited', null], [503, 'The command didn’t finish. Try again.', 'unavailable', null]] as const) {
+      const { host, root, run } = await mount(() => Response.json({ error }, { status, headers: retry ? { 'retry-after': retry } : {} }));
       await run('/fire fetch');
-      expect(host.querySelector('[role="alert"]')?.textContent, String(status)).toBe(said);
+      expect(host.querySelector('[role="alert"]')?.textContent, `${status} ${error} ${retry}`).toBe(said);
       expect(host.querySelector('pre.operator-output')).toBeNull();
       await act(async () => root.unmount());
       document.body.innerHTML = '';

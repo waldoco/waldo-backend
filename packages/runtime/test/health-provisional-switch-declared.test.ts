@@ -117,6 +117,12 @@ describe('WAKE_BRIEF, BRIEF_DAY_PLAN and CALENDAR_PLAN in the Worker config', ()
   });
 });
 
+describe('WORKOUT_WAKE in the Worker config', () => {
+  it('is off in production until a judged trial uploads a finished workout, and on in staging', () => {
+    expect([parsed.vars.WORKOUT_WAKE, parsed.env.staging.vars.WORKOUT_WAKE]).toEqual(['0', '1']);
+  });
+});
+
 describe('SCREEN_TIME in the Worker config', () => {
   it('is on in staging, where migration 20261103120000 is applied (4 Nov 2026), and off in production', () => {
     expect(parsed.vars.SCREEN_TIME).toBe('0');

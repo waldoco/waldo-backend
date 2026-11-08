@@ -1,0 +1,6 @@
+// Who or what restores or drains the owner is theirs to say. Reading it from their calendar, their messages or their health
+// would profile other people. The background memory passes, which may also write Waldo's own reads, keep it to the owner's
+// words (remember on the owner's turn already needs a verbatim owner quote), and the day cards may plan with what they said.
+// What counts as restoring or draining, and how much it should weigh on a given day, is the model's call.
+export const RESTORES_DRAINS_MEMORY_RULE = 'Who or what restores or drains the owner (time with their sister lifts them; long calls with a client wear them out) is kept only as they said it, in their own words, in the people area when it is about a person. Never infer it from their calendar, their messages, how a day went or their health, and never keep a judgement of the person.';
+export const RESTORES_DRAINS_PLANNING_RULE = 'Their memory may hold what the owner said restores or drains them. On a heavy day, or an evening their recovery is low, let it shape what you suggest: make room for what they said restores them, and keep what they said drains them away from the hours they need most. Use only what they said, never a guess about anyone, and never judge the people in it.';
