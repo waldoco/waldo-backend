@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ARTIFACT_BODY_MAX_CHARS, createArtifactArgsSchema, listArtifactsArgsSchema, readArtifactArgsSchema, reviseArtifactArgsSchema } from './artifacts';
+import { ARTIFACT_BODY_MAX_CHARS, createArtifactArgsSchema, listArtifactsArgsSchema, readArtifactArgsSchema, restoreArtifactArgsSchema, reviseArtifactArgsSchema } from './artifacts';
 
 describe('artifact tool args (A5)', () => {
   it('create requires a name, a typed kind and a bounded body', () => {
@@ -13,6 +13,17 @@ describe('artifact tool args (A5)', () => {
   it('revise requires a positive expected revision', () => {
     expect(reviseArtifactArgsSchema.safeParse({ artifact_id: 'art:1', expected_revision: 1, body_markdown: 'x' }).success).toBe(true);
     expect(reviseArtifactArgsSchema.safeParse({ artifact_id: 'art:1', expected_revision: 0, body_markdown: 'x' }).success).toBe(false);
+  });
+  it('restore names the kept revision to bring back and the revision the model last saw', () => {
+    expect(restoreArtifactArgsSchema.safeParse({ artifact_id: 'art:1', revision: 1, expected_revision: 2 }).success).toBe(true);
+    for (const args of [
+      { artifact_id: 'art:1', revision: 0, expected_revision: 2 },
+      { artifact_id: 'art:1', revision: 1, expected_revision: 0 },
+      { artifact_id: 'art:1', revision: 1.5, expected_revision: 2 },
+      { artifact_id: '', revision: 1, expected_revision: 2 },
+      { artifact_id: 'art:1', expected_revision: 2 },
+      { artifact_id: 'art:1', revision: 1, expected_revision: 2, body_markdown: 'x' },
+    ]) expect(restoreArtifactArgsSchema.safeParse(args).success, JSON.stringify(args)).toBe(false);
   });
   it('read defaults the window and caps the length at 8000', () => {
     const parsed = readArtifactArgsSchema.parse({ artifact_id: 'art:1' });

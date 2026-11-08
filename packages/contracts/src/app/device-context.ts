@@ -97,11 +97,16 @@ export const devicePlaceV1Schema = z.strictObject({
 // cannot repopulate what was deleted. device_id is the app installation id the push registration uses. A reading observed more
 // than 30 days ago is refused. A refused reading keeps nothing, its zone included: an app whose OS names fail the place-name
 // rule (a 400 invalid_request) sends the same reading again without locality and region.
+// arrived: the phone just reached a place the owner named on it (device-context ADR §9). The phone keeps those places and their
+// positions; only the word travels, and it is never stored. A backend from before §9 refuses the key, so the app sends it only to
+// one that has it.
+export const DEVICE_ARRIVAL_PLACES_V1 = ['home', 'gym'] as const;
 export const devicePlaceIngestV1Schema = z.strictObject({
   request_id: requestId,
   expected_epoch: epoch,
   device_id: z.uuid(),
   place: devicePlaceV1Schema,
+  arrived: z.enum(DEVICE_ARRIVAL_PLACES_V1).optional(),
 });
 export const devicePlaceIngestReceiptV1Schema = z.strictObject({
   request_id: requestId,
