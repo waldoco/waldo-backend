@@ -2492,12 +2492,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const kv = this.ctx.storage.kv, pending = kv.get<CompactionPending>(COMPACTION_PENDING_KEY);
     if (!pending) { kv.delete(COMPACTION_DUE_KEY); return; }
     const left = { app: pending.app.filter(entry => entry.at >= passStart), chats: pending.chats.filter(entry => entry.at >= passStart) };
+    // A compaction needs its whole budget before the pass ends, or it does nothing; one the pass has no room for waits for the next.
+    const roomLeft = () => alarmEnd === undefined || alarmEnd >= Date.now() + COMPACTION_BUDGET_MS;
     for (const record of pending.app.filter(entry => entry.at < passStart)) {
-      if (this.appInbox.records().some(row => row.state === 'admitted')) left.app.push(record);
+      if (!roomLeft() || this.appInbox.records().some(row => row.state === 'admitted')) left.app.push(record);
       else await this.compactApp(record, alarmEnd);
     }
     for (const entry of pending.chats.filter(entry => entry.at < passStart)) {
-      if ((await this.inbox.records()).some(record => record.state === 'admitted') || this.whatsappInbox().records().some(record => record.state === 'admitted')) left.chats.push(entry);
+      if (!roomLeft() || (await this.inbox.records()).some(record => record.state === 'admitted') || this.whatsappInbox().records().some(record => record.state === 'admitted')) left.chats.push(entry);
       else await this.compactTimeline(entry.chat, alarmEnd, true);
     }
     // Written only once the work is done: a pass cut off before here leaves every request for the next one.
