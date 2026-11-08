@@ -62,8 +62,7 @@ described on the same categorization page:
 3. **Wait for review**, which can take up to 24 hours.
    *Check:* status APPROVED, category UTILITY.
    *Falsifier:* category MARKETING. Do not configure it.
-4. **Configure.** In `packages/runtime/wrangler.jsonc`, staging `vars` (line 90, where both are empty
-   today), set:
+4. **Configure.** In `packages/runtime/wrangler.jsonc`, staging `vars` (set there since 6 Nov), set:
    - `WHATSAPP_REENGAGE_TEMPLATE` to `waldo_update_ready`;
    - `WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE` to `en`.
 
