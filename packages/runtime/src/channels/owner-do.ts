@@ -464,6 +464,15 @@ const validZone = (zone: string): boolean => {
     return false;
   }
 };
+// The owner's zone as an IANA name (Area/Location, or UTC), or null. Intl also takes offsets (+05:30) and abbreviations
+// (EST, IST), which carry no daylight-saving rules or are ambiguous, and resolves both to some zone, so the name as written is
+// what is checked. Its case is taken from Intl's own list where the list has it; the list holds the legacy spelling of some
+// zones (Asia/Calcutta), so a name it lacks is kept as written rather than renamed.
+const ianaZone = (zone: string): string | null => {
+  if (zone.toUpperCase() === 'UTC') return 'UTC';
+  if (!/^[A-Za-z]+(?:\/[A-Za-z0-9_+-]+)+$/.test(zone) || !validZone(zone)) return null;
+  return Intl.supportedValuesOf('timeZone').find((known) => known.toLowerCase() === zone.toLowerCase()) ?? zone;
+};
 
 // A directory-backed DO whose owner has not linked Telegram yet resolves to 0 (not the deploy
 // owner's id): every send gate drops on 0, so one owner's messages can never land in another's chat.
@@ -4351,7 +4360,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const doName = identity.get<string>('do_name');
       return !auth || !doName || auth.saveSettings(doName, settings);
     };
-    const clock = { get timezone() { return identity.get<string>('timezone') ?? fallbackZone; }, now: () => new Date(deps.now()) };
+    const clock = { get timezone() { return identity.get<string>('timezone') ?? fallbackZone; }, now: () => new Date(deps.now()),
+      ...(this.env.WALDO_TIMEZONE_ASK === '1' ? { confirmed: () => identity.get<boolean>('timezone_confirmed') === true } : {}) };
     const book = reminderBook(this.ctx.storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
     const meds = this.env.MEDICATIONS === '1'
       ? medicationBook(this.ctx.storage.sql, scheduler, clock, (operation, payload) => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', operation, payload))
@@ -5105,6 +5115,20 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       schedPrefs.enabled('heartbeat') && armable('heartbeat') ? armHeartbeat(scheduler, now) : Promise.resolve(),
       interventions && schedPrefs.enabled('heartbeat') && armable('heartbeat') ? armLook(now) : dropLook(),
     ]);
+    // The owner's own time zone, from the console or from chat: the directory keeps it first, then this object applies it,
+    // confirms it and re-arms the owner's jobs on it. Runtimes are rebuilt so values captured at build time follow the zone;
+    // from inside a turn, the turn's own runtime is kept, since its stop and steer controls are reached through it.
+    const confirmZone = async (zone: string, now: number, assertCurrent?: () => Promise<void>, inTurn = false): Promise<string | null> => {
+      const named = ianaZone(zone);
+      if (!named || !(await saveSettings({ timezone: named, ...loops.proactivity() }))) return null;
+      await assertCurrent?.();
+      identity.put('timezone', named);
+      identity.put('timezone_confirmed', true);
+      await armOwnJobs(named, now, true);
+      const own = inTurn ? this.runtimes[channel] : undefined;
+      this.runtimes = own ? { [channel]: own } : {};
+      return named;
+    };
     // Native chat initialization cannot launch unrequested background model work. An owner whose only surface is iMessage is the
     // exception: their iMessage runtime runs their scheduled work, so it arms it, as a WhatsApp-only owner's runtime does.
     const proactiveReady = channel === 'imessage' && !this.imessageOnly() ? this.browserReady : channel === 'app'
@@ -5391,7 +5415,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         context.runScope?.admit();
         if (!auth || auth.do_name !== doName || !auth.capabilities.includes(input.class) || identity.get<string>('do_name') !== doName) return { accepted: false, reason: 'unavailable' };
         return this.env.DEVICE_BRIDGE_DO.get(this.env.DEVICE_BRIDGE_DO.idFromName(device.device_id)).enqueueCommand({ ...input, owner_id: auth.owner_id, device_id: device.device_id });
-      } }), ...loopHandlers(loops, closableIn, this.env.PROACTIVE_GATE === '1'), ...schedulePreferenceHandlers(schedPrefs, async () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable: await armableNow(), cancelMachine, alongHeartbeat: lookFollows }), (card, time) => ownerCardTime(cardTimeDeps(Date.now()), card, time, this.env.WAKE_BRIEF === '1')), ...taskToolHandlers({ book: this.jobs(), now: Date.now, timezone: () => clock.timezone, surface: channel, wake: due => armTaskJobsWake(storage, due), fence: id => this.tasks.cancelled(id), log, steer: this.env.WALDO_TASK_STEER === '1',
+      } }), ...loopHandlers(loops, closableIn, this.env.PROACTIVE_GATE === '1'), ...schedulePreferenceHandlers(schedPrefs, async () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable: await armableNow(), cancelMachine, alongHeartbeat: lookFollows }), (card, time) => ownerCardTime(cardTimeDeps(Date.now()), card, time, this.env.WAKE_BRIEF === '1'), (zone) => confirmZone(zone, Date.now(), undefined, true)), ...taskToolHandlers({ book: this.jobs(), now: Date.now, timezone: () => clock.timezone, surface: channel, wake: due => armTaskJobsWake(storage, due), fence: id => this.tasks.cancelled(id), log, steer: this.env.WALDO_TASK_STEER === '1',
         // A task started by an app thread's own turn (the call's run scope is that message's attempt) reports in that thread.
         conversationRef: ctx => { const record = this.activeApp; return record && ctx.runScope?.runId === record.id && ctx.runScope.attempt === record.attempt && threadOfChain(record.conversationRef) ? record.conversationRef : null; } })]), undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now()); const trails = forgetTrails(this.ctx.storage.sql, texts) + dayPlanBook(this.ctx.storage.sql).forgetWhy(texts); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + trails + titles.remaining }; }), undefined,
       (opt) => opt ? [openLoopsPrompt(loops, clock.timezone, opt.loopsRoom), runningTasksLine(this.jobs(), Date.now())].filter(Boolean).join('\n\n') : [standingOrdersPrompt(orders, ...(contextCaps ? [STANDING_ORDERS_PROMPT_CHARS] : [])), questsPrompt(quests, ...(contextCaps ? [QUESTS_PROMPT_CHARS] : []))].filter(Boolean).join('\n\n'), runs, undefined,
@@ -6723,13 +6747,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           await assertCurrent?.();
           loops.setProactivity(parsed.data);
         } else if (action === 'timezone.set') {
-          if (!validZone(value) || !(await saveSettings({ timezone: value, ...loops.proactivity() }))) return false;
-          await assertCurrent?.();
-          identity.put('timezone', value);
-          identity.put('timezone_confirmed', true);
-          await armOwnJobs(value, now, true);
-          // Rebuild runtimes so values captured at build time follow the new zone.
-          this.runtimes = {};
+          if (!(await confirmZone(value ?? '', now, assertCurrent))) return false;
         } else if (action === 'spot.pin' || action === 'spot.unpin') {
           // The owner's pin goes at the end of its block; only the kinds the pinned blocks carry can be pinned.
           const claim = [...memory.claims(), ...memory.claims('promoted')].find((row) => row.id === spotId);
