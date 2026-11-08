@@ -1085,7 +1085,7 @@ export const createOwnerResponder = (
         const held = barrier();
         const admitted = !held.shows(summary) && !input.some((message) => held.shows(message.content)) && (timeline === undefined || !seed || timeline.unchanged());
         // Inside the commit that writes the summary, so the carry is marked exactly when the summary lands.
-        if (admitted && seed) timeline?.mark();
+        if (admitted && seed) timeline?.mark(ref);
         return admitted;
       } };
       if (!(await conversationStore.appendCompaction(row, live?.id ?? null, privateRunScope, fence))) { hop(false, 'held_topic'); return; }

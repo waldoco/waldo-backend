@@ -324,6 +324,39 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
     });
   });
 
+  it('a forget reaches a fact the cutover summary carried from WhatsApp, even paraphrased', async () => {
+    const name = 'one-timeline-forget-carried';
+    await withOwner(name, {}, async (owner, state, restart) => {
+      await saysOnWhatsApp(owner(), 'My sister Priya lands Thursday at 6pm.');
+      restart({ ...ON, WALDO_COMPACTION: 'on' });
+      model.summary = 'Earlier on WhatsApp: the owner\'s sister arrives on Thursday evening.';
+      await saysInApp(owner(), state, name, 'What does my week look like?');
+      await owner().alarm().catch(() => undefined);
+      expect(timeline(state).filter(row => row.role === 'compaction')).toHaveLength(1);
+      await saysInApp(owner(), state, name, 'Forget everything about Priya.');
+      await saysOnWhatsApp(owner(), 'What is on Thursday?');
+      expect(model.asked.at(-1)).toContain('What is on Thursday?');
+      expect(model.asked.at(-1)).not.toContain('sister arrives on Thursday evening');
+    });
+  });
+
+  it('a forget reaches a fact the cutover summary carried from Telegram, even paraphrased', async () => {
+    const name = 'one-timeline-forget-carried-telegram';
+    await withOwner(name, TELEGRAM, async (owner, state, restart) => {
+      state.storage.kv.put('telegram_subject', '7');
+      await saysOnTelegram(owner(), state, name, 'My sister Priya lands Thursday at 6pm.');
+      restart({ ...ON, ...TELEGRAM, WALDO_COMPACTION: 'on' });
+      model.summary = 'Earlier on Telegram: the owner\'s sister arrives on Thursday evening.';
+      await saysInApp(owner(), state, name, 'What does my week look like?');
+      await owner().alarm().catch(() => undefined);
+      expect(timeline(state).filter(row => row.role === 'compaction')).toHaveLength(1);
+      await saysInApp(owner(), state, name, 'Forget everything about Priya.');
+      await saysOnTelegram(owner(), state, name, 'What is on Thursday?');
+      expect(model.asked.at(-1)).toContain('What is on Thursday?');
+      expect(model.asked.at(-1)).not.toContain('sister arrives on Thursday evening');
+    });
+  });
+
   it('a forget asked for in the app clears what was said on WhatsApp from every later turn, on either surface', async () => {
     const name = 'one-timeline-forget';
     await withOwner(name, ON, async (owner, state) => {

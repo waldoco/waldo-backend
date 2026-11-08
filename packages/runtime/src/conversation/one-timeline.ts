@@ -16,36 +16,44 @@ export const oneTimelineEnabled = (env: Readonly<{ WALDO_ONE_TIMELINE?: string }
 export type TimelineSeed = Readonly<{
   read(): Readonly<{ messages: readonly ConversationModelMessage[]; rows: number }> | null;
   unchanged(): boolean;
-  mark(): void;
+  mark(chain: string): void;
 }>;
 export const TIMELINE_CARRIED_KEY = 'one_timeline_carried_v1';
+// The legacy rows each chain's summary carried, by their conv: keys: a forget that reaches one of them supersedes that chain's
+// live summary, which may paraphrase it, whichever later summary folded the carry in.
+export const TIMELINE_CARRIED_ROWS_KEY = 'one_timeline_carried_rows_v1';
+export type CarriedRows = Readonly<Record<string, readonly string[]>>;
 type Kv = Pick<DurableObjectStorage['kv'], 'get' | 'put' | 'list'>;
 export const timelineSeed = (kv: Kv, chatIds: () => readonly string[], budgetTokens: number): TimelineSeed => {
-  let seen: Readonly<{ rows: string; last: string; ids: string }> | null = null;
+  let seen: Readonly<{ rows: string; last: string; ids: string; keys: readonly string[] }> | null = null;
   const since = (ids: readonly string[]) => {
     const after = kv.get<string>(TIMELINE_CARRIED_KEY);
     const listed = [...kv.list<ConversationEntry>({ prefix: 'conv:', ...(after ? { startAfter: after } : {}) })];
-    const rows = listed.map(([, entry]) => entry)
-      .filter(entry => ids.includes(entry.chatId) && entry.role === 'user' && entry.inputOrigin === 'owner' && entry.ownerWordsOnly === true);
-    return { rows, last: listed.at(-1)?.[0] };
+    const carried = listed.filter(([, entry]) => ids.includes(entry.chatId) && entry.role === 'user' && entry.inputOrigin === 'owner' && entry.ownerWordsOnly === true);
+    return { rows: carried.map(([, entry]) => entry), keys: carried.map(([key]) => key), last: listed.at(-1)?.[0] };
   };
   return {
     read() {
       seen = null;
       const ids = chatIds();
       if (!ids.length) return null;
-      const { rows, last } = since(ids);
+      const { rows, keys, last } = since(ids);
       if (!last) return null;
       const messages = windowModelMessages(conversationModelMessages(rows.map(surfaceLabelled)), budgetTokens).messages;
       // Nothing to carry up to here: the mark moves on, so the next read starts after it.
       if (!messages.length) { kv.put(TIMELINE_CARRIED_KEY, last); return null; }
-      seen = { rows: JSON.stringify(rows), last, ids: JSON.stringify(ids) };
+      seen = { rows: JSON.stringify(rows), last, ids: JSON.stringify(ids), keys };
       return { messages, rows: rows.length };
     },
     unchanged() {
       const ids = chatIds();
       return seen !== null && JSON.stringify(ids) === seen.ids && JSON.stringify(since(ids).rows) === seen.rows;
     },
-    mark() { if (seen) kv.put(TIMELINE_CARRIED_KEY, seen.last); },
+    mark(chain) {
+      if (!seen) return;
+      kv.put(TIMELINE_CARRIED_KEY, seen.last);
+      const carried = kv.get<CarriedRows>(TIMELINE_CARRIED_ROWS_KEY) ?? {};
+      kv.put(TIMELINE_CARRIED_ROWS_KEY, { ...carried, [chain]: [...new Set([...(carried[chain] ?? []), ...seen.keys])] });
+    },
   };
 };
