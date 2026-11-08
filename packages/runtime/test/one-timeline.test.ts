@@ -19,11 +19,15 @@ const model = vi.hoisted(() => ({ asked: [] as string[] }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
-    const reply = (text: string) => ({ ok: true as const, data: { model: request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
+    const reply = (text: string, tool_calls?: { call_id: string; name: string; arguments: string }[]) => ({ ok: true as const,
+      data: { model: request.model, text, ...(tool_calls ? { tool_calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
     if (request.response_format?.name === 'claim_ops') return reply('{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}');
     if (request.response_format) return reply(request.response_format.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : '{}');
     if (String(request.system ?? '').startsWith('Summarise the earlier part of this conversation')) return reply(SUMMARY);
     model.asked.push(JSON.stringify(request.messages));
+    // The owner asks to forget: the model calls forget_memory once, then answers.
+    if (String(request.messages.at(-1)?.content ?? '').includes('Forget everything about Priya') && !request.tool_turns?.length)
+      return reply('', [{ call_id: 'forget-priya', name: 'forget_memory', arguments: JSON.stringify({ topic: 'Priya', scope_note: 'my sister' }) }]);
     return reply(REPLY);
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
@@ -185,6 +189,18 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
       expect(timeline(state).filter(row => row.role === 'compaction')).toHaveLength(1);
       await saysOnWhatsApp(owner(), 'And Friday?');
       expect(model.asked.at(-1)).toContain(SUMMARY);
+    });
+  });
+
+  it('a forget asked for in the app clears what was said on WhatsApp from every later turn, on either surface', async () => {
+    const name = 'one-timeline-forget';
+    await withOwner(name, ON, async (owner, state) => {
+      await saysOnWhatsApp(owner(), 'My sister Priya lands Thursday at 6pm.');
+      await saysInApp(owner(), state, name, 'Forget everything about Priya.');
+      await saysOnWhatsApp(owner(), 'What is on Thursday?');
+      expect(model.asked.at(-1)).toContain('What is on Thursday?');
+      expect(model.asked.at(-1)).not.toContain('Priya');
+      expect(timeline(state).some(row => row.appPayload.includes('Priya'))).toBe(false);
     });
   });
 
