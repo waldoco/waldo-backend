@@ -19,7 +19,7 @@ export const BRAIN_NAMESPACES = {
   skills: 'Reviewed skills: list, install or disable a skill, and search the tool catalog.',
   workspace: "The owner's workspace files: list, read, search, write and render them.",
   artifacts: 'Documents Waldo makes: create, revise, export, list or read an artifact, restore_artifact to bring back an earlier revision, a drafted document or a sheet cell.',
-  actions: "Actions that reach beyond this chat: a progress note, a file attachment, show_chart for a chart in the app reply, the owner's Mac, a delegated research task, todos and code.",
+  actions: "Actions that reach beyond this chat: a progress note, a file attachment, show_chart and show_health_chart for a chart in the app reply, the owner's Mac, a delegated research task, todos and code.",
 } as const;
 export type BrainNamespace = keyof typeof BRAIN_NAMESPACES;
 export type BrainPlacement = 'core' | BrainNamespace;
@@ -107,6 +107,7 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   // passing, so it is never behind a search. claim null: queued is not sent; it leaves with the reply.
   // reminders: how a card follows up on its own question, offered only while a planning card is being written; the core
   // budget is spent. claim null: offered is not shown; the answers go out with the card once it is delivered.
+  show_health_chart: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, long: false, claim: null, replay: unknown('keeps the chart\'s query in memory for the reply this turn saves; a re-run of the turn draws whatever it draws then') },
   show_chart: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, long: false, claim: null, replay: unknown('keeps the chart in memory for the reply this turn saves; a re-run of the turn draws whatever it draws then') },
   offer_replies: { brain: 'reminders', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: unknown('keeps the answers in memory for the card this turn writes; a re-run of the turn writes the card again with whatever it offers then') },
   react_to_message: { brain: 'core', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, long: false, claim: null, replay: { replay: 'provider_idempotent', basis: 'the commandId is fixed by the turn and the reaction, and the bridge mailbox and the host journal keep one command per commandId', evidence: { file: 'channels/imessage/final-outbox.ts', needle: 'wrx_' } } },
@@ -286,7 +287,7 @@ const TOOL_ACTIVITY: Readonly<Record<ToolName, AppChatActivityKind>> = {
   create_artifact: 'artifacts', revise_artifact: 'artifacts', restore_artifact: 'artifacts', export_artifact: 'artifacts', list_artifacts: 'artifacts', read_artifact: 'artifacts', draft_document: 'artifacts', write_sheet_cell: 'artifacts',
   set_proactivity: 'settings', set_schedule_preference: 'settings', set_quest: 'health', set_experiment: 'health', review_experiment: 'health', set_standing_order: 'settings', cancel_standing_order: 'settings', list_standing_orders: 'settings', propose_standing_grant: 'calendar', revoke_standing_grant: 'settings', pause_autonomy: 'settings', send_console_link: 'settings', connect_app: 'settings',
   search_tools: 'skills', skills_list: 'skills', skills_load: 'skills', skills_install: 'skills', skills_disable: 'skills',
-  send_message: 'actions', propose_action: 'actions', raise_approval: 'actions', approve_shown: 'actions', send_progress_note: 'actions', owner_message_heard: 'working', attach_file: 'actions', react_to_message: 'actions', offer_replies: 'actions', show_chart: 'actions', use_mac: 'actions', update_todo: 'actions', execute_action: 'actions', execute_code: 'actions',
+  send_message: 'actions', propose_action: 'actions', raise_approval: 'actions', approve_shown: 'actions', send_progress_note: 'actions', owner_message_heard: 'working', attach_file: 'actions', react_to_message: 'actions', offer_replies: 'actions', show_chart: 'actions', show_health_chart: 'actions', use_mac: 'actions', update_todo: 'actions', execute_action: 'actions', execute_code: 'actions',
   get_context: 'working', connect_service: 'working', delegate_task: 'working', start_task: 'working', cancel_task: 'working', check_task: 'working', steer_task: 'working',
 };
 // From the name alone, never the call's arguments. A name outside the record (a connected server's tool, a test double) is generic work.

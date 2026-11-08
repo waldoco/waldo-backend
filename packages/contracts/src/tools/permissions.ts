@@ -162,6 +162,9 @@ export const toolNameSchema = z.enum([
   'steer_task',
   // show_chart: a chart in the owner's app reply (the app.v1 chart_series part), with words for a build that draws none.
   'show_chart',
+  // show_health_chart: a chart of the owner's own readings in their app reply; the reply keeps the query, never the values,
+  // and the app's read draws it live. Offered while HEALTH_CHARTS is on.
+  'show_health_chart',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -318,6 +321,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'send_agent_mail',
     'offer_replies',
     'show_chart',
+    'show_health_chart',
     'propose_schedule',
     'write_sheet_cell',
     'propose_action',
