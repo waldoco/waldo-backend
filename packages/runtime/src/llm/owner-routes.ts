@@ -38,6 +38,8 @@ export type FloorPromise = Readonly<{ promise(turn: FloorTurn): string }>;
 export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?: string; primary?: ModelProvider; floorReply?: boolean | FloorPromise; health?: CircuitBreaker; toolSearch?: boolean; toolLoader?: 'harness';
   // WALDO_PROMPT_V2: the owner path's behavior prompt version 2 (prompt/messaging-behavior.ts).
   promptV2?: boolean;
+  // WALDO_CONTEXT_CAPS: an owner turn clears its tool results down to the latest few once they pass about 30k tokens.
+  contextCaps?: boolean;
   onAttempts?: (attempts: readonly LLMAttempt[]) => void; held?: () => Promise<boolean> }>;
 
 export const ownerModelAccess = (access: string | OwnerModelAccess): OwnerModelAccess =>
