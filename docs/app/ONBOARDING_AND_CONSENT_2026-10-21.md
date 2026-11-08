@@ -43,9 +43,9 @@ What each step does while the agreements are held back:
 
 Once the switch is `"1"`, every step after the agreements waits for them again (`agreements_required`), as before.
 
-**WHOOP's express authorization** to store the owner's data and use it in AI processing adds no purpose. It is the health plane's (`whoop`, `storage_compute`) and (`whoop`, `model_processing`) grants, both live, shown on the same consent screen as the other sources with WHOOP's own notice, copy version 3 (below). A WHOOP grant carries `version: 3` and a device grant `version: 2`; WHOOP rows may read back as 2 or 3, which the first run's health step ignores because it decides on source, purpose and status only. The health step reads both: a device source (`apple`, `samsung`, `health_connect`) counts on its storage grant; any other source counts only with storage and model use both live, and a source the health plane learns later never makes the step unreadable.
+**WHOOP's express authorization** to store the owner's data and use it in AI processing adds no purpose. It is the health plane's (`whoop`, `storage_compute`) and (`whoop`, `model_processing`) grants, both live, shown on the same consent screen as the other sources with WHOOP's own notice, copy version 4 (below). A new WHOOP grant carries `version: 4` and a device grant `version: 2`; WHOOP rows may read back as 2, 3 or 4, which the first run's health step ignores because it decides on source, purpose and status only. The health step reads both: a device source (`apple`, `samsung`, `health_connect`) counts on its storage grant; any other source counts only with storage and model use both live, and a source the health plane learns later never makes the step unreadable.
 
-## WHOOP notice, copy version 3
+## WHOOP notice, copy version 4
 
 This is the wording the app shows on the WHOOP consent screen. The app reads it from here. Both grants (storage, then AI use) are asked on this one notice, and any change to the wording is a new version number, which asks the owner again.
 
@@ -56,6 +56,8 @@ This is the wording the app shows on the WHOOP consent screen. The app reads it 
 > **1. Store it.** Waldo stores your WHOOP data in its health store and works out your Form, Recovery and Load from it, so you can see them. Readings are kept for 90 days and daily summaries for 24 months.
 >
 > **2. Let Waldo's AI models use it.** To plan your day, Waldo sends a summary of your WHOOP data (zones such as "low" or "high", not your raw numbers) to the companies that provide its AI models, today OpenAI and Anthropic. They are third parties. This happens only if you give this second yes. Waldo never uses your WHOOP data to create, develop, test, train, fine-tune or improve any model, prompt or eval.
+>
+> **Your authorization.** These two yeses are your express authorization, as WHOOP's terms require, for Waldo to store your WHOOP data and to use it with the AI models named above to plan your days.
 >
 > **Who else sees it.** Your WHOOP data, and Waldo's replies drawn from it, are shown only to you, on the surfaces you choose, unless you ask Waldo to share a specific item. A reply on WhatsApp, Telegram or iMessage passes through that channel's provider (Meta, Telegram, Apple). Waldo's notes about your WHOOP data are not medical advice.
 >
@@ -72,8 +74,8 @@ What the wording is built to keep true:
 Set no WHOOP secret and enter no client for the edge until all of these hold, none of which the app can settle:
 1. **The providers' terms.** WHOOP's §4 also binds anyone acting for Waldo, so zero-retention and no-training terms with every model provider an owner turn can route to are a precondition for WHOOP, not optional wording.
 2. **Trace capture.** Staging trace capture (Langfuse) is a further recipient of WHOOP-derived turns; the owner accepted that on 22 October 2026, and the notice names it for as long as staging capture stays on.
-3. **The legal reading.** Whether a consent screen counts as the "express authorization" WHOOP's terms ask for is a legal reading, not a code one.
-4. **The notice shipped.** The app ships this notice (copy version 3) and the health plane's copy-version migration is applied. The runbook `WHOOP_AND_OURA_2026-10-21.md` holds the same conditions.
+3. **The legal reading: settled.** The owner ruled on 7 November 2026 (waldoco/waldo-backend#1980) that each user's own consent, given when they connect WHOOP, is the express authorization WHOOP's terms require. Copy 4 adds the "Your authorization" line above to say so in words; it is the only change from copy 3.
+4. **The notice shipped.** The app ships this notice (copy version 4) and the health plane's copy-version migrations (`20261021170000`, `20261107090000`) are applied. The runbook `WHOOP_AND_OURA_2026-10-21.md` holds the same conditions.
 
 ## The chat-channel step
 
