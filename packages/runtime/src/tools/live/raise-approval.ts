@@ -23,10 +23,10 @@ const withdrawNote = (result: WithdrawOutcome): string => {
   return `It is closed with your reason and can no longer be approved; nothing was sent or done.${kept.length ? ` Its message on ${kept.join(' and ')} cannot be changed, but a tap or reply on it now answers that you withdrew it.` : ''} Tell the owner in a few words.`;
 };
 
-export const approvalHandlers = (desk: Pick<ApprovalDesk, 'waiting' | 'reraise' | 'withdraw'>) => [
+export const approvalHandlers = (desk: Pick<ApprovalDesk, 'waiting' | 'reraise' | 'withdraw'> & Partial<Pick<ApprovalDesk, 'decide'>>) => [
   {
     name: 'raise_approval',
-    description: "Your approval cards the owner has not settled. list shows each with when you raised it, the account a send goes from, its exact words and the card it replaces. raise shows one the owner put off to them again: do it when their conversation makes it matter again, never just because it waits. withdraw closes a stale card of your own, such as an earlier draft you have since revised, with a short reason the owner reads; it never approves anything, and a card the owner already decided stays as it is. To revise a card, prefer proposing the new version with replaces, which closes the old one when the new one reaches the owner.",
+    description: "Your approval cards the owner has not settled. list shows each with when you raised it, the account a send goes from, its exact words and the card it replaces. raise shows one the owner put off to them again: do it when their conversation makes it matter again, never just because it waits. withdraw closes a stale card of your own, such as an earlier draft you have since revised, with a short reason the owner reads; it never approves anything, and a card the owner already decided stays as it is. undo puts back a change already made, while its undo window is open, when the owner asks you to in their own message. To revise a card, prefer proposing the new version with replaces, which closes the old one when the new one reaches the owner.",
     schema: raiseApprovalArgsSchema,
     trigger_allowlist: allowlist('raise_approval'),
     autonomy_gated: false,
@@ -36,6 +36,14 @@ export const approvalHandlers = (desk: Pick<ApprovalDesk, 'waiting' | 'reraise' 
       if (args.operation === 'list') {
         const approvals = desk.waiting();
         return { ok: true as const, data: { approvals }, source_taint: approvals.some(card => card.outside_text) ? 'external' as const : null };
+      }
+      if (args.operation === 'undo') {
+        // Undoing reverses a change the owner made or asked for, so only their own message, before any outside text, asks for it.
+        if (!ctx?.ownerMessage || ctx.runOrigin !== 'owner') return { ok: false as const, error: NOT_THEIR_WORDS, code: 'forbidden' as const };
+        if (turnReadOutside(ctx)) return { ok: false as const, error: READ_OUTSIDE, code: 'forbidden' as const };
+        if (!desk.decide) return { ok: false as const, error: 'Undo is not available on this Waldo; nothing changed.', code: 'rejected' as const };
+        const undone = await desk.decide(args.approval_id!, 'u', ctx.turnId ?? args.approval_id!);
+        return { ok: true as const, data: { approval_id: args.approval_id!, outcome: undone.toast, receipt: undone.message }, source_taint: null };
       }
       if (args.operation === 'withdraw') {
         // In a turn that read outside text the desk closes the card with its own fixed words and tells the owner itself.
