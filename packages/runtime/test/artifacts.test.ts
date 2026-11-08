@@ -9,6 +9,7 @@ const fakeSql = () => {
     rows,
     exec(query: string, ...args: unknown[]) {
       if (query.startsWith('CREATE TABLE')) return { toArray: () => [] as Row[] };
+      if (query.includes('artifact_revisions')) return { toArray: () => [] as Row[] };
       if (query.startsWith('INSERT INTO artifacts')) {
         const [id, name, kind, revision, byte_size, r2_key, provenance, taint, created_at, updated_at] = args as [string, string, Row['kind'], number, number, string, string, string, number, number];
         rows.set(id, { id, name, kind, revision, byte_size, r2_key, provenance, taint, created_at, updated_at });

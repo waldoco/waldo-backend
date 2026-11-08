@@ -129,7 +129,7 @@ describe('an approved browser card runs as a replay job', () => {
       await serial(() => pass().then(() => undefined));
       await serial(() => pass().then(() => undefined));
       expect([...sent.keys()]).toEqual([replayKey(id)]);
-      expect(sent.get(replayKey(id))).toBe('Done: Run browse_act: The restaurant email offered the 8pm table.');
+      expect(sent.get(replayKey(id))).toBe('Done: Browse act: The restaurant email offered the 8pm table.');
       expect(status(sql, id)).toBe('done');
       expect(book.byKey(replayKey(id))!.status).toBe('applied');
       expect(await desk.decide(id, 'a', 'late-tap')).toEqual({ toast: 'Already handled.', message: 'Already handled.' });
@@ -165,7 +165,7 @@ describe('an approved browser card runs as a replay job', () => {
       clock.at += TASK_LEASE_MS + 1;
       await pass();
       expect(status(sql, midway)).toBe('uncertain');
-      expect(sent.get(replayKey(midway))).toMatch(/^The outcome is unknown: Run browse_act/);
+      expect(sent.get(replayKey(midway))).toMatch(/^The outcome is unknown: Browse act/);
       release();
       await pass();
       expect(ran).toEqual(['browse_act', 'browse_act:done']);
@@ -383,7 +383,7 @@ describe('an approved browser card runs as a replay job', () => {
       expect(JSON.parse(parked.inflight_json!)).toMatchObject({ tool: 'browse_act', call_id: replayKey(id) });
       expect(applyInterrupted(parked)).toBe(false);
       await pass();
-      expect(sent.get(replayKey(id))).toMatch(/^The outcome is unknown: Run browse_act/);
+      expect(sent.get(replayKey(id))).toMatch(/^The outcome is unknown: Browse act/);
       expect(status(sql, id)).toBe('uncertain');
       expect(log.map(entry => entry.hop)).not.toContain('task_apply_uncertain');
       release();
