@@ -741,7 +741,7 @@ export const createOwnerResponder = (
             const turnPrompt = assembleTurnPrompt({
               instructions,
               facts: {
-                clock: turnClockLine ??= ownerClockLine(clock),
+                clock: turnClockLine ??= ownerClockLine(clock, ownerTurnActive),
                 today,
                 // The owner's message is the composer's staged input, so only its operations material joins it.
                 reasons: reasons?.operations,
@@ -757,7 +757,7 @@ export const createOwnerResponder = (
             return { prompt: turnPrompt, suffix: { steering: contextSteering, forgets: forgetEpoch, generation, held: heldKey, health: admittedHealth, text: `${suffix}\n\n${turnPrompt.turnContext}`, sections: turnPrompt.contextSections } };
           };
           const built = reuseSuffix
-            ? { prompt: assembleTurnPrompt({ instructions, facts: { clock: turnClockLine ??= ownerClockLine(clock) }, room: systemRoom }), suffix: frozen }
+            ? { prompt: assembleTurnPrompt({ instructions, facts: { clock: turnClockLine ??= ownerClockLine(clock, ownerTurnActive) }, room: systemRoom }), suffix: frozen }
             : rebuilt();
           await assertCurrent();
           if (control.revision() !== contextSteering) throw new ClosedRunError();
@@ -781,7 +781,7 @@ export const createOwnerResponder = (
           lightFirst = false;
           if (lightNow) {
             const started = Date.now();
-            const lightPrompt = assembleTurnPrompt({ instructions, facts: { clock: turnClockLine ??= ownerClockLine(clock) }, room: systemRoom });
+            const lightPrompt = assembleTurnPrompt({ instructions, facts: { clock: turnClockLine ??= ownerClockLine(clock, ownerTurnActive) }, room: systemRoom });
             const lightEntries = [...cut.exchange.slice(0, -1), { ...current, content: `${ownTail}\n\n${lightPrompt.turnContext}` }];
             const lightSystem = { text: lightPrompt.system, sections: lightPrompt.sections, contextSections: lightPrompt.contextSections };
             const light = await complete(trace, 'reply', lightSystem, lightEntries, undefined, undefined, [LIGHT_ESCALATE], undefined, undefined, undefined, true)

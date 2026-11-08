@@ -7,7 +7,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
-import { ZONE_UNCONFIRMED } from '../src/prompt/messaging-behavior';
+import { ownerClockLine, ZONE_UNCONFIRMED } from '../src/prompt/messaging-behavior';
 
 const OWNER_ID = '4c9e1a7b-2d3f-4e85-b6a0-8f1d3c5e7a92';
 const world = vi.hoisted(() => ({ requests: [] as LLMGatewayRequest['request'][], call: null as { name: string; args: object } | null, saved: [] as Record<string, string>[], directory: true }));
@@ -67,12 +67,27 @@ it('the owner says where they are: the directory keeps the zone, the owner objec
   expect(toolResult()).not.toMatch(/invalid_args|rejected/);
 });
 
-it('a zone that is not a real IANA zone changes nothing and goes nowhere', async () => {
-  world.call = { name: 'set_schedule_preference', args: { action: 'timezone', timezone: 'Mars/Olympus_Mons' } };
-  const after = await appTurn('chat-timezone-invalid', 'I live on Mars');
+it('a zone written in the wrong case is saved by its IANA name', async () => {
+  world.call = { name: 'set_schedule_preference', args: { action: 'timezone', timezone: 'europe/london' } };
+  const after = await appTurn('chat-timezone-case', 'I live in London');
+  expect(after).toEqual({ zone: 'Europe/London', confirmed: true });
+  expect(world.saved[0]).toMatchObject({ p_timezone: 'Europe/London' });
+});
+
+// An offset has no daylight-saving rules and an abbreviation can name several zones, though Intl accepts both.
+it.each(['Mars/Olympus_Mons', 'EST', 'IST', '+05:30'])('%s is not saved as the owner\'s zone, and nothing changes', async (timezone) => {
+  world.call = { name: 'set_schedule_preference', args: { action: 'timezone', timezone } };
+  const after = await appTurn(`chat-timezone-invalid-${timezone.replace(/\W/g, '')}`, 'this is where I am');
   expect(after).toEqual({ zone: 'UTC', confirmed: false });
   expect(world.saved).toHaveLength(0);
   expect(toolResult()).toMatch(/rejected/);
+});
+
+it('only a turn with the owner on the other side says the zone is unconfirmed: a job\'s card cannot ask them', () => {
+  const clock = { timezone: 'UTC', now: () => new Date(0), confirmed: () => false };
+  expect(ownerClockLine(clock, true)).toContain(ZONE_UNCONFIRMED);
+  expect(ownerClockLine(clock)).not.toContain(ZONE_UNCONFIRMED);
+  expect(ownerClockLine({ ...clock, confirmed: () => true }, true)).not.toContain(ZONE_UNCONFIRMED);
 });
 
 it('when the directory does not keep the zone, the owner object does not apply it either', async () => {
