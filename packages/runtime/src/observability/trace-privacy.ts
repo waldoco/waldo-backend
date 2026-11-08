@@ -101,5 +101,6 @@ const gateWithoutCapture = (entry: TurnLogEntry): TurnLogEntry => {
 export const resolveCaptureText = (env: Readonly<{ LANGFUSE_CAPTURE_TEXT?: string; WALDO_ENVIRONMENT?: string }>): boolean =>
   env.LANGFUSE_CAPTURE_TEXT === 'true' && (env.WALDO_ENVIRONMENT ?? 'development') !== 'production';
 
-// A failure as its class only, for logs, traces and replies: its text can carry provider or internal detail.
-export const errorClass = (error: unknown): string => error instanceof Error ? error.name : 'unknown';
+// A failure as its class only, for logs, traces and replies: its text can carry provider or internal detail. A name is
+// set by whoever threw, so only a short plain name passes; anything else reads as unknown.
+export const errorClass = (error: unknown): string => error instanceof Error && /^[A-Za-z]{1,40}$/.test(error.name) ? error.name : 'unknown';

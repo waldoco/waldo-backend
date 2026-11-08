@@ -91,6 +91,8 @@ export type ConsoleAuth = Readonly<{
   issueProviderLinkCode?(doName: string, provider: 'telegram' | 'whatsapp' | 'imessage'): Promise<string | null>;
   saveSettings(doName: string, settings: OwnerSettings): Promise<boolean>;
   adminOverview(doName: string): Promise<AdminOverview | null>;
+  /** Whether this DO's owner is an active admin; reads nothing about any other owner. */
+  adminCheck(doName: string): Promise<boolean>;
   /** Spend across every owner for the last 30 days; null unless the database admits the caller as an admin. */
   adminCostSummary(doName: string): Promise<AdminCostSummary | null>;
   invite(doName: string, email: string, code: string): Promise<boolean>;
@@ -397,6 +399,7 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       return (await rpc('set_owner_settings', message, { p_do_name: doName, p_timezone: timezone, p_quiet_start: start ?? '', p_quiet_end: end ?? '', p_volume: volume })) === true;
     },
     adminOverview: async (doName) => (await rpc('admin_overview', `admin.${doName}`, { p_do_name: doName })) as AdminOverview | null,
+    adminCheck: async (doName) => (await rpc('admin_check', `admincheck.${doName}`, { p_do_name: doName })) === true,
     adminCostSummary: async (doName) => {
       const summary = await rpc('admin_cost_summary', `admincost.${doName}`, { p_do_name: doName });
       return summary === null ? null : adminCostSummarySchema.parse(summary);

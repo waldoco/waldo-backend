@@ -4046,15 +4046,19 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return `Fired ${command.target}.\n\n${traces.recent(timezone, null, 10)}`;
   }
 
-  // A deploy without the directory has one owner, who runs it: every command is theirs and fires are not spaced. With the
-  // directory, the admin commands need its admin check, and fires are spaced and capped per owner.
+  // A deploy without the directory that names its one owner (WALDO_OWNER_TELEGRAM_ID, the single-owner fallback) is run by
+  // that owner: every command is theirs and fires are not spaced. One without the directory that names no owner has lost
+  // its directory rather than chosen to run without one, so it has no admins. With the directory, the admin commands need
+  // its admin check, and fires are spaced and capped per owner.
+  private singleOwnerDeploy(): boolean { return !consoleAuth(this.env) && !!this.env.WALDO_OWNER_TELEGRAM_ID; }
+
   private async harnessAdmin(): Promise<boolean> {
     const auth = consoleAuth(this.env), doName = this.ctx.storage.kv.get<string>('do_name');
-    return auth ? Boolean(doName && await auth.adminOverview(doName)) : true;
+    return auth ? Boolean(doName && await auth.adminCheck(doName)) : this.singleOwnerDeploy();
   }
 
   private async admitHarness(command: HarnessCommand, budget?: () => boolean): Promise<HarnessRefusal | null> {
-    if (!consoleAuth(this.env)) return budget && !budget() ? { reason: 'budget' } : null;
+    if (this.singleOwnerDeploy()) return budget && !budget() ? { reason: 'budget' } : null;
     return admitHarnessCommand(command, { admin: () => this.harnessAdmin(), kv: this.ctx.storage.kv, now: Date.now, ...(budget ? { budget } : {}) });
   }
 
