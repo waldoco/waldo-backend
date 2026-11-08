@@ -128,6 +128,8 @@ export const photonAttachmentSource = (env: PhotonMediaEnv, fetcher: typeof fetc
 };
 
 const isVoice = (file: MediaFile) => file.mimeType.toLowerCase().startsWith('audio/') || file.name.toLowerCase().endsWith('.caf');
+// An iPhone voice message is Core Audio (.caf); any other audio is a file the owner sent, named as such, as on Telegram.
+const isVoiceMessage = (file: MediaFile) => file.mimeType.toLowerCase() === 'audio/x-caf' || file.name.toLowerCase().endsWith('.caf');
 const phrasing = (files: readonly MediaFile[]) => {
   const many = files.length > 1, photos = files.every(file => file.mimeType.toLowerCase().startsWith('image/'));
   return { what: `${photos ? 'photo' : 'file'}${many ? 's' : ''}`, it: many ? 'them' : 'it', is: many ? 'they are' : 'it is' };
@@ -144,7 +146,7 @@ export const IMESSAGE_MEDIA_REPLIES = {
 
 /** What the owner sent, as the model and the conversation read it beside the files. */
 export const iMessageMediaNotes = (files: readonly MediaFile[]): readonly InboundPart[] => files.map(file => ({ authorship: 'media_note',
-  text: isVoice(file) ? '[Owner sent a voice note.]' : readableAs({ kind: 'document', fileId: '', fileName: file.name, mimeType: file.mimeType, fileSize: file.size })?.kind === 'image'
+  text: isVoiceMessage(file) ? '[Owner sent a voice note.]' : isVoice(file) ? `[Owner sent an audio file "${file.name}".]` : readableAs({ kind: 'document', fileId: '', fileName: file.name, mimeType: file.mimeType, fileSize: file.size })?.kind === 'image'
     ? '[Owner sent a photo, attached.]' : `[Owner sent a file "${file.name}", attached.]` }));
 
 export type OpenedIMessageMedia =
@@ -172,9 +174,9 @@ const hear = async (media: IMessageMedia, deps: OpenIMessageMediaDeps, transcrib
     const stop = () => reject(bounded.reason);
     if (bounded.aborted) return stop();
     bounded.addEventListener('abort', stop, { once: true });
-    transcribe(audio, name, mime).then(resolve, reject).finally(() => bounded.removeEventListener('abort', stop));
+    transcribe(audio, name, mime, bounded).then(resolve, reject).finally(() => bounded.removeEventListener('abort', stop));
   });
-  const heard = await loadTelegramMedia({ kind: 'voice', fileId: voice!.id, fileName: voice!.name, mimeType: voice!.mimeType, fileSize: voice!.size },
+  const heard = await loadTelegramMedia({ kind: isVoiceMessage(voice!) ? 'voice' : 'audio', fileId: voice!.id, fileName: voice!.name, mimeType: voice!.mimeType, fileSize: voice!.size },
     { download: async () => fetched.bytes[0]!, transcribe: raced });
   deps.admit();
   const transcript = heard.parts.some(part => part.authorship === 'file_transcript');
@@ -208,7 +210,7 @@ export const openIMessageMedia = async (media: IMessageMedia, deps: OpenIMessage
     for (const [index, file] of files.entries()) {
       const kept = await deps.keep({ bytes: fetched.bytes[index]!, filename: file.name, mime: file.mimeType, key: `imessage:${media.messageGuid}:${index}` });
       deps.admit();
-      parts.push({ authorship: 'media_note', text: keptNote(readable[index]?.kind === 'image' ? 'photo' : `file "${file.name}"`, kept, readable[index] !== null) });
+      parts.push({ authorship: 'media_note', text: keptNote(readable[index]?.kind === 'image' ? 'a photo' : `a file "${file.name}"`, kept, readable[index] !== null) });
     }
     return { kind: 'opened', parts, attachments: readable.flatMap((kind, index) => kind ? [{ ...kind, data_base64: toBase64(fetched.bytes[index]!) }] : []) };
   }

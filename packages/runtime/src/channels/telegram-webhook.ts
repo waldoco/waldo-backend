@@ -68,12 +68,18 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // the owner has: Telegram only while they are linked there on a deploy that runs it, else the app, WhatsApp or iMessage.
   // Off: Telegram, as before.
   OWNER_SURFACE_DEFAULT?: string;
+  // "1" lets the app attach one voice note, photo or file to a chat message (APP_CHAT_UPLOAD_PATH). Off, the upload route is
+  // not there and a send that names an attachment is refused.
+  APP_CHAT_ATTACHMENTS?: string;
   // "1" serves the operator commands (/trace /e2e /usage /langfuse /heldrows /fire /ledger) to the owner in the console
   // (DASHBOARD_HARNESS_PATH), so none needs Telegram. Off, the route is not there.
   CONSOLE_HARNESS?: string;
   // "1" lets a typed /stop on WhatsApp stop the running turn at once and the owner's background work, as on Telegram. Off, it
   // waits its turn as any message does.
   WHATSAPP_STOP?: string;
+  // "1" lets a typed /stop on iMessage stop the running turn, the messages waiting ahead of it and the owner's background work.
+  // Off, it runs as any message does.
+  IMESSAGE_STOP?: string;
   // "1" lets a night that just ended, from an app upload or a WHOOP sync, give a Brief still to come one model turn: send it now,
   // earlier, or keep it, never later. WAKE_BRIEF_FRESH_MIN (default 180) is how fresh the night's end must be;
   // WAKE_BRIEF_TURNS_PER_DAY (default 3) caps the turns. Off unless "1".
