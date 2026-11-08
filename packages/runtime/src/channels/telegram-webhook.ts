@@ -121,6 +121,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" serves /app/v1/device-context (the owner's place consent and the latest coarse place per phone) and offers
   // get_device_context, which reads each phone's zone and city. Off unless "1".
   DEVICE_PLACE?: string;
+  // "1" with DEVICE_PLACE "1": a place upload that says the phone just arrived home or at the gym (places the owner named on the
+  // phone) brings Waldo's next look forward, as a move to another city does. Off unless "1".
+  ARRIVAL_LOOK?: string;
   // "1" with DEVICE_PLACE "1" and the four WeatherKit secrets set offers get_weather: today's and tomorrow's weather where the
   // owner's phones last were, from WeatherKit asked with the cell's centre only. Off unless "1".
   DEVICE_WEATHER?: string;

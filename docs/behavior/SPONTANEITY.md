@@ -58,10 +58,15 @@ New moments are inputs to that layer, never a second path to the owner.
   - Code holds only the limits: one wake per workout (none within three hours of the last, on any day, and one a day); a workout is "just finished" for three hours, so a run held longer drops it; no note on a day with nothing coming; and nothing while the switch or the owner's preference is off.
   - WHOOP says `workout` the same way, under the owner's ruling of 7 November 2026 that a user's own consent when connecting WHOOP is the authorization WHOOP's terms require. Source: `health/providers/whoop-owner.ts`.
 
+- **Arrived home or at the gym (`ARRIVAL_LOOK`, device-context ADR §9).**
+  - The owner names home and the gym on their phone, which keeps those places. When it arrives at one, its place upload says `arrived: home` or `gym`; only the word travels, and nothing stores it.
+  - For a reading observed within the hour, while the owner lets Waldo's model read place, the owner's object brings Waldo's look to now, as a move to another city does. The look is told an arrival is a reason to look, not a reason to speak, and keeps every limit of the look.
+  - Source: `channels/app-device-context.ts`, `health/zone-change-route.ts` (`placearrived`), `channels/interventions.ts` (`LookCause`), migration `20261107100000`.
+
 ## Not built: follow-ups for the proactive layer's seams
 
 - **Meeting ended or meeting notes ready.** These are inputs to the proactive layer's look (`intervention-review`) or triage, under `PROACTIVE_GATE`. They are not a separate `/signals` route with its own budget.
-- **Arrived or left a place.** The device-context ADR (`docs/proposals/ADR_DEVICE_CONTEXT_2026-11-05.md`) adds no trigger in v1 and rejects geofences and arrival moments as a fixed rule about what matters. Building one waits for the owner to change that ruling.
+- **Left a place.** Only arriving home or at the gym brings a look forward (above). Leaving one does nothing yet.
 - **Model-scheduled check-backs.** A "look again at HH:MM" belongs on the look's own one-shot schedule (`nextLookAt`), under the same limits.
 - **Oura and other cloud wearables.** Only the app upload and WHOOP say `woke` today.
 
