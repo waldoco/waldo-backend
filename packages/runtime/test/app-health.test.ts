@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { appHealthRoutesV1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, healthApiErrorV1Schema, healthDriverPhraseV1Schema, healthIngestV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema } from '../../contracts/src/app/health-ingest';
+import { appHealthRoutesV1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, healthApiErrorV1Schema, healthDriverPhraseV1Schema, healthIngestV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema } from '../../contracts/src/app/health-ingest';
 import { handleApp } from '../src/channels/app-api';
 import { healthScoresView } from '../src/channels/app-health';
 import { md5Hex } from '../src/channels/md5';
@@ -113,12 +113,12 @@ describe('app health routes: signed database calls', () => {
     expect([response.status, await response.json(), rpcs]).toEqual([400, { error: 'invalid_request' }, []]);
   });
   it('takes a WHOOP grant only on the WHOOP notice\'s copy version, and a device grant only on the device copy', async () => {
-    const whoopGrant = { ...grant, request_id: 'consent-grant-w01', source: 'whoop', version: 3 };
-    for (const refused of [{ ...whoopGrant, version: 2 }, { ...grant, version: 3 }]) {
+    const whoopGrant = { ...grant, request_id: 'consent-grant-w01', source: 'whoop', version: HEALTH_PROVIDER_CONSENT_VERSION_V1 };
+    for (const refused of [{ ...whoopGrant, version: 2 }, { ...whoopGrant, version: 3 }, { ...grant, version: HEALTH_PROVIDER_CONSENT_VERSION_V1 }]) {
       expect((await post('/app/v1/health/consents', refused, { 'idempotency-key': refused.request_id })).status, JSON.stringify(refused)).toBe(400);
     }
     expect(rpcs).toEqual([]);
-    rpcResult = { consent: { ...consent, source: 'whoop', version: 3 }, replayed: false, deletion_routed: false };
+    rpcResult = { consent: { ...consent, source: 'whoop', version: HEALTH_PROVIDER_CONSENT_VERSION_V1 }, replayed: false, deletion_routed: false };
     const accepted = await post('/app/v1/health/consents', whoopGrant, { 'idempotency-key': whoopGrant.request_id });
     expect([accepted.status, rpcs.map(call => call.fn)]).toEqual([200, ['health_consent_grant']]);
   });
@@ -223,6 +223,20 @@ describe('app health ingest: per-sample rejection at health revision 3', () => {
     // The same batch from an older build is refused whole, as every bad batch always was.
     expect((await post('/app/v1/health/ingest', { ...fahrenheit, request_id: 'health-upload-watch-3' })).status).toBe(400);
     expect(rpcs).toHaveLength(2);
+  });
+  it('takes a food entry from the phone\'s health store, and refuses one carrying the food\'s name without sending the name on', async () => {
+    const point = { ...sample, start_at: '2026-10-10T07:30:00Z', end_at: '2026-10-10T07:30:00Z' };
+    const lunch = { ...point, sample_id: 'HK:food-1', signal: 'nutrition', unit: 'kilocalories', value: 612.4, protein_g: 38.5, carbohydrate_g: 64, fat_g: 21.2, meal: 'lunch' };
+    const meals = { ...batch, request_id: 'health-upload-food-1', samples: [lunch], deletions: [{ sample_id: 'HK:food-0', signal: 'nutrition', revision: 2 }] };
+    rpcResult = { ...receipt, request_id: meals.request_id, accepted: 1, deleted: 1 };
+    expect((await post('/app/v1/health/ingest', meals)).status).toBe(200);
+    expect(JSON.parse(rpcs[0]!.body.p_payload as string)).toEqual(meals);
+    const named = { ...meals, request_id: 'health-upload-food-2', samples: [{ ...lunch, name: 'Synthetic Salad Name' }] };
+    rpcResult = { ...receipt, request_id: named.request_id, accepted: 0, deleted: 1, rejected: [{ change: 'sample', index: 0, signal: 'nutrition', reason: 'invalid_sample' }] };
+    expect((await post('/app/v1/health/ingest', named, v3)).status).toBe(200);
+    const payload = rpcs[1]!.body.p_payload as string;
+    expect(JSON.parse(payload).samples).toEqual([{ rejected: 'invalid_sample', signal: 'nutrition' }]);
+    expect(payload).not.toContain('Synthetic Salad Name');
   });
   it('keeps an older build all-or-nothing, exactly as before: the same mixed batch is refused and nothing is called', async () => {
     for (const header of [{}, { 'x-waldo-app-contract': 'health=2' }, { 'x-waldo-app-contract': 'health=1' }, { 'x-waldo-app-contract': 'health=3,health=3' }, { 'x-waldo-app-contract': 'approvals=3' }] as Record<string, string>[]) {
