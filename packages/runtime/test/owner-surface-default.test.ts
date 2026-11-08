@@ -209,12 +209,30 @@ describe('the surface a caller without one reaches, with the switch on', () => {
     });
   });
 
-  it('stays Telegram for an owner still linked there', async () => {
+  it('stays Telegram for an owner still linked there, while the owner\'s choice does not decide (PROACTIVE_BY_CHOICE off)', async () => {
     await ownerOn('surface-telegram-linked', { telegram_subject: '7' }, { ...ON, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture' }, async (owner, state) => {
       expect((await event(owner, 'tg-1')).status).toBe(200);
       expect(eventOutcome(state)).toEqual({ runs: ['completed'], admission: ['completed'] });
       expect(telegram.sends).toEqual(['sendMessage']);
       expect(world.texts).toEqual([]);
+    });
+  });
+
+  it('with the owner\'s choice deciding, writes the event of an owner still linked on Telegram where they chose, and nothing to Telegram', async () => {
+    const name = 'surface-telegram-by-choice';
+    await ownerOn(name, { telegram_subject: '7', app_subject: String(appSubjectFor(name)) }, { ...ON, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', PROACTIVE_BY_CHOICE: '1' }, async (owner, state) => {
+      expect((await event(owner, 'tg-choice-1')).status).toBe(200);
+      expect(eventOutcome(state)).toEqual({ runs: ['completed'], admission: ['completed'] });
+      expect(JSON.stringify([...state.storage.kv.list()])).toContain('Event - uptime: Deploy finished');
+      expect(telegram.sends).toEqual([]);
+    });
+  });
+
+  it('with the owner\'s choice deciding, keeps an owner with no other surface on Telegram', async () => {
+    await ownerOn('surface-telegram-only-by-choice', { telegram_subject: '7' }, { ...ON, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', PROACTIVE_BY_CHOICE: '1' }, async (owner, state) => {
+      expect((await event(owner, 'tg-only-1')).status).toBe(200);
+      expect(eventOutcome(state)).toEqual({ runs: ['completed'], admission: ['completed'] });
+      expect(telegram.sends).toEqual(['sendMessage']);
     });
   });
 

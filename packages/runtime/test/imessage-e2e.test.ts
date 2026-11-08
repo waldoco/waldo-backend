@@ -14,6 +14,7 @@ import { BridgeStore } from '../src/channels/imessage/bridge-store';
 import { gmailPushBook } from '../src/channels/gmail-push';
 import { PROPOSED_LOCAL_TEST_POLICY } from '../src/channels/imessage/policy';
 import { fixtureDirectory, type FixtureOwner } from './helpers/imessage-fixture-directory';
+import { presenceAuthority } from './helpers/directory-presence';
 import { SimulatedHost, type Delivery } from './helpers/imessage-sim-host';
 import { appSubjectFor } from '../src/channels/app-api';
 import { consoleAuth } from '../src/identity/console-auth';
@@ -1339,6 +1340,28 @@ it('an iMessage-only owner\'s due reminder goes out on iMessage and settles once
     expect(reminderRuns(state)).toEqual(['completed']);
     expect(state.storage.sql.exec("SELECT id FROM schedule WHERE kind = 'reminder'").toArray()).toEqual([]);
   });
+});
+
+// PROACTIVE_BY_CHOICE: a Telegram link no longer decides; iMessage, the owner's one other surface, takes the work.
+it('with the owner\'s choice deciding, an owner still linked on Telegram whose only other surface is iMessage gets a reminder there, and nothing reaches Telegram', async () => {
+  const w = await world();
+  await iMessageOnly(w);
+  // The directory admits the owner's scheduled work through their Telegram presence, as it does for any owner linked there.
+  const directory = vi.mocked(globalThis.fetch).getMockImplementation()!;
+  vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => String(input instanceof Request ? input.url : input).endsWith('/rpc/common_owner_authority')
+    ? presenceAuthority('10000000-0000-4000-8000-000000000001', init?.body) : directory(input, init));
+  const env = await runInDurableObject(w.ownerStub, async (instance, state) => {
+    state.storage.kv.put('telegram_subject', '7');
+    await seedDueReminder(state);
+    return (instance as unknown as { env: { PROACTIVE_BY_CHOICE?: string } }).env;
+  });
+  env.PROACTIVE_BY_CHOICE = '1';
+  try {
+    const delivery = await scheduledOnIMessage(w, REMINDER);
+    await hostReports(w, delivery);
+    await runInDurableObject(w.ownerStub, async (_i, state) => expect(reminderRuns(state)).toEqual(['completed']));
+    expect(forbiddenEgress).toEqual([]);
+  } finally { delete env.PROACTIVE_BY_CHOICE; }
 });
 
 it('an iMessage-only owner\'s reminder that the bridge proves it never sent fails its run and keeps its note', async () => {

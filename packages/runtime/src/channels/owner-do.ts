@@ -254,7 +254,7 @@ import { healthMemoryOn, memoryFlushHooks, setHealthMemory } from './health-memo
 import { capacityBudgetContext, cardCapacityNote, recentBlocks, recentMoves, runCapacityPass } from './capacity';
 import { capacityContext } from '../prompt/capacity';
 import { renderHealth } from '../context-composer/prompt';
-import { chooseProactiveSurface, linkingAppRows, proactiveBothDefault, proactiveReads, proactiveSurface, unaskedRecord, proactiveSurfaceReceipt, type ChatLinks, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, answersOwnerIn, ANSWERS_WHERE_ASKED, waitingForWhatsApp, wantedTargets, whatsappSubjects, withCopy, IMESSAGE_COPY_PREFIX, WHATSAPP_COPY_FRESH_MS, WHATSAPP_COPY_PREFIX, type ProactiveTarget } from './proactive-surface';
+import { chooseProactiveSurface, linkingAppRows, proactiveBothDefault, proactiveReads, proactiveSurface, unaskedRecord, proactiveSurfaceReceipt, type ChatLinks, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, answersOwnerIn, ANSWERS_WHERE_ASKED, scheduledWaitingFor, wantedTargets, whatsappSubjects, withCopy, IMESSAGE_COPY_PREFIX, WHATSAPP_COPY_FRESH_MS, WHATSAPP_COPY_PREFIX, type ProactiveTarget } from './proactive-surface';
 import { appApprovalsRequest } from './app-approvals';
 import { WHATSAPP_LINK_CONFIRM_ACTION, whatsappLinkConfirmAction, whatsappLinkConfirmPage } from './whatsapp-link-console';
 import { WHATSAPP_LINK_PATH, whatsappLinkDirectory } from '../identity/whatsapp-link';
@@ -785,17 +785,26 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // The surface for a caller with none of its own: the console, Google consent, an event notice, the owner's runs. With
   // OWNER_SURFACE_DEFAULT on, Telegram only while the owner is linked there on a deploy that runs it; then the app, WhatsApp or
   // iMessage they are bound on; the app when none is yet, where no owner is bound and a send goes nowhere.
-  // Among the surfaces they are bound on, the owner's own choice for proactive work comes first.
+  // Among the surfaces they are bound on, the owner's own choice for proactive work comes first. With PROACTIVE_BY_CHOICE on,
+  // being linked on Telegram does not come first: Telegram is used only when no other surface is bound.
   private ownerSurface(): ChannelKind {
     if (!this.surfaceRouting()) return 'telegram';
     const kv = this.ctx.storage.kv;
-    if (this.env.TELEGRAM_BOT_TOKEN && kv.get<boolean>('telegram_unlinked') !== true
-      && resolveOwnerTelegramId(kv.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null) > 0) return 'telegram';
+    const onTelegram = !!this.env.TELEGRAM_BOT_TOKEN && kv.get<boolean>('telegram_unlinked') !== true
+      && resolveOwnerTelegramId(kv.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null) > 0;
+    if (onTelegram && !this.proactiveByChoice()) return 'telegram';
     const bound: Readonly<Record<ProactiveTarget, boolean>> = { app: this.appBound(), whatsapp: this.whatsappBound(), imessage: this.imessageBound() };
     return wantedTargets(proactiveSurface(kv, proactiveBothDefault(this.env))).find(target => bound[target])
-      ?? (bound.app ? 'app' : bound.whatsapp ? 'whatsapp' : bound.imessage ? 'imessage' : 'app');
+      ?? (bound.app ? 'app' : bound.whatsapp ? 'whatsapp' : bound.imessage ? 'imessage' : onTelegram ? 'telegram' : 'app');
   }
   private surfaceRouting(): boolean { return this.env.OWNER_SURFACE_DEFAULT === '1'; }
+  private proactiveByChoice(): boolean { return this.env.PROACTIVE_BY_CHOICE === '1'; }
+  // An app owner's scheduled work waits for a time zone the owner confirmed in the app. With PROACTIVE_BY_CHOICE on, a
+  // Telegram-linked owner's zone counts as well: their work already ran on it there, and moving it to the app must not hold it.
+  private zoneSettled(): boolean {
+    const kv = this.ctx.storage.kv;
+    return kv.get<boolean>('timezone_confirmed') === true || (this.proactiveByChoice() && telegramLinked(kv));
+  }
   // A notice outside any turn, on `surface` as OUTSIDE_TURN_NOTICE declares. A transcript write is made under the turn queue
   // the caller holds, as every other writer of that transcript does. 'blocked': it certainly did not leave (the gate refused,
   // or the directory does not admit the owner or cannot say); 'unroutable': the surface takes no notice outside a turn;
@@ -1427,9 +1436,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return !!doName && kv.get<string>('imessage_subject') === String(appSubjectFor(doName)) && iMessageComposition(this.imessageHost.env) !== null
       && new IMessageOwnerInbox(this.ctx.storage).latest() !== null;
   }
-  // iMessage is the owner's only surface: no Telegram link and no app or WhatsApp binding.
+  // iMessage is the owner's only surface for proactive work: no app or WhatsApp binding, and no Telegram link unless the owner's
+  // choice decides (PROACTIVE_BY_CHOICE), where Telegram takes nothing another surface can.
   private imessageOnly(): boolean {
-    return !telegramLinked(this.ctx.storage.kv) && !this.appBound() && !this.whatsappBound() && this.imessageBound();
+    return (this.proactiveByChoice() || !telegramLinked(this.ctx.storage.kv)) && !this.appBound() && !this.whatsappBound() && this.imessageBound();
   }
   // Scheduled work for an owner whose only surface is iMessage is admitted by the sender they last wrote from, through the
   // same directory read that admits their turns. A newer sender or a revoked message ends it.
@@ -2429,7 +2439,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (!['schedule', 'loops', 'loop_mail_sources', 'heartbeat_notified'].every(has)
         || !sql.exec('SELECT 1 FROM schedule WHERE id = ?', HEARTBEAT_ID).toArray().length) return;
       // While a delivery record is open the heartbeat keeps its grid, so its pass reaches that record as often as with the switch off.
-      if ((this.appBound() && kv.get<boolean>('timezone_confirmed') !== true) || this.outboxOpen()) return this.restoreHeartbeat();
+      if ((this.appBound() && !this.zoneSettled()) || this.outboxOpen()) return this.restoreHeartbeat();
       const scheduler = new Scheduler(sql, this.ctx.storage, productionDeps());
       const found = scheduler.lookup(HEARTBEAT_ID);
       if (found.state !== 'entry') return;
@@ -3328,6 +3338,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // Set only for an owner the directory admits on the app: whether WhatsApp takes this pass's proactive work, and the
       // surfaces that get a copy of what the first one takes.
       let whatsappTarget: boolean | null = null, copies: readonly ProactiveTarget[] = [];
+      // A Telegram-linked owner whose proactive work goes elsewhere: Telegram keeps only what answers them there.
+      let telegramAnswers = false;
       const auth = consoleAuth(this.env);
       if (auth) {
         const doName = this.ctx.storage.kv.get<string>('do_name');
@@ -3336,7 +3348,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           && this.ctx.storage.kv.get<boolean>('telegram_unlinked') !== true
           && this.env.OWNER_DO && this.env.OWNER_DO.idFromName(doName).toString() === this.ctx.id.toString();
         if (this.whatsappBound()) rememberWhatsAppSubject(this.ctx.storage.kv, this.ctx.storage.kv.get<string>('whatsapp_subject')!);
-        const appOwner = telegramBound ? null : await this.appOwnerLookup();
+        // With PROACTIVE_BY_CHOICE on, a Telegram link does not decide: the owner's choice does, and Telegram runs the pass only
+        // when no other surface takes it.
+        const byChoice = this.proactiveByChoice();
+        const appOwner = telegramBound && !byChoice ? null : await this.appOwnerLookup();
         // A directory that cannot say whether WhatsApp is still bound holds the pass, as an outage of the app lookup does.
         const targets = appOwner?.kind === 'admitted' ? await this.proactiveTargets(auth) : null;
         if (appOwner?.kind === 'admitted' && targets !== null && targets !== 'retry') {
@@ -3347,11 +3362,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           this.scheduledAppDelivery = this.appDeliveryFor(appOwner.authority);
           this.jobOwner = Promise.resolve(this.appScheduledOwner(appOwner.authority));
         }
-        const whatsappOnly = !telegramBound && appOwner?.kind !== 'admitted' && !this.appBound() && this.whatsappBound();
+        const whatsappOnly = (!telegramBound || byChoice) && appOwner?.kind !== 'admitted' && !this.appBound() && this.whatsappBound();
         if (whatsappOnly) channel = 'whatsapp';
         // An owner whose only surface is iMessage runs on iMessage; the scheduled pass admits them through their sender.
-        const imessageOnly = !telegramBound && appOwner?.kind !== 'admitted' && this.imessageOnly();
+        const imessageOnly = (!telegramBound || byChoice) && appOwner?.kind !== 'admitted' && this.imessageOnly();
         if (imessageOnly) channel = 'imessage';
+        telegramAnswers = !!(telegramBound && byChoice && (whatsappTarget !== null || whatsappOnly || imessageOnly) && this.env.TELEGRAM_BOT_TOKEN);
         if (!telegramBound && whatsappTarget === null && !whatsappOnly && !imessageOnly) {
           // No surface is left to run a transport pass, so a record that ended without its job being settled (an unlink whose
           // own settle failed) is settled here, and asked for again until it is.
@@ -3374,7 +3390,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (this.env.NEXT_DUE_ALARM === '1') this.ctx.storage.kv.put(ALARM_FULL_RELEASE, this.env.WALDO_RELEASE ?? 'unknown');
       // Messages still waiting for a WhatsApp number that no longer takes proactive work go to the app; they are due now.
       const leftForWhatsApp = whatsappTarget === null ? null : this.leftForWhatsApp(whatsappTarget);
-      if (leftForWhatsApp) await finalOutbox.wake(waitingForWhatsApp(leftForWhatsApp));
+      if (leftForWhatsApp) await finalOutbox.wake(scheduledWaitingFor(leftForWhatsApp));
+      // Scheduled messages queued for Telegram before the owner's choice decided go to the app, now.
+      const leftForTelegram = telegramAnswers && this.appBound() ? new Set([this.ctx.storage.kv.get<string>('telegram_subject')!]) : null;
+      if (leftForTelegram) await finalOutbox.wake(scheduledWaitingFor(leftForTelegram));
       await lane('mac', () => this.drainMacDeliveries(appWithTelegramCopy ? 'app' : channel));
       await lane('mail', () => this.drainAgentMail(appWithTelegramCopy ? 'app' : channel, alarmEnd));
       await lane('jobs', () => this.drainJobs(channel, alarmEnd));
@@ -3425,7 +3444,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           return found.kind;
         }, () => Date.now() + APP_ADMISSION_RETRY_MS));
         // Messages left waiting for a WhatsApp number that no longer takes proactive work go to the app.
-        if (leftForWhatsApp) routes.push(this.linkingAppRows(this.outboxRoute('app', waitingForWhatsApp(leftForWhatsApp))));
+        if (leftForWhatsApp) routes.push(this.linkingAppRows(this.outboxRoute('app', scheduledWaitingFor(leftForWhatsApp))));
+        // So do scheduled messages left waiting for Telegram; whatever else is addressed there (the answers to what the owner wrote
+        // on Telegram) still goes there.
+        if (leftForTelegram) routes.push(this.linkingAppRows(this.outboxRoute('app', scheduledWaitingFor(leftForTelegram))));
+        if (telegramAnswers) routes.push(this.outboxRoute('telegram'));
         // An answer to work asked for on WhatsApp goes to that chat while the number is bound, whatever takes proactive work. Once
         // the number is unbound it goes to the app, so the answer is never left with no route.
         const whatsappSubject = this.ctx.storage.kv.get<string>('whatsapp_subject');
@@ -3466,7 +3489,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         try {
           // An app owner's jobs wait for a confirmed zone. The event-brief sweep, which a Telegram runtime build can arm, is
           // cancelled instead of held, so it does not wake every ten minutes; confirming the zone arms it again.
-          const held = (kind: ScheduleKind): ScheduleHold => channel !== 'app' || this.ctx.storage.kv.get<boolean>('timezone_confirmed') === true ? false : kind === 'event_briefs' ? 'drop' : 'hold';
+          const held = (kind: ScheduleKind): ScheduleHold => channel !== 'app' || this.zoneSettled() ? false : kind === 'event_briefs' ? 'drop' : 'hold';
           const onHeld = (kind: ScheduleKind, outcome: 'hold' | 'drop') => {
             const code = `${kind}_timezone_unconfirmed`;
             log({ trace: `alarm:${started}`, hop: outcome === 'drop' ? 'scheduled_drop' : 'scheduled_hold', ms: 0, ok: true, code, detail: code });
@@ -4903,7 +4926,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const updates = updateBook(storage.sql);
     // App-only owners get no proactive work on a fallback zone: only the owner's own time-zone choice confirms one.
-    const armable = (_kind: ScheduleKind) => channel !== 'app' || identity.get<boolean>('timezone_confirmed') === true;
+    const armable = (_kind: ScheduleKind) => channel !== 'app' || this.zoneSettled();
     // Turning a kind on arms it only where `armable` holds, and the brief sweep only while a Google grant exists.
     const armableNow = async () => { const sweeps = briefSweepRuns(watchGrants(await accounts())); return (kind: ScheduleKind) => armable(kind) && (kind !== 'event_briefs' || sweeps); };
     const armOwnJobs = (timezone: string, now: number, replanCards = false) => Promise.all([

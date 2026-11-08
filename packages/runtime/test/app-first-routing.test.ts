@@ -16,6 +16,7 @@ import { FINAL_OUTBOX_KEY, TelegramFinalOutbox, type FinalRecord } from '../src/
 import { updateBook } from '../src/channels/update-cards';
 import { claimStore } from '../src/memory/claims';
 import { persistTransportWake } from '../src/scheduler/alarm-slot';
+import { reminderBook } from '../src/channels/reminders';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
@@ -30,6 +31,7 @@ const ORDER_TEXT = 'Inbox triage done: two threads need you.';
 const CHECK_BACK_TEXT = 'I looked for the invoice in your sent mail and found nothing yet. Want me to draft it?';
 const NUDGE_TEXT = 'A nudge queued for the app.';
 const REPLY_TEXT = 'Here is your answer.';
+const REMINDER_TEXT = 'Time to call Sam, as you asked.';
 const fixture = vi.hoisted(() => ({ event: null as CalendarItem | null, changes: [] as CalendarChange[], requests: [] as string[] }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
@@ -51,7 +53,8 @@ vi.mock('../src/channels/telegram-turn', async load => {
       : content.includes('[Update check') ? UPDATE_TEXT
       : content.includes('[Scheduled card') ? CARD_TEXT
       : content.includes('[Standing order due now') ? ORDER_TEXT
-      : content.includes('[Check-back due now') ? CHECK_BACK_TEXT : 'SKIP';
+      : content.includes('[Check-back due now') ? CHECK_BACK_TEXT
+      : content.includes('[Reminder due now') ? REMINDER_TEXT : 'SKIP';
     return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
@@ -59,17 +62,18 @@ vi.mock('../src/channels/telegram-turn', async load => {
 const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '6c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f';
+const WHATSAPP = '15550004444';
 const AT = Date.parse('2026-10-03T09:00:00Z');
 const DAY = '2026-10-03';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 type Authority = 'current' | 'revoked' | 'outage' | 'error';
 type Sent = { chat_id: number; text: string; reply_markup?: unknown };
 // authorityAfter: the directory answers 'current' this many times, then `authority`.
-const wire = { authority: 'current' as Authority, authorityAfter: 0, asked: 0, presence: true, telegram: 'ok' as 'ok' | 'fails', telegramSent: [] as Sent[], previews: [] as unknown[] };
+const wire = { authority: 'current' as Authority, authorityAfter: 0, asked: 0, presence: true, telegram: 'ok' as 'ok' | 'fails', telegramSent: [] as Sent[], previews: [] as unknown[], whatsappSent: [] as string[] };
 
 beforeEach(() => {
   fixture.event = null; fixture.changes = []; fixture.requests = [];
-  wire.authority = 'current'; wire.authorityAfter = 0; wire.asked = 0; wire.presence = true; wire.telegram = 'ok'; wire.telegramSent = []; wire.previews = [];
+  wire.authority = 'current'; wire.authorityAfter = 0; wire.asked = 0; wire.presence = true; wire.telegram = 'ok'; wire.telegramSent = []; wire.previews = []; wire.whatsappSent = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -94,6 +98,11 @@ beforeEach(() => {
       return Response.json({ ok: true, result: { message_id: 40 + wire.telegramSent.length, chat: { id: sent.chat_id } } });
     }
     if (url.startsWith('https://api.telegram.org/')) return Response.json({ ok: true, result: true });
+    if (url === 'https://graph.facebook.com/v26.0/fictional-phone-id/messages') {
+      const body = JSON.parse(String(init?.body)) as { to: string; type: string; text?: { body: string } };
+      if (body.type === 'text') wire.whatsappSent.push(body.text!.body);
+      return Response.json({ messaging_product: 'whatsapp', contacts: [{ input: body.to, wa_id: body.to }], messages: [{ id: `wamid.out.${wire.whatsappSent.length}` }] });
+    }
     return Response.json(true);
   });
 });
@@ -101,7 +110,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 
 type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown> }; fetch(request: Request): Promise<Response>; alarm(): Promise<void> }>;
 type Ctx = { now: number; name: string; appSubject: number };
-type Binding = Readonly<{ app?: boolean }>;
+type Binding = Readonly<{ app?: boolean; byChoice?: boolean; whatsapp?: boolean }>;
 
 // An owner bound to Telegram (subject 7) who has also used the app, with Google connected, the clock pinned, and no time
 // zone confirmed in the app. The jobs each runtime arms on its first build are cleared, so each test schedules exactly the
@@ -116,12 +125,16 @@ const withOwner = async (name: string, run: (owner: Owner, state: DurableObjectS
       state.storage.kv.put('do_name', name);
       state.storage.kv.put('telegram_subject', '7');
       if (binding.app) state.storage.kv.put('app_subject', String(ctx.appSubject));
+      // Written to the app and to WhatsApp, the owner's choice; they wrote on WhatsApp an hour ago, so its window is open.
+      if (binding.whatsapp) { state.storage.kv.put('whatsapp_subject', WHATSAPP); state.storage.kv.put('proactive_surface_v1', 'both'); state.storage.kv.put('wa_last_inbound_ms', AT - 3_600_000); }
       state.storage.kv.put('timezone', 'UTC');
       await state.storage.put('origin', 'https://fixture.invalid');
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only',
         scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/gmail.readonly'] }]);
       const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC',
-        WALDO_OWNER_TELEGRAM_ID: undefined, GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', MAIL_SOURCE_FOLLOWUPS: '1', CALENDAR_GROUNDED_PREP: '1' }) as unknown as Owner;
+        WALDO_OWNER_TELEGRAM_ID: undefined, GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', MAIL_SOURCE_FOLLOWUPS: '1', CALENDAR_GROUNDED_PREP: '1',
+        ...(binding.byChoice ? { PROACTIVE_BY_CHOICE: '1', OWNER_SURFACE_DEFAULT: '1' } : {}),
+        ...(binding.whatsapp ? { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' } : {}) }) as unknown as Owner;
       await owner.setup('telegram').ready;
       await owner.setup('app').ready;
       state.storage.sql.exec('DELETE FROM schedule');
@@ -414,5 +427,201 @@ describe('link previews on Telegram', () => {
       expect(wire.telegramSent).toEqual([{ chat_id: 7, text: REPLY_TEXT }, { chat_id: 7, text: NUDGE_TEXT }]);
       expect(wire.previews).toEqual([noPreview, noPreview]);
     });
+  });
+});
+
+// PROACTIVE_BY_CHOICE: the owner's choice decides where Waldo writes first, whether or not they are still linked on Telegram.
+// Telegram takes none of it while another surface reaches them, and keeps only what answers what they wrote there.
+describe('with the owner\'s choice deciding, for an owner still linked on Telegram', () => {
+  const ON = { app: true, byChoice: true } as const;
+
+  it('a day card reaches the app chat and nothing goes to Telegram, on the zone the owner had on Telegram with none confirmed in the app', async () => {
+    await withOwner('choice-day-card', async (owner, state, ctx) => {
+      expect(state.storage.kv.get('timezone_confirmed')).toBeUndefined();
+      dayPlanBook(state.storage.sql).save(DAY, { card: 'card:brief', time: '00:00', reason: 'planned' });
+      await due(state, 'card:brief', 'brief');
+      await schedulePass(owner, state);
+      expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: CARD_TEXT, channel: 'app' }]);
+      expect(wire.telegramSent).toEqual([]);
+    }, ON);
+  });
+
+  it('an update card reaches the app chat and nothing goes to Telegram', async () => {
+    await withOwner('choice-update-card', async (owner, state, ctx) => {
+      dayPlanBook(state.storage.sql).sent(DAY, 'card:brief');
+      updateBook(state.storage.sql).mark('calendar_since', AT - 3_600_000);
+      fixture.changes = [{ id: 'event-1', title: 'Changed event', status: 'confirmed', start: `${DAY}T11:00:00Z`, end: `${DAY}T11:30:00Z`, all_day: false, description: '', etag: 'r2',
+        created: new Date(AT - 86_400_000).toISOString() } as CalendarChange];
+      await dueSweep(state);
+      await schedulePass(owner, state);
+      expect(reportMachineJobs(state.storage.sql)).toHaveLength(1);
+      await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
+      await outboxPass(owner, state, ctx);
+      expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: UPDATE_TEXT, channel: 'app' }]);
+      expect(wire.telegramSent).toEqual([]);
+    }, ON);
+  });
+
+  it('a mail follow-up reaches the app chat, settles as delivered, and nothing goes to Telegram', async () => {
+    await withOwner('choice-mail-followup', async (owner, state, ctx) => {
+      const updates = updateBook(state.storage.sql);
+      updates.observeMail('mail:thread-1', 'thread-1', AT - 600_000, 'message-1');
+      updates.record(DAY, AT - 600_000, [{ source: 'mail', kind: 'new', detail: '{"from":"Pat","subject":"Review the deck by 10"}', source_ref: 'mail:thread-1', source_message_id: 'message-1' }], null);
+      state.storage.sql.exec('UPDATE observed_mail SET judged = 1');
+      loopBook(state.storage.sql, { newId: () => 'deck', now: () => AT }).open({ title: 'Check the deck review', due: `${DAY}T09:30`, source_ref: 'mail:thread-1' });
+      await dueSweep(state);
+      await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
+      expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: FOLLOWUP_TEXT, channel: 'app' }]);
+      expect(state.storage.sql.exec('SELECT delivery_state FROM loop_mail_sources').toArray()).toEqual([{ delivery_state: 'delivered' }]);
+      expect(wire.telegramSent).toEqual([]);
+    }, ON);
+  });
+
+  it('meeting prep reaches the app chat and nothing goes to Telegram', async () => {
+    await withOwner('choice-prep', async (owner, state, ctx) => {
+      fixture.event = { id: 'event-1', title: 'Design review', status: 'confirmed', start: `${DAY}T09:30:00Z`, end: `${DAY}T10:00:00Z`, all_day: false,
+        description: 'Bring the onboarding mocks.', attendee_names: ['Pat'], attendees: 3, etag: 'r1' } as CalendarItem;
+      await dueSweep(state);
+      await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
+      expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: PREP_TEXT, channel: 'app' }]);
+      expect(wire.telegramSent).toEqual([]);
+    }, ON);
+  });
+
+  it('the check-back of a due loop reaches the app chat and nothing goes to Telegram', async () => {
+    await withOwner('choice-heartbeat', async (owner, state, ctx) => {
+      loopBook(state.storage.sql, { newId: () => 'loop-1', now: () => AT }).open({ title: 'Send the invoice', due: `${DAY}T08:00` });
+      await armHeartbeat(new Scheduler(state.storage.sql, state.storage, productionDeps()), Date.now() - 60 * 60_000);
+      await schedulePass(owner, state);
+      reportMachineJobs(state.storage.sql);
+      await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
+      expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: CHECK_BACK_TEXT, channel: 'app' }]);
+      expect(wire.telegramSent).toEqual([]);
+    }, ON);
+  });
+
+  it('a standing order\'s report reaches the app chat and nothing goes to Telegram', async () => {
+    await withOwner('choice-standing-order', async (owner, state, ctx) => {
+      const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
+      const order = await standingOrderBook(state.storage.sql, scheduler, { timezone: 'UTC', now: () => new Date(Date.now()) }, () => 'order1')
+        .set({ scope: 'Triage my inbox', trigger: 'daily', at: '08:00', gate: 'act_and_report', escalation: 'message_owner' });
+      await due(state, order.id, 'standing_order', { order_id: order.id });
+      await schedulePass(owner, state);
+      expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: ORDER_TEXT, channel: 'app' }]);
+      expect(wire.telegramSent).toEqual([]);
+    }, ON);
+  });
+
+  it('an owner who chose the app and WhatsApp gets a day card in both, and nothing on Telegram', async () => {
+    await withOwner('choice-both', async (owner, state, ctx) => {
+      dayPlanBook(state.storage.sql).save(DAY, { card: 'card:brief', time: '00:00', reason: 'planned' });
+      await due(state, 'card:brief', 'brief');
+      await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
+      expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: CARD_TEXT, channel: 'app' }]);
+      expect(wire.whatsappSent).toEqual([CARD_TEXT]);
+      expect(wire.telegramSent).toEqual([]);
+    }, { ...ON, whatsapp: true });
+  });
+
+  it('a full day for an owner still linked on Telegram who chose the app and WhatsApp: the Brief, a reminder, a check-back and a standing order\'s report reach both, and nothing reaches Telegram', async () => {
+    await withOwner('choice-full-day', async (owner, state, ctx) => {
+      const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
+      const step = async () => { await schedulePass(owner, state); await outboxPass(owner, state, ctx); await outboxPass(owner, state, ctx); };
+      // 09:00, the Brief.
+      dayPlanBook(state.storage.sql).save(DAY, { card: 'card:brief', time: '00:00', reason: 'planned' });
+      await due(state, 'card:brief', 'brief');
+      await step();
+      // 11:00, a reminder the owner set on Telegram yesterday.
+      ctx.now = AT + 2 * 3_600_000;
+      await reminderBook(state.storage.sql, scheduler, { timezone: 'UTC', now: () => new Date(Date.now() - 3_600_000) }, () => 'rem-1')
+        .set({ note: 'call Sam', at: new Date(Date.now() - 30 * 60_000).toISOString().slice(0, 16), repeat: 'none' });
+      await step();
+      // 13:00, the check-back of a loop that came due.
+      ctx.now = AT + 4 * 3_600_000;
+      loopBook(state.storage.sql, { newId: () => 'loop-1', now: () => ctx.now }).open({ title: 'Send the invoice', due: `${DAY}T12:00` });
+      await armHeartbeat(scheduler, Date.now() - 60 * 60_000);
+      await schedulePass(owner, state);
+      reportMachineJobs(state.storage.sql);
+      await step();
+      // 17:00, a standing order's report.
+      ctx.now = AT + 8 * 3_600_000;
+      const order = await standingOrderBook(state.storage.sql, scheduler, { timezone: 'UTC', now: () => new Date(Date.now()) }, () => 'order1')
+        .set({ scope: 'Triage my inbox', trigger: 'daily', at: '08:00', gate: 'act_and_report', escalation: 'message_owner' });
+      await due(state, order.id, 'standing_order', { order_id: order.id });
+      await step();
+      const day = [CARD_TEXT, REMINDER_TEXT, CHECK_BACK_TEXT, ORDER_TEXT];
+      // The app lists its newest row first.
+      expect({ app: (await appChat(owner, ctx)).map(row => row.text).reverse(), whatsapp: wire.whatsappSent }).toEqual({ app: day, whatsapp: day });
+      expect(wire.telegramSent).toEqual([]);
+    }, { ...ON, whatsapp: true });
+  });
+
+  it('a reply to a Telegram turn still goes to Telegram, and a scheduled message left queued for Telegram goes to the app instead', async () => {
+    await withOwner('choice-outbox', async (owner, state, ctx) => {
+      await queue(state, ctx, 'telegram');
+      await queue(state, ctx, 'telegram', { id: 'card:telegram-1', trace: 'card-1', payload: { chat_id: 7, text: CARD_TEXT }, dayCard: { day: DAY, card: 'card:brief' } } as Partial<FinalRecord>);
+      await outboxPass(owner, state, ctx);
+      await outboxPass(owner, state, ctx);
+      expect(outbox(state).map(record => [record.id, record.status])).toEqual([['turn:telegram-1', 'delivered'], ['card:telegram-1', 'delivered']]);
+      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: REPLY_TEXT }]);
+      expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: CARD_TEXT, channel: 'app' }]);
+    }, ON);
+  });
+
+  it('while the directory cannot say, sends no day card to Telegram and keeps a message for the app waiting, while a Telegram reply still goes out', async () => {
+    await withOwner('choice-outage', async (owner, state, ctx) => {
+      dayPlanBook(state.storage.sql).save(DAY, { card: 'card:brief', time: '00:00', reason: 'planned' });
+      await due(state, 'card:brief', 'brief');
+      await queue(state, ctx, 'app');
+      await queue(state, ctx, 'telegram');
+      wire.authority = 'outage';
+      await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
+      await outboxPass(owner, state, ctx);
+      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: REPLY_TEXT }]);
+      expect(outbox(state).map(record => [record.id, record.status])).toEqual([['nudge:app-1', 'pending'], ['turn:telegram-1', 'delivered']]);
+      wire.authority = 'current';
+      ctx.now += 120_000;
+      await outboxPass(owner, state, ctx);
+      expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: NUDGE_TEXT, channel: 'app' }]);
+      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: REPLY_TEXT }]);
+    }, ON);
+  });
+
+  it('sends nothing on Telegram for an owner the directory no longer admits: the choice opens no way around a revoked account', async () => {
+    await withOwner('choice-app-revoked', async (owner, state, ctx) => {
+      dayPlanBook(state.storage.sql).save(DAY, { card: 'card:brief', time: '00:00', reason: 'planned' });
+      await due(state, 'card:brief', 'brief');
+      wire.authority = 'revoked';
+      await schedulePass(owner, state);
+      expect(wire.telegramSent).toEqual([]);
+      wire.authority = 'current';
+      expect(await appChat(owner, ctx)).toEqual([]);
+    }, ON);
+  });
+
+  it('an owner with WhatsApp and no app gets a day card on WhatsApp, and nothing on Telegram', async () => {
+    await withOwner('choice-whatsapp-no-app', async (owner, state, ctx) => {
+      dayPlanBook(state.storage.sql).save(DAY, { card: 'card:brief', time: '00:00', reason: 'planned' });
+      await due(state, 'card:brief', 'brief');
+      await schedulePass(owner, state);
+      await outboxPass(owner, state, ctx);
+      expect(wire.whatsappSent).toEqual([CARD_TEXT]);
+      expect(wire.telegramSent).toEqual([]);
+    }, { app: false, byChoice: true, whatsapp: true });
+  });
+
+  it('keeps an owner with no other surface on Telegram', async () => {
+    await withOwner('choice-telegram-only', async (owner, state) => {
+      dayPlanBook(state.storage.sql).save(DAY, { card: 'card:brief', time: '00:00', reason: 'planned' });
+      await due(state, 'card:brief', 'brief');
+      await schedulePass(owner, state);
+      expect(wire.telegramSent.map(sent => sent.text)).toEqual([CARD_TEXT]);
+    }, { app: false, byChoice: true });
   });
 });
