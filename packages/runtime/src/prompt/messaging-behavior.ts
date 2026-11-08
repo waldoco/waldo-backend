@@ -250,7 +250,9 @@ export function surfacePresentationPrompt(presentation: SurfacePresentation, too
   ].join('\n');
 }
 
-export type MessagingClock = Readonly<{ timezone: string; now: () => Date }>;
+// confirmed: whether the owner chose this zone themselves; absent where the turn is not told.
+export type MessagingClock = Readonly<{ timezone: string; now: () => Date; confirmed?: () => boolean }>;
+export const ZONE_UNCONFIRMED = 'The owner has not confirmed this time zone; when it fits the conversation, ask where they are and save it with set_schedule_preference (action timezone).';
 
 // The owner's local time as a bare fact for the turn context; TURN_CONTEXT_RULE says how to use it. Without a time signal
 // the reply model greeted "Morning" at 5pm. A malformed stored timezone must not fail the turn: fall back to UTC.
@@ -265,7 +267,7 @@ export function ownerClockLine(clock: MessagingClock): string {
   }
   const parts = new Intl.DateTimeFormat('en-GB', { timeZone: zone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit' }).formatToParts(clock.now());
   const sinceMidnight = `${Number(parts.find((part) => part.type === 'hour')?.value ?? 0)}h ${Number(parts.find((part) => part.type === 'minute')?.value ?? 0)}m`;
-  return `The owner's current local time: ${local} (${zone}). The local day began ${sinceMidnight} ago.`;
+  return `The owner's current local time: ${local} (${zone}). The local day began ${sinceMidnight} ago.${clock.confirmed?.() === false ? ` ${ZONE_UNCONFIRMED}` : ''}`;
 }
 
 // A provider fact, not the owner's word: the name on the owner's Google account, its values quoted as data. The owner's own words win.

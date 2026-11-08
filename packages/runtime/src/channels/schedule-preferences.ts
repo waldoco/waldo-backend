@@ -139,7 +139,9 @@ const allowlist = () => triggerTypeSchema.options.filter((trigger) => TOOL_PERMI
 
 // cardTime sets the owner's every-day Brief or Close time (ownerCardTime) and returns its receipt; absent where it is not offered.
 export type CardTimeSetter = (card: 'card:brief' | 'card:close', time: string) => Promise<Readonly<{ state: 'recorded' | 'rejected'; message: string }>>;
-export const schedulePreferenceHandlers = (book: SchedulePreferenceBook, context: () => ScheduleApplyContext | Promise<ScheduleApplyContext>, cardTime?: CardTimeSetter) => [
+// confirmZone saves and confirms the owner's time zone as the console does, false when the zone is not real or the directory
+// did not keep it; absent where it is not offered.
+export const schedulePreferenceHandlers = (book: SchedulePreferenceBook, context: () => ScheduleApplyContext | Promise<ScheduleApplyContext>, cardTime?: CardTimeSetter, confirmZone?: (zone: string) => Promise<boolean>) => [
   {
     name: 'set_schedule_preference',
     description: "Turn one of Waldo's own scheduled behaviors off or back on, reset all of them to the out-of-the-box defaults, or set when the Brief or the Close comes every day. Only when the owner asks. The current state of every behavior is in the ledger; nothing is forced on the owner. Use kind for on and off. Tell the owner plainly what changed and that reset restores everything to on; after a time change, say what the result's said says.",
@@ -148,6 +150,10 @@ export const schedulePreferenceHandlers = (book: SchedulePreferenceBook, context
     autonomy_gated: false,
     mutates_state: true,
     async handle(args: SetSchedulePreferenceArgs) {
+      if (args.action === 'timezone') {
+        if (!(await confirmZone?.(args.timezone!))) return { ok: false, code: 'rejected', error: `${args.timezone} was not saved: it is not a time zone name, or it could not be saved here. Nothing changed.`, source_taint: null };
+        return { ok: true, data: { preferences: book.all(), said: `Saved. Waldo now runs on ${args.timezone} time.` }, source_taint: null };
+      }
       if (args.action === 'time') {
         const receipt = cardTime ? await cardTime(args.card === 'brief' ? 'card:brief' : 'card:close', args.time!) : null;
         if (receipt?.state !== 'recorded') return { ok: false, code: 'rejected', error: receipt?.message ?? 'The Brief and Close times cannot be set here.', source_taint: null };

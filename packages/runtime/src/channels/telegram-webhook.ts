@@ -27,6 +27,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_COST_LEDGER_SYNC?: string;
   // 'on' turns conversation compaction on for the app chat; anything else keeps the plain window.
   WALDO_COMPACTION?: string;
+  // '1' tells a turn whose time zone the owner has not confirmed to ask for it when it fits.
+  WALDO_TIMEZONE_ASK?: string;
   WALDO_ENVIRONMENT?: string;
   WALDO_OWNER_DO_NAMESPACE?: string;
   WALDO_RELEASE?: string;
