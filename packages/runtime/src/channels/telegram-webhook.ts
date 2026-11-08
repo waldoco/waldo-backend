@@ -118,6 +118,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   MEDICATIONS?: string;
   // "1" serves /app/v1/screen-time and offers get_screen_time, which reads the daily summaries the owner's phone sent. Off unless "1".
   SCREEN_TIME?: string;
+  // '1': app owner turns are offered show_health_chart, and app chat reads at chat=11 draw health charts from a live read.
+  HEALTH_CHARTS?: string;
   // '1': memory keeps people (who claims are about, rings, dates that come round); read_memory reads them and forget_memory
   // forgets one person. Off unless '1'.
   PEOPLE_MAP?: string;

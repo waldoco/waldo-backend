@@ -48,7 +48,27 @@ export type ConversationEntry = Readonly<{
   // Answers the owner can tap for the question the row asks, in order. The question itself is in the row's text, so a surface
   // that shows only text still reads whole; a tap comes back as the owner's own message.
   quickReplies?: readonly string[];
+  // Charts the reply drew (show_chart), in order: the app.v1 chart_series shape without its type and fallback, which the app
+  // projection sets from alt_text. A forget that touches any text in one removes that chart.
+  charts?: readonly ConversationChart[];
 }>;
+
+export type ConversationPointsChart = Readonly<{
+  title: string; unit: string; alt_text: string;
+  series: readonly Readonly<{ label: string; points: readonly Readonly<{ t: number; v: number }>[] }>[];
+}>;
+// A chart of the owner's own readings keeps the query only: which signal, which local days. The points are read live each
+// time the chat is read, so no reading is ever stored with the reply.
+// unit and series are stored empty, so code that predates health charts reads one as a chart with nothing to draw and shows
+// its alt text.
+export type ConversationHealthChart = Readonly<{
+  title: string; alt_text: string; unit: ''; series: readonly [];
+  health: Readonly<{ signal: string; from: string; to: string }>;
+}>;
+export type ConversationChart = ConversationPointsChart | ConversationHealthChart;
+export const isHealthChart = (chart: ConversationChart): chart is ConversationHealthChart => 'health' in chart;
+export const conversationChartTexts = (chart: ConversationChart): readonly string[] =>
+  isHealthChart(chart) ? [chart.title, chart.alt_text] : [chart.title, chart.unit, chart.alt_text, ...chart.series.map(series => series.label)];
 
 export type ConversationReceipt = Readonly<{
   line: string;
@@ -188,6 +208,8 @@ export const redactConversationEntry = (entry: ConversationEntry, redact: (value
   ...(entry.receipt ? { receipt: { ...entry.receipt, line: redact(entry.receipt.line),
     items: entry.receipt.items.map(item => (item.target === null ? item : { ...item, target: redact(item.target) })) } } : {}),
   ...(entry.quickReplies ? { quickReplies: entry.quickReplies.map(redact) } : {}),
+  // A chart any of whose words a forget touches goes whole: its points without their words would still say what was forgotten.
+  ...(entry.charts ? { charts: entry.charts.filter(chart => conversationChartTexts(chart).every(text => redact(text) === text)) } : {}),
 });
 
 export class ConversationTree {
