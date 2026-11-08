@@ -376,7 +376,7 @@ export const TASK_JOBS_TABLE_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS task_jobs (
     id              TEXT PRIMARY KEY,
     kind            TEXT NOT NULL CHECK (kind IN ('task', 'retry_turn', 'approval_replay')),
-    profile         TEXT CHECK (profile IS NULL OR profile IN ('reader', 'errand', 'code')),
+    profile         TEXT CHECK (profile IS NULL OR profile IN ('reader', 'errand', 'code', 'web', 'private')),
     idempotency_key TEXT NOT NULL UNIQUE,
     origin          TEXT NOT NULL,
     surface         TEXT NOT NULL,
@@ -527,6 +527,33 @@ export const GOAL_QUESTS_MIGRATION: DoMigration = {
   down: GOAL_QUEST_COLUMNS.map(([column]) => `ALTER TABLE goals DROP COLUMN ${column};`).reverse(),
 };
 
+// Personal experiments inside a quest (ADR-0064 health-quests amendment): one change tried for 7 to 28 days from the owner's
+// local start day, at most one running per quest, then kept, dropped or stopped. offered_at is when a Close offering the
+// verdict reached the owner. The quest book creates the table itself, as the OwnerDO runs no migration runner.
+export const EXPERIMENTS_TABLE_SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS experiments (
+    id          TEXT PRIMARY KEY,
+    quest_id    TEXT NOT NULL,
+    change      TEXT NOT NULL CHECK (length(change) BETWEEN 1 AND 300),
+    days        INTEGER NOT NULL CHECK (days BETWEEN 7 AND 28),
+    started_on  TEXT NOT NULL,
+    state       TEXT NOT NULL CHECK (state IN ('running', 'kept', 'dropped', 'stopped')),
+    reason      TEXT CHECK (reason IS NULL OR length(reason) BETWEEN 1 AND 500),
+    decided_on  TEXT,
+    offered_at  TEXT,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+  );`,
+  "CREATE UNIQUE INDEX IF NOT EXISTS experiments_one_running ON experiments (quest_id) WHERE state = 'running';",
+] as const;
+
+export const EXPERIMENTS_MIGRATION: DoMigration = {
+  version: 19,
+  name: 'experiments',
+  up: EXPERIMENTS_TABLE_SCHEMA,
+  down: ['DROP INDEX IF EXISTS experiments_one_running;', 'DROP TABLE IF EXISTS experiments;'],
+};
+
 // Versions 3-7 and 9-11 (the responsibility domain, canonical authority, planning harness,
 // execution writer, judgment authority and common execution migrations) were applied only by the
 // retired RunLoopDO and are retired: their numbers stay reserved in do-migration-reservations.json
@@ -542,6 +569,7 @@ export const DO_SCHEMA_MIGRATIONS = [
   HISTORY_ARCHIVE_MIGRATION,
   REPLY_MEMORY_USED_MIGRATION,
   GOAL_QUESTS_MIGRATION,
+  EXPERIMENTS_MIGRATION,
 ] as const;
 
 export const DO_SCHEMA_VERSION = DO_SCHEMA_MIGRATIONS.at(-1)!.version;

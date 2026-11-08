@@ -124,7 +124,7 @@ it('the card turn holds read tools and the owner\'s card, and nothing that write
   await morningCard([mail('Lunch moved', 'Priya <priya@vendor.example>', 'Now at 13:00.')], () => [], () => {
     const tools = cardTools();
     expect(tools).toEqual(expect.arrayContaining(['propose_action', 'get_context', 'list_reminders']));
-    for (const write of ['cancel_reminder', 'set_reminder', 'close_loop', 'open_loop', 'log_meal', 'log_workout', 'set_standing_order', 'set_quest', 'set_proactivity', 'create_artifact', 'workspace_write', 'send_email', 'draft_email', 'connect_service', 'browse_act', 'delegate_task']) expect(tools).not.toContain(write);
+    for (const write of ['cancel_reminder', 'set_reminder', 'close_loop', 'open_loop', 'log_meal', 'log_workout', 'set_standing_order', 'set_quest', 'set_experiment', 'set_proactivity', 'create_artifact', 'workspace_write', 'send_email', 'draft_email', 'connect_service', 'browse_act', 'delegate_task']) expect(tools).not.toContain(write);
     expect(delivered()).toHaveLength(1);
   });
 }, 30_000);
@@ -136,7 +136,7 @@ it('a change the card turn thinks is wanted reaches the owner as exactly one car
   ], (owned) => {
     expect(JSON.parse(toolOutput('card') ?? '{}')).toMatchObject({ ok: true });
     expect(cards()).toHaveLength(1);
-    expect(cards()[0]!.body.text).toContain('cancel_reminder');
+    expect(cards()[0]!.body.text.split('\n')[0]).toBe('Do this? Cancel reminder: A mail says the standup moved.');
     expect(owned.reminders().map(r => r.id)).toEqual([owned.reminder]);
   });
 }, 30_000);

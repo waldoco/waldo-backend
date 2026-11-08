@@ -38,7 +38,8 @@ export const healthStage = (book: HealthReadBook, timezone: () => string, now: (
   if (consent.kind === 'read_failed') return settled('unavailable');
   if (consent.kind !== 'granted') return settled('skipped');
   const zone = timezone(), to = localDayOf(new Date(now()), zone), from = shiftDay(to, -(WELCOME_HEALTH_DAYS - 1));
-  const signals = Object.keys(SIGNALS) as HealthReadSignal[];
+  // Food is read only by get_health, in the turn that asked, and never compiled into what Waldo knows.
+  const signals = (Object.keys(SIGNALS) as HealthReadSignal[]).filter((signal) => SIGNALS[signal].stored !== 'nutrition');
   const parsed = parseSeries(await book.series({ from, to, signals: signals.map((signal) => SIGNALS[signal].stored) }));
   if (parsed.kind === 'no_consent') return settled('skipped');
   if (parsed.kind === 'failed') return settled('unavailable');
