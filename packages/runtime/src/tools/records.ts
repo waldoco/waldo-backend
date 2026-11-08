@@ -6,7 +6,7 @@ import type { AppChatActivityKind } from '../../../contracts/src/app/core';
 // line per namespace instead of every schema. OpenAI's tool search guide asks for namespaces with clear, high-level
 // descriptions and fewer than 10 functions each; Anthropic's asks to keep the most used tools non-deferred.
 export const BRAIN_NAMESPACES = {
-  calendar: 'Calendar changes and Google Tasks: propose_calendar_change to add, move or cancel an event, and reading or changing Google Tasks.',
+  calendar: 'Calendar changes and Google Tasks: propose_calendar_change to add, move or cancel an event, query_phone_calendar for the calendars on the owner\'s phone that no connected account shows, and reading or changing Google Tasks.',
   mail: "Mail beyond search: read a whole message, approve_shown, where it is offered, when the owner tells you to go ahead with any card they were shown in this conversation (a send, or a calendar or task change), send_agent_mail to propose one Waldo sends as itself from the owner's Waldo address, draft_email for a Gmail draft they edit themselves, and contacts.",
   web: 'Acting on web pages and connected sources: browse_act to set dates, guests or filters on an open page or watch a transcript, Drive files, documents and connected MCP tools.',
   memory: 'Memory upkeep and history: forget_memory when the owner asks to forget something, list_owner_findings and record_owner_finding for what Waldo found about the owner on the public web, memory about one topic with its evidence, search_episodes for past conversations, search_history for past runs, tasks and decided cards, read_tool_output for stored tool output, chat threads, and owner_message_heard for a newer message the owner sent during this turn.',
@@ -17,7 +17,7 @@ export const BRAIN_NAMESPACES = {
   reminders: 'Follow-ups and background work: start_task for long work that reports back later, check_task for how one stands, steer_task, where it is offered, to change one while it runs, close_loop when an open loop is done, tracked responsibilities, and cancel_task to stop a background task.',
   settings: 'How Waldo works for the owner: set_proactivity for quiet hours and how often to reach out, set_schedule_preference for scheduled behaviours, standing orders, send_console_link for the console, and connect_app to connect one of the owner\'s apps.',
   skills: 'Reviewed skills: list, install or disable a skill, and search the tool catalog.',
-  workspace: "The owner's workspace files: list, read, search, write and render them.",
+  workspace: "The owner's workspace files: list, read, search, write and render them, and read_import and import_memories to bring in a ChatGPT or Claude chat export the owner uploaded.",
   artifacts: 'Documents Waldo makes: create, revise, export, list or read an artifact, restore_artifact to bring back an earlier revision, a drafted document or a sheet cell.',
   actions: "Actions that reach beyond this chat: a progress note, a file attachment, show_chart and show_health_chart for a chart in the app reply, the owner's Mac, a delegated research task, todos and code.",
 } as const;
@@ -122,6 +122,7 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   get_device_context: { brain: 'phone', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
   get_weather: { brain: 'phone', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
   query_calendar: { brain: 'core', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
+  query_phone_calendar: { brain: 'calendar', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
   get_communication: { brain: 'mail', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
   search_communication: { brain: 'core', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
   search_contacts: { brain: 'mail', scope: 'deny', concurrent: true, probe: 'strip', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
@@ -228,6 +229,8 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   list_owner_findings: { brain: 'memory', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
   // Owner turns only: the owner's history is theirs to ask about; a machine turn reads its own job's inputs.
   search_history: { brain: 'memory', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: true, long: false, claim: null, replay: read() },
+  read_import: { brain: 'workspace', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: true, long: false, claim: null, replay: read() },
+  import_memories: { brain: 'workspace', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, long: false, claim: 'memory_imported', tainted: { exempt: 'honest_origin', reason: 'it keeps the owner\'s quoted words from their own uploaded export as Waldo\'s read, marked as imported, until the owner confirms them; it never stands as the owner\'s word' }, replay: { replay: 'reconcilable_write', basis: 'every owner-local claim, whatever its status, dedupes by normalised text or by the same quote from the same export, so a re-run returns the stored claim as a duplicate and never re-adds one the owner decided on', evidence: { file: 'memory/imports.ts', needle: 'duplicate' } } },
   forget_memory: { brain: 'memory', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: 'memory_forgotten', replay: unknown('local forget plus retained history cleanup; reconcile scope before retrying') },
   // No live handler in this tree, so the effect is unverified: give each a claim label when its handler ships.
   execute_action: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: unknown(NO_HANDLER) },
@@ -274,7 +277,7 @@ export const brainTools = (tools: readonly LLMTool[], toolSearch: boolean): Pick
 // slow reads (mail search, calendar, web, health) sit in core. Every tool is named so a new one fails the build here too.
 const TOOL_ACTIVITY: Readonly<Record<ToolName, AppChatActivityKind>> = {
   search_communication: 'mail', read_thread: 'mail', get_communication: 'mail', search_contacts: 'mail', send_email: 'mail', send_agent_mail: 'mail', draft_email: 'mail', archive_thread: 'mail', delete_message: 'mail', restore_message: 'mail',
-  query_calendar: 'calendar', query_availability: 'calendar', propose_calendar_change: 'calendar', propose_calendar_plan: 'calendar', propose_schedule: 'calendar',
+  query_calendar: 'calendar', query_phone_calendar: 'calendar', query_availability: 'calendar', propose_calendar_change: 'calendar', propose_calendar_plan: 'calendar', propose_schedule: 'calendar',
   get_tasks: 'tasks', propose_google_task_change: 'tasks', write_task: 'tasks', update_task: 'tasks',
   web_search: 'web', browse_page: 'web', browse_act: 'web',
   // A connected MCP server can be mail, calendar or anything else, and the kind comes from the tool name alone.
@@ -282,7 +285,7 @@ const TOOL_ACTIVITY: Readonly<Record<ToolName, AppChatActivityKind>> = {
   read_drive: 'files', read_document: 'files', workspace_list: 'files', workspace_read: 'files', workspace_search: 'files', workspace_write: 'files', workspace_render: 'files', extract_archive: 'files',
   get_health: 'health', get_screen_time: 'health', get_device_context: 'working', get_weather: 'working', get_crs: 'health', get_master_metrics: 'health', list_health_logs: 'health', log_meal: 'health', log_workout: 'health', delete_health_log: 'health', set_sleep_need: 'health',
   track_medication: 'health', log_medication: 'health', list_medications: 'health', stop_medication: 'health',
-  read_memory: 'memory', remember: 'memory', search_episodes: 'memory', forget_memory: 'memory', list_owner_findings: 'memory', record_owner_finding: 'memory', read_tool_output: 'memory', create_thread: 'memory', update_thread_topics: 'memory', search_history: 'memory',
+  read_memory: 'memory', remember: 'memory', search_episodes: 'memory', forget_memory: 'memory', list_owner_findings: 'memory', record_owner_finding: 'memory', read_import: 'memory', import_memories: 'memory', read_tool_output: 'memory', create_thread: 'memory', update_thread_topics: 'memory', search_history: 'memory',
   set_reminder: 'reminders', list_reminders: 'reminders', cancel_reminder: 'reminders', open_loop: 'reminders', close_loop: 'reminders', track_responsibility: 'reminders', list_responsibilities: 'reminders', close_responsibility: 'reminders',
   create_artifact: 'artifacts', revise_artifact: 'artifacts', restore_artifact: 'artifacts', export_artifact: 'artifacts', list_artifacts: 'artifacts', read_artifact: 'artifacts', draft_document: 'artifacts', write_sheet_cell: 'artifacts',
   set_proactivity: 'settings', set_schedule_preference: 'settings', set_quest: 'health', set_experiment: 'health', review_experiment: 'health', set_standing_order: 'settings', cancel_standing_order: 'settings', list_standing_orders: 'settings', propose_standing_grant: 'calendar', revoke_standing_grant: 'settings', pause_autonomy: 'settings', send_console_link: 'settings', connect_app: 'settings',

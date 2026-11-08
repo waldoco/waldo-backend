@@ -28,15 +28,23 @@ export type ConversationStore = Readonly<{
   // When this chain last tried to compact, success or failure; one bounded value with no content.
   compactionAttempt?(chainRef: string): Promise<number | null>;
   noteCompactionAttempt?(chainRef: string, at: number, scope?: RunEffectScope): Promise<void>;
+  // Where the stepped window of this chain stood at its last turn: row ids only, no content.
+  windowStart?(chainRef: string): Promise<WindowStart | null>;
+  noteWindowStart?(chainRef: string, start: WindowStart, scope?: RunEffectScope): Promise<void>;
   // The compaction settings this chain is read under; a turn's view and its compaction follow them. Absent means off.
   compaction?: CompactionSettings;
 }>;
+
+// head: the row the model's view of the chain started with (a live summary's when one led); from: the first row the last cut
+// kept, absent while nothing has been cut.
+export type WindowStart = Readonly<{ head: string; from?: string }>;
 
 type KeyValueStorage = Pick<DurableObjectStorage, 'get' | 'list' | 'put'> & { kv?: Pick<DurableObjectStorage['kv'], 'put'> & Partial<Pick<DurableObjectStorage['kv'], 'list'>> };
 
 const entryKey = (seq: number) => `conv:${String(seq).padStart(10, '0')}`;
 
-export const durableConversationStore = (storage: KeyValueStorage): ConversationStore => ({
+export const durableConversationStore = (storage: KeyValueStorage, compaction?: CompactionSettings): ConversationStore => ({
+  ...(compaction ? { compaction } : {}),
   async forgetSourceBatch(topic) {
     const all = await this.forgetSources!(topic);
     const batch = forgetSourceBatch(topic, all.sources);
@@ -68,6 +76,11 @@ export const durableConversationStore = (storage: KeyValueStorage): Conversation
     };
     if (scope) { if (!storage.kv) throw new Error('fenced synchronous history store unavailable'); scope.commit(() => { for (const [key, value] of Object.entries(writes)) storage.kv!.put(key, value); }); }
     else await storage.put<unknown>(writes);
+  },
+  windowStart: async (chainRef) => (await storage.get<WindowStart>(`window-start:${chainRef}`)) ?? null,
+  async noteWindowStart(chainRef, start, scope) {
+    if (scope) { if (!storage.kv) throw new Error('fenced synchronous history store unavailable'); scope.commit(() => storage.kv!.put(`window-start:${chainRef}`, start)); }
+    else await storage.put(`window-start:${chainRef}`, start);
   },
 });
 

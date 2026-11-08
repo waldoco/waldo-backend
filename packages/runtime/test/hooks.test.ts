@@ -235,6 +235,7 @@ describe('hook registry', () => {
         'get_device_context',
         'get_weather',
         'query_calendar',
+        'query_phone_calendar',
         'connect_service',
         'get_communication',
         'search_communication',
