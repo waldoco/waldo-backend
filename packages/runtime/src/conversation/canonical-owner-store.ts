@@ -1,5 +1,5 @@
 import { conversationModelMessages, type ConversationEntry } from '@waldo/contracts';
-import type { ConversationStore } from '../channels/conversation-store';
+import type { ConversationStore, WindowStart } from '../channels/conversation-store';
 import type { RunEffectScope } from '../channels/run-effect-scope';
 import type { OwnerContextCapability } from '../context-composer/owner-turn';
 import { stableJson } from '../context-composer/canonical';
@@ -344,11 +344,11 @@ export function canonicalOwnerConversationStore(storage: CanonicalHistoryStorage
       if (scope) { if (!storage.kv) throw new Error('fenced canonical history unavailable'); scope.commit(() => storage.kv!.put(key, at)); }
       else await storage.put(key, at);
     },
-    windowStart: async (chainRef) => (await storage.get<string>(`${prefix}window-start:${chainRef}`)) ?? null,
-    async noteWindowStart(chainRef, rowId, scope) {
+    windowStart: async (chainRef) => (await storage.get<WindowStart>(`${prefix}window-start:${chainRef}`)) ?? null,
+    async noteWindowStart(chainRef, start, scope) {
       const key = `${prefix}window-start:${chainRef}`;
-      if (scope) { if (!storage.kv) throw new Error('fenced canonical history unavailable'); scope.commit(() => storage.kv!.put(key, rowId)); }
-      else await storage.put(key, rowId);
+      if (scope) { if (!storage.kv) throw new Error('fenced canonical history unavailable'); scope.commit(() => storage.kv!.put(key, start)); }
+      else await storage.put(key, start);
     },
   };
   return store;

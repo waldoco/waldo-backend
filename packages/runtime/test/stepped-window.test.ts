@@ -19,6 +19,8 @@ const grow = (tree: ConversationTree, from: number, to: number) => {
   return tree;
 };
 const stepped: CompactionSettings = { ...COMPACTION, budgetTokens: 1_000, steppedWindow: true };
+// A cut keeps the newest row (about 110 tokens here) and the rows before it within half the budget.
+const afterCut = stepped.budgetTokens / 2 + 120;
 // A turn's view of the chain, reading the start the last turn kept.
 const turn = (tree: ConversationTree, leaf: string, from?: string, settings = stepped) => compactedHistory(tree, leaf, undefined, settings, from);
 
@@ -36,10 +38,10 @@ describe('the stepped window', () => {
     expect(view.stats.from).toBeUndefined();
   });
 
-  it('past the budget cuts once to half of it, then holds that start while new rounds fit', () => {
+  it('past the budget cuts once to half of it beside the newest row, then holds that start while new rounds fit', () => {
     const tree = grow(new ConversationTree(), 1, 6);
     const first = turn(tree, 'a6');
-    expect(first.stats.estimated_tokens).toBeLessThanOrEqual(stepped.budgetTokens / 2);
+    expect(first.stats.estimated_tokens).toBeLessThanOrEqual(afterCut);
     expect(tree.get(first.stats.from!)).toBeDefined();
     const start = first.stats.from!;
     let previous = first.messages;
@@ -55,7 +57,7 @@ describe('the stepped window', () => {
     expect(previous.length).toBeGreaterThan(first.messages.length);
   });
 
-  it('the cut that follows lands at half the budget again and holds again', () => {
+  it('the cut that follows lands at half the budget again beside the newest row and holds again', () => {
     const tree = grow(new ConversationTree(), 1, 6);
     let start = turn(tree, 'a6').stats.from!;
     const cuts: string[] = [];
@@ -63,7 +65,7 @@ describe('the stepped window', () => {
       grow(tree, round, round);
       const view = turn(tree, `a${round}`, start);
       expect(view.stats.estimated_tokens).toBeLessThanOrEqual(stepped.budgetTokens);
-      if (view.stats.from !== start) { cuts.push(view.stats.from!); expect(view.stats.estimated_tokens).toBeLessThanOrEqual(stepped.budgetTokens / 2); }
+      if (view.stats.from !== start) { cuts.push(view.stats.from!); expect(view.stats.estimated_tokens).toBeLessThanOrEqual(afterCut); }
       start = view.stats.from!;
     }
     // 24 rounds of about 220 tokens each cross a 500-token step about ten times, not 24.
@@ -76,7 +78,27 @@ describe('the stepped window', () => {
     expect(turn(tree, 'a12', 'gone').stats.from).toBe(turn(tree, 'a12').stats.from);
     const tooOld = turn(tree, 'a12', 'u2');
     expect(tooOld.stats.from).not.toBe('u2');
-    expect(tooOld.stats.estimated_tokens).toBeLessThanOrEqual(stepped.budgetTokens / 2);
+    expect(tooOld.stats.estimated_tokens).toBeLessThanOrEqual(afterCut);
+  });
+
+  it('a newest message over half the budget still keeps the older rows that fit beside it', () => {
+    const tree = grow(new ConversationTree(), 1, 6);
+    tree.append(row('u7', 'a6', 'user', 'x'.repeat(2_400)));
+    const view = turn(tree, 'u7');
+    expect(view.messages.length).toBeGreaterThan(1);
+    expect(view.stats.estimated_tokens).toBeLessThanOrEqual(stepped.budgetTokens);
+    expect(view.messages.at(-1)!.content).toHaveLength(2_400);
+  });
+
+  it('names the row its view starts with: the summary when one leads, otherwise the first row kept', () => {
+    const tree = grow(new ConversationTree(), 1, 6);
+    expect(turn(tree, 'a6').stats.head).toBe(turn(tree, 'a6').stats.from);
+    expect(turn(grow(new ConversationTree(), 1, 2), 'a2').stats.head).toBe('u1');
+    const settings = { ...stepped, enabled: true };
+    const summary = compactionRow(compactionPlan(tree, 'a6', null, settings)!, 'Owner instructions:\n- keep calls short', 'owner', 99);
+    tree.append(summary);
+    grow(tree, 7, 7);
+    expect(turn(tree, 'a7', undefined, settings).stats.head).toBe(summary.id);
   });
 
   it('always keeps the newest message, even when it alone is over the budget', () => {

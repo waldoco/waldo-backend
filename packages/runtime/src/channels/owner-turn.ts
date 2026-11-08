@@ -54,7 +54,7 @@ import { episodesFromSearchTool, previousOwnerMessage, RECALL_MAX_CHARS, recallF
 import type { SemanticRecall } from '../memory/semantic-recall';
 import { coreMemory, CORE_ROOM, LEXICAL_DEADLINE_MS, recallWithin, SEMANTIC_DEADLINE_MS, type MemorySelection } from '../memory/select-memory';
 import { WELCOME_INSTRUCTION, WELCOME_INSTRUCTION_V2, WELCOME_SCHEMA, WELCOME_SCHEMA_V2 } from '../onboarding/welcome';
-import type { ConversationStore } from './conversation-store';
+import type { ConversationStore, WindowStart } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
 import { billedAttemptEntries } from './billed-attempts';
 import type { SystemSection, TurnLogEntry, TurnTimer } from './owner-turn-types';
@@ -430,11 +430,11 @@ export const createOwnerResponder = (
   // F1 receipt: the window observer fires only when history was actually dropped (content-free).
   const lastWindow = new Map<string, CompactedStats>();
   let windowingRef = '';
-  // The stepped window's start as this turn read it, and whether the turn's history starts somewhere else: a moved start
+  // The stepped window as the chain's last turn left it, and whether this turn's view starts with another row: a moved head
   // costs the provider's cache everything after the system prompt. The plain window moves whenever it drops a row.
-  let turnWindowFrom: string | undefined;
+  let turnWindow: WindowStart | null = null;
   let historyMoved: boolean | undefined;
-  const pathObservers = { onWindow: (stats: CompactedStats) => { lastWindow.set(windowingRef, stats); historyMoved = compaction.steppedWindow ? stats.from !== undefined && stats.from !== turnWindowFrom : stats.dropped > 0; if (stats.dropped > 0) log({ trace: traceId, hop: 'context_window', ms: 0, ok: true, detail: `kept ${stats.kept} dropped ${stats.dropped} ~${stats.estimated_tokens}/${stats.budget_tokens} tokens` }); } };
+  const pathObservers = { onWindow: (stats: CompactedStats) => { lastWindow.set(windowingRef, stats); historyMoved = compaction.steppedWindow && turnWindow ? stats.head !== turnWindow.head : stats.dropped > 0; if (stats.dropped > 0) log({ trace: traceId, hop: 'context_window', ms: 0, ok: true, detail: `kept ${stats.kept} dropped ${stats.dropped} ~${stats.estimated_tokens}/${stats.budget_tokens} tokens` }); } };
   // A held topic withholds only the rows that carry it (same guard the forget proof uses); other recall stays available.
   const removedTopics = new Set<string>();
   const heldTopics = () => [...removedTopics, ...(forgettingState ? heldTopicsOf(forgettingState) : [])];
@@ -966,8 +966,8 @@ export const createOwnerResponder = (
       const inputStored = fromOwner && context !== undefined && privateRunScope !== undefined && conversationStore?.persistOwnerInput !== undefined;
       if (inputStored) await conversationStore.persistOwnerInput(userEntry, privateRunScope);
       foldTarget = inputStored ? userEntry : null;
-      const windowFrom = compaction.steppedWindow ? (await conversationStore?.windowStart?.(conversationRef)) ?? undefined : undefined;
-      turnWindowFrom = windowFrom;
+      turnWindow = compaction.steppedWindow ? (await conversationStore?.windowStart?.(conversationRef)) ?? null : null;
+      const windowFrom = turnWindow?.from;
       historyMoved = undefined;
       const publication = await time('joined_path', () => path.submit({
         ...(privateRunScope ? { runScope: privateRunScope } : {}),
@@ -997,8 +997,8 @@ export const createOwnerResponder = (
       const jobStub = !fromOwner && privateOwner?.jobOutcomeRows ? jobPromptStub(tree.get(id)!, await jobPromptKey(said)) : null;
       const savedEntries = [...(inputStored ? [] : [jobStub ?? tree.get(id)!]), { ...told, ...(context ? { appPayload: out, ...(receipt ? { receipt } : {}) } : {}), ...(readOutside ? { readOutside: true as const } : {}) }].map(entry => redactConversationEntry(entry, redact));
       await conversationStore?.save(savedEntries, publication.leafId, privateRunScope);
-      const cutFrom = lastWindow.get(conversationRef)?.from;
-      if (cutFrom && cutFrom !== windowFrom) await conversationStore?.noteWindowStart?.(conversationRef, cutFrom, privateRunScope);
+      const view = compaction.steppedWindow ? lastWindow.get(conversationRef) : undefined;
+      if (view?.head && (view.head !== turnWindow?.head || view.from !== windowFrom)) await conversationStore?.noteWindowStart?.(conversationRef, { head: view.head, ...(view.from ? { from: view.from } : {}) }, privateRunScope);
       if (told !== answered) tree.replace(told);
       if (jobStub) tree.replace(jobStub);
       for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); }

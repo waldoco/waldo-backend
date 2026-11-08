@@ -53,8 +53,9 @@ export type SpanMemory = Readonly<{
 // a reading the owner wrote from one Waldo relayed or someone else sent.
 export type CompactionFlush = (span: CompactionSpan, memory: SpanMemory) => Promise<Readonly<{ owner: string }> | void>;
 
-// from: with the stepped window, the id of the first row kept after a cut, which the chain stores for its next turn.
-export type CompactedStats = ConversationWindowStats & Readonly<{ compacted: 0 | 1; from?: string }>;
+// With the stepped window: from, the id of the first row kept after a cut, which the chain stores for its next turn; head,
+// the id of the row the view starts with (the live summary's when one leads), which moves whenever the cached prefix does.
+export type CompactedStats = ConversationWindowStats & Readonly<{ compacted: 0 | 1; from?: string; head?: string }>;
 
 const chainFrom = (tree: ConversationTree, leafId: string, startRef?: string): readonly ConversationEntry[] => {
   const path = tree.path(leafId);
@@ -81,7 +82,7 @@ const steppedWindow = (entries: readonly ConversationEntry[], budgetTokens: numb
   const rows = entries.map((entry) => conversationModelMessages([entry]));
   const start = steppedWindowStart(rows.map((messages) => messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0)), budgetTokens, entries.findIndex((entry) => entry.id === from));
   const messages = rows.slice(start).flat();
-  return { messages, stats: { kept: messages.length, dropped: rows.slice(0, start).flat().length, estimated_tokens: messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0), budget_tokens: budgetTokens, ...(start > 0 ? { from: entries[start]!.id } : {}) } };
+  return { messages, stats: { kept: messages.length, dropped: rows.slice(0, start).flat().length, estimated_tokens: messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0), budget_tokens: budgetTokens, ...(start > 0 ? { from: entries[start]!.id } : {}), ...(entries[start] ? { head: entries[start]!.id } : {}) } };
 };
 
 // The model's view of a chain. Without a live compaction row, or with the switch off, this is the plain window. With one,
@@ -98,7 +99,7 @@ export const compactedHistory = (tree: ConversationTree, leafId: string, startRe
   const summary = compactionMessage(live, summaryText(live));
   const after = entries.slice(entries.findIndex((entry) => entry.id === live.covers!.to_id) + 1);
   const tail = window(after, Math.max(settings.budgetTokens - estimateMessageTokens(summary), 0));
-  return { messages: [summary, ...tail.messages], stats: { ...tail.stats, estimated_tokens: tail.stats.estimated_tokens + estimateMessageTokens(summary), compacted: 1 } };
+  return { messages: [summary, ...tail.messages], stats: { ...tail.stats, estimated_tokens: tail.stats.estimated_tokens + estimateMessageTokens(summary), compacted: 1, ...(settings.steppedWindow ? { head: live.id } : {}) } };
 };
 
 // The owner's own exchange on a chain: inputs entirely in the owner's own words, and Waldo's reply to each (the row the
