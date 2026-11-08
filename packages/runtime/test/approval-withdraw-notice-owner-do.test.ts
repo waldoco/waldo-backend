@@ -6,6 +6,7 @@ import { env, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
 import { OUTSIDE_REASON } from '../src/channels/approvals';
+import { FINAL_OUTBOX_KEY } from '../src/channels/telegram-final-outbox';
 
 const MODEL_REASON = 'You will tell them yourself.';
 const proof = vi.hoisted(() => ({ sent: [] as { chat_id: number; text: string }[], approvalId: '', script: [] as (() => unknown)[], listOutputs: [] as string[] }));
@@ -49,7 +50,10 @@ const tidy = async (name: string, options: Readonly<{ mcpCard?: boolean; replyTo
       for (let pass = 0; pass < 3; pass++) await instance.alarm();
       await state.storage.deleteAlarm();
       expect(network).not.toHaveBeenCalled();
-      return { sent: after(), row: state.storage.sql.exec('SELECT status, withdrawn_reason, withdrawn_outside FROM ledger WHERE id = ?', proof.approvalId).one() };
+      // The desk's notice is Waldo's own, not an answer to the turn: it goes wherever the owner's choice sends proactive work.
+      const notice = (state.storage.kv.get<{ id: string; notice?: true }[]>(FINAL_OUTBOX_KEY) ?? []).find(record => record.id === `withdrawn:${proof.approvalId}`);
+      if (notice) expect(notice.notice).toBe(true);
+      return { sent: after(), row: state.storage.sql.exec('SELECT status, withdrawn_reason, withdrawn_outside FROM ledger WHERE id = ?', proof.approvalId).one(), noticeQueued: notice !== undefined };
     });
   } finally { network.mockRestore(); }
 };
@@ -57,7 +61,8 @@ const notices = (sent: readonly { chat_id: number; text: string }[]) => sent.fil
 
 describe('a withdraw in a turn that read outside text', () => {
   it('reaches the owner as the desk’s notice on their main chat, never in the model’s words', async () => {
-    const { sent, row } = await tidy('withdraw-notice-forward', { replyTo: forwarded, script: [WITHDRAW] });
+    const { sent, row, noticeQueued } = await tidy('withdraw-notice-forward', { replyTo: forwarded, script: [WITHDRAW] });
+    expect(noticeQueued).toBe(true);
     expect(row).toEqual({ status: 'withdrawn', withdrawn_reason: OUTSIDE_REASON, withdrawn_outside: 1 });
     expect(notices(sent)).toEqual([{ chat_id: SUBJECT, text: expect.stringContaining('Waldo closed a card while working with an email or web page') }]);
     expect(sent.map(message => message.text).join('\n')).not.toContain(MODEL_REASON);

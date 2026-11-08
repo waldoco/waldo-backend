@@ -254,7 +254,7 @@ import { healthMemoryOn, memoryFlushHooks, setHealthMemory } from './health-memo
 import { capacityBudgetContext, cardCapacityNote, recentBlocks, recentMoves, runCapacityPass } from './capacity';
 import { capacityContext } from '../prompt/capacity';
 import { renderHealth } from '../context-composer/prompt';
-import { chooseProactiveSurface, linkingAppRows, proactiveBothDefault, proactiveReads, proactiveSurface, unaskedRecord, proactiveSurfaceReceipt, type ChatLinks, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, answersOwnerIn, ANSWERS_WHERE_ASKED, scheduledWaitingFor, wantedTargets, whatsappSubjects, withCopy, IMESSAGE_COPY_PREFIX, WHATSAPP_COPY_FRESH_MS, WHATSAPP_COPY_PREFIX, type ProactiveTarget } from './proactive-surface';
+import { chooseProactiveSurface, linkingAppRows, proactiveBothDefault, proactiveReads, proactiveSurface, unaskedRecord, proactiveSurfaceReceipt, type ChatLinks, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, answersOwnerIn, ANSWERS_WHERE_ASKED, waldoFirstWaitingFor, wantedTargets, whatsappSubjects, withCopy, IMESSAGE_COPY_PREFIX, WHATSAPP_COPY_FRESH_MS, WHATSAPP_COPY_PREFIX, type ProactiveTarget } from './proactive-surface';
 import { appApprovalsRequest } from './app-approvals';
 import { WHATSAPP_LINK_CONFIRM_ACTION, whatsappLinkConfirmAction, whatsappLinkConfirmPage } from './whatsapp-link-console';
 import { WHATSAPP_LINK_PATH, whatsappLinkDirectory } from '../identity/whatsapp-link';
@@ -3398,10 +3398,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (this.env.NEXT_DUE_ALARM === '1') this.ctx.storage.kv.put(ALARM_FULL_RELEASE, this.env.WALDO_RELEASE ?? 'unknown');
       // Messages still waiting for a WhatsApp number that no longer takes proactive work go to the app; they are due now.
       const leftForWhatsApp = whatsappTarget === null ? null : this.leftForWhatsApp(whatsappTarget);
-      if (leftForWhatsApp) await finalOutbox.wake(scheduledWaitingFor(leftForWhatsApp));
+      if (leftForWhatsApp) await finalOutbox.wake(waldoFirstWaitingFor(leftForWhatsApp));
       // Scheduled messages queued for Telegram before the owner's choice decided go to the app, now.
       const leftForTelegram = telegramAnswers && this.appBound() ? new Set([this.ctx.storage.kv.get<string>('telegram_subject')!]) : null;
-      if (leftForTelegram) await finalOutbox.wake(scheduledWaitingFor(leftForTelegram));
+      if (leftForTelegram) await finalOutbox.wake(waldoFirstWaitingFor(leftForTelegram));
       await lane('mac', () => this.drainMacDeliveries(appWithTelegramCopy ? 'app' : channel));
       await lane('mail', () => this.drainAgentMail(appWithTelegramCopy ? 'app' : channel, alarmEnd));
       await lane('jobs', () => this.drainJobs(channel, alarmEnd));
@@ -3452,10 +3452,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           return found.kind;
         }, () => Date.now() + APP_ADMISSION_RETRY_MS));
         // Messages left waiting for a WhatsApp number that no longer takes proactive work go to the app.
-        if (leftForWhatsApp) routes.push(this.linkingAppRows(this.outboxRoute('app', scheduledWaitingFor(leftForWhatsApp))));
+        if (leftForWhatsApp) routes.push(this.linkingAppRows(this.outboxRoute('app', waldoFirstWaitingFor(leftForWhatsApp))));
         // So do scheduled messages left waiting for Telegram; whatever else is addressed there (the answers to what the owner wrote
         // on Telegram) still goes there.
-        if (leftForTelegram) routes.push(this.linkingAppRows(this.outboxRoute('app', scheduledWaitingFor(leftForTelegram))));
+        if (leftForTelegram) routes.push(this.linkingAppRows(this.outboxRoute('app', waldoFirstWaitingFor(leftForTelegram))));
         if (telegramAnswers) routes.push(this.outboxRoute('telegram'));
         // An answer to work asked for on WhatsApp goes to that chat while the number is bound, whatever takes proactive work. Once
         // the number is unbound it goes to the app, so the answer is never left with no route.
@@ -4419,7 +4419,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const email = (await accounts()).find((known) => known.id === id)?.email;
       try {
         if (owner === 0) throw new Error('owner_unbound');
-        await finalOutbox.enqueue({ id: trace, trace, payload: { chat_id: owner, text: reconnectNoticeText(this.appBound() ? 'app' : 'console', email) },
+        await finalOutbox.enqueue({ id: trace, trace, payload: { chat_id: owner, text: reconnectNoticeText(this.appBound() ? 'app' : 'console', email) }, notice: true,
           ownerSubject: String(owner), doName: identity.get<string>('do_name') ?? '', expiresAt: Date.now() + 86_400_000 });
       } catch (error) {
         log({ trace, hop: 'google_reauth_notice', ms: 0, ok: false, error: String(error), code: 'not_queued' });
@@ -4440,8 +4440,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
         if (!transition.send) return;
         // A new ticket revokes the owner's open ones, so where no button can carry it (a surface that declares connect
-        // guidance) nothing is minted.
-        if (connectGuidance[channel] !== undefined) { this.ctx.waitUntil(this.serial(() => queueReauthNotice(id))); return; }
+        // guidance) nothing is minted. Nor anywhere once the owner's choice decides and the app is bound: the notice is Waldo's
+        // own, and the delivery outbox takes it where their proactive messages go.
+        if (connectGuidance[channel] !== undefined || (this.proactiveByChoice() && this.appBound())) { this.ctx.waitUntil(this.serial(() => queueReauthNotice(id))); return; }
         const account = (await accounts()).find((known) => known.id === id);
         const url = await google.connectUrl('calendar');
         const sent = url !== null && (await deliverConnectLink(url, 'reconnect', account?.email));
@@ -4753,7 +4754,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       ownerMessageAt: () => this.activeApp?.admittedAt ?? this.activeWhatsApp?.admittedAt ?? this.activeIMessage?.admittedAt,
       surface: channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work), writesFirstNow, renames: this.env.HEALTH_EASE_WORKOUT === '1', undoCancels: this.env.CALENDAR_UNDO_CANCEL === '1',
       // A card closed in a turn that read outside text: the desk's own words reach the owner's main chat once, through the outbox.
-      notice: (key, text) => finalOutbox.enqueue({ id: key, trace: key, payload: { chat_id: owner, text }, ownerSubject: String(owner),
+      notice: (key, text) => finalOutbox.enqueue({ id: key, trace: key, payload: { chat_id: owner, text }, notice: true, ownerSubject: String(owner),
         doName: storage.kv.get<string>('do_name') ?? '', expiresAt: deps.now() + 86_400_000 }),
       retire: async ({ surface, message_ref }) => {
         const [chat = '', message = ''] = message_ref.split(':');

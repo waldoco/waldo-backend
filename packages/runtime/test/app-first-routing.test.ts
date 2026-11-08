@@ -15,8 +15,9 @@ import { standingOrderBook } from '../src/channels/standing-orders';
 import { FINAL_OUTBOX_KEY, TelegramFinalOutbox, type FinalRecord } from '../src/channels/telegram-final-outbox';
 import { updateBook } from '../src/channels/update-cards';
 import { claimStore } from '../src/memory/claims';
-import { persistTransportWake } from '../src/scheduler/alarm-slot';
+import { persistTransportWake, TASK_JOBS_DUE_KEY } from '../src/scheduler/alarm-slot';
 import { reminderBook } from '../src/channels/reminders';
+import { jobBook } from '../src/tasks/jobs';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
@@ -32,13 +33,19 @@ const CHECK_BACK_TEXT = 'I looked for the invoice in your sent mail and found no
 const NUDGE_TEXT = 'A nudge queued for the app.';
 const REPLY_TEXT = 'Here is your answer.';
 const REMINDER_TEXT = 'Time to call Sam, as you asked.';
-const fixture = vi.hoisted(() => ({ event: null as CalendarItem | null, changes: [] as CalendarChange[], requests: [] as string[] }));
+const TASK_REPORT_TEXT = 'The vendor comparison is done: A is cheaper, B ships faster.';
+const RECONNECT_TEXT = 'Google stopped answering for owner@example.test. Reconnect it in the app.';
+const WITHDRAWN_TEXT = 'Waldo closed a card while working with an email or web page.';
+const fixture = vi.hoisted(() => ({ event: null as CalendarItem | null, changes: [] as CalendarChange[], requests: [] as string[], deadGrant: false }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
-  return { ...original, googleClient: (_app: unknown, _tokens: unknown, _fetch: unknown, _health: unknown, account: unknown) => ({
-    account, events: async () => fixture.event ? [fixture.event] : [], newMail: async () => [], changedEvents: async () => fixture.changes, event: async () => fixture.event,
-    calendarPage: async () => ({ events: fixture.event ? [fixture.event] : [], next_page_token: null, fetched_count: 1, account, observed_at: new Date().toISOString() }),
-  }) };
+  // A dead grant reports itself through the health callback and fails the read, as the real client does on invalid_grant.
+  const dead = (health: unknown) => { (health as ((error: string) => void) | undefined)?.('google token failed: invalid_grant'); throw new Error('google token failed: invalid_grant'); };
+  return { ...original, googleClient: (_app: unknown, _tokens: unknown, _fetch: unknown, health: unknown, account: unknown) => {
+    const reads = { events: async () => fixture.event ? [fixture.event] : [], newMail: async () => [], changedEvents: async () => fixture.changes, event: async () => fixture.event,
+      calendarPage: async () => ({ events: fixture.event ? [fixture.event] : [], next_page_token: null, fetched_count: 1, account, observed_at: new Date().toISOString() }) };
+    return { account, ...Object.fromEntries(Object.entries(reads).map(([name, read]) => [name, async () => fixture.deadGrant ? dead(health) : read()])) };
+  } };
 });
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
@@ -54,7 +61,8 @@ vi.mock('../src/channels/telegram-turn', async load => {
       : content.includes('[Scheduled card') ? CARD_TEXT
       : content.includes('[Standing order due now') ? ORDER_TEXT
       : content.includes('[Check-back due now') ? CHECK_BACK_TEXT
-      : content.includes('[Reminder due now') ? REMINDER_TEXT : 'SKIP';
+      : content.includes('[Reminder due now') ? REMINDER_TEXT
+      : content.includes('A background task you started has finished') ? TASK_REPORT_TEXT : 'SKIP';
     return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
@@ -72,7 +80,7 @@ type Sent = { chat_id: number; text: string; reply_markup?: unknown };
 const wire = { authority: 'current' as Authority, authorityAfter: 0, asked: 0, presence: true, telegram: 'ok' as 'ok' | 'fails', telegramSent: [] as Sent[], previews: [] as unknown[], whatsappSent: [] as string[], presenceDown: false, admittedBy: [] as string[] };
 
 beforeEach(() => {
-  fixture.event = null; fixture.changes = []; fixture.requests = [];
+  fixture.event = null; fixture.changes = []; fixture.requests = []; fixture.deadGrant = false;
   wire.authority = 'current'; wire.authorityAfter = 0; wire.asked = 0; wire.presence = true; wire.telegram = 'ok'; wire.telegramSent = []; wire.previews = []; wire.whatsappSent = []; wire.presenceDown = false; wire.admittedBy = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
@@ -132,7 +140,7 @@ const withOwner = async (name: string, run: (owner: Owner, state: DurableObjectS
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only',
         scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/gmail.readonly'] }]);
       const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC',
-        WALDO_OWNER_TELEGRAM_ID: undefined, GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', MAIL_SOURCE_FOLLOWUPS: '1', CALENDAR_GROUNDED_PREP: '1',
+        WALDO_OWNER_TELEGRAM_ID: undefined, GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', WALDO_OAUTH_STATE_SECRET: 'synthetic-state-secret', MAIL_SOURCE_FOLLOWUPS: '1', CALENDAR_GROUNDED_PREP: '1',
         ...(binding.byChoice ? { PROACTIVE_BY_CHOICE: '1', OWNER_SURFACE_DEFAULT: '1' } : {}),
         ...(binding.whatsapp ? { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' } : {}) }) as unknown as Owner;
       await owner.setup('telegram').ready;
@@ -174,6 +182,18 @@ describe('proactive work for an owner on Telegram who also uses the app', () => 
       await schedulePass(owner, state);
       expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: CARD_TEXT, channel: 'app' }]);
       expect(wire.telegramSent).toEqual([{ chat_id: 7, text: CARD_TEXT }]);
+    });
+  });
+
+  it('a Google grant that dies during a read on Telegram gets the reconnect button on Telegram, and nothing in the app', async () => {
+    await withOwner('routing-reconnect-telegram', async (owner, state, ctx) => {
+      fixture.deadGrant = true;
+      const client = await (owner.setup('telegram') as unknown as { google: { client(feature: string): Promise<{ events(): Promise<unknown> } | null> } }).google.client('calendar');
+      await expect(client!.events()).rejects.toThrow();
+      await vi.waitFor(() => expect(wire.telegramSent).toEqual([{ chat_id: 7, text: expect.stringContaining('owner@example.test'), reply_markup: expect.anything() }]), { timeout: 5_000, interval: 20 });
+      await outboxPass(owner, state, ctx);
+      expect(outbox(state).filter(record => record.id.startsWith('google-reauth:'))).toEqual([]);
+      expect(await appChat(owner, ctx)).toEqual([]);
     });
   });
 
@@ -528,7 +548,7 @@ describe('with the owner\'s choice deciding, for an owner still linked on Telegr
     }, { ...ON, whatsapp: true });
   });
 
-  it('a full day for an owner still linked on Telegram who chose the app and WhatsApp: the Brief, a reminder, a check-back and a standing order\'s report reach both, and nothing reaches Telegram', async () => {
+  it('a full day for an owner still linked on Telegram who chose the app and WhatsApp: the Brief, a reminder, a check-back, a task\'s report, a reconnect notice and a standing order\'s report follow the choice, and nothing reaches Telegram', async () => {
     await withOwner('choice-full-day', async (owner, state, ctx) => {
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
       const step = async () => { await schedulePass(owner, state); await outboxPass(owner, state, ctx); await outboxPass(owner, state, ctx); };
@@ -548,15 +568,34 @@ describe('with the owner\'s choice deciding, for an owner still linked on Telegr
       await schedulePass(owner, state);
       reportMachineJobs(state.storage.sql);
       await step();
+      // 14:00, the report of a task the owner started in a Telegram turn this morning.
+      ctx.now = AT + 5 * 3_600_000;
+      const jobs = jobBook(state.storage.sql, { now: Date.now, newId: () => 'task00000001', newToken: () => 'tok-task' });
+      const { job } = jobs.create({ kind: 'task', profile: 'reader', idempotencyKey: 'telegram-turn:task-1', origin: 'telegram-turn', surface: 'telegram',
+        brief: { title: 'Vendor research', goal: 'Compare the two vendors on price.', context: 'Synthetic vendors A and B.', done_when: 'A short comparison.', effort: 'standard', timezone: 'UTC', started_at: Date.now() - 3_600_000 },
+        dueAt: Date.now(), deadlineAt: Date.now() + 3_600_000 });
+      expect(jobs.report(jobs.startAttempt(job.id)!, { status: 'done', summary: 'Vendor A is cheaper.', findings: [{ text: 'Vendor B ships faster.' }], proposals: [], left: [] }, { rounds: 1, costUsd: 0 })).toBe('accepted');
+      await state.storage.put(TASK_JOBS_DUE_KEY, Date.now());
+      await step();
+      // 15:00, the owner's Google grant dies during the prep sweep's read; its reconnect notice is queued once.
+      ctx.now = AT + 6 * 3_600_000;
+      fixture.deadGrant = true;
+      await dueSweep(state);
+      await schedulePass(owner, state);
+      const reauth = () => outbox(state).find(record => record.id.startsWith('google-reauth:'));
+      await vi.waitFor(() => expect(reauth()?.notice).toBe(true), { timeout: 5_000, interval: 20 });
+      await vi.waitFor(async () => { await outboxPass(owner, state, ctx); expect(reauth()?.status).toBe('delivered'); }, { timeout: 5_000, interval: 20 });
       // 17:00, a standing order's report.
       ctx.now = AT + 8 * 3_600_000;
       const order = await standingOrderBook(state.storage.sql, scheduler, { timezone: 'UTC', now: () => new Date(Date.now()) }, () => 'order1')
         .set({ scope: 'Triage my inbox', trigger: 'daily', at: '08:00', gate: 'act_and_report', escalation: 'message_owner' });
       await due(state, order.id, 'standing_order', { order_id: order.id });
       await step();
-      const day = [CARD_TEXT, REMINDER_TEXT, CHECK_BACK_TEXT, ORDER_TEXT];
-      // The app lists its newest row first.
-      expect({ app: (await appChat(owner, ctx)).map(row => row.text).reverse(), whatsapp: wire.whatsappSent }).toEqual({ app: day, whatsapp: day });
+      // The app lists its newest row first. The task's report and the reconnect notice reach the app only: under `both`, WhatsApp
+      // copies the kinds copiedFollowups names, and these are not among them.
+      const app = await appChat(owner, ctx);
+      expect(app.map(row => row.text).reverse()).toEqual([CARD_TEXT, REMINDER_TEXT, CHECK_BACK_TEXT, TASK_REPORT_TEXT, expect.stringContaining('owner@example.test'), ORDER_TEXT]);
+      expect(wire.whatsappSent).toEqual([CARD_TEXT, REMINDER_TEXT, CHECK_BACK_TEXT, ORDER_TEXT]);
       expect(wire.telegramSent).toEqual([]);
     }, { ...ON, whatsapp: true });
   });
@@ -570,6 +609,31 @@ describe('with the owner\'s choice deciding, for an owner still linked on Telegr
       expect(outbox(state).map(record => [record.id, record.status])).toEqual([['turn:telegram-1', 'delivered'], ['card:telegram-1', 'delivered']]);
       expect(wire.telegramSent).toEqual([{ chat_id: 7, text: REPLY_TEXT }]);
       expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: CARD_TEXT, channel: 'app' }]);
+    }, ON);
+  });
+
+  it('a Google grant that dies during a read on Telegram sends its reconnect notice to the app, and no button to Telegram', async () => {
+    await withOwner('choice-reconnect-telegram', async (owner, state, ctx) => {
+      fixture.deadGrant = true;
+      const client = await (owner.setup('telegram') as unknown as { google: { client(feature: string): Promise<{ events(): Promise<unknown> } | null> } }).google.client('calendar');
+      await expect(client!.events()).rejects.toThrow();
+      const reauth = () => outbox(state).filter(record => record.id.startsWith('google-reauth:'));
+      await vi.waitFor(() => expect(reauth().map(record => record.notice)).toEqual([true]), { timeout: 5_000, interval: 20 });
+      await vi.waitFor(async () => { await outboxPass(owner, state, ctx); expect(reauth().map(record => record.status)).toEqual(['delivered']); }, { timeout: 5_000, interval: 20 });
+      expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: expect.stringContaining('owner@example.test'), channel: 'app' }]);
+      expect(wire.telegramSent).toEqual([]);
+    }, ON);
+  });
+
+  it('a notice of Waldo\'s own queued for Telegram in a turn there (a reconnect notice, the approvals desk\'s notice) goes to the app, and the turn\'s reply to Telegram', async () => {
+    await withOwner('choice-notices', async (owner, state, ctx) => {
+      await queue(state, ctx, 'telegram');
+      await queue(state, ctx, 'telegram', { id: 'google-reauth:fixture-1', trace: 'reauth-1', payload: { chat_id: 7, text: RECONNECT_TEXT }, notice: true } as Partial<FinalRecord>);
+      await queue(state, ctx, 'telegram', { id: 'withdrawn:fixture-1', trace: 'withdrawn-1', payload: { chat_id: 7, text: WITHDRAWN_TEXT }, notice: true } as Partial<FinalRecord>);
+      for (let pass = 0; pass < 3; pass++) await outboxPass(owner, state, ctx);
+      expect(outbox(state).map(record => [record.id, record.status])).toEqual([['turn:telegram-1', 'delivered'], ['google-reauth:fixture-1', 'delivered'], ['withdrawn:fixture-1', 'delivered']]);
+      expect(wire.telegramSent).toEqual([{ chat_id: 7, text: REPLY_TEXT }]);
+      expect((await appChat(owner, ctx)).map(row => row.text).reverse()).toEqual([RECONNECT_TEXT, WITHDRAWN_TEXT]);
     }, ON);
   });
 
