@@ -293,6 +293,9 @@ export type ApprovalDesk = Readonly<{
   settleUnknownGrants(): Promise<void>;
   // Waldo's unexpired cards the owner has not settled, oldest first, with the ones they put off marked.
   waiting(): readonly WaitingApproval[];
+  // The conversations where a card the owner can approve in words waits on this surface, as each card was shown (null where the
+  // surface names no thread). A put-off card is not waiting on their next word.
+  wordsAwaited(): readonly (string | null)[];
   // Closes a card of Waldo's that is still waiting, with the owner-visible reason. It never approves; a card the owner
   // decided, that expired, or whose effect is on record is left as it is.
   withdraw(id: string, reason: string, options?: Readonly<{ outside?: boolean }>): Promise<WithdrawOutcome>;
@@ -544,7 +547,7 @@ const CARDS_STAY: ReadonlySet<string> = new Set<ApprovalSurface>(['whatsapp', 'i
 // The surfaces that show no buttons and approve a one-tap card by the owner's numbered reply.
 const NUMBERED: ReadonlySet<ApprovalSurface> = new Set(['imessage']);
 // The reply protocol, not a reading of intent: only a message that is the digit itself decides.
-const NUMBERED_REPLY = /^\s*([12])\s*$/;
+export const NUMBERED_REPLY = /^\s*([12])\s*$/;
 const approvedInApp = (entry: LedgerRow): boolean => stepUpFor(entry, 'approve');
 const HANDED_TO_APP = 'It reaches other people or acts beyond your own things, so it is approved in the Waldo app, not in chat.';
 const GO_AHEAD_HERE = 'Tell me here to go ahead and I will do it. Nothing is done until you do.';
@@ -1876,6 +1879,14 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     },
     settleReplay(id, status) {
       return sql.exec("UPDATE ledger SET status = ?, decided_at = ? WHERE id = ? AND status = 'running'", status, deps.now(), id).rowsWritten > 0;
+    },
+    wordsAwaited() {
+      expireDue();
+      return sql.exec<LedgerRow>(`SELECT * FROM ledger WHERE ${WITHDRAWABLE_SQL} AND deferred_at IS NULL`).toArray()
+        .filter(entry => PROPOSAL_KINDS.includes(entry.kind) && entry.id.startsWith('p') && approvesInWords(entry))
+        .flatMap(entry => sql.exec<{ conversation_ref: string | null }>(
+          'SELECT conversation_ref FROM approval_presentations WHERE approval_id = ? AND surface = ? AND in_full = 1 AND retired_at IS NULL', entry.id, surface,
+        ).toArray().map(presentation => presentation.conversation_ref));
     },
     waiting() {
       expireDue();

@@ -33,7 +33,8 @@ export const hopFeature = (hop: string) => HOPS[hop]?.feature ?? 'other';
 
 // Machine turns (reminder fires, heartbeat ticks, nightly, standing orders) close their trace
 // with a machine_turn root instead of turn; without a root the spans never leave `pending`.
-const ROOT_NAMES: Readonly<Record<string, string>> = { turn: 'turn', machine_turn: 'machine' };
+// A turn recovery found cut off closes its trace with turn_aborted (turn-aborted.ts).
+const ROOT_NAMES: Readonly<Record<string, string>> = { turn: 'turn', machine_turn: 'machine', turn_aborted: 'turn_aborted' };
 
 export const langfuseOtlpConfig = (env: Env): OtlpConfig | null => {
   const { LANGFUSE_PUBLIC_KEY: pk, LANGFUSE_SECRET_KEY: sk, LANGFUSE_BASE_URL: base } = env;
@@ -291,7 +292,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
     const item = { entry: { ...gated, text: capture && gated.text ? { ...gated.text } : undefined, usage: gated.usage ? { ...gated.usage } : undefined }, endMs: now(), arrival: nextArrival++ };
     const done = exported.get(entry.trace);
     if (done) return post([span(done.traceId, hex(8), done.rootId, item, [list('langfuse.trace.tags', tagsFor(context, [item]))], done.rootHop)], done.delivery);
-    if (entry.hop !== 'turn' && entry.hop !== 'machine_turn') {
+    if (!Object.hasOwn(ROOT_NAMES, entry.hop)) {
       const overflow = bufferedHops >= MAX_BUFFERED_HOPS;
       if (overflow) {
         let oldest = pending.keys().next().value!;
