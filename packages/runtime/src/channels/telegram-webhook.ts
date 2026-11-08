@@ -29,12 +29,23 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_COMPACTION?: string;
   // '1' cuts chat history in steps and holds the start between cuts, so the provider's cache keeps the leading history.
   WALDO_STEPPED_WINDOW?: string;
-  // '1' caps standing orders and quests in the prompt and clears a turn's tool results down to the latest three past ~30k tokens.
+  // '1' caps standing orders and quests in the prompt and clears a turn's tool results down to the latest few past a size.
   WALDO_CONTEXT_CAPS?: string;
   // '1' runs the compaction a drain makes due in a later alarm pass of its own, never in the pass that ran the owner's turns.
   WALDO_COMPACTION_WAKE?: string;
   // '1' holds every chat's history to the conversation layer of the call budget and measures each call against its class's ceiling.
   WALDO_CALL_CEILINGS?: string;
+  // The context budget's sizes (conversation/context-budget.ts); each defaults to its value there.
+  WALDO_HISTORY_BUDGET_TOKENS?: string;
+  WALDO_CHAT_CEILING_TOKENS?: string;
+  WALDO_JOB_CEILING_TOKENS?: string;
+  WALDO_HARD_CEILING_TOKENS?: string;
+  WALDO_STEPPED_WINDOW_TARGET?: string;
+  WALDO_TOOL_RESULTS_CLEAR_AT_CHARS?: string;
+  WALDO_TOOL_RESULTS_KEEP_LATEST?: string;
+  WALDO_STANDING_ORDERS_CHARS?: string;
+  WALDO_QUESTS_CHARS?: string;
+  WALDO_TIMEZONE_ASK?: string;
   WALDO_ENVIRONMENT?: string;
   WALDO_OWNER_DO_NAMESPACE?: string;
   WALDO_RELEASE?: string;
@@ -296,6 +307,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   PROACTIVE_ACT_AHEAD?: string;
   // An owner who chose no proactive surface and has WhatsApp bound gets proactive work on the app and WhatsApp both.
   PROACTIVE_BOTH_DEFAULT?: string;
+  // '1' has an event notice that reaches the app chat raise one push, under quiet hours and the owner's own limits.
+  EVENT_PUSH?: string;
+  // The most event pushes in an owner's day, a backstop under the owner's limits (default 3).
+  EVENT_PUSH_PER_DAY?: string;
   // "1": Waldo's own sends follow the owner's choice among their other surfaces even while Telegram is linked.
   PROACTIVE_OVER_TELEGRAM?: string;
   // '1' (with PROACTIVE_GATE) has Waldo look across the owner's plate on its own every PROACTIVE_REVIEW_EVERY_MIN minutes

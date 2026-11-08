@@ -6,6 +6,7 @@ import { readThreadArgsSchema, triggerTypeSchema, TOOL_PERMISSIONS, type LLMTool
 import type { LLMGatewayAdapter } from '../src/llm/provider';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import { TOOL_OUTPUT_LIMIT } from '../src/conversation/tool-loop';
+import { CONTEXT_BUDGET, type ContextBudget } from '../src/conversation/context-budget';
 
 // An owner turn whose message is long reads one long thread after another, through the real responder. With
 // WALDO_CALL_CEILINGS, once the results would carry the call past its hard ceiling, every result but the newest is cleared;
@@ -13,7 +14,7 @@ import { TOOL_OUTPUT_LIMIT } from '../src/conversation/tool-loop';
 const allowed = (name: ToolName) => triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes(name));
 const ROUNDS = 12;
 
-const clearingIn = (callCeilings: boolean) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`call-ceilings-results-${callCeilings}`)), async () => {
+const clearingIn = (callCeilings: ContextBudget | undefined) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`call-ceilings-results-${callCeilings?.hardCeilingTokens}`)), async () => {
   const sent: (readonly LLMToolTurn[])[] = [];
   let step = 0;
   const gateway: LLMGatewayAdapter = { async complete(request) {
@@ -25,17 +26,21 @@ const clearingIn = (callCeilings: boolean) => runInDurableObject(env.OWNER_DO!.g
   } };
   const mail = { name: 'read_thread' as const, description: 'Read a mail thread.', schema: readThreadArgsSchema, trigger_allowlist: allowed('read_thread'),
     handle: async () => ({ ok: true as const, data: { body: 'y'.repeat(TOOL_OUTPUT_LIMIT - 300) }, source_taint: 'external' as const }) };
-  const responder = createOwnerResponder({ openaiApiKey: 'fixture', ...(callCeilings ? { callCeilings: true } : {}) }, undefined, undefined, undefined, undefined, [mail] as never, undefined, false, undefined, undefined, gateway);
-  await responder.respond(ownerTyped({ traceId: `tg-ceiling-${callCeilings}`, conversationRef: 'owner', surface: 'telegram', text: `Read every planning thread against these notes. ${'The venue, the caterer and the count all moved this week. '.repeat(3_400)}` }), async (_hop, work) => work());
+  const responder = createOwnerResponder({ openaiApiKey: 'fixture', ...(callCeilings ? { callCeilings } : {}) }, undefined, undefined, undefined, undefined, [mail] as never, undefined, false, undefined, undefined, gateway);
+  await responder.respond(ownerTyped({ traceId: `tg-ceiling-${callCeilings?.hardCeilingTokens}`, conversationRef: 'owner', surface: 'telegram', text: `Read every planning thread against these notes. ${'The venue, the caterer and the count all moved this week. '.repeat(3_400)}` }), async (_hop, work) => work());
   const kept = (turns: readonly LLMToolTurn[]) => turns.filter(turn => !turn.output.includes('[cleared: ')).length;
   const firstCleared = sent.find(turns => kept(turns) < turns.length);
   return { firstCleared: firstCleared && kept(firstCleared), at: firstCleared?.length };
 });
 
 it('with WALDO_CALL_CEILINGS a long owner turn clears every tool result but the newest at the hard ceiling', async () => {
-  const ceiling = await clearingIn(true);
-  const plain = await clearingIn(false);
+  const ceiling = await clearingIn(CONTEXT_BUDGET);
+  const plain = await clearingIn(undefined);
   expect(ceiling.firstCleared).toBe(1);
   expect(plain.firstCleared).toBeGreaterThan(1);
   expect(ceiling.at!).toBeLessThan(plain.at!);
+  // The hard ceiling is a setting: a lower one clears sooner.
+  const lower = await clearingIn({ ...CONTEXT_BUDGET, hardCeilingTokens: CONTEXT_BUDGET.hardCeilingTokens - 20_000 });
+  expect(lower.firstCleared).toBe(1);
+  expect(lower.at!).toBeLessThan(ceiling.at!);
 });

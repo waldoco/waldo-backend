@@ -105,6 +105,7 @@ import { adminRead, adminAction } from './dashboard-admin';
 import { pinProxyIntentRoute } from '../connectors/proxy-intent-route';
 import { ProxyIntentError, type ProxyIntent } from '../connectors/proxy-intent';
 import { compactionSettings } from '../conversation/compaction';
+import { contextBudget, ignoredSettings } from '../conversation/context-budget';
 import { eventAdmission } from './event-admission';
 import { DurableObject } from 'cloudflare:workers';
 import { workspaceOwnerHost, workspaceRequest, workspaceUploadLease } from './workspace-host';
@@ -203,8 +204,8 @@ import { healthLogBook, healthLogHandlers, healthSection, sleepNeedHandler } fro
 import { healthContextBook, healthZoneWords, toContextHealthMaterial, type HealthContextRow } from './health-context';
 import { localIso, localToEpoch, reminderBook, reminderHandlers, unreadableRemindersLine } from './reminders';
 import { medicationBook, medicationHandlers } from './medications';
-import { STANDING_ORDERS_PROMPT_CHARS, standingOrderBook, standingOrderFireText, standingOrderHandlers, standingOrdersPrompt } from './standing-orders';
-import { compareExperiment, experimentHandlers, QUESTS_PROMPT_CHARS, questBook, questCardContext, questHandler, questsPrompt, type QuestBook, type ReadZones } from './quests';
+import { standingOrderBook, standingOrderFireText, standingOrderHandlers, standingOrdersPrompt } from './standing-orders';
+import { compareExperiment, experimentHandlers, questBook, questCardContext, questHandler, questsPrompt, type QuestBook, type ReadZones } from './quests';
 import { standingGrants, type StandingGrants } from './standing-grants';
 import { appAutonomyRequest } from './app-autonomy';
 import { autonomyHandlers } from './autonomy-tools';
@@ -367,6 +368,8 @@ type OwnerRuntime = Readonly<{
   macFollowup: ReturnType<typeof createTelegramResponder>['prompt'];
   finalOutbox: TelegramFinalOutbox;
   settleFinal(record: FinalRecord): Promise<void>;
+  // The app's push to the owner's devices, within its kind's daily ceiling and never in quiet hours (expo-push.ts).
+  push: ReturnType<typeof ownerPush>;
   fire(entry: ScheduleEntry): Promise<void | 'delivery_pending'>;
   beat(entry: ScheduleEntry): Promise<void | 'delivery_pending'>;
   noticeFailures(): Promise<void>;
@@ -457,12 +460,26 @@ type ScheduledOwner = Readonly<{ kind: 'admitted'; binding: SurfaceOwnerBinding;
 // The notice for a run that stopped before it finished, so its outcome is unknown.
 const RUN_DID_NOT_FINISH = INTERRUPTED_NOTICES.unfinished;
 
+// EVENT_PUSH_PER_DAY: the deploy's backstop on event pushes, a whole number; anything else keeps expo-push's default.
+const eventPushesPerDay = (raw: string | undefined): number | null => {
+  const parsed = Number(raw);
+  return raw !== undefined && raw.trim() !== '' && Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+};
 const validZone = (zone: string): boolean => {
   try {
     return zone.length > 0 && Boolean(new Intl.DateTimeFormat('en', { timeZone: zone }));
   } catch {
     return false;
   }
+};
+// The owner's zone as an IANA name (Area/Location, or UTC), or null. Intl also takes offsets (+05:30) and abbreviations
+// (EST, IST), which carry no daylight-saving rules or are ambiguous, and resolves both to some zone, so the name as written is
+// what is checked. Its case is taken from Intl's own list where the list has it; the list holds the legacy spelling of some
+// zones (Asia/Calcutta), so a name it lacks is kept as written rather than renamed.
+const ianaZone = (zone: string): string | null => {
+  if (zone.toUpperCase() === 'UTC') return 'UTC';
+  if (!/^[A-Za-z]+(?:\/[A-Za-z0-9_+-]+)+$/.test(zone) || !validZone(zone)) return null;
+  return Intl.supportedValuesOf('timeZone').find((known) => known.toLowerCase() === zone.toLowerCase()) ?? zone;
 };
 
 // A directory-backed DO whose owner has not linked Telegram yet resolves to 0 (not the deploy
@@ -2445,11 +2462,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   // A chain's compaction job, after the turn that made it due. Its own scope and deadline, the owner admitted again through
   // the session the turn ran under, and the thread's fence; off unless WALDO_COMPACTION=on. Anything that ends it early
-  // writes no summary, and the chain's next eligible reply asks again.
-  private async compactApp(record: AppCompaction, alarmEnd?: number): Promise<void> {
+  // writes no summary, and the chain's next eligible reply asks again; one the alarm pass has no room for says so.
+  private async compactApp(record: AppCompaction, alarmEnd?: number): Promise<'no_time' | undefined> {
     if(!compactionSettings(this.env).enabled)return;
     const started=Date.now(),deadline=started+COMPACTION_BUDGET_MS;
-    if(alarmEnd!==undefined&&alarmEnd<deadline)return;
+    if(alarmEnd!==undefined&&alarmEnd<deadline)return 'no_time';
     const runtime=this.setup('app'),trace=`compaction:${record.id}`,abort=new AbortController(),timer=setTimeout(()=>abort.abort(),COMPACTION_BUDGET_MS);
     const admit=()=>{if(abort.signal.aborted||Date.now()>=deadline)throw new ClosedRunError();};
     this.compactionAbort=abort;
@@ -2465,11 +2482,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   // The owner's chain after their turns on a chat surface on the timeline. An app, WhatsApp or Telegram message admitted
   // meanwhile stops it, as it stops the app's own compaction.
-  private async compactTimeline(chat: TimelineChat, alarmEnd?: number, inline = !this.compactionWake()): Promise<void> {
-    if (!inline) return this.askCompaction({ chat });
+  private async compactTimeline(chat: TimelineChat, alarmEnd?: number, inline = !this.compactionWake()): Promise<'no_time' | undefined> {
+    if (!inline) { await this.askCompaction({ chat }); return; }
     const abort = new AbortController();
     this.compactionAbort = abort;
-    try { await compactChatTimeline(this.chatTimelineHost(), chat, this.setup(chat), abort, alarmEnd); }
+    try { return await compactChatTimeline(this.chatTimelineHost(), chat, this.setup(chat), abort, alarmEnd); }
     finally { if (this.compactionAbort === abort) this.compactionAbort = undefined; }
   }
   // WALDO_COMPACTION_WAKE: a drain that makes chains due leaves their compaction to a later alarm pass of its own, so the pass
@@ -2492,13 +2509,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const kv = this.ctx.storage.kv, pending = kv.get<CompactionPending>(COMPACTION_PENDING_KEY);
     if (!pending) { kv.delete(COMPACTION_DUE_KEY); return; }
     const left = { app: pending.app.filter(entry => entry.at >= passStart), chats: pending.chats.filter(entry => entry.at >= passStart) };
+    // A compaction the pass has no room for does nothing and says so; it waits for the next pass.
     for (const record of pending.app.filter(entry => entry.at < passStart)) {
-      if (this.appInbox.records().some(row => row.state === 'admitted')) left.app.push(record);
-      else await this.compactApp(record, alarmEnd);
+      if (this.appInbox.records().some(row => row.state === 'admitted') || await this.compactApp(record, alarmEnd) === 'no_time') left.app.push(record);
     }
     for (const entry of pending.chats.filter(entry => entry.at < passStart)) {
-      if ((await this.inbox.records()).some(record => record.state === 'admitted') || this.whatsappInbox().records().some(record => record.state === 'admitted')) left.chats.push(entry);
-      else await this.compactTimeline(entry.chat, alarmEnd, true);
+      if ((await this.inbox.records()).some(record => record.state === 'admitted') || this.whatsappInbox().records().some(record => record.state === 'admitted')
+        || await this.compactTimeline(entry.chat, alarmEnd, true) === 'no_time') left.chats.push(entry);
     }
     // Written only once the work is done: a pass cut off before here leaves every request for the next one.
     kv.delete(COMPACTION_DUE_KEY);
@@ -2979,6 +2996,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const url = typeof envelope.url === 'string' ? envelope.url.slice(0, 300) : '';
         const text = `Event - ${summary}${url ? `\n${url}` : ''}`;
         sent = OUTSIDE_TURN_NOTICE[surface].by === 'transcript' ? await this.serial(() => this.notifyOwner(surface, runtime, text, true)) : await this.notifyOwner(surface, runtime, text, true);
+        // In the app the notice is a chat row the owner sees only when they open it, so it raises one push; on any other
+        // surface the message itself is the notification.
+        if (sent === 'sent' && OUTSIDE_TURN_NOTICE[surface].by === 'transcript' && this.env.EVENT_PUSH === '1') this.ctx.waitUntil(runtime.push('event'));
         // Refused at the gate (its own line names why) or by the directory, or no route outside a turn: nothing left the Worker,
         // a definite non-send, not an unknown one.
         if(sent==='blocked'||sent==='unroutable'){
@@ -4351,7 +4371,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const doName = identity.get<string>('do_name');
       return !auth || !doName || auth.saveSettings(doName, settings);
     };
-    const clock = { get timezone() { return identity.get<string>('timezone') ?? fallbackZone; }, now: () => new Date(deps.now()) };
+    const clock = { get timezone() { return identity.get<string>('timezone') ?? fallbackZone; }, now: () => new Date(deps.now()),
+      ...(this.env.WALDO_TIMEZONE_ASK === '1' ? { confirmed: () => identity.get<boolean>('timezone_confirmed') === true } : {}) };
     const book = reminderBook(this.ctx.storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
     const meds = this.env.MEDICATIONS === '1'
       ? medicationBook(this.ctx.storage.sql, scheduler, clock, (operation, payload) => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', operation, payload))
@@ -4957,7 +4978,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const uncompacted = { ...compactionSettings(this.env), enabled: false };
     const kv = durableConversationStore(storage, uncompacted);
     // WALDO_CONTEXT_CAPS: the always-on standing orders and quests are capped, and an owner turn's tool results are cleared
-    // down to the latest few past about 30k tokens.
+    // down to the latest few past a size. The sizes, and the call ceilings', are the deploy's context budget.
+    const budget = contextBudget(this.env), ignored = ignoredSettings(this.env);
+    if (ignored.length) console.log(JSON.stringify({ hop: 'context_budget', ok: false, code: 'setting_ignored', detail: ignored.join(',') }));
     const contextCaps = this.env.WALDO_CONTEXT_CAPS === '1';
     const callCeilings = this.env.WALDO_CALL_CEILINGS === '1';
     const plans = dayPlanBook(storage.sql);
@@ -5029,13 +5052,21 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (!call || !doName) throw new Error('push directory unavailable');
       return { call, doName };
     };
+    const eventPerDay = eventPushesPerDay(this.env.EVENT_PUSH_PER_DAY);
     const push = ownerPush({ accessToken: this.env.EXPO_ACCESS_TOKEN, kv: identity, send: fetch, quiet, today: () => localIso(Date.now(), clock.timezone).slice(0, 10),
       targets: async () => { const { call, doName } = pushDirectory(); return call('app_push_targets', `app.push.targets.${doName}`, { p_do_name: doName }); },
       retire: async ({ installation_id: installation, device_epoch: epoch }) => {
         const { call, doName } = pushDirectory();
         return call('app_push_retire', `app.push.retire.${doName}.${installation}.${epoch}`, { p_do_name: doName, p_installation_id: installation, p_device_epoch: epoch });
       },
-      log: (code, count) => log({ trace: `push:${Date.now()}`, hop: 'app_push', ms: 0, ok: code === 'sent' || code === 'retired', code, detail: `${code}: ${count}` }) });
+      log: (code, count) => log({ trace: `push:${Date.now()}`, hop: 'app_push', ms: 0, ok: code === 'sent' || code === 'retired', code, detail: `${code}: ${count}` }),
+      // An event push is an unasked message: with PROACTIVE_GATE it waits on the owner's limits and spends from them; without, it
+      // holds when the owner turned follow-ups off or volume to low. Quiet hours are ownerPush's own.
+      held: kind => kind !== 'event' ? null : interrupts
+        ? interrupts.book.hold({ consent: reachesOut(), quiet: false, closed: interrupts.closed(), asks: false, urgent: false, limits: interrupts.limits() })
+        : reachesOut() ? null : 'consent',
+      spent: kind => { if (kind === 'event' && interrupts) interrupts.book.spend(interrupts.limits(), false, 'push:event'); },
+      ...(eventPerDay === null ? {} : { eventPerDay }) });
     // Media reads are per-surface and feed the one transcriber/attachment pipeline: Telegram file ids go through getFile,
     // WhatsApp media ids through the Graph two-step, and an app attachment's id opens the upload staged in this object.
     const mediaReaders: Readonly<Record<ChannelKind, () => TelegramFileDownloader>> = {
@@ -5105,6 +5136,20 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       schedPrefs.enabled('heartbeat') && armable('heartbeat') ? armHeartbeat(scheduler, now) : Promise.resolve(),
       interventions && schedPrefs.enabled('heartbeat') && armable('heartbeat') ? armLook(now) : dropLook(),
     ]);
+    // The owner's own time zone, from the console or from chat: the directory keeps it first, then this object applies it,
+    // confirms it and re-arms the owner's jobs on it. Runtimes are rebuilt so values captured at build time follow the zone;
+    // from inside a turn, the turn's own runtime is kept, since its stop and steer controls are reached through it.
+    const confirmZone = async (zone: string, now: number, assertCurrent?: () => Promise<void>, inTurn = false): Promise<string | null> => {
+      const named = ianaZone(zone);
+      if (!named || !(await saveSettings({ timezone: named, ...loops.proactivity() }))) return null;
+      await assertCurrent?.();
+      identity.put('timezone', named);
+      identity.put('timezone_confirmed', true);
+      await armOwnJobs(named, now, true);
+      const own = inTurn ? this.runtimes[channel] : undefined;
+      this.runtimes = own ? { [channel]: own } : {};
+      return named;
+    };
     // Native chat initialization cannot launch unrequested background model work. An owner whose only surface is iMessage is the
     // exception: their iMessage runtime runs their scheduled work, so it arms it, as a WhatsApp-only owner's runtime does.
     const proactiveReady = channel === 'imessage' && !this.imessageOnly() ? this.browserReady : channel === 'app'
@@ -5350,7 +5395,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const modelAccess: OwnerModelAccess = { openaiApiKey: key ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), primary: modelProviderSetting(this.env.WALDO_MODEL_PROVIDER), health: this.providerHealth, onAttempts, held: () => this.openHold().held() };
     const responder = createTelegramResponder(
-      { ...modelAccess, floorReply: retryFloor, ...(this.env.WALDO_TOOL_LOADER === 'harness' ? { toolLoader: 'harness' as const } : this.env.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true } : {}), ...(this.env.WALDO_PROMPT_V2 === '1' ? { promptV2: true } : {}), ...(contextCaps ? { contextCaps: true } : {}), ...(callCeilings ? { callCeilings: true } : {}) }, legacyStore, memory, log,
+      { ...modelAccess, floorReply: retryFloor, ...(this.env.WALDO_TOOL_LOADER === 'harness' ? { toolLoader: 'harness' as const } : this.env.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true } : {}), ...(this.env.WALDO_PROMPT_V2 === '1' ? { promptV2: true } : {}), ...(contextCaps ? { contextCaps: budget } : {}), ...(callCeilings ? { callCeilings: budget } : {}) }, legacyStore, memory, log,
       { download, transcribe: selectTranscriber(this.env)?.transcribe, ...(this.env.WALDO_FILE_TOOLS === '1' ? { keeper: (runScope: RunEffectScope) => uploadKeeper(() => openWorkspace({ runScope }), identity.get<string>('do_name') ?? String(owner)) } : {}) }, clock, replayHandlers = surfaceHandlers([...workspaceTools, ...reminderHandlers(book), ...(meds ? medicationHandlers(meds) : []), ...healthLogHandlers(healthLogs), ...(this.env.HEALTH_COACHING === '1' ? [sleepNeedHandler(payload => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', 'settings_write', payload), () => this.setup('app').healthSamples('settings'))] : []), getHealthHandler(healthRead, clock), ...(this.env.SCREEN_TIME === '1' ? [getScreenTimeHandler(screenTimeReadBook(signedRpc(this.env), identity.get<string>('do_name') ?? null), clock)] : []), ...(this.env.DEVICE_PLACE === '1' ? [getDeviceContextHandler(deviceContextReadBook(signedRpc(this.env), identity.get<string>('do_name') ?? null), clock)] : []), ...(this.env.DEVICE_CALENDAR === '1' ? [queryPhoneCalendarHandler(phoneCalendarReader(this.deviceCalendar(), google), clock)] : []), ...weatherTools(this.env, signedRpc(this.env), identity.get<string>('do_name') ?? null, clock, typeof caches === 'undefined' ? null : cacheApiWeatherCache(caches.default)), ...standingOrderHandlers(orders), questHandler(quests), ...experimentHandlers(quests, readZones), ...(this.env.AUTONOMY_OWN_CALENDAR === '1' ? autonomyHandlers(grants, desk, { now: () => deps.now(), timezone: () => clock.timezone, surface: channel,
         account: async requested => (await google.client('calendar', undefined, undefined, requested).catch(() => null))?.account?.email ?? null }) : []), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...(this.env.APPROVE_IN_CHAT === '1' || this.env.AUTONOMOUS_BY_DEFAULT === '1' ? [approveShownHandler(desk)] : []), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
         // Owner-ruled OTP parity (September 27, 2026): the extracted artifact goes to the owner
@@ -5391,10 +5436,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         context.runScope?.admit();
         if (!auth || auth.do_name !== doName || !auth.capabilities.includes(input.class) || identity.get<string>('do_name') !== doName) return { accepted: false, reason: 'unavailable' };
         return this.env.DEVICE_BRIDGE_DO.get(this.env.DEVICE_BRIDGE_DO.idFromName(device.device_id)).enqueueCommand({ ...input, owner_id: auth.owner_id, device_id: device.device_id });
-      } }), ...loopHandlers(loops, closableIn, this.env.PROACTIVE_GATE === '1'), ...schedulePreferenceHandlers(schedPrefs, async () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable: await armableNow(), cancelMachine, alongHeartbeat: lookFollows }), (card, time) => ownerCardTime(cardTimeDeps(Date.now()), card, time, this.env.WAKE_BRIEF === '1')), ...taskToolHandlers({ book: this.jobs(), now: Date.now, timezone: () => clock.timezone, surface: channel, wake: due => armTaskJobsWake(storage, due), fence: id => this.tasks.cancelled(id), log, steer: this.env.WALDO_TASK_STEER === '1',
+      } }), ...loopHandlers(loops, closableIn, this.env.PROACTIVE_GATE === '1'), ...schedulePreferenceHandlers(schedPrefs, async () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable: await armableNow(), cancelMachine, alongHeartbeat: lookFollows }), (card, time) => ownerCardTime(cardTimeDeps(Date.now()), card, time, this.env.WAKE_BRIEF === '1'), (zone) => confirmZone(zone, Date.now(), undefined, true)), ...taskToolHandlers({ book: this.jobs(), now: Date.now, timezone: () => clock.timezone, surface: channel, wake: due => armTaskJobsWake(storage, due), fence: id => this.tasks.cancelled(id), log, steer: this.env.WALDO_TASK_STEER === '1',
         // A task started by an app thread's own turn (the call's run scope is that message's attempt) reports in that thread.
         conversationRef: ctx => { const record = this.activeApp; return record && ctx.runScope?.runId === record.id && ctx.runScope.attempt === record.attempt && threadOfChain(record.conversationRef) ? record.conversationRef : null; } })]), undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; } }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now()); const trails = forgetTrails(this.ctx.storage.sql, texts) + dayPlanBook(this.ctx.storage.sql).forgetWhy(texts); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + trails + titles.remaining }; }), undefined,
-      (opt) => opt ? [openLoopsPrompt(loops, clock.timezone, opt.loopsRoom), runningTasksLine(this.jobs(), Date.now())].filter(Boolean).join('\n\n') : [standingOrdersPrompt(orders, ...(contextCaps ? [STANDING_ORDERS_PROMPT_CHARS] : [])), questsPrompt(quests, ...(contextCaps ? [QUESTS_PROMPT_CHARS] : []))].filter(Boolean).join('\n\n'), runs, undefined,
+      (opt) => opt ? [openLoopsPrompt(loops, clock.timezone, opt.loopsRoom), runningTasksLine(this.jobs(), Date.now())].filter(Boolean).join('\n\n') : [standingOrdersPrompt(orders, ...(contextCaps ? [budget.standingOrdersChars] : [])), questsPrompt(quests, ...(contextCaps ? [budget.questsChars] : []))].filter(Boolean).join('\n\n'), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
       undefined, channel, ({ telegram: telegramSkillHost, app: appSkillHost, imessage: imessageSkillHost, whatsapp: whatsappSkillHost } satisfies Record<ChannelKind, OwnerSkillHost>)[channel],
@@ -6635,7 +6680,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           doName: identity.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] }, work => storage.transactionSync(() => { work(); commit(); }));
       },
       ended: grant => { welcome.lateWeb(grant); this.continueWelcome(runtime); } });
-    const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, interventionReview, placeMoved, placeArrived, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, push, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, interventionReview, placeMoved, placeArrived, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       lookupToolHandlers: () => {
         const unlocated = webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch), this.lookupPages) : null;
@@ -6723,13 +6768,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           await assertCurrent?.();
           loops.setProactivity(parsed.data);
         } else if (action === 'timezone.set') {
-          if (!validZone(value) || !(await saveSettings({ timezone: value, ...loops.proactivity() }))) return false;
-          await assertCurrent?.();
-          identity.put('timezone', value);
-          identity.put('timezone_confirmed', true);
-          await armOwnJobs(value, now, true);
-          // Rebuild runtimes so values captured at build time follow the new zone.
-          this.runtimes = {};
+          if (!(await confirmZone(value ?? '', now, assertCurrent))) return false;
         } else if (action === 'spot.pin' || action === 'spot.unpin') {
           // The owner's pin goes at the end of its block; only the kinds the pinned blocks carry can be pinned.
           const claim = [...memory.claims(), ...memory.claims('promoted')].find((row) => row.id === spotId);

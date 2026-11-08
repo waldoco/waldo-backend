@@ -196,7 +196,6 @@ const questLine = (book: QuestBook, quest: AppQuestV1, due = false): string => `
 // Every owner turn reads the open quests beside the standing orders, so set_quest can change one by id.
 // With a cap, quests are shown whole while they fit within capChars and the rest by id and title only, so set_quest can
 // still name each one.
-export const QUESTS_PROMPT_CHARS = 3_000;
 export const questsPrompt = (book: QuestBook, capChars?: number): string => {
   const quests = book.open();
   if (!quests.length) return '';

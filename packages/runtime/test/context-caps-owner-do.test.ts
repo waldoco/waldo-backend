@@ -3,10 +3,12 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
-import { STANDING_ORDERS_PROMPT_CHARS, standingOrderBook } from '../src/channels/standing-orders';
+import { standingOrderBook, standingOrdersPrompt } from '../src/channels/standing-orders';
+import { questBook, questsPrompt } from '../src/channels/quests';
 import { handleWhatsAppWebhook } from '../src/channels/whatsapp-webhook';
 import type { OwnerDirectory } from '../src/identity/owner-directory';
 import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
+import { CONTEXT_BUDGET } from '../src/conversation/context-budget';
 
 const { calls } = vi.hoisted(() => ({ calls: [] as { instructions?: string }[] }));
 vi.mock('openai', () => ({ default: class {
@@ -50,13 +52,39 @@ it.each([['1', true], ['0', false]] as const)('WALDO_CONTEXT_CAPS=%s: the turn\'
       const system = calls.find((call) => (call.instructions ?? '').includes('Standing orders from the owner'))!.instructions!;
       const shown = system.split('\n').filter((line) => /^- \[order:so\d+\]/.test(line));
       if (capped) {
-        expect(shown.join('\n').length).toBeLessThanOrEqual(STANDING_ORDERS_PROMPT_CHARS);
+        expect(shown.join('\n').length).toBeLessThanOrEqual(CONTEXT_BUDGET.standingOrdersChars);
         expect(shown.slice(0, 2).map((line) => line.slice(3, line.indexOf(']')))).toEqual(['order:so1', 'order:so2']);
         expect(system).toContain(`${12 - shown.length} more scheduled standing orders are not shown here`);
       } else {
         expect(shown).toHaveLength(12);
         expect(system).not.toContain('more scheduled standing orders');
       }
+    } finally { net.mockRestore(); await state.storage.deleteAlarm(); }
+  });
+}, 60_000);
+
+// The caps' sizes are deploy settings: with values of their own, the turn reads exactly the orders and quests they fit.
+it('the standing-order and quest caps read their own settings', async () => {
+  const doName = 'context-caps-settings';
+  calls.length = 0;
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName)), async (_instance, state) => {
+    const net = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ messages: [{ id: 'wamid.out' }] }));
+    let n = 0, q = 0;
+    const clock = { timezone: 'UTC', now: () => new Date() };
+    const orders = standingOrderBook(state.storage.sql, { schedule: async () => undefined, cancel: async () => undefined, lookup: () => ({ state: 'absent' }) } as never, clock as never, () => `so${++n}`);
+    for (let index = 0; index < 12; index += 1) await orders.set({ scope: `Digest ${index}: ${'sum up what moved on my plate and what is still open. '.repeat(6)}`, trigger: 'daily', at: '21:00', gate: 'act_and_report', escalation: 'message_owner' });
+    const quests = questBook(state.storage.sql, clock as never, () => `q${++q}`);
+    for (let index = 1; index <= 12; index += 1) quests.set({ title: `Quest ${index}`, plan: `step ${index} ${'one small change at a time, checked weekly with the owner. '.repeat(5)}`, usual: 'as before', check_in_days: 7 }, 'owner-1');
+    const instance = new OwnerDO(state, { ...env, WALDO_CONTEXT_CAPS: '1', WALDO_STANDING_ORDERS_CHARS: '1500', WALDO_QUESTS_CHARS: '2200',
+      OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' });
+    try {
+      await deliver(instance, doName, 'What is on my list?');
+      const system = calls.find((call) => (call.instructions ?? '').includes('Standing orders from the owner'))!.instructions!;
+      expect(system).toContain(standingOrdersPrompt(orders, 1_500));
+      expect(system).toContain(questsPrompt(quests, 2_200));
+      expect(standingOrdersPrompt(orders, 1_500)).not.toBe(standingOrdersPrompt(orders, CONTEXT_BUDGET.standingOrdersChars));
+      expect(questsPrompt(quests, 2_200)).not.toBe(questsPrompt(quests, CONTEXT_BUDGET.questsChars));
+      expect(questsPrompt(quests, 2_200)).not.toBe(questsPrompt(quests, 1_500));
     } finally { net.mockRestore(); await state.storage.deleteAlarm(); }
   });
 }, 60_000);

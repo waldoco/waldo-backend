@@ -97,7 +97,6 @@ export const standingOrderBook = (sql: Sql, scheduler: Scheduler, clock: OwnerCl
 // confirm_first order as license to act on its own.
 // Past capChars, every order that applies every turn still shows whole, and scheduled orders fill what room is left: a
 // scheduled order's fire carries its own instructions, so the rest are only counted.
-export const STANDING_ORDERS_PROMPT_CHARS = 3_000;
 export const standingOrdersPrompt = (book: StandingOrderBook, capChars?: number): string => {
   const orders = book.list();
   if (orders.length === 0) return '';

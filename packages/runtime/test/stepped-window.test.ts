@@ -31,6 +31,14 @@ describe('the stepped window', () => {
     expect(compactionSettings({ WALDO_STEPPED_WINDOW: '1' }).steppedWindow).toBe(true);
   });
 
+  it('a cut keeps the share of the budget the stepped target sets', () => {
+    const tree = grow(new ConversationTree(), 1, 6);
+    const half = turn(tree, 'a6'), most = turn(tree, 'a6', undefined, { ...stepped, steppedTarget: 0.8 });
+    expect(half.stats.estimated_tokens).toBeLessThanOrEqual(afterCut);
+    expect(most.stats.estimated_tokens).toBeGreaterThan(afterCut);
+    expect(most.stats.estimated_tokens).toBeLessThanOrEqual(stepped.budgetTokens * 0.8 + 120);
+  });
+
   it('keeps the whole chain while it fits, and names no start', () => {
     const view = turn(grow(new ConversationTree(), 1, 3), 'a3');
     expect(view.messages).toHaveLength(6);
