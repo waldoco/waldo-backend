@@ -11,9 +11,9 @@ import {
 
 const minimal = { trace: 'tg-1', hop: 'llm_reply', ms: 12, ok: true };
 
-describe('turn event schema v14', () => {
+describe('turn event schema v15', () => {
   it('pins the schema version and the ladder, outcome and cost vocabularies', () => {
-    expect(TURN_EVENT_SCHEMA_VERSION).toBe('14');
+    expect(TURN_EVENT_SCHEMA_VERSION).toBe('15');
     expect(executionRungSchema.options).toEqual(['memory', 'connector', 'email', 'fetch', 'browser', 'sandbox', 'mac', 'human']);
     expect(rungBlockedReasonSchema.options).toEqual(['approval_required', 'policy_denied', 'budget_exhausted', 'unavailable', 'auth_required', 'timed_out', 'unsupported', 'on_hold', 'challenge', 'login_required', 'js_required', 'device_offline']);
     expect(turnOutcomeSchema.options).toEqual(['answered', 'completed', 'failed', 'dropped', 'delivery_pending', 'blocked']);
@@ -57,6 +57,16 @@ describe('turn event schema v14', () => {
     expect(turnEventSchema.parse({ ...minimal, tool_search_rejection: 'gateway_http_400' }).tool_search_rejection).toBe('gateway_http_400');
     expect(turnEventSchema.parse({ ...minimal, tool_search_rejection: 'Anthropic request failed (400 invalid_request_error)' }).tool_search_rejection).toBeDefined();
   });
+  it('sizes each cache layer as a count and says whether the history window moved, as a boolean only', () => {
+    const context = { tools_count: 3, tools_bytes: 400, tool_turns_bytes: 0, history_messages: 4, history_bytes: 900, current_bytes: 30, attachments: 0,
+      system_tokens_est: 5_000, history_tokens_est: 225, current_tokens_est: 8, history_moved: true, context_sections: { recall: 120, clock: 40 } };
+    const shape = { system_bytes: 1, request_bytes: 2, context };
+    expect(turnEventSchema.parse({ ...minimal, shape })).toEqual({ ...minimal, shape });
+    expect(turnEventSchema.safeParse({ ...minimal, shape: { ...shape, context: { ...context, history_moved: 'yes' } } }).success).toBe(false);
+    expect(turnEventSchema.safeParse({ ...minimal, shape: { ...shape, context: { ...context, history_tokens_est: -1 } } }).success).toBe(false);
+    expect(turnEventSchema.safeParse({ ...minimal, shape: { ...shape, context: { ...context, context_sections: { recalled_text: 3 } } } }).success).toBe(false);
+  });
+
   it('accepts tool_search_degraded as a boolean and nothing else', () => {
     expect(turnEventSchema.parse({ ...minimal, tool_search_degraded: true })).toEqual({ ...minimal, tool_search_degraded: true });
     expect(turnEventSchema.safeParse({ ...minimal, tool_search_degraded: 'yes' }).success).toBe(false);

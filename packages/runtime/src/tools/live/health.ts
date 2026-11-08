@@ -176,7 +176,7 @@ const allowlist = triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS
 export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolHandler<GetHealthArgs, GetHealthResult, ToolDispatcherContext> => ({
   name: 'get_health',
   description:
-    "The owner's own health readings by local day, up to 31 days ending today, as daily values or a summary; one source per signal. Sleep is time asleep, never time in bed. HRV and wrist temperature carry their method, never blended. heart_rate, respiratory_rate, spo2 and hr_recovery are day means. food_energy, protein, carbs and fat are what the owner's own food app logged that day; a macro is missing on a day when some entry did not carry it. They are context for a plan, never a judgement of what the owner ate. The numbers stay in this turn and are never stored or logged.",
+    "The owner's own health readings by local day, up to 31 days ending today, as daily values or a summary; one source per signal. Sleep is time asleep, never time in bed. HRV and wrist temperature carry their method, never blended. heart_rate, respiratory_rate, spo2 and hr_recovery are day means. food_energy, protein, carbs and fat are what the owner's own food app logged that day; a macro is missing on a day an entry lacked it. They are context for a plan, never a judgement of what the owner ate. The numbers stay in this turn and are never stored or logged.",
   schema: getHealthArgsSchema,
   trigger_allowlist: allowlist,
   autonomy_gated: false,
