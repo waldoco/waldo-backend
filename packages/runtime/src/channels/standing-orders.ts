@@ -95,14 +95,26 @@ export const standingOrderBook = (sql: Sql, scheduler: Scheduler, clock: OwnerCl
 // The system-prompt section every owner turn carries. Read-only context: the order text is
 // owner-authored, and the legend keeps the gate meaning explicit so the model never treats a
 // confirm_first order as license to act on its own.
-export const standingOrdersPrompt = (book: StandingOrderBook): string => {
+// With a cap, the section holds the orders that fit within capChars, every-turn orders first (a scheduled order's fire
+// carries its own text), and says how many more list_standing_orders reads; the first order always shows.
+export const STANDING_ORDERS_PROMPT_CHARS = 3_000;
+export const standingOrdersPrompt = (book: StandingOrderBook, capChars?: number): string => {
   const orders = book.list();
   if (orders.length === 0) return '';
   const line = (order: StandingOrder): string =>
     `- [${order.id}] ${order.scope} (${order.trigger === 'every_turn' ? 'applies every turn' : `runs ${order.trigger} ${order.cron ?? (order.schedule_unreadable ? "on a schedule stored in a form this version can't read" : `at ${order.at}`)}`}; gate: ${order.gate === 'confirm_first' ? 'confirm with the owner before acting' : 'act and report'})`;
+  const lines = capChars === undefined ? orders.map(line)
+    : [...orders.filter((order) => order.trigger === 'every_turn'), ...orders.filter((order) => order.trigger !== 'every_turn')].map(line);
+  let shown = lines.length;
+  if (capChars !== undefined) {
+    let used = lines[0]!.length;
+    shown = 1;
+    while (shown < lines.length && used + 1 + lines[shown]!.length <= capChars) used += 1 + lines[shown++]!.length;
+  }
   return [
     'Standing orders from the owner (apply until cancelled; a confirm_first order is never license to act without the owner):',
-    ...orders.map(line),
+    ...lines.slice(0, shown),
+    ...(shown < lines.length ? [`${lines.length - shown} more standing orders are not shown here; list_standing_orders reads every one.`] : []),
   ].join('\n');
 };
 

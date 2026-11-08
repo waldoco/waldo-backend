@@ -194,9 +194,20 @@ const questLine = (book: QuestBook, quest: AppQuestV1, due = false): string => `
 ].join('; ')})`;
 
 // Every owner turn reads the open quests beside the standing orders, so set_quest can change one by id.
-export const questsPrompt = (book: QuestBook): string => {
+// With a cap, quests are shown whole while they fit within capChars and the rest by id and title only, so set_quest can
+// still name each one.
+export const QUESTS_PROMPT_CHARS = 3_000;
+export const questsPrompt = (book: QuestBook, capChars?: number): string => {
   const quests = book.open();
-  return quests.length ? ["Quests the owner chose to work toward with you, in their words (change one with set_quest by its id; start one only when they ask):", ...quests.map(quest => questLine(book, quest))].join('\n') : '';
+  if (!quests.length) return '';
+  let used = 0;
+  const lines = quests.map((quest) => {
+    const whole = questLine(book, quest);
+    if (capChars === undefined || used + whole.length <= capChars) { used += whole.length + 1; return whole; }
+    used = capChars;
+    return `- [${quest.id}] ${quest.title} (${quest.state})`;
+  });
+  return ["Quests the owner chose to work toward with you, in their words (change one with set_quest by its id; start one only when they ask):", ...lines].join('\n');
 };
 
 const QUEST_CARD: Readonly<Partial<Record<CardId, string>>> = {
