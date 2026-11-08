@@ -1,5 +1,6 @@
 import { createOwnerTurnContext, type OwnerContextCapability } from '../context-composer/owner-turn';
 import { jobPromptKey, jobPromptStub } from '../conversation/job-outcome';
+import type { TimelineSeed } from '../conversation/one-timeline';
 import type { OwnerMessageAdmission } from '../identity/owner-message-admission';
 import { OwnerHeldError } from '../identity/open-owner-hold';
 import { OWNER_REQUEST_HOP } from './harness';
@@ -31,7 +32,7 @@ import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
 import { localTrustedBriefContextComposer, localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, type LocalSystemSkillBinding } from '../llm/run-loop-adapters';
 import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath } from '../conversation/joined-path';
-import { COMPACTION, COMPACTION_INSTRUCTION, compactedHistory, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, ownerExchangeHistory, ownerRowsSince, planWithout, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
+import { COMPACTION, COMPACTION_INSTRUCTION, compactedHistory, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, seedBasePlan, ownerExchangeHistory, ownerRowsSince, planWithout, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
 import { ownerReadings, readingBeyondOwner, sanitise } from '../scribe/sanitiser';
 import { lightRoutePolicy, MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerModels, ownerRoutePolicy, strongRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { MODEL_CALL_TIMEOUT_MS, OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
@@ -137,13 +138,13 @@ class LightStepFailed extends Error {}
 // lightRoles: the models each role runs on, where the environment sets them.
 // skills: one book for every turn this responder runs, for a host that admits no turn of its own (the eval world). A skill
 // capability is bound to one turn id, so this book must follow the running turn; a pinned one refuses every later turn.
-export type OwnerContextIntegration = Readonly<{ skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; jobOutcomeRows?: boolean;
+export type OwnerContextIntegration = Readonly<{ skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; jobOutcomeRows?: boolean; timelineSeed?: TimelineSeed;
   // While an alarm runs machine turns: the time they may run to (the alarm's end less the close margin) and whether the
   // owner's own message is waiting for the chain. Undefined outside an alarm, where a machine turn keeps TURN_TIME_BUDGET_MS.
   machineTime?: () => Readonly<{ deadline: number; yieldNow(): boolean }> | undefined }>;
 // This owner's spend so far this month and the ceiling it is held to, read once when a turn starts.
 export type OwnerSpend = Readonly<{ spentUsd: number; ceilingUsd: number }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; jobOutcomeRows?: boolean; machineTime?: OwnerContextIntegration['machineTime'] }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; jobOutcomeRows?: boolean; timelineSeed?: TimelineSeed; machineTime?: OwnerContextIntegration['machineTime'] }>;
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 // The typed failure on a tool hop: the ToolError code when the tool returned one, else the loop's coarse code.
@@ -1039,25 +1040,31 @@ export const createOwnerResponder = (
       const now = Date.now();
       const live = liveCompaction(tree, leafId);
       const lastAttemptAt = (await conversationStore.compactionAttempt?.(ref)) ?? null;
-      if (!compactionDue({ stats, ownerRows: ownerRowsSince(tree, leafId, live?.createdAt ?? null), lastAttemptAt, now }, compaction)) return;
+      const seed = await privateOwner?.timelineSeed?.read() ?? null;
+      if (seed ? lastAttemptAt !== null && now - lastAttemptAt < compaction.minIntervalMs
+        : !compactionDue({ stats, ownerRows: ownerRowsSince(tree, leafId, live?.createdAt ?? null), lastAttemptAt, now }, compaction)) return;
       privateRunScope?.admit();
       await conversationStore.noteCompactionAttempt?.(ref, now, privateRunScope);
-      const planned = compactionPlan(tree, leafId, live, compaction);
+      const planned = seed ? seedBasePlan(tree, leafId, live, compactionPlan(tree, leafId, live, compaction, compaction.budgetTokens / 2))
+        : compactionPlan(tree, leafId, live, compaction);
       if (!planned || tree.get(compactionId(planned.covers.to_id))) return;
       // A topic forgotten this turn is still in this turn's rows; like the reply, neither the memory flush nor the summary
       // reads a row that carries it.
       const cut = barrier();
-      const plan = planWithout(planned, (message) => cut.shows(message.content));
-      if (!plan) { hop(false, 'held_topic'); return; }
+      const kept = planWithout(planned, (message) => cut.shows(message.content));
+      if (!kept) { hop(false, 'held_topic'); return; }
+      const earlier = seed?.messages.filter((message) => !cut.shows(message.content)) ?? [];
+      const plan = seed ? { ...kept, covers: { ...kept.covers, rows: kept.covers.rows + seed.rows } } : kept;
+      const input = [...earlier, ...plan.input];
       // The memory flush sees the span before the summary takes its place; until it has run, the span stays in the window.
       let ownerWords: string | undefined;
       if (privateOwner?.compactionFlush) {
-        try { ownerWords = (await privateOwner.compactionFlush({ conversationRef: ref, covers: plan.covers, messages: plan.input, entryIds: plan.entryIds }, { save: saveFromSpan }))?.owner; }
+        try { ownerWords = (await privateOwner.compactionFlush({ conversationRef: ref, covers: plan.covers, messages: input, entryIds: plan.entryIds }, { save: saveFromSpan }))?.owner; }
         catch (error) { if (error instanceof ClosedRunError) throw error; hop(false, 'flush_failed'); return; }
         privateRunScope?.admit();
       }
       const started = Date.now();
-      const response = await complete(traceId, 'compaction', COMPACTION_INSTRUCTION, plan.input, undefined, undefined, undefined, undefined, auxiliaryModel);
+      const response = await complete(traceId, 'compaction', COMPACTION_INSTRUCTION, input, undefined, undefined, undefined, undefined, auxiliaryModel);
       const summary = response.text.trim();
       if (response.truncated || summary.length > compaction.maxOutputTokens * BUDGET_CHARS_PER_TOKEN) { hop(false, 'truncated'); return; }
       if (!summary) { hop(false, 'empty'); return; }
@@ -1072,11 +1079,12 @@ export const createOwnerResponder = (
       // summary must not show one (it can name a topic its input did not carry), and no row it was made from may carry one.
       const fence = { sources: plan.sources, admits: () => {
         const held = barrier();
-        return !held.shows(summary) && !plan.input.some((message) => held.shows(message.content));
+        return !held.shows(summary) && !input.some((message) => held.shows(message.content));
       } };
       if (!(await conversationStore.appendCompaction(row, live?.id ?? null, privateRunScope, fence))) { hop(false, 'held_topic'); return; }
       tree.append(row);
       if (live) tree.replace(supersededCompaction(live));
+      if (seed) privateOwner?.timelineSeed?.done(privateRunScope);
       hop(true, 'compacted', { ms: Date.now() - started, detail: `rows=${plan.covers.rows}:chars=${summary.length}:gap=${plan.gap}` });
     } catch (error) {
       if (error instanceof ClosedRunError) throw error;
@@ -1088,7 +1096,7 @@ export const createOwnerResponder = (
     async compactChain(trace, jobContext, scope) {
       if (privateRunScope !== scope) {
         if (!privateOwner?.history) return;
-        const job = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, scope, privateSystemSkills, { context: jobContext, history: privateOwner.history, ...(privateOwner.compactionFlush ? { compactionFlush: privateOwner.compactionFlush } : {}), ...(privateOwner.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}) });
+        const job = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, scope, privateSystemSkills, { context: jobContext, history: privateOwner.history, ...(privateOwner.compactionFlush ? { compactionFlush: privateOwner.compactionFlush } : {}), ...(privateOwner.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}), ...(privateOwner.timelineSeed ? { timelineSeed: privateOwner.timelineSeed } : {}) });
         return job.compactChain!(trace, jobContext, scope);
       }
       traceId = trace;

@@ -14,12 +14,15 @@ import { presenceAuthority } from './helpers/directory-presence';
 import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 const REPLY = 'Noted.';
+const SUMMARY = 'Earlier on WhatsApp: the owner trains at the gym at 7 every weekday.';
 const model = vi.hoisted(() => ({ asked: [] as string[] }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
     const reply = (text: string) => ({ ok: true as const, data: { model: request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
+    if (request.response_format?.name === 'claim_ops') return reply('{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}');
     if (request.response_format) return reply(request.response_format.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : '{}');
+    if (String(request.system ?? '').startsWith('Summarise the earlier part of this conversation')) return reply(SUMMARY);
     model.asked.push(JSON.stringify(request.messages));
     return reply(REPLY);
   } };
@@ -150,18 +153,38 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
     });
   });
 
-  it('the cutover is forward-only: a WhatsApp chain from before stays stored and reaches the timeline once, as one summary row', async () => {
+  it('the cutover is forward-only: the WhatsApp chain from before stays stored, and reaches the timeline once, through one summary the next turn reads', async () => {
     const name = 'one-timeline-cutover';
     await withOwner(name, {}, async (owner, state, restart) => {
       await saysOnWhatsApp(owner(), 'My gym is at 7 every weekday.');
       const legacy = [...state.storage.kv.list({ prefix: 'conv:' })];
       expect(legacy.length).toBeGreaterThan(0);
-      restart(ON);
+      restart({ ...ON, WALDO_COMPACTION: 'on' });
       await saysInApp(owner(), state, name, 'What does my week look like?');
       await owner().alarm().catch(() => undefined);
       expect([...state.storage.kv.list({ prefix: 'conv:' })]).toEqual(legacy);
-      expect(timeline(state).filter(row => row.role === 'compaction')).toHaveLength(1);
+      const seeds = timeline(state).filter(row => row.role === 'compaction');
+      expect(seeds).toHaveLength(1);
       expect(timeline(state).some(row => row.role !== 'compaction' && row.appPayload === 'My gym is at 7 every weekday.')).toBe(false);
+      await saysInApp(owner(), state, name, 'And on Friday?');
+      expect(model.asked.at(-1)).toContain(SUMMARY);
+      // Once carried, the earlier chain is not carried again.
+      await owner().alarm().catch(() => undefined);
+      expect(timeline(state).filter(row => row.role === 'compaction')).toHaveLength(1);
+    });
+  });
+
+  it('an owner who only writes on WhatsApp gets the same carry-over: their next WhatsApp turn reads the summary of their chain from before', async () => {
+    const name = 'one-timeline-cutover-whatsapp';
+    await withOwner(name, {}, async (owner, state, restart) => {
+      await saysOnWhatsApp(owner(), 'My gym is at 7 every weekday.');
+      const legacy = [...state.storage.kv.list({ prefix: 'conv:' })];
+      restart({ ...ON, WALDO_COMPACTION: 'on' });
+      await saysOnWhatsApp(owner(), 'Plan my week.');
+      expect([...state.storage.kv.list({ prefix: 'conv:' })]).toEqual(legacy);
+      expect(timeline(state).filter(row => row.role === 'compaction')).toHaveLength(1);
+      await saysOnWhatsApp(owner(), 'And Friday?');
+      expect(model.asked.at(-1)).toContain(SUMMARY);
     });
   });
 

@@ -162,6 +162,17 @@ export const compactionPlan = (tree: ConversationTree, leafId: string, live: Con
   };
 };
 
+// The plan a summary carrying the owner's earlier chain from another surface is built on. That chain is not on this one, so it
+// rides beside the plan, never among its sources. With no plan yet (one round on the chain), the summary covers the chain's
+// first row and carries it too. With a live summary and nothing new to fold there is none, since a second summary of the same span
+// would take the live one's id, so the earlier chain waits for the next compaction.
+export const seedBasePlan = (tree: ConversationTree, leafId: string, live: ConversationEntry | null, planned: CompactionPlan | null): CompactionPlan | null => {
+  if (planned || live) return planned;
+  const root = tree.path(leafId)[0]!;
+  const message = conversationModelMessages([root])[0];
+  return message ? { input: [message], sources: [root], covers: { from_id: root.id, to_id: root.id, rows: 1 }, gap: 0, toEntry: root, entryIds: [root.id] } : null;
+};
+
 // What a summary was made from, checked again in the commit that writes it, after the model call: each source row must
 // still be stored as the summary read it, and admits() must pass, reading what is held at that moment. A forget that
 // landed while the summary was being written rewrites a source row or holds a topic, and the summary is not written.
