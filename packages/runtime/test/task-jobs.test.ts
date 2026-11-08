@@ -61,6 +61,23 @@ describe('task job book', () => {
     });
   });
 
+  it('a table an earlier build made, which does not admit the web and private profiles, is rebuilt with its rows kept', async () => {
+    const stub = env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`task-jobs-${seq += 1}`));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const sql = state.storage.sql, deps = { now: () => 1_800_000_000_000, newId: () => crypto.randomUUID().slice(0, 12), newToken: () => crypto.randomUUID() };
+      for (const statement of TASK_JOBS_TABLE_SCHEMA) sql.exec(statement.replace(", 'web', 'private'", ''));
+      sql.exec(`INSERT INTO task_jobs (id, kind, profile, idempotency_key, origin, surface, brief_json, brief_digest, status, deadline_at, created_at, updated_at)
+        VALUES ('job_old', 'task', 'reader', 'turn-0:call-0', 'tg-1', 'app', ?, 'digest', 'queued', 1, 1, 1)`, JSON.stringify(brief));
+      expect(() => sql.exec("UPDATE task_jobs SET profile = 'web' WHERE id = 'job_old'")).toThrow();
+      const before = sql.exec('SELECT * FROM task_jobs').toArray();
+      const book = jobBook(sql, deps);
+      expect(sql.exec('SELECT * FROM task_jobs').toArray()).toEqual(before);
+      expect(book.create(job('turn-2:call-1', { profile: 'web' })).job.profile).toBe('web');
+      expect(book.create(job('turn-2:call-2', { profile: 'private' })).job.profile).toBe('private');
+      expect(sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE name LIKE 'task_jobs%' ORDER BY name").toArray().map(row => row.name)).toEqual(['task_jobs', 'task_jobs_open']);
+    });
+  });
+
   it('writes the job before any I/O, once per idempotency key', async () => {
     await withBook((book) => {
       const first = book.create(job());

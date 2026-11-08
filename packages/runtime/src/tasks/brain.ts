@@ -430,7 +430,7 @@ export const taskHost = (deps: TaskHostDeps) => {
       const resumed = asked?.decision !== undefined ? deps.book.get(row.id)! : row;
       const handlers = await profileHandlers(resumed, attemptFor(ticket, resumed).outputs);
       const spend = ownerSpend();
-      const { conversation_ref: _replyChain, ...brief } = taskBrief(resumed);
+      const { conversation_ref: _replyChain, asked_in: _askedIn, owner_approved: _approved, ...brief } = taskBrief(resumed);
       const nudge = deps.nudge?.(row.id, resumed.checkpoint_seq) ?? null;
       const { steers, draft } = jobCheckpoint(resumed);
       return {

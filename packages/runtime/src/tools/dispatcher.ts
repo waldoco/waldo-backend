@@ -96,7 +96,11 @@ export type ToolDispatcherContext = HookRuntimeContext & {
   healthShown?: boolean;
   claimedWhy?: unknown;
   whySteps?: readonly TrailStep[];
+  // Where the owner asked: the surface and conversation of the owner's own turn, or of the turn whose card an approved replay
+  // runs. Work it starts answers there.
+  askedIn?: AskedIn;
 };
+export type AskedIn = Readonly<{ surface: string; conversation_ref: string }>;
 
 export type DispatchToolResult = (
   | {

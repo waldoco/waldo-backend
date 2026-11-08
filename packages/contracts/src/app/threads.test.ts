@@ -1,11 +1,37 @@
 import { describe, expect, it } from 'vitest';
 import {
-  APP_THREAD_MAX_V1, appThreadArchiveV1Schema, appThreadCreateV1Schema, appThreadDeleteV1Schema, appThreadListQueryV1Schema, appThreadListV1Schema,
+  APP_CHAT_TASK_CARDS_REVISION, APP_TASK_CARDS_MAX_V1, APP_THREAD_MAX_V1, appTaskCardV1Schema, appThreadArchiveV1Schema, appThreadCreateV1Schema, appThreadDeleteV1Schema, appThreadListQueryV1Schema, appThreadListV1Schema,
   appThreadOperationResultV1Schema, appThreadReadQueryV1Schema, appThreadReadV1Schema, appThreadRenameV1Schema, appThreadRoutesV1, appThreadSendV1Schema, appThreadV1Schema,
 } from './threads';
 
 const thread_id = 'thr_3f2c8a10-4b7d-4c1e-9a2b-1234567890ab', operation_id = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
 const thread = { thread_id, title: null, preview: null, revision: 1, title_revision: 1, state: 'active', created_at: 1_791_700_000_000, last_activity_at: 1_791_700_000_000 };
+
+// A background task's card in its own thread (chat revision 9): the same approval part an inline reply card carries.
+const approval = { type: 'approval', approval_id: 'pc0ffee01', kind: 'tainted_action', review: 'Do this? Search the web for the vendor.', payload_digest: `sha256:${'a'.repeat(64)}`,
+  expires_at: 1_791_700_000_000, actions: ['approve', 'skip'], fallback_text: 'Do this? Search the web for the vendor.' };
+const card = { job_id: 'job_0123456789ab', title: 'Vendor research', approval };
+const read = { thread, history: { messages: [], next_cursor: null } };
+
+describe('a thread read with the cards its tasks wait on', () => {
+  it('is chat revision 9, and a read without the key is what every earlier build gets', () => {
+    expect(APP_CHAT_TASK_CARDS_REVISION).toBe(9);
+    expect(appThreadReadV1Schema.safeParse(read).success).toBe(true);
+    for (const valid of [{ ...read, task_cards: [card] }, { ...read, task_cards: [{ ...card, title: null }, { ...card, job_id: 'job_ba9876543210', approval: { ...approval, approval_id: 'pc0ffee02' } }] }])
+      expect(appThreadReadV1Schema.safeParse(valid).success).toBe(true);
+  });
+
+  it('refuses a card with no approval, a repeated approval, a bad job id, an unknown key, an empty list or more than the open-task cap', () => {
+    for (const invalid of [
+      { ...card, approval: undefined }, { ...card, job_id: 'job_x' }, { ...card, title: '' }, { ...card, title: 'x'.repeat(81) }, { ...card, thread_id },
+      { ...card, approval: { ...approval, kind: 'tainted' } },
+    ]) expect(appTaskCardV1Schema.safeParse(invalid).success, JSON.stringify(invalid).slice(0, 60)).toBe(false);
+    for (const invalid of [
+      { ...read, task_cards: [] }, { ...read, task_cards: [card, { ...card, job_id: 'job_ba9876543210' }] },
+      { ...read, task_cards: Array.from({ length: APP_TASK_CARDS_MAX_V1 + 1 }, (_, i) => ({ ...card, approval: { ...approval, approval_id: `pc${i}` } })) },
+    ]) expect(appThreadReadV1Schema.safeParse(invalid).success).toBe(false);
+  });
+});
 
 describe('threads', () => {
   it('reads an untitled or titled thread with separate revisions and times', () => {
