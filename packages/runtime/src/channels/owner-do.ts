@@ -2819,16 +2819,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const surface = this.ownerSurface(), runtime = this.setup(surface), { runs, log } = runtime;
     const run = runs.start('event', null);
     const summary = `${source}: ${envelope.title}`.slice(0, 180);
-    let sent: Awaited<ReturnType<OwnerDO['notifyOwner']>> | null = null;
+    let sent: Awaited<ReturnType<OwnerDO['notifyOwner']>> | null = null, pushAfter = false;
     try {
       if (notify) {
         const url = typeof envelope.url === 'string' ? envelope.url.slice(0, 300) : '';
         const text = `Event - ${summary}${url ? `\n${url}` : ''}`;
         const transcript = OUTSIDE_TURN_NOTICE[surface].by === 'transcript';
         sent = transcript ? await this.serial(() => this.notifyOwner(surface, runtime, text)) : await this.notifyOwner(surface, runtime, text);
-        // Once its row is in the app chat, the notice raises one push, unless the owner turned Waldo's volume down. The sender
-        // holds quiet hours and the day's budget, and never throws.
-        if (sent === 'sent' && transcript && this.env.EVENT_PUSH === '1' && loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume !== 'low') await runtime.push('chat');
+        // Once its row is in the app chat, the notice raises one push, unless the owner turned Waldo's volume down. It goes out
+        // after the event is recorded, so nothing the push does can change that record.
+        pushAfter = sent === 'sent' && transcript && this.env.EVENT_PUSH === '1' && loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume !== 'low';
         // Refused at the gate (its own line names why) or by the directory, or no route outside a turn: nothing left the Worker,
         // a definite non-send, not an unknown one.
         if(sent==='blocked'||sent==='unroutable'){
@@ -2846,6 +2846,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       log({ trace: run.id, hop: 'event_ingress', ms: 0, ok: false, code:'notification_unknown' });
       // Durable admission remains true even when notification is unknown.
     }
+    if (pushAfter) await runtime.push('chat');
     return new Response('ok');
   }
 
