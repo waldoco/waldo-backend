@@ -35,6 +35,9 @@
   // the system prompt's tool catalogue; it wins over WALDO_TOOL_SEARCH. "off" is the rollback.
   // WALDO_COMPACTION: "on" summarises the oldest part of a long app chat into one row the model reads first; "off" keeps
   // the plain window, and is the rollback.
+  // WALDO_STEPPED_WINDOW: "1" cuts a chat's history in steps once it outgrows the budget and holds the start between cuts,
+  // so the provider reads the same leading history from its cache turn after turn; "0" drops the oldest row every turn, and
+  // is the rollback.
   // WALDO_COMPACTION_WAKE: "1" runs a compaction in its own alarm pass after the one that ran the owner's turns; "0" runs
   // it at the end of that pass, and is the rollback.
   // WALDO_SWITCHES: every feature switch and tuning knob, one JSON var, because Cloudflare caps a Worker at 128 vars and
@@ -106,6 +109,7 @@
       "WALDO_TOOL_SEARCH": "off",
       "WALDO_TOOL_LOADER": "off",
       "WALDO_COMPACTION": "off",
+      "WALDO_STEPPED_WINDOW": "0",
       "WALDO_COMPACTION_WAKE": "0",
       "WALDO_STREAM_REPLIES": "off",
       "HEALTH_PROVISIONAL_SCORES": "0",
@@ -115,7 +119,14 @@
       "HEALTH_ACTIONS": "0",
       "MEDICATIONS": "0",
       "SCREEN_TIME": "0",
+      "HEALTH_CHARTS": "0",
+      "PEOPLE_MAP": "0",
       "DEVICE_PLACE": "0",
+      "DEVICE_CALENDAR": "0",
+      "CALENDAR_COVERAGE": "0",
+      "FREE_WINDOW_OFFERS": "0",
+      "BLOCK_LIFECYCLE": "0",
+      "ARRIVAL_LOOK": "0",
       "DEVICE_WEATHER": "0",
       "BROWSER_FORM_SUBMIT": "0",
       "HISTORY_ARCHIVE": "0",
@@ -320,6 +331,7 @@
           "WALDO_TOOL_SEARCH": "off",
           "WALDO_TOOL_LOADER": "harness",
           "WALDO_COMPACTION": "on",
+          "WALDO_STEPPED_WINDOW": "1",
           "WALDO_COMPACTION_WAKE": "1",
           "WALDO_STREAM_REPLIES": "on",
           "HEALTH_PROVISIONAL_SCORES": "1",
@@ -329,7 +341,14 @@
           "HEALTH_ACTIONS": "1",
           "MEDICATIONS": "1",
           "SCREEN_TIME": "1",
+          "HEALTH_CHARTS": "1",
+          "PEOPLE_MAP": "1",
           "DEVICE_PLACE": "1",
+          "DEVICE_CALENDAR": "1",
+          "CALENDAR_COVERAGE": "1",
+          "FREE_WINDOW_OFFERS": "1",
+          "BLOCK_LIFECYCLE": "1",
+          "ARRIVAL_LOOK": "1",
           "DEVICE_WEATHER": "1",
           "BROWSER_FORM_SUBMIT": "1",
           "HISTORY_ARCHIVE": "dry",
