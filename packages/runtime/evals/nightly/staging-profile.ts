@@ -43,6 +43,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_COMPACTION: mapped('the trial\'s chat runs on the canonical store with these compaction settings'),
   WALDO_STEPPED_WINDOW: mapped('the trial\'s chat history is windowed in steps under the same compaction settings'),
   WALDO_CONTEXT_CAPS: gap('caps the standing orders and quests a turn reads and clears tool results down to the latest three past ~30k tokens; no trial holds that many orders or quests or runs that long a tool loop, so the trials read as they would with it on'),
+  WALDO_COMPACTION_WAKE: inert('moves a compaction to its own alarm pass; what it summarises and what the next turn reads are the same'),
   WALDO_TIMEZONE_ASK: gap('adds a line to a turn whose time zone the owner has not confirmed; every trial runs on a fixed zone, so no trial sees it'),
   WALDO_FORGET_BARRIER: mapped("'on' is the 'items' barrier, any other value the earlier 'reads' rule"),
   MEMORY_SELECTION: mapped("'1' shows the trials option B's memory: the pins, what is new since the nightly review, recall stubs"),
