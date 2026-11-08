@@ -554,6 +554,29 @@ export const EXPERIMENTS_MIGRATION: DoMigration = {
   down: ['DROP INDEX IF EXISTS experiments_one_running;', 'DROP TABLE IF EXISTS experiments;'],
 };
 
+// What's new: the announcements this owner's Waldo has decided on, once each. The announcement book creates the table
+// itself, as the OwnerDO runs no migration runner.
+// card: waiting for the owner's next day card. A row here is never said again. The copy is the team's product copy, kept so
+// the card and a later "what's new?" read it without asking the directory; it holds no owner data.
+export const ANNOUNCEMENTS_TABLE_SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS announcements (
+    id          TEXT PRIMARY KEY,
+    title       TEXT NOT NULL,
+    shipped     TEXT NOT NULL,
+    why         TEXT NOT NULL,
+    capability  TEXT NOT NULL,
+    state       TEXT NOT NULL CHECK (state IN ('card', 'folded', 'messaged', 'skipped', 'opted_out')),
+    decided_at  INTEGER NOT NULL,
+    carded_at   INTEGER
+  );`,
+] as const;
+export const ANNOUNCEMENTS_MIGRATION: DoMigration = {
+  version: 20,
+  name: 'announcements',
+  up: ANNOUNCEMENTS_TABLE_SCHEMA,
+  down: ['DROP TABLE IF EXISTS announcements;'],
+};
+
 // Versions 3-7 and 9-11 (the responsibility domain, canonical authority, planning harness,
 // execution writer, judgment authority and common execution migrations) were applied only by the
 // retired RunLoopDO and are retired: their numbers stay reserved in do-migration-reservations.json
@@ -570,6 +593,7 @@ export const DO_SCHEMA_MIGRATIONS = [
   REPLY_MEMORY_USED_MIGRATION,
   GOAL_QUESTS_MIGRATION,
   EXPERIMENTS_MIGRATION,
+  ANNOUNCEMENTS_MIGRATION,
 ] as const;
 
 export const DO_SCHEMA_VERSION = DO_SCHEMA_MIGRATIONS.at(-1)!.version;
