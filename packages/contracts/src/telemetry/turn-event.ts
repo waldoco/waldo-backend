@@ -14,7 +14,8 @@ import { providerSchema } from '../model/roster';
 // the status, the provider's error code and the parameter name only.
 // v15: `shape.context` estimates the tokens of each cache layer (system prompt, history, the new message) and says whether
 // this reply call's history window moved since the chain's last turn; `context_sections.recall` sizes the recalled memory.
-export const TURN_EVENT_SCHEMA_VERSION = '15';
+// v16: a reply call's `shape.context` names the ceiling its class aims at and whether the whole call went over it.
+export const TURN_EVENT_SCHEMA_VERSION = '16';
 // A provider adapter's line is its status and at most two identifiers (error code, parameter path); a gateway failure is
 // one fixed token. Words, quotes and commas fail, so prose cannot ride this field even when a producer slips.
 export const toolSearchRejectionSchema = z.string().max(160).regex(
@@ -58,11 +59,14 @@ export type TurnModelUsage = z.infer<typeof turnModelUsageSchema>;
 // history and current estimates size the other layers the same way, in the order the provider caches them.
 // history_moved: on a reply call, whether the history window starts at a different row than the chain's last turn's did,
 // which costs the cache everything after the system prompt.
+// ceiling_tokens: the tokens a call of this class aims at (a chat turn 40k, a card or job 25k); over_ceiling: whether this
+// call's layers and tool results together were estimated above it. Set while the deploy measures calls against ceilings.
 // context_sections: the parts of the turn context that ride the owner's message instead of the system prompt.
 export const turnContextShapeSchema = z.strictObject({
   tools_count: count, tools_bytes: count, tools_tokens_est: count.optional(), tool_turns_bytes: count,
   history_messages: count, history_bytes: count, current_bytes: count, attachments: count,
   system_tokens_est: count.optional(), history_tokens_est: count.optional(), current_tokens_est: count.optional(), history_moved: z.boolean().optional(),
+  ceiling_tokens: count.optional(), over_ceiling: z.boolean().optional(),
   system_sections: z.partialRecord(systemSectionSchema, count).optional(),
   context_sections: z.partialRecord(systemSectionSchema, count).optional(),
 });

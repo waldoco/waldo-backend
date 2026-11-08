@@ -155,6 +155,10 @@ const toolErrorCode = (event: ToolLoopEvent): { error_code?: string } => {
 };
 // Tool definitions are JSON: about four UTF-8 bytes per token on current tokenizers, close enough to compare rounds.
 const BYTES_PER_TOKEN_EST = 4;
+// WALDO_CALL_CEILINGS: what a call's whole input aims at by class, and the ceiling past which an owner's chat turn clears
+// its earlier tool results. A job's apply turn is measured with the jobs until it has its own small context.
+const CALL_CEILING_TOKENS = { chat: 40_000, job: 25_000 } as const;
+const CHAT_HARD_CEILING_TOKENS = 80_000;
 // The reply's system prompt with the byte size of each joined section, so a trace shows what fills it.
 type SystemPrompt = Readonly<{ text: string; sections: Readonly<Partial<Record<SystemSection, number>>>; contextSections?: Readonly<Partial<Record<SystemSection, number>>> }>;
 
@@ -281,6 +285,9 @@ export const createOwnerResponder = (
   let turnSanitise: Readonly<{ forgets: string; memo: TurnSanitiseMemo }> | undefined;
   // The tool loop's context for the turn in flight: the loop marks it external when a result or hosted search was.
   let turnLoopCtx: Readonly<{ toolArgSourceTaint?: unknown; healthShown?: boolean }> | undefined;
+  // The estimated tokens of the owner's reply call apart from its tool turns: tools, system prompt, history and message,
+  // set by its first round. They hold across the turn's rounds, so the room left for tool turns under the ceiling holds too.
+  let replyBaseTokens: number | undefined;
   // The owner's reply when every provider failed: a promise the host keeps (its retry job, written before this text goes
   // out), else the plain line.
   const floorText = (floor: NonNullable<OwnerModelAccess['floorReply']>): string => {
@@ -369,19 +376,28 @@ export const createOwnerResponder = (
     await assertCurrent();
     privateRunScope?.admit();
     const input = JSON.stringify([{ role: 'system', content: system }, ...userMessages, ...(turns ?? [])]);
+    const layers = {
+      tools: tools?.length ? Math.ceil(utf8Bytes(JSON.stringify(tools)) / BYTES_PER_TOKEN_EST) : 0,
+      system: Math.ceil(utf8Bytes(system) / BYTES_PER_TOKEN_EST),
+      history: Math.ceil(utf8Bytes(JSON.stringify(userMessages.slice(0, -1))) / BYTES_PER_TOKEN_EST),
+      current: Math.ceil(utf8Bytes(userMessages.at(-1)?.content ?? '') / BYTES_PER_TOKEN_EST),
+    };
+    const base = layers.tools + layers.system + layers.history + layers.current;
+    if (purpose === 'reply' && ownerTurnActive && !light) replyBaseTokens = base;
+    // A late answer to the owner carries the chat's history like a chat turn does.
+    const ceiling = CALL_CEILING_TOKENS[ownerTurnActive || backgroundOwnerModel ? 'chat' : 'job'];
     const shape = {
       system_bytes: utf8Bytes(system), request_bytes: utf8Bytes(input),
       // These calls run on the voice block, so a shift in behaviour or cache share can be traced to a voice bump.
       ...(purpose === 'reply' || purpose === 'background_decision' ? { voice_version: voiceVersion(promptV2) } : {}),
       context: {
-        tools_count: tools?.length ?? 0, tools_bytes: tools?.length ? utf8Bytes(JSON.stringify(tools)) : 0, tools_tokens_est: tools?.length ? Math.ceil(utf8Bytes(JSON.stringify(tools)) / BYTES_PER_TOKEN_EST) : 0,
+        tools_count: tools?.length ?? 0, tools_bytes: tools?.length ? utf8Bytes(JSON.stringify(tools)) : 0, tools_tokens_est: layers.tools,
         tool_turns_bytes: turns?.length ? utf8Bytes(JSON.stringify(turns)) : 0,
         history_messages: Math.max(0, userMessages.length - 1), history_bytes: utf8Bytes(JSON.stringify(userMessages.slice(0, -1))),
         current_bytes: utf8Bytes(userMessages.at(-1)?.content ?? ''), attachments: attachments?.length ?? 0,
-        system_tokens_est: Math.ceil(utf8Bytes(system) / BYTES_PER_TOKEN_EST),
-        history_tokens_est: Math.ceil(utf8Bytes(JSON.stringify(userMessages.slice(0, -1))) / BYTES_PER_TOKEN_EST),
-        current_tokens_est: Math.ceil(utf8Bytes(userMessages.at(-1)?.content ?? '') / BYTES_PER_TOKEN_EST),
+        system_tokens_est: layers.system, history_tokens_est: layers.history, current_tokens_est: layers.current,
         ...(purpose === 'reply' && historyMoved !== undefined ? { history_moved: historyMoved } : {}),
+        ...(access.callCeilings && purpose === 'reply' ? { ceiling_tokens: ceiling, over_ceiling: base + Math.ceil((turns?.length ? utf8Bytes(JSON.stringify(turns)) : 0) / BYTES_PER_TOKEN_EST) > ceiling } : {}),
         ...(typeof systemPrompt === 'string' ? {} : { system_sections: systemPrompt.sections, ...(systemPrompt.contextSections ? { context_sections: systemPrompt.contextSections } : {}) }),
       },
     };
@@ -645,6 +661,7 @@ export const createOwnerResponder = (
         stableMenu: true,
         ...(harnessLoader ? { loader: (tools: readonly LLMTool[]) => harnessToolLoader(tools, backgroundDirect) } : {}),
         ...(access.contextCaps ? { clearToLatest: true } : {}),
+        ...(access.callCeilings ? { resultRoomBytes: () => replyBaseTokens === undefined ? undefined : Math.max(0, CHAT_HARD_CEILING_TOKENS - replyBaseTokens) * BYTES_PER_TOKEN_EST } : {}),
         budget: turnBudget,
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
         maxSteps: turnRounds,
@@ -954,6 +971,7 @@ export const createOwnerResponder = (
     turnClockLine = undefined;
     ownerTurnActive = fromOwner;
     turnSanitise = { forgets: '', memo: new TurnSanitiseMemo() };
+    replyBaseTokens = undefined;
     const spend = privateOwner?.spend?.();
     turnSpend = spend && { spent_cents: Math.floor(spend.spentUsd * 100), cap_cents: Math.round(spend.ceilingUsd * 100), clamp: ownerRoutePolicy(auxiliaryModel, model, access) };
     // Past the spend ceiling every call already runs on the auxiliary route, so a light step would only add a call.
@@ -1066,7 +1084,7 @@ export const createOwnerResponder = (
       if (!seed && !compactionDue({ stats, ownerRows: ownerRowsSince(tree, leafId, live?.createdAt ?? null), lastAttemptAt, now }, compaction)) return;
       privateRunScope?.admit();
       await conversationStore.noteCompactionAttempt?.(ref, now, privateRunScope);
-      const planned = seed ? seedBasePlan(tree, leafId, live, compactionPlan(tree, leafId, live, compaction, compaction.budgetTokens / 2))
+      const planned = seed ? seedBasePlan(tree, leafId, live, compactionPlan(tree, leafId, live, compaction, compaction.summaryInputTokens / 2))
         : compactionPlan(tree, leafId, live, compaction);
       if (!planned || tree.get(compactionId(planned.covers.to_id))) return;
       // A topic forgotten this turn is still in this turn's rows; like the reply, neither the memory flush nor the summary
