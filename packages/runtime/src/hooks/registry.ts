@@ -18,6 +18,7 @@ import type {
 } from '@waldo/contracts';
 import {
   DEFAULT_HOOK_TIMEOUT_MS,
+  taskProfileSchema,
   toolError,
   POST_TOOL_USE_PRIORITIES,
   PRE_TOOL_USE_PRIORITIES,
@@ -47,7 +48,7 @@ import {
   workspaceSearchArgsSchema,
   workspaceWriteArgsSchema,
   workspaceRenderArgsSchema, extractArchiveArgsSchema,
-  reviseArtifactArgsSchema, exportArtifactArgsSchema,
+  reviseArtifactArgsSchema, restoreArtifactArgsSchema, exportArtifactArgsSchema,
   getContextArgsSchema,
   queryAvailabilityArgsSchema,
   getCrsArgsSchema,
@@ -71,6 +72,8 @@ import {
   ownerMessageHeardArgsSchema,
   reactToMessageArgsSchema,
   offerRepliesArgsSchema,
+  showChartArgsSchema,
+  showHealthChartArgsSchema,
   attachFileArgsSchema,
   queryCalendarArgsSchema,
   readDocumentArgsSchema,
@@ -84,7 +87,7 @@ import {
   searchToolsArgsSchema,
   sendMessageArgsSchema,
   useMacArgsSchema,
-  browseActArgsSchema, delegateTaskArgsSchema, startTaskArgsSchema, cancelTaskArgsSchema, checkTaskArgsSchema,
+  browseActArgsSchema, delegateTaskArgsSchema, startTaskArgsSchema, cancelTaskArgsSchema, checkTaskArgsSchema, steerTaskArgsSchema,
   browsePageArgsSchema,
   cancelReminderArgsSchema,
   cancelStandingOrderArgsSchema,
@@ -99,6 +102,7 @@ import {
   trackResponsibilityArgsSchema,
   updateTodoArgsSchema,
   listHealthLogsArgsSchema,
+  deleteHealthLogArgsSchema,
   setSleepNeedArgsSchema,
   trackMedicationArgsSchema,
   logMedicationArgsSchema,
@@ -135,10 +139,13 @@ import {
   writeTaskArgsSchema,
   archiveThreadArgsSchema,
   recordOwnerFindingArgsSchema,
+  readImportArgsSchema,
+  importMemoriesArgsSchema,
   listOwnerFindingsArgsSchema,
 } from '@waldo/contracts';
 import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, OPEN_PUBLIC_TOOLS, evaluateDeclaredEgress } from './egress-policy';
 import { TOOL_RECORDS, type ToolRecord } from '../tools/records';
+import { holdsPrivateAndEgress, TASK_PROFILE_SPECS } from '../tasks/profile-tools';
 import { ownerStatedMinutes, type MemoryOwnerTurn } from '../tools/owner-words';
 
 export type HookRegistry<Ctx> = readonly HookHandler<Ctx>[];
@@ -217,6 +224,8 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   attach_file: attachFileArgsSchema,
   react_to_message: reactToMessageArgsSchema,
   offer_replies: offerRepliesArgsSchema,
+  show_chart: showChartArgsSchema,
+  show_health_chart: showHealthChartArgsSchema,
   query_calendar: queryCalendarArgsSchema,
   get_communication: getCommunicationArgsSchema,
   search_communication: searchCommunicationArgsSchema,
@@ -224,6 +233,7 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   read_thread: readThreadArgsSchema,
   create_artifact: createArtifactArgsSchema,
   revise_artifact: reviseArtifactArgsSchema,
+  restore_artifact: restoreArtifactArgsSchema,
   export_artifact: exportArtifactArgsSchema,
   list_artifacts: listArtifactsArgsSchema,
   read_artifact: readArtifactArgsSchema,
@@ -279,6 +289,7 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   log_meal: logMealArgsSchema,
   log_workout: logWorkoutArgsSchema,
   list_health_logs: listHealthLogsArgsSchema,
+  delete_health_log: deleteHealthLogArgsSchema,
   set_sleep_need: setSleepNeedArgsSchema,
   track_medication: trackMedicationArgsSchema,
   log_medication: logMedicationArgsSchema,
@@ -312,7 +323,10 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   start_task: startTaskArgsSchema,
   cancel_task: cancelTaskArgsSchema,
   check_task: checkTaskArgsSchema,
+  steer_task: steerTaskArgsSchema,
   record_owner_finding: recordOwnerFindingArgsSchema,
+  read_import: readImportArgsSchema,
+  import_memories: importMemoriesArgsSchema,
   list_owner_findings: listOwnerFindingsArgsSchema,
 });
 
@@ -543,10 +557,20 @@ export const recordNeedsOwnerCard = async (
     case 'narrows': return clearsEverything(tool, args);
     case 'source_bound': return !(await boundToObservedSource(tool, args, ctx));
     case 'commits_on_card': return !typedBrowserStep(tool, args);
-    case 'owner_inward': return ctx.ownerInitiated !== true;
+    case 'owner_inward': return ctx.ownerInitiated !== true || combinedTask(tool, args);
     default: return true;
   }
 };
+
+// A background task whose worker would hold the owner's private reads and a way out together. Started after outside text, its
+// brief may carry instructions to read the inbox and fetch a URL with it, so only the owner's card starts it.
+const combinedTask = (tool: ToolName, args: unknown): boolean => {
+  if (tool !== 'start_task') return false;
+  const profile = taskProfileSchema.safeParse(typeof args === 'object' && args !== null ? (args as { profile?: unknown }).profile : undefined);
+  return !profile.success || holdsPrivateAndEgress(TASK_PROFILE_SPECS[profile.data].tools);
+};
+export const TAINT_COMBINED_TASK_REASON = 'external-tainted background task would read private data and the web together';
+export const TAINT_COMBINED_TASK_CAUSE = 'This task would read the owner\'s mail and the web together, after reading outside content in this conversation. Start it with profile web (public look-ups only) or private (the owner\'s data, no web) and it runs at once; for both, call propose_action with this exact call and the owner gets a card.';
 
 // A narrowing call that removes everything of its kind at once is carded: its receipt cannot name what it removed, so outside
 // text could wipe the owner's reminders with nothing to set them again from. One by one, each receipt quotes what went.
@@ -614,7 +638,8 @@ export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
       let needsOwner: boolean;
       try { needsOwner = await taintedCallNeedsOwnerApproval(tool.data, sourceTaint.data, payload.args, ctx); }
       catch { return halt('loop lookup failed', 'transient'); }
-      if (needsOwner) return halt(TAINT_NEEDS_APPROVAL_REASON, 'forbidden');
+      // Only the owner's own turn can start the narrower task at once, so only there is the model pointed at it.
+      if (needsOwner) return halt(ctx.ownerInitiated === true && combinedTask(tool.data, payload.args) ? TAINT_COMBINED_TASK_REASON : TAINT_NEEDS_APPROVAL_REASON, 'forbidden');
     }
 
     // A write that is not privileged runs past the taint law on the owner's own turn as any tool does.
@@ -736,6 +761,7 @@ export type RunHooksOptions<Ctx> = {
 // sanitiser or approval reason never reaches the model, only a code and a fix it can act on.
 const hookToolError = (hook: string, reason: string, code: ErrorCode): ToolError => {
   if (reason === TAINT_NEEDS_APPROVAL_REASON) return toolError('taint_needs_approval');
+  if (reason === TAINT_COMBINED_TASK_REASON) return toolError('taint_needs_approval', TAINT_COMBINED_TASK_CAUSE);
   if (reason === TAINT_REFUSED_REASON) return toolError('hook_denied', TAINT_REFUSED_CAUSE);
   if (reason === 'privileged action lacks approval') return toolError('approval_denied');
   if (reason === 'approval check unavailable' || reason === 'approval check failed') return toolError('approval_check_unavailable');

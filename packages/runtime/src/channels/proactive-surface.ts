@@ -24,6 +24,11 @@ export const proactiveReads = (kv: Pick<Kv, 'get'>, bothDefault = false): ReadsA
   const wanted = wantedTargets(proactiveSurface(kv, bothDefault));
   return bothDefault && wanted.some(target => READS[target] === 'chat') ? 'chat' : READS[wanted[0] ?? 'app'];
 };
+// Whether a surface's delivery of proactive work is written into the owner's own chain: the app transcript is that chain,
+// while a chat surface's job runs on and writes that chat's chain.
+const ON_OWNER_CHAIN: Readonly<Record<ProactiveTarget, boolean>> = { app: true, whatsapp: false, imessage: false };
+export const proactiveOnOwnerChain = (kv: Pick<Kv, 'get'>, bothDefault = false): boolean =>
+  ON_OWNER_CHAIN[wantedTargets(proactiveSurface(kv, bothDefault))[0] ?? 'app'];
 // Whether a surface can take the work itself, so that its delivery settles the job; one that cannot only gets copies.
 const SETTLES: Readonly<Record<ProactiveTarget, boolean>> = { app: true, whatsapp: true, imessage: false };
 // The stored choice read as a list of surfaces, the one that takes the work first and then each that gets a copy. This is
@@ -143,6 +148,13 @@ export const unaskedRecord = (record: FinalRecord): boolean => unaskedKind(recor
 // meeting prep, a pause notice, a day card or a standing order's report. When WhatsApp stops taking proactive work it goes to the app instead. A copy of an app message stays behind,
 // since the app has it already, and so would a reply to the owner's own message, which belongs where the owner wrote. So does a
 // message WhatsApp took any part of: it is on the owner's phone in part, and the app would get only the rest.
+// A record that answers work the owner asked for, addressed to this chat.
+export const answersOwnerIn = (subject: string) => (record: FinalRecord): boolean =>
+  record.answersOwner === true && record.ownerSubject === subject && record.payload.chat_id === Number(subject);
+// The surfaces with a chat of their own that the owner's answers go back to, where the owner asked; the app answers in its own
+// thread chain, and every other surface answers where Waldo's own messages go.
+export const ANSWERS_WHERE_ASKED: ReadonlySet<string> = new Set(['whatsapp']);
+
 export const waitingForWhatsApp = (subjects: ReadonlySet<string>) => (record: FinalRecord): boolean =>
   !!(record.reminder || record.heartbeat || record.mailFollowup || record.update || record.calendarPrep || record.scheduleNotice || record.dayCard || record.standingOrder)
   && subjects.has(record.ownerSubject) && record.payload.chat_id === Number(record.ownerSubject) && !tookPart(record);

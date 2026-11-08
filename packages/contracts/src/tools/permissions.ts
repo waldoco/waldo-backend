@@ -42,6 +42,8 @@ export const toolNameSchema = z.enum([
   'draft_document',
   'create_artifact',
   'revise_artifact',
+  // restore_artifact: bring back a kept earlier revision as a new one, so a revise can be undone.
+  'restore_artifact',
   'export_artifact',
   'draft_email',
   'send_email',
@@ -84,6 +86,8 @@ export const toolNameSchema = z.enum([
   'log_meal',
   'log_workout',
   'list_health_logs',
+  // delete_health_log: remove one meal or workout log by id, the undo for log_meal and log_workout.
+  'delete_health_log',
   'set_sleep_need',
   // track/log/list/stop_medication: the owner's medicines, on the health plane; owner turns only, offered while MEDICATIONS is on.
   'track_medication',
@@ -156,6 +160,17 @@ export const toolNameSchema = z.enum([
   'check_task',
   // query_phone_calendar: the events on the owner's phone calendars as the phone last sent them; offered while DEVICE_CALENDAR is on.
   'query_phone_calendar',
+  // steer_task: change a running background task's work, as a correction or an addition, keeping its id (WALDO_TASK_STEER).
+  'steer_task',
+  // show_chart: a chart in the owner's app reply (the app.v1 chart_series part), with words for a build that draws none.
+  'show_chart',
+  // show_health_chart: a chart of the owner's own readings in their app reply; the reply keeps the query, never the values,
+  // and the app's read draws it live. Offered while HEALTH_CHARTS is on.
+  'show_health_chart',
+  // read_import/import_memories: the owner's own messages in a ChatGPT or Claude export they uploaded, and what Waldo keeps
+  // from them as its read, quoted from the owner's words, until the owner confirms it. Owner chat turns only.
+  'read_import',
+  'import_memories',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -308,11 +323,14 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'draft_document',
     'create_artifact',
     'revise_artifact',
+    'restore_artifact',
     'export_artifact',
     'draft_email',
     'send_email',
     'send_agent_mail',
     'offer_replies',
+    'show_chart',
+    'show_health_chart',
     'propose_schedule',
     'write_sheet_cell',
     'propose_action',
@@ -344,6 +362,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'log_meal',
     'log_workout',
     'list_health_logs',
+    'delete_health_log',
     'set_sleep_need',
     'track_medication',
     'log_medication',
@@ -368,8 +387,11 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'start_task',
     'cancel_task',
     'check_task',
+    'steer_task',
     'record_owner_finding',
     'list_owner_findings',
+    'read_import',
+    'import_memories',
     'search_history',
   ],
   dreaming_mode: ['read_memory', 'search_episodes', 'skills_load'],
