@@ -7,6 +7,7 @@ import { DeliveryGateStore } from '../src/delivery-gate/store';
 import { ensureSchema } from '../src/tracer/schema';
 import { healthCardBudget, healthTriggerBook, healthTriggerPrompt, healthTriggerView, runHealthTrigger, HEALTH_TRIGGER_FLOOR_MS, HEALTH_TRIGGER_PENDING_TTL_MS, type ComingItem, type HealthTriggerDeps } from '../src/health/trigger';
 import type { HealthWakeReason } from '../src/health/wakes';
+import { WORKOUT_FRESH_MS } from '../src/health/wake-notice';
 
 // The wake reasons beyond a zone change, through the one trigger path: the model still answers propose or no_op, and the
 // consent read, quiet hours, cooldown, budget, same-day duplicate refusal and egress check still decide whether a card
@@ -35,6 +36,7 @@ const SENTENCES: Readonly<Record<Exclude<HealthWakeReason, 'zone_change'>, strin
   driver_appeared: 'A signal is outside the owner\'s usual range that was not at the last reading.',
   driver_far: 'A signal that was already outside the owner\'s usual range has moved far outside it.',
   load_jump: 'Load moved by more than a steady amount since the last reading, inside the same zone.',
+  workout_ended: 'The owner just finished a workout.',
 };
 
 let sequence = 0;
@@ -68,6 +70,25 @@ describe('what the book keeps about a wake', () => {
       expect(book.markOnce(DAY, NOW + 60_000, 'driver_appeared')).toBe(true);
       expect(book.markOnce('2026-10-22', NOW + 60_000, 'sleep_debt_building')).toBe(true);
       expect(book.pending(NOW + 60_000)).toMatchObject({ days: ['2026-10-22', DAY] });
+    });
+  });
+
+  it('wakes once per workout: a workout mark within three hours of the last one is refused on any day, across midnight and a DST night', async () => {
+    await withTrigger(async ({ deps }) => {
+      const book = deps().book;
+      // 23:20 on day D in Kolkata, then the same workout re-sent (or its effort rating added) at 00:15 on D+1.
+      const late = Date.parse('2026-10-21T17:50:00Z'), resent = Date.parse('2026-10-21T18:45:00Z');
+      expect(book.markOnce(DAY, late, 'workout_ended')).toBe(true);
+      expect(book.markOnce('2026-10-22', resent, 'workout_ended')).toBe(false);
+      expect(book.markOnce('2026-10-22', resent, 'sleep_debt_building')).toBe(true);
+      // A workout three hours later is a new one, and the next day's first.
+      expect(book.markOnce('2026-10-22', late + WORKOUT_FRESH_MS, 'workout_ended')).toBe(true);
+      // The gap is in epoch time, so the night London's clocks go back (25 Oct) neither shortens nor lengthens it.
+      const beforeChange = Date.parse('2026-10-25T00:30:00Z'), afterChange = Date.parse('2026-10-25T02:20:00Z');
+      expect(book.markOnce('2026-10-25', beforeChange, 'workout_ended')).toBe(true);
+      expect(book.markOnce('2026-10-25', afterChange, 'workout_ended')).toBe(false);
+      expect(book.markOnce('2026-10-25', beforeChange + WORKOUT_FRESH_MS, 'workout_ended')).toBe(false);
+      expect(book.markOnce('2026-10-26', beforeChange + WORKOUT_FRESH_MS, 'workout_ended')).toBe(true);
     });
   });
 
@@ -115,7 +136,9 @@ describe('what the model is told', () => {
         deps().book.markOnce(DAY, NOW - 60_000, reason as HealthWakeReason);
         await runHealthTrigger(deps({ decide: async (_id, prompt) => { prompts.push(prompt); return noOp; } }));
         expect(prompts[0], reason).toContain(sentence);
-        expect(prompts[0], reason).toContain(`The owner's derived health state for ${DAY} (owner-local day) changed since the last reading.`);
+        expect(prompts[0], reason).toContain(reason === 'workout_ended'
+          ? `The owner's derived health state for ${DAY} (owner-local day) is as below; no reading changed it.`
+          : `The owner's derived health state for ${DAY} (owner-local day) changed since the last reading.`);
         expect(prompts[0], reason).not.toContain('moved zone');
         expect(prompts[0], reason).toContain('Now (2026-10-21, fresh): recovery compromised, form depleted, load peak.');
         for (const leak of LEAKS) expect(prompts[0], reason).not.toContain(leak);
@@ -322,6 +345,35 @@ describe('the same gates as a zone change', () => {
       deps().book.markOnce(DAY, NOW - 60_000, 'sleep_debt_building');
       expect(await runHealthTrigger(deps({ modeSetting: () => 'shadow' }))).toBe('shadow_proposed');
       expect([proposals.length, charged.length]).toEqual([0, 0]);
+    });
+  });
+});
+
+describe('a finished workout at the trigger', () => {
+  it('is no longer "just finished" once it is older than the workout window, as after quiet hours held it', async () => {
+    await withTrigger(async ({ deps, prompts }) => {
+      deps().book.markOnce(DAY, NOW - WORKOUT_FRESH_MS - 60_000, 'workout_ended');
+      expect(await runHealthTrigger(deps({ decide: async (_id, prompt) => { prompts.push(prompt); return noOp; } }))).toBe('stale_day');
+      expect(prompts).toEqual([]);
+      expect(deps().book.pending(NOW)).toBeNull();
+    });
+    await withTrigger(async ({ deps, prompts }) => {
+      deps().book.markOnce(DAY, NOW - WORKOUT_FRESH_MS - 60_000, 'workout_ended');
+      deps().book.markOnce(DAY, NOW - 60_000, 'sleep_debt_building');
+      await runHealthTrigger(deps({ decide: async (_id, prompt) => { prompts.push(prompt); return noOp; } }));
+      expect(prompts[0]).toContain(SENTENCES.sleep_debt_building);
+      expect(prompts[0]).not.toContain(SENTENCES.workout_ended);
+    });
+  });
+
+  it('writes no note on a day with nothing coming, since there is nothing left to reshape', async () => {
+    await withTrigger(async ({ deps, prompts }) => {
+      const delivered: string[] = [];
+      const soloNotice = { enabled: () => true, held: () => null, deliver: async (_id: string, text: string, commit: () => void) => { delivered.push(text); commit(); } };
+      deps().book.markOnce(DAY, NOW - 60_000, 'workout_ended');
+      const run = await runHealthTrigger(deps({ comingItems: async () => [], soloNotice, decide: async (_id, prompt) => { prompts.push(prompt); return JSON.stringify({ kind: 'notice', text: 'Easy evening.' }); } }));
+      expect([run, prompts, delivered]).toEqual(['nothing_coming', [], []]);
+      expect(deps().book.pending(NOW)).toBeNull();
     });
   });
 });
