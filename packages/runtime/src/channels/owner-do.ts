@@ -140,6 +140,7 @@ import { consoleLinkHandler } from '../tools/live/console-link';
 import { progressNoteHandler, type ProgressNoteDeliver } from '../tools/live/progress-note';
 import { attachFileHandler } from '../tools/live/attach-file';
 import { cardReplyBook, offerRepliesHandler } from '../tools/live/offer-replies';
+import { showChartHandler, turnChartBook } from '../tools/live/show-chart';
 import { deliverTurnAttachments, turnAttachmentBook, type AttachmentSend } from './turn-attachments';
 import { HARNESS_MESSAGE_LIMIT, heldRowShapes } from '../memory/held-rows';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type HarnessCommand, type TraceBook } from './harness';
@@ -247,7 +248,7 @@ import { approvalHandlers, approveShownHandler } from '../tools/live/raise-appro
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi, telegramReplyDraft } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
-import { APP_CHAT_MEMORY_USED_REVISION, APP_CHAT_RATING_REVISION, APP_CHAT_UPLOAD_MAX_BYTES, APP_CHAT_UPLOAD_PATH, APP_CONTRACT_HEADER, appChatUploadResultV1Schema, appContractRevision } from '../../../contracts/src/app/core';
+import { APP_CHAT_CHART_REVISION, APP_CHAT_MEMORY_USED_REVISION, APP_CHAT_RATING_REVISION, APP_CHAT_UPLOAD_MAX_BYTES, APP_CHAT_UPLOAD_PATH, APP_CONTRACT_HEADER, appChatUploadResultV1Schema, appContractRevision } from '../../../contracts/src/app/core';
 import { APP_AUTONOMY_PATH, APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, APP_UPDATE_BASE, appSubjectFor, appTranscriptPage, appTranscriptPageRead, ownerPrincipalRef, parseAppSend } from './app-api';
 import { appThreadsRequest, askThreadTitle, nameThread, recallReach, redactThreadTitles, threadChainRef, threadOfChain, threadRecord, threadRowsOfChain, threadRowsPrefix, touchThread, type AppThreadsHost } from './app-threads';
 import { stableJson } from '../context-composer/canonical';
@@ -2112,7 +2113,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const at={step:'context'},url=new URL(request.url);
       const rated=appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'chat')>=APP_CHAT_RATING_REVISION;
       const shows=this.env.MEMORY_USED_SHOWN==='1'&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'chat')>=APP_CHAT_MEMORY_USED_REVISION;
-      try{return Response.json(await this.appChatPage(name,hash,undefined,url.searchParams.get('cursor'),Number(url.searchParams.get('limit')??20),at,rated,appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'approvals'),shows),{headers:{'cache-control':'no-store'}});}
+      const charts=appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'chat')>=APP_CHAT_CHART_REVISION;
+      try{return Response.json(await this.appChatPage(name,hash,undefined,url.searchParams.get('cursor'),Number(url.searchParams.get('limit')??20),at,rated,appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'approvals'),shows,charts),{headers:{'cache-control':'no-store'}});}
       catch(error){logAppReadFailure('app_history_read',at.step,error);return fail(503);}
     }
     return fail(404);
@@ -2120,7 +2122,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // One of the owner's app chats as a page, read under a read admission: main, or a thread's own chain. `at` names the step
   // a failure stopped at.
   // approvals: the approvals revision the reading build declares, so a card kind it predates comes as words.
-  private async appChatPage(name: string, hash: string, thread: string | undefined, cursor: string | null, limit: number, at: { step: string }, rated = false, approvals = 1, memoryUsed = false) {
+  private async appChatPage(name: string, hash: string, thread: string | undefined, cursor: string | null, limit: number, at: { step: string }, rated = false, approvals = 1, memoryUsed = false, charts = false) {
     const entries=await this.appChatRows(name,hash,thread,at,appTranscriptPageRead(cursor,limit));
     at.step='transcript';
     const consoleLinks=appConsoleLinks(this.ctx.storage.kv),connectLinks=appConsoleLinks(this.ctx.storage.kv,Date.now,CONNECT_APP_LINKS);
@@ -2128,7 +2130,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const ratings=rated&&thread===undefined?replyRatings(this.ctx.storage.sql):undefined;
     // Main chat only, like ratings; each claim is read as it is now, so a forgotten one is gone from the answer.
     const used=memoryUsed&&thread===undefined?memoryUsedFor(memoryUsedBook(this.ctx.storage.sql),()=>[...claimStore(this.ctx.storage.sql).claims(),...claimStore(this.ctx.storage.sql).claims('promoted')],()=>heldTopicsOf(claimStore(this.ctx.storage.sql))):undefined;
-    return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql,approvals),run=>[consoleLinks(run),connectLinks(run)].filter(Boolean).join('\n\n')||null,id=>ratings?.get(id),used);
+    return appTranscriptPage(entries,cursor,limit,appApprovalParts(this.ctx.storage.sql,approvals),run=>[consoleLinks(run),connectLinks(run)].filter(Boolean).join('\n\n')||null,id=>ratings?.get(id),used,charts);
   }
   // The rows an app chat's page shows, read under a read admission.
   private async appChatRows(name: string, hash: string, thread: string | undefined, at: { step: string }, enough: (newestFirst: readonly ConversationEntry[]) => boolean) {
@@ -5019,6 +5021,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const attachmentRoute = attachmentRoutes[channel];
     const turnAttachments = turnAttachmentBook();
     const attachTools = attachmentRoute ? [attachFileHandler({ open: openWorkspace, book: turnAttachments })] : [];
+    // A chart is the app reply's chart_series part, so the app is the one surface that offers it.
+    const turnCharts = turnChartBook();
+    const chartTools = SURFACE_CAPABILITIES_V1[channel].charts === 'native' ? [showChartHandler(turnCharts)] : [];
     // The planning Brief's answers to tap, offered only on a surface that draws them as chips on the row (today the app).
     const planningBrief = this.env.PLANNING_BRIEF === '1';
     // PROACTIVE_ACT_AHEAD: the approved day shape, and update triage that builds on the worker's prepared move.
@@ -5236,7 +5241,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await sentOrThrow(routedCall('sendMessage', { chat_id: owner, text: `From ${from}:\n${lines.join('\n')}`, [SEND_NOW_ONLY]: true }));
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
-      }, effects, () => ownerName(memory), briefEgress.screen), ...(this.env.CALENDAR_PLAN === '1' ? [calendarPlanHandler(google, desk, clock, briefEgress.screen)] : []), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, connectAppTool, ...progressNoteTools, ...secondMessageTools, ...attachTools, ...tapbackTools, ...replyOfferTools, ...this.recallTools(episodes, memory), ...memoryHandlers({
+      }, effects, () => ownerName(memory), briefEgress.screen), ...(this.env.CALENDAR_PLAN === '1' ? [calendarPlanHandler(google, desk, clock, briefEgress.screen)] : []), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, connectAppTool, ...progressNoteTools, ...secondMessageTools, ...attachTools, ...chartTools, ...tapbackTools, ...replyOfferTools, ...this.recallTools(episodes, memory), ...memoryHandlers({
         sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner), ...(semantic ? { semantic } : {}), ...(this.env.MEMORY_VALIDITY === '1' ? { validity: true } : {}), ...(this.env.PEOPLE_MAP === '1' ? { people: true } : {}),
         // The tool has already deleted the claims and taken custody of the texts. One cleaning pass runs now, so a card waiting
         // to send loses the text before the turn ends; what it cannot clean, the forget purge job retries, and the forget
@@ -5284,7 +5289,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }},...(oneTimelineEnabled(this.env)?{timelineSeed:seed}:{}),
       history:context=>({...ownerHistory(context),
         noteUnfinished:(line,scope)=>this.appInbox.noteLanded(scope.runId,scope.attempt,line),
-        }),jobHost:this.jobHostFor(admission=>ownerChainRef('app',admission.invocation.verified_authority.principal_ref)),ownerProfile:google.nameLine,watchStatus,connectors,dayCards,loopIsSourceBound:loops.sourceBound,...memoryHooks,...(spend ? { spend } : {}),forgetBarrier,forgetPass,profileView,newerOwnerMessages,...(finishedTasks ? { finishedTasks } : {}),...router} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
+        }),jobHost:this.jobHostFor(admission=>ownerChainRef('app',admission.invocation.verified_authority.principal_ref)),ownerProfile:google.nameLine,watchStatus,connectors,dayCards,loopIsSourceBound:loops.sourceBound,...memoryHooks,turnCharts:(id:string)=>turnCharts.take(id),...(spend ? { spend } : {}),forgetBarrier,forgetPass,profileView,newerOwnerMessages,...(finishedTasks ? { finishedTasks } : {}),...router} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
         const record=this.activeIMessage;
         if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==iMessageTurnText(record))throw new ClosedRunError();
         return iMessageOwnerContext(this.imessageHost,record,scope,{ownerProfile:google.nameLine});
@@ -5367,7 +5372,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await scheduler.rearm();
       } } : {}),
       ...(replyDraft ? { streamReply: (turn: import('./telegram-polling').TelegramInboundTurn) => probeCapture.current === null ? replyDraft(turn) : undefined } : {}),
-      clearTurnReceipts: trace => { turnReceiptUrls.delete(trace); turnAttachments.clear(trace); },
+      clearTurnReceipts: trace => { turnReceiptUrls.delete(trace); turnAttachments.clear(trace); turnCharts.clear(trace); },
       ...turnHooks?.listener,
       ...(attachmentRoute ? { deliverAttachments: (trace: string, runScope?: RunEffectScope) => deliverTurnAttachments(turnAttachments.take(trace), {
         trace, ownerRef: ownerRef(), effects, open: () => openWorkspace(runScope ? { runScope } : undefined), send: attachmentRoute, delivery: workspaceLinks,

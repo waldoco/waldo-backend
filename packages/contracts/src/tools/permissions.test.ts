@@ -149,6 +149,7 @@ describe('toolName', () => {
       'review_experiment',
       'check_task',
       'steer_task',
+      'show_chart',
     ]);
   });
 
@@ -323,6 +324,7 @@ describe('TOOL_PERMISSIONS', () => {
         'send_email',
         'send_agent_mail',
         'offer_replies',
+        'show_chart',
         'propose_schedule',
         'write_sheet_cell',
         'propose_action',

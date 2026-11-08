@@ -48,7 +48,16 @@ export type ConversationEntry = Readonly<{
   // Answers the owner can tap for the question the row asks, in order. The question itself is in the row's text, so a surface
   // that shows only text still reads whole; a tap comes back as the owner's own message.
   quickReplies?: readonly string[];
+  // Charts the reply drew (show_chart), in order: the app.v1 chart_series shape without its type and fallback, which the app
+  // projection sets from alt_text. A forget that touches any text in one removes that chart.
+  charts?: readonly ConversationChart[];
 }>;
+
+export type ConversationChart = Readonly<{
+  title: string; unit: string; alt_text: string;
+  series: readonly Readonly<{ label: string; points: readonly Readonly<{ t: number; v: number }>[] }>[];
+}>;
+export const conversationChartTexts = (chart: ConversationChart): readonly string[] => [chart.title, chart.unit, chart.alt_text, ...chart.series.map(series => series.label)];
 
 export type ConversationReceipt = Readonly<{
   line: string;
@@ -188,6 +197,8 @@ export const redactConversationEntry = (entry: ConversationEntry, redact: (value
   ...(entry.receipt ? { receipt: { ...entry.receipt, line: redact(entry.receipt.line),
     items: entry.receipt.items.map(item => (item.target === null ? item : { ...item, target: redact(item.target) })) } } : {}),
   ...(entry.quickReplies ? { quickReplies: entry.quickReplies.map(redact) } : {}),
+  // A chart any of whose words a forget touches goes whole: its points without their words would still say what was forgotten.
+  ...(entry.charts ? { charts: entry.charts.filter(chart => conversationChartTexts(chart).every(text => redact(text) === text)) } : {}),
 });
 
 export class ConversationTree {

@@ -17,6 +17,7 @@ import { APP_SCREEN_TIME_PATH, handleAppScreenTime } from './app-screen-time';
 import { APP_CALENDAR_DAY_PATH } from './app-calendar-day';
 import { APP_TODAY_PATH, appToday } from './app-today';
 import { APP_GOOGLE_PICTURE_PATH_V1 } from '../../../contracts/src/app/controls';
+import { replyChartSeriesPartV1Schema } from '../../../contracts/src/app/parts';
 import { appDeviceMutationResultV1Schema, appDeviceRegisterV1Schema, appDeviceRevokeV1Schema, appDevicesResultV1Schema } from '../../../contracts/src/app/devices';
 import { APP_ONBOARDING_PATHS } from './app-onboarding';
 import { APP_PROVIDERS_PATH, handleAppHealthProviders } from '../health/providers/app-providers';
@@ -416,7 +417,7 @@ export const appTranscriptPageRead = (cursor: string | null, limit: number) => {
 // to it and before that reply's receipt line, which stays last.
 export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor: string | null, limit: number, cards: (parentId: string) => AppApprovalCards = () => NO_CARDS,
   consoleLink: (parentId: string) => string | null = () => null, rating: (messageId: string) => 'up' | 'down' | undefined = () => undefined,
-  memoryUsed: (turnId: string) => readonly Readonly<{ id: string; text: string }>[] | undefined = () => undefined): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
+  memoryUsed: (turnId: string) => readonly Readonly<{ id: string; text: string }>[] | undefined = () => undefined, charts = false): Readonly<{ messages: readonly AppMessage[]; next_cursor: string | null }> => {
   const shown = entries.filter(shownRow);
   const { taken, size, before: beforeId } = pageWindow(cursor, limit);
   const before = beforeId !== null ? shown.findIndex(entry => entry.id === beforeId) : -1;
@@ -433,14 +434,20 @@ export const appTranscriptPage = (entries: readonly ConversationEntry[], cursor:
     const stored = entry.appPayload.trim() || !presented.fallbacks.length ? entry.appPayload : presented.fallbacks.join('\n\n');
     const tail = entry.receipt && stored.endsWith(`\n\n${entry.receipt.line}`) ? `\n\n${entry.receipt.line}` : '', body = stored.slice(0, stored.length - tail.length);
     // A card this build cannot read is told in words, after the reply's own words and before its receipt line.
-    const told = presented.withheld?.length && entry.appPayload.trim() ? [body, ...presented.withheld].join('\n\n') : body;
+    const withheld = presented.withheld?.length && entry.appPayload.trim() ? [body, ...presented.withheld].join('\n\n') : body;
+    // A chart reaches a build below chat=8 as its alt text, in the same place, and so does one that no longer fits the part.
+    const drawn = (entry.charts ?? []).map(chart => ({ chart, part: replyChartSeriesPartV1Schema.safeParse({ type: 'chart_series', title: chart.title, unit: chart.unit,
+      series: chart.series.map(series => ({ label: series.label, points: [...series.points] })), alt_text: chart.alt_text, fallback_text: chart.alt_text }) }));
+    const chartWords = drawn.filter(({ part }) => !charts || !part.success).map(({ chart }) => chart.alt_text).filter(words => words.trim());
+    const told = chartWords.length ? [withheld, ...chartWords].filter(Boolean).join('\n\n') : withheld;
     const text = link ? `${told.trim() ? `${told}\n\n` : ''}${link}${tail}` : told === body ? stored : `${told}${tail}`;
     const operation = entry.operation ? [{ type: 'operation' as const, operation_id: entry.operation.id, state: entry.operation.state, message: text }] : [];
     const receipt = entry.receipt ? [{ type: 'receipt' as const, items: [...entry.receipt.items], more: entry.receipt.more, fallback_text: entry.receipt.line }] : [];
     const replies = entry.quickReplies?.length ? [appQuickRepliesPart(entry.quickReplies)].filter(part => part !== null) : [];
+    const chartParts = charts ? drawn.flatMap(({ part }) => part.success ? [part.data] : []) : [];
     const rated = entry.role === 'assistant' ? rating(entry.id) : undefined;
     const used = entry.role === 'assistant' && entry.parentId ? memoryUsed(entry.parentId) : undefined;
-    return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...operation, ...presented.live, ...replies, ...receipt], channel: entry.surface, parent_id: entry.parentId,
+    return { id: entry.id, role: entry.role, text, parts: [{ type: 'text' as const, text }, ...operation, ...presented.live, ...replies, ...chartParts, ...receipt], channel: entry.surface, parent_id: entry.parentId,
       ...(entry.createdAt === undefined ? {} : { created_at: entry.createdAt }), ...(rated === undefined ? {} : { rating: rated }), ...(used === undefined ? {} : { memory_used: [...used] }) };
   });
   return { messages, next_cursor: start > 0 ? `before:${shown[start]!.id}` : null };
