@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { setSleepNeedArgsSchema, setSleepNeedResultSchema } from './health';
+import { deleteHealthLogArgsSchema, setSleepNeedArgsSchema, setSleepNeedResultSchema } from './health';
 
 // Every value here is synthetic.
 describe('set_sleep_need', () => {
@@ -16,5 +16,14 @@ describe('set_sleep_need', () => {
     expect(setSleepNeedResultSchema.safeParse({ state: 'set' }).success).toBe(true);
     expect(setSleepNeedResultSchema.safeParse({ state: 'cleared' }).success).toBe(true);
     for (const result of [{ state: 'set', minutes: 480 }, { state: 'saved' }, {}]) expect(setSleepNeedResultSchema.safeParse(result).success, JSON.stringify(result)).toBe(false);
+  });
+});
+
+describe('delete_health_log', () => {
+  it('takes one positive integer id and nothing else', () => {
+    expect(deleteHealthLogArgsSchema.safeParse({ id: 7 }).success).toBe(true);
+    for (const args of [{}, { id: 0 }, { id: -1 }, { id: 1.5 }, { id: '7' }, { id: 7, kind: 'meal' }, { ids: [7] }]) {
+      expect(deleteHealthLogArgsSchema.safeParse(args).success, JSON.stringify(args)).toBe(false);
+    }
   });
 });

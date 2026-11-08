@@ -113,7 +113,7 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
     if (digest === null) return { ok: false, error: 'The args could not be frozen as plain JSON.', code: 'invalid_args' };
     const proposal_id = await desk.proposeTaintedAction({
       operation_ref: await ownerEffectOperationRef(ctx), tool: tool.data, args: frozen, args_digest: digest, reasoning: args.reasoning, source: 'external',
-      ...(preview ? { preview } : {}),
+      ...(preview ? { preview } : {}), ...(ctx.askedIn ? { asked_in: ctx.askedIn } : {}),
     }, { why: callWhy(ctx) });
     return {
       ok: true,
@@ -140,7 +140,7 @@ export const taintedActionReplay = (input: Readonly<{
   const callRef = `approval:${approvalRef}`;
   const ctx: ToolDispatcherContext = {
     ...input.context(), toolArgSourceTaint: 'external', turnId: callRef, toolCallId: callRef,
-    approvedTaintedAction: { tool: tool.data, args_digest: proposal.args_digest },
+    approvedTaintedAction: { tool: tool.data, args_digest: proposal.args_digest }, ...(proposal.asked_in ? { askedIn: proposal.asked_in } : {}),
   };
   const result = await dispatchTool({ id: callRef, name: tool.data, args: proposal.args }, ctx, { handlers });
   // The owner reads the outcome. The tool's payload and its error text were written for the model and can carry readings, ids
