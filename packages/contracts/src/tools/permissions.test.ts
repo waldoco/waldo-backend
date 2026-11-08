@@ -151,6 +151,8 @@ describe('toolName', () => {
       'steer_task',
       'show_chart',
       'show_health_chart',
+      'read_import',
+      'import_memories',
     ]);
   });
 
@@ -386,6 +388,8 @@ describe('TOOL_PERMISSIONS', () => {
       'steer_task',
       'record_owner_finding',
       'list_owner_findings',
+      'read_import',
+      'import_memories',
       'search_history',
       ],
       dreaming_mode: ['read_memory', 'search_episodes', 'skills_load'],

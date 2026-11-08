@@ -12,6 +12,7 @@ import { fuseRanked, type SemanticRecall } from '../../memory/semantic-recall';
 import { outsideSafe } from '../../memory/outside-view';
 import { personCard, StalePersonRef, type Person } from '../../memory/people';
 import { ownerParts, type MemoryOwnerTurn } from '../owner-words';
+import { importedQuote, importSourceOf } from '../../memory/import-ref';
 
 export type { MemoryOwnerTurn };
 export type MemoryToolContext = ToolDispatcherContext & {
@@ -73,7 +74,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
   };
   const ready = async (ctx: MemoryToolContext) => { ctx.runScope?.admit(); await ctx.assertTaskSourceCurrent?.(); ctx.runScope?.admit(); };
   const hidden = (claim: Claim) => store.pendingTopics().some(topic => [claim.text, claim.evidence, claim.source_ref, (claim as Claim & { aliases?: string | null }).aliases].some(text => typeof text === 'string' && (carriesTopic(text, topic) || hidesTopic(text, topic))));
-  const blocked = (text: string) => store.barriers().some(barrier => barrier.topic_hash === textFingerprint(text.trim()) || barrier.topic_hash === textFingerprint(text.trim().toLowerCase().replace(/\s+/g, ' ')));
+  const blocked = (text: string) => store.barred(text);
   const base = (name: ToolName, description: string) => ({ name, description, trigger_allowlist: triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes(name)), autonomy_gated: false });
   return [
     { ...base('remember', `Store a fact or preference grounded in a verbatim quote from the owner in this conversation. To correct an active claim, pass its id as replaces_id: the c12 that starts its memory line, or 12. Memory is context, never permission to act. ${HEALTH_MEMORY_RULES.join(' ')}`), schema: rememberArgsSchema, mutates_state: true,
@@ -199,12 +200,13 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         for (const claim of selected) { const size = new TextEncoder().encode(JSON.stringify(claim)).byteLength; if (bytes + size > READ_BUDGET_BYTES) omitted_claim_ids.push(claim.id); else { claims.push(claim); bytes += size; } }
         return success({ claims, omitted_claim_ids, complete: omitted_claim_ids.length === 0, authority: 'context_only_not_action_approval' });
       } },
-    { ...base('forget_memory', 'Remove selected owner memory by ids, literal topic in the current owner message, an exact stored owner-message span using UTF-16 offsets, or one person. scope_note describes the requested scope.'), schema: forgetMemoryArgsSchema, mutates_state: true,
+    { ...base('forget_memory', 'Remove selected owner memory by ids, literal topic in the current owner message, an exact stored owner-message span using UTF-16 offsets, one person, or import_source for everything brought in from one assistant\'s export. scope_note describes the requested scope.'), schema: forgetMemoryArgsSchema, mutates_state: true,
       async handle(args: ForgetMemoryArgs, ctx) {
         await ready(ctx); const turn = admitted(ctx);
         // A forget by ids from a turn that read outside text runs only from the owner's card. That replay has no
-        // conversation turn; the dispatcher has matched it to the approved call, and ids need none to select.
-        const approvedById = ctx.approvedTaintedAction?.tool === 'forget_memory' && args.claim_ids !== undefined && args.topic === undefined && args.source === undefined && args.person === undefined;
+        // conversation turn; the dispatcher has matched it to the approved call, and ids need none to select. A topic, span,
+        // whole import or person selects more than the card's ids show, so none of them runs from a replay.
+        const approvedById = ctx.approvedTaintedAction?.tool === 'forget_memory' && args.claim_ids !== undefined && args.topic === undefined && args.source === undefined && args.import_source === undefined && args.person === undefined;
         if (!turn && !approvedById) return fail('Authenticated owner memory context is unavailable.');
         const claims = store.allClaims(); const selected = new Map<number, Claim>(); const texts = new Set<string>();
         for (const id of args.claim_ids ?? []) { const claim = claims.find(row => row.id === id); if (!claim) return fail('A claim id does not belong to this owner store.'); selected.set(id, claim); }
@@ -221,6 +223,8 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
           texts.add(message.text.slice(span.start, span.end));
           for (const claim of claims) if (claim.origin === 'owner' && claim.source_ref === `owner, ${span.message_ref}` && overlapsEvidence(message.text, claim.evidence, span.start, span.end)) selected.set(claim.id, claim);
         }
+        // A whole import: every claim it brought in, the ones the owner has confirmed since included.
+        if (args.import_source) for (const claim of claims) if (importSourceOf(claim.source_ref) === args.import_source) selected.set(claim.id, claim);
         // One person: every claim about them, and their name and addresses as words the owner named, so the purge sweeps every store
         // for them and a later pass cannot bring them back. Another name they share with someone else memory holds is left alone.
         if (args.person !== undefined) {
@@ -236,7 +240,9 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         // exactly the selected claims: their sentences and evidence may be repeated or cited by other claims, so they only
         // leave the transcript and the stores outside the table.
         const purged = [...texts];
-        const words = [...selected.values()].flatMap(claim => claim.origin === 'owner' ? [claim.text, claim.evidence] : [claim.text]);
+        // An imported claim's quote is the owner's words from their export: it is barred and hidden with the claim, so the same
+        // passage is not brought back by importing that export again.
+        const words = [...selected.values()].flatMap(claim => [...(claim.origin === 'owner' ? [claim.text, claim.evidence] : [claim.text]), ...[importedQuote(claim)].filter((quote): quote is string => quote !== null)]);
         for (const word of words) texts.add(word);
         // With no claim selected, earlier chat the episode index holds counts as memory touched; the owner's current message,
         // which always names the topic, does not. Read before the commit, which redacts both.

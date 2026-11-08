@@ -16,6 +16,7 @@ import { consentLedger, consentSwitches } from '../onboarding/consent-ledger';
 import { OPEN_OWNER_PATH, openOwnerHold, verifiedOpenOwnerMark, type OpenOwnerHold } from '../identity/open-owner-hold';
 import { openOwnerCeilingUsd } from '../identity/open-signup';
 import { findingStore, observeReads, observedPages, ownerLookupHandlers } from '../onboarding/findings';
+import { importHandlers } from '../memory/imports';
 import { consoleLog, consoleTrace } from '../observability/console-correlation';
 import { APP_TURN_DEADLINE_MS, AppInbox, chatRevision, type AppInboxRecord } from './app-inbox';
 import { appMessageBody, appTurnText, appUploadHeaders, appUploadRoom, readAppUpload, stageAppUpload } from './app-uploads';
@@ -5283,7 +5284,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           context.runScope?.admit();
           return this.forgetPurgeJob().track(texts);
         },
-      }), ...ownerLookupHandlers({ store: findingStore(storage.sql, memory, consentLedger(storage.sql, consentSwitches(this.env)), deps.now), pages: this.lookupPages, transaction: work => storage.transactionSync(work) }), ...(webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? [observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch, () => clock.timezone), this.lookupPages)] : []), observeReads(this.ownerBrowser.read(browsePageHandler(undefined, undefined, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))), this.lookupPages), this.ownerBrowser.act(this.ownerBrowser.guard(browserTaskHandler({ legacy: browseActHandler(undefined, undefined, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
+      }), ...ownerLookupHandlers({ store: findingStore(storage.sql, memory, consentLedger(storage.sql, consentSwitches(this.env)), deps.now), pages: this.lookupPages, transaction: work => storage.transactionSync(work) }), ...(this.env.WALDO_FILE_TOOLS === '1' ? importHandlers({ open: openWorkspace, store: memory, sql: storage.sql, transaction: work => storage.transactionSync(work), ...(semantic ? { semantic } : {}) }) : []), ...(webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? [observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch, () => clock.timezone), this.lookupPages)] : []), observeReads(this.ownerBrowser.read(browsePageHandler(undefined, undefined, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))), this.lookupPages), this.ownerBrowser.act(this.ownerBrowser.guard(browserTaskHandler({ legacy: browseActHandler(undefined, undefined, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
         if (!context.assertTaskSourceCurrent) throw Error('browser task source unavailable');
         await context.assertTaskSourceCurrent();
         const [ownerKey] = await currentTaskOwnerKeys(); await context.assertTaskSourceCurrent();

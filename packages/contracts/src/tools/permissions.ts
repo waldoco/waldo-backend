@@ -165,6 +165,10 @@ export const toolNameSchema = z.enum([
   // show_health_chart: a chart of the owner's own readings in their app reply; the reply keeps the query, never the values,
   // and the app's read draws it live. Offered while HEALTH_CHARTS is on.
   'show_health_chart',
+  // read_import/import_memories: the owner's own messages in a ChatGPT or Claude export they uploaded, and what Waldo keeps
+  // from them as its read, quoted from the owner's words, until the owner confirms it. Owner chat turns only.
+  'read_import',
+  'import_memories',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -381,6 +385,8 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'steer_task',
     'record_owner_finding',
     'list_owner_findings',
+    'read_import',
+    'import_memories',
     'search_history',
   ],
   dreaming_mode: ['read_memory', 'search_episodes', 'skills_load'],
