@@ -8,6 +8,8 @@ import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 import { ownerClockLine, ZONE_UNCONFIRMED } from '../src/prompt/messaging-behavior';
+import { NIGHTLY_ID } from '../src/channels/episodes';
+import { HEARTBEAT_ID } from '../src/channels/heartbeat';
 
 const OWNER_ID = '4c9e1a7b-2d3f-4e85-b6a0-8f1d3c5e7a92';
 const world = vi.hoisted(() => ({ requests: [] as LLMGatewayRequest['request'][], call: null as { name: string; args: object } | null, saved: [] as Record<string, string>[], directory: true }));
@@ -48,14 +50,16 @@ const appTurn = (name: string, ask: string, setup: Readonly<{ confirmed?: boolea
       expect(sent.status).toBe(202);
       const { message_id: id } = await sent.json() as { message_id: string };
       await vi.waitFor(() => expect(state.storage.kv.get<{ state: string }>(`app:inbox-record:${id}`)?.state).toBe('completed'), { timeout: 10_000, interval: 10 });
+      jobs = Object.fromEntries(state.storage.sql.exec<{ id: string; status: string; recurrence: string | null }>('SELECT id, status, recurrence_json AS recurrence FROM schedule').toArray().map(row => [row.id, row]));
       return { zone: state.storage.kv.get<string>('timezone'), confirmed: state.storage.kv.get<boolean>('timezone_confirmed') === true };
     } finally { await state.storage.deleteAlarm(); }
   });
 };
+let jobs: Record<string, { status: string; recurrence: string | null }> = {};
 const toolResult = () => JSON.stringify(world.requests[1]?.tool_turns ?? []);
 const firstRequest = () => JSON.stringify(world.requests[0] ?? {});
 
-afterEach(() => { vi.unstubAllGlobals(); world.requests = []; world.call = null; world.saved = []; world.directory = true; });
+afterEach(() => { vi.unstubAllGlobals(); jobs = {}; world.requests = []; world.call = null; world.saved = []; world.directory = true; });
 
 it('the owner says where they are: the directory keeps the zone, the owner object confirms it, and the receipt names it', async () => {
   world.call = { name: 'set_schedule_preference', args: { action: 'timezone', timezone: 'Asia/Kolkata' } };
@@ -65,6 +69,14 @@ it('the owner says where they are: the directory keeps the zone, the owner objec
   expect(world.saved[0]).toMatchObject({ p_timezone: 'Asia/Kolkata' });
   expect(toolResult()).toContain('Asia/Kolkata');
   expect(toolResult()).not.toMatch(/invalid_args|rejected/);
+});
+
+// An app owner's own jobs wait for a confirmed zone; a zone confirmed in chat arms them in that zone, as the console does.
+it('a zone confirmed in chat arms the owner\'s own jobs in that zone', async () => {
+  world.call = { name: 'set_schedule_preference', args: { action: 'timezone', timezone: 'Asia/Kolkata' } };
+  await appTurn('chat-timezone-arms', 'I live in Bengaluru');
+  expect(JSON.parse(jobs[NIGHTLY_ID]?.recurrence ?? '{}')).toMatchObject({ type: 'daily_local', timezone: 'Asia/Kolkata' });
+  expect(jobs[HEARTBEAT_ID]?.status).toBe('armed');
 });
 
 it('a zone written in the wrong case is saved by its IANA name', async () => {
@@ -80,6 +92,7 @@ it.each(['Mars/Olympus_Mons', 'EST', 'IST', '+05:30'])('%s is not saved as the o
   const after = await appTurn(`chat-timezone-invalid-${timezone.replace(/\W/g, '')}`, 'this is where I am');
   expect(after).toEqual({ zone: 'UTC', confirmed: false });
   expect(world.saved).toHaveLength(0);
+  expect(jobs[NIGHTLY_ID]).toBeUndefined();
   expect(toolResult()).toMatch(/rejected/);
 });
 

@@ -5124,7 +5124,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       identity.put('timezone', named);
       identity.put('timezone_confirmed', true);
       await armOwnJobs(named, now, true);
-      this.runtimes = inTurn ? { [channel]: this.runtimes[channel] } : {};
+      const own = inTurn ? this.runtimes[channel] : undefined;
+      this.runtimes = own ? { [channel]: own } : {};
       return named;
     };
     // Native chat initialization cannot launch unrequested background model work. An owner whose only surface is iMessage is the
