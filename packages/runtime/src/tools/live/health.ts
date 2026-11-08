@@ -66,7 +66,10 @@ export const healthReadBook = (call: SignedCall | null, doName: string | null): 
   },
   async series(range) {
     if (!call || !doName) return null;
-    const payload = JSON.stringify(range);
+    // Each stored name goes once. Several read signals share one (sleep and its four stages all read sleep_duration), and the
+    // plane refuses a list longer than its known signals before it removes repeats, so a caller asking for every signal would
+    // otherwise be refused outright.
+    const payload = JSON.stringify({ ...range, signals: [...new Set(range.signals)] });
     return call('health_series_read', `health.series_read.${doName}.${md5Hex(payload)}`, { p_do_name: doName, p_payload: payload });
   },
 });
