@@ -5,6 +5,7 @@ import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import { forgetSourceBatch, type ForgetSource, type ForgetBatch } from '../memory/selective-forget';
 import { supersededCompaction, type CompactionFence, type CompactionSettings } from '../conversation/compaction';
 import { shapeFault, turnLinkedEntries } from '../conversation/canonical-owner-store';
+import { TIMELINE_CARRIED_ROWS_KEY, type CarriedRows } from '../conversation/one-timeline';
 
 export type ConversationStore = Readonly<{
   load(): Promise<Readonly<{ entries: readonly ConversationEntry[]; leafId: string | null }>>;
@@ -209,6 +210,10 @@ export const redactConversationEntries = async (
     }
   }
   const hit = (entry: ConversationEntry): boolean => needles.some((needle) => entryTexts(entry).some(text => carriesTopic(text, needle) || conversationHides(text, needle)));
+  // Legacy rows a chain's summary carried in from another surface count as rows of its span.
+  const carried = (await storage.get<CarriedRows>(TIMELINE_CARRIED_ROWS_KEY)) ?? {};
+  const legacyRows = new Map(legacy);
+  const carriedHit = (chain: string): boolean => (carried[chain] ?? []).some((key) => { const row = legacyRows.get(key); return row !== undefined && hit(row); });
   // A compaction row paraphrases its span, which a literal rewrite cannot reach. When the topic sits in any original row of
   // the span, or in the summary itself, or the span cannot be walked to its first row, the row is superseded to the marker
   // and omitted, with its witness in the same unit and its covers kept; the hit test reads the rows as stored before this
@@ -223,7 +228,7 @@ export const redactConversationEntries = async (
     for (const { key, entry } of rows) {
       if (entry.role !== 'compaction' || !entry.covers || entry.modelProjection.mode === 'omit') continue;
       const span = coveredRows(linked, entry.covers);
-      if (!hit(entry) && span !== null && !span.some(hit)) continue;
+      if (!hit(entry) && span !== null && !span.some(hit) && !carriedHit(entry.chatId)) continue;
       const next = supersededCompaction(entry);
       writes[key] = next; rewritten += 1;
       const witnessKey = `${chain}witness:${entry.id}`;

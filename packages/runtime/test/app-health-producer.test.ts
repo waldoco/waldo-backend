@@ -65,7 +65,7 @@ describe('a committed ingest asks the owner\'s object to recompute', () => {
     expect(rpcs.map(r => r.fn)).toEqual(['health_ingest']);
     expect(toOwner.map(request => new URL(request.url).pathname)).toEqual([HEALTH_SAMPLES_PATH]);
     expect(await toOwner[0]!.clone().json()).toEqual({});
-    expect(await verifiedHealthSamples(toOwner[0]!, SECRET, name => name === 'owner-1')).toEqual({ cause: 'readings', woke: false });
+    expect(await verifiedHealthSamples(toOwner[0]!, SECRET, name => name === 'owner-1')).toEqual({ cause: 'readings', woke: false, workout: false });
   });
 
   it('says a night just ended with WAKE_BRIEF on, and nothing more; off, or for an old night, the notice is as before', async () => {
@@ -238,7 +238,7 @@ describe('a saved sleep need asks the owner\'s object to recompute', () => {
       expect([response.status, await response.json()]).toEqual([200, { sleep_need_minutes: 480 }]);
       await expect(Promise.all(d.work)).resolves.toBeDefined();
       expect(toOwner.map(request => new URL(request.url).pathname)).toEqual([HEALTH_SAMPLES_PATH]);
-      expect(await verifiedHealthSamples(toOwner[0]!, SECRET, name => name === 'owner-1')).toEqual({ cause: 'settings', woke: false });
+      expect(await verifiedHealthSamples(toOwner[0]!, SECRET, name => name === 'owner-1')).toEqual({ cause: 'settings', woke: false, workout: false });
     }
   });
 

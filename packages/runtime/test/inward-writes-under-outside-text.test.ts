@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildSessionState, EXTERNAL_ORIGIN_TOOLS, TOOL_PERMISSIONS, type LLMToolCall, type ToolHandler, type ToolName, type TriggerType } from '@waldo/contracts';
-import { INWARD_RECEIPT_LINES, INWARD_RECEIPTS_HEADER, withInwardReceipts } from '../src/conversation/inward-receipts';
+import { INWARD_RECEIPT_LINES, INWARD_RECEIPTS_HEADER, inwardReceipt, withInwardReceipts } from '../src/conversation/inward-receipts';
 import { runToolLoop } from '../src/conversation/tool-loop';
 import { TOOL_ARG_SCHEMAS } from '../src/hooks/registry';
 import { sanitise } from '../src/scribe/sanitiser';
@@ -144,6 +144,11 @@ describe('an injected request in the owner\'s turn can set an owner-inward write
 
   // The receipt lines and the exemptions name one set: a write that can run after outside text without a card (inward,
   // narrowing, or a figure the owner stated) and has no receipt line fails here.
+  it('an owner-asked change to a background task runs after outside text and is listed with the change it made', () => {
+    expect(inwardReceipt('steer_task', JSON.stringify({ job_id: 'job_0123456789ab', instruction: 'Only vendors that ship to Pune.', mode: 'interrupt' })))
+      .toBe('Changed background task job_0123456789ab: "Only vendors that ship to Pune." (you can change it again or cancel it)');
+  });
+
   it('every owner-inward, narrowing and owner-stated record has a receipt line, and nothing else does', () => {
     const listed = (Object.entries(TOOL_RECORDS) as [ToolName, ToolRecord][]).filter(([, { tainted }]) => tainted !== undefined
       && ('exempt' in tainted ? tainted.exempt === 'owner_inward' || tainted.exempt === 'narrows' : tainted.unless_owner_stated !== undefined)).map(([tool]) => tool).sort();

@@ -62,7 +62,7 @@ it('a forwarded mail asking to log a meal becomes one card; nothing is logged un
       expect(proof.rpc).not.toContain('health_log_add');
       const cards = proof.telegram.filter(entry => entry.method === 'sendMessage' && JSON.stringify(entry.body.reply_markup ?? {}).includes('"a:'));
       expect(cards).toHaveLength(1);
-      expect(cards[0]!.body.text).toContain('log_meal');
+      expect(cards[0]!.body.text).toMatch(/^Do this\? Log a meal: "/);
       expect(cards[0]!.body.text).toContain('Lunch at the restaurant on the receipt');
 
       const id = /"a:([A-Za-z0-9_-]+)"/.exec(JSON.stringify(cards[0]!.body.reply_markup))![1]!;

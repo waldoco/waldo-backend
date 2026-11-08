@@ -47,6 +47,8 @@ const NEAR_MISSES: Readonly<Record<string, (chars: number) => string>> = {
   'words joined by dots': n => 'a.'.repeat(n / 2),
   'digits and dots': n => '1.'.repeat(n / 2),
   'percent runs': n => 'a%'.repeat(n / 2),
+  'fullwidth digit groups': n => '\uff14\uff11\uff11\uff11 '.repeat(n / 5),
+  'mathematical digits': n => '\u{1d7cf}'.repeat(n / 2),
   'stray percents between escapes': n => '%41%'.repeat(n / 4),
   'bytes that are not UTF-8': n => '%FF'.repeat(n / 3),
   'cut-off multibyte sequences': n => '%E0%A4 '.repeat(n / 7),
@@ -102,6 +104,10 @@ const NEAR_MISSES: Readonly<Record<string, (chars: number) => string>> = {
   'sleep, a tilde and hours, repeated': n => 'slept ~7h '.repeat(n / 10),
   'sleep and glued hours and minutes, repeated': n => 'sleep 7h22 '.repeat(n / 11),
   'sleep and hours glued to one digit, repeated': n => 'sleep 7h2'.repeat(n / 9),
+  'a trend of values with units, repeated': n => 'hrv 42 ms → '.repeat(n / 12),
+  'a list of values, repeated': n => 'hrv 42, '.repeat(n / 8),
+  'a list of values with no unit after the last, then blanks': n => 'hrv 42, 45' + ' '.repeat(n),
+  'sleep said as a reading, repeated': n => 'sleep was 6 '.repeat(n / 12),
   'Devanagari digit groups': n => '\u096f\u096e\u096d\u096c\u096b '.repeat(n / 6),
   'a WhatsApp link, then fullwidth digits': n => 'wa.me/' + '\uff19'.repeat(n),
 };
@@ -134,9 +140,14 @@ describe('the patterns sanitise() runs stay linear on the near-miss and whitespa
   });
 
   // The health patterns the Scribe also runs on task output, recalled memory and traces, outside sanitise().
-  it.each(['hrv', 'hrv rmssd', 'hrv (', 'heart rate variability ( rmssd', 'slept', 'sleep:', 'slept ~', 'sleep ~ :'])('numericHealthIn and redactNumericHealth read %s followed by a run of blanks', word => {
+  it.each(['hrv', 'hrv rmssd', 'hrv (', 'heart rate variability ( rmssd', 'slept', 'sleep:', 'slept ~', 'sleep ~ :', 'hrv →', 'hrv now', '42 ms', 'sleep was', 'hrv 42,', 'hrv 42 ms →', 'hrv 48 down', 'tsh', 'vitamin d (', '25-oh vitamin d', 'psa', 'psa level', 'hb 12', 'ferritin 12', 'egfr >', 'tsh (ultra', 'creatinine,', 'hb 9.8', 'psa 2.1', 'tsh:', 'vitamin d 3', 'vitamin d (25', 'hb 10.9 →', 'tsh 5'])('numericHealthIn and redactNumericHealth read %s followed by a run of blanks', word => {
     expectLinear('numericHealthIn', 100_000, n => numericHealthIn(`${word}${' '.repeat(n)}`));
     expectLinear('redactNumericHealth', 100_000, n => redactNumericHealth(`${word}${' '.repeat(n)}`, '[health]'));
+  });
+
+  it.each([['an arrow chain', (n: number) => `hrv 1${' → 1'.repeat(n / 4)}`], ['table cells', (n: number) => `| hrv | 1${' | 1'.repeat(n / 4)} |`], ['arrows with no value', (n: number) => `hrv ${'→ '.repeat(n / 2)}`]] as const)('a reading followed by %s stays linear', (_shape, make) => {
+    expectLinear('numericHealthIn', 100_000, n => numericHealthIn(make(n)));
+    expectLinear('redactNumericHealth', 100_000, n => redactNumericHealth(make(n), '[health]'));
   });
 
   // A word between a health word and its number may not swallow the number's own digits and be tried at every split. The

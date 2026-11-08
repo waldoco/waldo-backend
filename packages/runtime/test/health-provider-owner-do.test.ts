@@ -8,7 +8,7 @@ import { WHOOP_SYNC_ID } from '../src/health/providers/whoop-owner';
 import { armAlarm } from '../src/scheduler/alarm-slot';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
-import { addNight, edge, newPlane, newWorld, planeRpc, whoopFetch } from './helpers/whoop-fakes';
+import { addNight, edge, newPlane, newWorld, planeRpc, whoopFetch, workoutRecord } from './helpers/whoop-fakes';
 import { EDGE_ENV } from './support/oauth-edge-harness';
 
 // The owner object's side of WHOOP, end to end on the real object: a signed call from the Worker, a real alarm pass that
@@ -168,4 +168,18 @@ describe('WHOOP on the owner object', () => {
       expect(await again.json()).toEqual({ result: 'duplicate' });
     });
   });
+
+  for (const [label, over, noted] of [['on', { WORKOUT_WAKE: '1' }, true], ['off', {}, false]] as const) {
+    it(`notes a WHOOP workout that just ended for the health trigger as an app upload does, with WORKOUT_WAKE ${label}: ${noted ? 'noted' : 'never noted'}`, async () => {
+      const w = workoutRecord({ start: new Date(START - 65 * 60_000).toISOString(), end: new Date(START - 20 * 60_000).toISOString() });
+      world.workouts.push(w);
+      await withOwner(async ({ call, state }) => {
+        await call('exchange', { code: 'good-code', denied: false });
+        const answer = await call('hint', { type: 'workout.updated', id: String(w.id), trace: 'trace-work-0001' });
+        expect(await answer.json()).toEqual({ result: 'handled' });
+        expect([...plane.samples.keys()].some(key => key.startsWith('workout|'))).toBe(true);
+        expect(state.storage.kv.get('health_workout_noted_v1')).toBe(noted ? START : undefined);
+      }, over);
+    });
+  }
 });
