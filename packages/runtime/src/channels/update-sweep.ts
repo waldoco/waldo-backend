@@ -11,6 +11,7 @@ import { clockWords } from '../prompt/fixed-lines';
 import { OUTSIDE_TEXT_JOB_TOOLS, OUTSIDE_TEXT_READS } from './check-back';
 import { localIso } from './reminders';
 import { spendOf, withinBudget, type InterruptBook, type InterruptHold, type InterruptLimits, type InterruptSpend } from './interruptions';
+import { bindNotes, type BoundNote } from './source-notes';
 import { changeDetail, changeLines, CONTEXT_KINDS, CursorMovedError, readChanges, touchesDay, writeChanges, type Change, type DeltaCode, type DeltaSource, type TitleDigest, type UpdateBook } from './update-cards';
 
 // The update sweep as a machine job. Each tick the brain reads what changed on the owner's calendar and inbox and records
@@ -200,9 +201,18 @@ export const parseUpdateEffects = (reply: string): UpdateEffects | 'invalid' => 
 // What was delivered for a job, as a bounded code: the effect, and whether a push went with it or quiet hours kept it back.
 export type UpdateEffectCode = 'none' | 'effects_invalid' | 'revise_undelivered' | `${'revise' | 'say'}${'' | '+push' | '+quiet'}`;
 
+// A note the turn keeps of what a change in the batch says happened: the change's ref, one line, and the open loop it bears on.
+const NOTE_LINE_CHARS = 280;
+const noteChoice = z.strictObject({
+  ref: z.string().trim().min(1).max(256),
+  line: z.string().trim().min(1).max(NOTE_LINE_CHARS),
+  loop: z.string().trim().min(1).max(64).optional(),
+});
 // The triage turn's choice. The schema is the contract between the turn and the code that delivers it.
 export const triageSchema = z.strictObject({
-  decision: z.enum(['act', 'tell', 'brief', 'silent']),
+  decision: z.enum(['act', 'tell', 'brief', 'note', 'silent']),
+  // TRIAGE_NOTES: what to keep on record, with note alone or beside act, tell or brief. A note never reaches the owner by itself.
+  notes: z.array(noteChoice).min(1).max(8).optional(),
   revise: z.strictObject({ card: z.enum(dayCardIds), text: effectText }).optional(),
   say: effectText.optional(),
   push: z.strictObject({ event: z.string().trim().min(1).max(256).optional() }).optional(),
@@ -210,7 +220,9 @@ export const triageSchema = z.strictObject({
   urgent: z.boolean().optional(),
   asks: z.boolean().optional(),
 }).refine(chosen => chosen.decision === 'tell' || (!chosen.revise && !chosen.say && !chosen.push), { error: 'say, revise and push go only with tell' })
-  .refine(chosen => chosen.decision !== 'tell' || (!!chosen.revise !== !!chosen.say), { error: 'a tell says or revises, not both' });
+  .refine(chosen => chosen.decision !== 'tell' || (!!chosen.revise !== !!chosen.say), { error: 'a tell says or revises, not both' })
+  .refine(chosen => chosen.decision !== 'note' || !!chosen.notes, { error: 'a note keeps at least one note' })
+  .refine(chosen => chosen.decision !== 'silent' || !chosen.notes, { error: 'silent keeps nothing' });
 export type Triage = z.infer<typeof triageSchema>;
 export const parseTriage = (reply: string): Triage | 'invalid' => {
   const body = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(reply.trim())?.[1] ?? reply.trim();
@@ -221,7 +233,9 @@ export const parseTriage = (reply: string): Triage | 'invalid' => {
 };
 // What triage delivered, as a bounded code. act: the turn raised a card. held_*: a tell that would have interrupted the owner
 // waited for the next main card (a revision in it still landed, silently). invalid: an unreadable choice, left for the next card.
-export type TriageCode = 'act' | 'act_without_card' | 'tell' | 'tell+push' | 'revise' | 'brief' | 'silent' | 'invalid' | 'revise_undelivered' | `held_${TriageHold | InterruptHold}`
+// note: notes were kept, alone or beside the code before it; note_unbound: none named a change in the batch or passed the health
+// floor, and a batch chosen only for a note is left for the next card.
+export type TriageCode = 'act' | 'act_without_card' | 'tell' | 'tell+push' | 'revise' | 'brief' | 'note' | 'note_unbound' | 'silent' | 'invalid' | 'revise_undelivered' | `held_${TriageHold | InterruptHold}`
   // An interruption charged to the urgent allowance, past the day's budget or the gap.
   | 'act+urgent' | 'tell+urgent'
   // A card the turn raised past the budget or the gap without calling it urgent: charged like an urgent one, traced apart.
@@ -262,12 +276,16 @@ export type UpdateSweepApplyDeps = Readonly<{
   interruptions?: Readonly<{ book: InterruptBook; limits(): InterruptLimits; closed(): boolean }>;
   // GOOGLE_REALTIME_TRIAGE, with the day state: the apply turn triages the batch.
   triage?: Readonly<{
-    // What the turn reads beside the batch: the owner's goals, from their memory.
-    context(): Promise<Readonly<{ goals: string }>>;
+    // What the turn reads beside the batch: the owner's goals, from their memory, and with TRIAGE_NOTES their recent
+    // conversation across surfaces (their open loops are in the ledger).
+    context(): Promise<Readonly<{ goals: string; exchange?: string }>>;
     // How many approval cards were raised since `at`: what the turn offered with propose_action.
     cardsSince(at: number): number;
     // PROACTIVE_ACT_AHEAD: the turn builds on the worker's prepared move, and writes for the surface the owner reads.
     actAhead?: Readonly<{ style(): string }>;
+    // TRIAGE_NOTES: the owner's source notes. record runs inside the settle's transaction; loopOpen says whether a loop a note
+    // names is open, so the note becomes evidence on it.
+    notes?: Readonly<{ record(notes: readonly BoundNote[], recordId: number, now: number): number; loopOpen(id: string): boolean }>;
   }>;
 }>;
 
@@ -325,7 +343,7 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
     const ownHold = (urgent: boolean, asks: boolean) => own!.book.hold({ consent: true, quiet: day.quiet(), closed: own!.closed, asks, urgent, limits: own!.limits });
     const hold = own ? (day.quiet() ? 'quiet' : null) : triageHold(deps.updates.interrupts(localDay), started, day.quiet());
     const canAct = own ? ownHold(true, false) === null : hold === null;
-    const prompt = triagePrompt(localIso(started, deps.timezone), { changes: changeLines(changes), ...await deps.context(), ...await sense.context(), sourceFollowups,
+    const prompt = triagePrompt(localIso(started, deps.timezone), { changes: changeLines(changes), ...await deps.context(), ...await sense.context(), sourceFollowups, notes: !!sense.notes,
       cards: day.cards(), revisesCards: day.revisesCards, hold, left: TRIAGE_INTERRUPTS_PER_DAY - deps.updates.interrupts(localDay).count, ...(own ? { limits: own.book.line(own.limits) } : {}),
       ...(sense.actAhead ? { actAhead: { style: sense.actAhead.style() } } : {}) });
     const reply = await deps.turn(io.trace, `${prompt}\n\n${machineResultText(result, withheld)}`, io.current, triageTools(sourceFollowups, canAct));
@@ -335,11 +353,18 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
     // What a delivery will be charged to, known before it goes so the trace code survives a failed delivery.
     const charge = (): InterruptSpend | null => own ? spendOf(own.book.spent(), own.limits, deps.now()) : null;
     const spend = () => { if (own) own.book.spend(own.limits, asks, `update:${row.id}`); else deps.updates.interrupted(localDay, deps.now()); };
-    const settle = (code: TriageCode, work: () => void = () => undefined) => { day.chose(io.trace, code); deps.transaction(() => { work(); commit(); }); return 'skipped' as const; };
+    // Notes are bound to the batch before anything commits, and kept with whatever commit the outcome makes: a held tell, a
+    // spent budget or quiet hours still keep them, and they spend nothing.
+    const notes = chosen !== 'invalid' && chosen.notes && sense.notes ? bindNotes(chosen.notes, changes, { recordId, now: deps.now(), loopOpen: sense.notes.loopOpen }).notes : [];
+    const keep = () => { if (notes.length) sense.notes!.record(notes, recordId, deps.now()); commit(); };
+    if (chosen !== 'invalid' && chosen.notes && chosen.decision !== 'note') day.chose(io.trace, notes.length ? 'note' : 'note_unbound');
+    const settle = (code: TriageCode, work: () => void = () => undefined) => { day.chose(io.trace, code); deps.transaction(() => { work(); keep(); }); return 'skipped' as const; };
     if (sense.cardsSince(started) > 0) return settle(own === null || withinBudget(own.book.spent(), own.limits, deps.now()) ? 'act' : urgent ? 'act+urgent' : 'act+over_budget', spend);
     if (chosen === 'invalid') return settle('invalid');
     if (chosen.decision === 'act') return settle('act_without_card');
     if (chosen.decision === 'brief') return settle('brief');
+    // Kept on record only: the next main card does not carry it. With no note kept, nothing is lost: the next card carries it.
+    if (chosen.decision === 'note') return notes.length ? settle('note', () => deps.updates.noted(recordId)) : settle('note_unbound');
     if (chosen.decision === 'silent') return settle('silent', () => deps.updates.noted(recordId));
     if (chosen.revise && !day.delivered(chosen.revise.card)) return settle('revise_undelivered');
     // A message interrupts; so does a push, and a revision that can only go out as a new message.
@@ -349,13 +374,13 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
       if (!chosen.revise || !day.revisesCards) return settle(`held_${held}`);
       // Only the revision in place still lands, silently.
       day.chose(io.trace, `held_${held}`);
-      await deps.deliver(`update:${row.id}`, io.trace, chosen.revise.text, recordId, commit, { revision: chosen.revise.card, inPlace: true });
+      await deps.deliver(`update:${row.id}`, io.trace, chosen.revise.text, recordId, keep, { revision: chosen.revise.card, inPlace: true });
       return 'delivered' as const;
     }
     // A push goes only from a surface that raises one; elsewhere the message is the notification.
     const push = chosen.push && day.revisesCards ? updatePushLine(changes, chosen.push.event, { named: day.named(), timezone: deps.timezone, now: deps.now() }) : undefined;
     day.chose(io.trace, !interrupts ? 'revise' : interrupts && charge() === 'urgent' ? 'tell+urgent' : push ? 'tell+push' : 'tell');
-    await deps.deliver(`update:${row.id}`, io.trace, chosen.say ?? chosen.revise!.text, recordId, () => { if (interrupts) spend(); commit(); },
+    await deps.deliver(`update:${row.id}`, io.trace, chosen.say ?? chosen.revise!.text, recordId, () => { if (interrupts) spend(); keep(); },
       { ...(chosen.revise ? { revision: chosen.revise.card, ...(!interrupts ? { inPlace: true as const } : {}) } : {}), ...(push ? { push } : {}) });
     return 'delivered' as const;
   };

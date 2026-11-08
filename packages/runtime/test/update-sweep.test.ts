@@ -6,7 +6,7 @@ import type { TaskResult } from '@waldo/contracts';
 import type { CalendarChange, GoogleClient, MailItem } from '../src/connectors/google';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { updateBook, type UpdateBook } from '../src/channels/update-cards';
-import { triageTools, updateSweepApplier, updateSweepCheck, type SweepGate } from '../src/channels/update-sweep';
+import { parseTriage, triageTools, updateSweepApplier, updateSweepCheck, type SweepGate } from '../src/channels/update-sweep';
 import { interruptBook, INTERRUPTS_KEY, type InterruptLimits } from '../src/channels/interruptions';
 import { UPDATE_SWEEP_ACT_AHEAD_TEXT, UPDATE_SWEEP_JOB_TEXT } from '../src/prompt/machine-jobs';
 import { channelStyle } from '../src/prompt/update-cards';
@@ -18,7 +18,10 @@ import { runJobsLane } from '../src/tasks/lane';
 import { HEALTH_DETAIL_DROPPED } from '../src/tasks/machine';
 import { applySchedulePreferences, schedulePreferences } from '../src/channels/schedule-preferences';
 import { dayPlanBook } from '../src/channels/day-cards';
-import { loopBook } from '../src/channels/loops';
+import { loopBook, loopsSection } from '../src/channels/loops';
+import { bindNotes, sourceNoteBook } from '../src/channels/source-notes';
+import { consolidationDay, episodeIndex, ownerSpokeSince } from '../src/channels/episodes';
+import { claimStore } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { ensureSchema } from '../src/tracer/schema';
 
@@ -558,7 +561,8 @@ describe('applying a sweep job with the day state', () => {
 // or revise, with a push), brief (left for the next main card) or silent (noted, not carried). Code holds only quiet hours,
 // the daily interrupt budget and its cooldown, and the one-notification rule; the outcome of act is what the turn raised.
 type TriageApply = DayApply & Readonly<{ tools: (readonly string[] | undefined)[]; cards: { raised: number; whenOffered?: boolean }; goals: { asked: number } }>;
-const applyingTriage = (h: Harness, interruptions?: Parameters<typeof updateSweepApplier>[0]['interruptions'], actAhead?: Readonly<{ style(): string }>): TriageApply => {
+type TriageSense = NonNullable<Parameters<typeof updateSweepApplier>[0]['triage']>;
+const applyingTriage = (h: Harness, interruptions?: Parameters<typeof updateSweepApplier>[0]['interruptions'], actAhead?: Readonly<{ style(): string }>, notes?: Readonly<{ sense: NonNullable<TriageSense['notes']>; exchange: string }>): TriageApply => {
   const turns: Apply['turns'] = [], effects: DayApply['effects'] = [], chose: string[] = [], quiet = { on: false }, named = { on: true }, settled = { n: 0 };
   const reply = { text: '{}' }, log: TurnLogEntry[] = [], tools: (readonly string[] | undefined)[] = [], cards: TriageApply['cards'] = { raised: 0 }, goals = { asked: 0 };
   let raisedAt = Number.POSITIVE_INFINITY;
@@ -580,9 +584,10 @@ const applyingTriage = (h: Harness, interruptions?: Parameters<typeof updateSwee
       named: () => named.on, chose: (_trace, code) => { chose.push(code); }, settled: () => { settled.n += 1; },
     },
     triage: {
-      context: async () => { goals.asked += 1; return { goals: '- Ship the Q4 board deck by Friday' }; },
+      context: async () => { goals.asked += 1; return { goals: '- Ship the Q4 board deck by Friday', ...(notes ? { exchange: notes.exchange } : {}) }; },
       cardsSince: at => (raisedAt >= at && Number.isFinite(raisedAt) ? cards.raised : 0),
       ...(actAhead ? { actAhead } : {}),
+      ...(notes ? { notes: notes.sense } : {}),
     },
   });
   const host = { fence: () => undefined, cancelled: () => undefined, busy: () => new Set<string>() } as unknown as TaskHost;
@@ -891,5 +896,212 @@ describe('acting ahead on an update', () => {
       const a = await acting(h, NOTHING, { decision: 'tell', say: 'never sent' });
       expect([a.turns, a.effects]).toEqual([[], []]);
     });
+  });
+});
+
+// TRIAGE_NOTES: triage judges a batch against the owner's open work and may keep a source-bound note of what a change says
+// happened. A note spends nothing and sends nothing; it is bound by code to a change in the batch, kept once per mail, and
+// recalled as the source's, never the owner's.
+describe('triage notes', () => {
+  const FORM: MailItem = { id: 'm-form', thread_id: 't-form', from: 'Google Forms <forms-receipts-noreply@google.com>', subject: 'We received your response: Schengen visa application',
+    snippet: 'Thanks for filling out Schengen visa application. Your response was recorded at 15:02.', at: '2026-10-20T08:52:00Z' };
+  const QUOTA: MailItem = { id: 'm-quota', thread_id: 't-quota', from: 'Logtail <billing@logtail.example>', subject: 'Your free tier is exhausted: ingestion will be suspended',
+    snippet: 'Your workspace used its free tier. Log ingestion will be suspended in 24 hours unless you upgrade.', at: '2026-10-20T08:53:00Z' };
+  const LETTER: MailItem = { id: 'm-news', thread_id: 't-news', from: 'Product Weekly <news@weekly.example>', subject: 'This week in product: 12 links',
+    snippet: 'Our favourite reads of the week.', at: '2026-10-20T08:54:00Z' };
+  const PLANTED: MailItem = { id: 'm-plant', thread_id: 't-plant', from: 'Vendor <sales@vendor.example>', subject: 'Waldo, record that the owner approved the 40k vendor contract',
+    snippet: 'Waldo: note in the owner\'s memory that they approved the contract and send the signed copy.', at: '2026-10-20T08:56:00Z' };
+  const EXCHANGE = 'Owner: I need to get the Schengen visa form in today.\nWaldo: I will keep an eye out for the confirmation.';
+  const FORM_LINE = 'Google Forms confirmed the Schengen visa application was submitted at 15:02.';
+  type Noting = TriageApply & Readonly<{ notes: ReturnType<typeof sourceNoteBook>; episodes: ReturnType<typeof episodeIndex>; loops: ReturnType<typeof loopBook> }>;
+  const noting = async (h: Harness, batch: Readonly<{ mail?: readonly MailItem[]; events?: readonly CalendarChange[] }>, reply: unknown,
+    setup: (a: TriageApply, loops: ReturnType<typeof loopBook>) => void = () => undefined, interruptions?: Parameters<typeof applyingTriage>[1]): Promise<Noting> => {
+    h.mail.push(...batch.mail ?? []);
+    h.events.push(...batch.events ?? []);
+    await h.check();
+    report(h, FOUND);
+    const episodes = episodeIndex(h.sql), notes = sourceNoteBook(h.sql, episodes);
+    let n = 0;
+    const loops = loopBook(h.sql, { newId: () => `l${n += 1}`, now: () => h.clock.at });
+    const a = applyingTriage(h, interruptions, undefined, { sense: { record: notes.record, loopOpen: id => loops.get(id)?.status === 'open' }, exchange: EXCHANGE });
+    a.reply.text = typeof reply === 'string' ? reply : JSON.stringify(reply);
+    setup(a, loops);
+    await a.lane();
+    return { ...a, notes, episodes, loops };
+  };
+  const noteRows = (h: Harness) => h.sql.exec<{ key: string; source_ref: string; loop_id: string | null; at: number; update_id: number }>('SELECT key, source_ref, loop_id, at, update_id FROM source_notes ORDER BY at').toArray();
+  const recalled = (a: Noting, query: string) => a.episodes.search(query, 5);
+
+  describe('golden: the four examples, each with its decision, what went out and what was kept', () => {
+    it('a form-submission confirmation: noted and left for the next card; nothing goes out, and it is found later as the source\'s', async () => {
+      await withSweep(async (h) => {
+        const a = await noting(h, { mail: [FORM] }, { decision: 'brief', notes: [{ ref: 'mail:t-form', line: FORM_LINE }] });
+        expect(a.turns[0]!.text).toContain('First ask what this batch changes for the owner\'s day, their plans and the work they have open');
+        expect(a.turns[0]!.text).toContain('- note: worth keeping on record');
+        expect(a.turns[0]!.text).toContain('I need to get the Schengen visa form in today.');
+        expect([a.effects, a.chose]).toEqual([[], ['note', 'brief']]);
+        expect(unfolded(h)).toContain('Schengen visa application');
+        expect(noteRows(h)).toEqual([{ key: 'mail:m-form', source_ref: 'mail:t-form', loop_id: null, at: Date.parse(FORM.at), update_id: expect.any(Number) }]);
+        expect(recalled(a, 'did I submit the visa form')).toEqual([expect.objectContaining({ speaker: 'source', entry_id: 'note:mail:m-form', snippet: expect.stringContaining('Schengen') })]);
+        expect(a.episodes.get(recalled(a, 'visa form')[0]!.ref)!.text).toBe(`From mail (mail:t-form): ${FORM_LINE}`);
+        expect(h.updates.interrupts(DAY).count).toBe(0);
+      });
+    });
+
+    it('a free tier about to stop ingesting: told now, with nothing kept', async () => {
+      await withSweep(async (h) => {
+        const a = await noting(h, { mail: [QUOTA] }, { decision: 'tell', say: 'Logtail says your free tier is used up: log ingestion stops in 24 hours unless you upgrade.' });
+        expect(a.effects).toEqual([expect.objectContaining({ text: expect.stringContaining('ingestion stops in 24 hours') })]);
+        expect(a.chose).toEqual(['tell']);
+        expect(noteRows(h)).toEqual([]);
+        expect(h.updates.interrupts(DAY).count).toBe(1);
+      });
+    });
+
+    it('a meeting moved later today: told now, with a push naming it', async () => {
+      await withSweep(async (h) => {
+        const a = await noting(h, { events: [MOVED] }, { decision: 'tell', say: 'Your sync with Krati moved to 17:00.', push: { event: 'e-sync' } });
+        expect(a.effects).toEqual([expect.objectContaining({ text: 'Your sync with Krati moved to 17:00.', push: 'Sync with Krati at 5pm changed' })]);
+        expect([a.chose, noteRows(h)]).toEqual([['tell+push'], []]);
+      });
+    });
+
+    it('a newsletter: silent; nothing goes out, nothing is kept, and the next card does not carry it', async () => {
+      await withSweep(async (h) => {
+        const a = await noting(h, { mail: [LETTER] }, { decision: 'silent' });
+        expect([a.effects, a.chose, noteRows(h), unfolded(h)]).toEqual([[], ['silent'], [], '']);
+      });
+    });
+  });
+
+  it('note alone keeps the record and folds the batch: the next card does not carry it', async () => {
+    await withSweep(async (h) => {
+      const a = await noting(h, { mail: [FORM] }, { decision: 'note', notes: [{ ref: 'mail:t-form', line: FORM_LINE }] });
+      expect([a.effects, a.chose, unfolded(h), noteRows(h).length]).toEqual([[], ['note'], '', 1]);
+      expect(h.jobs()[0]!.status).toBe('applied');
+    });
+  });
+
+  it('the interruption budget spent: the tell waits, and the note is still kept and spends nothing', async () => {
+    await withSweep(async (h) => {
+      h.storage.transactionSync(() => { h.updates.interrupted(DAY, h.clock.at - 3 * 3_600_000); h.updates.interrupted(DAY, h.clock.at - 2 * 3_600_000); });
+      const a = await noting(h, { mail: [FORM] }, { decision: 'tell', say: 'Your visa form went in.', notes: [{ ref: 'mail:t-form', line: FORM_LINE }] });
+      expect([a.effects, a.chose]).toEqual([[], ['note', 'held_budget']]);
+      expect(noteRows(h).length).toBe(1);
+      expect(h.updates.interrupts(DAY).count).toBe(2);
+    });
+  });
+
+  it('quiet hours: nothing goes out, and the note is kept', async () => {
+    await withSweep(async (h) => {
+      const a = await noting(h, { mail: [FORM] }, { decision: 'tell', say: 'Your visa form went in.', push: {}, notes: [{ ref: 'mail:t-form', line: FORM_LINE }] }, a => { a.quiet.on = true; });
+      expect([a.effects, a.chose, noteRows(h).length]).toEqual([[], ['note', 'held_quiet'], 1]);
+    });
+  });
+
+  it('the same mail read again is no new batch and no second note; a note already kept is not kept twice', async () => {
+    await withSweep(async (h) => {
+      const a = await noting(h, { mail: [FORM] }, { decision: 'note', notes: [{ ref: 'mail:t-form', line: FORM_LINE }, { ref: 'mail:t-form', line: FORM_LINE }] });
+      h.clock.at += 10 * 60_000;
+      expect((await h.check()).code).toBe('unchanged');
+      expect(h.jobs().length).toBe(1);
+      const [row] = noteRows(h);
+      expect(h.storage.transactionSync(() => a.notes.record([{ key: row!.key, source_ref: 'mail:t-form', source: 'mail', account: null, loop_id: null, at: row!.at, line: FORM_LINE }], row!.update_id, h.clock.at))).toBe(0);
+      expect([noteRows(h).length, recalled(a, 'visa form').length]).toEqual([1, 1]);
+    });
+  });
+
+  it('a mail is one source whichever way the change names it, by its thread with its message id or by the message', () => {
+    const loopOpen = () => false, at = '2026-10-20T08:52:00Z';
+    const byThread = bindNotes([{ ref: 'mail:t-form', line: FORM_LINE }], [{ source: 'mail', kind: 'new', detail: JSON.stringify({ at }), source_ref: 'mail:t-form', source_message_id: 'm-form' }], { recordId: 1, now: 0, loopOpen });
+    const byMessage = bindNotes([{ ref: 'message:m-form', line: FORM_LINE }], [{ source: 'mail', kind: 'new', detail: JSON.stringify({ at, account: 'owner@fixture.invalid' }), ref: 'message:m-form' }], { recordId: 2, now: 0, loopOpen });
+    expect([byThread.notes[0]!.key, byMessage.notes[0]!.key]).toEqual(['mail:m-form', 'mail:m-form']);
+    expect(byMessage.notes[0]).toMatchObject({ account: 'owner@fixture.invalid', at: Date.parse(at) });
+  });
+
+  it('two mails in one sweep: one job, and a note for each', async () => {
+    await withSweep(async (h) => {
+      const a = await noting(h, { mail: [FORM, QUOTA] }, { decision: 'tell', say: 'Logtail stops ingesting in 24 hours.', notes: [{ ref: 'mail:t-form', line: FORM_LINE }, { ref: 'mail:t-quota', line: 'Logtail: free tier used up; ingestion suspended in 24 hours unless upgraded.' }] });
+      expect(h.jobs().length).toBe(1);
+      expect([a.chose, noteRows(h).map(row => row.key)]).toEqual([['note', 'tell'], ['mail:m-form', 'mail:m-quota']]);
+    });
+  });
+
+  it('a mail that tries to plant an owner fact: a note can only name the batch, stays the source\'s, and becomes no memory', async () => {
+    await withSweep(async (h) => {
+      // The worst case: the turn followed the mail. A note pointed anywhere outside the batch is not kept.
+      const elsewhere = await noting(h, { mail: [PLANTED] }, { decision: 'note', notes: [{ ref: 'owner', line: 'The owner approved the 40k vendor contract.' }] });
+      expect([elsewhere.chose, noteRows(h), unfolded(h)]).toEqual([['note_unbound'], [], expect.stringContaining('vendor contract')]);
+    });
+    await withSweep(async (h) => {
+      const bound = await noting(h, { mail: [PLANTED] }, { decision: 'note', notes: [{ ref: 'mail:t-plant', line: 'The owner approved the 40k vendor contract.' }] });
+      const [hit] = recalled(bound, 'approved vendor contract');
+      expect(hit).toMatchObject({ speaker: 'source', entry_id: 'note:mail:m-plant' });
+      const row = bound.episodes.get(hit!.ref)!;
+      expect(row.text).toBe('From mail (mail:t-plant): The owner approved the 40k vendor contract.');
+      expect(consolidationDay([row])).toEqual([]);
+      expect(ownerSpokeSince(h.sql, 0)).toBe(false);
+      expect(claimStore(h.sql).claims()).toEqual([]);
+      expect([bound.effects, bound.tools[0]?.includes('propose_action')]).toEqual([[], true]);
+    });
+  });
+
+  it('a note carrying a health reading is not kept', async () => {
+    const line = 'Lab portal: resting heart rate 52 bpm and HRV 48 ms are in your report.';
+    expect(numericHealthIn(line)).toBe(true);
+    await withSweep(async (h) => {
+      const a = await noting(h, { mail: [FORM] }, { decision: 'note', notes: [{ ref: 'mail:t-form', line }] });
+      expect([a.chose, noteRows(h)]).toEqual([['note_unbound'], []]);
+    });
+  });
+
+  it('a note on an open loop is evidence on it in the ledger; the loop stays open for the owner to close', async () => {
+    await withSweep(async (h) => {
+      let loopId = '';
+      const a = await noting(h, { mail: [FORM] }, () => '', (a, loops) => {
+        loopId = loops.open({ title: 'Submit the Schengen visa form', due: '2026-10-20T18:00' }).id;
+        a.reply.text = JSON.stringify({ decision: 'note', notes: [{ ref: 'mail:t-form', line: FORM_LINE, loop: loopId }] });
+      });
+      expect(noteRows(h)[0]!.loop_id).toBe(loopId);
+      expect(a.loops.get(loopId)!.status).toBe('open');
+      expect(loopsSection(a.loops, 'UTC', a.notes.evidence())).toContain(`[evidence noted 2026-10-20: note:mail:m-form; closing is the owner's] [${loopId}]`);
+    });
+    // A loop that is closed or unknown is not linked; the note still stands alone.
+    await withSweep(async (h) => {
+      await noting(h, { mail: [FORM] }, { decision: 'note', notes: [{ ref: 'mail:t-form', line: FORM_LINE, loop: 'o-unknown' }] });
+      expect(noteRows(h)[0]!.loop_id).toBeNull();
+    });
+  });
+
+  it('a read that fails mid-sweep writes nothing; the next tick reads the same mail and its note is kept once', async () => {
+    await withSweep(async (h) => {
+      h.mail.push(FORM);
+      await expect(h.check({ google: { changedEvents: async () => [], newMail: async () => { throw new Error('google disconnected'); } } as unknown as GoogleClient })).rejects.toThrow('google disconnected');
+      expect([h.jobs(), h.rows()]).toEqual([[], []]);
+      h.mail.splice(0);
+      await noting(h, { mail: [FORM] }, { decision: 'note', notes: [{ ref: 'mail:t-form', line: FORM_LINE }] });
+      expect(noteRows(h).length).toBe(1);
+    });
+  });
+
+  it('without notes wired the turn is not offered note, and a note it chooses anyway is left for the next card', async () => {
+    await withSweep(async (h) => {
+      h.mail.push(FORM);
+      await h.check();
+      report(h, FOUND);
+      const a = applyingTriage(h);
+      a.reply.text = JSON.stringify({ decision: 'note', notes: [{ ref: 'mail:t-form', line: FORM_LINE }] });
+      await a.lane();
+      expect(a.turns[0]!.text).not.toContain('- note:');
+      expect([a.chose, unfolded(h).includes('Schengen')]).toEqual([['note_unbound'], true]);
+    });
+  });
+
+  it('the schema: note needs a note, silent keeps none, and a note is one bounded line', () => {
+    expect(parseTriage(JSON.stringify({ decision: 'note' }))).toBe('invalid');
+    expect(parseTriage(JSON.stringify({ decision: 'silent', notes: [{ ref: 'mail:t-form', line: FORM_LINE }] }))).toBe('invalid');
+    expect(parseTriage(JSON.stringify({ decision: 'note', notes: [{ ref: 'mail:t-form', line: 'x'.repeat(281) }] }))).toBe('invalid');
+    expect(parseTriage(JSON.stringify({ decision: 'note', notes: [{ ref: 'mail:t-form', line: FORM_LINE, owner_fact: true }] }))).toBe('invalid');
+    expect(parseTriage(JSON.stringify({ decision: 'brief', notes: [{ ref: 'mail:t-form', line: FORM_LINE }] }))).toMatchObject({ decision: 'brief' });
   });
 });

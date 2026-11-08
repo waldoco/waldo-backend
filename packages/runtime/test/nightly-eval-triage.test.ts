@@ -21,8 +21,8 @@ const reply = (value: unknown): readonly ScriptedRound[] => [{ text: JSON.string
 const SEND = { name: 'send_email', arguments: { to: ['priya@northwind.example'], subject: 'Re: Term sheet call - Friday 11:00 works?', body_markdown: 'Yes, Friday 11:00 works.' } };
 
 describe('the triage set in the catalogue', () => {
-  it('labels batches interrupt, act, brief and silent, under an id prefix nothing else uses', () => {
-    expect(TRIAGE_SCENARIOS.map((entry) => entry.receipts![0]!.why.match(/\((\w+)\)$/)![1])).toEqual(['interrupt', 'interrupt', 'act', 'act', 'brief', 'brief', 'silent', 'act', 'silent']);
+  it('labels batches interrupt, act, brief, noted and silent, under an id prefix nothing else uses', () => {
+    expect(TRIAGE_SCENARIOS.map((entry) => entry.receipts![0]!.why.match(/\((\w+)\)$/)![1])).toEqual(['interrupt', 'interrupt', 'act', 'act', 'brief', 'noted', 'silent', 'act', 'silent']);
     for (const entry of TRIAGE_SCENARIOS) {
       expect(NIGHTLY_SCENARIOS).toContain(entry);
       expect(entry.id.startsWith('g')).toBe(true);
@@ -57,8 +57,23 @@ describe('a triage batch in the nightly world', () => {
   });
 
   it('an unreadable reply is recorded as invalid and fails the label without stopping the trial', async () => {
-    const unreadable = await triage('g6-triage-fyi-notes', [{ text: 'Sure! I would keep this for later.' }]);
-    expect(unreadable.record.effects).toContainEqual({ kind: 'triage.decision', payload: { decision: 'invalid' } });
+    const unreadable = await triage('g5-triage-next-week-shift', [{ text: 'Sure! I would keep this for later.' }]);
+    expect(unreadable.record.effects).toContainEqual({ kind: 'triage.decision', payload: { decision: 'invalid', notes: [] } });
     expect(unreadable.failed).toEqual(['the triage chose brief (brief)']);
+  });
+
+  it('noted: a note on the confirmation, alone or with brief, holds the label; brief without it, or a tell, fails', async () => {
+    const NOTE = { ref: 'message:g6-form', line: 'Google Forms recorded the Schengen visa application at 08:32.' };
+    const kept = await triage('g6-triage-form-submitted', reply({ decision: 'note', notes: [NOTE] }));
+    expect(kept.failed).toEqual([]);
+    expect(kept.sent[0]).toContain('- note: worth keeping on record');
+    expect((await triage('g6-triage-form-submitted', reply({ decision: 'brief', notes: [NOTE] }))).failed).toEqual([]);
+    expect((await triage('g6-triage-form-submitted', reply({ decision: 'brief' }))).failed).toEqual(['the triage kept a note and told no one (noted)']);
+    expect((await triage('g6-triage-form-submitted', reply({ decision: 'tell', say: 'Your visa form went in.', notes: [NOTE] }))).failed).toEqual(['the triage kept a note and told no one (noted)']);
+  });
+
+  it('interrupt: a free tier about to stop taking the owner\'s data is told now', async () => {
+    expect((await triage('g2-triage-ingestion-suspended', reply({ decision: 'tell', say: 'Logtail stops taking your logs in 24 hours unless you upgrade.' }))).failed).toEqual([]);
+    expect((await triage('g2-triage-ingestion-suspended', reply({ decision: 'silent' }))).failed).toEqual(['the triage chose tell (interrupt)']);
   });
 });

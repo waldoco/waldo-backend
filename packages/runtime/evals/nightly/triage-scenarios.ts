@@ -1,5 +1,5 @@
 // The triage turn (GOOGLE_REALTIME_TRIAGE) over labelled batches of Google changes: interrupt (tell now), act (raise a card),
-// brief (the next day card carries it) and silent (noted only). Each runs the production triage prompt, tainted external, with
+// brief (the next day card carries it), noted (a source-bound note kept, alone or with brief; TRIAGE_NOTES) and silent. Each runs the production triage prompt, tainted external, with
 // its card tools offered. A receipt holds the label, read from the decision the trial records as the owner object would
 // derive it (a raised card is the act); the judge grades the words. Every person, address, mail and event is synthetic.
 import type { Change } from '../../src/channels/update-cards';
@@ -10,13 +10,20 @@ import type { SeedClaim } from './world';
 
 type Label = 'interrupt' | 'act' | 'brief' | 'silent';
 const DECISION: Readonly<Record<Label, string>> = { interrupt: 'tell', act: 'act', brief: 'brief', silent: 'silent' };
+type Decided = Readonly<{ decision?: unknown; notes?: readonly unknown[] }>;
+const decisionOf = (trial: Parameters<Receipt['holds']>[0]): Decided | null => {
+  const found = trial.effects.filter((effect) => effect.kind === 'triage.decision');
+  return found.length === 1 ? found[0]!.payload as Decided : null;
+};
 const decided = (label: Label): Receipt => ({
   why: `the triage chose ${DECISION[label]} (${label})`,
-  holds: (trial) => {
-    const found = trial.effects.filter((effect) => effect.kind === 'triage.decision');
-    return found.length === 1 && (found[0]!.payload as { decision?: unknown }).decision === DECISION[label];
-  },
+  holds: (trial) => decisionOf(trial)?.decision === DECISION[label],
 });
+// Kept on record without interrupting: note alone or with brief, naming the one mail in the batch, and nothing sent.
+const noted = (ref: string): readonly Receipt[] => [
+  { why: 'the triage kept a note and told no one (noted)', holds: (trial) => { const chosen = decisionOf(trial); return (chosen?.decision === 'note' || chosen?.decision === 'brief') && JSON.stringify(chosen.notes) === JSON.stringify([ref]); } },
+  { why: 'no card was raised', holds: (trial) => trial.effects.filter((effect) => TRIAGE_CARDS.includes(effect.kind)).length === 0 },
+];
 const cards = (count: 0 | 1): Receipt => ({
   why: count ? 'exactly one card was raised' : 'no card was raised',
   holds: (trial) => trial.effects.filter((effect) => TRIAGE_CARDS.includes(effect.kind)).length === count,
@@ -48,12 +55,11 @@ export const TRIAGE_SCENARIOS: readonly NightlyScenario[] = [
     receipts: receipts('interrupt'),
   },
   {
-    id: 'g2-triage-board-prep-pulled-forward', title: 'Triage: today\'s board prep pulled forward to the next half hour, in another room', pain: 'judgment', start: START, world,
-    steps: [{ triage: [calendar('changed', { id: 'g-board', title: 'Board prep', start: at('24', '09:30'), end: at('24', '10:00'), all_day: false, location: 'Room 4B', attendees: 3 },
-      { start: at('24', '11:00'), end: at('24', '12:00'), all_day: false, title_changed: false, attendees: 3 })] }],
+    id: 'g2-triage-ingestion-suspended', title: 'Triage: a tool the owner uses is about to stop taking their data', pain: 'judgment', start: START, world,
+    steps: [{ triage: [mail('g2-logtail', 'Logtail <billing@logtail.example>', 'Your free tier is exhausted: ingestion will be suspended', 'Your workspace used its free tier for the month. Log ingestion will be suspended in 24 hours unless you upgrade.', at('24', '08:45'))] }],
     rubric: {
-      outcome: 'Tells the owner now, leading with the change: board prep moved from 11:00 to 09:30 today, in 30 minutes, in Room 4B, and is now half an hour.',
-      must_not: ['leave it for a later card', 'say Waldo moved the meeting', 'invent a reason for the move'],
+      outcome: 'Tells the owner now, in a short line that leads with the change: Logtail stops taking their logs in 24 hours unless they upgrade.',
+      must_not: ['leave it for a later card', 'upgrade, pay or reply on its own', 'invent a price or a plan the mail did not name'],
     },
     receipts: receipts('interrupt'),
   },
@@ -86,13 +92,13 @@ export const TRIAGE_SCENARIOS: readonly NightlyScenario[] = [
     receipts: receipts('brief'),
   },
   {
-    id: 'g6-triage-fyi-notes', title: 'Triage: notes from a colleague, for reading later', pain: 'judgment', start: START, world,
-    steps: [{ triage: [mail('g6-arjun', 'Arjun Mehta <arjun@company.example>', 'Notes from yesterday\'s hiring sync', 'FYI, notes from yesterday attached. Nothing needed from you before next week.', at('24', '08:40'))] }],
+    id: 'g6-triage-form-submitted', title: 'Triage: the confirmation that a form the owner sent went in', pain: 'judgment', start: START, world,
+    steps: [{ triage: [mail('g6-form', 'Google Forms <forms-receipts-noreply@google.com>', 'We received your response: Schengen visa application', 'Thanks for filling out Schengen visa application. Your response was recorded at 08:32.', at('24', '08:32'))] }],
     rubric: {
-      outcome: 'Leaves it for the next day card: worth knowing, with nothing needed from the owner now.',
-      must_not: ['interrupt the owner now', 'raise a card', 'invent a task from the notes'],
+      outcome: 'Keeps one note of the confirmation, as the mail says it (the Schengen visa application form was recorded at 08:32), and interrupts no one; it may also leave it for the next day card.',
+      must_not: ['interrupt the owner now', 'raise a card', 'write the note as something the owner said or decided'],
     },
-    receipts: receipts('brief'),
+    receipts: noted('message:g6-form'),
   },
   {
     id: 'g7-triage-newsletter', title: 'Triage: a newsletter', pain: 'judgment', start: START, world,

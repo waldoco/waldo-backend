@@ -198,14 +198,15 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         skills.turn(`${scenario.id}-triage-${turn}`);
         const offered = new Set(world.handlers.map((handler) => handler.name));
         const prompt = triagePrompt(world.localNow(), { changes, ledger: '', feedback: '', volume: 'normal', sourceFollowups: false, cards: '', revisesCards: true,
-          goals: world.goals(), hold: null, left: TRIAGE_INTERRUPTS_PER_DAY });
+          goals: world.goals(), hold: null, left: TRIAGE_INTERRUPTS_PER_DAY, notes: true });
         const carded = () => world.effects().filter((effect) => TRIAGE_CARDS.includes(effect.kind)).length;
         const before = carded();
         const reply = await responder.prompt(`${scenario.id}-triage-${turn}`, 1, prompt, time, triageTools(false, true).filter((name) => offered.has(name)) as never, undefined, undefined, undefined, 'external');
         // As the owner object does: a card the turn raised is the act; an unreadable reply is left for the next card.
         const chosen = parseTriage(reply);
         const raised = carded() > before;
-        world.note('triage.decision', { decision: raised ? 'act' : chosen === 'invalid' ? 'invalid' : chosen.decision === 'act' ? 'act_without_card' : chosen.decision });
+        world.note('triage.decision', { decision: raised ? 'act' : chosen === 'invalid' ? 'invalid' : chosen.decision === 'act' ? 'act_without_card' : chosen.decision,
+          notes: chosen === 'invalid' ? [] : chosen.notes?.map((note) => note.ref) ?? [] });
         if (!raised && chosen !== 'invalid' && chosen.decision === 'tell') transcript.push({ role: 'waldo', surface: chosen.push ? 'notification' : 'chat', text: chosen.say ?? chosen.revise!.text });
       } else if ('welcome' in step) {
         const { stage, sources, text } = step.welcome;

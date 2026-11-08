@@ -113,11 +113,14 @@ export const isQuiet = (settings: Proactivity, now: number, timezone: string): b
 export const proactivityLine = (settings: Proactivity, limits = false): string =>
   `Proactivity: volume ${settings.volume}; ${settings.quiet_start ? `quiet hours ${settings.quiet_start}-${settings.quiet_end}` : 'no quiet hours'}${settings.followups === false ? '; follow-ups off' : ''}${limits && settings.interruptions_per_day !== undefined ? `; ${settings.interruptions_per_day} unasked messages a day` : ''}`;
 
-export const loopsSection = (book: LoopBook, timezone: string): string => {
+// evidence: the source notes kept against each open loop (source-notes.ts), shown by date and episode ref, never their text:
+// what a source says happened bears on the loop, and closing it stays with the owner.
+export const loopsSection = (book: LoopBook, timezone: string, evidence: ReadonlyMap<string, readonly Readonly<{ at: number; entry_id: string }>[]> = new Map()): string => {
   const open = book.list();
+  const noted = (id: string) => (evidence.get(id) ?? []).slice(-3).map((note) => ` [evidence noted ${localIso(note.at, timezone).slice(0, 10)}: ${note.entry_id}; closing is the owner's]`).join('');
   return [
     'Waldo is on',
-    ...(open.length ? open.map((loop) => `- ${loop.title}${loop.due ? ` (due ${loop.due.replace('T', ' ')})` : ''}${loop.source_ref ? ` [source ${loop.source_ref}; completion unknown]` : ''} [${loop.id}]`) : ['- nothing open']),
+    ...(open.length ? open.map((loop) => `- ${loop.title}${loop.due ? ` (due ${loop.due.replace('T', ' ')})` : ''}${loop.source_ref ? ` [source ${loop.source_ref}; completion unknown]` : ''}${noted(loop.id)} [${loop.id}]`) : ['- nothing open']),
     ...book.closed().map((loop) => `- ${loop.status}: ${loop.title} (${localIso(loop.closed_at ?? loop.created_at, timezone).slice(0, 10)})`),
   ].join('\n');
 };

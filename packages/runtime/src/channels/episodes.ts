@@ -7,8 +7,9 @@ import type { Scheduler } from '../scheduler/multiplexer';
 // Full-text history of the owner's chat (SQLite FTS5 in the owner's Durable Object). Every
 // saved turn is indexed; search_episodes ranks by BM25 and the nightly pass reads a day back.
 // 'quoted' is text the owner pasted inside a quote (a Telegram blockquote, pre or code range): searchable, but never the
-// owner's own words.
-export type Speaker = 'owner' | 'waldo' | 'system' | 'quoted';
+// owner's own words. 'source' is a note triage kept of what an outside source said happened (source-notes.ts): searchable from
+// every surface, never anyone's words in the conversation.
+export type Speaker = 'owner' | 'waldo' | 'system' | 'quoted' | 'source';
 // Only the index that splits an owner message stores its own words, as OWNER_SAID; reads show them as 'owner', with `own`
 // set. Any other 'owner' row is a whole message, quotes and media notes included (stored before this index split messages,
 // or by a build that does not), so it is never the owner's own words. The mark is on the row, not inferred from its time.
@@ -215,7 +216,8 @@ export const backfillEpisodes = async (store: ConversationStore, index: EpisodeI
 
 // Nightly consolidation learns from what the owner and Waldo said. Machine-written entries
 // (reminder and scheduled prompts) are not the owner's words and never become memory.
-export const consolidationDay = (episodes: readonly Episode[]): readonly Episode[] => episodes.filter((episode) => episode.speaker !== 'system');
+// A source note is outside text Waldo kept as a record, so it never becomes memory about the owner.
+export const consolidationDay = (episodes: readonly Episode[]): readonly Episode[] => episodes.filter((episode) => episode.speaker !== 'system' && episode.speaker !== 'source');
 
 // Only the owner's own words, as the splitting index stored them, are the owner side. A whole-message 'owner' row is only
 // ever shared text.
