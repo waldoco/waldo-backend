@@ -147,7 +147,7 @@ describe('the patterns sanitise() runs stay linear on the near-miss and whitespa
 
   // A bare value is read only when no clock time or second number follows it, so the check after it reads the blanks that
   // follow: once, not once for every way of splitting them.
-  it.each(['hrv 42', 'hr 61', 'resting hr 61', 'heart rate 61', 'spo2 97', 'blood pressure 120', 'weight: 72', '37.5'])('numericHealthIn and redactNumericHealth read %s, a run of blanks, then a letter', word => {
+  it.each(['hrv 42', 'hr 61', 'resting hr 61', 'heart rate 61', 'spo2 97', 'blood pressure 120', 'weight: 72', '37.5', 'hrr 42', 'hr recovery 42', '0.3°'])('numericHealthIn and redactNumericHealth read %s, a run of blanks, then a letter', word => {
     expectLinear('numericHealthIn', 100_000, n => numericHealthIn(`${word}${' '.repeat(n)}x`));
     expectLinear('redactNumericHealth', 100_000, n => redactNumericHealth(`${word}${' '.repeat(n)}x`, '[health]'));
   });

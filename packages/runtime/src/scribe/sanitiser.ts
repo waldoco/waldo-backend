@@ -268,9 +268,9 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\bbreathing\b${BARE_GAP}${READING_NUMBER}\s*(?:per|a|\/)\s*min(?:ute)?\b`),
   // A wrist temperature is read as a value or as its change from the owner's baseline, so a signed small number counts.
   reading(String.raw`\bwrist\s+temp(?:erature)?\b(?:\s+(?:deviation|delta|change))?${WRIST_GAP}[+\-−]?${READING_NUMBER}\b`),
-  reading(String.raw`(?<![\w.])[+\-−]?${READING_NUMBER}\s*(?:°\s*[cf]?|degrees?|[cf]\b)\s+(?:(?:above|below)\s+baseline\s+)?(?:on\s+)?wrist\s+temp(?:erature)?\b`),
+  reading(String.raw`(?<![\w.])[+\-−]?${READING_NUMBER}\s*(?:°(?:\s*[cf]\b)?|degrees?|[cf]\b)\s+(?:(?:above|below)\s+baseline\s+)?(?:on\s+)?wrist\s+temp(?:erature)?\b`),
   // Recovery a minute after exercise can be a single digit, and HRR is its usual short form.
-  reading(String.raw`\b(?:hrr|(?:hr|heart[\s-]+rate)\s+recovery)\b${BARE_GAP}\d{1,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|[-–]?\s*\d))`),
+  reading(String.raw`\b(?:hrr|(?:hr|heart[\s-]+rate)\s+recovery)\b${BARE_GAP}\d{1,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|\d|[-–]\s*\d))`),
   reading(String.raw`\b(?:calories\s+burned|calorie\s+burn|active\s+(?:energy|kcal|cal(?:ories)?))\b${BARE_GAP}\d`),
   reading(String.raw`\b${READING_NUMBER}\s*(?:active\s+(?:kcal|cal(?:ories)?)|(?:kcal|cal(?:ories)?)\s+active)\b`),
   // Apple's Move ring counts active energy.
