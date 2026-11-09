@@ -248,7 +248,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
   if (!sql.exec<{ name: string }>('PRAGMA table_info(mcp_connections)').toArray().some((column) => column.name === 'tools_capped')) sql.exec('ALTER TABLE mcp_connections ADD COLUMN tools_capped INTEGER NOT NULL DEFAULT 0');
   // The account the provider named when the owner signed in (a Slack team), shown with each send.
   if (!sql.exec<{ name: string }>('PRAGMA table_info(mcp_connections)').toArray().some((column) => column.name === 'workspace')) sql.exec('ALTER TABLE mcp_connections ADD COLUMN workspace TEXT');
-  // What the server's discovery says about using it: its own words, shown only beside its search results, never in a prompt.
+  // What the server's discovery says about using it: its own words, shown only beside its search results, never in the system prompt.
   if (!sql.exec<{ name: string }>('PRAGMA table_info(mcp_connections)').toArray().some((column) => column.name === 'instructions')) sql.exec('ALTER TABLE mcp_connections ADD COLUMN instructions TEXT');
   sql.exec('CREATE TABLE IF NOT EXISTS mcp_tools (connection TEXT NOT NULL, name TEXT NOT NULL, position INTEGER NOT NULL, digest TEXT NOT NULL, def TEXT NOT NULL, PRIMARY KEY (connection, name))');
   // A permission is for one tool definition: a changed definition no longer matches and asks again. source says who allowed
@@ -419,9 +419,11 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     const digests = await Promise.all(tools.map(toolDigest));
     // Discovery is a modern-era method; a legacy server's instructions come only with initialize, which the edge does not pass on.
     // One that fails keeps what it said before, and the miss is logged.
+    // tools/list settles the era of a server first seen with none, so the stored row decides, not the one this refresh began with.
     let instructions = r.instructions;
-    if (r.era !== 'legacy') {
-      try { instructions = serverInstructions(await send(r, 'server/discover', {})); } catch (error) { log('mcp_discover', started, error instanceof McpRefusal ? error.code : 'malformed'); }
+    if ((row(r.id)?.era ?? r.era) !== 'legacy') {
+      const asked = deps.now();
+      try { instructions = serverInstructions(await send(r, 'server/discover', {})); } catch (error) { log('mcp_discover', asked, error instanceof McpRefusal ? error.code : 'malformed'); }
     }
     deps.transaction(() => {
       sql.exec('DELETE FROM mcp_tools WHERE connection = ?', r.id);
