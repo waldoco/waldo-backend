@@ -54,6 +54,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_TOOL_RESULTS_KEEP_LATEST: gap('how many results WALDO_CONTEXT_CAPS keeps when it clears; no trial runs that long a tool loop'),
   WALDO_STANDING_ORDERS_CHARS: gap('the WALDO_CONTEXT_CAPS cap on standing orders; no trial holds that many'),
   WALDO_QUESTS_CHARS: gap('the WALDO_CONTEXT_CAPS cap on quests; no trial holds that many'),
+  WALDO_WHATS_NEW_CHARS: gap('the cap on an owner turn\'s what\'s new section; no trial holds announcements'),
   WALDO_TIMEZONE_ASK: gap('adds a line to a turn whose time zone the owner has not confirmed; every trial runs on a fixed zone, so no trial sees it'),
   WALDO_FORGET_BARRIER: mapped("'on' is the 'items' barrier, any other value the earlier 'reads' rule"),
   MEMORY_SELECTION: mapped("'1' shows the trials option B's memory: the pins, what is new since the nightly review, recall stubs"),

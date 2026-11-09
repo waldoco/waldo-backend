@@ -2,9 +2,10 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import {
-  ANNOUNCEMENT_CARD_HOLD_MS, announcementBook, announcementCardSection, whatsNewSection, WHATS_NEW_CHARS, WHATS_NEW_WINDOW_MS, announcementPrompt, parseAnnouncementDecision, runAnnouncementPass, switchOn,
+  ANNOUNCEMENT_CARD_HOLD_MS, announcementBook, announcementCardSection, whatsNewSection, WHATS_NEW_WINDOW_MS, announcementPrompt, parseAnnouncementDecision, runAnnouncementPass, switchOn,
   type Announcement, type AnnouncementOutcome, type AnnouncementPassCode, type AnnouncementPrerequisite,
 } from '../src/channels/announcements';
+import { CONTEXT_BUDGET } from '../src/conversation/context-budget';
 import type { InterruptHold } from '../src/channels/interruptions';
 
 // What's new: code holds the capability truth check, the opt-out, the owner's limits and once-only; the model holds whether,
@@ -47,6 +48,8 @@ const pass = (setup: Setup, again?: Setup) => runInDurableObject(env.TEST_STORAG
   const first = await run(setup);
   return [first, again ? await run(again) : first] as const;
 });
+
+const CAP = CONTEXT_BUDGET.whatsNewChars;
 
 describe('what\'s new: each owner\'s Waldo tells them once, in its own voice', () => {
   it('golden: with the switch on the owner gets it once, folded into the next card by default; a second release does not repeat it', async () => {
@@ -137,12 +140,21 @@ describe('the card and the decision', () => {
     expect(announcementCardSection([FAMILY])).toContain(JSON.stringify(JSON.stringify([{ id: 'family', title: FAMILY.title, what_shipped: FAMILY.shipped, why_it_matters: FAMILY.why }])));
   });
 
+  it('what\'s new reads every capability decided in its window, so its count of the rest is the true one', async () => {
+    const rows = await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('announcements-recent-all')), async (_i, state) => {
+      const book = announcementBook(state.storage.sql);
+      for (let i = 0; i < 8; i += 1) book.record({ ...IMAGES, id: `many${i}`, title: `Many ${i}` }, 'skipped', NOW - i);
+      return book.recent(NOW - WHATS_NEW_WINDOW_MS);
+    });
+    expect(rows.map(row => row.id)).toEqual(Array.from({ length: 8 }, (_, i) => `many${i}`));
+  });
+
   it('what\'s new names only recently decided capabilities, and nothing when there are none', async () => {
     const [section, empty] = await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('announcements-recent')), async (_i, state) => {
       const book = announcementBook(state.storage.sql);
       book.record(FAMILY, 'folded', NOW - WHATS_NEW_WINDOW_MS - 1);
       book.record(IMAGES, 'skipped', NOW);
-      return [whatsNewSection(book.recent(NOW - WHATS_NEW_WINDOW_MS)), whatsNewSection(book.recent(NOW + 1))];
+      return [whatsNewSection(book.recent(NOW - WHATS_NEW_WINDOW_MS), CAP), whatsNewSection(book.recent(NOW + 1), CAP)];
     });
     expect(section).toContain('Images');
     expect(section).not.toContain('Family coordination');
@@ -151,14 +163,22 @@ describe('the card and the decision', () => {
   });
 
   it('what\'s new stays within its cap however many shipped: what shipped while it fits, then titles, then a count', () => {
-    const many = Array.from({ length: 5 }, (_, i) => ({ id: `cap${i}`, title: `Capability ${i}`, shipped: 'x'.repeat(1_000) }));
-    const section = whatsNewSection(many);
-    const listed = JSON.parse(JSON.parse(section.split('\n')[3]!) as string) as Array<{ id: string; what_shipped?: string }>;
-    expect(JSON.stringify(listed).length).toBeLessThanOrEqual(WHATS_NEW_CHARS);
-    expect(listed[0]!.what_shipped).toBe('x'.repeat(1_000));
-    expect(listed.slice(1).every(item => item.what_shipped === undefined)).toBe(true);
-    expect(section).toContain(`${5 - listed.length} more shipped`);
-    expect(whatsNewSection([many[0]!, many[1]!], 60)).toMatch(/\n1 more shipped/);
+    const many = Array.from({ length: 8 }, (_, i) => ({ id: `cap${i}`, title: `Capability ${i}`, shipped: 'x'.repeat(1_000) }));
+    const section = whatsNewSection(many, CAP);
+    const listed = section.match(/cap\d/g) ?? [];
+    expect(listed.length).toBeGreaterThan(1);
+    expect(listed.length).toBeLessThan(many.length);
+    expect(section.split('x'.repeat(1_000)).length - 1).toBe(1);
+    // The rest are counted, past any page the book once held back.
+    expect(section).toContain(String(many.length - listed.length));
+    const short = whatsNewSection([{ id: 'one', title: 'One', shipped: 'y' }], 10 * CAP);
+    expect(section.length - short.length).toBeLessThanOrEqual(CAP);
+  });
+
+  it('the cap holds on the copy as quoted into the prompt, where escaping grows it', () => {
+    const hostile = Array.from({ length: 4 }, (_, i) => ({ id: `q${i}`, title: `Quoted ${i}`, shipped: '<"\\'.repeat(300) }));
+    const short = whatsNewSection([{ id: 'one', title: 'One', shipped: 'y' }], 10 * CAP);
+    expect(whatsNewSection(hostile, CAP).length - short.length).toBeLessThanOrEqual(CAP);
   });
 
   it('the decision is one strict object', () => {
