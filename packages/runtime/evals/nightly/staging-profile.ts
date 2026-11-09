@@ -154,6 +154,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   OPEN_SIGNUP_SPEND_CEILING_USD: inert('applies only to an owner who joined without an invite; the trial owner is invited'),
   GMAIL_PUSH_PROJECT: inert('mail push subscription'),
   LANGFUSE_CAPTURE_TEXT: inert('trace capture after a turn'),
+  LANGFUSE_RETENTION_SWEEP: inert('the daily cron\'s trace retention sweep; no turn reads it'),
   IMESSAGE_CONNECTOR_ENABLED: inert(IMESSAGE),
   IMESSAGE_CONNECTOR_POLICY: inert(IMESSAGE),
   IMESSAGE_ONBOARDING_URL: inert(IMESSAGE),

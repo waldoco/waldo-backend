@@ -102,7 +102,7 @@ The privacy notice promises that traces are deleted after 30 days, and the Langf
   - Deletion allows 50 requests a day per organization, and the same bucket covers trace and score deletes. A run's trace and score deletes together use at most 40, about 1,600 traces, which leaves 10 a day for people and for rating changes (each change of a Like or Dislike deletes the score it replaces). Scores take at most 5, and only what the traces left.
   - Metrics API v2 allows 100 requests a day. A run makes three.
   - A 429 waits for its `Retry-After` and is retried three times. If it still holds, the run ends `incomplete` and the next day resumes.
-- **Modes.** `LANGFUSE_RETENTION_SWEEP` is absent by default.
+- **Modes.** `LANGFUSE_RETENTION_SWEEP` is a `WALDO_SWITCHES` entry: `dry` on staging, `0` (off) in production.
   - `dry` makes every read and deletes nothing.
   - `1` deletes.
   - Any other value is off.
