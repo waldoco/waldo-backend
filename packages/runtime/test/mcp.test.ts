@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { callMcpToolHandler, mcpServers } from '../src/tools/live/mcp';
+import { callMcpToolHandler, mcpServers, type McpDesk } from '../src/tools/live/mcp';
 
 const handler = callMcpToolHandler(JSON.stringify([{ name: 'github', url: 'https://mcp.test/rpc', token: 'tok' }]));
 
@@ -17,6 +17,33 @@ describe('mcp server registry', () => {
     expect(mcpServers(undefined)).toEqual([]);
     expect(mcpServers('not json')).toEqual([]);
     expect(mcpServers('[{"name":"a","url":"https://x"},{"name":"b"}]')).toEqual([{ name: 'a', url: 'https://x' }]);
+  });
+});
+
+describe('call_mcp_tool owner card flow', () => {
+  it('with a desk: proposes a card and never executes; the result keeps the external stamp', async () => {
+    const proposed: { server: string; tool: string; args: Record<string, unknown> }[] = [];
+    const desk: McpDesk = { proposeMcpCall: async (p) => { proposed.push(p); return 'p1'; } };
+    const deskHandler = callMcpToolHandler(JSON.stringify([{ name: 'github', url: 'https://mcp.test/rpc' }]), desk);
+    let fetched = false;
+    vi.stubGlobal('fetch', (async () => { fetched = true; return Response.json({}); }) as typeof fetch);
+    const out = await deskHandler.handle({ server: 'github', tool: 'get_issue', args: { n: 1 } }, {} as never);
+    expect(fetched).toBe(false);
+    expect(proposed).toEqual([{ server: 'github', tool: 'get_issue', args: { n: 1 } }]);
+    expect(out.ok).toBe(true);
+    if (out.ok) {
+      expect(out.data).toMatchObject({ proposal_id: 'p1', applied: false });
+      expect(out.source_taint).toBe('external');
+    }
+    vi.unstubAllGlobals();
+  });
+
+  it('with a desk: unknown server still names the configured set before any card', async () => {
+    const desk: McpDesk = { proposeMcpCall: async () => 'p1' };
+    const deskHandler = callMcpToolHandler(JSON.stringify([{ name: 'github', url: 'https://mcp.test/rpc' }]), desk);
+    const miss = await deskHandler.handle({ server: 'nope', tool: 't', args: {} }, {} as never);
+    expect(miss.ok).toBe(false);
+    if (!miss.ok) expect(miss.error).toContain('github');
   });
 });
 

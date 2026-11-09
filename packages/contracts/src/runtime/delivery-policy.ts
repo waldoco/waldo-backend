@@ -136,10 +136,11 @@ export const DELIVERY_POLICY: Readonly<Record<PushClass, DeliveryPolicyRow>> = {
     is_standalone: false,
     quiet_hours: 'hold',
     priority: 3,
-    daily_cap: 2,
+    // Whether a meeting gets a prep note is the model's judgment; quiet hours and the owner's volume still hold it.
+    daily_cap: null,
     cap_scope: 'utc_day',
-    cooldown_min: 60,
-    cooldown_scope: 'event',
+    cooldown_min: null,
+    cooldown_scope: 'class',
     agent_invocable: true,
     sub_caps: null,
   },
@@ -253,7 +254,8 @@ export const triggerPushClassesSchema = z.record(triggerTypeSchema, z.array(push
 export const TRIGGER_PUSH_CLASSES: Readonly<Record<TriggerType, readonly PushClass[]>> = {
   brief: ['brief'],
   fetch_alert: ['fetch_alert'],
-  patrol: [],
+  // The health trigger proposes at most one plan change, as a proposed adjustment under that class's budget.
+  patrol: ['adjustment'],
   pre_brief_sweep: [],
   handoff_explore: [],
   handoff_plan: [],

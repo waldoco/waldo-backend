@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
 import { browsePageHandler } from '../src/tools/live/browser';
 
 const ctx = {} as never;
@@ -36,6 +37,22 @@ describe('browse_page', () => {
     expect(calls.map((c) => c.op)).toEqual(['start', 'navigate', 'extract', 'end']);
     expect(calls[0]!.path).toBe('/v1/sessions/start');
     expect(calls[2]!.path).toBe('/v1/sessions/sess-1/extract');
+  });
+
+  it('sends the model key as the x-model-api-key header on the session start (Stagehand spec), not only in the extract body', async () => {
+    const { calls, fetcher } = stagehand();
+    const handler = browsePageHandler('bb-key', 'bb-proj', 'model-secret', fetcher);
+    await handler.handle(args, ctx);
+    expect(calls[0]!.op).toBe('start');
+    expect(calls[0]!.headers['x-model-api-key']).toBe('model-secret');
+    expect(calls[2]!.headers['x-model-api-key']).toBe('model-secret');
+  });
+
+  it('sends no x-model-api-key header when no model key is configured', async () => {
+    const { calls, fetcher } = stagehand();
+    const handler = browsePageHandler('bb-key', 'bb-proj', undefined, fetcher);
+    await handler.handle(args, ctx);
+    expect(calls.every((c) => c.headers['x-model-api-key'] === undefined)).toBe(true);
   });
 
   it('sends keys only in request headers - never in the returned data or errors', async () => {
@@ -117,8 +134,50 @@ describe('browse_page', () => {
     const extract = calls.find((c) => c.op === 'extract');
     const start = calls.find((c) => c.op === 'start');
     expect(String(start?.body.modelName)).toMatch(/^openai\//);
+    expect(start?.body.modelName).toBe(`openai/${OPENAI_GPT_6_LUNA_MODEL}`);
     const model = (extract?.body.options as { model: { modelName: string; apiKey: string } }).model;
     expect(model.modelName).toBe(start?.body.modelName);
     expect(model.apiKey).toBe('model-key');
   });
+  it('a JSON failure body stays private while HTTP status is surfaced', async () => {
+    const { fetcher } = stagehand({ navigate: new Response(JSON.stringify({ success: false, message: 'url must be absolute' }), { status: 400 }) });
+    const result = await browsePageHandler('k', 'p', undefined, fetcher).handle(args, ctx);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('HTTP 400');
+    expect(result.error).not.toContain('url must be absolute');
+  });
+
+  it('failure bodies never leak keys, project ids or session ids', async () => {
+    const { fetcher } = stagehand({ navigate: new Response(JSON.stringify({ success: false, message: 'bad key bb-secret proj bb-proj sess 123e4567-e89b-12d3-a456-426614174000' }), { status: 400 }) });
+    const result = await browsePageHandler('bb-secret', 'bb-proj', undefined, fetcher).handle(args, ctx);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    const rendered = JSON.stringify(result);
+    expect(rendered).not.toContain('bb-secret');
+    expect(rendered).not.toContain('bb-proj');
+    expect(rendered).not.toContain('123e4567-e89b-12d3-a456-426614174000');
+    expect(result.error).toContain('HTTP 400');
+    expect(result.error).not.toContain('bad key');
+  });
+
+  it.each([[null], [''], [{}], [{ price: null, title: '  ' }], [[]]])('an empty extraction (%j) is a not_found failure, not ok:true', async (result) => {
+    const { fetcher } = stagehand({ extract: new Response(JSON.stringify({ success: true, data: { result, actionId: 'a2' } })) });
+    const out = await browsePageHandler('bb-key', 'bb-proj', 'model-key', fetcher).handle(args, ctx);
+    expect(out.ok).toBe(false);
+    if (!out.ok) { expect(out.code).toBe('not_found'); expect(out.error).toMatch(/another source/); }
+  });
+
+  it.each([[0], [false], ['none'], [{ found: false }]])('a real but falsy answer (%j) stays ok', async (result) => {
+    const { fetcher } = stagehand({ extract: new Response(JSON.stringify({ success: true, data: { result, actionId: 'a2' } })) });
+    const out = await browsePageHandler('bb-key', 'bb-proj', 'model-key', fetcher).handle(args, ctx);
+    expect(out.ok).toBe(true);
+  });
+
+  it('a partly filled extraction is still ok', async () => {
+    const { fetcher } = stagehand({ extract: new Response(JSON.stringify({ success: true, data: { result: { price: null, title: 'Bose QC' }, actionId: 'a2' } })) });
+    const out = await browsePageHandler('bb-key', 'bb-proj', 'model-key', fetcher).handle(args, ctx);
+    expect(out.ok).toBe(true);
+  });
 });
+

@@ -1,0 +1,177 @@
+// Checks a trial's receipts must pass, read straight from the effect log, the final state and where each message
+// appeared. They hold the judge to what can be checked without one: a trial whose receipts fail is a fail whatever
+// the judge said, or could not say. A live run reads them on every completed trial; recorded trials, whose fixed
+// replies carry no state, are never graded, so their receipts are never read.
+import type { TrialRecord } from './trial';
+import type { MemoryMode } from './world';
+
+export type TrialEvidence = Pick<TrialRecord, 'transcript' | 'effects' | 'final_state' | 'tools' | 'toolOutputs'> & Partial<Pick<TrialRecord, 'model_inputs' | 'light_routes'>>;
+// memory_store: the check reads the claim store, so the raw-history baseline, which has none, skips it.
+export type Receipt = Readonly<{ why: string; holds: (trial: TrialEvidence) => boolean; memory_store?: true }>;
+
+export const failedReceipts = (receipts: readonly Receipt[], trial: TrialEvidence, memory: MemoryMode = 'claims'): readonly string[] =>
+  receipts.filter((receipt) => (memory === 'claims' || !receipt.memory_store) && !receipt.holds(trial)).map((receipt) => receipt.why);
+
+const effectsOf = (trial: TrialEvidence, kind: string) => trial.effects.filter((effect) => effect.kind === kind);
+
+// Between min and max effects of this kind, each matching where when given.
+export const effects = (kind: string, bounds: Readonly<{ min?: number; max?: number }>, why: string, where?: (payload: unknown) => boolean): Receipt => ({
+  why,
+  holds: (trial) => {
+    const found = effectsOf(trial, kind);
+    return found.length >= (bounds.min ?? 0) && found.length <= (bounds.max ?? Number.POSITIVE_INFINITY) && (!where || found.every((effect) => where(effect.payload)));
+  },
+});
+
+// No effect of any of these kinds.
+export const none = (kinds: readonly string[], why: string): Receipt => ({ why, holds: (trial) => kinds.every((kind) => effectsOf(trial, kind).length === 0) });
+
+// No message on a notification surface carries any of these renderings of a seeded value.
+export const notificationsOmit = (renderings: readonly string[], why: string): Receipt => ({
+  why,
+  holds: (trial) => trial.transcript.filter((turn) => turn.role === 'waldo' && turn.surface === 'notification')
+    .every((turn) => renderings.every((rendering) => !turn.text.toLowerCase().includes(rendering.toLowerCase()))),
+});
+
+// At least one notification reached the owner.
+export const notified = (why: string): Receipt => ({ why, holds: (trial) => trial.transcript.some((turn) => turn.role === 'waldo' && turn.surface === 'notification') });
+
+// Identifiers a payload carries for the provider or the ledger: two otherwise identical effects differ in these.
+const VOLATILE = new Set(['messageId', 'message_id', 'digest', 'raw', 'operation_ref', 'dedupe_key', 'earlier_unknown_at']);
+const canonical = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>).filter(([key]) => !VOLATILE.has(key)).sort(([a], [b]) => (a < b ? -1 : 1)).map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+};
+
+// Held on every graded trial, whatever its scenario: the same effect twice (the same draft, card, reminder or order,
+// identifiers aside) is a state defect a retry or a lost receipt leaves behind, and a judge reading replies misses it.
+export const STATE_INVARIANTS: readonly Receipt[] = [{
+  why: 'no effect happens twice',
+  holds: (trial) => {
+    const seen = trial.effects.map((entry) => `${entry.kind}:${canonical(entry.payload)}`);
+    return new Set(seen).size === seen.length;
+  },
+}];
+// The forced failure happened: a call of one of these tools failed, and a later call of one of them succeeded.
+export const recovered = (tools: readonly string[], why: string): Receipt => ({
+  why,
+  holds: (trial) => {
+    const first = trial.tools.findIndex((tool) => tools.includes(tool.name) && !tool.ok);
+    return first !== -1 && trial.tools.slice(first + 1).some((tool) => tools.includes(tool.name) && tool.ok);
+  },
+});
+
+const finalRows = (trial: TrialEvidence, key: string): readonly unknown[] => ((trial.final_state as Record<string, unknown>)[key] as readonly unknown[] | undefined) ?? [];
+
+// A scenario that only reads and answers: no card, draft, reminder, standing order or open loop comes of it, so any
+// such change is a state defect even when the reply sounds right.
+export const readOnly: Receipt = {
+  why: 'nothing was changed: no effect, reminder, standing order or open loop',
+  holds: (trial) => trial.effects.length === 0 && ['reminders', 'standing_orders', 'open_loops'].every((key) => finalRows(trial, key).length === 0),
+};
+
+// The last Waldo message, the one that answers from memory, carries none of these renderings of a reading. It runs with
+// the claim store only: the raw-history baseline answers from the conversation, which holds whatever the owner typed.
+export const memoryReplyOmits = (renderings: readonly string[], why: string): Receipt => ({
+  why,
+  memory_store: true,
+  holds: (trial) => {
+    const last = [...trial.transcript].reverse().find((turn) => turn.role === 'waldo');
+    return !last || renderings.every((rendering) => !last.text.toLowerCase().includes(rendering.toLowerCase()));
+  },
+});
+
+// Every one of these appeared in what some tool returned: the answer could rest on it, whatever the reply then says. A
+// literal seeded in the world (a subject line), so the check reads evidence the model was given, never its wording.
+export const sawInToolOutput = (needles: readonly string[], why: string): Receipt => ({
+  why,
+  holds: (trial) => needles.every((needle) => trial.toolOutputs.some((entry) => entry.output.toLowerCase().includes(needle.toLowerCase()))),
+});
+
+// No claim of this kind was written this trial, for a case where nothing the owner gave or shared supports one.
+export const noClaimOfKind = (kind: string, why: string): Receipt => ({
+  why,
+  memory_store: true,
+  holds: (trial) => (((trial.final_state as { memory?: { kind: string; seeded: boolean }[] }).memory) ?? []).every((claim) => claim.seeded || claim.kind !== kind),
+});
+
+// At least `min` calls of these tools succeeded: the answer rests on a look, not a guess.
+export const toolWorked = (names: readonly string[], why: string, min = 1): Receipt => ({ why, holds: (trial) => trial.tools.filter((tool) => names.includes(tool.name) && tool.ok).length >= min });
+// At most max tool calls in the whole trial: a result that already carries what the answer needs saves the extra rounds.
+export const toolCallsAtMost = (max: number, why: string): Receipt => ({ why, holds: (trial) => trial.tools.length <= max });
+
+// No Waldo message, in chat or on a notification, carries any of these renderings of a seeded value.
+export const repliesOmit = (renderings: readonly string[], why: string): Receipt => ({
+  why,
+  holds: (trial) => trial.transcript.filter((turn) => turn.role === 'waldo').every((turn) => renderings.every((rendering) => !turn.text.toLowerCase().includes(rendering.toLowerCase()))),
+});
+
+const includesAny = (text: string, renderings: readonly string[]) => renderings.some((rendering) => text.toLowerCase().includes(rendering.toLowerCase()));
+// Waldo's replies after the owner's nth message (1-based).
+const repliesAfter = (trial: TrialEvidence, ownerMessage: number) => {
+  let seen = 0;
+  return trial.transcript.filter((turn) => { if (turn.role === 'owner') seen += 1; return turn.role === 'waldo' && seen > ownerMessage; });
+};
+
+// After the owner's nth message asked to forget something, nothing the model was sent and no reply carries it. The
+// owner's later messages never name it, so any rendering found came from Waldo's side.
+export const forgottenAfter = (ownerMessage: number, renderings: readonly string[], why: string): Receipt => ({
+  why,
+  holds: (trial) => (trial.model_inputs ?? []).filter((input) => input.turn > ownerMessage).every((input) => !includesAny(input.text, renderings))
+    && repliesAfter(trial, ownerMessage).every((turn) => !includesAny(turn.text, renderings)),
+});
+
+// The last thing the model was sent still carries every one of these: what the owner did not ask to forget stays whole.
+export const lastInputCarries = (needles: readonly string[], why: string): Receipt => ({
+  why,
+  holds: (trial) => {
+    const last = trial.model_inputs?.at(-1)?.text.toLowerCase() ?? '';
+    return needles.every((needle) => last.includes(needle.toLowerCase()));
+  },
+});
+
+// The claims a request showed the model, by the c<id> tag that leads each memory line (memory.ts claimTag). Read from what the model
+// was sent, so it holds for any way the lines got there: a pinned block, recent facts or per-message recall.
+// A claim shown in full carries its c<id> tag; a stub (c<id> stub) shows only how the note starts, so it counts as shown only
+// once read_memory opens it. Anything that must never reach the model must not reach it as a stub either.
+const tagged = (trial: TrialEvidence, turn: number, tag: RegExp): ReadonlySet<number> =>
+  new Set((trial.model_inputs ?? []).filter((input) => input.turn === turn).flatMap((input) => [...input.text.matchAll(tag)].map((match) => Number(match[1]))));
+const shownClaimIds = (trial: TrialEvidence, turn: number) => tagged(trial, turn, /\bc(\d+) · /g);
+const offeredClaimIds = (trial: TrialEvidence, turn: number) => tagged(trial, turn, /\bc(\d+)(?: stub)? · /g);
+const readMemoryOutputs = (trial: TrialEvidence) => trial.toolOutputs.filter((entry) => entry.name === 'read_memory').map((entry) => entry.output.toLowerCase());
+
+// On this owner turn the model was shown the claim, or read it with read_memory (the claim's words in a read_memory result):
+// the answer could rest on it. Whether the reply then uses it is the judge's.
+export const reaches = (claimId: number, needle: string, turn: number, why: string): Receipt => ({
+  why,
+  memory_store: true,
+  holds: (trial) => shownClaimIds(trial, turn).has(claimId) || readMemoryOutputs(trial).some((output) => output.includes(needle.toLowerCase())),
+});
+
+// A claim that was written this trial and is active: the one a turn later must reach. Matches by its words, since its id is the store's.
+export const reachesWritten = (needle: string, turn: number, why: string): Receipt => ({
+  why,
+  memory_store: true,
+  holds: (trial) => {
+    const rows = ((trial.final_state as { memory?: { id: number; text: string; status: string; seeded: boolean }[] }).memory ?? []).filter((claim) => !claim.seeded && (claim.status === 'active' || claim.status === 'promoted') && claim.text.toLowerCase().includes(needle.toLowerCase()));
+    return rows.some((claim) => shownClaimIds(trial, turn).has(claim.id));
+  },
+});
+
+// None of these claims or their words reached the model on any turn or came back from a memory read, and no reply carries them:
+// a forgotten or held claim is not shown and is not readable.
+export const neverReaches = (claims: readonly Readonly<{ id: number; needle: string }>[], why: string, turns?: readonly number[]): Receipt => ({
+  why,
+  memory_store: true,
+  holds: (trial) => {
+    const inputs = (trial.model_inputs ?? []).filter((input) => turns === undefined || turns.includes(input.turn));
+    const needles = claims.map((claim) => claim.needle.toLowerCase());
+    return claims.every((claim) => inputs.every((input) => !offeredClaimIds(trial, input.turn).has(claim.id)))
+      && inputs.every((input) => needles.every((needle) => !input.text.toLowerCase().includes(needle)))
+      && trial.toolOutputs.every((entry) => needles.every((needle) => !entry.output.toLowerCase().includes(needle)))
+      && trial.transcript.filter((turn) => turn.role === 'waldo').every((turn) => needles.every((needle) => !turn.text.toLowerCase().includes(needle)));
+  },
+});

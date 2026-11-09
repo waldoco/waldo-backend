@@ -10,10 +10,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 const GUARD = 'scripts/guards/guard-health-leak.mjs';
-const FAKE_CALLBACK_GUARD = 'scripts/guards/guard-fake-callbacks.mjs';
 const DO_ONLY_RUNTIME_GUARD = 'scripts/guards/guard-do-only-runtime.mjs';
 const DO_MIGRATION_GUARD = 'scripts/guards/guard-do-migration-lineage.mjs';
 const AGENT_SURFACE_GUARD = 'scripts/guards/guard-agent-surface-stale-refs.mjs';
+const SURFACE_NEUTRAL_GUARD = 'scripts/guards/guard-surface-neutral-core.mjs';
 
 const LEAK_CASES = [
   { name: 'same-line assignment', code: 'const hrv = 42;\n' },
@@ -37,10 +37,6 @@ function runGuardOn(root) {
   return spawnSync('node', [GUARD, '--root', root], { encoding: 'utf8' });
 }
 
-function runFakeCallbackGuardOn(root) {
-  return spawnSync('node', [FAKE_CALLBACK_GUARD, '--root', root], { encoding: 'utf8' });
-}
-
 function runDoOnlyRuntimeGuardOn(root) {
   return spawnSync('node', [DO_ONLY_RUNTIME_GUARD, '--root', root], { encoding: 'utf8' });
 }
@@ -57,6 +53,72 @@ function runDoMigrationGuardOn(root, baseRef) {
   delete env.GITHUB_BASE_REF;
   delete env.WALDO_DO_MIGRATION_BASE_REF;
   return spawnSync('node', args, { encoding: 'utf8', env });
+}
+
+function runDoMigrationGuardWithEnv(root, overrides, args = []) {
+  const env = { ...process.env };
+  delete env.GITHUB_BASE_REF;
+  delete env.WALDO_DO_MIGRATION_BASE_REF;
+  delete env.WALDO_PR_HEAD_SHA;
+  return spawnSync('node', [DO_MIGRATION_GUARD, '--root', root, ...args], { encoding: 'utf8', env: { ...env, ...overrides } });
+}
+
+// GitHub's pull_request checkout: the PR head merged onto the base as it stood (baseRef), while origin/<base> has since moved
+// on by one commit. checkout picks what HEAD is: the merge ref, the PR head itself, or the PR head merged with base the other
+// way round (the base as second parent). prHead picks what the workflow names as the PR head; by default the true one.
+function runDoMigrationGuardOnStalePullRequest(root, baseRef, headRef, checkout, { prHead, args } = {}) {
+  runFixtureGit(root, ['checkout', '--quiet', baseRef]);
+  writeFileSync(join(root, 'later-on-base.txt'), 'later\n');
+  runFixtureGit(root, ['add', '.']);
+  runFixtureGit(root, ['commit', '--quiet', '-m', 'later on base']);
+  const movedTip = runFixtureGit(root, ['rev-parse', 'HEAD']);
+  runFixtureGit(root, ['update-ref', 'refs/remotes/origin/beta-mvp', movedTip]);
+  if (checkout === 'merge-ref') {
+    runFixtureGit(root, ['checkout', '--quiet', baseRef]);
+    runFixtureGit(root, ['merge', '--quiet', '--no-ff', '-m', 'merge ref', headRef]);
+  } else if (checkout === 'merge-onto-sibling' || checkout === 'octopus') {
+    // A first parent (or a third) that is not in the base branch's history.
+    runFixtureGit(root, ['checkout', '--quiet', '-b', 'sibling', baseRef]);
+    writeFileSync(join(root, 'sibling.txt'), 'sibling\n');
+    runFixtureGit(root, ['add', '.']);
+    runFixtureGit(root, ['commit', '--quiet', '-m', 'sibling']);
+    if (checkout === 'octopus') {
+      runFixtureGit(root, ['checkout', '--quiet', baseRef]);
+      runFixtureGit(root, ['merge', '--quiet', '--no-ff', '-m', 'octopus', headRef, 'sibling']);
+    } else {
+      runFixtureGit(root, ['merge', '--quiet', '--no-ff', '-m', 'merge onto sibling', headRef]);
+    }
+  } else if (checkout === 'head-merged-with-base') {
+    runFixtureGit(root, ['checkout', '--quiet', headRef]);
+    runFixtureGit(root, ['merge', '--quiet', '--no-ff', '-m', 'merge base into head', movedTip]);
+  } else {
+    runFixtureGit(root, ['checkout', '--quiet', headRef]);
+  }
+  const trueHead = checkout === 'head-merged-with-base' ? runFixtureGit(root, ['rev-parse', 'HEAD']) : headRef;
+  const named = prHead === undefined ? trueHead : prHead === 'base' ? baseRef : prHead;
+  return runDoMigrationGuardWithEnv(
+    root,
+    { GITHUB_BASE_REF: 'beta-mvp', ...(named ? { WALDO_PR_HEAD_SHA: named } : {}) },
+    args === 'moved-tip' ? ['--base-ref', movedTip] : [],
+  );
+}
+
+// A push run: no GitHub base, so the base is where HEAD meets origin/main. checkout 'branch' leaves HEAD on the change made
+// on top of main, 'branch-then-more' adds an unrelated commit after it; 'merged-into-main' merges that change into main and points origin/main at the merge, as a push to main does.
+function runDoMigrationGuardOnPush(root, baseRef, headRef, checkout) {
+  if (checkout === 'merged-into-main') {
+    runFixtureGit(root, ['checkout', '--quiet', baseRef]);
+    runFixtureGit(root, ['merge', '--quiet', '--no-ff', '-m', 'merge into main', headRef]);
+    runFixtureGit(root, ['update-ref', 'refs/remotes/origin/main', runFixtureGit(root, ['rev-parse', 'HEAD'])]);
+  } else {
+    runFixtureGit(root, ['update-ref', 'refs/remotes/origin/main', baseRef]);
+    if (checkout === 'branch-then-more') {
+      writeFileSync(join(root, 'more.txt'), 'more\n');
+      runFixtureGit(root, ['add', '.']);
+      runFixtureGit(root, ['commit', '--quiet', '-m', 'more']);
+    }
+  }
+  return runDoMigrationGuardWithEnv(root, {});
 }
 
 function runDoMigrationGuardWithoutFixtureMode(root) {
@@ -196,6 +258,64 @@ if (
   !unversionedDoMigration.stderr.includes('migration history is unavailable')
 ) {
   process.stderr.write('guards-selftest: guard-do-migration-lineage ACCEPTED implicit unversioned mode\n');
+  failures += 1;
+}
+
+// Retirement policy: a historical migration leaves the chain only with a retired reservation.
+const THREE_MIGRATIONS = `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const SECOND: DoMigration = { version: 2, name: 'second', up: [], down: [] };
+export const THIRD: DoMigration = { version: 3, name: 'third', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST, SECOND, THIRD] as const;
+`;
+const THREE_RESERVATIONS = {
+  allocation: 'rebase_then_append',
+  migrations: [{ version: 1, name: 'first' }, { version: 2, name: 'second' }, { version: 3, name: 'third' }],
+};
+const WITHOUT_SECOND = `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const THIRD: DoMigration = { version: 3, name: 'third', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST, THIRD] as const;
+`;
+const SECOND_RETIRED = {
+  allocation: 'rebase_then_append',
+  migrations: [{ version: 1, name: 'first' }, { version: 2, name: 'second', retired: true }, { version: 3, name: 'third' }],
+};
+const retiredHistorical = withVersionedDoMigrationFixture(
+  THREE_MIGRATIONS, THREE_RESERVATIONS, WITHOUT_SECOND, SECOND_RETIRED,
+  (root, baseRef) => runDoMigrationGuardOn(root, baseRef),
+);
+if (retiredHistorical.status !== 0) {
+  process.stderr.write(`guards-selftest: guard-do-migration-lineage REJECTED a retired historical migration:\n${retiredHistorical.stderr}`);
+  failures += 1;
+}
+const removedHistorical = withVersionedDoMigrationFixture(
+  THREE_MIGRATIONS, THREE_RESERVATIONS, WITHOUT_SECOND,
+  { allocation: 'rebase_then_append', migrations: [{ version: 1, name: 'first' }, { version: 2, name: 'second' }, { version: 3, name: 'third' }] },
+  (root, baseRef) => runDoMigrationGuardOn(root, baseRef),
+);
+if (removedHistorical.status === 0 || !removedHistorical.stderr.includes('historical migration 2 changed')) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage MISSED an unretired historical removal\n');
+  failures += 1;
+}
+const retiredStillChained = withVersionedDoMigrationFixture(
+  THREE_MIGRATIONS, THREE_RESERVATIONS, THREE_MIGRATIONS, SECOND_RETIRED,
+  (root, baseRef) => runDoMigrationGuardOn(root, baseRef),
+);
+if (retiredStillChained.status === 0) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage ACCEPTED a retired migration still in the chain\n');
+  failures += 1;
+}
+const reusedRetired = withVersionedDoMigrationFixture(
+  WITHOUT_SECOND, SECOND_RETIRED,
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const SECOND: DoMigration = { version: 2, name: 'second', up: [], down: [] };
+export const THIRD: DoMigration = { version: 3, name: 'third', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST, SECOND, THIRD] as const;
+`,
+  THREE_RESERVATIONS,
+  (root, baseRef) => runDoMigrationGuardOn(root, baseRef),
+);
+if (reusedRetired.status === 0 || !reusedRetired.stderr.includes('retired reservation 2 cannot be reused')) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage MISSED reuse of a retired version\n');
   failures += 1;
 }
 
@@ -543,7 +663,7 @@ export const DO_SCHEMA_MIGRATIONS = [SECOND, FIRST] as const;
 );
 if (
   reorderedDoMigration.status === 0 ||
-  !reorderedDoMigration.stderr.includes('reserve version 1')
+  !reorderedDoMigration.stderr.includes('versions must increase')
 ) {
   process.stderr.write('guards-selftest: guard-do-migration-lineage MISSED reordered chain\n');
   failures += 1;
@@ -687,6 +807,93 @@ if (!reportsClean(inlineCommentDoMigration)) {
   failures += 1;
 }
 
+const FIRST_ONLY = `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`;
+const FIRST_RESERVED = { allocation: 'rebase_then_append', migrations: [{ version: 1, name: 'first' }] };
+const appendsSecond = [
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const SECOND: DoMigration = { version: 2, name: 'second', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST, SECOND] as const;
+`,
+  { allocation: 'rebase_then_append', migrations: [{ version: 1, name: 'first' }, { version: 2, name: 'second' }] },
+];
+const rewritesFirst = [
+  `export const FIRST: DoMigration = { version: 1, name: 'rewritten', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  { allocation: 'rebase_then_append', migrations: [{ version: 1, name: 'rewritten' }] },
+];
+
+const staleMergeRefAppend = withVersionedDoMigrationFixture(FIRST_ONLY, FIRST_RESERVED, ...appendsSecond, (root, baseRef, headRef) =>
+  runDoMigrationGuardOnStalePullRequest(root, baseRef, headRef, 'merge-ref'));
+if (!reportsClean(staleMergeRefAppend)) {
+  process.stderr.write(
+    `guards-selftest: guard-do-migration-lineage FALSE POSITIVE on a pull request merged onto a base that has since moved:\n${staleMergeRefAppend.stderr}`,
+  );
+  failures += 1;
+}
+
+const staleMergeRefRewrite = withVersionedDoMigrationFixture(FIRST_ONLY, FIRST_RESERVED, ...rewritesFirst, (root, baseRef, headRef) =>
+  runDoMigrationGuardOnStalePullRequest(root, baseRef, headRef, 'merge-ref'));
+if (staleMergeRefRewrite.status === 0 || !staleMergeRefRewrite.stderr.includes('historical migration 1 changed')) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage MISSED historical rewrite in a stale pull request merge\n');
+  failures += 1;
+}
+
+for (const checkout of ['head', 'head-merged-with-base']) {
+  const staleOtherHead = withVersionedDoMigrationFixture(FIRST_ONLY, FIRST_RESERVED, ...appendsSecond, (root, baseRef, headRef) =>
+    runDoMigrationGuardOnStalePullRequest(root, baseRef, headRef, checkout));
+  const expected = checkout === 'head' ? 'must be a strict ancestor of HEAD' : null;
+  if (expected ? staleOtherHead.status === 0 || !staleOtherHead.stderr.includes(expected) : !reportsClean(staleOtherHead)) {
+    process.stderr.write(
+      `guards-selftest: guard-do-migration-lineage wrong on a pull request checkout of ${checkout} with a moved base:\n${staleOtherHead.stderr}`,
+    );
+    failures += 1;
+  }
+}
+
+// The merge's first parent is trusted only when its second parent is the PR head the workflow names, and only when no base
+// was given explicitly.
+for (const [label, options] of [
+  ['no PR head named', { prHead: '' }],
+  ['another commit named as the PR head', { prHead: 'base' }],
+  ['a malformed PR head', { prHead: 'HEAD^2' }],
+  ['an explicit base', { args: 'moved-tip' }],
+  ['a first parent outside the base branch', { checkout: 'merge-onto-sibling' }],
+  ['three parents', { checkout: 'octopus' }],
+]) {
+  const untrusted = withVersionedDoMigrationFixture(FIRST_ONLY, FIRST_RESERVED, ...appendsSecond, (root, baseRef, headRef) =>
+    runDoMigrationGuardOnStalePullRequest(root, baseRef, headRef, options.checkout ?? 'merge-ref', options));
+  if (untrusted.status === 0 || !untrusted.stderr.includes('must be a strict ancestor of HEAD')) {
+    process.stderr.write(`guards-selftest: guard-do-migration-lineage TRUSTED a stale merge ref with ${label}\n`);
+    failures += 1;
+  }
+}
+
+for (const [label, change, checkout, expected] of [
+  ['an append on a branch', appendsSecond, 'branch', null],
+  ['a rewrite on a branch', rewritesFirst, 'branch', 'historical migration 1 changed'],
+  ['a rewrite on a branch with a later commit', rewritesFirst, 'branch-then-more', 'historical migration 1 changed'],
+  ['an append merged into main', appendsSecond, 'merged-into-main', null],
+  ['a rewrite merged into main', rewritesFirst, 'merged-into-main', 'historical migration 1 changed'],
+]) {
+  const push = withVersionedDoMigrationFixture(FIRST_ONLY, FIRST_RESERVED, ...change, (root, baseRef, headRef) =>
+    runDoMigrationGuardOnPush(root, baseRef, headRef, checkout));
+  if (expected ? push.status === 0 || !push.stderr.includes(expected) : !reportsClean(push)) {
+    process.stderr.write(`guards-selftest: guard-do-migration-lineage wrong on a push of ${label}:\n${push.stderr}`);
+    failures += 1;
+  }
+}
+
+// A PR head that merged the base in has its own earlier commit as first parent; that commit is not a base to check against.
+const headMergedWithBaseRewrite = withVersionedDoMigrationFixture(FIRST_ONLY, FIRST_RESERVED, ...rewritesFirst, (root, baseRef, headRef) =>
+  runDoMigrationGuardOnStalePullRequest(root, baseRef, headRef, 'head-merged-with-base'));
+if (headMergedWithBaseRewrite.status === 0 || !headMergedWithBaseRewrite.stderr.includes('historical migration 1 changed')) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage MISSED historical rewrite in a PR head that merged its base\n');
+  failures += 1;
+}
+
 const cleanDoMigration = withDoMigrationFixture(
   `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
 export const SECOND: DoMigration = { version: 2, name: 'second', up: [], down: [] };
@@ -749,46 +956,6 @@ const basisPoints = withFixture(
 if (basisPoints.stderr.trim() !== '') {
   process.stderr.write(
     `guards-selftest: guard-health-leak FALSE POSITIVE on basis-points shorthand:\n${basisPoints.stderr}`,
-  );
-  failures += 1;
-}
-
-const fakeCallbackViolation = withFixture(
-  'packages/runtime/src/run-loop/do.ts',
-  `class RunLoopDO {
-  constructor() {
-    this.gateway = new FakeRunLoopGateway();
-  }
-  rebuildInvocationContext() {
-    return {
-      rateLimitCheck: () => true,
-      hasApproval: () => true,
-      sanitise: ({ text }) => ({ ok: true, output: text, redactions: [] }),
-      medicalGate: () => true,
-    };
-  }
-}
-`,
-  runFakeCallbackGuardOn,
-);
-if (!fakeCallbackViolation.stderr.includes('packages/runtime/src/run-loop/do.ts')) {
-  process.stderr.write('guards-selftest: guard-fake-callbacks MISSED production fake/stub wiring\n');
-  failures += 1;
-}
-
-const fakeCallbackClean = withFixture(
-  'packages/runtime/src/run-loop/do.ts',
-  `class RunLoopDO {
-  constructor(env) {
-    this.adapters = resolveRunLoopAdapters(env);
-  }
-}
-`,
-  runFakeCallbackGuardOn,
-);
-if (fakeCallbackClean.stderr.trim() !== '') {
-  process.stderr.write(
-    `guards-selftest: guard-fake-callbacks FALSE POSITIVE on resolver wiring:\n${fakeCallbackClean.stderr}`,
   );
   failures += 1;
 }
@@ -1044,6 +1211,138 @@ if (legitimateSupabaseFunction.status !== 0 || legitimateSupabaseFunction.stderr
   process.stderr.write(
     `guards-selftest: guard-do-only-runtime FALSE POSITIVE on mint-agent-jwt:\n${legitimateSupabaseFunction.stderr}`,
   );
+  failures += 1;
+}
+
+// guard-wake-due-keys: a slot listing one key, then lanes that write an unlisted key, arm without a key, re-arm with a bare
+// null for the schedule, or are clean.
+const WAKE_GUARD = 'scripts/guards/guard-wake-due-keys.mjs';
+const WAKE_SLOT = "export const LANE_DUE_KEY = 'lane_due_v1';\nexport const WAKE_DUE_KEYS = [\n  LANE_DUE_KEY, 'other_due_v1',\n] as const;\n";
+function withWakeFixture(lanes) {
+  const root = mkdtempSync(join(tmpdir(), 'guard-selftest-'));
+  try {
+    for (const [path, code] of Object.entries({ 'packages/runtime/src/scheduler/alarm-slot.ts': WAKE_SLOT, ...lanes })) {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), code);
+    }
+    return spawnSync('node', [WAKE_GUARD, '--root', root], { encoding: 'utf8' });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+const WAKE_CASES = [
+  { name: 'an unlisted due key', lanes: { 'packages/runtime/src/channels/lane.ts': "kv.put('stray_due_v1', due);\n" }, finds: "'stray_due_v1'" },
+  { name: 'an arm without a listed key', lanes: { 'packages/runtime/src/channels/lane.ts': 'await armAlarm(storage, due);\n' }, finds: 'channels/lane.ts: arms the owner alarm' },
+  { name: 'a re-arm with a bare null for the schedule', lanes: { 'packages/runtime/src/channels/lane.ts': 'await rearmSharedAlarm(this.ctx.storage,\n  null, Date.now());\n' }, finds: 'channels/lane.ts: re-arms the owner alarm with a bare null' },
+];
+for (const { name, lanes, finds } of WAKE_CASES) {
+  const result = withWakeFixture(lanes);
+  if (result.status === 0 || !result.stderr.includes(finds)) {
+    process.stderr.write(`guards-selftest: guard-wake-due-keys MISSED ${name}\n${result.stderr}`);
+    failures += 1;
+  }
+}
+const wakeClean = withWakeFixture({
+  'packages/runtime/src/channels/lane.ts': "kv.put(LANE_DUE_KEY, due);\nawait armAlarm(storage, due);\nawait rearmSharedAlarm(storage, bound, now);\nawait rearmSharedAlarm(storage, held ? retry : NO_SCHEDULE_WAKE, now, 30_000);\n",
+  'packages/runtime/src/channels/other.ts': "kv.put('other_due_v1', due);\nawait armAlarm(storage, due);\n",
+  'packages/runtime/src/devices/device-bridge-do.ts': "await armAlarm(this.ctx.storage, due);\nkv.put('bridge_due_v1', due);\n",
+});
+if (wakeClean.status !== 0) {
+  process.stderr.write(`guards-selftest: guard-wake-due-keys FALSE POSITIVE on keyed lanes or another object's alarm:\n${wakeClean.stderr}`);
+  failures += 1;
+}
+
+// The surface ratchet: a fixture repo with the contract's surface list, a baseline and one
+// core file carrying one of each compare form the guard counts, plus a typeof check it must not.
+const SURFACE_CONTRACT = `const MESSAGING_SURFACES = ['telegram', 'whatsapp', 'imessage'] as const;
+export const surfaceNameV1Schema = z.enum(['app', ...MESSAGING_SURFACES, 'console']);
+`;
+const SURFACE_CORE = `const a = channel === 'telegram';
+switch (kind) { case 'app': break; }
+const b = mode !== "console";
+const c = name === surface;
+const d = typeof turn.channel === 'string';
+`;
+const SURFACE_CORE_PATH = 'packages/runtime/src/channels/core.ts';
+
+function runSurfaceNeutralGuardWith(baseline, fileName, code) {
+  const root = mkdtempSync(join(tmpdir(), 'guard-selftest-'));
+  try {
+    for (const [path, body] of [
+      ['packages/contracts/src/app/surfaces.ts', SURFACE_CONTRACT],
+      ['scripts/guards/guard-surface-neutral-core.baseline.json', `${JSON.stringify(baseline)}\n`],
+      [fileName, code],
+    ]) {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), body);
+    }
+    return spawnSync('node', [SURFACE_NEUTRAL_GUARD, '--root', root], { encoding: 'utf8' });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+const surfaceCountHeld = runSurfaceNeutralGuardWith({ [SURFACE_CORE_PATH]: 4 }, SURFACE_CORE_PATH, SURFACE_CORE);
+if (!reportsClean(surfaceCountHeld) || !surfaceCountHeld.stdout.includes('4 surface compares')) {
+  process.stderr.write(
+    `guards-selftest: guard-surface-neutral-core MISCOUNTED the compare forms:\n${surfaceCountHeld.stdout}${surfaceCountHeld.stderr}`,
+  );
+  failures += 1;
+}
+
+const surfaceCountRose = runSurfaceNeutralGuardWith({ [SURFACE_CORE_PATH]: 3 }, SURFACE_CORE_PATH, SURFACE_CORE);
+if (surfaceCountRose.status === 0 || !surfaceCountRose.stderr.includes(`${SURFACE_CORE_PATH}: 4 surface compares, baseline 3`)) {
+  process.stderr.write('guards-selftest: guard-surface-neutral-core MISSED a new surface compare\n');
+  failures += 1;
+}
+
+const surfaceCountFell = runSurfaceNeutralGuardWith({ [SURFACE_CORE_PATH]: 5 }, SURFACE_CORE_PATH, SURFACE_CORE);
+if (surfaceCountFell.status === 0 || !surfaceCountFell.stderr.includes('lower it to 4')) {
+  process.stderr.write('guards-selftest: guard-surface-neutral-core LET a stale baseline stand\n');
+  failures += 1;
+}
+
+const surfaceFileGone = runSurfaceNeutralGuardWith({ [SURFACE_CORE_PATH]: 4 }, 'packages/runtime/src/elsewhere.ts', 'export {};\n');
+if (surfaceFileGone.status === 0 || !surfaceFileGone.stderr.includes('remove its entry')) {
+  process.stderr.write('guards-selftest: guard-surface-neutral-core LET a baseline entry outlive its file\n');
+  failures += 1;
+}
+
+const surfaceCompareOutsideBaseline = runSurfaceNeutralGuardWith({}, 'packages/runtime/src/fresh.ts', "if (surface === 'app') {}\n");
+if (surfaceCompareOutsideBaseline.status === 0 || !surfaceCompareOutsideBaseline.stderr.includes('baseline 0')) {
+  process.stderr.write('guards-selftest: guard-surface-neutral-core MISSED a surface compare in a new file\n');
+  failures += 1;
+}
+
+const surfaceCompareInTest = runSurfaceNeutralGuardWith({}, 'packages/runtime/src/channels/core.test.ts', SURFACE_CORE);
+if (!reportsClean(surfaceCompareInTest)) {
+  process.stderr.write(`guards-selftest: guard-surface-neutral-core FALSE POSITIVE on a test file:\n${surfaceCompareInTest.stderr}`);
+  failures += 1;
+}
+
+const runEdgeImportGuardWith = (libSpecifier) => {
+  const root = mkdtempSync(join(tmpdir(), 'edge-imports-'));
+  try {
+    mkdirSync(join(root, 'supabase', 'functions', 'f'), { recursive: true });
+    mkdirSync(join(root, 'packages', 'lib'), { recursive: true });
+    writeFileSync(join(root, 'supabase', 'functions', 'f', 'index.ts'), "import { a } from '../../../packages/lib/a.ts';\n");
+    writeFileSync(join(root, 'packages', 'lib', 'a.ts'), `import { b } from '${libSpecifier}';\nexport const a = b;\n`);
+    writeFileSync(join(root, 'packages', 'lib', 'b.ts'), 'export const b = 1;\n');
+    return spawnSync('node', ['scripts/guards/guard-edge-function-imports.mjs', '--root', root], { encoding: 'utf8' });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+};
+
+const edgeImportBare = runEdgeImportGuardWith('./b');
+if (edgeImportBare.status === 0 || !edgeImportBare.stderr.includes("imports './b'")) {
+  process.stderr.write('guards-selftest: guard-edge-function-imports MISSED an extensionless import two hops from a function\n');
+  failures += 1;
+}
+
+const edgeImportExplicit = runEdgeImportGuardWith('./b.ts');
+if (edgeImportExplicit.status !== 0) {
+  process.stderr.write(`guards-selftest: guard-edge-function-imports FALSE POSITIVE on an explicit extension:\n${edgeImportExplicit.stderr}`);
   failures += 1;
 }
 

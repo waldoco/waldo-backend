@@ -1,12 +1,16 @@
 import OpenAI from 'openai';
+import { validModelCredential } from './credential-shape';
 import {
   OPENAI_PROVIDER,
+  OPENAI_REASONING,
   PROVIDER_OF,
+  type LLMTool,
   type ModelName,
-  type AdapterResult,
-  type LLMResponse,
 } from '@waldo/contracts';
-import type { LLMGatewayAdapter, LLMGatewayRequest } from './provider';
+import { fromOpenAIStrictArguments, openAIStrictParameters } from './strict-schema';
+import { outputItemProvider, type LLMGatewayAdapter, type LLMGatewayRequest, type LLMGatewayResult, type ProviderRetryAdvice } from './provider';
+import type { ReplyDeltaSink } from '../conversation/reply-stream';
+import { callTimeLeftMs, FIRST_TOKEN_TIMEOUT_MS, MODEL_CALL_TIMEOUT_MS } from './time-budget';
 
 export type OpenAIResponsesClient = Pick<OpenAI, 'responses'>;
 
@@ -15,6 +19,7 @@ export type OpenAIAdapterOptions = Readonly<{
   timeoutMs?: number;
   client?: OpenAIResponsesClient;
   onResponseMetadata?: (metadata: OpenAIResponseMetadata) => void;
+  firstTokenTimeoutMs?: number;
 }>;
 
 export type OpenAIResponseMetadata = Readonly<{
@@ -31,61 +36,118 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
   private readonly timeoutMs: number;
   private readonly missingKey: boolean;
   private readonly onResponseMetadata: ((metadata: OpenAIResponseMetadata) => void) | undefined;
+  private readonly firstTokenTimeoutMs: number;
 
   constructor(options: OpenAIAdapterOptions) {
-    this.timeoutMs = options.timeoutMs ?? 30_000;
+    this.timeoutMs = options.timeoutMs ?? MODEL_CALL_TIMEOUT_MS;
+    this.firstTokenTimeoutMs = options.firstTokenTimeoutMs ?? FIRST_TOKEN_TIMEOUT_MS;
     this.onResponseMetadata = options.onResponseMetadata;
-    this.missingKey = options.client === undefined && (options.apiKey?.trim().length ?? 0) === 0;
-    this.client = options.client ?? (this.missingKey ? undefined : new OpenAI({
+    this.missingKey = options.apiKey !== undefined ? !validModelCredential(options.apiKey) : options.client === undefined;
+    // The provider's attempt plan is the one retry owner. An SDK retry is invisible to the trace, the circuit breaker and
+    // the spend meter, and its backoff sleep outlasts both the turn's deadline and a stop.
+    this.client = this.missingKey ? undefined : options.client ?? new OpenAI({
       apiKey: options.apiKey,
       maxRetries: 0,
       timeout: this.timeoutMs,
-    }));
+    });
   }
 
-  async complete(input: LLMGatewayRequest): Promise<AdapterResult<LLMResponse>> {
+  async complete(input: LLMGatewayRequest): Promise<LLMGatewayResult> {
     if (PROVIDER_OF[input.request.model] !== OPENAI_PROVIDER || input.step.provider !== OPENAI_PROVIDER) {
       return { ok: false, code: 'invalid_args', error: 'OpenAI adapter received an unsupported route' };
+    }
+    // Refused, never mapped to a nearby effort: a mapped effort would silently change how much the model reasons.
+    const reasoning = OPENAI_REASONING[input.request.model];
+    const effort = input.request.reasoning_effort ?? reasoning?.effort;
+    if (reasoning === undefined || effort === undefined || !reasoning.accepts.includes(effort)) {
+      return { ok: false, code: 'invalid_args', error: 'OpenAI adapter received a reasoning effort the model does not accept' };
     }
     if (this.missingKey || this.client === undefined) {
       return { ok: false, code: 'auth_failed', error: 'OPENAI_API_KEY is unavailable' };
     }
 
+    input.runScope?.admit();
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const abortRun = () => controller.abort();
+    input.runScope?.signal.addEventListener('abort', abortRun, { once: true });
+    // The request's own limit, cut to what is left of the turn.
+    const timeout = setTimeout(() => controller.abort(), Math.max(0, Math.min(this.timeoutMs, callTimeLeftMs(input.runScope))));
     const startedAt = Date.now();
+    // Declared outside the try: a search-only response, or an answer sent back for citing a test site, was billed even when
+    // the call after it fails.
+    const searched: OpenAI.Responses.ResponseOutputItem[] = [];
+    const searchSpent = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_write_input_tokens: 0 };
+    let billedRounds = 0;
     try {
-      const response = await this.client.responses.create(
-        {
+      const body: OpenAI.Responses.ResponseCreateParamsNonStreaming = {
           model: input.request.model,
           instructions: input.request.system,
           input: responsesInput(input.request),
           max_output_tokens: input.request.max_tokens,
-          reasoning: { effort: 'low', summary: 'auto' },
+          store: false,
+          reasoning: { effort, summary: 'auto' },
           ...(input.request.cache_key ? { prompt_cache_key: input.request.cache_key } : {}),
-          ...(input.request.tools ? { tools: input.request.tools.map((tool) => ({ type: 'function' as const, name: tool.name, description: tool.description, parameters: tool.parameters, strict: false })) } : {}),
+          ...(input.request.tools || input.request.web_search ? { tools: [
+            ...functionTools(input.request),
+            ...(input.request.web_search ? [hostedWebSearch(input.request.web_search)] : []),
+          ] } : {}),
           ...(input.request.response_format ? { text: { format: { type: 'json_schema' as const, name: input.request.response_format.name, schema: input.request.response_format.schema, strict: true } } } : {}),
-        },
-        { signal: controller.signal },
-      );
-      if (response.status === 'incomplete') {
-        return { ok: false, code: 'oversize', error: `OpenAI output incomplete: ${response.incomplete_details?.reason ?? 'unknown'}` };
+      };
+      const client = this.client;
+      let ttftMs: number | undefined;
+      const send = async (params: OpenAI.Responses.ResponseCreateParamsNonStreaming) => {
+        if (!input.stream) return client.responses.create(params, { signal: controller.signal });
+        // Only a call with a usable provider ahead (the provider decides) has somewhere to go when the first token is late;
+        // without one the call keeps its whole limit, as an unstreamed call does.
+        const streamed = await streamedResponse(client, params, controller, input.stream, input.failoverAhead ? this.firstTokenTimeoutMs : undefined);
+        ttftMs ??= streamed.ttftMs;
+        return streamed.response;
+      };
+      const asked = typeof body.input === 'string' ? [{ role: 'user' as const, content: body.input }] : body.input ?? [];
+      const bill = (billed: OpenAI.Responses.Response) => {
+        billedRounds += 1;
+        searchSpent.input_tokens += billed.usage?.input_tokens ?? 0;
+        searchSpent.output_tokens += billed.usage?.output_tokens ?? 0;
+        searchSpent.cache_read_input_tokens += billed.usage?.input_tokens_details?.cached_tokens ?? 0;
+        searchSpent.cache_write_input_tokens += cacheWrites(billed);
+      };
+      let response = await send(body);
+      // A response that only searched for tools has not answered yet: it is continued with its search items, as a round
+      // after a search replays them, and the items lead the answer's own so later rounds replay the whole search.
+      for (let continuation = 0; continuation < SEARCH_CONTINUATIONS && onlySearched(response); continuation += 1) {
+        searched.push(...response.output);
+        bill(response);
+        response = await send({ ...body, input: [...asked, ...searched as unknown as OpenAI.Responses.ResponseInputItem[]] });
       }
-      const text = responseText(response).trim();
-      const toolCalls = response.output.flatMap((item) => item.type === 'function_call' ? [{ call_id: item.call_id, name: item.name, arguments: item.arguments }] : []);
+      const text = withOneSource(responseText(response).trim(), response);
+      const strictSent = strictParametersByTool(input.request);
+      const toolCalls = response.output.flatMap((item) => item.type === 'function_call' ? [{ call_id: item.call_id, name: item.name, arguments: strictSent.has(item.name) ? fromOpenAIStrictArguments(item.arguments, strictSent.get(item.name)!) : item.arguments }] : []);
+      const incomplete = response.status === 'incomplete';
+      const written = searchSpent.cache_write_input_tokens + cacheWrites(response);
+      const spent = {
+        input_tokens: searchSpent.input_tokens + (response.usage?.input_tokens ?? 0),
+        output_tokens: searchSpent.output_tokens + (response.usage?.output_tokens ?? 0),
+        cache_read_input_tokens: searchSpent.cache_read_input_tokens + (response.usage?.input_tokens_details?.cached_tokens ?? 0),
+        ...(written > 0 ? { cache_write_input_tokens: written } : {}),
+      };
+      if (incomplete && text.length === 0 && toolCalls.length === 0) {
+        return { ok: false, code: 'oversize', error: `OpenAI output incomplete: ${response.incomplete_details?.reason ?? 'unknown'}`, spent };
+      }
+      // A reply that is only reasoning (no text, no tool call) is a transient model miss: the provider asks once more,
+      // and the tokens it cost still count.
+      if (text.length === 0 && toolCalls.length === 0) {
+        return { ok: false, code: 'transient', error: 'OpenAI returned empty output', spent };
+      }
       const parsed = {
         model: input.request.model,
         text,
         ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
-        input_tokens: response.usage?.input_tokens ?? 0,
-        output_tokens: response.usage?.output_tokens ?? 0,
-        cache_read_input_tokens: response.usage?.input_tokens_details?.cached_tokens ?? 0,
-        output_items: response.output.map((item) => item as unknown as Record<string, unknown>),
+        ...spent,
+        output_items: [...searched, ...response.output].map((item) => item as unknown as Record<string, unknown>),
         latency_ms: Date.now() - startedAt,
+        ...(incomplete ? { truncated: true } : {}),
+        ...(ttftMs === undefined ? {} : { ttft_ms: ttftMs }),
       };
-      if (text.length === 0 && toolCalls.length === 0) {
-        return { ok: false, code: 'invalid_args', error: 'OpenAI returned empty output' };
-      }
       this.onResponseMetadata?.({
         response_id: response.id,
         model: input.request.model,
@@ -96,39 +158,218 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
       });
       return { ok: true, data: parsed };
     } catch (error) {
-      return { ok: false, code: openAIErrorCode(error), error: 'OpenAI request failed' };
+      if (error instanceof FirstTokenTimeout) return { ok: false, code: 'transient', error: 'OpenAI first token timed out', retry: { allowed: false }, firstTokenLate: true, ...(billedRounds > 0 ? { spent: searchSpent } : {}) };
+      // Only identifiers cross into the trace (status, provider error code, offending parameter name); the provider's message can quote the request.
+      const detail = error instanceof OpenAI.APIError
+        ? ` (${[error.status, error.code, error.param].filter((part) => part !== undefined && part !== null && part !== '').join(' ')})`
+        : '';
+      const retry = error instanceof OpenAI.APIError ? retryAdvice(error.headers) : undefined;
+      return { ok: false, code: openAIErrorCode(error), error: `OpenAI request failed${detail}`, ...(retry ? { retry } : {}), ...(billedRounds > 0 ? { spent: searchSpent } : {}) };
     } finally {
       clearTimeout(timeout);
+      input.runScope?.signal.removeEventListener('abort', abortRun);
     }
   }
 }
 
-function responsesInput(request: LLMGatewayRequest['request']): OpenAI.Responses.ResponseCreateParams['input'] {
-  const text = request.messages.map((message) => `${message.role}: ${message.content}`).join('\n');
-  if (!request.attachments && !request.tool_turns) return text;
+class FirstTokenTimeout extends Error {}
+
+// One create, streamed. The response's first message streams to the reply only when the model labels it its final answer
+// (the Responses API `phase`; the installed SDK does not type it yet): commentary, reasoning and an unlabelled message never
+// do. A tool call after it takes it back. The terminal event carries the same Response the unstreamed call returns, so
+// everything after this reads one shape. With `firstTokenMs`, a model that has emitted no output item or delta by then is
+// abandoned; `ttftMs` is the time to that first output.
+async function streamedResponse(client: OpenAIResponsesClient, body: OpenAI.Responses.ResponseCreateParamsNonStreaming, controller: AbortController, sink: ReplyDeltaSink, firstTokenMs?: number): Promise<Readonly<{ response: OpenAI.Responses.Response; ttftMs?: number }>> {
+  const sentAt = Date.now();
+  let ttftMs: number | undefined, late = false;
+  const watchdog = firstTokenMs === undefined ? undefined : setTimeout(() => { late = true; controller.abort(); }, firstTokenMs);
+  try {
+    const events = await client.responses.create({ ...body, stream: true }, { signal: controller.signal });
+    let messages = 0, streaming: number | null = null, streamed = false;
+    for await (const event of events) {
+      if (ttftMs === undefined && (event.type === 'response.output_item.added' || event.type.endsWith('.delta'))) {
+        ttftMs = Date.now() - sentAt;
+        clearTimeout(watchdog);
+      }
+      if (event.type === 'response.output_item.added') {
+        if (event.item.type === 'message') {
+          messages += 1;
+          streaming = messages === 1 && (event.item as { phase?: unknown }).phase === 'final_answer' ? event.output_index : null;
+        } else if (event.item.type === 'function_call' && streamed) {
+          streamed = false;
+          sink.retract();
+        }
+      } else if (event.type === 'response.output_text.delta' && event.output_index === streaming) {
+        streamed = true;
+        sink.delta(event.delta);
+      } else if (event.type === 'response.completed' || event.type === 'response.incomplete') {
+        return { response: event.response, ...(ttftMs === undefined ? {} : { ttftMs }) };
+      } else if (event.type === 'response.failed' || event.type === 'error') {
+        throw new Error(`OpenAI stream ${event.type}`);
+      }
+    }
+    throw new Error('OpenAI stream ended without a result');
+  } catch (error) {
+    throw late ? new FirstTokenTimeout() : error;
+  } finally {
+    clearTimeout(watchdog);
+  }
+}
+
+// Without tool search every function goes up front, non-strict, as it always has. With it (the tool search guide,
+// Responses API): core functions go up front with strict schemas where they fit the documented subset, each deferred
+// function goes into its namespace with defer_loading, and the hosted tool_search tool loads a namespace when the model
+// asks. Loaded tools are injected at the end of the context, so the cached prefix holds.
+function functionTools(request: LLMGatewayRequest['request']): OpenAI.Responses.Tool[] {
+  const tools = request.tools ?? [];
+  if (!request.tool_search) return tools.map((tool) => ({ type: 'function' as const, name: tool.name, description: tool.description, parameters: tool.parameters, strict: false }));
+  const strictFunction = (tool: LLMTool, deferred: boolean) => {
+    const strict = openAIStrictParameters(tool.parameters);
+    return { type: 'function', name: tool.name, description: tool.description, parameters: strict ?? tool.parameters, strict: strict !== null, ...(deferred ? { defer_loading: true } : {}) };
+  };
+  const namespaces = new Map<string, unknown[]>();
+  const core: unknown[] = [];
+  const called = calledWithoutLoading(request);
+  for (const tool of tools) {
+    if (tool.defer_loading && tool.namespace && request.tool_search.namespaces[tool.namespace] && !called.has(tool.name)) {
+      const members = namespaces.get(tool.namespace) ?? [];
+      members.push(strictFunction(tool, true));
+      namespaces.set(tool.namespace, members);
+    } else core.push(strictFunction(tool, false));
+  }
+  // The installed SDK has no types for namespaces, defer_loading or tool_search; the API takes them as documented.
   return [
-    {
-      role: 'user',
-      content: [
-        { type: 'input_text', text },
-        ...(request.attachments ?? []).map((file): OpenAI.Responses.ResponseInputContent => {
-          const data = `data:${file.mime_type};base64,${file.data_base64}`;
-          return file.kind === 'image'
-            ? { type: 'input_image', image_url: data, detail: 'auto' }
-            : { type: 'input_file', filename: file.filename, file_data: data };
-        }),
-      ],
-    },
-    ...(request.tool_turns ?? []).flatMap((turn): OpenAI.Responses.ResponseInputItem[] => {
-      const prior = (turn.prior_items ?? []) as unknown as OpenAI.Responses.ResponseInputItem[];
-      const included = prior.some((item) => (item as { type?: string }).type === 'function_call' && (item as { call_id?: string }).call_id === turn.call.call_id);
-      return [
-        ...prior,
-        ...(included ? [] : [{ type: 'function_call' as const, call_id: turn.call.call_id, name: turn.call.name, arguments: turn.call.arguments }]),
-        { type: 'function_call_output' as const, call_id: turn.call.call_id, output: turn.output },
-      ];
-    }),
+    ...core,
+    ...[...namespaces].map(([name, members]) => ({ type: 'namespace', name, description: request.tool_search!.namespaces[name], tools: members })),
+    ...(namespaces.size ? [{ type: 'tool_search' }] : []),
+  ] as unknown as OpenAI.Responses.Tool[];
+}
+
+// Each continuation is a billed call; past this many a response that keeps only searching fails as an empty one does, and
+// the provider's attempt plan decides what follows.
+// Prompt tokens written to the cache, which the routed models bill at the write rate and report beside cached_tokens
+// (https://developers.openai.com/api/docs/guides/prompt-caching). The pinned SDK's types predate the field.
+const cacheWrites = (response: OpenAI.Responses.Response): number => {
+  const written = (response.usage?.input_tokens_details as { cache_write_tokens?: unknown } | undefined)?.cache_write_tokens;
+  return typeof written === 'number' && Number.isInteger(written) && written > 0 ? written : 0;
+};
+const SEARCH_CONTINUATIONS = 2;
+const onlySearched = (response: OpenAI.Responses.Response): boolean => response.status !== 'incomplete'
+  && response.output.some((item) => (item.type as string) === 'tool_search_output')
+  && response.output.every((item) => ['tool_search_call', 'tool_search_output', 'reasoning'].includes(item.type as string));
+
+// A deferred function the replayed history calls without the search output that loaded it goes up front: a round
+// another provider ran is rebuilt from its call record with no namespace, and a trimmed history can drop the round whose
+// search loaded it. Only then does the list change; a turn on this provider alone replays its searches.
+function calledWithoutLoading(request: LLMGatewayRequest['request']): Set<string> {
+  const loaded = new Set<string>();
+  const called = new Set<string>();
+  const rebuilt = new Set<string>();
+  const replayed = new Set<string>();
+  for (const turn of request.tool_turns ?? []) {
+    for (const item of (turn.prior_items ?? []).filter((prior) => outputItemProvider(prior) === OPENAI_PROVIDER)) {
+      if (item.type === 'function_call' && typeof item.call_id === 'string') replayed.add(item.call_id);
+      if (item.type !== 'tool_search_output' || !Array.isArray(item.tools)) continue;
+      for (const found of item.tools as Array<{ type?: unknown; name?: unknown }>) {
+        if (typeof found.name !== 'string') continue;
+        if (found.type === 'namespace') for (const tool of request.tools ?? []) { if (tool.namespace === found.name) loaded.add(tool.name); }
+        else loaded.add(found.name);
+      }
+    }
+    called.add(turn.call.name);
+    if (!replayed.has(turn.call.call_id)) rebuilt.add(turn.call.name);
+  }
+  return new Set([...called].filter((name) => rebuilt.has(name) || !loaded.has(name)));
+}
+
+// The original parameters of each function sent strict, so a call's strict nulls can be turned back into absent fields.
+function strictParametersByTool(request: LLMGatewayRequest['request']): Map<string, Record<string, unknown>> {
+  if (!request.tool_search) return new Map();
+  return new Map((request.tools ?? []).flatMap((tool) => openAIStrictParameters(tool.parameters) ? [[tool.name, tool.parameters] as const] : []));
+}
+
+// A request that declares no tool search (the turn's closing round, which offers no tools, or a resend without the search
+// a model refused) cannot carry tool-search state: the namespaces it loaded are not declared, so the search items are left
+// out and a loaded call is replayed as a plain function call.
+function replayable(item: Record<string, unknown>, searchDeclared: boolean): Record<string, unknown>[] {
+  if (searchDeclared) return [item];
+  if (item.type === 'tool_search_call' || item.type === 'tool_search_output') return [];
+  if (item.type === 'function_call' && 'namespace' in item) { const { namespace: _namespace, ...call } = item; return [call]; }
+  return [item];
+}
+
+function responsesInput(request: LLMGatewayRequest['request']): OpenAI.Responses.ResponseCreateParams['input'] {
+  // Real roles: a flattened "user: ..." blob hid who said what, so "that one" could not resolve (PR 1 item 3).
+  const turns = request.messages.map((message) => ({ role: message.role, content: message.content }));
+  // One plain user message stays a plain string (single-shot callers such as selectors and writers parse it as text).
+  if (!request.attachments && !request.tool_turns) return turns.length === 1 && turns[0]!.role === 'user' ? turns[0]!.content : turns;
+  const lastUser = turns.map((turn) => turn.role).lastIndexOf('user');
+  const files = (request.attachments ?? []).map((file): OpenAI.Responses.ResponseInputContent => {
+    const data = `data:${file.mime_type};base64,${file.data_base64}`;
+    return file.kind === 'image'
+      ? { type: 'input_image', image_url: data, detail: 'auto' }
+      : { type: 'input_file', filename: file.filename, file_data: data };
+  });
+  return [
+    ...turns.map((turn, index): OpenAI.Responses.ResponseInputItem => index === lastUser && files.length
+      ? { role: 'user', content: [{ type: 'input_text', text: turn.content }, ...files] }
+      : { role: turn.role, content: turn.content }),
+    ...(lastUser === -1 && files.length ? [{ role: 'user' as const, content: files }] : []),
+    ...(() => {
+      // The model's own output items ride on the first call of a round and already hold every parallel call in it;
+      // a call is replayed from its record only when no earlier item carries its call_id. A round another provider ran
+      // left items this API cannot read, so only OpenAI's own are replayed and that round is rebuilt from its records.
+      const replayed = new Set<string>();
+      return (request.tool_turns ?? []).flatMap((turn): OpenAI.Responses.ResponseInputItem[] => {
+        const prior = (turn.prior_items ?? []).filter((item) => outputItemProvider(item) === OPENAI_PROVIDER).flatMap((item) => replayable(item, request.tools !== undefined && request.tool_search !== undefined)) as unknown as OpenAI.Responses.ResponseInputItem[];
+        for (const item of prior) {
+          const record = item as { type?: string; call_id?: string };
+          if (record.type === 'function_call' && record.call_id) replayed.add(record.call_id);
+        }
+        const included = replayed.has(turn.call.call_id);
+        replayed.add(turn.call.call_id);
+        return [
+          ...prior,
+          ...(included ? [] : [{ type: 'function_call' as const, call_id: turn.call.call_id, name: turn.call.name, arguments: turn.call.arguments }]),
+          { type: 'function_call_output' as const, call_id: turn.call.call_id, output: turn.output },
+        ];
+      });
+    })(),
   ];
+}
+
+// The installed SDK types only the legacy web_search_preview tool; OpenAI's web search guide names web_search for new
+// Responses integrations, with the same approximate user_location.
+function hostedWebSearch(search: NonNullable<LLMGatewayRequest['request']['web_search']>): OpenAI.Responses.Tool {
+  return { type: 'web_search', user_location: { type: 'approximate', ...search } } as unknown as OpenAI.Responses.Tool;
+}
+
+const citedUrls = (response: OpenAI.Responses.Response): string[] => [...new Set(response.output.flatMap((item) => item.type !== 'message' ? []
+  : item.content.flatMap((part) => part.type !== 'output_text' ? [] : (part.annotations ?? []).flatMap((annotation) => annotation.type === 'url_citation' ? [annotation.url] : []))))];
+
+// The page itself, without the tracking parameters search adds or a highlight fragment.
+const cleanUrl = (url: string): string => {
+  try {
+    const parsed = new URL(url);
+    for (const key of [...parsed.searchParams.keys()]) if (key.toLowerCase().startsWith('utm_')) parsed.searchParams.delete(key);
+    if (parsed.hash.startsWith('#:~:')) parsed.hash = '';
+    return parsed.toString();
+  } catch { return url; }
+};
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// OpenAI requires web results shown to people to carry a visible, clickable citation. A chat reply carries its answer,
+// not a bibliography: search's parenthesised citations leave the sentences, a cited link the model wrote keeps its words,
+// and the first cited page is the one source link at the end. Links that are not citations stay as written.
+function withOneSource(text: string, response: OpenAI.Responses.Response): string {
+  const cited = citedUrls(response);
+  if (cited.length === 0) return text;
+  let body = text;
+  for (const url of cited) {
+    const link = `\\[([^\\[\\]\\n]*)\\]\\(${escapeRegExp(url)}\\)`;
+    body = body.replace(new RegExp(`\\s*\\(${link}\\)`, 'g'), '').replace(new RegExp(link, 'g'), '$1');
+  }
+  return `${body.trim()}\n\nSource: ${cleanUrl(cited[0]!)}`;
 }
 
 function reasoningSummary(response: OpenAI.Responses.Response): string {
@@ -147,6 +388,21 @@ function responseText(response: OpenAI.Responses.Response): string {
       return item.content.flatMap((part) => part.type === 'output_text' ? [part.text] : []);
     })
     .join('\n');
+}
+
+// The retry headers the OpenAI SDK reads: retry-after-ms, else retry-after in seconds or as a date, and x-should-retry.
+function retryAdvice(headers: Headers | undefined): ProviderRetryAdvice | undefined {
+  if (!headers) return undefined;
+  const millis = Number.parseFloat(headers.get('retry-after-ms') ?? '');
+  const after = headers.get('retry-after');
+  const seconds = Number.parseFloat(after ?? '');
+  const afterMs = millis > 0 ? millis : after === null ? undefined : Number.isNaN(seconds) ? Date.parse(after) - Date.now() : seconds * 1000;
+  const flag = headers.get('x-should-retry');
+  const advice = {
+    ...(afterMs !== undefined && Number.isFinite(afterMs) ? { afterMs } : {}),
+    ...(flag === 'true' || flag === 'false' ? { allowed: flag === 'true' } : {}),
+  };
+  return Object.keys(advice).length > 0 ? advice : undefined;
 }
 
 function openAIErrorCode(error: unknown): 'auth_failed' | 'not_found' | 'rate_limited' | 'oversize' | 'invalid_args' | 'transient' {

@@ -1,23 +1,35 @@
+import type { RunEffectScope } from '../channels/run-effect-scope';
+import { peelWhy, type TrailRead, type TrailStep } from './why-trail';
+import type { RunOrigin } from '@waldo/contracts';
 import {
   TOOL_PERMISSIONS,
   ALWAYS_ON_TOOLS,
   EXTERNAL_ORIGIN_TOOLS,
+  VARYING_ORIGIN_TOOLS,
   LAZY_DISCOVERY_TRIGGERS,
   errorCodeSchema,
+  rungBlockedOutcomeSchema,
   handlerAllowlistMatchesAcl,
   sessionToolAllowed,
   connectIntentSchema,
   sourceTaintSchema,
   trustedToolEffectReceiptUnavailableSchema,
+  toolError,
+  toolResultFixSchema,
+  TOOL_SPILL_VIEW_MAX_CHARS,
   toolNameSchema,
   triggerTypeSchema,
   waldoCardSchema,
   type ConnectIntent,
   type ErrorCode,
+  type ToolError,
+  type RungBlockedOutcome,
+  type ToolErrorCode,
   type HookPayload,
   type HookEvent,
   type SessionState,
   type SanitiseCheck,
+  type SanitiseDenialDiagnostic,
   type SanitiseFailureReason,
   type SourceTaint,
   type ToolHandler,
@@ -29,12 +41,15 @@ import {
 import {
   HookHaltError,
   HOOK_REGISTRY,
+  invalidArgumentsCause,
   runHooks,
+  type ArgumentIssue,
   type HookRegistry,
   type HookRuntimeContext,
 } from '../hooks/registry';
-import { guardForOffload } from '../scribe/sanitiser';
-import type { ToolOutputStore } from '../conversation/tool-output-store';
+import { DEEP_ENCODING_MARKER, guardForOffload, sanitiseDenialLabel } from '../scribe/sanitiser';
+import { sha256Hex, stableJson } from '../context-composer/canonical';
+import type { StoredPut, ToolOutputStore } from '../conversation/tool-output-store';
 
 export type RuntimeToolCall = {
   id: string;
@@ -55,8 +70,37 @@ export type ParseToolCallsResult =
 
 export type ToolDispatcherContext = HookRuntimeContext & {
   authenticatedUserId: string;
+  assertTaskSourceCurrent?: () => Promise<void>;
+  // What started this run, set once at its start; a standing grant acts only for the origins its class allows.
+  runOrigin?: RunOrigin;
+  // Set by the host only on a turn the owner's own message started, with no one else's words in it: that message's ref and
+  // when the turn took it. A tool that acts on the owner's word reads it here, never from its arguments.
+  ownerMessage?: Readonly<{ messageRef: string; receivedAt: number }>;
+  // Where this turn's outside content came from, one entry per tainting result: the result's own taint_origin (for example
+  // mcp:<server>), else '*'. The tool loop keeps it next to toolArgSourceTaint and never instead of it; absent means unknown.
+  taintOrigins?: readonly string[];
+  turnId?: string;
+  toolCallId?: string;
+  runScope?: RunEffectScope;
   session: SessionState;
+  // A host hold on one tool for now (the owner's spend ceiling): the call is refused before anything runs.
+  heldTool?: (tool: ToolName) => ToolError | null;
+  // Set by the dispatcher for a call that has the turn's output store: keeps a long text whole behind the offload guard, so
+  // the handler can show a part of it and read_tool_output pages the rest from the guarded text it returns. Null when the
+  // guard refuses the text.
+  keepOutput?: (text: string) => Readonly<{ stored: StoredPut; text: string }> | null;
+  // "Why this changed": the turn's successful reads, which the tool loop records while the trail is on, and the steps a
+  // proposing call claimed (its `why`, taken off its arguments).
+  turnReads?: TrailRead[];
+  // Set by the tool loop once a request has shown the model the owner's health readings (conversation/health-fence).
+  healthShown?: boolean;
+  claimedWhy?: unknown;
+  whySteps?: readonly TrailStep[];
+  // Where the owner asked: the surface and conversation of the owner's own turn, or of the turn whose card an approved replay
+  // runs. Work it starts answers there.
+  askedIn?: AskedIn;
 };
+export type AskedIn = Readonly<{ surface: string; conversation_ref: string }>;
 
 export type DispatchToolResult = (
   | {
@@ -71,7 +115,15 @@ export type DispatchToolResult = (
       ok: false;
       call_id: string;
       tool: ToolName | null;
+      // The one error shape (contracts ToolError): error is the cause sentence, error_code the
+      // stable machine code, fix what the model can do, retryable whether the same call may run
+      // again. code and reason stay as the coarse ErrorCode and dispatch stage for telemetry.
       error: string;
+      error_code: ToolErrorCode;
+      fix: string;
+      retryable: boolean;
+      // Why a page or site stopped the call, when the tool knew it for certain; fix names the next rung.
+      blocked?: RungBlockedOutcome;
       code: ErrorCode;
       reason: ToolDispatchErrorReason;
       source_taint?: 'external';
@@ -88,7 +140,11 @@ export type DispatchToolResult = (
   trusted_effect?: TrustedToolEffect;
 };
 
-export type GuardDiagnostic = Readonly<{ check: SanitiseCheck; reason: SanitiseFailureReason }>;
+export type GuardDiagnostic = Readonly<{ check: SanitiseCheck; reason: SanitiseFailureReason; diagnostic?: SanitiseDenialDiagnostic }>;
+
+// 'size_cap:invalid_payload:decode:nesting:base64:3': the check, the reason, then the denial stage when the guard named one.
+export const guardLabel = ({ check, reason, diagnostic }: GuardDiagnostic): string =>
+  [check, reason, ...(diagnostic ? [sanitiseDenialLabel(diagnostic)] : [])].join(':');
 
 export type ToolDispatchErrorReason =
   | 'unknown_tool'
@@ -96,6 +152,7 @@ export type ToolDispatchErrorReason =
   | 'effect_receipt_unavailable'
   | 'handler_acl_drift'
   | 'acl_denied'
+  | 'held'
   | 'invalid_args'
   | 'approval_denied'
   | 'egress_denied'
@@ -124,14 +181,22 @@ export type DispatchToolOptions<Ctx extends ToolDispatcherContext> = {
   handlers: readonly RuntimeToolHandler<Ctx>[];
   extraHooks?: HookRegistry<Ctx>;
   maxResultJsonChars?: number;
-  offload?: import('../conversation/tool-output-store').ToolOutputStore;
+  offload?: ToolOutputStore;
   trustedEffect?: Readonly<{
     prepare(input: Readonly<{ tool: ToolName; args: unknown }>): Promise<TrustedToolEffect>;
   }>;
 };
 
 const DEFAULT_MAX_RESULT_JSON_CHARS = 16_384;
-const DEFAULT_MAX_ERROR_CHARS = 512;
+// Room for a provider's diagnostic or a subagent's partial report. A longer error is stored whole when the turn can
+// store outputs, else cut, so the model always sees a bounded head.
+export const MAX_TOOL_ERROR_CHARS = 2_000;
+
+// The identity of a tool call's arguments: sha256 over canonical JSON, so a proposal and its replay agree on the
+// bytes whatever key order the model used. null when the arguments cannot be canonicalised (never a plain JSON object).
+export const argumentDigest = async (args: unknown): Promise<string | null> => {
+  try { return await sha256Hex(stableJson(args)); } catch { return null; }
+};
 
 export async function parseToolCalls(
   raw: unknown,
@@ -160,7 +225,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
 ): Promise<DispatchToolResult> {
   const tool = toolNameSchema.safeParse(call.name);
   if (!tool.success) {
-    return failDispatch(call.id, null, 'unknown tool', 'invalid_args', 'unknown_tool');
+    return failDispatch(call.id, null, toolError('unknown_tool'), 'invalid_args', 'unknown_tool');
   }
 
   if (
@@ -170,7 +235,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return failDispatch(
       call.id,
       tool.data,
-      'tool authentication failed',
+      toolError('unauthenticated'),
       'auth_failed',
       'hook_halt',
     );
@@ -180,7 +245,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return failDispatch(
       call.id,
       tool.data,
-      'tool outside trigger ACL',
+      toolError('acl_denied'),
       'forbidden',
       'acl_denied',
     );
@@ -191,7 +256,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return failDispatch(
       call.id,
       tool.data,
-      'tool handler unavailable',
+      toolError('handler_unavailable'),
       'not_found',
       'handler_unavailable',
     );
@@ -201,29 +266,46 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return failDispatch(
       call.id,
       tool.data,
-      'tool handler ACL drift',
+      toolError('handler_acl_drift'),
       'transient',
       'handler_acl_drift',
     );
   }
 
+  const held = ctx.heldTool?.(tool.data);
+  if (held) return failDispatch(call.id, tool.data, held, 'rejected', 'held');
+
+  // An approval token names one frozen call. A call that is not that call fails closed here, before any hook
+  // could read the token and admit it.
+  if (ctx.approvedTaintedAction !== undefined && (ctx.approvedTaintedAction.tool !== tool.data || await argumentDigest(call.args) !== ctx.approvedTaintedAction.args_digest)) {
+    return failDispatch(call.id, tool.data, toolError('approval_denied', 'The approval covers a different tool call.'), 'forbidden', 'approval_denied');
+  }
+
+  // The card-only marker is the handler's own declaration, carried to the hooks for this call alone; a context that
+  // arrives already carrying one was not built here and fails closed.
+  if (ctx.proposalOnlyCall !== undefined) {
+    return failDispatch(call.id, tool.data, toolError('approval_denied'), 'forbidden', 'approval_denied');
+  }
+  const hookCtx: Ctx = handler.proposal_only === true ? { ...ctx, proposalOnlyCall: tool.data } : ctx;
+  const { args: callArgs, why: claimedWhy } = handler.takes_why === true ? peelWhy(call.args) : { args: call.args, why: undefined };
+
   let preToolPayload: Extract<HookPayload, { event: 'PreToolUse' }> = {
     event: 'PreToolUse',
     tool: tool.data,
-    args: call.args,
+    args: callArgs,
   };
   try {
     const nextPayload = await runTerminalHooks(
       'PreToolUse',
       preToolPayload,
-      ctx,
+      hookCtx,
       options.extraHooks,
     );
     if (nextPayload.event !== 'PreToolUse' || nextPayload.tool !== tool.data) {
       return failDispatch(
         call.id,
         tool.data,
-        'tool args failed validation',
+        toolError('invalid_args'),
         'transient',
         'invalid_args',
       );
@@ -239,11 +321,13 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
   let args: unknown;
   try {
     args = handler.schema.parse(preToolPayload.args);
-  } catch {
+  } catch (error) {
+    // A handler's schema can be stricter than the registry's, which the PreToolUse hook already checked.
+    const issues = (error as { issues?: unknown } | null)?.issues;
     return failDispatch(
       call.id,
       tool.data,
-      'tool args failed schema validation',
+      toolError('invalid_args', Array.isArray(issues) ? invalidArgumentsCause(issues as readonly ArgumentIssue[]) : undefined),
       'invalid_args',
       'invalid_args',
     );
@@ -260,7 +344,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
       return failDispatch(
         call.id,
         tool.data,
-        'tool effect receipt unavailable',
+        toolError('effect_receipt_unavailable'),
         'transient',
         'effect_receipt_unavailable',
       );
@@ -269,6 +353,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     // handler I/O. The digest therefore names the exact arguments that cross the adapter
     // boundary, while the durable intent is still committed first by RunLoopDO. Do not catch
     // this callback: a storage/programming fault must retain its original cause.
+    ctx.runScope?.admit();
     trustedEffect = await options.trustedEffect.prepare({ tool: tool.data, args });
   }
 
@@ -276,18 +361,22 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     if (trustedEffect !== undefined) {
       const executeOrReconcile = handler.executeOrReconcile;
       if (executeOrReconcile === undefined) throw new Error('trusted tool reconciler disappeared');
+      ctx.runScope?.admit();
       handlerResult = await executeOrReconcile(args, ctx, trustedEffect);
     } else {
-      handlerResult = await handler.handle(args, ctx);
+      ctx.runScope?.admit();
+      const store = options.offload;
+      handlerResult = await handler.handle(args, { ...ctx, toolCallId: call.id, ...(claimedWhy === undefined ? {} : { claimedWhy }), ...(store ? { keepOutput: (text: string) => keepGuarded(call.id, text, ctx, store) } : {}) });
     }
   } catch (error) {
     // A trusted adapter can have crossed its side-effect boundary before an unexpected throw.
     // Preserve that original cause and leave the durable intent for reconciliation; collapsing it
     // into a normal tool failure would falsely make the effect look settled.
     if (trustedEffect !== undefined) throw error;
-    return failDispatch(call.id, tool.data, 'tool handler failed', 'transient', 'handler_failed');
+    return failDispatch(call.id, tool.data, toolError('handler_failed'), 'transient', 'handler_failed');
   }
 
+  ctx.runScope?.admit();
   if (
     trustedEffect !== undefined &&
     trustedToolEffectReceiptUnavailableSchema.safeParse(handlerResult).success
@@ -295,7 +384,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return failDispatch(
       call.id,
       tool.data,
-      'tool effect receipt unavailable',
+      toolError('effect_receipt_unavailable'),
       'transient',
       'effect_receipt_unavailable',
     );
@@ -307,7 +396,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return withTrustedEffect(failDispatch(
       call.id,
       tool.data,
-      'tool handler returned invalid result',
+      toolError('invalid_handler_result'),
       'transient',
       'invalid_handler_result',
     ), settledTrustedEffect);
@@ -320,7 +409,8 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
   if (parsedHandlerResult.ok && options.offload !== undefined) {
     const full = JSON.stringify(parsedHandlerResult.data);
     if (full.length > (options.maxResultJsonChars ?? DEFAULT_MAX_RESULT_JSON_CHARS)) {
-      const offloaded = offloadResult(call.id, tool.data, full, ctx, options.offload);
+      ctx.runScope?.admit();
+      const offloaded = offloadResult(call.id, tool.data, full, ctx, options.offload, spillView(handler, parsedHandlerResult.data));
       if (!offloaded.ok) return withTrustedEffect(offloaded.result, settledTrustedEffect);
       effectiveHandlerResult = { ...parsedHandlerResult, data: offloaded.data };
     }
@@ -333,6 +423,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     latency_ms: Math.max(0, Date.now() - startedAt),
   };
   try {
+    ctx.runScope?.admit();
     const nextPayload = await runTerminalHooks(
       'PostToolUse',
       postToolPayload,
@@ -343,7 +434,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
       return withTrustedEffect(failDispatch(
         call.id,
         tool.data,
-        'tool result failed validation',
+        toolError('invalid_tool_result'),
         'transient',
         'invalid_tool_result',
       ), settledTrustedEffect);
@@ -357,23 +448,25 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return withTrustedEffect(hookFailure(call.id, tool.data, error), settledTrustedEffect);
   }
 
+  ctx.runScope?.admit();
   const finalResult = parseToolResult(postToolPayload.result, tool.data);
   if (finalResult === null) {
     return withTrustedEffect(failDispatch(
       call.id,
       tool.data,
-      'tool result failed validation',
+      toolError('invalid_tool_result'),
       'transient',
       'invalid_tool_result',
     ), settledTrustedEffect);
   }
 
   if (!finalResult.ok) {
-    if (finalResult.error.length > DEFAULT_MAX_ERROR_CHARS) {
+    const error = boundedError(call.id, finalResult.error, ctx, options.offload);
+    if (error === null) {
       return withTrustedEffect(failDispatch(
         call.id,
         tool.data,
-        'tool returned oversized error',
+        toolError(finalResult.code, 'The tool failed and its error text was too large to show.', finalResult.blocked, finalResult.fix),
         finalResult.code,
         'tool_result_error',
       ), settledTrustedEffect);
@@ -382,7 +475,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return withTrustedEffect(failDispatch(
       call.id,
       tool.data,
-      finalResult.error,
+      toolError(finalResult.code, error, finalResult.blocked, finalResult.fix),
       finalResult.code,
       'tool_result_error',
       finalResult.source_taint,
@@ -395,7 +488,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return withTrustedEffect(failDispatch(
       call.id,
       tool.data,
-      'tool result failed validation',
+      toolError('invalid_tool_result'),
       'transient',
       'invalid_tool_result',
     ), settledTrustedEffect);
@@ -404,7 +497,8 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
   if (resultSize > (options.maxResultJsonChars ?? DEFAULT_MAX_RESULT_JSON_CHARS)) {
     if (options.offload !== undefined) {
       const full = JSON.stringify(finalResult.data);
-      const offloaded = offloadResult(call.id, tool.data, full, ctx, options.offload);
+      ctx.runScope?.admit();
+      const offloaded = offloadResult(call.id, tool.data, full, ctx, options.offload, spillView(handler, finalResult.data));
       if (!offloaded.ok) return withTrustedEffect(offloaded.result, settledTrustedEffect);
       return withTrustedEffect({
         ok: true,
@@ -417,7 +511,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return withTrustedEffect(failDispatch(
       call.id,
       tool.data,
-      'tool result exceeded bound',
+      toolError('result_oversize'),
       'oversize',
       'result_oversize',
     ), settledTrustedEffect);
@@ -457,28 +551,28 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     handlers: readonly RuntimeToolHandler<Ctx>[];
     extraHooks?: HookRegistry<Ctx>;
     maxResultJsonChars?: number;
-  offload?: import('../conversation/tool-output-store').ToolOutputStore;
+  offload?: ToolOutputStore;
   }>,
 ): Promise<DispatchToolResult> {
   const tool = toolNameSchema.safeParse(input.tool);
   if (!tool.success) {
-    return failDispatch(input.callRef, null, 'unknown tool', 'invalid_args', 'unknown_tool');
+    return failDispatch(input.callRef, null, toolError('unknown_tool'), 'invalid_args', 'unknown_tool');
   }
   if (
     typeof input.ctx.authenticatedUserId !== 'string' ||
     input.ctx.authenticatedUserId.trim().length === 0
   ) {
-    return failDispatch(input.callRef, tool.data, 'tool authentication failed', 'auth_failed', 'hook_halt');
+    return failDispatch(input.callRef, tool.data, toolError('unauthenticated'), 'auth_failed', 'hook_halt');
   }
   if (!sessionToolAllowed(input.ctx.session, tool.data)) {
-    return failDispatch(input.callRef, tool.data, 'tool outside trigger ACL', 'forbidden', 'acl_denied');
+    return failDispatch(input.callRef, tool.data, toolError('acl_denied'), 'forbidden', 'acl_denied');
   }
   const handler = input.handlers.find((candidate) => candidate.name === tool.data);
   if (handler === undefined) {
     return failDispatch(
       input.callRef,
       tool.data,
-      'tool handler unavailable',
+      toolError('handler_unavailable'),
       'not_found',
       'handler_unavailable',
     );
@@ -487,7 +581,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     return failDispatch(
       input.callRef,
       tool.data,
-      'tool handler ACL drift',
+      toolError('handler_acl_drift'),
       'transient',
       'handler_acl_drift',
     );
@@ -500,7 +594,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     return failDispatch(
       input.callRef,
       tool.data,
-      'tool effect receipt unavailable',
+      toolError('effect_receipt_unavailable'),
       'transient',
       'effect_receipt_unavailable',
     );
@@ -514,7 +608,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     return failDispatch(
       input.callRef,
       tool.data,
-      'tool effect receipt unavailable',
+      toolError('effect_receipt_unavailable'),
       'transient',
       'effect_receipt_unavailable',
     );
@@ -524,7 +618,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     return withTrustedEffect(failDispatch(
       input.callRef,
       tool.data,
-      'tool handler returned invalid result',
+      toolError('invalid_handler_result'),
       'transient',
       'invalid_handler_result',
     ), input.effect);
@@ -537,6 +631,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     latency_ms: 0,
   };
   try {
+    input.ctx.runScope?.admit();
     const nextPayload = await runTerminalHooks(
       'PostToolUse',
       postToolPayload,
@@ -547,7 +642,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
       return withTrustedEffect(failDispatch(
         input.callRef,
         tool.data,
-        'tool result failed validation',
+        toolError('invalid_tool_result'),
         'transient',
         'invalid_tool_result',
       ), input.effect);
@@ -557,22 +652,24 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     if (!(error instanceof HookHaltError)) throw error;
     return withTrustedEffect(hookFailure(input.callRef, tool.data, error), input.effect);
   }
+  input.ctx.runScope?.admit();
   const finalResult = parseToolResult(postToolPayload.result, tool.data);
   if (finalResult === null) {
     return withTrustedEffect(failDispatch(
       input.callRef,
       tool.data,
-      'tool result failed validation',
+      toolError('invalid_tool_result'),
       'transient',
       'invalid_tool_result',
     ), input.effect);
   }
   if (!finalResult.ok) {
-    if (finalResult.error.length > DEFAULT_MAX_ERROR_CHARS) {
+    const error = boundedError(input.callRef, finalResult.error, input.ctx, input.offload);
+    if (error === null) {
       return withTrustedEffect(failDispatch(
         input.callRef,
         tool.data,
-        'tool returned oversized error',
+        toolError(finalResult.code, 'The tool failed and its error text was too large to show.', finalResult.blocked, finalResult.fix),
         finalResult.code,
         'tool_result_error',
       ), input.effect);
@@ -580,7 +677,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     return withTrustedEffect(failDispatch(
       input.callRef,
       tool.data,
-      finalResult.error,
+      toolError(finalResult.code, error, finalResult.blocked, finalResult.fix),
       finalResult.code,
       'tool_result_error',
       finalResult.source_taint,
@@ -591,7 +688,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     return withTrustedEffect(failDispatch(
       input.callRef,
       tool.data,
-      'tool result failed validation',
+      toolError('invalid_tool_result'),
       'transient',
       'invalid_tool_result',
     ), input.effect);
@@ -600,7 +697,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     return withTrustedEffect(failDispatch(
       input.callRef,
       tool.data,
-      'tool result exceeded bound',
+      toolError('result_oversize'),
       'oversize',
       'result_oversize',
     ), input.effect);
@@ -822,9 +919,9 @@ async function runTerminalHooks<Ctx extends ToolDispatcherContext>(
 
 function hookFailure(callId: string, tool: ToolName, error: unknown): DispatchToolResult {
   if (error instanceof HookHaltError) {
-    return failDispatch(callId, tool, error.clientMessage, error.code, reasonFromHook(error.hook));
+    return failDispatch(callId, tool, error.toolError, error.code, reasonFromHook(error.hook));
   }
-  return failDispatch(callId, tool, 'tool hook failed', 'transient', 'hook_halt');
+  return failDispatch(callId, tool, toolError('hook_failed'), 'transient', 'hook_halt');
 }
 
 function failParse(error: string, repaired: false): FailedToolCallParse<false>;
@@ -835,19 +932,41 @@ function failParse(error: string, repaired: boolean): ParseToolCallsResult & { o
 
 
 type OffloadedResult =
-  | { ok: true; data: { stored_output: string; total_chars: number; stored_chars: number; truncated: boolean; head: string; read_with: 'read_tool_output' } }
+  | { ok: true; data: { stored_output: string; total_chars: number; stored_chars: number; truncated: boolean; head?: string; inline?: unknown; read_with: 'read_tool_output'; withheld?: { count: number; note: string } } }
   | { ok: false; result: DispatchToolResult };
 
 // Raw external output is never stored: the offload guard runs the full sanitise pipeline minus
 // the destination size cap (storage is not model context). Only guarded text reaches the store,
 // so a read-back slice can never expose unguarded content, including a secret that would span
 // read chunks.
+// The handler's spill view of a result it is about to store, or undefined when it has none or the view cannot be built
+// from this data (a hook may have reshaped it): then the stored text's first characters are shown, as for any tool.
+const spillView = (handler: Pick<ToolHandler<unknown, unknown, ToolDispatcherContext>, 'spill'> | undefined, data: unknown): unknown => {
+  if (handler?.spill === undefined) return undefined;
+  try { return handler.spill(data); } catch { return undefined; }
+};
+// The view passes the same guard as the stored text, and is shown only when it survives whole and still parses.
+const guardedView = (view: unknown, ctx: ToolDispatcherContext): unknown => {
+  const text = JSON.stringify(view);
+  if (typeof text !== 'string' || text.length > TOOL_SPILL_VIEW_MAX_CHARS) return undefined;
+  const guarded = guardForOffload({ payload: text, destination: 'internal_context', canary_tokens: ctx.session?.canary_tokens ?? [], source_taint: 'external' });
+  if (!guarded.ok || typeof guarded.payload !== 'string') return undefined;
+  try { return JSON.parse(guarded.payload); } catch { return undefined; }
+};
+
+// The stored text's first characters, never ending in half of a character that takes two code units.
+const headOf = (text: string) => {
+  const last = text.charCodeAt(3_999);
+  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? 3_999 : 4_000);
+};
+
 const offloadResult = (
   callId: string,
   tool: ToolName,
   full: string,
   ctx: ToolDispatcherContext,
   store: ToolOutputStore,
+  view?: unknown,
 ): OffloadedResult => {
   const guarded = guardForOffload({
     payload: full,
@@ -856,6 +975,7 @@ const offloadResult = (
     source_taint: 'external',
   });
   if (!guarded.ok) {
+    const guard: GuardDiagnostic = { check: guarded.check, reason: guarded.reason, ...(guarded.diagnostic ? { diagnostic: guarded.diagnostic } : {}) };
     return {
       ok: false,
       result: failDispatch(
@@ -863,42 +983,74 @@ const offloadResult = (
         tool,
         // Typed enums only - the denied stage/reason stay provable from the trace without any
         // provider content (live QA could not name the exact check before this).
-        `tool result failed the offload guard: ${guarded.check}:${guarded.reason}`,
+        toolError('sanitise_denied', `tool result failed the offload guard: ${guardLabel(guard)}`),
         guarded.reason === 'oversize' ? 'oversize' : 'forbidden',
         'sanitise_denied',
         undefined,
         undefined,
-        { check: guarded.check, reason: guarded.reason },
+        guard,
       ),
     };
   }
   const text = typeof guarded.payload === 'string' ? guarded.payload : JSON.stringify(guarded.payload);
-  const stored = store.put(text);
+  const stored = store.put(text, { call_id: callId });
+  // A cut store still shows the view: it is built from the whole result, so it keeps every item's flags, and next says
+  // what read_tool_output cannot reach.
+  const inline = view === undefined ? undefined : guardedView(view, ctx);
+  const withheld = guarded.redactions.find((redaction) => redaction.kind === 'deep_encoding')?.count;
   return {
     ok: true,
     // total_chars is the full guarded length; stored_chars + truncated say what is actually
     // retrievable - the receipt never claims retrievable output the store did not keep
-    data: { stored_output: stored.id, total_chars: stored.original_chars, stored_chars: stored.stored_chars, truncated: stored.truncated, head: text.slice(0, 4_000), read_with: 'read_tool_output' },
+    data: {
+      stored_output: stored.id, total_chars: stored.original_chars, stored_chars: stored.stored_chars, truncated: stored.truncated, ...(inline === undefined ? { head: headOf(text) } : { inline }), read_with: 'read_tool_output',
+      ...(stored.truncated ? { next: `Only the first ${stored.stored_chars} characters were kept, so read_tool_output cannot reach the rest. Make the same call asking for less (a smaller limit, a narrower range, or one item) to see what was cut.` } : {}),
+      ...(withheld === undefined ? {} : { withheld: { count: withheld, note: `${withheld === 1 ? 'One value was' : `${withheld} values were`} withheld in place as ${DEEP_ENCODING_MARKER}, because the content was encoded too deeply to check. Nothing else in the result was withheld for this.` } }),
+    },
   };
+};
+
+const keepGuarded = (callId: string, text: string, ctx: ToolDispatcherContext, store: ToolOutputStore): Readonly<{ stored: StoredPut; text: string }> | null => {
+  const guarded = guardForOffload({ payload: text, destination: 'internal_context', canary_tokens: ctx.session?.canary_tokens ?? [], source_taint: 'external' });
+  if (!guarded.ok) return null;
+  const kept = typeof guarded.payload === 'string' ? guarded.payload : JSON.stringify(guarded.payload);
+  return { stored: store.put(kept, { call_id: callId }), text: kept };
+};
+
+// null when the stored form is refused by the offload guard: then no part of the error is shown.
+const boundedError = (callId: string, error: string, ctx: ToolDispatcherContext, store?: ToolOutputStore): string | null => {
+  if (error.length <= MAX_TOOL_ERROR_CHARS) return error;
+  if (store === undefined) return `${error.slice(0, MAX_TOOL_ERROR_CHARS)}\n[cut: ${error.length - MAX_TOOL_ERROR_CHARS} more characters]`;
+  const guarded = guardForOffload({
+    payload: error,
+    destination: 'internal_context',
+    canary_tokens: ctx.session?.canary_tokens ?? [],
+    source_taint: 'external',
+  });
+  if (!guarded.ok) return null;
+  const text = typeof guarded.payload === 'string' ? guarded.payload : JSON.stringify(guarded.payload);
+  const stored = store.put(text, { call_id: callId });
+  return `${text.slice(0, MAX_TOOL_ERROR_CHARS)}\n[full error stored as ${stored.id}: ${stored.stored_chars} of ${stored.original_chars} characters kept; call read_tool_output with this id, offset and length to read more]`;
 };
 
 function failDispatch(
   callId: string,
   tool: ToolName | null,
-  error: string,
+  error: ToolError,
   code: ErrorCode,
   reason: ToolDispatchErrorReason,
   sourceTaint?: SourceTaint,
   connect?: ConnectIntent,
   guard?: GuardDiagnostic,
 ): DispatchToolResult {
+  const shaped = { error: error.cause, error_code: error.code, fix: error.fix, retryable: error.retryable, ...(error.blocked === undefined ? {} : { blocked: error.blocked }) };
   const extra = {
     ...(connect === undefined ? {} : { connect }),
     ...(guard === undefined ? {} : { guard }),
   };
   return sourceTaint === 'external'
-    ? { ok: false, call_id: callId, tool, error, code, reason, source_taint: 'external', ...extra }
-    : { ok: false, call_id: callId, tool, error, code, reason, ...extra };
+    ? { ok: false, call_id: callId, tool, ...shaped, code, reason, source_taint: 'external', ...extra }
+    : { ok: false, call_id: callId, tool, ...shaped, code, reason, ...extra };
 }
 
 function withTrustedEffect(
@@ -943,7 +1095,7 @@ function reasonFromHook(hook: string): ToolDispatchErrorReason {
 
 type ParsedToolResult =
   | { ok: true; data: unknown; source_taint: SourceTaint; card?: WaldoCard }
-  | { ok: false; error: string; code: ErrorCode; source_taint?: 'external'; connect?: ConnectIntent };
+  | { ok: false; error: string; code: ErrorCode; source_taint?: 'external'; connect?: ConnectIntent; blocked?: RungBlockedOutcome; fix?: string };
 
 function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | null {
   if (!isRecord(value) || typeof value.ok !== 'boolean') {
@@ -960,7 +1112,7 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
     const sourceTaint = sourceTaintSchema.safeParse(value.source_taint);
     if (!sourceTaint.success) return null;
     const expectsExternal = EXTERNAL_ORIGIN_TOOLS.includes(tool);
-    if (expectsExternal !== (sourceTaint.data === 'external')) return null;
+    if (!VARYING_ORIGIN_TOOLS.includes(tool) && expectsExternal !== (sourceTaint.data === 'external')) return null;
     if (!Object.prototype.hasOwnProperty.call(value, 'card')) {
       return { ok: true, data: value.data, source_taint: sourceTaint.data };
     }
@@ -975,7 +1127,7 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
   if (
     !hasOnlyKeys(
       value,
-      expectsExternal ? ['ok', 'error', 'code', 'source_taint', 'connect'] : ['ok', 'error', 'code', 'connect'],
+      expectsExternal || value.source_taint === null ? ['ok', 'error', 'code', 'source_taint', 'connect', 'blocked', 'fix'] : ['ok', 'error', 'code', 'connect', 'blocked', 'fix'],
     )
   ) {
     return null;
@@ -988,6 +1140,11 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
   // rather than failing the whole result - the fixed model-facing text already stands alone.
   const connect = value.connect === undefined ? undefined : connectIntentSchema.safeParse(value.connect);
   if (connect !== undefined && !connect.success) return null;
+  const blocked = value.blocked === undefined ? undefined : rungBlockedOutcomeSchema.safeParse(value.blocked);
+  if (blocked !== undefined && !blocked.success) return null;
+  const fix = value.fix === undefined ? undefined : toolResultFixSchema.safeParse(value.fix);
+  if (fix !== undefined && !fix.success) return null;
+  const typed = { ...(connect?.success ? { connect: connect.data } : {}), ...(blocked?.success ? { blocked: blocked.data } : {}), ...(fix?.success ? { fix: fix.data } : {}) };
 
   if (expectsExternal) {
     if (value.source_taint !== 'external') return null;
@@ -996,10 +1153,10 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
       error: value.error,
       code: code.data,
       source_taint: 'external',
-      ...(connect?.success ? { connect: connect.data } : {}),
+      ...typed,
     };
   }
-  return { ok: false, error: value.error, code: code.data, ...(connect?.success ? { connect: connect.data } : {}) };
+  return { ok: false, error: value.error, code: code.data, ...typed };
 }
 
 function hasOnlyKeys(value: Readonly<Record<string, unknown>>, allowed: readonly string[]): boolean {

@@ -7,7 +7,7 @@
 
 Waldo is one private, user-governed personal agent with a stable personality, correctable memory, health-aware planning, bounded actions, and continuity across the Waldo app and officially supported remote presences. App and push are first; Telegram is the recommended same-agent demonstration/fallback and inbound email is optional. WhatsApp India is currently blocked for a general-purpose AI provider under the public Business Solution Terms unless Meta admits Waldo to its Third Party Agent/provider path or authoritatively confirms another eligible route; no production adapter or launch claim precedes that gate. K0 supplies a bounded Codex-first Kennel work handoff for the joined showcase; broader work orchestration follows. Providers, tools, channels, connectors, people, and environments contribute bounded observations or effects; none owns Waldo identity, canonical personal context, authority, Acceptance, or Open Loop closure.
 
-The repository contains authenticated owner routing, responsibility capture/planning state, one execution writer and start-only bridge, Judgment Authority, RunLoop recovery/effect foundations, ContextComposer/Scribe foundations, and closure contracts. It does not yet contain the production conversation, real connectors, delivery, multi-presence, Trusted Relationships, closure runtime, staging, or operations needed for the target agent. Contract names, fakes, OpenAPI, and green local tests are not shipped capability.
+The repository contains authenticated owner routing, one brain (the per-owner `OwnerDO`), ContextComposer/Scribe foundations, and the effect, approval and delivery paths it runs. The earlier second brain (RunLoopDO, `WaldoCoordinator`, the responsibility protocol and its public API, the TracerDO pipeline) was deleted in B-1, October 2026. It does not yet contain the production conversation, real connectors, delivery, multi-presence, Trusted Relationships, closure runtime, staging, or operations needed for the target agent. Contract names, fakes, OpenAPI, and green local tests are not shipped capability.
 
 ## Read before changing code
 
@@ -23,8 +23,7 @@ The repository contains authenticated owner routing, responsibility capture/plan
 
 - One owner maps to one canonical backend authority root.
 - One named reducer is the durable writer for each aggregate. The current build plan owns the proposed writer/store matrix; accepted ADRs constrain the touched seam.
-- `WaldoCoordinator` authenticates, authorizes, and sequences; it does not bypass owning reducers.
-- `RunLoopEngine` remains the trusted execution kernel and physical effect path during additive migration.
+- `OwnerDO` is the one brain and the only writer of memory, chats and approvals. Task workers get a frozen snapshot and return results or proposals, which the brain applies once.
 - Persist `EffectIntent`, frozen arguments, digest, and reconciliation key before external I/O.
 - Never blindly retry an indeterminate effect. Reconcile first and expose a terminal user-visible resolution path.
 - Context is compiled for a declared purpose, audience, destination, and data class. Memory is not permission.

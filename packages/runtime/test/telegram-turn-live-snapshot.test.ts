@@ -6,7 +6,7 @@ import {
   localTrustedBriefScheduleInput,
   localTrustedBriefTurnSnapshot,
   resolveRunLoopAdapters,
-} from '../src/run-loop/adapters';
+} from '../src/llm/run-loop-adapters';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 

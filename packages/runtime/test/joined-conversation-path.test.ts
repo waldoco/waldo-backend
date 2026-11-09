@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { acceptTrustedInvocation } from '@waldo/contracts';
-import { localTrustedBriefScheduleInput, resolveRunLoopAdapters } from '../src/run-loop/adapters';
+import { localTrustedBriefScheduleInput, resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
 import { JoinedConversationPath } from '../src/conversation/joined-path';
 
 const fixture = localTrustedBriefScheduleInput();
@@ -43,6 +43,26 @@ describe('JoinedConversationPath', () => {
 
     const reconnected = new JoinedConversationPath(composer, { async complete() { throw new Error('must not run'); } }, undefined, publications);
     expect(reconnected.read(ownerId, 'assistant-user-1')).toEqual(result);
+  });
+
+  it('applies the input window to the assembled history and reports stats to the observer', async () => {
+    const composer = resolveRunLoopAdapters({ WALDO_ENV: 'local' }).contextComposer!;
+    let observed: { messages: readonly { role: string; content: string }[] } | undefined;
+    const statsSeen: { kept: number; dropped: number; estimated_tokens: number; budget_tokens: number }[] = [];
+    const path = new JoinedConversationPath(composer, {
+      async complete(request) { observed = request; return 'Noted.'; },
+    }, undefined, undefined, { onWindow: (stats) => statsSeen.push(stats) });
+
+    const first = input('user-w1');
+    await path.submit(first);
+    const second = input('user-w2');
+    await path.submit({ ...second, userEntry: { ...second.userEntry, parentId: 'assistant-user-w1' } });
+
+    expect(statsSeen).toHaveLength(2);
+    expect(statsSeen[0]).toMatchObject({ kept: 1, dropped: 0, budget_tokens: 100_000 });
+    // Second submit: full ancestor path (user1, assistant1, user2) fits, nothing dropped.
+    expect(statsSeen[1]).toMatchObject({ kept: 3, dropped: 0 });
+    expect(observed?.messages.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);
   });
 
   it('fails closed before composition on authenticated-owner mismatch', async () => {

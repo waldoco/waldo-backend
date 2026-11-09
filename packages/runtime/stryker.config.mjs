@@ -56,7 +56,6 @@ export default {
     'src/scribe/sanitiser.ts:918:2-920:71',
     'src/scribe/sanitiser.ts:925:2-925:48',
     'src/scribe/sanitiser.ts:952:2-953:39',
-    'src/scribe/medical-gate.ts:21:2-35:32',
   ],
   plugins: ['@stryker-mutator/vitest-runner'],
   testRunner: 'vitest',

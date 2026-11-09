@@ -8,7 +8,7 @@ describe('redactSecretUrls (narrow scope)', () => {
     expect(r.text).toBe('go here [link removed] to connect');
   });
   it('redacts a first-party /c/ ticket link', () => {
-    const r = redactSecretUrls('https://waldo.piyushfulper3210.workers.dev/c/AbCdEfGhIjKlMnOpQrStUv');
+    const r = redactSecretUrls('https://staging.heywaldo.in/c/AbCdEfGhIjKlMnOpQrStUv');
     expect(r.count).toBe(1);
     expect(r.text).toBe('[link removed]');
   });
@@ -30,17 +30,30 @@ describe('egressGuardedCaller', () => {
     const onRedact = vi.fn();
     const guarded = egressGuardedCaller(call, onRedact);
     await guarded('sendMessage', { chat_id: 1, text: 'tap https://accounts.google.com/o/oauth2/v2/auth?state=x now' });
-    expect(call).toHaveBeenCalledWith('sendMessage', { chat_id: 1, text: 'tap [link removed] now' });
+    expect(call).toHaveBeenCalledWith('sendMessage', { chat_id: 1, text: 'tap [link removed] now', link_preview_options: { is_disabled: true } });
     expect(onRedact).toHaveBeenCalledWith(1, 'sendMessage');
   });
-  it('leaves clean text and other methods untouched', async () => {
+  it('leaves clean text and other methods untouched, apart from turning link previews off', async () => {
     const call = vi.fn(async () => ({}));
     const onRedact = vi.fn();
     const guarded = egressGuardedCaller(call, onRedact);
-    await guarded('sendMessage', { chat_id: 1, text: 'hello, no links' });
+    await guarded('sendMessage', { chat_id: 1, text: 'see https://example.com/page' });
     await guarded('setMessageReaction', { chat_id: 1, message_id: 2, reaction: [] });
-    expect(call).toHaveBeenNthCalledWith(1, 'sendMessage', { chat_id: 1, text: 'hello, no links' });
+    expect(call).toHaveBeenNthCalledWith(1, 'sendMessage', { chat_id: 1, text: 'see https://example.com/page', link_preview_options: { is_disabled: true } });
     expect(call).toHaveBeenNthCalledWith(2, 'setMessageReaction', { chat_id: 1, message_id: 2, reaction: [] });
     expect(onRedact).not.toHaveBeenCalled();
+  });
+  it('turns link previews off on an edited message too, and overrides a request that asked for one', async () => {
+    const call = vi.fn(async () => ({}));
+    const guarded = egressGuardedCaller(call, vi.fn());
+    await guarded('editMessageText', { chat_id: 1, message_id: 2, text: 'see https://example.com/page', link_preview_options: { is_disabled: false, url: 'https://example.com/page' } });
+    expect(call).toHaveBeenCalledWith('editMessageText', { chat_id: 1, message_id: 2, text: 'see https://example.com/page', link_preview_options: { is_disabled: true } });
+  });
+  it('scrubs a reply draft as it scrubs the reply, and adds no preview option the draft method does not take', async () => {
+    const call = vi.fn(async () => true);
+    const onRedact = vi.fn();
+    await egressGuardedCaller(call, onRedact)('sendMessageDraft', { chat_id: 1, draft_id: 7, text: 'tap https://accounts.google.com/o/oauth2/v2/auth?state=x now' });
+    expect(call).toHaveBeenCalledWith('sendMessageDraft', { chat_id: 1, draft_id: 7, text: 'tap [link removed] now' });
+    expect(onRedact).toHaveBeenCalledWith(1, 'sendMessageDraft');
   });
 });

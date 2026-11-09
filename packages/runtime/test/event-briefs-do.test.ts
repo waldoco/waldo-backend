@@ -20,7 +20,7 @@ describe('pre-event briefs', () => {
   });
 
   it('briefs each timed upcoming event once and stays quiet without Google', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('event-briefs'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('event-briefs'));
     await runInDurableObject(stub, async (_instance, state) => {
       const book = eventBriefs(state.storage.sql, 'Asia/Kolkata');
       const sent: string[] = [];
@@ -41,7 +41,7 @@ describe('pre-event briefs', () => {
   });
 
   it('arms one ten-minute sweep', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('brief-sweep'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('brief-sweep'));
     await runInDurableObject(stub, async (_instance, state) => {
       ensureSchema(state.storage);
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());

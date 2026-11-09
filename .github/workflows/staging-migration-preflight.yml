@@ -1,0 +1,34 @@
+name: staging-migration-preflight
+# Read-only only. No push trigger, migration apply, repair, or Worker promotion.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_source_sha:
+        description: 'Exact reviewed40-character commit SHA checked out for this preflight'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: staging-migration-preflight
+  cancel-in-progress: false
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: staging
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+      - name: Deterministic preflight boundary tests
+        run: node --test scripts/staging-migration-preflight.test.mjs
+      - name: Read pinned staging history
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          SUPABASE_PROJECT_ID: togdshayyxycitzckpqv
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: node scripts/staging-migration-preflight.mjs
+      - name: Print sanitized receipt
+        run: cat staging-migration-preflight.json

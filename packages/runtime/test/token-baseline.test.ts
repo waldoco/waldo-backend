@@ -1,3 +1,4 @@
+import { ownerTyped } from './helpers/owner-typed';
 import { describe, expect, it, vi } from 'vitest';
 import type { ConversationEntry } from '@waldo/contracts';
 
@@ -26,7 +27,7 @@ describe('token baseline (phase 1 measurement)', () => {
     };
     const responder = createTelegramResponder('test-key', store, undefined, () => undefined, {}, { timezone: 'UTC', now: () => new Date('2026-09-24T05:00:00Z') });
     for (let turn = 0; turn < 6; turn++) {
-      await responder.respond({ updateId: turn + 1, chatId: 7, text: `message ${turn + 1}: how is my sleep trend and what should I focus on today?` } as never, (_name, run) => run());
+      await responder.respond(ownerTyped({ updateId: turn + 1, messageId: null, senderId: 7, chatId: 7, sentAt: null, text: `message ${turn + 1}: how is my sleep trend and what should I focus on today?` }), (_name, run) => run());
     }
     for (const body of bodies) expect(typeof body.prompt_cache_key).toBe('string');
     const rows = bodies.map((body) => ({ instructions: tokens(body.instructions), input: tokens(body.input), tools: tokens(body.tools ?? []) }));

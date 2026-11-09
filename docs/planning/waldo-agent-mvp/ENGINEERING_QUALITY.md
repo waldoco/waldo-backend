@@ -77,7 +77,7 @@ Use each repository's own committed lockfile and package manager. Keep backend d
 
 Choose one update bot, initially Dependabot, to propose manageable scheduled PRs for supported ecosystems and Actions. Group coupled runtime/test packages; separate major upgrades, native platform upgrades and unrelated ecosystems. Review release notes and compatibility; automated proposal does not imply automatic merge. No bot configuration is installed by this documentation change. [Dependabot options](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference)
 
-Retain the backend's current 14-day dependency release-age delay and narrowly justified exceptions. At the inspected baseline, June hotfix exclusions remain, including a broad `@cloudflare/workerd-*` exemption. Re-evaluate and expire unnecessary exemptions without changing resolved versions accidentally. Allow necessary dependency build scripts narrowly; keep a frozen-install smoke check. Use the installed pnpm 10 documentation, not current-major defaults. [pnpm 10 settings](https://pnpm.io/10.x/settings)
+The owner removed the backend's 14-day dependency release-age delay on September 30, 2026 at 23:23 IST to remove a build blocker. Keep exact toolchain pins, reviewed dependency PRs, narrow build-script allowances and frozen-install smoke checks. Do not restore an age rule or treat its removal as automatic upgrade/deploy approval. Use the installed pnpm 10 documentation, not current-major defaults. [pnpm 10 settings](https://pnpm.io/10.x/settings)
 
 Specific compatibility checks:
 
@@ -104,7 +104,7 @@ Freeze later relationship/commerce/general orchestration breadth until its named
 
 ## 7. Premium experience and competitive evidence
 
-Instinct and Meta Muse set an experience target; the [competitor evidence register](COMPETITOR_RESEARCH.md) separates public claims and observations. Full product parity is not promised by an adapter architecture. Recheck sources for a specific capability only when it affects the assigned slice.
+Instinct, Meta Muse and Dots set an experience target; the [competitor evidence register](COMPETITOR_RESEARCH.md) separates public claims and observations. Full product parity is not promised by an adapter architecture. Recheck sources for a specific capability only when it affects the assigned slice.
 
 | Experience to prove | Waldo acceptance / comparison |
 |---|---|
@@ -115,4 +115,6 @@ Instinct and Meta Muse set an experience target; the [competitor evidence regist
 | Health plus work delegation | Optional health meaningfully changes the day; K0 delegates one actual task and returns independently checked evidence without losing the personal thread |
 | Premium reliability | Clear pending/error/uncertain states, fast useful progress, accessible controls, stop/reconnect, quiet notifications and measured latency/cost on iPhone |
 
-For a parity claim, record product/date/version or observed account configuration, the same consented synthetic scenario, permissions, trials, outcomes, latency/cost and interventions. Use the same rubric and proof level; public marketing or a single demo cannot establish relative reliability. When competitor access is unavailable, mark comparison unverified and evaluate Waldo against the explicit product rubric. No invented personally tested Instinct or Muse story, unsupported exclusivity claim, or competitive feature checklist expands the MVP release cut.
+For a parity claim, record product/date/version or observed account configuration, the same consented synthetic scenario, permissions, trials, outcomes, latency/cost and interventions. Use the same rubric and proof level; public marketing or a single demo cannot establish relative reliability. When competitor access is unavailable, mark comparison unverified and evaluate Waldo against the explicit product rubric. No invented personally tested Instinct, Muse or Dots story, unsupported exclusivity claim, or competitive feature checklist expands the MVP release cut.
+
+September 29 Dots source note: https://openai.com/index/introducing-dots/ returned HTTP 403 to independent fetching; Dots claims in [the register](COMPETITOR_RESEARCH.md) are owner-supplied transcription attributed to the launch page. Keep these separate from observed product behavior before comparing against Waldo.

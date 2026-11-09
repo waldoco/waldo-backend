@@ -59,6 +59,45 @@ describe('trace privacy canary', () => {
     expect(consoleLines).not.toContain(MARKER);
   });
 
+  it('keeps typed memory and health receipt codes without private text when capture is off', async () => {
+    const entries = [
+      { trace: 'night:constellation', hop: 'constellation_evidence', ms: 0, ok: false, code: 'same_day', detail: 'held:same_day:owner_observation_pattern:1', error: MARKER },
+      { trace: 'tg-test', hop: 'health_context', ms: 5, ok: true, code: 'absent', detail: MARKER, error: MARKER },
+    ].map((entry) => gateTraceEntry(entry, false));
+    expect(entries.map((entry) => entry.detail)).toEqual(['held:same_day:owner_observation_pattern:1', 'absent']);
+    const payload = await exportBodies([...entries, { trace: 'night:constellation', hop: 'machine_turn', ms: 1, ok: true }, { trace: 'tg-test', hop: 'turn', ms: 6, ok: true }], false);
+    expect(payload).not.toContain(MARKER);
+    expect(payload).toContain('same_day');
+    expect(payload).toContain('absent');
+    const failed = gateTraceEntry({ trace: 'tg-failed', hop: 'health_context', ms: 0, ok: false, code: 'read_failed', error: MARKER }, false);
+    expect(failed.detail).toBe('read_failed');
+    expect(JSON.stringify(failed)).not.toContain(MARKER);
+  });
+
+  it('keeps semantic recall\'s counts with capture off, and only counts', () => {
+    const kept = [
+      ['memory_embedding', 'sweep texts=32'], ['memory_embedding', 'query rows=118 scan_ms=3'], ['memory_embedding', 'query'],
+      ['memory_embed', 'embedded=31 withheld=1'], ['memory_embed', 'sweep'],
+    ] as const;
+    for (const [hop, detail] of kept) {
+      const entry: TurnLogEntry = { trace: 'memory:semantic', hop, ms: 0, ok: true, detail };
+      expect(gateTraceEntry(entry, false).detail).toBe(detail);
+      expect(gateTraceEntry(entry, true).detail).toBe(detail);
+    }
+    for (const detail of [`query rows=5 note=${MARKER}`, `sweep texts=2 ${MARKER}`, 'query rows=1234567890 scan_ms=1', MARKER]) {
+      const gated = gateTraceEntry({ trace: 'memory:semantic', hop: 'memory_embedding', ms: 0, ok: false, code: 'embed_failed', detail }, false);
+      expect(gated.detail).toBe('embed_failed');
+      expect(JSON.stringify(gated)).not.toContain(MARKER);
+    }
+  });
+
+  it('rejects forged safe-hop codes that carry a private marker', () => {
+    const bad = gateTraceEntry({ trace: 't', hop: 'constellation_evidence', ms: 0, ok: false, detail: `held:same_day:owner_observation_pattern:1 ${MARKER}`, code: MARKER }, false);
+    expect(bad.detail).toBeUndefined();
+    expect(bad.code).toBeUndefined();
+    expect(JSON.stringify(bad)).not.toContain(MARKER);
+  });
+
   it('keeps the marker in the OTLP body when capture is on (the test is not vacuous)', async () => {
     const bodies = await exportBodies(markerTurn().map((entry) => gateTraceEntry(entry, true)), true);
     expect(bodies).toContain(MARKER);
@@ -124,6 +163,32 @@ describe('trace privacy canary', () => {
 
     const bodies = await exportBodies([gated, { trace: 't4', hop: 'turn', ms: 10, ok: true }], false);
     expect(bodies).not.toContain(MARKER);
+  });
+
+  it('a guard carrying the denial stage label survives capture-off in every sink', async () => {
+    for (const guard of ['size_cap:invalid_payload:decode:nesting:base64:3', 'size_cap:invalid_payload:health', 'size_cap:invalid_payload:pii']) {
+      const gated = gateTraceEntry({ trace: 't6', hop: 'tool_get_tasks', ms: 4, ok: false, code: 'forbidden:sanitise_denied', error: `${guard} ${MARKER}`, guard }, false);
+      expect(gated.guard).toBe(guard);
+      const sink = noteSink();
+      traceBook(sink.sql).record(gated, Date.now());
+      expect(sink.notes[0]).toBe(guard);
+      const bodies = await exportBodies([gated, { trace: 't6', hop: 'turn', ms: 10, ok: true }], false);
+      expect(bodies).toContain(guard);
+      expect(bodies).not.toContain(MARKER);
+    }
+  });
+
+  it('a stage label outside the enums, out of order or with trailing text is dropped at the gate', () => {
+    for (const guard of [
+      `size_cap:invalid_payload:decode:${MARKER}`,
+      'size_cap:invalid_payload:decode:nesting:base64:9',
+      'size_cap:invalid_payload:decode:nesting:base64',
+      'size_cap:invalid_payload:nesting:decode:base64:3',
+      'size_cap:invalid_payload:health:extra',
+      `size_cap:invalid_payload:pii ${MARKER}`,
+    ]) {
+      expect(gateTraceEntry({ trace: 't7', hop: 'tool_get_tasks', ms: 4, ok: false, guard }, false).guard).toBeUndefined();
+    }
   });
 
   it('a non-string guard (object with toString yielding a valid enum pair) is dropped at the gate - no sink serializes it', async () => {
@@ -218,5 +283,51 @@ describe('staging release gate: production can never export text', () => {
     );
     expect(entry.error).toBeUndefined();
     expect(entry.detail).toBe('provider_error');
+  });
+});
+
+
+it.each(['invalid_decision', 'uncertain', 'retained_invalid', 'retained_uncertain', 'invalid_decision:json_syntax', 'invalid_decision:invalid_shape', 'invalid_decision:unknown_decision', 'invalid_decision:invalid_sources', 'invalid_decision:invalid_evidence'] as const)('task custody %s diagnostic survives capture-off without private classifier data', async code => {
+  const entry: TurnLogEntry = { trace: 'scope-recovery', hop: 'task_source_custody', ms: 0, ok: code.startsWith('retained_'), code, detail: MARKER, error: MARKER, text: { input: MARKER, output: MARKER } };
+  const gated = gateTraceEntry(entry, false);
+  const bodies = await exportBodies([gated, { trace: entry.trace, hop: 'turn', ms: 0, ok: true }], false);
+  expect(bodies).toContain(code); expect(bodies).not.toContain(MARKER);
+  const sink = noteSink(); traceBook(sink.sql).record(gated, Date.now());
+  expect(sink.notes).toEqual([code]);
+});
+
+describe('v9 typed fields at the gate', () => {
+  it('keeps the typed v9 fields with capture off and drops any that are not in their vocabulary', () => {
+    const typed: TurnLogEntry = {
+      trace: 't9', hop: 'tool_draft_email', ms: 5, ok: false, error: `provider says ${MARKER}`,
+      error_code: 'rate_limited', rung: 'email', blocked_reason: 'approval_required', provider: 'openai', fallback_fired: true,
+      ttft_ms: 120, tools_called: 1, parallel_batches: 1, job_id: 'job_01', job_profile: 'reader', outcome: 'blocked', browser_ms: 0, sandbox_ms: 0,
+    };
+    const gated = gateTraceEntry(typed, false);
+    expect(gated).toMatchObject({ error_code: 'rate_limited', rung: 'email', blocked_reason: 'approval_required', provider: 'openai', fallback_fired: true, ttft_ms: 120, tools_called: 1, parallel_batches: 1, job_id: 'job_01', job_profile: 'reader', outcome: 'blocked', browser_ms: 0, sandbox_ms: 0 });
+    expect(JSON.stringify(gated)).not.toContain(MARKER);
+
+    const smuggled = gateTraceEntry({
+      ...typed, error_code: `rate_limited ${MARKER}`, rung: MARKER as never, blocked_reason: MARKER as never, provider: MARKER as never,
+      job_id: `job ${MARKER}`, job_profile: `reader ${MARKER}`, outcome: MARKER as never, ttft_ms: Number.NaN, tools_called: -1,
+    }, false);
+    expect(JSON.stringify(smuggled)).not.toContain(MARKER);
+    for (const key of ['error_code', 'rung', 'blocked_reason', 'provider', 'job_id', 'job_profile', 'outcome', 'ttft_ms', 'tools_called'] as const) expect(smuggled[key]).toBeUndefined();
+  });
+
+  it('keeps a tool search rejection made of identifiers and drops one that carries words', () => {
+    const base: TurnLogEntry = { trace: 't13', hop: 'llm_reply', ms: 5, ok: true, tool_search_degraded: true };
+    const reason = 'OpenAI request failed (400 unsupported_parameter tools[12].type)';
+    expect(gateTraceEntry({ ...base, tool_search_rejection: reason }, false).tool_search_rejection).toBe(reason);
+    const smuggled = gateTraceEntry({ ...base, tool_search_rejection: `OpenAI request failed: "${MARKER}, my dentist is on Elm Road"` }, false);
+    expect(smuggled.tool_search_rejection).toBeUndefined();
+    expect(JSON.stringify(smuggled)).not.toContain(MARKER);
+  });
+  it('keeps tool_search_degraded as a boolean with capture off and drops anything else', () => {
+    const base: TurnLogEntry = { trace: 't12', hop: 'llm_reply', ms: 5, ok: true };
+    expect(gateTraceEntry({ ...base, tool_search_degraded: true }, false).tool_search_degraded).toBe(true);
+    const smuggled = gateTraceEntry({ ...base, tool_search_degraded: MARKER as never }, false);
+    expect(smuggled.tool_search_degraded).toBeUndefined();
+    expect(JSON.stringify(smuggled)).not.toContain(MARKER);
   });
 });

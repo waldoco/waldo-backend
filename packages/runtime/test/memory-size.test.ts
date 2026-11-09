@@ -1,10 +1,10 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { applyClaimOps, claimStore, memoryPrompt } from '../src/memory/claims';
+import { applyClaimOps, claimStore, memoryPrompt, turnMemoryPrompt } from '../src/memory/claims';
 
 const withSql = <T>(fn: (sql: SqlStorage) => T) =>
-  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('memory-size')), (_instance, state) => fn(state.storage.sql));
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('memory-size')), (_instance, state) => fn(state.storage.sql));
 
 const tokens = (text: string) => Math.ceil(new TextEncoder().encode(text).byteLength / 4);
 const AT = '2026-09-24T04:00:00Z';
@@ -48,7 +48,15 @@ describe('memory prompt size (phase 1 measurement)', () => {
     const size = await withSql((sql) => {
       const store = claimStore(sql);
       applyClaimOps(store, ops({ add: REALISTIC_CLAIMS.map(([kind, text, source, evidence]) => ({ kind, text, source, evidence, touches_forgotten: false })) }), AT);
-      return tokens(memoryPrompt(store));
+      const full = tokens(memoryPrompt(store));
+      const selective = tokens(turnMemoryPrompt(store, 'How do my Sunday long runs fit the week?'));
+      console.log('MEMORY_PROMPT_TOKENS_30_CLAIMS_SELECTIVE ' + selective);
+      expect(selective).toBeLessThan(full);
+      // The older ungated fixture rows have no authentic source pointers, so the
+      // compact profile is intentionally empty. Retrieval still works by lexical hit.
+      expect(turnMemoryPrompt(store, 'Sunday long runs')).not.toContain('Sunday long run');
+      expect(store.recall('Sunday long runs').some(claim => claim.text.includes('Sunday long run'))).toBe(true);
+      return full;
     });
     console.log('MEMORY_PROMPT_TOKENS_30_CLAIMS ' + size);
     expect(size).toBeGreaterThan(100);

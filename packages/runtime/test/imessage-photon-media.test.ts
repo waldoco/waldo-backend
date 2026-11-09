@@ -1,0 +1,335 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { LLM_ATTACHMENTS_MAX } from '@waldo/contracts';
+import {
+  IMESSAGE_MEDIA_FILES_MAX, IMESSAGE_MEDIA_MAX_BYTES, IMESSAGE_MEDIA_REPLIES, iMessageMediaNotes, iMessageMediaOf, iMessageMediaSchema, openIMessageMedia, photonAttachmentSource,
+  type IMessageMedia, type PhotonAttachmentSource,
+} from '../src/channels/imessage/photon-media';
+import { iMessageTranscriber, openedForTurn } from '../src/channels/imessage/owner-runtime';
+import { renderIMessage } from '../src/channels/imessage/console';
+
+// Every value here is fictional. The secret and token are distinctive so a leak into any output is found by substring.
+const SECRET = 'fictional-photon-project-secret-7f3a9c';
+const TOKEN = 'fictional-photon-bearer-token-51e0d2';
+const ENV = { PHOTON_PROJECT_ID: 'proj-fixture', PHOTON_PROJECT_SECRET: SECRET };
+const SENDER = 'owner@example.invalid';
+const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+const PDF = new Uint8Array([0x25, 0x50, 0x44, 0x46, 5, 6]);
+const signal = () => new AbortController().signal;
+
+type Route = (url: string, init: RequestInit) => Response | Promise<Response>;
+const photon = (overrides: Partial<Record<'token' | 'message' | 'data', Route>> = {}) => {
+  const calls: { url: string; init: RequestInit }[] = [];
+  const message = { message: { guid: 'msg-1', sender: { address: SENDER }, content: { attachments: [
+    { guid: 'att-photo', mimeType: 'image/png', totalBytes: String(PNG.length) },
+    { guid: 'att-pdf', mimeType: 'application/pdf', totalBytes: String(PDF.length) },
+  ] } } };
+  const routes: Record<'token' | 'message' | 'data', Route> = {
+    token: () => Response.json({ succeed: true, data: { type: 'shared', token: TOKEN, expiresIn: 3600 } }),
+    message: () => Response.json(message),
+    data: (url) => new Response(url.includes('att-pdf') ? PDF : PNG),
+    ...overrides,
+  };
+  const fetcher = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = String(input);
+    calls.push({ url, init });
+    if (url === 'https://spectrum.photon.codes/projects/proj-fixture/imessage/tokens') return routes.token(url, init);
+    if (url === 'https://imessage.spectrum.photon.codes/v1/messages/msg-1') return routes.message(url, init);
+    if (url.startsWith('https://imessage.spectrum.photon.codes/v1/attachments/')) return routes.data(url, init);
+    throw new Error('unexpected egress');
+  }) as typeof fetch;
+  return { fetcher, calls };
+};
+const request = (ids = ['att-photo']) => ({ messageGuid: 'msg-1', sender: SENDER, files: ids.map(id => ({ id, mimeType: id === 'att-pdf' ? 'application/pdf' : 'image/png' })), maxBytes: IMESSAGE_MEDIA_MAX_BYTES, signal: signal() });
+
+afterEach(() => { vi.restoreAllMocks(); });
+
+describe('photonAttachmentSource', () => {
+  it('is absent until the project id and secret are both set', () => {
+    expect(photonAttachmentSource({})).toBeNull();
+    expect(photonAttachmentSource({ PHOTON_PROJECT_ID: 'proj-fixture' })).toBeNull();
+    expect(photonAttachmentSource({ PHOTON_PROJECT_SECRET: SECRET })).toBeNull();
+    expect(photonAttachmentSource({ PHOTON_PROJECT_ID: 'proj/../x', PHOTON_PROJECT_SECRET: SECRET })).toBeNull();
+  });
+
+  it('mints a project token, checks the message is the sender\'s, then reads each attachment over the documented HTTP route', async () => {
+    const { fetcher, calls } = photon();
+    const result = await photonAttachmentSource(ENV, fetcher)!(request(['att-photo', 'att-pdf']));
+    expect(result).toEqual({ ok: true, bytes: [PNG, PDF] });
+    expect(calls.map(c => `${c.init.method ?? 'GET'} ${c.url}`)).toEqual([
+      'POST https://spectrum.photon.codes/projects/proj-fixture/imessage/tokens',
+      'GET https://imessage.spectrum.photon.codes/v1/messages/msg-1',
+      'GET https://imessage.spectrum.photon.codes/v1/attachments/att-photo/data',
+      'GET https://imessage.spectrum.photon.codes/v1/attachments/att-pdf/data',
+    ]);
+    expect(new Headers(calls[0]!.init.headers).get('authorization')).toBe(`Basic ${btoa(`proj-fixture:${SECRET}`)}`);
+    for (const call of calls.slice(1)) expect(new Headers(call.init.headers).get('authorization')).toBe(`Bearer ${TOKEN}`);
+    for (const call of calls) expect(call.init.redirect).toBe('manual');
+  });
+
+  it.each([
+    ['an internal address', 'https://10.0.0.8'], ['a private address', 'https://192.168.1.4'], ['a 172.16/12 address', 'https://172.20.0.1'],
+    ['the metadata address', 'https://169.254.169.254'], ['localhost', 'https://localhost'], ['loopback', 'https://127.0.0.1'],
+    ['a host off the allowlist', 'https://imessage.spectrum.photon.codes.example.invalid'], ['a lookalike', 'https://photon.codes'],
+    ['plain http', 'http://imessage.spectrum.photon.codes'], ['another port', 'https://imessage.spectrum.photon.codes:8443'],
+    ['credentials in the origin', 'https://user:pass@imessage.spectrum.photon.codes'],
+  ])('refuses %s before any request', async (_name, origin) => {
+    const { fetcher, calls } = photon();
+    for (const origins of [{ token: origin, imessage: 'https://imessage.spectrum.photon.codes' }, { token: 'https://spectrum.photon.codes', imessage: origin }]) {
+      expect(await photonAttachmentSource(ENV, fetcher, origins)!(request())).toEqual({ ok: false, code: 'egress_refused' });
+    }
+    expect(calls).toEqual([]);
+  });
+
+  it.each([
+    ['another sender', { message: { sender: { address: 'someone-else@example.invalid' }, content: { attachments: [{ guid: 'att-photo', mimeType: 'image/png' }] } } }],
+    ['no sender', { message: { content: { attachments: [{ guid: 'att-photo', mimeType: 'image/png' }] } } }],
+    ['Waldo itself', { message: { isFromMe: true, sender: { address: SENDER }, content: { attachments: [{ guid: 'att-photo', mimeType: 'image/png' }] } } }],
+    ['a message without that attachment', { message: { sender: { address: SENDER }, content: { attachments: [{ guid: 'att-other', mimeType: 'image/png' }] } } }],
+    ['a different type than the host named', { message: { sender: { address: SENDER }, content: { attachments: [{ guid: 'att-photo', mimeType: 'application/x-msdownload' }] } } }],
+  ])('refuses an attachment that belongs to %s and never reads it', async (_name, body) => {
+    const { fetcher, calls } = photon({ message: () => Response.json(body) });
+    expect(await photonAttachmentSource(ENV, fetcher)!(request())).toEqual({ ok: false, code: 'not_in_message' });
+    expect(calls.some(c => c.url.includes('/data'))).toBe(false);
+  });
+
+  it.each([
+    ['a dot-only message guid', { messageGuid: '..' }], ['a single-dot message guid', { messageGuid: '.' }],
+    ['a dot-only attachment id', { files: [{ id: '..', mimeType: 'image/png' }] }], ['a slash in an attachment id', { files: [{ id: 'att/../x', mimeType: 'image/png' }] }],
+  ])('refuses %s before any request, so no path can normalise to another route with the token', async (_name, override) => {
+    const { fetcher, calls } = photon();
+    expect(await photonAttachmentSource(ENV, fetcher)!({ ...request(), ...override })).toEqual({ ok: false, code: 'egress_refused' });
+    expect(calls).toEqual([]);
+  });
+
+  it('bounds size by what Photon declares and by what it streams', async () => {
+    const declared = photon({ message: () => Response.json({ message: { sender: { address: SENDER }, content: { attachments: [{ guid: 'att-photo', mimeType: 'image/png', totalBytes: '9' }] } } }) });
+    expect(await photonAttachmentSource(ENV, declared.fetcher)!({ ...request(), maxBytes: 8 })).toEqual({ ok: false, code: 'too_large' });
+    expect(declared.calls.some(c => c.url.includes('/data'))).toBe(false);
+    const streamed = photon({ data: () => new Response(new Uint8Array(9)) });
+    expect(await photonAttachmentSource(ENV, streamed.fetcher)!({ ...request(), maxBytes: 8 })).toEqual({ ok: false, code: 'too_large' });
+    const together = photon();
+    expect(await photonAttachmentSource(ENV, together.fetcher)!({ ...request(['att-photo', 'att-pdf']), maxBytes: PNG.length + PDF.length - 1 })).toEqual({ ok: false, code: 'too_large' });
+    // With no declared sizes, the bound over a whole message is what the files stream, each one under it on its own.
+    const undeclared = photon({ message: () => Response.json({ message: { sender: { address: SENDER }, content: { attachments: [{ guid: 'att-photo', mimeType: 'image/png' }, { guid: 'att-pdf', mimeType: 'application/pdf' }] } } }) });
+    expect(await photonAttachmentSource(ENV, undeclared.fetcher)!({ ...request(['att-photo', 'att-pdf']), maxBytes: Math.max(PNG.length, PDF.length) + 1 })).toEqual({ ok: false, code: 'too_large' });
+  });
+
+  it.each([
+    ['a refused token', { token: () => new Response('{"succeed":false}', { status: 401 }) }, 'token_refused'],
+    ['a dedicated-line token', { token: () => Response.json({ succeed: true, data: { type: 'dedicated', auth: { line: TOKEN }, numbers: {}, expiresIn: 3600 } }) }, 'token_unsupported'],
+    ['a missing message', { message: () => new Response('not found', { status: 404 }) }, 'not_in_message'],
+    ['an expired attachment', { data: () => new Response('gone', { status: 404 }) }, 'attachment_unavailable'],
+    ['a redirect', { data: () => new Response(null, { status: 302, headers: { location: 'https://169.254.169.254/latest' } }) }, 'unexpected_response'],
+    ['a network failure', { data: () => { throw new Error(`connect failed for https://imessage.spectrum.photon.codes Bearer ${TOKEN}`); } }, 'unreachable'],
+  ] as const)('fails closed on %s and never writes the secret or token anywhere', async (_name, routes, code) => {
+    const lines: string[] = [];
+    for (const method of ['log', 'info', 'warn', 'error', 'debug'] as const) vi.spyOn(console, method).mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')); });
+    const result = await photonAttachmentSource(ENV, photon(routes).fetcher)!(request());
+    expect(result).toEqual({ ok: false, code });
+    const seen = JSON.stringify([result, lines]);
+    for (const secret of [SECRET, TOKEN, btoa(`proj-fixture:${SECRET}`)]) expect(seen).not.toContain(secret);
+  });
+
+  it('stops when the turn is cancelled', async () => {
+    const controller = new AbortController();
+    const { fetcher } = photon({ data: (_url, init) => { controller.abort(); init.signal?.throwIfAborted(); return new Response(PNG); } });
+    expect(await photonAttachmentSource(ENV, fetcher)!({ ...request(), signal: controller.signal })).toEqual({ ok: false, code: 'unreachable' });
+  });
+});
+
+describe('openIMessageMedia', () => {
+  const photo = { id: 'att-photo', name: 'IMG_0001.png', mimeType: 'image/png', size: PNG.length };
+  const pdf = { id: 'att-pdf', name: 'notes.pdf', mimeType: 'application/pdf', size: PDF.length };
+  const media = (...files: IMessageMedia['files'][number][]): IMessageMedia => ({ messageGuid: 'msg-1', files });
+  const opened = (bytes: readonly Uint8Array[]): PhotonAttachmentSource => vi.fn(async () => ({ ok: true as const, bytes }));
+  const deps = (source: PhotonAttachmentSource | null, enabled = true) => ({ enabled, source, sender: SENDER, signal: signal(), admit: vi.fn() });
+
+  it('opens a photo and a document into model attachments with a note for each', async () => {
+    const d = deps(opened([PNG, PDF]));
+    const result = await openIMessageMedia(media(photo, pdf), d);
+    expect(result).toEqual({ kind: 'opened',
+      parts: [{ authorship: 'media_note', text: '[Owner sent a photo, attached.]' }, { authorship: 'media_note', text: '[Owner sent a file "notes.pdf", attached.]' }],
+      attachments: [{ kind: 'image', mime_type: 'image/png', filename: 'IMG_0001.png', data_base64: btoa(String.fromCharCode(...PNG)) },
+        { kind: 'file', mime_type: 'application/pdf', filename: 'notes.pdf', data_base64: btoa(String.fromCharCode(...PDF)) }] });
+    expect(d.source).toHaveBeenCalledWith(expect.objectContaining({ messageGuid: 'msg-1', sender: SENDER, files: [{ id: 'att-photo', mimeType: 'image/png' }, { id: 'att-pdf', mimeType: 'application/pdf' }], maxBytes: IMESSAGE_MEDIA_MAX_BYTES }));
+    expect(d.admit).toHaveBeenCalledTimes(2);
+  });
+
+  it('answers once and fetches nothing while IMESSAGE_MEDIA is off', async () => {
+    const d = deps(opened([PNG]), false);
+    expect(await openIMessageMedia(media(photo), d)).toEqual({ kind: 'reply', text: "I got your photo but couldn't open it here; send it in the app." });
+    expect(await openIMessageMedia(media(pdf, photo), d)).toEqual({ kind: 'reply', text: "I got your files but couldn't open them here; send them in the app." });
+    expect(d.source).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a voice note', [{ ...photo, name: 'Audio Message.caf', mimeType: 'audio/x-caf' }], IMESSAGE_MEDIA_REPLIES.voice],
+    ['an audio file with a generic type', [{ ...photo, name: 'Audio Message.caf', mimeType: 'application/octet-stream' }], IMESSAGE_MEDIA_REPLIES.voice],
+    ['more files than one turn carries', Array.from({ length: LLM_ATTACHMENTS_MAX + 1 }, (_, i) => ({ ...photo, id: `att-${i}` })), `I got your photos but can open at most ${LLM_ATTACHMENTS_MAX} at once here; send them in smaller batches or in the app.`],
+    ['a video', [{ ...photo, name: 'clip.mov', mimeType: 'video/quicktime' }], "I got your file but can't read that format here; send it in the app."],
+    ['a HEIC photo', [{ ...photo, name: 'IMG_0002.heic', mimeType: 'image/heic' }], "I got your photo but can't read that format here; send it in the app."],
+    ['an oversized photo', [{ ...photo, size: IMESSAGE_MEDIA_MAX_BYTES + 1 }], "I got your photo but it is too large to open here; send it in the app."],
+    ['files too large together', [{ ...photo, size: IMESSAGE_MEDIA_MAX_BYTES / 2 + 1 }, { ...pdf, size: IMESSAGE_MEDIA_MAX_BYTES / 2 }], "I got your files but they are too large to open here; send them in the app."],
+    ['a Mac host file Photon does not hold', [{ name: photo.name, mimeType: photo.mimeType, size: photo.size }], "I got your photo but couldn't open it here; send it in the app."],
+  ])('refuses %s honestly without fetching', async (_name, files, text) => {
+    const d = deps(opened([PNG]));
+    expect(await openIMessageMedia(media(...files), d)).toEqual({ kind: 'reply', text });
+    expect(d.source).not.toHaveBeenCalled();
+  });
+
+  it('with WALDO_FILE_TOOLS on, keeps every file, attaches the readable ones and names the saved path for the rest', async () => {
+    const kept: { filename: string; key: string }[] = [];
+    const keep = vi.fn(async (file: { filename: string; key: string }) => { kept.push(file); return { status: 'saved' as const, path: `uploads/f/${file.filename}`, file_id: `id-${kept.length}`, revision: 1 }; });
+    const zip = { id: 'att-zip', name: 'notes.zip', mimeType: 'application/zip', size: 4 };
+    const d = { ...deps(opened([PNG, new Uint8Array([0x50, 0x4b, 3, 4])])), keep };
+    const result = await openIMessageMedia(media(photo, zip), d);
+    expect(result).toEqual({ kind: 'opened',
+      parts: [{ authorship: 'media_note', text: '[Owner sent a photo, attached. Saved in their workspace as uploads/f/IMG_0001.png (file_id id-1, revision 1).]' },
+        { authorship: 'media_note', text: '[Owner sent a file "notes.zip". Saved in their workspace as uploads/f/notes.zip (file_id id-2, revision 1). It is not attached here; open it with the workspace tools.]' }],
+      attachments: [{ kind: 'image', mime_type: 'image/png', filename: 'IMG_0001.png', data_base64: btoa(String.fromCharCode(...PNG)) }] });
+    expect(kept.map(file => file.key)).toEqual(['imessage:msg-1:0', 'imessage:msg-1:1']);
+    // Off: the same zip is still the honest format reply.
+    expect(await openIMessageMedia(media(zip), deps(opened([PNG])))).toEqual({ kind: 'reply', text: "I got your file but can't read that format here; send it in the app." });
+  });
+
+  describe('a voice note, with IMESSAGE_VOICE on (a transcriber given)', () => {
+    const AUDIO = new Uint8Array([0x63, 0x61, 0x66, 0x66, 9, 9]);
+    const voice = { id: 'att-voice', name: 'Audio Message.caf', mimeType: 'audio/x-caf', size: AUDIO.length };
+    const heard = (text: string) => vi.fn(async (_audio: Uint8Array, _name: string, _mime: string) => text);
+
+    it('is fetched from Photon and transcribed; the transcript is its own part and nothing is attached', async () => {
+      const transcribe = heard(' Book the dentist for Thursday. ');
+      const d = { ...deps(opened([AUDIO]), false), transcribe };
+      expect(await openIMessageMedia(media(voice), d)).toEqual({ kind: 'opened', attachments: [],
+        parts: [{ authorship: 'media_note', text: '[Owner sent a voice note.]' }, { authorship: 'file_transcript', text: 'Book the dentist for Thursday.' }] });
+      expect(d.source).toHaveBeenCalledWith(expect.objectContaining({ messageGuid: 'msg-1', sender: SENDER, files: [{ id: 'att-voice', mimeType: 'audio/x-caf' }] }));
+      expect(transcribe).toHaveBeenCalledWith(AUDIO, 'Audio Message.caf', 'audio/x-caf', expect.any(AbortSignal));
+      expect(d.admit).toHaveBeenCalledTimes(3);
+    });
+
+    it('that cannot be transcribed says so to the model rather than failing the turn', async () => {
+      const d = { ...deps(opened([AUDIO])), transcribe: vi.fn(async () => { throw new Error('transcription failed: 400'); }) };
+      expect(await openIMessageMedia(media(voice), d)).toEqual({ kind: 'opened', attachments: [], parts: [{ authorship: 'media_note', text: '[Owner sent a voice note, but it could not be transcribed.]' }] });
+    });
+
+    it.each([
+      ['Photon cannot give it', vi.fn(async () => ({ ok: false as const, code: 'attachment_unavailable' as const })), [voice], true],
+      ['it is not on Photon', opened([AUDIO]), [{ name: voice.name, mimeType: voice.mimeType, size: voice.size }], false],
+      ['it comes with other files', opened([AUDIO, PNG]), [voice, photo], false],
+      ['it is too large', opened([AUDIO]), [{ ...voice, size: IMESSAGE_MEDIA_MAX_BYTES + 1 }], false],
+    ])('keeps the honest voice reply when %s', async (_name, source, files, fetched) => {
+      const transcribe = heard('unused');
+      expect(await openIMessageMedia(media(...files), { ...deps(source), transcribe })).toEqual({ kind: 'reply', text: IMESSAGE_MEDIA_REPLIES.voice });
+      expect(transcribe).not.toHaveBeenCalled();
+      expect(source).toHaveBeenCalledTimes(fetched ? 1 : 0);
+    });
+
+    it('fetches under the turn\'s signal, and a cancelled turn stops a transcription that never answers', async () => {
+      const turn = new AbortController();
+      let fetchSignal: AbortSignal | undefined;
+      const source = vi.fn(async (input: { signal: AbortSignal }) => { fetchSignal = input.signal; return { ok: true as const, bytes: [AUDIO] }; });
+      let heardSignal: AbortSignal | undefined;
+      const transcribe = vi.fn((_audio: Uint8Array, _name: string, _mime: string, given?: AbortSignal) => { heardSignal = given; setTimeout(() => turn.abort(), 0); return new Promise<string>(() => undefined); });
+      const result = await openIMessageMedia(media(voice), { ...deps(source as never), signal: turn.signal, transcribe });
+      expect(fetchSignal!.aborted).toBe(true);
+      // The provider's own request is given the turn's signal, so it ends with the turn.
+      expect(heardSignal!.aborted).toBe(true);
+      expect(result).toEqual({ kind: 'opened', attachments: [], parts: [{ authorship: 'media_note', text: '[Owner sent a voice note, but it could not be transcribed.]' }] });
+    });
+
+    it('logs whether it was heard, as a code, never its words or name', async () => {
+      const lines: string[] = [];
+      vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')); });
+      await openIMessageMedia(media(voice), { ...deps(opened([AUDIO])), transcribe: heard('Call Sam back.') });
+      await openIMessageMedia(media(voice), { ...deps(opened([AUDIO])), transcribe: vi.fn(async () => { throw new Error('transcription failed: 400'); }) });
+      expect(lines.map(line => JSON.parse(line))).toEqual([{ hop: 'imessage_media', ok: true, voice: true }, { hop: 'imessage_media', ok: false, voice: true, code: 'no_transcript' }]);
+      expect(lines.join('\n')).not.toMatch(/Call Sam|Audio Message/);
+    });
+
+    it('is named a voice note, not a file, wherever the turn names what the owner sent', () => {
+      expect(iMessageMediaNotes([voice, photo, pdf]).map(note => note.text)).toEqual(['[Owner sent a voice note.]', '[Owner sent a photo, attached.]', '[Owner sent a file "notes.pdf", attached.]']);
+    });
+
+    it('an audio file that is no voice message is heard and named as the audio file it is, as on Telegram', async () => {
+      const song = { id: 'att-song', name: 'song.mp3', mimeType: 'audio/mpeg', size: AUDIO.length };
+      expect(iMessageMediaNotes([song]).map(note => note.text)).toEqual(['[Owner sent an audio file "song.mp3".]']);
+      const transcribe = heard('La la la.');
+      expect(await openIMessageMedia(media(song), { ...deps(opened([AUDIO])), transcribe })).toEqual({ kind: 'opened', attachments: [],
+        parts: [{ authorship: 'media_note', text: '[Owner sent an audio file "song.mp3".]' }, { authorship: 'file_transcript', text: 'La la la.' }] });
+    });
+
+    it('is heard only with IMESSAGE_VOICE on and a transcriber set up', () => {
+      expect(iMessageTranscriber({ IMESSAGE_VOICE: '0', OPENAI_API_KEY: 'synthetic' } as never)).toBeUndefined();
+      expect(iMessageTranscriber({ IMESSAGE_VOICE: '1' } as never)).toBeUndefined();
+      expect(iMessageTranscriber({ IMESSAGE_VOICE: '1', OPENAI_API_KEY: 'synthetic' } as never)).toBeTypeOf('function');
+    });
+
+    it('a closed turn stops before the fetch and before the transcript is used', async () => {
+      const transcribe = heard('unused');
+      const d = { ...deps(opened([AUDIO])), transcribe, admit: vi.fn(() => { throw new Error('closed'); }) };
+      await expect(openIMessageMedia(media(voice), d)).rejects.toThrow('closed');
+      expect(d.source).not.toHaveBeenCalled();
+      let n = 0;
+      const late = { ...deps(opened([AUDIO])), transcribe, admit: vi.fn(() => { if (++n === 3) throw new Error('closed'); }) };
+      await expect(openIMessageMedia(media(voice), late)).rejects.toThrow('closed');
+    });
+  });
+
+  it('a voice note stays refused with the flag off', async () => {
+    expect(await openIMessageMedia(media({ ...photo, mimeType: 'audio/mp4', name: 'voice.m4a' }), deps(null, false))).toEqual({ kind: 'reply', text: IMESSAGE_MEDIA_REPLIES.voice });
+  });
+
+  it.each([
+    ['Photon is not configured', null],
+    ['the fetch fails', vi.fn(async () => ({ ok: false as const, code: 'attachment_unavailable' as const }))],
+    ['Photon returns the wrong number of files', opened([])],
+  ])('falls back to the one honest reply when %s', async (_name, source) => {
+    const lines: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')); });
+    expect(await openIMessageMedia(media(photo), deps(source))).toEqual({ kind: 'reply', text: "I got your photo but couldn't open it here; send it in the app." });
+    expect(lines.join('\n')).not.toMatch(/att-photo|IMG_0001|msg-1|owner@/);
+  });
+
+  it('the console says what happens to a photo or file, by the flag, and claims tapbacks only for a host that verified them', () => {
+    expect(renderIMessage([], 'csrf', { media: true, voice: true })).toContain('Direct iMessages: text, voice notes, and photos and documents sent to your Waldo number. Groups and SMS are not supported.');
+    expect(renderIMessage([], 'csrf', { voice: true })).toContain('Direct iMessage text and voice notes. Photos and files get a reply asking you to send them in the app. Groups and SMS are not supported.');
+    const off = renderIMessage([], 'csrf', {}), on = renderIMessage([], 'csrf', { media: true });
+    const TAPBACKS = 'Groups, SMS and voice notes are not supported. Waldo sends a tapback only from a host whose row says tapbacks verified.';
+    expect(off).toContain(`Direct iMessage text only. Photos and files get a reply asking you to send them in the app. ${TAPBACKS}`);
+    expect(on).toContain(`Direct iMessages: text, and photos and documents sent to your Waldo number. ${TAPBACKS}`);
+    for (const page of [off, on]) expect(page).not.toContain('reactions are not supported');
+    const row = { bridge_id: 'imb_' + '0'.repeat(32), account_id: 'ima_' + '0'.repeat(32), state: 'active', kind: 'owner', subject: 'owner@example.invalid', chat_guid: 'iMessage;-;owner@example.invalid', host_version: 'h1', online: true, textReady: true } as never;
+    expect(renderIMessage([{ ...(row as object), tapbacksReady: true } as never], 'csrf')).toContain('online · text verified · tapbacks verified');
+    expect(renderIMessage([{ ...(row as object), tapbacksReady: false } as never], 'csrf')).toContain('online · text verified · tapbacks not verified');
+  });
+
+  it('a closed turn stops before and after the fetch', async () => {
+    const d = { ...deps(opened([PNG])), admit: vi.fn(() => { throw new Error('closed'); }) };
+    await expect(openIMessageMedia(media(photo), d)).rejects.toThrow('closed');
+    expect(d.source).not.toHaveBeenCalled();
+  });
+});
+
+describe('the media that crosses from the bridge', () => {
+  const photo = (n: number) => ({ id: `att-${n}`, name: `photo-${n}.png`, mimeType: 'image/png', size: 10 });
+  it('holds at most IMESSAGE_MEDIA_FILES_MAX files, which still leaves the too-many reply to answer', () => {
+    expect(IMESSAGE_MEDIA_FILES_MAX).toBeGreaterThan(LLM_ATTACHMENTS_MAX);
+    expect(iMessageMediaSchema.safeParse({ messageGuid: 'msg-1', files: Array.from({ length: IMESSAGE_MEDIA_FILES_MAX }, (_, n) => photo(n)) }).success).toBe(true);
+    expect(iMessageMediaSchema.safeParse({ messageGuid: 'msg-1', files: Array.from({ length: IMESSAGE_MEDIA_FILES_MAX + 1 }, (_, n) => photo(n)) }).success).toBe(false);
+  });
+  it('a message with more files than that crosses with the first IMESSAGE_MEDIA_FILES_MAX, and is answered as too many', () => {
+    const media = iMessageMediaOf({ messageGuid: 'msg-1', attachments: [], photonAttachments: Array.from({ length: IMESSAGE_MEDIA_FILES_MAX + 5 }, (_, n) => photo(n)) })!;
+    expect(iMessageMediaSchema.parse(media).files).toHaveLength(IMESSAGE_MEDIA_FILES_MAX);
+  });
+});
+
+describe('the files an iMessage turn opened', () => {
+  const opened = { updateId: 9_000_000_000_001, runId: 'run-imessage', parts: [{ authorship: 'media_note' as const, text: 'photo' }], attachments: [] };
+  it('are read only by the iMessage turn they were opened for, never by another run with the same update id', () => {
+    expect(openedForTurn(opened, { updateId: opened.updateId, runScope: { runId: 'run-imessage' } })).toBe(opened);
+    expect(openedForTurn(opened, { updateId: opened.updateId, runScope: { runId: 'run-whatsapp' } })).toBeNull();
+    expect(openedForTurn(opened, { updateId: opened.updateId })).toBeNull();
+    expect(openedForTurn(opened, { updateId: opened.updateId + 1, runScope: { runId: 'run-imessage' } })).toBeNull();
+    expect(openedForTurn(null, { updateId: opened.updateId, runScope: { runId: 'run-imessage' } })).toBeNull();
+  });
+});

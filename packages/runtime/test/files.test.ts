@@ -7,7 +7,7 @@ import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
 
 describe('owner files', () => {
   it('records Telegram media references newest first and removes them', async () => {
-    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('owner-files'));
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('owner-files'));
     await runInDurableObject(stub, async (_instance, state) => {
       const book = fileBook(state.storage.sql);
       book.record({ kind: 'photo', fileId: 'a', fileName: null, mimeType: null, fileSize: 1000 }, '', 1);
@@ -20,6 +20,18 @@ describe('owner files', () => {
     });
   });
 
+  it('keeps one reference for a file recorded again, as a requeued turn does', async () => {
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('owner-files-again'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const book = fileBook(state.storage.sql);
+      const media = { kind: 'document', fileId: 'wa-media-1', fileName: 'plan.pdf', mimeType: 'application/pdf', fileSize: 5000 } as const;
+      book.record(media, 'first', 1);
+      book.record(media, 'first', 2);
+      book.record({ ...media, fileId: 'wa-media-2' }, '', 3);
+      expect(book.list().map(file => file.file_id).sort()).toEqual(['wa-media-1', 'wa-media-2']);
+    });
+  });
+
   it('serves images and PDFs inline and everything else as a download', () => {
     const file = SAMPLE_CONSOLE_VIEW.files[0]!;
     expect(fileResponse(file, new Uint8Array([1])).headers.get('content-disposition')).toBe('inline; filename="blood-panel-sept.pdf"');
@@ -29,7 +41,7 @@ describe('owner files', () => {
   });
 
   it('lists files in the console with open and remove controls', () => {
-    const page = renderConsole(SAMPLE_CONSOLE_VIEW);
+    const page = renderConsole(SAMPLE_CONSOLE_VIEW, 'files');
     expect(page).toContain('id="files"');
     expect(page).toContain('href="/console/file?id=2"');
     expect(page).toContain('value="file.remove"');

@@ -1,59 +1,520 @@
+import { z } from 'zod';
 import { onlyArtifacts, quarantineArtifacts } from '../security/artifact-hygiene';
-// Minimal WhatsApp Cloud API caller (WHATSAPP_CHANNEL_SPEC W2): text sends only for the webhook's
-// link-code replies. The full gated send surface (buttons, templates, the owner-0 drop gate) is W3.
+import { OUTBOX_CUSTODY } from './delivery-routes';
+import { splitTelegramText } from './telegram-api';
+// WhatsApp Cloud API surface (WHATSAPP_CHANNEL_SPEC W2-W4): the raw caller for the webhook's
+// link-code replies, the telegram-shaped send shim the owner DO wraps in the same
+// gatedCaller/egressGuardedCaller gate as Telegram (W3), the two-step media downloader that
+// feeds voice notes to the shared transcriber (W4), and the ingress normalization below.
 export type WhatsAppCall = (body: object) => Promise<unknown>;
+
+// Match the existing Telegram transport bound. A timed-out POST is uncertain,
+// so this caller never retries and never reports a successful acknowledgement.
+export const WHATSAPP_API_TIMEOUT_MS = 15_000;
+export const WHATSAPP_GRAPH_VERSION = 'v26.0';
+// https://developers.facebook.com/docs/whatsapp/cloud-api/reference/messages , text object: "Maximum 4096 characters".
+export const WHATSAPP_TEXT_MAX_CHARS = 4096;
+// A Graph refusal with Meta's numeric error code (error.code in the JSON body), or null when the body has none.
+export class WhatsAppApiError extends Error {
+  readonly code: number | null;
+  readonly #body: string;
+  constructor(readonly status: number, body: string) {
+    super(`whatsapp ${status}: ${body.slice(0, 200)}`);
+    this.#body = body.slice(0, 4096);
+    let code: unknown = null;
+    try { code = (JSON.parse(body) as { error?: { code?: unknown } }).error?.code; } catch { /* not JSON */ }
+    this.code = typeof code === 'number' && Number.isSafeInteger(code) ? code : null;
+  }
+
+  // Graph's answer (its first 4096 characters), read only by the webhook's staging debug log. A getter over a private
+  // field, so serializing the error never carries it.
+  get body(): string { return this.#body; }
+}
+
+// Graph can quote the token it was sent back in an auth refusal ("Malformed access token ..."), so every form of the token,
+// as stored and trimmed of whitespace and quotes, is masked before Graph's answer becomes an error. A form shorter than 8
+// characters is no real token and is left alone, so it cannot garble the answer.
+const maskToken = (text: string, token: string): string => {
+  let masked = text;
+  for (const form of new Set([token, token.trim(), token.trim().replace(/^["']+|["']+$/g, '')])) {
+    if (form.length >= 8) masked = masked.split(form).join('[token]');
+  }
+  return masked;
+};
+
+// https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/send-messages/ , "WhatsApp user phone
+// number formats": a `to` without its plus gets the business number's country calling code prepended. Callers pass the
+// stored E.164 digits, so an all-digit `to` goes out with its plus. A BSUID goes in `recipient`, which is sent as given.
+const e164To = (body: object): object => {
+  const { to } = body as { to?: unknown };
+  return typeof to === 'string' && /^\d+$/.test(to) ? { ...body, to: `+${to}` } : body;
+};
 
 export const createWhatsAppCaller = (token: string, phoneNumberId: string, fetcher: typeof fetch = fetch): WhatsAppCall =>
   async (body) => {
-    const response = await fetcher(`https://graph.facebook.com/v21.0/${phoneNumberId}/messages`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ messaging_product: 'whatsapp', ...body }),
-    });
-    if (!response.ok) throw new Error(`whatsapp ${response.status}: ${(await response.text()).slice(0, 200)}`);
-    return response.json();
+    const controller = new AbortController();
+    let timer:ReturnType<typeof setTimeout>;
+    const timeout=new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new Error('whatsapp send timed out; delivery uncertain'));},WHATSAPP_API_TIMEOUT_MS);});
+    try {
+      const response = await Promise.race([fetcher(`https://graph.facebook.com/${WHATSAPP_GRAPH_VERSION}/${phoneNumberId}/messages`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ messaging_product: 'whatsapp', ...e164To(body) }),
+        signal: controller.signal,
+      }),timeout]);
+      if (!response.ok) throw new WhatsAppApiError(response.status, maskToken(await Promise.race([response.text(),timeout]), token));
+      return await Promise.race([response.json(),timeout]);
+    } finally {
+      clearTimeout(timer!);
+    }
   };
 
-export const sendWhatsAppText = (call: WhatsAppCall, to: string, text: string) =>
-  call({ to, type: 'text', text: { body: text } });
+// A text longer than one WhatsApp message went out in parts and a later part failed: the owner already has the first `sent`
+// parts, so the caller must not send the whole text again. `ack` is the last part that went out; `remaining` are the parts
+// that did not.
+export class WhatsAppPartialSend extends Error {
+  constructor(readonly sent: number, readonly ack: unknown, readonly remaining: readonly string[], override readonly cause: unknown) {
+    super(`whatsapp send stopped after part ${sent}`, { cause });
+  }
+}
 
-// Telegram-shaped shim over the Cloud API (the OpenClaw channel-plugin pattern: normalize the
-// provider behind one call interface so the turn pipeline never branches on provider, and the
-// reply always goes back out the channel it came in on). sendMessage maps to a text send; buttons
-// flatten to reply instructions because WhatsApp interactive replies carry no callback_data, so
-// approval cards arrive as "reply a:<id>" lines. Everything else is a logged no-op.
+// preview_url makes WhatsApp fetch the first http(s) link with no tap from the owner, so it is opt-in per send.
+// quote is the wamid of an earlier message the text answers, which WhatsApp shows quoted above it.
+export const sendWhatsAppText = (call: WhatsAppCall, to: string, text: string, preview = false, quote?: string) =>
+  call({ to, ...(quote ? { context: { message_id: quote } } : {}), type: 'text', text: { body: text, ...(preview && /https?:\/\//i.test(text) ? { preview_url: true } : {}) } });
+// Waldo's own contact card, so the owner saves the number as Waldo in one tap. Until Meta verifies the display name,
+// WhatsApp shows an unsaved business by its number.
+export const sendWhatsAppWaldoCard = (call: WhatsAppCall, to: string, waldoNumber: string) =>
+  call({ to, type: 'contacts', contacts: [{ name: { formatted_name: 'Waldo', first_name: 'Waldo' }, phones: [{ phone: `+${waldoNumber}`, type: 'WORK', wa_id: waldoNumber }] }] });
+export const whatsappAckId = (ack: unknown): string | null => {
+  const id = (ack as { messages?: { id?: unknown }[] } | undefined)?.messages?.[0]?.id;
+  return typeof id === 'string' && id !== '' ? id : null;
+};
+
+// Telegram-shaped compatibility caller. WhatsApp currently uses explicit text
+// instructions for approvals and exact URL text for link buttons. sendDocument
+// uploads the file and sends it by media id (deliverWhatsAppFile is its caller).
+// Unsupported Telegram operations return no receipt, never a fabricated successful result.
 export type TelegramShimCall = (method: string, body: object) => Promise<unknown>;
 
-export const whatsappTelegramShim = (token: string, phoneNumberId: string, to: string, fetcher: typeof fetch = fetch): TelegramShimCall => {
+// Meta shows the typing indicator for up to 25 seconds or until the reply, and each call also marks the message read, so the
+// listener's 4-second typing ticks are thinned to one call per 20 seconds for the same message.
+export const WHATSAPP_TYPING_REFRESH_MS = 20_000;
+// The owner DO keeps the id of the owner's latest admitted message here, for the read receipt and typing indicator.
+export const WA_LAST_INBOUND_ID_KEY = 'wa_last_inbound_id';
+// onSent hears each part of what Waldo wrote to the owner, with its wamid, so a later reaction or swipe-reply naming it can be
+// read: a turn's own reply, and whatever the delivery outbox sends (the Brief, Check-in and Close, reminders, follow-ups,
+// notices). Direct system sends (sign-in and connect links among them) are never heard.
+export type WhatsAppShimOptions = Readonly<{ lastInbound?: () => string | null; now?: () => number; onSent?: (id: string, text: string) => void;
+  // WHATSAPP_REPLY_BUTTONS: a card whose buttons fit WhatsApp's reply buttons goes out as one interactive message.
+  replyButtons?: boolean;
+  // WHATSAPP_LIST_CARDS: a card those buttons cannot hold goes out as one interactive list: four choices, words past the reply
+  // buttons' 1,024 characters (up to the list's 4,096), or reply buttons off.
+  listCards?: boolean }>;
+
+// Meta's limits for an interactive reply-buttons message, read on 6 Nov 2026 from
+// https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/interactive-reply-buttons-messages
+// (updated 21 May 2026): up to 3 buttons, a unique title of at most 20 characters, an id of at most 256 characters and a body of
+// at most 1,024 characters. A reply button carries no link, and a message that cannot meet every limit goes out as text.
+export const WHATSAPP_REPLY_BUTTONS_MAX = 3;
+export const WHATSAPP_REPLY_BUTTON_TITLE_MAX = 20;
+export const WHATSAPP_REPLY_BUTTON_ID_MAX = 256;
+export const WHATSAPP_REPLY_BODY_MAX = 1024;
+// Meta's limits for an interactive list message, read on 7 Nov 2026 from
+// https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/interactive-list-messages: a body of at
+// most 4,096 characters, a button label of at most 20, at least one section with a required title of at most 24, at most 10
+// rows across sections, and a row title of at most 24 characters and an id of at most 200.
+export const WHATSAPP_LIST_ROWS_MAX = 10;
+export const WHATSAPP_LIST_ROW_TITLE_MAX = 24;
+export const WHATSAPP_LIST_ROW_ID_MAX = 200;
+export const WHATSAPP_LIST_BODY_MAX = 4096;
+// The ids the approval desk reads (approvals.ts callback): an action letter and the card's id.
+const CALLBACK_ID = /^([aseud]):(\S+)$/;
+type ShimButton = Readonly<{ text: string; callback_data?: string; url?: string }>;
+type Choice = Readonly<{ id: string; title: string }>;
+// The card's buttons as choices when every one is a callback button within the form's limits and no two share a title; null
+// when the card must go as text.
+const choicesWithin = (buttons: readonly ShimButton[], max: number, titleMax: number, idMax: number): Choice[] | null => {
+  if (buttons.length === 0 || buttons.length > max) return null;
+  const choices = buttons.map(button => ({ id: button.callback_data ?? '', title: button.text.trim(), url: button.url }));
+  const fits = choices.every(choice => !choice.url && CALLBACK_ID.test(choice.id) && choice.id.length <= idMax && choice.title !== '' && choice.title.length <= titleMax);
+  return fits && new Set(choices.map(choice => choice.title)).size === choices.length ? choices.map(({ id, title }) => ({ id, title })) : null;
+};
+// The interactive body for a card: reply buttons when they hold it, a list when list cards are on and it holds it; null when it
+// must go as text.
+const interactiveCard = (text: string, buttons: readonly ShimButton[], options: WhatsAppShimOptions): { type: 'interactive'; interactive: object } | null => {
+  const body = text.trim();
+  if (body === '') return null;
+  const replies = options.replyButtons === true && body.length <= WHATSAPP_REPLY_BODY_MAX
+    ? choicesWithin(buttons, WHATSAPP_REPLY_BUTTONS_MAX, WHATSAPP_REPLY_BUTTON_TITLE_MAX, WHATSAPP_REPLY_BUTTON_ID_MAX) : null;
+  if (replies) return { type: 'interactive', interactive: { type: 'button', body: { text: body }, action: { buttons: replies.map(reply => ({ type: 'reply', reply })) } } };
+  const rows = options.listCards === true && body.length <= WHATSAPP_LIST_BODY_MAX
+    ? choicesWithin(buttons, WHATSAPP_LIST_ROWS_MAX, WHATSAPP_LIST_ROW_TITLE_MAX, WHATSAPP_LIST_ROW_ID_MAX) : null;
+  return rows ? { type: 'interactive', interactive: { type: 'list', body: { text: body }, action: { button: 'Choose', sections: [{ title: 'Your choices', rows }] } } } : null;
+};
+
+export const whatsappTelegramShim = (token: string, phoneNumberId: string, to: string, fetcher: typeof fetch = fetch, options: WhatsAppShimOptions = {}): TelegramShimCall => {
   const call = createWhatsAppCaller(token, phoneNumberId, fetcher);
+  const upload = createWhatsAppMediaUploader(token, phoneNumberId, fetcher);
+  const now = options.now ?? Date.now;
+  let typed: { id: string; at: number } | null = null;
   return async (method, body) => {
-    if (method === 'sendMessage') {
-      const b = body as { text: string; reply_markup?: { inline_keyboard?: { text: string; callback_data?: string }[][] } };
-      const buttons = (b.reply_markup?.inline_keyboard ?? []).flat().filter((x) => x.callback_data);
-      const suffix = buttons.length ? `\n\n${buttons.map((x) => `- ${x.text}: reply "${x.callback_data}"`).join('\n')}` : '';
-      return sendWhatsAppText(call, to, b.text + suffix);
+    // Typing marks the owner's latest message read (blue ticks) and shows "typing…". It needs that message's id.
+    if (method === 'sendChatAction') {
+      const id = options.lastInbound?.() ?? null;
+      if (!id || (typed?.id === id && now() - typed.at < WHATSAPP_TYPING_REFRESH_MS)) return undefined;
+      typed = { id, at: now() };
+      return call({ status: 'read', message_id: id, typing_indicator: { type: 'text' } });
     }
-    console.log(JSON.stringify({ hop: 'whatsapp_shim', ok: true, skipped: method }));
-    return {};
+    // An approved template with no variables: agent text never rides in a template.
+    if (method === 'sendTemplate') {
+      const { name, language } = body as { name: string; language: string };
+      return call({ to, type: 'template', template: { name, language: { code: language } } });
+    }
+    // A reaction on one of the owner's messages. WhatsApp shows one reaction per sender on a message, so a later one replaces it.
+    if (method === 'sendReaction') {
+      const { message_id, emoji } = body as { message_id: string; emoji: string };
+      return call({ to, type: 'reaction', reaction: { message_id, emoji } });
+    }
+    if (method === 'sendWaldoCard') return sendWhatsAppWaldoCard(call, to, (body as { number: string }).number);
+    if (method === 'sendDocument') {
+      const { file } = body as { file: WhatsAppOutboundFile };
+      const kind = whatsappOutboundKind(file);
+      const id = await upload(file);
+      return call({ to, type: kind, [kind]: kind === 'document' ? { id, filename: file.filename } : { id } });
+    }
+    if (method === 'sendMessage') {
+      const b = body as { text: string; fallback_text?: string; quote_message_id?: string; turn_reply?: boolean; link_preview_options?: { is_disabled?: boolean }; reply_markup?: { inline_keyboard?: { text: string; callback_data?: string; url?: string }[][] } };
+      const buttons = (b.reply_markup?.inline_keyboard ?? []).flat().filter((x) => x.callback_data || x.url);
+      // One interactive message carries the whole card: it is a single message, so a longer text or any button it cannot hold
+      // keeps the text-with-instructions form, which every WhatsApp client shows.
+      const interactive = interactiveCard(b.fallback_text ?? b.text, buttons, options);
+      if (interactive) {
+        // Meta refusing the interactive form (a 4xx that is not the window's 131047) falls back to the text form once, so the
+        // owner still gets the card. A timeout or a 5xx may have gone out, and a window refusal must reach the window layer: both propagate.
+        let ack: unknown;
+        try { ack = await call({ to, ...(b.quote_message_id ? { context: { message_id: b.quote_message_id } } : {}), ...interactive }); }
+        catch (error) {
+          if (!(error instanceof WhatsAppApiError) || error.status >= 500 || error.code === 131047) throw error;
+          console.log(JSON.stringify({ hop: 'whatsapp_shim', ok: false, code: 'interactive_refused_text_fallback', status: error.status }));
+        }
+        if (ack !== undefined) {
+          const id = whatsappAckId(ack);
+          if (id && (b.turn_reply === true || (body as { [OUTBOX_CUSTODY]?: unknown })[OUTBOX_CUSTODY] === true)) options.onSent?.(id, (b.fallback_text ?? b.text).trim());
+          return ack;
+        }
+      }
+      const suffix = buttons.length ? `\n\n${buttons.map((x) => x.url ? `- ${x.text}: ${x.url}` : `- ${x.text}: reply "${x.callback_data}"`).join('\n')}` : '';
+      // A text message carries at most 4,096 characters, so a longer one goes in parts on the same split as the surface adapter.
+      const parts = splitTelegramText((b.fallback_text ?? b.text) + suffix, WHATSAPP_TEXT_MAX_CHARS);
+      let ack: unknown;
+      for (let index = 0; index < parts.length; index += 1) {
+        try { ack = await sendWhatsAppText(call, to, parts[index]!, b.link_preview_options?.is_disabled !== true, index === 0 ? b.quote_message_id : undefined); }
+        catch (error) { if (index === 0) throw error; throw new WhatsAppPartialSend(index, ack, parts.slice(index), error); }
+        const id = whatsappAckId(ack);
+        if (id && (b.turn_reply === true || (body as { [OUTBOX_CUSTODY]?: unknown })[OUTBOX_CUSTODY] === true)) options.onSent?.(id, parts[index]!);
+      }
+      return ack;
+    }
+    console.log(JSON.stringify({ hop: 'whatsapp_shim', ok: false, skipped: method, code: 'unsupported_surface_action' }));
+    return undefined;
   };
+};
+
+// W4 media download: same 20 MB ceiling as Telegram; the transcriber path reports an honest
+// "could not be transcribed" note when the cap trips.
+export const WHATSAPP_MEDIA_DOWNLOAD_LIMIT_BYTES = 20 * 1024 * 1024;
+
+export type WhatsAppMediaDownloader = (mediaId: string) => Promise<Uint8Array>;
+
+// Cloud API media is a two-step read: GET /{media-id} (bearer) returns a short-lived download
+// URL, then GET that URL (bearer again) returns the bytes. The bearer is sent to Meta media
+// hosts only - a signed payload can name any media id, and the returned URL is attacker-shaped
+// input until its host is checked.
+const WHATSAPP_MEDIA_HOST = /(^|\.)(fbsbx\.com|whatsapp\.net|facebook\.com)$/;
+
+export const createWhatsAppMediaDownloader = (token: string, fetcher: typeof fetch = fetch): WhatsAppMediaDownloader => async (mediaId) => {
+  if (mediaId.length === 0 || mediaId.length > 256) throw new Error('whatsapp media id invalid');
+  const auth = { authorization: `Bearer ${token}` };
+  const meta = await fetcher(`https://graph.facebook.com/${WHATSAPP_GRAPH_VERSION}/${encodeURIComponent(mediaId)}`, { headers: auth });
+  if (!meta.ok) throw new Error(`whatsapp media lookup failed: ${meta.status}`);
+  const { url } = await meta.json() as { url?: string };
+  const host = url ? new URL(url).host : '';
+  if (!url || !WHATSAPP_MEDIA_HOST.test(host)) throw new Error('whatsapp media lookup returned no usable url');
+  const file = await fetcher(url, { headers: auth });
+  if (!file.ok) throw new Error(`whatsapp media download failed: ${file.status}`);
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (bytes.length > WHATSAPP_MEDIA_DOWNLOAD_LIMIT_BYTES) throw new Error('whatsapp media exceeds download limit');
+  return bytes;
+};
+
+// Outbound files: a file reaches a WhatsApp chat as a media id, so the bytes are uploaded first
+// (POST /{phone-number-id}/media, multipart) and the message then names that id. Uploaded media
+// persists for 30 days on Meta's side.
+export type WhatsAppOutboundFile = Readonly<{ bytes: Uint8Array; mime: string; filename: string }>;
+export type WhatsAppFileRefusal = 'unsupported_type' | 'too_large' | 'empty' | 'invalid_filename';
+export class WhatsAppFileRefused extends Error {
+  constructor(readonly reason: WhatsAppFileRefusal) { super(`whatsapp file refused: ${reason}`); }
+}
+
+const MB = 1024 * 1024;
+// Meta's supported outbound types and per-type caps
+// (https://developers.facebook.com/docs/whatsapp/cloud-api/reference/media , "Supported media types").
+// Every cap is also held to the existing 20 MB media ceiling. Images must be JPEG or PNG; WebP is
+// sticker-only and is left out. A type missing here is refused, never guessed.
+const OUTBOUND: Readonly<Record<string, Readonly<{ kind: 'image' | 'document' | 'audio' | 'video'; maxBytes: number }>>> = {
+  'image/jpeg': { kind: 'image', maxBytes: 5 * MB },
+  'image/png': { kind: 'image', maxBytes: 5 * MB },
+  'application/pdf': { kind: 'document', maxBytes: 100 * MB },
+  'text/plain': { kind: 'document', maxBytes: 100 * MB },
+  'application/msword': { kind: 'document', maxBytes: 100 * MB },
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': { kind: 'document', maxBytes: 100 * MB },
+  'application/vnd.ms-excel': { kind: 'document', maxBytes: 100 * MB },
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': { kind: 'document', maxBytes: 100 * MB },
+  'application/vnd.ms-powerpoint': { kind: 'document', maxBytes: 100 * MB },
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': { kind: 'document', maxBytes: 100 * MB },
+  'audio/aac': { kind: 'audio', maxBytes: 16 * MB },
+  'audio/amr': { kind: 'audio', maxBytes: 16 * MB },
+  'audio/mpeg': { kind: 'audio', maxBytes: 16 * MB },
+  'audio/mp4': { kind: 'audio', maxBytes: 16 * MB },
+  'video/mp4': { kind: 'video', maxBytes: 16 * MB },
+  'video/3gpp': { kind: 'video', maxBytes: 16 * MB },
+};
+
+export const whatsappOutboundKind = (file: WhatsAppOutboundFile): 'image' | 'document' | 'audio' | 'video' => {
+  const rule = OUTBOUND[file.mime.toLowerCase()];
+  if (!rule) throw new WhatsAppFileRefused('unsupported_type');
+  if (!file.filename.trim() || file.filename.length > 240 || /[\u0000-\u001f\\/]/.test(file.filename)) throw new WhatsAppFileRefused('invalid_filename');
+  if (file.bytes.byteLength === 0) throw new WhatsAppFileRefused('empty');
+  if (file.bytes.byteLength > Math.min(rule.maxBytes, WHATSAPP_MEDIA_DOWNLOAD_LIMIT_BYTES)) throw new WhatsAppFileRefused('too_large');
+  return rule.kind;
+};
+
+export type WhatsAppMediaUploader = (file: WhatsAppOutboundFile) => Promise<string>;
+
+// The bound grows with the payload: the 15 s message bound would cut off a large upload mid-body.
+const uploadTimeoutMs = (bytes: number) => WHATSAPP_API_TIMEOUT_MS + Math.ceil(bytes / (512 * 1024)) * 1000;
+
+export const createWhatsAppMediaUploader = (token: string, phoneNumberId: string, fetcher: typeof fetch = fetch): WhatsAppMediaUploader => async (file) => {
+  whatsappOutboundKind(file);
+  const form = new FormData();
+  form.set('messaging_product', 'whatsapp');
+  form.set('type', file.mime);
+  form.set('file', new File([file.bytes], file.filename, { type: file.mime }));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), uploadTimeoutMs(file.bytes.byteLength));
+  try {
+    const response = await fetcher(`https://graph.facebook.com/${WHATSAPP_GRAPH_VERSION}/${encodeURIComponent(phoneNumberId)}/media`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}` }, body: form, signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`whatsapp media upload ${response.status}`);
+    const { id } = await response.json() as { id?: unknown };
+    if (typeof id !== 'string' || !id.trim()) throw new Error('whatsapp media upload returned no id');
+    return id;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+type Caller = (method: string, body: object) => Promise<unknown>;
+// What a held send answers instead of a provider receipt: the text is in Waldo's custody and goes out on the owner's next
+// message (whatsapp-window.ts). It is not a delivery, and no caller may read it as one.
+export const WHATSAPP_HELD = Object.freeze({ held: 'whatsapp_window' as const });
+export const whatsappHeld = (result: unknown): boolean => (result as { held?: unknown } | null | undefined)?.held === WHATSAPP_HELD.held;
+// Why the owner got a link text instead of the file: WhatsApp cannot carry it, the service window was closed, or earlier
+// messages were still held and the file must not land ahead of them.
+export type WhatsAppFileLinkReason = WhatsAppFileRefusal | 'window_closed' | 'behind_held';
+// degraded: the link text was sent. held: the window layer holds the link text until the owner's next message.
+export type WhatsAppFileOutcome =
+  | Readonly<{ status: 'sent'; providerMessageId: string }>
+  | Readonly<{ status: 'degraded'; reason: WhatsAppFileLinkReason }>
+  | Readonly<{ status: 'held'; reason: WhatsAppFileLinkReason }>
+  | Readonly<{ status: 'blocked' }>;
+
+const REFUSAL_WORDS: Readonly<Record<WhatsAppFileRefusal, string>> = {
+  unsupported_type: 'this file type', too_large: 'a file this large', empty: 'an empty file', invalid_filename: 'this file name',
+};
+export const whatsappFileLinkText = (file: WhatsAppOutboundFile, reason: WhatsAppFileLinkReason, link: string): string =>
+  reason === 'window_closed' || reason === 'behind_held' ? `Here is ${file.filename}. ${link}` : `WhatsApp can't carry ${file.filename} (${REFUSAL_WORDS[reason]}). ${link}`;
+// What a link text's send answered: nothing (the owner gate blocked it), held for the owner's next message, or sent.
+export const whatsappLinkOutcome = (sent: unknown, reason: WhatsAppFileLinkReason): WhatsAppFileOutcome =>
+  sent === undefined ? { status: 'blocked' } : whatsappHeld(sent) ? { status: 'held', reason } : { status: 'degraded', reason };
+
+// Sends one file through the owner's gated, egress-guarded caller. A file WhatsApp cannot carry is a
+// definite refusal made before any upload, so the owner gets a plain text instead, naming the file
+// and carrying the caller's fallback (normally the owner-authenticated link), which is built only then. Any failure after the
+// upload starts propagates: the document may have gone out, so no second message is sent.
+export const deliverWhatsAppFile = async (call: Caller, chatId: number, file: WhatsAppOutboundFile, fallback: () => Promise<string>): Promise<WhatsAppFileOutcome> => {
+  let ack: unknown;
+  try {
+    ack = await call('sendDocument', { chat_id: chatId, file });
+  } catch (error) {
+    if (!(error instanceof WhatsAppFileRefused)) throw error;
+    return whatsappLinkOutcome(await call('sendMessage', { chat_id: chatId, text: whatsappFileLinkText(file, error.reason, await fallback()) }), error.reason);
+  }
+  if (ack === undefined) return { status: 'blocked' };
+  const id = (ack as { messages?: { id?: unknown }[] }).messages?.[0]?.id;
+  if (typeof id !== 'string' || !id) throw new Error('invalid WhatsApp acknowledgement');
+  return { status: 'sent', providerMessageId: id };
 };
 
 export const WA_UPDATE_BASE = 9_000_000_000_000;
 
-export type WaIngressMessage = Readonly<{ id?: string; from?: string; type?: string; text?: { body?: string } }>;
+// The Cloud API marks a forward in a message's context, which can also carry reply context: the id of the message the owner
+// swiped to reply to.
+// The webhook's description of a tap on a reply button (button_reply), as Meta documents it. Only a button this runtime could
+// have sent counts: its id is an approval callback, whatever else the payload says.
+export const waButtonReplySchema = z.object({
+  type: z.literal('interactive'),
+  interactive: z.object({
+    type: z.literal('button_reply'),
+    button_reply: z.object({ id: z.string().max(WHATSAPP_REPLY_BUTTON_ID_MAX).regex(CALLBACK_ID), title: z.string().max(WHATSAPP_REPLY_BUTTON_TITLE_MAX * 4).optional() }),
+  }),
+});
+export const waListReplySchema = z.object({
+  type: z.literal('interactive'),
+  interactive: z.object({
+    type: z.literal('list_reply'),
+    list_reply: z.object({ id: z.string().max(WHATSAPP_LIST_ROW_ID_MAX).regex(CALLBACK_ID), title: z.string().max(WHATSAPP_LIST_ROW_TITLE_MAX * 4).optional() }),
+  }),
+});
+// The card callback a reply button or a list row carries, or null for any other interactive message.
+const chosenCallback = (message: unknown): string | null => {
+  const button = waButtonReplySchema.safeParse(message);
+  if (button.success) return button.data.interactive.button_reply.id;
+  const row = waListReplySchema.safeParse(message);
+  return row.success ? row.data.interactive.list_reply.id : null;
+};
+const waForwardContextSchema = z.object({ forwarded: z.boolean().optional(), frequently_forwarded: z.boolean().optional(), id: z.string().optional(), from: z.string().optional() });
+
+type WaLocation = { latitude?: unknown; longitude?: unknown; name?: unknown; address?: unknown };
+type WaContactCard = { name?: { formatted_name?: unknown }; phones?: { phone?: unknown }[]; emails?: { email?: unknown }[] };
+export type WaIngressMessage = Readonly<{
+  id?: string; from?: string; type?: string; context?: Readonly<z.infer<typeof waForwardContextSchema>>; text?: { body?: string };
+  audio?: { id?: string; mime_type?: string; voice?: boolean }; image?: { id?: string; mime_type?: string; caption?: string };
+  document?: { id?: string; filename?: string; mime_type?: string; caption?: string }; location?: WaLocation; contacts?: WaContactCard[];
+  sticker?: { id?: string; mime_type?: string; animated?: boolean }; reaction?: { message_id?: string; emoji?: string };
+  video?: { id?: string; mime_type?: string; caption?: string };
+  interactive?: unknown;
+}>;
 export type WaSyntheticUpdate = Readonly<Record<string, unknown>>;
 
-// Pure normalization for /whatsapp-turn: each of the owner's text messages becomes a
+// A context that does not match the schema counts as a forward: text Waldo cannot vouch for is never the owner's command.
+export const whatsappForwarded = (message: WaIngressMessage): boolean => {
+  if (message.context === undefined) return false;
+  const context = waForwardContextSchema.safeParse(message.context);
+  return !context.success || context.data.forwarded === true || context.data.frequently_forwarded === true;
+};
+
+// Normalization for WhatsApp ingress: each of the owner's text messages becomes a
 // telegram-shaped update (subject digits double as the numeric owner/chat id; ids live in the
 // 9e12 namespace so they never collide with telegram update ids). An approval reply "a:p12"
 // synthesizes the equivalent callback_query because WhatsApp buttons carry no callback_data.
-// Non-text messages and any foreign sender are skipped.
-export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], subject: string, seqStart: number): { updates: WaSyntheticUpdate[]; seq: number } => {
+// An audio message becomes the voice/audio media update the shared transcriber path already
+// reads (file_id carries the WhatsApp media id; the owner DO's per-channel downloader resolves
+// it through the Graph two-step). An image message becomes the photo update the shared media
+// path reads (A6), and a document the document update (PDFs, office files and the rest go through the shared file path's
+// own type and size checks); a caption is owner text, so it gets the same artifact quarantine as a text body. A shared
+// location or contact card becomes text in the sender's words, and a static sticker the document update of its image. A type
+// Waldo cannot open (video, an animated sticker, anything new) becomes a bare message the shared parser classes as
+// unsupported, so the owner gets the honest unsupported reply rather than silence. A swipe-reply to a message Waldo sent
+// carries that message as Bot API's reply_to_message, from Waldo, so the turn reads it as Waldo's quoted words; a reply to
+// anything else carries nothing. A reaction (kept for the next turn at admission), a system notice and a welcome request need
+// no answer; they and any foreign sender are skipped. sources names the wamid each update came from.
+const SILENT_TYPES = new Set(['reaction', 'system', 'request_welcome']);
+export const whatsappTurnMessage = (message: Readonly<{ type?: string }>): boolean => !SILENT_TYPES.has(message.type ?? '');
+// The quoted message's Bot API ids. WhatsApp names it by wamid, which an integer cannot carry; the turn reads only its words
+// and that Waldo wrote them.
+const WALDO_QUOTE_IDS = { message_id: 1, from: { id: 1, is_bot: true } } as const;
+const quarantined = (text: string): string => {
+  const q = quarantineArtifacts(text);
+  return q.kinds.length === 0 ? text : onlyArtifacts(q) ? `[quarantined: ${q.kinds.join('/')} artifact - see your WhatsApp thread]` : q.text;
+};
+const captionOf = (caption: string | undefined) => {
+  const text = (caption ?? '').trim();
+  return text ? { caption: quarantined(text).slice(0, 1024) } : {};
+};
+const fieldText = (value: unknown): string | null => typeof value === 'string' && value.trim() ? value.trim() : null;
+const locationText = (location: WaLocation | undefined): string | null => {
+  const { latitude, longitude } = location ?? {};
+  if (typeof latitude !== 'number' || typeof longitude !== 'number' || !Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  const label = [fieldText(location?.name), fieldText(location?.address)].filter(Boolean).join(', ');
+  return `Shared a location: ${label ? `${label} ` : ''}(${latitude}, ${longitude})`;
+};
+const contactsText = (contacts: readonly WaContactCard[] | undefined): string | null => {
+  const cards = (Array.isArray(contacts) ? contacts : []).map(card => [
+    fieldText(card?.name?.formatted_name),
+    ...(Array.isArray(card?.phones) ? card.phones.map((phone: { phone?: unknown } | undefined) => fieldText(phone?.phone)) : []),
+    ...(Array.isArray(card?.emails) ? card.emails.map((email: { email?: unknown } | undefined) => fieldText(email?.email)) : []),
+  ].filter(Boolean).join(', ')).filter(Boolean);
+  return cards.length === 0 ? null : `${cards.length === 1 ? 'Shared a contact' : 'Shared contacts'}: ${cards.join('; ')}`;
+};
+
+export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], subject: string, seqStart: number, sentText: (id: string) => string | null = () => null)
+  : { updates: WaSyntheticUpdate[]; seq: number; sources: string[] } => {
   let seq = seqStart;
   const ownerNum = Number(subject);
   const updates: WaSyntheticUpdate[] = [];
+  const sources: string[] = [];
   for (const message of messages) {
-    if (message.from !== subject || message.type !== 'text') continue;
+    if (message.from !== subject) continue;
+    // A forward carries Bot API's MessageOrigin, the mark isForward and the turn parser read, so it runs as someone else's
+    // text and never as a command or an approval reply. WhatsApp names neither the original sender nor when it was first
+    // sent: the origin is a hidden user, and the time Waldo received it stands in.
+    const forwarded = whatsappForwarded(message);
+    const origin = forwarded ? { forward_origin: { type: 'hidden_user', date: Math.floor(Date.now() / 1000) } } : {};
+    const target = forwarded ? undefined : message.context?.id;
+    const quoted = target ? sentText(target) : null;
+    const reply = quoted === null ? {} : { reply_to_message: { ...WALDO_QUOTE_IDS, chat: { id: ownerNum, type: 'private' }, text: quoted } };
+    const add = (update: WaSyntheticUpdate) => { updates.push(update); sources.push(message.id ?? ''); };
+    const push = (content: object) => { seq += 1; add({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: ownerNum, is_bot: false }, chat: { id: ownerNum, type: 'private' }, ...origin, ...reply, ...content } }); };
+    if (message.type === 'audio' || message.type === 'image' || message.type === 'document') {
+      if (message.type === 'audio' && message.audio?.id) {
+        const { id, mime_type, voice } = message.audio;
+        push({ [voice === false ? 'audio' : 'voice']: { file_id: id, ...(mime_type ? { mime_type } : {}) } });
+      } else if (message.type === 'image' && message.image?.id) {
+        push({ photo: [{ file_id: message.image.id }], ...captionOf(message.image.caption) });
+      } else if (message.type === 'document' && message.document?.id) {
+        const { id, filename, mime_type, caption } = message.document;
+        push({
+          document: { file_id: id, ...(fieldText(filename) ? { file_name: fieldText(filename)!.slice(0, 256) } : {}), ...(fieldText(mime_type) ? { mime_type: fieldText(mime_type)!.slice(0, 128) } : {}) },
+          ...captionOf(caption),
+        });
+      }
+      continue;
+    }
+    if (message.type === 'sticker') {
+      const { id, mime_type, animated } = message.sticker ?? {};
+      push(id && animated !== true ? { document: { file_id: id, file_name: 'sticker.webp', mime_type: fieldText(mime_type)?.slice(0, 128) ?? 'image/webp' } } : { whatsapp_type: 'sticker' });
+      continue;
+    }
+    // No model input takes video, so a captioned video reaches the turn as its caption, saying the video itself was not seen;
+    // without a caption there is nothing to read, and it gets the shared unsupported reply.
+    if (message.type === 'video') {
+      const caption = fieldText(message.video?.caption);
+      push(caption ? { text: quarantined(`Sent a video Waldo can't watch yet. Its caption: ${caption}`).slice(0, 4096) } : { whatsapp_type: 'video' });
+      continue;
+    }
+    if (message.type === 'location' || message.type === 'contacts') {
+      const text = message.type === 'location' ? locationText(message.location) : contactsText(message.contacts);
+      push(text ? { text: quarantined(text).slice(0, 4096) } : { whatsapp_type: message.type });
+      continue;
+    }
+    if (message.type === 'interactive') {
+      const tapped = forwarded ? null : chosenCallback(message);
+      // card_ref is the message the owner tapped on: the approval desk accepts the tap only from a card it still shows for that
+      // approval. A tap that names no card cannot be checked, so it is not a decision.
+      const cardRef = typeof message.context?.id === 'string' && message.context.id !== '' ? message.context.id : null;
+      if (tapped !== null && cardRef !== null) {
+        seq += 1;
+        add({ update_id: WA_UPDATE_BASE + seq, callback_query: { id: `wa-${message.id ?? seq}`, from: { id: ownerNum, is_bot: false }, data: tapped, card_ref: cardRef, message: { message_id: 0, chat: { id: ownerNum } } } });
+      } else push({ whatsapp_type: 'interactive' });
+      continue;
+    }
+    if (message.type !== 'text') {
+      if (!SILENT_TYPES.has(message.type ?? '')) push({ whatsapp_type: message.type ?? 'unknown' });
+      continue;
+    }
     const text = (message.text?.body ?? '').trim();
     if (!text) continue;
     seq += 1;
@@ -61,13 +522,50 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
     // update exists, so no downstream consumer (turn pipeline, episodes, traces) ever sees the raw
     // code or link. The original stays owner-inspectable in their own WhatsApp thread. Approval
     // replies are channel commands that can never carry an artifact, so they skip the filter.
-    if (/^([aseu]):(\S+)$/.exec(text)) {
-      updates.push({ update_id: WA_UPDATE_BASE + seq, callback_query: { id: `wa-${message.id ?? seq}`, from: { id: ownerNum }, data: text, message: { message_id: 0, chat: { id: ownerNum } } } });
+    if (!forwarded && /^([aseud]):(\S+)$/.exec(text)) {
+      add({ update_id: WA_UPDATE_BASE + seq, callback_query: { id: `wa-${message.id ?? seq}`, from: { id: ownerNum, is_bot: false }, data: text, message: { message_id: 0, chat: { id: ownerNum } } } });
       continue;
     }
-    const q = quarantineArtifacts(text);
-    const clean = q.kinds.length === 0 ? text : onlyArtifacts(q) ? `[quarantined: ${q.kinds.join('/')} artifact - see your WhatsApp thread]` : q.text;
-    updates.push({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: ownerNum }, chat: { id: ownerNum, type: 'private' }, text: clean } });
+    add({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: ownerNum, is_bot: false }, chat: { id: ownerNum, type: 'private' }, ...origin, ...reply, text: quarantined(text) } });
   }
-  return { updates, seq };
+  return { updates, seq, sources };
+};
+
+// Text the owner typed themselves, which may join the texts typed right after it into one turn: not a command, an approval
+// reply (a callback, not a message), a forward, a quoted reply or media.
+export const plainOwnerText = (update: WaSyntheticUpdate | null): boolean => {
+  const message = (update as { message?: { text?: unknown; reply_to_message?: unknown; forward_origin?: unknown } } | null)?.message;
+  return typeof message?.text === 'string' && message.reply_to_message === undefined && message.forward_origin === undefined && !message.text.trimStart().startsWith('/');
+};
+
+// A message that may ride in one turn with the owner's messages sent around it: text, a forward or a file the owner sent,
+// never a command, an approval reply (a callback, not a message) or a quoted reply, which names its own target.
+export const burstOwnerMessage = (update: WaSyntheticUpdate | null): boolean => {
+  const message = (update as { message?: { text?: unknown; reply_to_message?: unknown; document?: unknown; photo?: unknown; voice?: unknown; audio?: unknown } } | null)?.message;
+  if (!message || message.reply_to_message !== undefined) return false;
+  if (typeof message.text === 'string') return !message.text.trimStart().startsWith('/');
+  return message.document !== undefined || message.photo !== undefined || message.voice !== undefined || message.audio !== undefined;
+};
+
+// Meta redelivers a webhook until it gets a 200, for up to 7 days
+// (https://developers.facebook.com/docs/whatsapp/cloud-api/guides/set-up-webhooks/ , "Webhook delivery failure").
+// A message id (wamid) is therefore remembered for 7 days from first sight. First sight is never earlier
+// than Meta's first attempt, so a retry cannot outlive the record. A message is marked as it is accepted
+// (at-most-once): a replayed turn could repeat effects. A message waits in the owner's inbox until its turn runs; a turn that
+// started and failed is reported to the owner by a fixed notice (whatsappNotice), since it may have had effects. Meta gives
+// every message an id; one without an id could not be told apart from its redelivery, so it is never claimed or run.
+export const WHATSAPP_PARTIAL_NOTICE = 'I may have only partly handled your last message. Check what went through before you send it again.';
+export const WAMID_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+type WamidKv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void; delete(key: string): unknown; list<T>(options: { prefix: string }): Iterable<[string, T]> }>;
+export const claimNewWhatsAppMessages = <M extends Readonly<{ id?: string }>>(kv: WamidKv, messages: readonly M[], now: number): M[] => {
+  for (const [key, seen] of [...kv.list<number>({ prefix: 'wamid:' })]) if (now - seen >= WAMID_RETENTION_MS) kv.delete(key);
+  const fresh: M[] = [];
+  for (const message of messages) {
+    if (typeof message.id !== 'string' || message.id === '') continue;
+    const key = `wamid:${message.id}`;
+    if (kv.get<number>(key) !== undefined) continue;
+    kv.put(key, now);
+    fresh.push(message);
+  }
+  return fresh;
 };

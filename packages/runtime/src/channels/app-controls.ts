@@ -1,0 +1,366 @@
+import { APP_CONTROLS_PEOPLE_REVISION, APP_PEOPLE_MAX_V1, APP_MEMORY_PAGE_MAX_V1, APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_CONNECTIONS_CATALOGUE_REVISION, type AppWearableV1, APP_CONTROLS_QUESTS_REVISION, type AppQuestV1, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_WHY_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_SCHEDULE_REVISION } from '../../../contracts/src/app/controls';
+import type { AppWhyV1 } from '../../../contracts/src/app/why';
+import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
+import { appControlStepUpAction, appStepUpRefusal, stepUpGated } from './console-step-up';
+import { signedInRecently } from '../identity/console-auth';
+import { controlAction, controlRevision, type ControlReceipt } from './dashboard-control-actions';
+import { projectControls, readControlsQuery } from './dashboard-controls';
+import { ownerControlsAction, ownerControlsRead, type OwnerControlsDeps } from './dashboard-owner-controls';
+import type { ConsoleAction, ConsoleView } from './console';
+import { claimStore, memoryRevision, type Claim } from '../memory/claims';
+import { PERSON_RINGS } from '@waldo/contracts';
+import { personCard, type Person } from '../memory/people';
+import { carriesTopic } from '../memory/forget-guard';
+import { appClaimActions, claimHeldAs } from './dashboard-memory-actions';
+import { readMemoryGraph } from './memory-graph';
+import { pageMemoryGraph } from './memory-graph-page';
+import { phoneControlAct, phoneControls, type IMessageProof, type WhatsAppProof } from './dashboard-phone';
+import { phoneSms, type PhoneSmsEnv } from '../identity/phone-sms';
+import { ownerAccountEmail } from '../identity/owner-account-email';
+import { ownerGoogleSignin } from '../identity/owner-google-signin';
+import { FINDING_URL_MAX } from '../onboarding/findings';
+import { agentMailControlAct, agentMailControls, type AgentMailControls, type AgentMailControlsDeps } from './agent-mail/controls';
+import { googlePicturePaths } from './app-google-picture';
+import { chooseProactiveSurface, proactiveSurface, proactiveSurfaceChoices, proactiveSurfaceReceipt, type ChatLinks } from './proactive-surface';
+
+export type AppControlsHost = Readonly<{
+  csrf:string; expires:number; storage:DurableObjectStorage;
+  // PROACTIVE_BOTH_DEFAULT: an owner who chose nothing and has WhatsApp bound reads and gets both surfaces.
+  bothDefault?:boolean;
+  // The session row's created_at: the proof of a recent email code that a gated action needs.
+  signedInAt:string;
+  assertCurrent():Promise<void>; sessions():Promise<readonly {csrf:string;expires:number}[]>;
+  view(page?:{traceBefore?:number;runsBefore?:number}):Promise<ConsoleView>;
+  // The day read's cards with the Main chat row each was delivered to. It reads the chat, so only that read asks for it.
+  cardsLatest?(view:ConsoleView,revised:boolean):Promise<ConsoleView['cards']>;
+  // The steps behind each of a day's cards that proposed changes ("Why this changed"), by card id.
+  cardsWhy?(date:string):ReadonlyMap<string,AppWhyV1>;
+  // The days view: the last 14 local days, or one of them in detail; null for a date outside them.
+  days?(date?:string):Promise<object|null>;
+  act(action:ConsoleAction,fields?:Readonly<Record<string,string>>):Promise<boolean|string|ControlReceipt>;
+  // The owner's welcome build, read with the constellation summary; a read also takes up a build an interrupted run left.
+  welcome?():AppWelcomeBuildV1;
+  // What the owner asked to be called, or null when the memory holds no name to serve.
+  ownerName?():string|null;
+  // The owner's quests as the day view lists them (controls revision 17).
+  quests?():readonly AppQuestV1[];
+  account:Pick<OwnerControlsDeps,'owner'|'auth'|'requestUrl'|'purgeOwnerFiles'|'eraseOwnerStorage'>;
+  phone:PhoneSmsEnv;
+  // Clears the WhatsApp chat this owner DO holds, after the directory unlinked it.
+  whatsappUnlinked():Promise<void>;
+  // Whether the owner can prove a number by sending their iMessage link code from it; absent means they cannot.
+  imessageProof?:IMessageProof;
+  // Whether the owner can prove a number by sending their WhatsApp link code from it (controls revision APP_CONTROLS_WHATSAPP_PROOF_REVISION); absent means they cannot.
+  whatsappProof?:WhatsAppProof;
+  // The owner's Waldo address (controls revision APP_CONTROLS_AGENT_MAIL_REVISION); absent where it is not offered.
+  agentMail?:AgentMailControlsDeps;
+  // Which chats are linked to the owner now, for where Waldo writes first (controls revision 11); absent where it is not offered.
+  chatLinks?():Promise<ChatLinks>;
+  // Whether this deployment serves the claim controls of controls revision 15 (MEMORY_CLAIM_CONTROLS); absent means it does not.
+  claimControls?:boolean;
+  // Whether this deployment keeps people (PEOPLE_MAP), and so serves controls revision 22's people view and its actions.
+  people?:boolean;
+  // Controls revision 17: each connected Google account's picture address, by account id; absent means none are served.
+  googlePictures?():Promise<ReadonlyMap<string,string>>;
+  // Controls revision 17: every source of body readings Waldo lists on Connections; absent means the view carries none.
+  wearables?():Promise<readonly AppWearableV1[]>;
+}>;
+const reply=(body:object,status=200)=>Response.json(body,{status,headers:{'cache-control':'private, no-store'}});
+// App memory ids are `memory:claim:<n>` and `memory:node:<n>`: a constant scope, so the DO id never reaches the app.
+const MEMORY_SCOPE='memory';
+type Item=Record<string,unknown>&{local_id?:number};
+// A build below controls revision 13 knows five node sources: a web or setup source is left out of what it reads.
+const V1_SOURCES:ReadonlySet<unknown>=new Set(appNodeSourceV1Schema.options);
+const withoutLocalId=(webSources:boolean)=>({local_id:_local,...item}:Item)=>webSources||!Array.isArray(item.sources)?item:{...item,sources:item.sources.filter(source=>V1_SOURCES.has(source))};
+// The console pager's body, with its sub-view key renamed and the table-local ids and static lists it carries removed.
+// A claim as each revision reads it. Revision 2 adds its pin and names a claim the nightly model confirmed waldo_confirmed;
+// revision 1 reads that claim as confirmed, as it always did. Interpretations carry neither.
+const pinOf=(pins:ReadonlyMap<number,string>|undefined,extras?:ReadonlyMap<number,Item>)=>(item:Item):Item=>item.type==='interpretation'?item
+  :pins?{...item,pinned:pins.get(item.local_id!)??null,...(extras?.get(item.local_id!)??{})}:item.source==='waldo_confirmed'?{...item,source:'confirmed'}:item;
+const appMemoryGraph=({view,actions:_actions,views:_views,items,item,center,nodes,...rest}:Record<string,unknown>,pins:ReadonlyMap<number,string>|undefined,webSources:boolean,extras?:ReadonlyMap<number,Item>)=>{
+  const shown=withoutLocalId(webSources);
+  return {
+    ...rest,memory_view:view,
+    ...(Array.isArray(items)?{items:items.map(pinOf(pins,extras)).map(shown)}:{}),...(item?{item:shown(pinOf(pins,extras)(item as Item))}:{}),
+    ...(center?{center:shown(center as Item)}:{}),...(Array.isArray(nodes)?{nodes:nodes.map(shown)}:{}),
+  };
+};
+type Book=Record<string,{receipt:unknown;expires:number}>;
+// A build before controls revision 5 knows four stages: the setup stage is left out of what it reads.
+const welcomeForRevision=(request:Request,build:AppWelcomeBuildV1):AppWelcomeBuildV1=>{
+  if(appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_WELCOME_SETUP_REVISION)return build;
+  const {setup:_setup,...stages}=build.stages;
+  return {...build,stages};
+};
+const choosesSurface=(request:Request,host:AppControlsHost)=>!!host.chatLinks&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_PROACTIVE_SURFACE_REVISION;
+// The owner's Google sign-in account while it can be connected and is not yet: left out when the directory cannot say.
+const googleSignin=async(env:PhoneSmsEnv,owner:string,google:{connectAvailable:boolean;accounts:readonly {email:string}[]})=>{
+  if(!google.connectAvailable)return {};
+  const signin=await ownerGoogleSignin(env,owner);
+  return signin&&!google.accounts.some(account=>account.email.toLowerCase()===signin.email)?{signin:{email:signin.email}}:{};
+};
+const readsAgentMail=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_AGENT_MAIL_REVISION;
+const namesWebSources=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_WELCOME_WEB_REVISION;
+// Controls revision 12 names WhatsApp as a way to prove the number; builds below it never receive it.
+const whatsappProofFor=(request:Request,host:AppControlsHost)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_WHATSAPP_PROOF_REVISION?host.whatsappProof:undefined;
+const showsPins=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_MEMORY_REVISION;
+// A build before controls revision 3 knows four card states and neither reason nor tries: a card being made, failed or paused
+// is still unfinished, so it reads as pending.
+const OLDER_CARD_STATE:Readonly<Record<string,string>>={generating:'pending',failed:'pending',paused:'pending'};
+const setsSchedules=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_SCHEDULE_REVISION;
+// A build below controls revision 16 never receives schedule_controls; it is in the day's revision, as schedule.set changes it.
+const dayForRevision=(request:Request,day:Record<string,unknown>)=>{
+  const {schedule_controls:_schedules,...older}=day.data as Record<string,unknown>,shown=setsSchedules(request)?day:{...day,data:older};
+  if(appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_CARD_STATE_REVISION)return shown;
+  const data=shown.data as {cards:readonly Record<string,unknown>[]};
+  return {...shown,data:{...data,cards:data.cards.map(({state_reason:_reason,retries_left:_left,...card})=>typeof card.state==='string'&&OLDER_CARD_STATE[card.state]?{...card,state:OLDER_CARD_STATE[card.state]}:card)}};
+};
+// Controls revision 7 names the owner on the day view and gives the account view its identity lines; builds below it never receive either.
+const namesOwner=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_IDENTITY_REVISION;
+// Controls revision 8 tells an open screen that memory changed; builds below it never receive the count.
+const signalsMemory=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_MEMORY_SIGNAL_REVISION;
+// Controls revision 9 shows a revised day card as revised; builds below it read the card as first delivered.
+const showsRevisions=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_DAY_CARD_REVISION;
+// Controls revision 14 shows the steps behind a card's proposals, outside the day's revision like latest; builds below it never receive them.
+const explainCards=(request:Request,host:AppControlsHost,shown:Record<string,unknown>)=>{
+  if(!host.cardsWhy||appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')<APP_CONTROLS_WHY_REVISION)return shown;
+  const data=shown.data as {date:string;cards:readonly Record<string,unknown>[]},why=host.cardsWhy(data.date);
+  return why.size?{...shown,data:{...data,cards:data.cards.map(card=>{const steps=why.get(card.id as string);return steps?{...card,why:steps}:card;})}}:shown;
+};
+// The sign-in email and, once verified, the number on file. Each is left out when the directory cannot say, and neither read can fail the view.
+const accountIdentity=async(env:PhoneSmsEnv,owner:string)=>{
+  const [email,phone]=await Promise.all([ownerAccountEmail(env,owner),phoneSms(env).state(owner).catch(()=>null)]);
+  return {...(email?{email}:{}),...(phone?.verified&&phone.phone?{phone:phone.phone}:{})};
+};
+const pinsOf=(sql:Pick<SqlStorage,'exec'>)=>new Map(sql.exec<{id:number;pinned:string}>("SELECT id, pinned FROM claims WHERE pinned IN ('profile','facts')").toArray().map(row=>[row.id,row.pinned]));
+// The console's memory action for each of the app's claim actions; the app's id names one claim, memory:claim:<n>.
+const SPOT_ACTION:Readonly<Record<string,string>>={'claim.pin':'spot.pin','claim.unpin':'spot.unpin','claim.edit':'spot.edit','claim.confirm':'spot.confirm','claim.forget':'spot.forget','claim.dismiss':'spot.dismiss','claim.quiet':'spot.quiet','claim.unquiet':'spot.unquiet'};
+// Controls revision 17 gives each Google account its picture and lists the wearables; builds below it never receive either.
+// Both sit outside the view's revision, like the sign-in account, and a read that fails leaves its field to the app's fallback.
+const listsCatalogue=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_CONNECTIONS_CATALOGUE_REVISION;
+// The Workspace services each account's saved grant lets Waldo read come from the same console read as calendar, mail and tasks.
+const SERVICES=['drive','docs','sheets','slides'] as const;
+const withRevision17=async<T extends {id:string}>(host:AppControlsHost,accounts:readonly T[],grants:ConsoleView['google']['accounts'])=>{
+  const paths=await (async()=>{try{return await googlePicturePaths(await host.googlePictures?.()??new Map());}catch{return new Map<string,string>();}})();
+  return accounts.map(account=>{const grant=grants.find(known=>known.id===account.id);return {...account,picture:paths.get(account.id)??null,...Object.fromEntries(SERVICES.map(service=>[service,grant?.[service]===true]))};});
+};
+const wearablesOf=async(host:AppControlsHost)=>{
+  if(!host.wearables)return {};
+  try{return {wearables:await host.wearables()};}catch{return {};}
+};
+// Controls revision 15's claim controls are served to a build that asks for them, on a deployment that has them on.
+const claimControlsFor=(request:Request,host:AppControlsHost)=>host.claimControls===true&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_CLAIM_CONTROLS_REVISION;
+const NEW_CLAIM_ACTIONS:ReadonlySet<string>=new Set(['claim.confirm','claim.forget','claim.dismiss','claim.quiet','claim.unquiet']);
+// Where a kept look-up finding came from: the page's own address, by the claim it became. The findings table exists once a look-up has run.
+const lookupUrlsOf=(sql:Pick<SqlStorage,'exec'>)=>sql.exec<{name:string}>("SELECT name FROM sqlite_master WHERE type='table' AND name='owner_findings'").toArray().length
+  ?new Map(sql.exec<{claim_id:number;source_url:string}>('SELECT claim_id, source_url FROM owner_findings WHERE claim_id IS NOT NULL').toArray().filter(row=>row.source_url.length<=FINDING_URL_MAX).map(row=>[row.claim_id,row.source_url])):new Map<number,string>();
+// What each live claim shows and can be sent under controls revision 15, derived from its stored origin, source and state.
+const claimExtrasOf=(sql:Pick<SqlStorage,'exec'>):ReadonlyMap<number,Item>=>{
+  const urls=lookupUrlsOf(sql);
+  return new Map(sql.exec<Claim>("SELECT id, kind, source, origin, status, pinned, bring_up_less_at FROM claims WHERE status IN ('active','promoted')").toArray()
+    .map(claim=>[claim.id,{held_as:claimHeldAs(claim),bring_up:claim.bring_up_less_at?'less':'normal',source_url:urls.get(claim.id)??null,actions:appClaimActions(claim)}]));
+};
+// One constellation read, as the app sees it: paged from the console graph, its local ids gone, pins added for revision 2.
+const constellationData=(storage:DurableObjectStorage,paging:readonly (readonly [string,string])[],pins:boolean,webSources:boolean,extras?:ReadonlyMap<number,Item>)=>{
+  const paged=pageMemoryGraph(readMemoryGraph(storage.sql,MEMORY_SCOPE),new URLSearchParams(paging as [string,string][]));
+  return paged.status===200?{status:200,data:appMemoryGraph(paged.body,pins?pinsOf(storage.sql):undefined,webSources,extras)}:{status:paged.status,error:paged.body.error};
+};
+// Controls revision 22: the people in the owner's memory. A person is listed while a claim about them is listed in the
+// constellation (so a forget still clearing hides them as it hides the claim); their claims are the constellation's own items.
+const peopleFor=(request:Request,host:AppControlsHost)=>host.people===true&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_PEOPLE_REVISION;
+const peopleData=(request:Request,host:AppControlsHost,id?:string)=>{
+  const store=claimStore(host.storage.sql),graph=readMemoryGraph(host.storage.sql,MEMORY_SCOPE);
+  const listed=new Map(graph.claims.map(claim=>[claim.local_id,claim as unknown as Item]));
+  const zone=host.storage.kv.get<string>('timezone')??'UTC',today=new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  const held=store.pendingTopics();
+  const shown=(row:Person)=>{
+    const claims=store.people.claimsOf(row.id).filter(claim=>listed.has(claim.id));
+    if(!claims.length||held.some(topic=>carriesTopic(row.name,topic)))return null;
+    const card=personCard(row,claims,today),yours=claims.some(claim=>claimHeldAs(claim)==='owner_said');
+    const item={id:`memory:person:${row.id}`,name:card.name,other_names:card.other_names.slice(0,10),ring:card.ring,ring_by:card.ring_by,relations:card.relations,
+      next_date:card.next_date?{date:card.next_date.date,claim_id:`memory:claim:${card.next_date.claim_id}`,text:card.next_date.text}:null,
+      last_contact:card.last_contact&&(card.last_contact.via==='mail'||card.last_contact.via==='meeting')?{at:card.last_contact.at,via:card.last_contact.via}:null,
+      held_as:yours?'yours' as const:'waldo_thinks' as const,claims:claims.length,actions:[...(yours?[]:['person.confirm']),'person.rename','person.ring','person.forget']};
+    return {item,claims};
+  };
+  if(id!==undefined){
+    const row=store.people.person(Number(id.split(':')[2])),found=row?shown(row):null;
+    if(!found)return null;
+    const extras=claimControlsFor(request,host)?claimExtrasOf(host.storage.sql):undefined,pins=pinsOf(host.storage.sql);
+    return {person:found.item,claims:found.claims.slice(0,APP_MEMORY_PAGE_MAX_V1).map(claim=>withoutLocalId(namesWebSources(request))(pinOf(pins,extras)(listed.get(claim.id)!)))};
+  }
+  const people=store.people.all().flatMap(row=>{const found=shown(row);return found?[found.item]:[];})
+    .sort((a,b)=>PERSON_RINGS.indexOf(a.ring??'wider')-PERSON_RINGS.indexOf(b.ring??'wider')||a.name.localeCompare(b.name));
+  return {people:people.slice(0,APP_PEOPLE_MAX_V1),more:people.length>APP_PEOPLE_MAX_V1};
+};
+export async function appControlsRequest(request:Request,host:AppControlsHost):Promise<Response> {
+  const url=new URL(request.url),path=url.pathname;await host.assertCurrent();
+  if(path.startsWith('/app/v1/actions/')){
+    if(request.method!=='GET')return reply({error:'method_not_allowed'},405);
+    const id=path.slice('/app/v1/actions/'.length);
+    if(url.search||!appControlRequestIdV1Schema.safeParse(id).success)return reply({error:'invalid_query'},400);
+    const key=`${await controlRevision(host.csrf)}:${id}`;
+    const row=(await host.storage.get<Book>('console:control-receipts'))?.[key]??(await host.storage.get<Book>('console:owner-control-receipts'))?.[key];
+    if(!row||row.expires<=Date.now())return reply({error:'receipt_not_found'},404);
+    const result=appControlResultV1Schema.safeParse({request_id:id,receipt:row.receipt,duplicate:true});
+    await host.assertCurrent();return result.success?reply(result.data):reply({error:'receipt_unavailable'},503);
+  }
+  const owner:OwnerControlsDeps={...host.account,csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage};
+  let built:ConsoleView|undefined;
+  const read=async(page?:{traceBefore?:number;runsBefore?:number})=>built??(built=await host.view(page));
+  const projection=async(view:string,_id?:string,page?:{traceBefore?:number;runsBefore?:number})=>{
+    if(!['day','connections','activity'].includes(view))return null;
+    const query=readControlsQuery(new URLSearchParams({view}));return query?projectControls(await read(page),query.view):null;
+  };
+  if(path==='/app/v1/controls'){
+    if(request.method!=='GET')return reply({error:'method_not_allowed'},405);
+    if([...url.searchParams.keys()].some(key=>url.searchParams.getAll(key).length!==1))return reply({error:'invalid_query'},400);
+    const query=appControlQueryV1Schema.safeParse(Object.fromEntries(url.searchParams));if(!query.success)return reply({error:'invalid_query'},400);
+    if(query.data.view==='constellation'){
+      const {memory_view,cursor,limit,id,max_nodes,max_links}=query.data;
+      const paging=Object.entries({view:memory_view,cursor,limit,id,max_nodes,max_links}).filter((entry):entry is [string,string]=>entry[1]!==undefined);
+      let graph:ReturnType<typeof constellationData>;
+      try{graph=constellationData(host.storage,paging,showsPins(request),namesWebSources(request),claimControlsFor(request,host)?claimExtrasOf(host.storage.sql):undefined);}catch{return reply({error:'projection_unavailable'},503);}
+      if(graph.status!==200||!graph.data)return reply({error:graph.error},graph.status);
+      const data=graph.data.memory_view==='summary'&&host.welcome?{...graph.data,welcome:welcomeForRevision(request,host.welcome())}:graph.data,parsed=appControlProjectionV1Schema.safeParse({version:1,state:'available',view:'constellation',revision:await controlRevision(data),data});
+      await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
+    }
+    if(query.data.view==='people'){
+      if(!peopleFor(request,host))return reply({error:'invalid_query'},400);
+      let data:ReturnType<typeof peopleData>;
+      try{data=peopleData(request,host,query.data.id);}catch{return reply({error:'projection_unavailable'},503);}
+      if(data===null)return reply({error:'not_found'},404);
+      const parsed=appControlProjectionV1Schema.safeParse({version:1,state:'available',view:'people',revision:await controlRevision(data),data});
+      await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
+    }
+    if(query.data.view==='days'){
+      if(!host.days||appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')<APP_CONTROLS_DAY_HISTORY_REVISION)return reply({error:'invalid_query'},400);
+      let data:object|null;
+      try{data=await host.days(query.data.date);}catch{return reply({error:'projection_unavailable'},503);}
+      if(data===null)return reply({error:'not_found'},404);
+      const parsed=appControlProjectionV1Schema.safeParse({version:1,state:'available',view:'days',revision:await controlRevision(data),data});
+      await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
+    }
+    if(query.data.view==='phone'){
+      let controls:Awaited<ReturnType<typeof phoneControls>>;
+      try{controls=await phoneControls(host.phone,host.account.owner,host.csrf,host.imessageProof,undefined,whatsappProofFor(request,host));}catch{return reply({error:'projection_unavailable'},503);}
+      const {csrf:_csrf,...shown}=controls,parsed=appControlProjectionV1Schema.safeParse({...shown,revision:await controlRevision(controls)});
+      await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
+    }
+    if(query.data.view==='agent_mail'){
+      if(!host.agentMail||!readsAgentMail(request))return reply({error:'invalid_query'},400);
+      let controls:AgentMailControls;
+      try{controls=await agentMailControls(host.agentMail,host.csrf);}catch{return reply({error:'projection_unavailable'},503);}
+      const {csrf:_csrf,...shown}=controls,parsed=appControlProjectionV1Schema.safeParse({...shown,revision:await controlRevision(controls)});
+      await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
+    }
+    if(query.data.view==='account'){
+      const response=await ownerControlsRead('account',owner);if(!response.ok)return reply({error:'projection_unavailable'},503);
+      // The revision is the console's own and was taken before identity joins: an email change must not make a deletion read stale.
+      const {csrf:_csrf,...shown}=await response.json() as Record<string,unknown>&{data:Record<string,unknown>};
+      const name=namesOwner(request)?host.ownerName?.()??null:null,identity=namesOwner(request)?await accountIdentity(host.phone,host.account.owner):{};
+      const parsed=appControlProjectionV1Schema.safeParse({...shown,data:{...shown.data,...(name?{name}:{}),...identity}});
+      await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
+    }
+    const page={...(query.data.trace_before?{traceBefore:Number(query.data.trace_before)}:{}),...(query.data.runs_before?{runsBefore:Number(query.data.runs_before)}:{})};
+    const result=await projection(query.data.view,undefined,page);if(!result)return reply({error:'not_found'},404);
+    // The revision guards what an action changes, so it is taken before latest is added: an action rebuilds the day without it.
+    const revision=await controlRevision(result);
+    const {csrf:_csrf,...shown}=query.data.view==='day'&&host.cardsLatest&&built?projectControls({...built,cards:await host.cardsLatest(built,showsRevisions(request))},'day'):result;
+    const named=query.data.view==='day'&&namesOwner(request)?host.ownerName?.()??null:null;
+    const memory=query.data.view==='day'&&signalsMemory(request)?{memory_revision:memoryRevision(host.storage.sql)}:{};
+    const day=query.data.view==='day'?explainCards(request,host,dayForRevision(request,shown)):shown;
+    // Where Waldo writes first is offered from the same links the action checks, outside the day's revision.
+    // The quests change in chat, never through a day action, so they too sit outside the day's revision.
+    const quests=query.data.view==='day'&&host.quests&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_QUESTS_REVISION?{quests:host.quests()}:{};
+    const surface=query.data.view==='day'&&choosesSurface(request,host)?{proactive_surface:{value:proactiveSurface(host.storage.kv,host.bothDefault),choices:proactiveSurfaceChoices(await host.chatLinks!())}}:{};
+    // Like the surface, the sign-in account is offered outside the view's revision: it changes nothing an action checks.
+    // Every build gets it: the app reads this view tolerantly, so one that does not know the field drops it.
+    const google=query.data.view==='connections'?(day.data as {google:{connectAvailable:boolean;accounts:{id:string;email:string}[]}}).google:null;
+    const catalogue=google!==null&&listsCatalogue(request);
+    const connections=google?{google:{...google,...(catalogue?{accounts:await withRevision17(host,google.accounts,built?.google.accounts??[])}:{}),...await googleSignin(host.phone,host.account.owner,google)},...(catalogue?await wearablesOf(host):{})}:{};
+    const parsed=appControlProjectionV1Schema.safeParse({...day,data:{...(day.data as object),...(named?{name:named}:{}),...memory,...surface,...quests,...connections},revision});
+    await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
+  }
+  if(path!=='/app/v1/actions')return reply({error:'not_found'},404);
+  if(request.method!=='POST')return reply({error:'method_not_allowed'},405);
+  let raw:unknown;try{raw=await request.json();}catch{return reply({error:'invalid_action'},400);}
+  const action=appControlActionV1Schema.safeParse(raw);
+  if(action.success&&stepUpGated(appControlStepUpAction(action.data))&&!signedInRecently(host.signedInAt,Date.now()))return appStepUpRefusal();
+  // A recorded deletion erases this storage and revokes the session: nothing may write or check currency after it.
+  if(action.success&&action.data.action==='account.delete'){
+    const form=new FormData();for(const key of ['action','view','revision','request_id','confirmation'] as const)form.set(key,action.data[key]!);form.set('csrf',host.csrf);
+    const response=await ownerControlsAction(form,owner),body:unknown=await response.json();
+    if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
+    const result=appControlResultV1Schema.safeParse({...body,request_id:action.data.request_id});
+    return result.success?reply(result.data,response.status):reply({error:'receipt_unavailable'},503);
+  }
+  // A person action runs as the console's memory action on the person it names, against the revision of that person's detail read.
+  if(action.success&&action.data.view==='people'){
+    if(!peopleFor(request,host))return reply({error:'invalid_action'},400);
+    // Only what the person offers now: confirm names someone Waldo only read about, never one the owner already knows.
+    const offered=(()=>{try{const data=peopleData(request,host,action.data.id);return data&&'person' in data&&data.person?data.person.actions as readonly string[]:[];}catch{return [];}})();
+    if(!offered.includes(action.data.action))return reply({error:'no_longer_eligible',message:'This action is no longer available. Refresh the records.'},409);
+    const {id,action:name,value,revision,request_id}=action.data,form=new FormData();
+    for(const [key,field] of Object.entries({csrf:host.csrf,view:'memory',action:name,id:id!.split(':')[2]!,revision,request_id,...(value===undefined?{}:{value:value.trim()})}))form.set(key,field);
+    const response=await controlAction(form,{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,
+      projection:async()=>{try{return peopleData(request,host,id) as never;}catch{return null;}},
+      act:async person=>{await host.assertCurrent();return host.act({...person,made:`app:${name}`});}});
+    const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
+    const result=appControlResultV1Schema.safeParse({...body,request_id});
+    await host.assertCurrent();return result.success?reply(result.data,response.status):reply({error:'receipt_unavailable'},503);
+  }
+  // A node action runs as the console's memory action on the node it names, against the revision of that node's detail read.
+  if(action.success&&action.data.view==='constellation'&&action.data.action.startsWith('node.')){
+    const {id,action:name,value,revision,request_id}=action.data,form=new FormData();
+    for(const [key,field] of Object.entries({csrf:host.csrf,view:'memory',action:name,id:id!.split(':')[2]!,revision,request_id,...(value===undefined?{}:{value:value.trim()})}))form.set(key,field);
+    const response=await controlAction(form,{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,
+      projection:async()=>{const detail=constellationData(host.storage,[['view','detail'],['id',id!]],showsPins(request),namesWebSources(request));return detail.status===200?detail.data as never:null;},
+      act:async node=>{await host.assertCurrent();return host.act({...node,made:`app:${name}`});}});
+    const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
+    const result=appControlResultV1Schema.safeParse({...body,request_id});
+    await host.assertCurrent();return result.success?reply(result.data,response.status):reply({error:'receipt_unavailable'},503);
+  }
+  // A claim action runs as the console's memory action on the claim it names. It carries the revision of that claim's
+  // detail read under revision 2, so a pin or an edit made elsewhere since makes it stale.
+  if(action.success&&action.data.view==='constellation'){
+    if(!showsPins(request))return reply({error:'invalid_action'},400);
+    const claimControls=claimControlsFor(request,host);
+    if(NEW_CLAIM_ACTIONS.has(action.data.action)&&!claimControls)return reply({error:'invalid_action'},400);
+    // Only what the claim offers now: confirm names a claim Waldo inferred, never one the owner said.
+    if(NEW_CLAIM_ACTIONS.has(action.data.action)&&!(claimExtrasOf(host.storage.sql).get(Number(action.data.id!.split(':')[2]))?.actions as readonly string[]|undefined)?.includes(action.data.action))return reply({error:'no_longer_eligible',message:'This action is no longer available. Refresh the records.'},409);
+    const {id,action:name,value,revision,request_id}=action.data,form=new FormData();
+    for(const [key,field] of Object.entries({csrf:host.csrf,view:'memory',action:SPOT_ACTION[name]!,id:id!.split(':')[2]!,revision,request_id,...(value===undefined?{}:{value:name==='claim.edit'?value.trim():value})}))form.set(key,field);
+    const response=await controlAction(form,{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,
+      projection:async()=>{const detail=constellationData(host.storage,[['view','detail'],['id',id!]],true,namesWebSources(request),claimControls?claimExtrasOf(host.storage.sql):undefined);return detail.status===200?detail.data as never:null;},
+      act:async spot=>{await host.assertCurrent();return host.act({...spot,made:`app:${name}`});}});
+    const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
+    const result=appControlResultV1Schema.safeParse({...body,request_id});
+    await host.assertCurrent();return result.success?reply(result.data,response.status):reply({error:'receipt_unavailable'},503);
+  }
+  // Try again came with the card states (controls=3): an older build that names it gets what it got before it existed.
+  if(action.success&&action.data.action==='card.retry'&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')<APP_CONTROLS_CARD_STATE_REVISION)return reply({error:'invalid_action'},400);
+  // Disconnecting Google came with controls=7: a build below it never named it, so it gets what it got before.
+  if(action.success&&action.data.action==='google.disconnect'&&!namesOwner(request))return reply({error:'invalid_action'},400);
+  if(action.success&&action.data.view==='agent_mail'&&(!host.agentMail||!readsAgentMail(request)))return reply({error:'invalid_action'},400);
+  if(action.success&&action.data.action==='proactive_surface.set'&&!choosesSurface(request,host))return reply({error:'invalid_action'},400);
+  if(action.success&&action.data.action==='schedule.set'&&!setsSchedules(request))return reply({error:'invalid_action'},400);
+  if(!action.success||!(action.data.view==='day'||action.data.view==='phone'||action.data.view==='agent_mail'||(action.data.view==='connections'&&['google.connect','google.disconnect','granola.connect','granola.disconnect','app.connect','app.disconnect','session.revoke'].includes(action.data.action))))return reply({error:'invalid_action'},400);
+  const form=new FormData();for(const [key,value]of Object.entries(action.data))if(value!==undefined)form.set(key,value);form.set('csrf',host.csrf);
+  // The phone view lists its own actions, so its fresh read is the eligibility check; the console view is never built.
+  const phone=action.data.view==='phone',mail=action.data.view==='agent_mail'?host.agentMail:undefined;
+  let mailRead:AgentMailControls|undefined;
+  const response=await controlAction(form,phone
+    ?{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,
+      projection:async view=>view==='phone'?phoneControls(host.phone,host.account.owner,host.csrf,host.imessageProof,undefined,whatsappProofFor(request,host)):null,
+      act:async(action,fields)=>{await host.assertCurrent();return phoneControlAct(host.phone,host.account.owner,action,fields,host.whatsappUnlinked,host.imessageProof);}}
+    :mail?{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,
+      projection:async view=>view==='agent_mail'?(mailRead=await agentMailControls(mail,host.csrf)):null,
+      act:async(action,fields)=>{await host.assertCurrent();return agentMailControlAct(mail,mailRead!,action,fields);}}
+    :{csrf:host.csrf,expires:host.expires,sessions:host.sessions,store:host.storage,view:read,projection,
+      act:async(action,fields)=>{await host.assertCurrent();return action.action==='proactive_surface.set'?proactiveSurfaceReceipt(chooseProactiveSurface(host.storage.kv,action.value,await host.chatLinks!(),host.bothDefault)):action.action==='google.connect'?host.act(action,fields):host.act(action);}});
+  const body:unknown=await response.json();if(!body||typeof body!=='object'||!('receipt'in body))return reply(body as object,response.status);
+  const result=appControlResultV1Schema.safeParse({...body,request_id:action.data.request_id});
+  // Signout is a separate push-first endpoint. No control can invalidate its own receipt.
+  await host.assertCurrent();return result.success?reply(result.data,response.status):reply({error:'receipt_unavailable'},503);
+}

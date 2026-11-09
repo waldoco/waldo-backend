@@ -2,7 +2,9 @@ import { z } from 'zod';
 import { docProviderSchema, docReadResultSchema } from '../../adapters/doc';
 import { iso8601Schema } from '../../core/error';
 import { hallTypeSchema } from '../../memory/hall';
+import { lifeAreaSchema } from '../../memory/area';
 import { sourceTaintSchema } from '../../memory/sanitise';
+import { connectIntentSchema } from '../connect-intent';
 
 // Model-supplied argument shapes for the read-cluster tools (ADR-0008/0021 surface). The
 // dispatcher validates args at the PreToolUse Zod gate (ADR-0032) before any handler runs,
@@ -10,58 +12,336 @@ import { sourceTaintSchema } from '../../memory/sanitise';
 // a smuggled extra argument a parse failure, not a silent pass-through (ADR-0029).
 
 // Instants, not strings: iso8601 admits non-UTC offsets, so lexicographic order can lie.
-const isoInstant = iso8601Schema.describe(
-  'ISO 8601 datetime with seconds and an explicit UTC offset, e.g. 2026-09-26T00:00:00+05:30',
-);
 const dateRangeSchema = z
-  .strictObject({ from: isoInstant, to: isoInstant })
+  .strictObject({ from: iso8601Schema, to: iso8601Schema })
   .refine((r) => Date.parse(r.from) <= Date.parse(r.to), {
     error: 'date_range must not end before it starts',
     path: ['to'],
-  });
+  })
+  .describe('from and to with seconds and a UTC offset, e.g. 2026-09-26T00:00:00+05:30');
 
 export const getCrsArgsSchema = z.strictObject({
   range_days: z.int().min(1).max(90).default(1),
 });
 export type GetCrsArgs = z.infer<typeof getCrsArgsSchema>;
 
-// Metric selectors are names only — results come back as zones/bands/trends, never raw
-// values (ADR-0024 destination rules); the closed set is what the health seam serves.
-export const healthMetricSelectorSchema = z.enum([
-  'hrv',
-  'hr',
-  'sleep',
-  'spo2',
-  'strain',
-  'recovery',
+// The owner's own readings from the health plane, by local day, for the owner's own model context (the beta ruling
+// lets them reach the model and owner-channel replies, never storage or egress). Days are the owner's local days,
+// inclusive, at most 31, ending no later than today; the handler checks "today" in the owner's zone.
+export const healthReadSignalSchema = z.enum([
+  'sleep', 'sleep_midpoint', 'hrv', 'resting_hr', 'heart_rate', 'movement', 'daylight', 'workouts',
+  'sleep_light', 'sleep_deep', 'sleep_rem', 'sleep_awake', 'sleep_efficiency', 'respiratory_rate', 'spo2', 'wrist_temperature',
+  'walking_hr', 'hr_recovery', 'vo2_max', 'steps', 'active_energy', 'mindful',
+  'body_mass', 'body_fat', 'lean_body_mass', 'stand_hours',
+  // Food the owner's own app logged to the phone's health store: energy and the three macros, each a day's sum.
+  'food_energy', 'protein', 'carbs', 'fat',
 ]);
-export type HealthMetricSelector = z.infer<typeof healthMetricSelectorSchema>;
-
-export const getHealthArgsSchema = z.strictObject({
-  metrics: z.array(healthMetricSelectorSchema).optional(),
-  date: iso8601Schema.optional(),
-});
+export type HealthReadSignal = z.infer<typeof healthReadSignalSchema>;
+const healthReadDaySchema = z.iso.date();
+export const HEALTH_READ_MAX_DAYS = 31;
+const dayOrdinal = (day: string): number => Math.round(Date.parse(`${day}T00:00:00Z`) / 86_400_000);
+export const getHealthArgsSchema = z
+  .strictObject({
+    signals: z.array(healthReadSignalSchema).min(1).max(healthReadSignalSchema.options.length),
+    from: healthReadDaySchema,
+    to: healthReadDaySchema,
+    aggregation: z.enum(['daily', 'summary']).default('daily'),
+  })
+  .refine((args) => dayOrdinal(args.from) <= dayOrdinal(args.to), { error: 'from must not be after to', path: ['to'] })
+  .refine((args) => dayOrdinal(args.to) - dayOrdinal(args.from) < HEALTH_READ_MAX_DAYS, { error: `at most ${HEALTH_READ_MAX_DAYS} days`, path: ['to'] });
 export type GetHealthArgs = z.infer<typeof getHealthArgsSchema>;
+
+export const healthReadUnitSchema = z.enum(['minutes', 'ms', 'bpm', 'minute_of_day', 'ratio', 'percent', 'breaths_per_minute', 'celsius', 'ml_per_kg_min', 'count', 'kcal', 'kg', 'g']);
+// One workout as the watch measured it, from the same source as the workouts signal. A part the store holds in a shape this
+// does not admit is left out, never the session. zone_minutes are minutes in heart-rate zones 1 to 5.
+const sport = <Shape extends z.ZodRawShape>(shape: Shape) => z.strictObject(shape).partial();
+const nonNegative = (max: number) => z.number().finite().min(0).max(max);
+export const healthWorkoutSessionParts = {
+  energy_kcal: nonNegative(30_000), distance_m: nonNegative(1_000_000), elevation_gain_m: nonNegative(20_000),
+  avg_hr_bpm: z.number().finite().positive().max(300), max_hr_bpm: z.number().finite().positive().max(300),
+  zone_minutes: z.tuple([nonNegative(1440), nonNegative(1440), nonNegative(1440), nonNegative(1440), nonNegative(1440)]),
+  effort: z.strictObject({ score: z.number().finite().min(1).max(10), method: z.enum(['rated', 'estimated']) }),
+  running: sport({ power_w: nonNegative(2_000), cadence_spm: nonNegative(300), stride_length_m: nonNegative(4), vertical_oscillation_cm: nonNegative(30), ground_contact_ms: nonNegative(2_000) }),
+  cycling: sport({ power_w: nonNegative(2_000), cadence_rpm: nonNegative(250) }),
+  swimming: sport({ strokes: z.int().min(0).max(100_000) }),
+};
+export const healthWorkoutSessionSchema = z.strictObject({
+  day: healthReadDaySchema, activity: z.string().min(1).max(64), minutes: nonNegative(1440),
+  ...Object.fromEntries(Object.entries(healthWorkoutSessionParts).map(([key, part]) => [key, part.optional()])) as { [K in keyof typeof healthWorkoutSessionParts]: z.ZodOptional<(typeof healthWorkoutSessionParts)[K]> },
+}).refine(session => session.avg_hr_bpm === undefined || session.max_hr_bpm === undefined || session.avg_hr_bpm <= session.max_hr_bpm, 'average heart rate above the maximum');
+export const HEALTH_READ_MAX_SESSIONS = 100;
+export const healthReadUnavailableReasonSchema = z.enum(['consent_required', 'consent_withdrawn', 'not_linked', 'no_readings', 'read_failed']);
+export const getHealthResultSchema = z.discriminatedUnion('state', [
+  z.strictObject({
+    state: z.literal('available'),
+    timezone: z.string().min(1),
+    from: healthReadDaySchema,
+    to: healthReadDaySchema,
+    read_at: z.iso.datetime(),
+    signals: z.array(z.strictObject({
+      signal: healthReadSignalSchema,
+      unit: healthReadUnitSchema,
+      source: z.enum(['apple', 'samsung', 'health_connect', 'whoop']),
+      // A wrist temperature is absolute or a delta against the platform's own baseline, never the two blended.
+      method: z.enum(['asleep', 'rmssd', 'sdnn', 'absolute', 'baseline_delta']).nullable(),
+      days: z.array(z.strictObject({ day: healthReadDaySchema, value: z.number().nullable() })).optional(),
+      // Null when no asked day has a value: nothing is invented.
+      summary: z.strictObject({ mean: z.number().nullable(), min: z.number().nullable(), max: z.number().nullable(), days_with_value: z.int().nonnegative() }).optional(),
+    })).max(healthReadSignalSchema.options.length),
+    // From the newest reading used: fresh within 36 hours, stale within 72, expired after (the source-data bounds of
+    // ADR-0081 section 2).
+    freshness: z.enum(['fresh', 'stale', 'expired']),
+    // The share of asked signal-days that have a value, 0 to 1.
+    coverage: z.number().min(0).max(1),
+    // Daily reads that ask for workouts: each session, oldest first, at most the newest HEALTH_READ_MAX_SESSIONS.
+    sessions: z.array(healthWorkoutSessionSchema).max(HEALTH_READ_MAX_SESSIONS).optional(),
+  }),
+  // next: what is true and what can be done, in words; it never carries a reading.
+  z.strictObject({ state: z.literal('unavailable'), reason: healthReadUnavailableReasonSchema, next: z.string().min(1).max(400).optional() }),
+]);
+export type GetHealthResult = z.infer<typeof getHealthResultSchema>;
+
+// The owner's screen time as their phone sent it: one summary per device and local day, at most 31 days ending no later than
+// today in the owner's zone. Stored summaries, not a live read of the phone: received_at says how fresh each one is.
+export const SCREEN_TIME_TOOL_MAX_DAYS = 31;
+export const getScreenTimeArgsSchema = z
+  .strictObject({ from: healthReadDaySchema, to: healthReadDaySchema })
+  .refine((args) => dayOrdinal(args.from) <= dayOrdinal(args.to), { error: 'from must not be after to', path: ['to'] })
+  .refine((args) => dayOrdinal(args.to) - dayOrdinal(args.from) < SCREEN_TIME_TOOL_MAX_DAYS, { error: `at most ${SCREEN_TIME_TOOL_MAX_DAYS} days`, path: ['to'] });
+export type GetScreenTimeArgs = z.infer<typeof getScreenTimeArgsSchema>;
+const screenTimeMinutes = z.int().min(0).max(1440);
+const screenTimeClock = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$/);
+// device numbers the owner's phones 1, 2, ... in the order they first sent, so two phones are never added up.
+export const screenTimeToolDaySchema = z.strictObject({
+  day: healthReadDaySchema,
+  device: z.int().min(1).max(8),
+  coverage: z.enum(['complete', 'partial', 'none']),
+  received_at: z.iso.datetime(),
+  screen_on_minutes: screenTimeMinutes.optional(),
+  pickups: z.int().min(0).max(10_000).optional(),
+  unlocks: z.int().min(0).max(10_000).optional(),
+  late_night_minutes: screenTimeMinutes.optional(),
+  late_night_window: z.string().min(1).max(11),
+  first_use_at: screenTimeClock.optional(),
+  last_use_at: screenTimeClock.optional(),
+  categories: z.array(z.strictObject({ category: z.string().min(1).max(32), minutes: screenTimeMinutes })).max(10).optional(),
+});
+export const getScreenTimeResultSchema = z.discriminatedUnion('state', [
+  z.strictObject({
+    state: z.literal('available'),
+    from: healthReadDaySchema,
+    to: healthReadDaySchema,
+    // Oldest first.
+    days: z.array(screenTimeToolDaySchema).max(SCREEN_TIME_TOOL_MAX_DAYS * 8),
+  }),
+  z.strictObject({ state: z.literal('unavailable'), reason: z.enum(['consent_required', 'consent_withdrawn', 'not_linked', 'no_data', 'read_failed']) }),
+]);
+export type GetScreenTimeResult = z.infer<typeof getScreenTimeResultSchema>;
+
+// Where the owner's phones are, as they last said: each phone's time zone and, when it sent one, the city-level place the phone's
+// own OS named, each with when it was observed and how many minutes ago that was. Never a cell or a coordinate. device numbers
+// the owner's phones 1, 2, ... most recently heard from first. Nothing observed more than 30 days ago is kept.
+export const getDeviceContextArgsSchema = z.strictObject({});
+export type GetDeviceContextArgs = z.infer<typeof getDeviceContextArgsSchema>;
+const deviceContextAge = z.int().min(0).max(31 * 24 * 60);
+export const deviceContextToolDeviceSchema = z.strictObject({
+  device: z.int().min(1).max(8),
+  platform: z.enum(['ios', 'android']),
+  timezone: z.string().min(1).max(64),
+  timezone_observed_at: z.iso.datetime(),
+  timezone_age_minutes: deviceContextAge,
+  // null when the phone has sent only its zone; a place without names is a cell the OS could not name.
+  place: z.strictObject({
+    locality: z.string().min(1).max(80).optional(),
+    region: z.string().min(1).max(80).optional(),
+    country: z.string().regex(/^[A-Z]{2}$/).optional(),
+    observed_at: z.iso.datetime(),
+    age_minutes: deviceContextAge,
+  }).nullable(),
+});
+export const getDeviceContextResultSchema = z.discriminatedUnion('state', [
+  z.strictObject({ state: z.literal('available'), devices: z.array(deviceContextToolDeviceSchema).min(1).max(8) }),
+  z.strictObject({ state: z.literal('unavailable'), reason: z.enum(['consent_required', 'consent_withdrawn', 'not_linked', 'no_data', 'read_failed']) }),
+]);
+export type GetDeviceContextResult = z.infer<typeof getDeviceContextResultSchema>;
+
+// The events on the owner's phone calendars, as each phone last sent them (DEVICE_CALENDAR): what Waldo sees of a work
+// Outlook or Exchange account, or a local calendar, that no connected account shows. phone numbers the owner's phones 1, 2, ...
+// most recently heard from first; each says when it was read and how many minutes ago, and whether it shared times only or
+// stopped at its cap (complete false). An event whose iCal UID matches a connected Google event is left out and counted;
+// may_be_on_google marks one that could still be a Google event under another id. Default window: now to 24 hours ahead.
+export const PHONE_CALENDAR_TOOL_MAX_EVENTS = 100;
+export const PHONE_CALENDAR_TOOL_MAX_RANGE_MS = 16 * 24 * 60 * 60_000;
+export const queryPhoneCalendarArgsSchema = z.strictObject({ date_range: dateRangeSchema.optional() })
+  .refine(args => !args.date_range || (Date.parse(args.date_range.from) < Date.parse(args.date_range.to)
+    && Date.parse(args.date_range.to) - Date.parse(args.date_range.from) <= PHONE_CALENDAR_TOOL_MAX_RANGE_MS), { error: 'a range that advances, of at most sixteen days', path: ['date_range'] });
+export type QueryPhoneCalendarArgs = z.infer<typeof queryPhoneCalendarArgsSchema>;
+const phoneNumber = z.int().min(1).max(8);
+export const phoneCalendarToolEventSchema = z.strictObject({
+  phone: phoneNumber,
+  calendar: z.string().min(1).max(120).nullable(),
+  account_type: z.enum(['local', 'exchange', 'google', 'icloud', 'caldav', 'other']),
+  start: z.string().min(10).max(64),
+  end: z.string().min(10).max(64),
+  all_day: z.boolean(),
+  title: z.string().min(1).max(300).optional(),
+  location: z.string().min(1).max(300).optional(),
+  availability: z.enum(['busy', 'free', 'tentative', 'unknown']),
+  may_be_on_google: z.boolean(),
+});
+export const queryPhoneCalendarResultSchema = z.discriminatedUnion('state', [
+  z.strictObject({
+    state: z.literal('available'),
+    from: z.iso.datetime(),
+    to: z.iso.datetime(),
+    phones: z.array(z.strictObject({ phone: phoneNumber, observed_at: z.iso.datetime(), age_minutes: z.int().min(0), times_only: z.boolean(), complete: z.boolean() })).min(1).max(8),
+    events: z.array(phoneCalendarToolEventSchema).max(PHONE_CALENDAR_TOOL_MAX_EVENTS),
+    // Events in the range past the page, and phone events left out as the same as a connected Google event.
+    more: z.int().min(0),
+    on_google: z.int().min(0),
+    // Whether the connected Google calendars could be read to compare.
+    google_compared: z.boolean(),
+  }),
+  z.strictObject({ state: z.literal('unavailable'), reason: z.enum(['consent_required', 'no_data', 'read_failed']) }),
+]);
+export type QueryPhoneCalendarResult = z.infer<typeof queryPhoneCalendarResultSchema>;
+
+// Today's and tomorrow's weather where the owner's most recently placed phone is, from the provider the place consent names
+// (WeatherKit), asked with the cell's centre only. Metric units as the provider gives them. condition is the provider's own
+// condition code (for example PartlyCloudy, Rain). place names the city the forecast is for and how old that reading is.
+// The provider requires attribution: say the forecast is from Apple Weather when sharing it.
+export const getWeatherArgsSchema = z.strictObject({});
+export type GetWeatherArgs = z.infer<typeof getWeatherArgsSchema>;
+// The provider's condition code, such as Clear or ScatteredThunderstorms: a word, never free text.
+const weatherCondition = z.string().regex(/^[A-Z][A-Za-z]{0,39}$/);
+const celsius = z.number().min(-90).max(60);
+export const weatherToolDaySchema = z.strictObject({
+  date: healthReadDaySchema,
+  condition: weatherCondition,
+  high_c: celsius,
+  low_c: celsius,
+  precipitation_chance: z.number().min(0).max(1).optional(),
+  precipitation_mm: z.number().min(0).max(2000).optional(),
+  uv_max: z.int().min(0).max(20),
+  sunrise: z.iso.datetime({ offset: true }).optional(),
+  sunset: z.iso.datetime({ offset: true }).optional(),
+});
+export const getWeatherResultSchema = z.discriminatedUnion('state', [
+  z.strictObject({
+    state: z.literal('available'),
+    source: z.literal('Apple Weather'),
+    place: z.strictObject({
+      locality: z.string().min(1).max(80).optional(),
+      region: z.string().min(1).max(80).optional(),
+      country: z.string().regex(/^[A-Z]{2}$/).optional(),
+      // The zone the phone last reported, which can be newer than the place; the days' dates are in it.
+      phone_timezone: z.string().min(1).max(64),
+      observed_at: z.iso.datetime(),
+      age_minutes: deviceContextAge,
+    }),
+    now: z.strictObject({ temperature_c: celsius, condition: weatherCondition, uv_index: z.int().min(0).max(20) }).optional(),
+    days: z.array(weatherToolDaySchema).min(1).max(2),
+    read_at: z.iso.datetime({ offset: true }),
+  }),
+  z.strictObject({
+    state: z.literal('unavailable'),
+    reason: z.enum(['consent_required', 'consent_withdrawn', 'not_linked', 'no_place', 'provider_unavailable', 'read_failed']),
+  }),
+]);
+export type GetWeatherResult = z.infer<typeof getWeatherResultSchema>;
 
 // 'query_calendar' is the ADR-0040 rename of the legacy schedule read.
 export const queryCalendarArgsSchema = z.strictObject({
+  account: z.email().optional(),
   date_range: dateRangeSchema.optional(),
+  calendar_id: z.string().min(1).max(254).default('primary'),
+  page_token: z.string().min(1).max(4096).optional(),
   include_declined: z.boolean().default(false),
   limit: z.int().min(1).max(50).default(20),
-});
+  operation: z.enum(['list_events', 'list_calendars']).optional(),
+  include_hidden: z.boolean().optional(),
+}).refine(args => args.operation === 'list_calendars' || !args.page_token || Boolean(args.date_range), {error:'page_token requires the same explicit date_range',path:['date_range']})
+  .refine(args => !args.date_range || Date.parse(args.date_range.from) < Date.parse(args.date_range.to), {error:'Calendar range must advance',path:['date_range']})
+  .refine(args => args.operation !== 'list_calendars' || (!args.date_range && args.calendar_id === 'primary' && !args.include_declined), {error:'Calendar discovery does not accept an event query'})
+  .refine(args => args.operation === 'list_calendars' || args.include_hidden === undefined, {error:'include_hidden applies only to Calendar discovery'});
 export type QueryCalendarArgs = z.infer<typeof queryCalendarArgsSchema>;
 
+// Provider receipt validation is also used after the proxy boundary, before claiming coverage. It names every field the
+// connector reports: one it leaves out rejects the whole page. An event Waldo created, moved or cancelled carries the
+// operation marker the approval desk reconciles by; one Waldo created carries waldo_made.
+export const calendarPageSchema = z.strictObject({
+  events: z.array(z.strictObject({
+    id:z.string().min(1).max(1024),title:z.string().max(2000),start:z.string().min(1).max(64),end:z.string().min(1).max(64),all_day:z.boolean(),
+    location:z.string().max(2000).optional(),description:z.string().max(2000).optional(),attendees:z.int().min(0).optional(),etag:z.string().max(1024).optional(),operation_marker:z.string().min(1).max(1024).optional(),
+    status:z.enum(['confirmed','tentative','cancelled']).optional(),updated:iso8601Schema.optional(),recurring_event_id:z.string().max(1024).optional(),original_start:iso8601Schema.optional(),source_url:z.string().max(2048).optional(),attendee_names:z.array(z.string().max(320)).max(50).optional(),
+    attendee_emails:z.array(z.string().min(1).max(320)).max(20).optional(),conference_url:z.string().max(2048).optional(),attachments:z.array(z.strictObject({title:z.string().min(1).max(255),file_id:z.string().max(1024).optional()})).max(20).optional(),
+    owner_status:z.enum(['organizer','accepted']).optional(),waldo_made:z.literal(true).optional(),ical_uid:z.string().min(1).max(1024).optional(),
+  }).refine(event => {
+    const time = event.all_day ? z.iso.date() : iso8601Schema;
+    return time.safeParse(event.start).success && time.safeParse(event.end).success && Date.parse(event.start) < Date.parse(event.end);
+  }, 'invalid Calendar event range')).max(50),
+  next_page_token:z.string().min(1).max(4096).nullable(), fetched_count:z.int().min(0).max(50),
+  account:z.strictObject({connection_id:z.string().min(1).max(1024).nullable(),email:z.string().min(1).max(320).nullable()}),
+  observed_at:iso8601Schema,
+}).refine(page=>page.fetched_count>=page.events.length,'returned events exceed fetched count');
+
 // Connect intent is its own tool, never a side effect of a failed service call: the consent
-// URL must be reachable on demand (owner direction 2026-09-24).
+// URL must be reachable on demand (owner direction 2026-09-24). feature names an ungranted account
+// feature to offer, so an owner whose tools for it are left out can still get the button.
 export const connectServiceArgsSchema = z.strictObject({
   service: z.enum(['google']),
+  feature: connectIntentSchema.shape.feature,
 });
 export type ConnectServiceArgs = z.infer<typeof connectServiceArgsSchema>;
 
 export const getCommunicationArgsSchema = z.strictObject({
+  account: z.email().optional(),
   date_range: dateRangeSchema.optional(),
-});
+  // A page above 30 messages exceeds the inline tool-output limit and reaches the model as a stored-output pointer, not as mail.
+  limit: z.int().min(1).max(30).default(10),
+  page_token: z.string().min(1).optional(),
+}).refine(args=>!args.page_token||Boolean(args.date_range),{error:'page_token requires the same explicit date_range',path:['date_range']});
 export type GetCommunicationArgs = z.infer<typeof getCommunicationArgsSchema>;
+
+// A1 gmail parity: free-text mail search (Gmail q passthrough; the handler appends
+// after:/before: from the date range) and a single-thread body read. Both are read-only;
+// the E1 verification-artifact quarantine runs on results before they reach model context.
+export const searchCommunicationArgsSchema = z.strictObject({
+  account: z.email().optional(),
+  cursor: z.string().min(1).max(4096).optional(),
+  query: z.string().min(1),
+  date_range: dateRangeSchema.optional(),
+  limit: z.int().min(1).max(20).default(10),
+});
+export type SearchCommunicationArgs = z.infer<typeof searchCommunicationArgsSchema>;
+
+// People search over the owner's own contacts and "other contacts" (people they have mailed).
+// Google matches name and address prefixes; the result carries names and addresses only.
+export const searchContactsArgsSchema = z.strictObject({
+  account: z.email().optional(),
+  query: z.string().min(1).max(100),
+  limit: z.int().min(1).max(10).default(5),
+});
+export type SearchContactsArgs = z.infer<typeof searchContactsArgsSchema>;
+// A match carries a name and addresses only; there is no field for phone, organisation or photo.
+export const contactMatchSchema = z.strictObject({
+  name: z.string().min(1).max(200).nullable(),
+  emails: z.array(z.email().max(320)).min(1).max(3),
+  source: z.enum(['contacts', 'other_contacts']),
+});
+export type ContactMatch = z.infer<typeof contactMatchSchema>;
+
+export const readThreadArgsSchema = z.strictObject({
+  account: z.email().optional(),
+  cursor: z.string().min(1).max(4096).optional(),
+  thread_id: z.string().min(1),
+  limit: z.int().min(1).max(20).default(10),
+  // Continue one long message body: the id of a message whose body_next_offset was returned, and that offset.
+  body_message_id: z.string().min(1).max(128).optional(),
+  body_offset: z.int().min(0).max(100_000_000).optional(),
+}).refine(args => (args.body_message_id === undefined) === (args.body_offset === undefined), { error: 'body_message_id and body_offset go together', path: ['body_offset'] })
+  .refine(args => args.body_message_id === undefined || args.cursor === undefined, { error: 'a body continuation does not take a thread cursor', path: ['cursor'] });
+export type ReadThreadArgs = z.infer<typeof readThreadArgsSchema>;
 
 // 'all' is a read-filter sentinel, not a task state — write-side status vocabulary lives
 // with the update_task args.
@@ -69,10 +349,41 @@ export const taskStatusFilterSchema = z.enum(['todo', 'in_progress', 'done', 'al
 export type TaskStatusFilter = z.infer<typeof taskStatusFilterSchema>;
 
 export const getTasksArgsSchema = z.strictObject({
+  account: z.email().optional(),
+  operation: z.enum(['list_tasks', 'list_task_lists']).optional(),
+  task_list_id: z.string().min(1).max(1024).optional(),
+  page_token: z.string().min(1).max(16_384).optional(),
   status: taskStatusFilterSchema.default('todo'),
   limit: z.int().min(1).max(100).default(20),
-});
+}).refine(args => args.operation !== 'list_task_lists' || (!args.task_list_id && args.status === 'todo'), {error:'Task-list discovery does not accept a task filter'});
 export type GetTasksArgs = z.infer<typeof getTasksArgsSchema>;
+
+const googleCollectionAccountSchema = z.strictObject({ connection_id: z.string().min(1).max(1024).nullable(), email: z.string().min(1).max(320).nullable() });
+const googleCollectionReceipt = {
+  next_page_token: z.string().min(1).max(16_384).nullable(), fetched_count: z.int().min(0).max(1000),
+  account: googleCollectionAccountSchema, observed_at: iso8601Schema,
+};
+export const googleCalendarListPageSchema = z.strictObject({ ...googleCollectionReceipt, items: z.array(z.strictObject({ id: z.string().min(1).max(1024), title: z.string().max(2000), timezone: z.string().max(128).optional(), access_role: z.enum(['freeBusyReader', 'reader', 'writer', 'owner', 'writerWithoutPrivateAccess']), primary: z.boolean(), selected: z.boolean(), hidden: z.boolean(), etag: z.string().max(1024).optional() })).max(50) }).refine(page => page.fetched_count === page.items.length);
+export const googleTaskListPageSchema = z.strictObject({ ...googleCollectionReceipt, items: z.array(z.strictObject({ id: z.string().min(1).max(1024), title: z.string().max(2000), updated: iso8601Schema.optional(), etag: z.string().max(1024).optional() })).max(100) }).refine(page => page.fetched_count === page.items.length);
+export const googleTasksPageSchema = z.strictObject({ ...googleCollectionReceipt,
+  task_list_ids: z.array(z.string().min(1).max(1024)).max(10),
+  tasks: z.array(z.strictObject({ id: z.string().min(1).max(1024), title: z.string().max(2000), status: z.enum(['todo', 'done']), task_list_id: z.string().min(1).max(1024), due: iso8601Schema.optional(), updated: iso8601Schema.optional(), completed: iso8601Schema.optional(), notes: z.string().max(100_000).optional(), parent: z.string().max(1024).optional(), position: z.string().max(1024).optional(), web_view_link: z.string().max(2048).optional() })).max(100),
+}).refine(page => page.fetched_count >= page.tasks.length && page.tasks.every(task => page.task_list_ids.includes(task.task_list_id)));
+export type GoogleTasksPage = z.infer<typeof googleTasksPageSchema>;
+
+// Drive reads over the REST adapter (explicit, no MCP). The query is a typed field the edge turns into
+// a Drive query; the model never writes Drive query syntax. file_id is a closed id shape, not free text.
+export const readDriveArgsSchema = z.strictObject({
+  account: z.email().optional(),
+  action: z.enum(['recent', 'search', 'get', 'content']),
+  name_contains: z.string().min(1).max(200).optional(),
+  file_id: z.string().regex(/^[A-Za-z0-9_-]{10,128}$/).optional(),
+  page_size: z.int().min(1).max(50).default(10),
+  page_token: z.string().min(1).max(2048).optional(),
+  connection_id: z.string().min(1).max(256).optional(),
+  expected_modified_time: z.string().datetime({ offset: true }).optional(),
+}).refine((a) => (a.action !== 'search' || a.name_contains !== undefined) && (a.action !== 'get' || a.file_id !== undefined) && (a.action !== 'content' || (a.file_id !== undefined && a.connection_id !== undefined && a.expected_modified_time !== undefined)), { message: 'search needs name_contains; get needs file_id; content needs file_id, connection_id and expected_modified_time from a current metadata read' });
+export type ReadDriveArgs = z.infer<typeof readDriveArgsSchema>;
 
 export const getMasterMetricsArgsSchema = z.strictObject({
   date: iso8601Schema.optional(),
@@ -89,17 +400,77 @@ export const readMemoryArgsSchema = z.strictObject({
   hall: hallTypeSchema.optional(),
   limit: z.int().min(1).max(50).default(10),
   query: z.string().min(1).max(500).optional(),
-});
+  // Only claims filed under this part of the owner's life; unsorted reads what is not filed yet.
+  area: lifeAreaSchema.optional(),
+  // Claims by id (the number in a c12 tag), as a stub in recall names them. An id this read may not show is left out,
+  // the same as one that does not exist.
+  ids: z.array(z.int().positive()).min(1).max(12).optional(),
+  // Also read what used to be true: claims a later fact replaced, each with the dates it held. For a question about the past
+  // ("when did I", "what changed"); the replaced ones are history, never current.
+  include_replaced: z.boolean().optional(),
+  // The people memory holds, each as a card (name, ring, relation, next date, last contact); with query, those whose name or
+  // claims match it. Or one person (an id from a card) with what memory holds about them.
+  people: z.boolean().optional(),
+  person: z.int().positive().optional(),
+}).refine((args) => args.ids === undefined || args.query === undefined, { error: 'read by ids or by query, not both', path: ['ids'] })
+  .refine((args) => [args.ids, args.people || undefined, args.person].filter((value) => value !== undefined).length <= 1, { error: 'read ids, people or one person, not more than one', path: ['people'] });
 export type ReadMemoryArgs = z.infer<typeof readMemoryArgsSchema>;
+// A read shows each claim whole with its provenance; aliases are search keys and stay out. Untrusted claims never
+// return. A claim past the read's byte budget is named in omitted_claim_ids, never cut.
+export const readMemoryClaimSchema = z.strictObject({
+  id: z.int().positive(),
+  kind: z.string().min(1),
+  text: z.string(),
+  evidence: z.string(),
+  source: z.string(),
+  origin: z.string().refine(origin => origin !== 'untrusted').nullable(),
+  source_ref: z.string().nullable(),
+  verification_status: z.string(),
+  supersedes_id: z.int().positive().nullable(),
+  last_seen_at: z.string(),
+  area: lifeAreaSchema.optional(),
+  // When the fact began to hold and, once something replaced it, when it stopped.
+  valid_from: z.string().nullable().optional(),
+  valid_to: z.string().nullable().optional(),
+});
+export const readMemoryResultSchema = z.strictObject({
+  claims: z.array(readMemoryClaimSchema),
+  omitted_claim_ids: z.array(z.int().positive()),
+  complete: z.boolean(),
+  authority: z.literal('context_only_not_action_approval'),
+}).refine(result => result.complete === (result.omitted_claim_ids.length === 0), 'complete means no claim was omitted');
+export type ReadMemoryResult = z.infer<typeof readMemoryResultSchema>;
 
 // The model-facing bound of the episode FTS5 leg — episodeSearchArgsSchema (memory/episode)
 // is the internal gateway shape; this seam additionally caps what the model may request.
-export const searchEpisodesArgsSchema = z.strictObject({
-  query: z.string().min(1).max(500),
+// Two distinct modes. Search takes `query` (with optional limit and date_range). Exact-source
+// takes `ref`, a value copied from a prior search hit, and returns that stored turn in
+// full. The two never mix: a request names exactly one, and date_range is search-only.
+// (limit carries a schema default, so it is inert in exact-source mode, not rejected.)
+const searchEpisodesFields = {
+  query: z.string().min(1).max(500).optional(),
+  ref: z.string().min(1).max(200).optional(),
   limit: z.int().min(1).max(20).default(5),
   date_range: dateRangeSchema.optional(),
-});
+};
+const oneEpisodeMode = (args: Readonly<{ query?: string; ref?: string; date_range?: unknown }>, ctx: z.RefinementCtx) => {
+  if ((args.query === undefined) === (args.ref === undefined)) {
+    ctx.addIssue({ code: 'custom', message: 'provide exactly one of query or ref', path: ['query'] });
+  }
+  if (args.ref !== undefined && args.date_range !== undefined) {
+    ctx.addIssue({ code: 'custom', message: 'date_range applies to query searches only', path: ['date_range'] });
+  }
+};
+export const searchEpisodesArgsSchema = z.strictObject(searchEpisodesFields).superRefine(oneEpisodeMode);
+// With the recall chain on, a search can keep to one surface the owner talked on (whatsapp, imessage, app, telegram).
+export const searchEpisodesChainArgsSchema = z
+  .strictObject({ ...searchEpisodesFields, surface: z.string().regex(/^[a-z]{1,16}$/).optional().describe('Only messages on this surface: whatsapp, imessage, app or telegram.') })
+  .superRefine((args, ctx) => {
+    oneEpisodeMode(args, ctx);
+    if (args.ref !== undefined && args.surface !== undefined) ctx.addIssue({ code: 'custom', message: 'surface applies to query searches only', path: ['surface'] });
+  });
 export type SearchEpisodesArgs = z.infer<typeof searchEpisodesArgsSchema>;
+export type SearchEpisodesChainArgs = z.infer<typeof searchEpisodesChainArgsSchema>;
 
 // execute_action runs only a previously proposed-and-confirmed action: the confirmation
 // token is the user's approval artifact from the ADR-0018 autonomy gate, never
@@ -123,6 +494,9 @@ export type WebSearchArgs = z.infer<typeof webSearchArgsSchema>;
 // B-tool-1: read-only browser. One shot: open the page in a real browser, extract, done.
 // No act/observe here - bounded actions are a later slice with the approval gate.
 export const browsePageArgsSchema = z.strictObject({
+  retain_session: z.boolean().optional().describe('true to start an interactive journey: returns the page state and a session_handle for browse_act. Omit for a one-shot read.'),
+  session_handle: z.string().min(1).max(80).optional().describe('From a prior observation, to continue that exact session; never a provider ID.'),
+  provider: z.enum(['cloudflare_playwright', 'browserbase_stagehand_http_v3']).optional().describe('Ignored: the host always picks the browser.'),
   url: z.url().max(2000),
   instruction: z.string().min(1).max(1000),
 });
@@ -131,10 +505,38 @@ export type BrowsePageArgs = z.infer<typeof browsePageArgsSchema>;
 // B-tool-2: bounded in-page actions. observe-before-act seam, capped steps, deterministic
 // stop before anything irreversible-looking (submit/pay/send/book...) - those need the
 // approval gate, which is B-tool-3, not model judgment.
+const browserCommandIntent = z.enum(['read', 'send']).optional();
+export const browserTaskCommandSchema = z.discriminatedUnion('operation', [
+  z.strictObject({ operation: z.literal('goto'), url: z.url().max(2000), intent: browserCommandIntent }),
+  z.strictObject({ operation: z.literal('click'), element_ref: z.string().min(1).max(80), intent: browserCommandIntent }),
+  z.strictObject({ operation: z.literal('type'), element_ref: z.string().min(1).max(80), value: z.string().min(1).max(1000).optional(), key: z.literal('Enter').optional(), intent: browserCommandIntent }).refine(value => (value.value !== undefined) !== (value.key !== undefined), 'Type needs exactly a value or Enter'),
+  z.strictObject({ operation: z.literal('select'), element_ref: z.string().min(1).max(80), value: z.string().max(1000), intent: browserCommandIntent }),
+  z.strictObject({ operation: z.literal('set_checked'), element_ref: z.string().min(1).max(80), checked: z.boolean(), intent: browserCommandIntent }),
+  z.strictObject({ operation: z.literal('scroll'), delta: z.int().min(-2000).max(2000), intent: browserCommandIntent }),
+  z.strictObject({ operation: z.literal('read'), intent: browserCommandIntent }),
+  z.strictObject({ operation: z.literal('wait'), milliseconds: z.int().min(0).max(1000), intent: browserCommandIntent }),
+  z.strictObject({ operation: z.literal('inspect') }),
+  z.strictObject({ operation: z.literal('fill'), field_ref: z.string().min(1).max(80), value: z.string().min(1).max(1000) }),
+  z.strictObject({ operation: z.literal('prepare_submit') }),
+  z.strictObject({ operation: z.literal('verify') }),
+  z.strictObject({ operation: z.literal('open_tab'), url: z.url().max(2000) }),
+  z.strictObject({ operation: z.literal('switch_tab'), tab_ref: z.string().min(1).max(80) }),
+  z.strictObject({ operation: z.literal('close_tab'), tab_ref: z.string().min(1).max(80) }),
+  z.strictObject({ operation: z.literal('screenshot') }),
+  z.strictObject({ operation: z.literal('cancel') }),
+  z.strictObject({ operation: z.literal('owner_login'), reason: z.string().min(1).max(1000) }),
+  z.strictObject({ operation: z.literal('resume_owner_login') }),
+  z.strictObject({ operation: z.literal('download'), element_ref: z.string().min(1).max(80) }),
+  z.strictObject({ operation: z.literal('back') }),
+]);
+export type BrowserTaskCommand = z.infer<typeof browserTaskCommandSchema>;
 export const browseActArgsSchema = z.strictObject({
+  provider: z.enum(['cloudflare_playwright', 'browserbase_stagehand_http_v3']).optional().describe('Ignored: the host always picks the browser.'),
+  session_handle: z.string().min(1).max(80).optional(),
   url: z.url().max(2000),
   task: z.string().min(1).max(1000),
   max_actions: z.int().min(1).max(5).default(3),
+  command: browserTaskCommandSchema.optional(),
 });
 export type BrowseActArgs = z.infer<typeof browseActArgsSchema>;
 
@@ -158,10 +560,23 @@ export type ReadToolOutputArgs = z.infer<typeof readToolOutputArgsSchema>;
 // dispatch-time server allowlist (ADR-0049), whose shape is deliberately unpinned here.
 export const callMcpToolArgsSchema = z.strictObject({
   server: z.string().min(1).max(100),
-  tool: z.string().min(1).max(100),
+  // MCP tool names run to 128 characters; the server's own list decides which exist.
+  tool: z.string().min(1),
   args: z.record(z.string(), z.unknown()),
+  // The owner's answers to a connected server's questions (an input_required result), sent with the same
+  // call: handle names the questions, responses maps each question id to the owner's answer.
+  answers: z.strictObject({ handle: z.string().min(1), responses: z.record(z.string(), z.unknown()) }).optional(),
 });
 export type CallMcpToolArgs = z.infer<typeof callMcpToolArgsSchema>;
+
+// Finds tools on the MCP servers the owner connected: words to match, one server's full list, or the
+// next page of a previous search. All optional: no arguments lists every server and its first tools.
+export const searchMcpToolsArgsSchema = z.strictObject({
+  query: z.string().min(1).optional(),
+  server: z.string().min(1).optional(),
+  cursor: z.string().min(1).optional(),
+});
+export type SearchMcpToolsArgs = z.infer<typeof searchMcpToolsArgsSchema>;
 
 // Results of the three general-agent tools are external-origin by construction, so the
 // taint field pins the single owner's (memory/sanitise) non-null arm: an untainted
@@ -197,3 +612,13 @@ export const callMcpToolResultSchema = z.strictObject({
   source_taint: externalTaintSchema,
 });
 export type CallMcpToolResult = z.infer<typeof callMcpToolResultSchema>;
+
+// Explicit provider availability, not a calendar-event pagination heuristic.
+export const queryAvailabilityArgsSchema=z.strictObject({
+ account:z.email().optional(),
+ date_range:z.strictObject({from:iso8601Schema,to:iso8601Schema}).refine(r=>Date.parse(r.from)<Date.parse(r.to),'range must advance'),
+ calendar_ids:z.array(z.string().min(1).max(254)).min(1).max(50).default(['primary']).refine(ids=>new Set(ids).size===ids.length,'duplicate calendar IDs'),
+ duration_minutes:z.int().min(1).max(1440),
+ work_windows:z.array(z.strictObject({start:iso8601Schema,end:iso8601Schema}).refine(w=>Date.parse(w.start)<Date.parse(w.end),'window must advance')).max(100).default([]),
+});
+export type QueryAvailabilityArgs=z.infer<typeof queryAvailabilityArgsSchema>;

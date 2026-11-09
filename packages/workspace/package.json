@@ -1,0 +1,10 @@
+{
+  "name": "@waldo/workspace",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "typecheck": "tsc --noEmit", "test": "vitest run" },
+  "dependencies": { "fflate": "0.8.3" },
+  "devDependencies": { "typescript": "5.9.3", "vitest": "4.1.9" }
+}

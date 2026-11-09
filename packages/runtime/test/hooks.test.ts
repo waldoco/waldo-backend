@@ -1,4 +1,4 @@
-import { ROSTER, type HookPayload, type SanitiseResult } from '@waldo/contracts';
+import { ROSTER, TOOL_ERRORS, type HookPayload, type SanitiseResult } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
 import {
   egressAllowlistHook,
@@ -8,9 +8,10 @@ import {
   runHooks,
   scribeSanitisePostLlmCallHook,
   scribeSanitisePostToolUseHook,
+  scribeSanitisePreToolUseHook,
   type HookRuntimeContext,
 } from '../src/hooks/registry';
-import { sanitise } from '../src/scribe/sanitiser';
+import { DEEP_ENCODING_MARKER, sanitise } from '../src/scribe/sanitiser';
 
 type TestContext = {
   calls: string[];
@@ -43,7 +44,6 @@ describe('hook registry', () => {
           source_taint,
           redactions: [],
         }) satisfies SanitiseResult,
-      medicalGate: () => true,
       ...overrides,
     };
   }
@@ -135,6 +135,26 @@ describe('hook registry', () => {
     );
   });
 
+  it("keeps the run scope's AbortSignal itself through a hook's context copy, so later tools can still compose it", async () => {
+    const registry = registerHook<{ runScope: { signal: AbortSignal } }>({
+      name: 'scope_reader',
+      event: 'PostPromptBuild',
+      priority: 100,
+      async handle(_payload, ctx) {
+        expect(ctx.runScope.signal).toBe(signal);
+        return { ok: true };
+      },
+    });
+    const run = new AbortController();
+    const { signal } = run;
+    const ctx = { runScope: { signal } };
+    await runHooks('PostPromptBuild', postPromptPayload, ctx, { registry });
+    expect(ctx.runScope.signal).toBe(signal);
+    const composed = AbortSignal.any([ctx.runScope.signal, AbortSignal.timeout(60_000)]);
+    run.abort();
+    expect(composed.aborted).toBe(true);
+  });
+
   it('ignores in-place payload mutation unless a hook returns a replacement payload', async () => {
     const registry = registerHook<TestContext>(
       {
@@ -183,7 +203,6 @@ describe('hook registry', () => {
       ['PostToolUse', 'scribe_sanitise', 100],
       ['PostLLMCall', 'canary_leak_check', 100],
       ['PostLLMCall', 'scribe_sanitise', 100],
-      ['PostLLMCall', 'medical_gate', 200],
     ]);
   });
 
@@ -212,17 +231,25 @@ describe('hook registry', () => {
       tool_permissions: [
         'get_crs',
         'get_health',
+        'get_screen_time',
+        'get_device_context',
+        'get_weather',
         'query_calendar',
+        'query_phone_calendar',
         'connect_service',
         'get_communication',
+        'search_communication',
+        'read_thread',
         'get_tasks',
         'get_master_metrics',
         'get_context',
+        'query_availability',
         'read_memory',
         'search_episodes',
         'search_connector',
         'propose_action',
         'send_message',
+        'skills_load',
       ],
       canary_tokens: validCanaries,
       iteration_count: 0,
@@ -304,7 +331,61 @@ describe('hook registry', () => {
     ).rejects.toMatchObject({
       hook: 'autonomy_gate_check',
       code: 'forbidden',
+      clientMessage: TOOL_ERRORS.taint_needs_approval.cause,
+      toolError: expect.objectContaining({ code: 'taint_needs_approval', fix: expect.stringContaining('propose_action') }),
     });
+  });
+
+  it('routes every external-tainted privileged tool to the approval card, the MCP write included', async () => {
+    const ctx = runtimeCtx({ toolArgSourceTaint: 'external' });
+    await runHooks('OnInvocationStart', { event: 'OnInvocationStart', trace_id: 'trace-taint-mcp' }, ctx);
+    await expect(
+      runHooks('PreToolUse', { event: 'PreToolUse', tool: 'call_mcp_tool', args: { server: 's', tool: 't', args: {} } }, ctx),
+    ).rejects.toMatchObject({ code: 'forbidden', toolError: expect.objectContaining({ code: 'taint_needs_approval' }) });
+  });
+
+  it('admits exactly the approved tainted call: the token names the tool, and the dispatcher has checked its digest', async () => {
+    const ctx = runtimeCtx({ toolArgSourceTaint: 'external', approvedTaintedAction: { tool: 'write_task', args_digest: 'f'.repeat(64) } });
+    await runHooks('OnInvocationStart', { event: 'OnInvocationStart', trace_id: 'trace-taint-token' }, ctx);
+    await expect(runHooks('PreToolUse', { event: 'PreToolUse', tool: 'write_task', args: { title: 'hello', reasoning: 'asked' } }, ctx)).resolves.toMatchObject({ tool: 'write_task' });
+    await expect(runHooks('PreToolUse', { event: 'PreToolUse', tool: 'update_task', args: { task_id: 't1', changes: { title: 'hello' }, reasoning: 'asked' } }, ctx))
+      .rejects.toMatchObject({ toolError: expect.objectContaining({ code: 'taint_needs_approval' }) });
+  });
+
+  it('admits a tainted call to a handler that only raises the owner card, and only for that tool', async () => {
+    const ctx = runtimeCtx({ toolArgSourceTaint: 'external', proposalOnlyCall: 'send_message' });
+    await runHooks('OnInvocationStart', { event: 'OnInvocationStart', trace_id: 'trace-taint-card' }, ctx);
+    const send = { channel: 'telegram', content: 'hello', idempotency_key: 'c'.repeat(64) };
+    await expect(runHooks('PreToolUse', { event: 'PreToolUse', tool: 'send_message', args: send }, ctx)).resolves.toMatchObject({ tool: 'send_message' });
+    await expect(runHooks('PreToolUse', { event: 'PreToolUse', tool: 'write_task', args: { title: 'hello', reasoning: 'asked' } }, ctx))
+      .rejects.toMatchObject({ toolError: expect.objectContaining({ code: 'taint_needs_approval' }) });
+  });
+
+  it('after outside content, closes a mail-bound loop directly and sends any other loop close to the card', async () => {
+    const close = (id: string) => ({ event: 'PreToolUse' as const, tool: 'close_loop', args: { id, outcome: 'done' } });
+    const needsCard = { code: 'forbidden', toolError: expect.objectContaining({ code: 'taint_needs_approval', fix: expect.stringContaining('propose_action') }) };
+    const asked: string[] = [];
+    const ctx = runtimeCtx({ toolArgSourceTaint: 'external', loopIsSourceBound: (id) => { asked.push(id); return id === 'o-mail'; } });
+    await runHooks('OnInvocationStart', { event: 'OnInvocationStart', trace_id: 'trace-taint-loop' }, ctx);
+    await expect(runHooks('PreToolUse', close('o-mail'), ctx)).resolves.toMatchObject({ tool: 'close_loop' });
+    await expect(runHooks('PreToolUse', close('o-owner'), ctx)).rejects.toMatchObject(needsCard);
+    expect(asked).toEqual(['o-mail', 'o-owner']);
+
+    // A host that never wired the read admits no tainted close; a read that fails admits none either.
+    const unwired = runtimeCtx({ toolArgSourceTaint: 'external' });
+    await runHooks('OnInvocationStart', { event: 'OnInvocationStart', trace_id: 'trace-taint-loop-unwired' }, unwired);
+    await expect(runHooks('PreToolUse', close('o-mail'), unwired)).rejects.toMatchObject(needsCard);
+    const failing = runtimeCtx({ toolArgSourceTaint: 'external', loopIsSourceBound: () => { throw new Error('storage gone'); } });
+    await runHooks('OnInvocationStart', { event: 'OnInvocationStart', trace_id: 'trace-taint-loop-failing' }, failing);
+    await expect(runHooks('PreToolUse', close('o-mail'), failing)).rejects.toMatchObject({ hook: 'autonomy_gate_check', code: 'transient' });
+
+    // The approved replay of a frozen close runs; an untainted turn closes any loop without asking.
+    const approved = runtimeCtx({ toolArgSourceTaint: 'external', loopIsSourceBound: () => false, approvedTaintedAction: { tool: 'close_loop', args_digest: 'f'.repeat(64) } });
+    await runHooks('OnInvocationStart', { event: 'OnInvocationStart', trace_id: 'trace-taint-loop-approved' }, approved);
+    await expect(runHooks('PreToolUse', close('o-owner'), approved)).resolves.toMatchObject({ tool: 'close_loop' });
+    const owner = runtimeCtx({ loopIsSourceBound: () => { throw new Error('an untainted close never asks'); } });
+    await runHooks('OnInvocationStart', { event: 'OnInvocationStart', trace_id: 'trace-loop-untainted' }, owner);
+    await expect(runHooks('PreToolUse', close('o-owner'), owner)).resolves.toMatchObject({ tool: 'close_loop' });
   });
 
   it('fails closed when an ACL-granted tool has no contract arg schema yet', async () => {
@@ -516,17 +597,18 @@ describe('hook registry', () => {
     });
   });
 
-  it('denies canary-shaped PostLLMCall output under external turn taint (provider-ingestion exception stays off egress)', async () => {
-    // After a tool result the run loop merges external taint into the turn context; model
-    // output to send_message must keep the 16-hex shape scan (owner security review of #203).
-    // The string is canary-SHAPED, not a session canary, so only the shape scan can catch it.
-    await expect(
-      runHooks(
-        'PostLLMCall',
-        { event: 'PostLLMCall', response: 'see 19c8a1b2f3d4e5f6 for details', tokens_in: 1, tokens_out: 1 },
-        runtimeCtx({ sourceTaint: 'external', sanitise }),
-      ),
-    ).rejects.toMatchObject({ hook: 'scribe_sanitise', code: 'forbidden' });
+  it('allows a non-session mail-id-shaped PostLLMCall output under external turn taint', async () => {
+    await expect(runHooks('PostLLMCall',
+      { event: 'PostLLMCall', response: 'see 19c8a1b2f3d4e5f6 for details', tokens_in: 1, tokens_out: 1 },
+      runtimeCtx({ sourceTaint: 'external', sanitise }),
+    )).resolves.toBeDefined();
+  });
+
+  it('still denies the exact session canary on PostLLMCall egress', async () => {
+    await expect(runHooks('PostLLMCall',
+      { event: 'PostLLMCall', response: `see ${validCanaries[0]} for details`, tokens_in: 1, tokens_out: 1 },
+      runtimeCtx({ sourceTaint: 'external', sanitise }),
+    )).rejects.toMatchObject({ hook: 'canary_leak_check', code: 'forbidden' });
   });
 
   it('passes harmless PostLLMCall output under external turn taint (the regression is not vacuous)', async () => {
@@ -591,14 +673,14 @@ describe('hook registry', () => {
       ),
     ).resolves.toEqual({
       event: 'PostLLMCall',
-      response: { '[REDACTED_EMAIL]': 'owner' },
+      response: { 'alice@example.com': 'owner' },
       tokens_in: 1,
       tokens_out: 1,
     });
     expect(calls).toBe(1);
   });
 
-  it('never rewrites executable tool-call arguments: text redacts, arguments pass through (2026-09-25 draft_email)', async () => {
+  it('keeps owner-intent addresses readable in text and byte-identical in arguments (2026-09-25 draft_email; owner direction 2026-09-27: no redaction of what a personal agent needs)', async () => {
     const ctx = runtimeCtx({ sanitise });
     const args = JSON.stringify({ to: ['priya@example.com'], subject: 'Deck', body_markdown: 'I will send the deck by Thursday.' });
     const result = await runHooks(
@@ -619,10 +701,34 @@ describe('hook registry', () => {
     expect(result.event).toBe('PostLLMCall');
     if (result.event !== 'PostLLMCall') throw new Error('unreachable');
     const response = result.response as { text: string; tool_calls: { arguments: string }[] };
-    // Owner-bound text keeps full redaction...
-    expect(response.text).toBe('Drafted it to [REDACTED_EMAIL] - not sent.');
-    // ...but the executable call is byte-identical: the recipient IS the call.
+    // Owner-bound text keeps the address readable (owner-readable seam)...
+    expect(response.text).toBe('Drafted it to priya@example.com - not sent.');
+    // ...and the executable call is byte-identical: the recipient IS the call.
     expect(response.tool_calls[0]!.arguments).toBe(args);
+  });
+
+  it('does not apply the 4 KB reply cap to tool-call arguments (PR 1 item 5)', async () => {
+    const ctx = runtimeCtx({ sanitise });
+    const args = JSON.stringify({ path: 'notes.md', content: 'line of notes\n'.repeat(500) });
+    expect(args.length).toBeGreaterThan(5_000);
+    const result = await runHooks(
+      'PostLLMCall',
+      {
+        event: 'PostLLMCall',
+        response: {
+          model: ROSTER.fallback,
+          text: 'Saved it.',
+          tool_calls: [{ call_id: 'c1', name: 'workspace_write', arguments: args }],
+          input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1,
+        },
+        tokens_in: 1,
+        tokens_out: 1,
+      },
+      ctx,
+    );
+    expect(result.event).toBe('PostLLMCall');
+    if (result.event !== 'PostLLMCall') throw new Error('unreachable');
+    expect((result.response as { tool_calls: { arguments: string }[] }).tool_calls[0]!.arguments).toBe(args);
   });
 
   it('still halts fail-closed when a canary hides inside tool-call arguments', async () => {
@@ -659,6 +765,24 @@ describe('hook registry', () => {
     expect(draftResult.args).toEqual(draftArgs);
   });
 
+  it('refuses executable arguments that carry a value encoded past the decode limit, with the decode reason, and withholds it from rewritten ones', async () => {
+    const ctx = runtimeCtx({ sanitise, toolArgSourceTaint: 'external' });
+    const deep = btoa(btoa(btoa(`the code is ${validCanaries[0]}`)));
+    const executable = [
+      ['propose_action', { tool: 'log_workout', args: { type: `run ${deep}`, duration_minutes: 30 }, reasoning: 'r' }],
+      ['workspace_write', { title: 'Notes', text: `see ${deep}` }],
+      ['draft_email', { to: ['a@b.example'], subject: 's', body_markdown: `see ${deep}` }],
+    ] as const;
+    for (const [tool, args] of executable) {
+      await expect(runHooks('PreToolUse', { event: 'PreToolUse', tool, args }, ctx, { registry: [scribeSanitisePreToolUseHook] }), tool)
+        .rejects.toMatchObject({ hook: 'tool_arg_sanitise', reason: 'scribe:invalid_payload' });
+    }
+    const rewritten = await runHooks('PreToolUse', { event: 'PreToolUse', tool: 'browse_page', args: { url: `https://example.com/?q=${deep}` } }, ctx, { registry: [scribeSanitisePreToolUseHook] });
+    if (rewritten.event !== 'PreToolUse') throw new Error('unreachable');
+    expect(JSON.stringify(rewritten.args)).not.toContain(deep);
+    expect(JSON.stringify(rewritten.args)).toContain(DEEP_ENCODING_MARKER);
+  });
+
   it('halts PostLLMCall when the Scribe sanitiser rejects generated text', async () => {
     await expect(
       runHooks(
@@ -680,29 +804,6 @@ describe('hook registry', () => {
       ),
     ).rejects.toMatchObject({
       hook: 'scribe_sanitise',
-      code: 'forbidden',
-    });
-  });
-
-  it('halts PostLLMCall when the medical gate rejects generated text', async () => {
-    const ctx = runtimeCtx({
-      medicalGate: () => ({ ok: false, reason: 'unsafe medical directive', code: 'forbidden' }),
-    });
-    await runHooks('OnInvocationStart', { event: 'OnInvocationStart', trace_id: 'trace-medical' }, ctx);
-
-    await expect(
-      runHooks(
-        'PostLLMCall',
-        {
-          event: 'PostLLMCall',
-          response: 'medical instruction',
-          tokens_in: 1,
-          tokens_out: 1,
-        },
-        ctx,
-      ),
-    ).rejects.toMatchObject({
-      hook: 'medical_gate',
       code: 'forbidden',
     });
   });
@@ -729,10 +830,10 @@ describe('hook registry', () => {
       hook: 'acl_check',
       reason: 'tool outside trigger ACL',
       code: 'forbidden',
-      clientMessage: 'hook halted',
+      clientMessage: TOOL_ERRORS.acl_denied.cause,
       onErrorPayload: {
         event: 'OnError',
-        error: 'hook halted',
+        error: TOOL_ERRORS.acl_denied.cause,
         code: 'forbidden',
       },
     });
@@ -865,12 +966,50 @@ describe('hook registry', () => {
       hook: 'medical_gate',
       reason: 'unsafe output',
       code: 'forbidden',
-      clientMessage: 'hook halted',
+      clientMessage: TOOL_ERRORS.hook_denied.cause,
       onErrorPayload: {
         event: 'OnError',
-        error: 'hook halted',
+        error: TOOL_ERRORS.hook_denied.cause,
         code: 'forbidden',
       },
+    });
+  });
+
+  describe('open public browsing mode (egress sentinel "*", browse_page and browse_act)', () => {
+    const run = (tool: string, args: unknown, egressAllowlist: readonly string[] | undefined) => runHooks(
+      'PreToolUse', { event: 'PreToolUse', tool, args } as never, runtimeCtx({ egressAllowlist }), { registry: [egressAllowlistHook] },
+    );
+    it('"*" lets browse_page reach any public host', async () => {
+      await expect(run('browse_page', { url: 'https://news.example.org/a?b=1', instruction: 'x' }, ['*'])).resolves.toMatchObject({ tool: 'browse_page' });
+      await expect(run('browse_page', { url: 'https://news.example.org/a', instruction: 'x' }, ['en.wikipedia.org', '*'])).resolves.toMatchObject({ tool: 'browse_page' });
+    });
+    it('"*" still blocks private, loopback, metadata and malformed targets for browse_page', async () => {
+      for (const url of ['http://169.254.169.254/latest', 'http://127.0.0.1/', 'http://localhost/', 'http://metadata.google.internal/', 'http://[::1]/', 'ftp://example.org/', 'https://user:pw@example.org/']) {
+        await expect(run('browse_page', { url, instruction: 'x' }, ['*'])).rejects.toMatchObject({ hook: 'egress_allowlist_check', code: 'forbidden' });
+      }
+    });
+    it('"*" opens browse_act to public hosts, keeps the hard blocks, and still does not open execute_code', async () => {
+      await expect(run('browse_act', { url: 'https://news.example.org/', task: 'x' }, ['*'])).resolves.toMatchObject({ tool: 'browse_act' });
+      for (const url of ['http://169.254.169.254/latest', 'http://127.0.0.1/', 'http://localhost/']) {
+        await expect(run('browse_act', { url, task: 'x' }, ['*'])).rejects.toMatchObject({ hook: 'egress_allowlist_check', code: 'forbidden' });
+      }
+      await expect(run('browse_act', { url: 'https://news.example.org/', task: 'x' }, undefined)).rejects.toMatchObject({ code: 'forbidden' });
+      await expect(run('browse_act', { url: 'https://evil.example/', task: 'x' }, ['*', '-evil.example'])).rejects.toMatchObject({ code: 'forbidden' });
+      await expect(run('browse_act', { url: 'https://news.example.org/', task: 'x' }, ['en.wikipedia.org'])).rejects.toMatchObject({ code: 'forbidden' });
+      await expect(run('execute_code', { allow_hosts: ['news.example.org'] }, ['*'])).rejects.toMatchObject({ code: 'forbidden' });
+    });
+    it('browse_act with a list plus "*" allows the listed host and any other public host', async () => {
+    await expect(run('browse_act', { url: 'https://en.wikipedia.org/wiki/X', task: 'x' }, ['en.wikipedia.org', '*'])).resolves.toMatchObject({ tool: 'browse_act' });
+    await expect(run('browse_act', { url: 'https://news.example.org/', task: 'x' }, ['en.wikipedia.org', '*'])).resolves.toMatchObject({ tool: 'browse_act' });
+  });
+  it('blocks internal-network names that need no DNS to recognise: dotless hosts and .local/.internal/.svc/.localdomain', async () => {
+    for (const url of ['http://intranet/', 'http://printer.local/', 'http://db.internal/', 'http://api.default.svc/', 'http://host.localdomain/', 'http://router/admin']) {
+      await expect(run('browse_page', { url, instruction: 'x' }, ['*'])).rejects.toMatchObject({ code: 'forbidden' });
+    }
+    await expect(run('browse_page', { url: 'https://example.org/', instruction: 'x' }, ['*'])).resolves.toMatchObject({ tool: 'browse_page' });
+  });
+  it('without "*" the list still decides', async () => {
+      await expect(run('browse_page', { url: 'https://news.example.org/', instruction: 'x' }, ['en.wikipedia.org'])).rejects.toMatchObject({ code: 'forbidden' });
     });
   });
 });

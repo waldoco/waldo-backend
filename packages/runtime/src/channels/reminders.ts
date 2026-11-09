@@ -1,18 +1,23 @@
 import {
   cancelReminderArgsSchema, listRemindersArgsSchema, setReminderArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
-  type CancelReminderArgs, type ListRemindersArgs, type ScheduleEntry, type SetReminderArgs, type ToolHandler, type ToolName,
+  type ScheduleRecurrence, type CancelReminderArgs, type ListRemindersArgs, type ScheduleEntry, type SetReminderArgs, type ToolHandler, type ToolName,
 } from '@waldo/contracts';
-import type { Scheduler } from '../scheduler/multiplexer';
+import { nextOccurrence, UnreadableScheduleRowError, type Scheduler } from '../scheduler/multiplexer';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { OwnerClock } from '../tools/live/get-context';
 
-type Reminder = Readonly<{ id: string; note: string; at: string; repeat: 'none' | 'daily' }>;
+// outside: set in a turn that had read outside text, so the note may carry that text's words, not the owner's.
+type Reminder = Readonly<{ id: string; note: string; at: string; repeat: SetReminderArgs['repeat']; cron?: string; outside?: true }>;
 
 export type ReminderBook = Readonly<{
-  set(args: SetReminderArgs): Promise<Reminder>;
+  set(args: SetReminderArgs, written?: Readonly<{ outside?: boolean }>): Promise<Reminder>;
   list(): readonly Reminder[];
+  // Reminders kept in a form this version cannot read: left out of list(), but they still exist.
+  unreadable(): number;
   cancel(id: string): Promise<boolean>;
+  cancelAll(): Promise<number>;
   note(id: string): string | null;
+  outside(id: string): boolean;
   fired(entry: ScheduleEntry): void;
 }>;
 
@@ -20,59 +25,116 @@ export type ReminderBook = Readonly<{
 // because schedule payloads carry refs only.
 export const reminderBook = (sql: SqlStorage, scheduler: Scheduler, clock: OwnerClock, newId: () => string): ReminderBook => {
   sql.exec('CREATE TABLE IF NOT EXISTS reminder_notes (id TEXT PRIMARY KEY, note TEXT NOT NULL, created_at INTEGER NOT NULL)');
+  // The reminders whose note was written in a turn that had read outside text; a row here goes when its note does.
+  sql.exec('CREATE TABLE IF NOT EXISTS reminder_outside (id TEXT PRIMARY KEY)');
   const local = (at: number) => localIso(at, clock.timezone);
-  const toReminder = (row: { id: string; note: string; due_at: number; recurrence_json: string | null }): Reminder =>
-    ({ id: row.id, note: row.note, at: local(row.due_at), repeat: row.recurrence_json === null ? 'none' : 'daily' });
+  const toReminder = (row: { id: string; note: string; due_at: number; recurrence_json: string | null; outside: number }): Reminder =>
+    ({ id: row.id, note: row.note, at: local(row.due_at), ...repeatFromRecurrence(row.recurrence_json === null ? null : JSON.parse(row.recurrence_json) as ScheduleRecurrence), ...(row.outside ? { outside: true as const } : {}) });
+  const forget = (id: string) => sql.exec('DELETE FROM reminder_outside WHERE id = ?', id);
   return {
-    async set({ note, at, repeat }) {
+    async set({ note, at, repeat, cron }, written) {
       const now = clock.now().getTime();
       const due = localToEpoch(at, clock.timezone);
       if (repeat === 'none' && due <= now) throw new Error(`${at} is already past in ${clock.timezone}`);
+      const recurrence = reminderRecurrence(repeat, at, clock.timezone, cron);
+      const start = localIso(due, clock.timezone) === at ? due : localToEpoch(`${at.slice(0, 10)}T00:00`, clock.timezone);
+      const first = recurrence === null ? due : nextOccurrence(recurrence, Math.max(now, start - 1));
       const id = `reminder:${newId()}`;
       sql.exec('INSERT INTO reminder_notes (id, note, created_at) VALUES (?, ?, ?)', id, note, now);
-      const entry = await scheduler.schedule({
-        id, kind: 'reminder', payloadRefs: { reminder_id: id },
-        ...(repeat === 'daily'
-          ? { occurrenceAt: nextAfter(due, now), dueAt: nextAfter(due, now), recurrence: { type: 'daily_local' as const, time: at.slice(11), timezone: clock.timezone } }
-          : { occurrenceAt: due, dueAt: due }),
-      });
-      return { id, note, at: local(entry.due_at), repeat };
+      if (written?.outside === true) sql.exec('INSERT INTO reminder_outside (id) VALUES (?)', id);
+      let entry: ScheduleEntry;
+      try {
+        entry = await scheduler.schedule({
+          id, kind: 'reminder', payloadRefs: { reminder_id: id },
+          occurrenceAt: first, dueAt: first, recurrence,
+        });
+      } catch (error) {
+        sql.exec('DELETE FROM reminder_notes WHERE id = ?', id);
+        forget(id);
+        try { await scheduler.cancel(id); } catch (cleanupError) {
+          throw new AggregateError([error, cleanupError], 'Reminder scheduling and cleanup failed');
+        }
+        throw error;
+      }
+      return { id, note, at: local(entry.due_at), repeat, ...(cron === undefined ? {} : { cron }), ...(written?.outside === true ? { outside: true as const } : {}) };
     },
+    // A reminder row this Worker cannot read stays out of the list, which feeds prompts, rather than failing them.
     list() {
-      return sql.exec<{ id: string; note: string; due_at: number; recurrence_json: string | null }>(
-        "SELECT s.id, n.note, s.due_at, s.recurrence_json FROM schedule s JOIN reminder_notes n ON n.id = s.id WHERE s.kind = 'reminder' ORDER BY s.due_at",
-      ).toArray().map(toReminder);
+      return sql.exec<{ id: string; note: string; due_at: number; recurrence_json: string | null; outside: number }>(
+        "SELECT s.id, n.note, s.due_at, s.recurrence_json, o.id IS NOT NULL AS outside FROM schedule s JOIN reminder_notes n ON n.id = s.id LEFT JOIN reminder_outside o ON o.id = s.id WHERE s.kind = 'reminder' ORDER BY s.due_at",
+      ).toArray().filter(row => scheduler.lookup(row.id).state === 'entry').map(toReminder);
+    },
+    unreadable() {
+      return sql.exec<{ id: string }>("SELECT s.id FROM schedule s JOIN reminder_notes n ON n.id = s.id WHERE s.kind = 'reminder'")
+        .toArray().filter(row => scheduler.lookup(row.id).state === 'unreadable').length;
     },
     async cancel(id) {
       const known = scheduler.read(id)?.kind === 'reminder';
       if (known) await scheduler.cancel(id);
-      sql.exec('DELETE FROM reminder_notes WHERE id = ?', id);
-      return known;
+      // A fired reminder whose check-back is still queued has no schedule row; deleting its note stops that send.
+      const queued = sql.exec('DELETE FROM reminder_notes WHERE id = ? RETURNING id', id).toArray().length > 0;
+      forget(id);
+      return known || queued;
+    },
+    async cancelAll() {
+      sql.exec('DELETE FROM reminder_notes');
+      sql.exec('DELETE FROM reminder_outside');
+      return scheduler.cancelKind('reminder');
     },
     note(id) {
       return sql.exec<{ note: string }>('SELECT note FROM reminder_notes WHERE id = ?', id).toArray()[0]?.note ?? null;
     },
+    outside(id) {
+      return sql.exec('SELECT 1 FROM reminder_outside WHERE id = ?', id).toArray().length > 0;
+    },
     fired(entry) {
-      if (entry.recurrence === null) sql.exec('DELETE FROM reminder_notes WHERE id = ?', entry.id);
+      if (entry.recurrence !== null) return;
+      sql.exec('DELETE FROM reminder_notes WHERE id = ?', entry.id);
+      forget(entry.id);
     },
   };
 };
+
+export function reminderRecurrence(repeat: SetReminderArgs['repeat'], at: string, timezone: string, cron?: string): ScheduleRecurrence | null {
+  const time = at.slice(11);
+  if (repeat === 'none') return null;
+  if (repeat === 'cron') {
+    if (cron === undefined) throw new Error('cron recurrence needs a cron expression');
+    return { type: 'cron', expression: cron, timezone };
+  }
+  if (repeat === 'weekly') return { type: 'weekly_local', time, timezone, weekday: new Date(`${at.slice(0, 10)}T00:00:00Z`).getUTCDay() };
+  return { type: repeat === 'weekdays' ? 'weekdays_local' : 'daily_local', time, timezone };
+}
+
+function repeatFromRecurrence(recurrence: ScheduleRecurrence | null): Pick<Reminder, 'repeat' | 'cron'> {
+  if (recurrence === null) return { repeat: 'none' };
+  if (recurrence.type === 'cron') return { repeat: 'cron', cron: recurrence.expression };
+  if (recurrence.type === 'daily_local') return { repeat: 'daily' };
+  if (recurrence.type === 'weekdays_local') return { repeat: 'weekdays' };
+  if (recurrence.type === 'weekly_local') return { repeat: 'weekly' };
+  throw new Error(`Unsupported reminder recurrence: ${recurrence.type}`);
+}
 
 const DAY_MS = 24 * 60 * 60_000;
 export const nextAfter = (due: number, now: number) => (due > now ? due : due + Math.ceil((now - due + 1) / DAY_MS) * DAY_MS);
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 
+// '' when every reminder can be read, so the ledger reads exactly as before.
+export const unreadableRemindersLine = (count: number): string =>
+  count === 0 ? '' : `${count} more reminder${count === 1 ? ' was' : 's were'} saved in a form this version can't read. They are kept, and this version can't show or change them one by one; cancelling all reminders removes them too.`;
+
 export const reminderHandlers = (book: ReminderBook) => [
   {
     name: 'set_reminder',
-    description: "Set a reminder or daily routine for the owner. It fires at that local time and you message them then. Use get_context first if you need today's date.",
+    description: "Set a reminder or recurring routine for the owner. It fires at that local time and you message them then. Use get_context first if you need today's date.",
     schema: setReminderArgsSchema,
     trigger_allowlist: allowlist('set_reminder'),
     autonomy_gated: false,
-    async handle(args) {
+    mutates_state: true,
+    async handle(args: SetReminderArgs, ctx?: ToolDispatcherContext) {
       try {
-        return { ok: true, data: await book.set(args), source_taint: null };
+        return { ok: true, data: await book.set(args, { outside: ctx?.toolArgSourceTaint === 'external' }), source_taint: null };
       } catch (error) {
         return { ok: false, code: 'invalid_args', error: error instanceof Error ? error.message : String(error) };
       }
@@ -85,19 +147,33 @@ export const reminderHandlers = (book: ReminderBook) => [
     trigger_allowlist: allowlist('list_reminders'),
     autonomy_gated: false,
     async handle() {
-      return { ok: true, data: { reminders: book.list() }, source_taint: null };
+      const unreadable = book.unreadable();
+      return { ok: true, data: { reminders: book.list(), ...(unreadable > 0 ? { unreadable } : {}) }, source_taint: null };
     },
-  } satisfies ToolHandler<ListRemindersArgs, { reminders: readonly Reminder[] }, ToolDispatcherContext>,
+  } satisfies ToolHandler<ListRemindersArgs, { reminders: readonly Reminder[]; unreadable?: number }, ToolDispatcherContext>,
   {
     name: 'cancel_reminder',
-    description: 'Cancel a pending reminder or routine by id.',
+    description: "Cancel one reminder by id, or all of the owner's reminders with all: true.",
     schema: cancelReminderArgsSchema,
     trigger_allowlist: allowlist('cancel_reminder'),
     autonomy_gated: false,
-    async handle({ id }) {
-      return { ok: true, data: { id, cancelled: await book.cancel(id) }, source_taint: null };
+    mutates_state: true,
+    async handle({ id, all }) {
+      if (all === true) return { ok: true, data: { cancelled: await book.cancelAll() }, source_taint: null };
+      if (id === undefined) return { ok: false, code: 'invalid_args', error: 'Supply a reminder id or all: true.' };
+      try {
+        // What was cancelled rides the result, since the note is deleted with it: the owner's receipt quotes it.
+        const reminder = book.list().find((entry) => entry.id === id);
+        const note = reminder?.note ?? book.note(id);
+        const cancelled = await book.cancel(id);
+        return { ok: true, data: { id, cancelled, ...(cancelled && note !== null ? { note, ...(reminder ? { at: reminder.at } : {}) } : {}) }, source_taint: null };
+      } catch (error) {
+        // Retrying cannot help: nothing was cancelled, and this version will never read the row.
+        if (error instanceof UnreadableScheduleRowError) return { ok: false, code: 'rejected', error: "That reminder is stored in a form this version can't read, so it can't be cancelled here. Nothing was changed." };
+        throw error;
+      }
     },
-  } satisfies ToolHandler<CancelReminderArgs, { id: string; cancelled: boolean }, ToolDispatcherContext>,
+  } satisfies ToolHandler<CancelReminderArgs, { id: string; cancelled: boolean; note?: string; at?: string } | { cancelled: number }, ToolDispatcherContext>,
 ];
 
 export function localIso(at: number, timezone: string): string {

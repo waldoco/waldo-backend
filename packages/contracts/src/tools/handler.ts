@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { errorCodeSchema, type ErrorCode } from '../core/error';
+import { errorCodeSchema, rungBlockedOutcomeSchema, type ErrorCode, type RungBlockedOutcome } from '../core/error';
 import { triggerTypeSchema, type TriggerType } from '../core/trigger';
 import { isExternalSourceTaint, sourceTaintSchema, type SourceTaint } from '../memory/sanitise';
 import { waldoCardSchema, type WaldoCard } from '../ui/card';
@@ -11,6 +11,10 @@ import { TOOL_PERMISSIONS, type ToolName } from './permissions';
 // static type (a generic schema would be a factory, not a value); this factory is the
 // validator run at the dispatch boundary. The optional card is the tool's render surface,
 // owned by ui/card.
+// A failing tool's own next step, in place of its code's generic one: the field, offset or account that would make the
+// call work, or why no retry will. The tool's own words, never provider text.
+export const toolResultFixSchema = z.string().min(1).max(500);
+export const TOOL_SPILL_VIEW_MAX_CHARS = 8_000;
 export const toolResultSchema = <Data extends z.ZodType>(dataSchema: Data) =>
   z.discriminatedUnion('ok', [
     z.strictObject({
@@ -19,14 +23,16 @@ export const toolResultSchema = <Data extends z.ZodType>(dataSchema: Data) =>
       card: waldoCardSchema.optional(),
       source_taint: z.null(),
     }),
-    z.strictObject({ ok: z.literal(false), error: z.string().min(1), code: errorCodeSchema, source_taint: sourceTaintSchema.optional(), connect: connectIntentSchema.optional() }),
+    z.strictObject({ ok: z.literal(false), error: z.string().min(1), code: errorCodeSchema, source_taint: sourceTaintSchema.optional(), connect: connectIntentSchema.optional(), blocked: rungBlockedOutcomeSchema.optional(), fix: toolResultFixSchema.optional() }),
   ]);
 
 export type ToolResult<T> =
   | { ok: true; data: T; source_taint: SourceTaint; card?: WaldoCard }
   // connect (CONNECT_FLOW_DESIGN 4.4): a typed auth intent the responder turns into the channel's
   // connect affordance. Never a URL - the model only ever sees fixed words.
-  | { ok: false; error: string; code: ErrorCode; source_taint?: SourceTaint; connect?: ConnectIntent };
+  // blocked: why a page or site stopped the call, when the tool knows it for certain; the refusal's fix names the next rung.
+  // fix: the tool's own recovery step (toolResultFixSchema), shown in place of the code's generic one.
+  | { ok: false; error: string; code: ErrorCode; source_taint?: SourceTaint; connect?: ConnectIntent; blocked?: RungBlockedOutcome; fix?: string };
 
 // The trusted RunLoop V2 path provides this content-free capability only after it has committed
 // a durable effect intent. A handler that cannot reconcile a retry on this key must not be used
@@ -79,6 +85,8 @@ export const externalToolResultSchema = <Data extends z.ZodType>(dataSchema: Dat
       code: errorCodeSchema,
       source_taint: z.literal('external'),
       connect: connectIntentSchema.optional(),
+      blocked: rungBlockedOutcomeSchema.optional(),
+      fix: toolResultFixSchema.optional(),
     }),
   ]);
 
@@ -97,14 +105,44 @@ export const GENERAL_AGENT_TOOLS: readonly ToolName[] = [
 // the complete set here makes a null taint stamp unrepresentable at the dispatcher boundary.
 export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'query_calendar',
+  'query_availability',
   'get_communication',
+  'search_communication',
+  'search_contacts',
+  'read_thread',
   'get_tasks',
   'web_search',
   'read_document',
   'call_mcp_tool',
+  'read_mcp_tool',
+  // search_mcp_tools: tool names, titles and descriptions are the connected server's own text.
+  'search_mcp_tools',
+  'read_drive',
   'search_connector',
   'read_tool_output',
+  'read_artifact',
+  // workspace files hold owner uploads and agent text that can quote provider content; names and bodies are data.
+  'workspace_list',
+  'workspace_read',
+  'workspace_search',
+  'browse_page',
+  'browse_act',
+  // delegate_task: child handbacks carry whatever the child read (web, connector text), so the
+  // summary - and its failure text - is externally influenced and stamped 'external' end-to-end.
+  'delegate_task',
+  // findings are stored web text about the owner; reading them back keeps the taint they arrived with.
+  'list_owner_findings',
+  // read_import: an export's titles are the other assistant's words, and the owner's own messages there may paste anyone's.
+  'read_import',
 ];
+
+// Tools whose result is outside text on some calls only: each result carries its own stamp, and the dispatcher accepts
+// either. raise_approval: its list shows card text Waldo raised while working with outside text, such as an MCP card.
+// extract_archive: an archive the owner sent themselves is their own material, so its listing does not taint the turn and
+// their "unzip this" holds across the follow-up calls a large archive needs; any other archive (a forward, a mail
+// attachment, Waldo's own output) is outside text. get_weather: a forecast is the weather provider's text; a refusal or
+// "unavailable" is Waldo's own words.
+export const VARYING_ORIGIN_TOOLS: readonly ToolName[] = ['raise_approval', 'extract_archive', 'get_weather'];
 
 // A privileged action is any DIRECT external mutation or send (ADR-0049) — the conservative
 // superset the taint gate blocks, in tool-union order: the memory/Scribe write, execute_action,
@@ -121,7 +159,6 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
 // holds ONLY while it is unreachable: any change granting it an ACL MUST add it here in
 // the same change (pinned by handler.test's zero-ACL coupling guard).
 export const PRIVILEGED_ACTION_TOOLS: readonly ToolName[] = [
-  'update_memory',
   'execute_action',
   'send_message',
   'call_mcp_tool',
@@ -135,6 +172,10 @@ export const PRIVILEGED_ACTION_TOOLS: readonly ToolName[] = [
   'restore_message',
   'archive_thread',
   'update_thread_topics',
+  // Changing durable procedure availability is owner-controlled, never provider-authorized.
+  'skills_install',
+  'skills_disable',
+  'use_mac',
 ];
 
 // The single authority of the ADR-0049 taint gate, pure so hook and dispatcher share one law:
@@ -161,6 +202,15 @@ export function handlerAllowlistMatchesAcl(
   );
 }
 
+// Whether a handler can serve the owner at all, from deterministic host facts only (granted account scopes, deploy
+// configuration), never a reading of the message. A tool missing an account feature reports the connect intent a call
+// would return. Hosts check once per turn and keep the tool when the check fails; call-time auth still gates every call.
+export type ToolEligibility = Readonly<
+  | { ok: true }
+  | { ok: false; reason: 'not_configured' }
+  | { ok: false; reason: 'not_connected'; connect: ConnectIntent }
+>;
+
 // The ToolHandler seam (ADR-0029): name is the key the dispatcher routes on, typed as the
 // union so drift is a compile error; schema validates args at PreToolUse priority 200 and
 // autonomy_gated routes through the priority-300 gate (ADR-0032, ADR-0018) before
@@ -172,6 +222,37 @@ export interface ToolHandler<Args, Result, Ctx> {
   schema: z.ZodType<Args>;
   trigger_allowlist: readonly TriggerType[];
   autonomy_gated: boolean;
+  // mutates_state marks calls whose success changes state a repeated identical read would
+  // observe: desk proposals, external writes/sends, internal state changes. The tool loop
+  // keys its no-progress epoch reset on autonomy_gated || mutates_state so live mutation
+  // handlers (which are desk-routed, not privilege-gated) still open a new epoch.
+  mutates_state?: true;
+  // requires_connector marks a handler that cannot run without a live connector (for example a Google account).
+  // The host derives the connector_backed list for ACL intersection from this declaration, never from a host-supplied
+  // list that can be omitted (see connectorBackedTools in tools/acl-intersection.ts).
+  requires_connector?: true;
+  // turn_only_output marks a result that may hold the owner's health values: it reaches the model in the turn that
+  // asked and nowhere else. The cross-turn tool ledger and the unfinished-turn flush record a content-free line for it.
+  turn_only_output?: true;
+  // proposal_only marks a handler that never performs its effect: it only raises the owner's approval card, which
+  // carries the exact effect and performs it on Do it. The taint gate admits such a call with external arguments
+  // (core build plan H-2), because that card is the human confirm ADR-0049 requires. The dispatcher reads it per call
+  // from the handler it routes to, so a tool name alone never earns it.
+  proposal_only?: true;
+  // takes_why marks a proposing handler offered the optional `why` argument ("Why this changed"). The dispatcher takes it off
+  // the call before the arguments are checked and hands it on as claimedWhy, so it is never part of what the owner approves.
+  takes_why?: true;
+  // turn_bound marks a handler that runs only inside the live turn that called it (its run scope, an open browser session,
+  // a selection for that turn). An approval runs after the turn has ended, so such a call is never put on an approval card.
+  turn_bound?: true;
+  // spill: the view shown in place of a result too long to show, which is stored behind read_tool_output. It names every
+  // item with its id and a short summary, so the model sees the whole result and reads back only the part it needs.
+  // A view longer than TOOL_SPILL_VIEW_MAX_CHARS as JSON is no summary, and the stored result's first characters are shown
+  // instead, as when spill is absent. The view is built from the whole result, so it is shown even when the store kept only
+  // the start of it; the result then says what read_tool_output cannot reach.
+  spill?(data: Result): unknown;
+  // Absent means always eligible (connect_service must stay offered so an owner can connect).
+  eligible?(): ToolEligibility | Promise<ToolEligibility>;
   handle(args: Args, ctx: Ctx): Promise<ToolResult<Result>>;
   idempotentOnKey?: true;
   executeOrReconcile?(

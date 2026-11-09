@@ -1,0 +1,362 @@
+import { env } from 'cloudflare:workers';
+import { runInDurableObject } from 'cloudflare:test';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CalendarItem } from '../src/connectors/google';
+import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
+import { dayPlanBook } from '../src/channels/day-cards';
+import { loopBook } from '../src/channels/loops';
+import { schedulePreferences } from '../src/channels/schedule-preferences';
+import { standingGrants } from '../src/channels/standing-grants';
+import { FINAL_OUTBOX_KEY } from '../src/channels/telegram-final-outbox';
+import { updateBook } from '../src/channels/update-cards';
+import { HEALTH_TRIGGER_ID } from '../src/health/trigger';
+import { notifyOwnerZoneChange } from '../src/health/zone-change-route';
+import { armAlarm } from '../src/scheduler/alarm-slot';
+import { ensureSchema } from '../src/tracer/schema';
+import { presenceAuthority } from './helpers/directory-presence';
+
+// The health trigger end to end on the real owner object: a zone-change notice from the Worker, a real alarm pass, the
+// consented read of the derived row, one scripted model call, and the one approval card it ends in. The database, Google
+// and the model are fakes; every reading is synthetic and none may be found anywhere the trigger is not allowed to put it.
+const SECRET = 'router-secret-fixture-0000000000';
+const OWNER_ID = '4a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
+const NOW = Date.parse('2026-10-21T03:30:00Z'); // 09:00 in Kolkata
+const LEAKS = ['47.3', '37.9', '61.4', '52.6'];
+const REVIEW: CalendarItem = { id: 'gcal-review-1', title: 'Quarterly board review', status: 'confirmed', start: '2026-10-21T14:00:00+05:30', end: '2026-10-21T15:30:00+05:30', all_day: false, etag: 'r1' };
+const ROW = {
+  context: {
+    id: 'ctx-1', day: '2026-10-21', compiled_at: '2026-10-21T03:00:00Z', basis: [{ source: 'whoop', consent_epoch: 1 }], confidence: 0.8, freshness: 'fresh', drivers: [], tags: [],
+    recovery: { score: 47.3, zone: 'low', algorithm_version: 'recovery.candidate.v1', activation: 'candidate_unaccepted' },
+    form: { score: 37.9, zone: 'low', algorithm_version: 'form.candidate.v3', activation: 'candidate_unaccepted' },
+    weight: { score: 61.4, zone: 'high', algorithm_version: 'weight.candidate.v3', activation: 'candidate_unaccepted' },
+  },
+  previous: { day: '2026-10-20', form_score: 52.6, recovery_zone: 'good', weight_zone: 'moderate', basis: [{ source: 'whoop', consent_epoch: 1 }] },
+};
+
+const fixture = vi.hoisted(() => ({
+  event: null as CalendarItem | null, health: null as unknown, requests: [] as LLMGatewayRequest[], decision: '' as string, notice: '' as string, writes: 0, sent: [] as string[],
+  pushes: [] as unknown[][], targetsAsked: 0, otlp: [] as string[],
+}));
+vi.mock('../src/connectors/google', async load => {
+  const original = await load<typeof import('../src/connectors/google')>();
+  return { ...original, googleClient: (_app: unknown, _tokens: unknown, _fetch: unknown, _health: unknown, account: unknown) => ({
+    account, events: async () => (fixture.event ? [fixture.event] : []),
+    calendarPage: async () => ({ events: fixture.event ? [fixture.event] : [], next_page_token: null, fetched_count: 1, account, observed_at: new Date().toISOString() }),
+    event: async () => fixture.event, changedEvents: async () => [], newMail: async () => [],
+    updateEvent: async () => { fixture.writes += 1; throw new Error('the trigger must not write to Google'); },
+    createEvent: async () => { fixture.writes += 1; throw new Error('the trigger must not write to Google'); },
+  }) };
+});
+vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(),
+  createTelegramCaller: () => async (method: string, payload?: { text?: string }) => {
+    if (method !== 'sendMessage') return true;
+    fixture.sent.push(payload?.text ?? '');
+    return { message_id: 91, chat: { id: 7 } };
+  } }));
+vi.mock('../src/channels/telegram-turn', async load => {
+  const original = await load<typeof import('../src/channels/telegram-turn')>();
+  const gateway: LLMGatewayAdapter = { async complete(request) {
+    fixture.requests.push(request);
+    const format = request.request.response_format?.name;
+    const text = format === 'health_proposal' ? fixture.decision : format === 'health_notice' ? fixture.notice : format === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : 'SKIP';
+    return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
+  } };
+  return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
+});
+const { OwnerDO } = await import('../src/channels/owner-do');
+
+const CONFIG = { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture',
+  GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', WALDO_ROUTER_HMAC_SECRET: SECRET, SUPABASE_PROJECT_URL: 'https://edge.test', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable' };
+const LANGFUSE = { LANGFUSE_PUBLIC_KEY: 'pk-lf-synthetic', LANGFUSE_SECRET_KEY: 'sk-lf-synthetic', LANGFUSE_BASE_URL: 'https://langfuse.test', WALDO_ENVIRONMENT: 'staging' };
+const LANGFUSE_URL = 'https://langfuse.test/api/public/otel/v1/traces';
+const move = (start: string, end: string) => JSON.stringify({ kind: 'propose', action: 'move', item: 'e1', start, end, title: null, notify_guests: true, reason: 'Recovery is compromised; a later slot gives you a slower morning.' });
+
+let sequence = 0;
+const printed: string[] = [];
+beforeEach(() => {
+  fixture.event = REVIEW; fixture.health = ROW; fixture.requests = []; fixture.writes = 0; fixture.sent = []; fixture.pushes = []; fixture.targetsAsked = 0; fixture.otlp = []; printed.length = 0;
+  fixture.decision = move('2026-10-21T16:00', '2026-10-21T17:30');
+  vi.useFakeTimers({ toFake: ['Date'], now: NOW });
+  for (const method of ['log', 'info', 'warn', 'error'] as const) vi.spyOn(console, method).mockImplementation((...args: unknown[]) => { printed.push(args.map(String).join(' ')); });
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
+    const body = init?.body ? JSON.parse(String(init.body)) as Record<string, string | number> : {};
+    if (fn === 'common_owner_authority') return presenceAuthority(OWNER_ID, init?.body);
+    if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: body.p_do_name, state_version: 1, admission_revision: '5' });
+    if (fn === 'health_context_read') return Response.json(fixture.health);
+    if (fn === 'app_push_targets') { fixture.targetsAsked += 1; return Response.json([{ installation_id: '41000000-0000-4000-8000-000000000001', device_epoch: 1, token: 'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]' }]); }
+    if (String(input instanceof Request ? input.url : input) === LANGFUSE_URL) { fixture.otlp.push(String(init?.body)); return Response.json({}); }
+    if (String(input instanceof Request ? input.url : input) === 'https://exp.host/--/api/v2/push/send') { fixture.pushes.push(JSON.parse(String(init?.body))); return Response.json({ data: [{ status: 'ok', id: 'ticket' }] }); }
+    if (fn === 'assert_channel_presence' || fn === 'set_owner_settings') return Response.json(true);
+    return fn ? Response.json(null) : new Response('unexpected', { status: 500 });
+  });
+});
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers(); });
+
+const dump = (state: DurableObjectState) => JSON.stringify([
+  state.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE '\\_cf\\_%' ESCAPE '\\'").toArray().map(({ name }) => [name, state.storage.sql.exec(`SELECT * FROM "${name}"`).toArray()]),
+  [...state.storage.kv.list()],
+]);
+
+const withOwner = (work: (o: { owner: { fetch(request: Request): Promise<Response>; alarm(): Promise<void> }; state: DurableObjectState; doName: string; pass(): Promise<void>; notify(day?: string): Promise<void> }) => Promise<void>, config: object = CONFIG) => {
+  const doName = `health-trigger-do-${sequence++}`;
+  return runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName)), async (_i, state) => {
+    ensureSchema(state.storage);
+    state.storage.kv.put('do_name', doName); state.storage.kv.put('telegram_subject', '7');
+    await state.storage.put('origin', 'https://fixture.invalid');
+    await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
+    const owner = new OwnerDO(state, config as never) as unknown as { fetch(request: Request): Promise<Response>; alarm(): Promise<void> };
+    const notify = async (day = '2026-10-21') => notifyOwnerZoneChange({ idFromName: (name: string) => name as never, get: () => ({ fetch: (request: Request) => owner.fetch(request) }) }, SECRET, doName, day);
+    const pass = async () => { await armAlarm(state.storage, Date.now()); await state.storage.deleteAlarm(); state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm(); };
+    try { await work({ owner, state, doName, pass, notify }); } finally { await state.storage.deleteAlarm(); }
+  });
+};
+const runs = (state: DurableObjectState) => state.storage.sql.exec<{ local_day: string; mode: string; outcome: string; approval_id: string | null }>('SELECT local_day, mode, outcome, approval_id FROM health_trigger_runs').toArray();
+const evaluations = () => fixture.requests.filter(r => r.request.response_format?.name === 'health_proposal');
+
+describe('the health trigger on the owner object', () => {
+  it('turns a zone change and a coming meeting into one approval card, in zone words only, with nothing written to Google', async () => {
+    await withOwner(async ({ state, pass, notify }) => {
+      await notify();
+      expect(state.storage.sql.exec('SELECT day FROM health_trigger_pending').toArray()).toEqual([{ day: '2026-10-21' }]);
+      expect(state.storage.sql.exec<{ kind: string }>('SELECT kind FROM schedule WHERE id = ?', HEALTH_TRIGGER_ID).toArray()).toEqual([{ kind: 'patrol' }]);
+      await pass();
+      expect(evaluations()).toHaveLength(1);
+      const sent = JSON.stringify(evaluations()[0]!.request);
+      expect(sent).toContain('recovery compromised');
+      expect(sent).toContain('Quarterly board review');
+      const [run] = runs(state);
+      expect(run).toMatchObject({ local_day: '2026-10-21', mode: 'live', outcome: 'proposed' });
+      expect(run!.approval_id).toBeTruthy();
+      expect(fixture.writes).toBe(0);
+      expect(state.storage.sql.exec('SELECT day FROM health_trigger_pending').toArray()).toEqual([]);
+      for (const leak of LEAKS) for (const [where, text] of [['the model request', sent], ['tables and storage', dump(state)], ['printed lines', printed.join('\n')]] as const) expect(text, `${leak} in ${where}`).not.toContain(leak);
+    });
+  });
+
+  it('cards a block it proposes even with own-block grants on and one that covers it: a health-trigger run never uses a grant', async () => {
+    fixture.decision = JSON.stringify({ kind: 'propose', action: 'create', item: null, start: '2026-10-21T16:00', end: '2026-10-21T17:00', title: 'Quiet hour', block: 'rest', notify_guests: null, reason: 'A pause after the review.' });
+    await withOwner(async ({ state, pass, notify }) => {
+      standingGrants(state.storage, { now: () => NOW, newId: () => 'g1', enabled: () => true, ownerRef: () => OWNER_ID }).grant({
+        scope: { class: 'calendar.move_own_block', account: 'owner@example.test', window: { from: '08:00', to: '20:00' }, weekdays: [0, 1, 2, 3, 4, 5, 6], min_lead_minutes: 30 },
+        limits: { max_per_day: 3, timezone: 'Asia/Kolkata' }, valid_from: NOW - 60_000, expires_at: NOW + 86_400_000 }, 'app');
+      await notify();
+      await pass();
+      const [run] = runs(state);
+      expect(run).toMatchObject({ outcome: 'proposed' });
+      expect(fixture.writes).toBe(0);
+      expect(state.storage.sql.exec('SELECT status, grant_json FROM ledger WHERE id = ?', run!.approval_id).one()).toMatchObject({ grant_json: null });
+      expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', run!.approval_id).one().status).not.toBe('done');
+    }, { ...CONFIG, AUTONOMY_OWN_CALENDAR: '1' });
+  });
+
+  it('asks nothing of the model when health sharing is off: no readable row, no evaluation, the mark cleared', async () => {
+    fixture.health = null;
+    await withOwner(async ({ state, pass, notify }) => {
+      await notify();
+      await pass();
+      expect(evaluations()).toHaveLength(0);
+      expect(runs(state)).toEqual([]);
+      expect(state.storage.sql.exec('SELECT day FROM health_trigger_pending').toArray()).toEqual([]);
+    });
+  });
+
+  it('proposes nothing when the model judges the change does not matter', async () => {
+    fixture.decision = JSON.stringify({ kind: 'no_op', action: null, item: null, start: null, end: null, title: null, notify_guests: null, reason: '' });
+    await withOwner(async ({ state, pass, notify }) => {
+      await notify();
+      await pass();
+      expect(evaluations()).toHaveLength(1);
+      expect(runs(state)).toMatchObject([{ outcome: 'no_op', approval_id: null }]);
+    });
+  });
+
+  it('holds a change that arrives in quiet hours and still evaluates it when they end, through the real scheduler', async () => {
+    await withOwner(async ({ state, pass, notify }) => {
+      vi.setSystemTime(Date.parse('2026-10-20T17:30:00Z')); // 23:00 in Kolkata
+      // The change was marked on the 20th, so the row the read returns names the 20th; the evaluation after midnight is for that day.
+      fixture.health = { context: { ...ROW.context, day: '2026-10-20', compiled_at: '2026-10-20T17:00:00Z' }, previous: { ...ROW.previous, day: '2026-10-19' } };
+      loopBook(state.storage.sql, { newId: () => 'fixture', now: () => Date.now() }).setProactivity({ quiet_start: '22:00', quiet_end: '07:00', volume: 'normal' });
+      await notify('2026-10-20');
+      await pass();
+      expect(evaluations()).toHaveLength(0);
+      const held = state.storage.sql.exec<{ due_at: number }>('SELECT due_at FROM schedule WHERE id = ?', HEALTH_TRIGGER_ID).toArray();
+      expect(held).toHaveLength(1);
+      expect(held[0]!.due_at).toBe(Date.parse('2026-10-21T01:30:00Z')); // 07:00 in Kolkata
+      vi.setSystemTime(Date.parse('2026-10-21T03:30:00Z'));
+      await pass();
+      expect(evaluations()).toHaveLength(1);
+    });
+  });
+});
+
+describe('the push that tells the app a health card is up', () => {
+  const PUSH = { ...CONFIG, EXPO_ACCESS_TOKEN: 'synthetic-expo-access' };
+
+  it('sends one push once the card is up: fixed text and the approval id, nothing the card or the reading says', async () => {
+    await withOwner(async ({ state, pass, notify }) => {
+      await notify();
+      await pass();
+      const [run] = runs(state);
+      expect(run).toMatchObject({ outcome: 'proposed' });
+      expect(fixture.pushes).toHaveLength(1);
+      expect(fixture.pushes[0]).toEqual([{ to: 'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]', body: 'Waldo has a suggestion for your day', data: { trigger: 'approval', approval_id: run!.approval_id }, sound: 'default' }]);
+      const wire = JSON.stringify(fixture.pushes);
+      for (const text of [...LEAKS, 'Recovery', 'compromised', 'slower morning', 'Quarterly', 'low', 'depleted']) expect(wire, text).not.toContain(text);
+      await pass();
+      expect(fixture.pushes).toHaveLength(1);
+    }, PUSH);
+  });
+
+  it('sends nothing when health sharing is off: no health, no card, no push, and the device list is never read', async () => {
+    fixture.health = null;
+    await withOwner(async ({ state, pass, notify }) => {
+      await notify();
+      await pass();
+      expect(runs(state)).toEqual([]);
+      expect([fixture.pushes, fixture.targetsAsked]).toEqual([[], 0]);
+    }, PUSH);
+  });
+
+  it('sends nothing for a change held through quiet hours, nor when the model judges it does not matter', async () => {
+    await withOwner(async ({ state, pass, notify }) => {
+      loopBook(state.storage.sql, { newId: () => 'fixture', now: () => Date.now() }).setProactivity({ quiet_start: '07:00', quiet_end: '12:00', volume: 'normal' });
+      await notify();
+      await pass();
+      expect(evaluations()).toHaveLength(0);
+      expect([fixture.pushes, fixture.targetsAsked]).toEqual([[], 0]);
+    }, PUSH);
+    fixture.decision = JSON.stringify({ kind: 'no_op', action: null, item: null, start: null, end: null, title: null, notify_guests: null, reason: '' });
+    await withOwner(async ({ pass, notify }) => {
+      await notify();
+      await pass();
+      expect(evaluations()).toHaveLength(1);
+      expect(fixture.pushes).toEqual([]);
+    }, PUSH);
+  });
+});
+
+describe('the health trigger\'s traces', () => {
+  type Span = { name: string; attributes: { key: string; value: { stringValue?: string } }[] };
+  const spans = () => fixture.otlp.flatMap(body => (JSON.parse(body) as { resourceSpans: { scopeSpans: { spans: Span[] }[] }[] }).resourceSpans.flatMap(r => r.scopeSpans.flatMap(s => s.spans)));
+  const key = (span: Span) => span.attributes.find(a => a.key === 'langfuse.observation.metadata.trace_key')?.value.stringValue ?? '';
+
+  for (const capture of ['false', 'true']) {
+    it(`closes the run and its model call with machine roots, so both export, with no reading in them (capture ${capture})`, async () => {
+      await withOwner(async ({ state, pass, notify }) => {
+        await notify();
+        await pass();
+        expect(runs(state)).toMatchObject([{ outcome: 'proposed' }]);
+        const roots = state.storage.sql.exec<{ trace: string }>("SELECT trace FROM trace_log WHERE hop = 'machine_turn' ORDER BY trace").toArray().map(row => row.trace);
+        expect(roots).toEqual([expect.stringMatching(/^health-trigger:/), expect.stringMatching(/^health:/)]);
+        await vi.waitFor(() => expect(spans().filter(span => span.name.endsWith('.machine')).map(key).sort()).toEqual(roots));
+        const named = (prefix: string) => spans().filter(span => key(span).startsWith(prefix) && !span.name.endsWith('.machine')).map(span => span.name);
+        expect(named('health-trigger:')).toContain('health_trigger');
+        expect(named('health:').some(name => name.startsWith('llm_'))).toBe(true);
+        const wire = fixture.otlp.join('\n');
+        for (const leak of LEAKS) expect(wire, leak).not.toContain(leak);
+        if (capture === 'false') for (const said of ['Quarterly board review', 'recovery compromised', 'slower morning']) expect(wire, said).not.toContain(said);
+      }, { ...CONFIG, ...LANGFUSE, LANGFUSE_CAPTURE_TEXT: capture });
+    });
+  }
+});
+
+// A day with nothing on the owner's plate. With HEALTH_SOLO_NOTICE at "1", the model decides whether a note is worth it,
+// and one goes out as an update card through the final outbox. Off, the day stays as silent as it always was.
+describe('the health-only note on the owner object', () => {
+  const NOTE = 'Update\nRecovery is compromised after a short night. Nothing is booked today, so an easy evening would help.';
+  // The Expo token is set so a push, if the note path made one, would be seen: the only pushes are the Brief's and an approval's.
+  const ON = { ...CONFIG, HEALTH_SOLO_NOTICE: '1', EXPO_ACCESS_TOKEN: 'synthetic-expo-access' };
+  const notices = () => fixture.requests.filter(r => r.request.response_format?.name === 'health_notice');
+  const queued = (state: DurableObjectState) => (state.storage.kv.get<{ id: string; status: string; payload: { text: string }; update?: { recordId: number } }[]>(FINAL_OUTBOX_KEY) ?? []).filter(row => row.id.startsWith('health-notice:'));
+  beforeEach(() => { fixture.event = null; fixture.notice = JSON.stringify({ kind: 'notice', text: NOTE }); });
+
+  it('sends the note the model writes as one update card, which the next main card reads, with no reading stored anywhere', async () => {
+    await withOwner(async ({ state, pass, notify }) => {
+      await notify();
+      await pass();
+      expect([notices().length, evaluations().length]).toEqual([1, 0]);
+      const sent = JSON.stringify(notices()[0]!.request);
+      expect(sent).toContain('recovery compromised');
+      expect(sent).toContain('Nothing is on the owner');
+      expect(runs(state)).toMatchObject([{ local_day: '2026-10-21', mode: 'live', outcome: 'noticed', approval_id: null }]);
+      const [row] = queued(state);
+      expect(row).toMatchObject({ id: 'health-notice:2026-10-21', payload: { text: NOTE }, update: { recordId: expect.any(Number) } });
+      vi.setSystemTime(NOW + 5_000);
+      await pass();
+      expect(updateBook(state.storage.sql).unfolded('Asia/Kolkata')).toContain('sent as update: Update Recovery is compromised');
+      await notify();
+      vi.setSystemTime(NOW + 2 * 3_600_000);
+      await pass();
+      expect(notices()).toHaveLength(1);
+      expect(queued(state)).toHaveLength(1);
+      expect([fixture.pushes, fixture.targetsAsked]).toEqual([[], 0]);
+      for (const leak of LEAKS) for (const [where, text] of [['the model request', sent], ['tables and storage', dump(state)], ['printed lines', printed.join('\n')]] as const) expect(text, `${leak} in ${where}`).not.toContain(leak);
+    }, ON);
+  });
+
+  it('stays silent with the switch off: no model call, no run and nothing queued', async () => {
+    for (const config of [CONFIG, { ...CONFIG, HEALTH_SOLO_NOTICE: '0' }]) {
+      fixture.requests = [];
+      await withOwner(async ({ state, pass, notify }) => {
+        await notify();
+        await pass();
+        expect([notices().length, evaluations().length, runs(state), queued(state)]).toEqual([0, 0, [], []]);
+        expect(state.storage.sql.exec('SELECT day FROM health_trigger_pending').toArray()).toEqual([]);
+      }, config);
+    }
+  });
+
+  it('holds the note, before any model call, once the Close has gone out or the owner turned update cards off', async () => {
+    await withOwner(async ({ state, pass, notify }) => {
+      dayPlanBook(state.storage.sql).sent('2026-10-21', 'card:close');
+      await notify();
+      await pass();
+      expect([notices().length, queued(state)]).toEqual([0, []]);
+      expect(runs(state)).toMatchObject([{ outcome: 'notice_held' }]);
+    }, ON);
+    fixture.requests = [];
+    await withOwner(async ({ state, pass, notify }) => {
+      loopBook(state.storage.sql, { newId: () => 'fixture', now: () => Date.now() }).setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', followups: false });
+      await notify();
+      await pass();
+      expect([notices().length, queued(state)]).toEqual([0, []]);
+      expect(runs(state)).toMatchObject([{ outcome: 'notice_held' }]);
+    }, ON);
+  });
+
+  // Sharing can be revoked, or health proposals turned off, while a note waits in the outbox (a send that has to wait, a
+  // retry). The route checks again at send time, and a note it refuses ends unsent and is never retried or folded into a card.
+  it('drops a queued note, unsent, once health sharing is revoked or health proposals are turned off before it goes out', async () => {
+    const turnings = [
+      () => { fixture.health = null; },
+      (state: DurableObjectState) => schedulePreferences(state.storage.sql, loopBook(state.storage.sql, { newId: () => 'fixture', now: () => Date.now() })).set('health_proposals', false),
+    ];
+    for (const turnOff of turnings) {
+      fixture.health = ROW; fixture.sent = []; fixture.requests = [];
+      vi.setSystemTime(NOW);
+      await withOwner(async ({ state, pass, notify }) => {
+        await notify();
+        await pass();
+        expect(queued(state)).toMatchObject([{ id: 'health-notice:2026-10-21', status: 'pending' }]);
+        turnOff(state);
+        for (const at of [NOW + 5_000, NOW + 15 * 60_000]) {
+          vi.setSystemTime(at);
+          await pass();
+        }
+        expect(queued(state)).toMatchObject([{ status: 'blocked' }]);
+        expect(fixture.sent.filter(text => text.includes('Recovery is compromised'))).toEqual([]);
+        expect(updateBook(state.storage.sql).unfolded('Asia/Kolkata')).not.toContain('Recovery is compromised');
+      }, ON);
+    }
+  });
+
+  it('asks nothing of the model when health sharing is off', async () => {
+    fixture.health = null;
+    await withOwner(async ({ state, pass, notify }) => {
+      await notify();
+      await pass();
+      expect([notices().length, runs(state), queued(state)]).toEqual([0, [], []]);
+    }, ON);
+  });
+});

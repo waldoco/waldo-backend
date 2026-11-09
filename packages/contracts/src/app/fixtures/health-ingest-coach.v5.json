@@ -1,0 +1,188 @@
+{
+  "notes": [
+    "Synthetic values only. Send x-waldo-app-contract: health=5 (or later) with these readings; a backend that does not know a signal yet rejects that reading alone on the receipt (per-sample, revision 3).",
+    "A workout keeps activity (its type), value (its minutes), start_at/end_at and energy_kcal as before. Every other workout key is optional: send what HealthKit has for that session and leave the rest out, never a zero.",
+    "hr_zones.seconds are the time in zones 1-5, bucketed on the phone from the session's heart-rate samples on the bounds it names; lower_bounds_bpm are where zones 2-5 start. Their sum fits inside the session (one minute of slack).",
+    "effort.method is 'rated' for HKQuantityTypeIdentifierWorkoutEffortScore and 'estimated' for estimatedWorkoutEffortScore.",
+    "To enrich a workout already uploaded, send it again at a higher revision; the same revision with other content is revision_conflict.",
+    "Phone-computed beat-to-beat RMSSD goes out as hrv_window (method rmssd, n_beats) or overnight_hrv (method rmssd): never on an SDNN reading.",
+    "A fully described workout is under 1 KiB; split uploads by bytes (98,304) as well as by count (128)."
+  ],
+  "request": {
+    "request_id": "health-upload-coach-0001",
+    "source": "apple",
+    "consent_epoch": 1,
+    "timezone": "Asia/Kolkata",
+    "anchor_before": null,
+    "anchor_after": "opaque-anchor-coach-1",
+    "samples": [
+      {
+        "revision": 1793400000,
+        "day": "2026-10-30",
+        "utc_offset_minutes": 330,
+        "sample_id": "HK:1F0E7C9A-0000-4000-8000-000000000001",
+        "origin": {
+          "read_api": "healthkit",
+          "source_bundle_id": "com.apple.health.00000000-0000-0000-0000-000000000000",
+          "source_package_name": null,
+          "source_version": "11.1",
+          "source_revision": null,
+          "device_ref": null,
+          "recording_method": "active",
+          "manufacturer": "Apple Inc.",
+          "product_type": "Watch7,5"
+        },
+        "start_at": "2026-10-30T06:00:00+05:30",
+        "end_at": "2026-10-30T07:00:00+05:30",
+        "signal": "workout",
+        "unit": "minutes",
+        "activity": "running",
+        "value": 58,
+        "energy_kcal": 640,
+        "distance_m": 12400,
+        "elevation_gain_m": 85,
+        "avg_hr_bpm": 152,
+        "max_hr_bpm": 181,
+        "hr_zones": {
+          "basis": "heart_rate_reserve",
+          "lower_bounds_bpm": [
+            120,
+            136,
+            151,
+            166
+          ],
+          "seconds": [
+            300,
+            900,
+            1500,
+            600,
+            180
+          ]
+        },
+        "effort": {
+          "score": 7,
+          "method": "rated"
+        },
+        "running": {
+          "power_w": 285,
+          "cadence_spm": 176,
+          "stride_length_m": 1.21,
+          "vertical_oscillation_cm": 8.4,
+          "ground_contact_ms": 238
+        }
+      },
+      {
+        "revision": 1793400000,
+        "day": "2026-10-30",
+        "utc_offset_minutes": 330,
+        "sample_id": "HK:1F0E7C9A-0000-4000-8000-000000000002",
+        "origin": {
+          "read_api": "healthkit",
+          "source_bundle_id": "com.apple.health.00000000-0000-0000-0000-000000000000",
+          "source_package_name": null,
+          "source_version": "11.1",
+          "source_revision": null,
+          "device_ref": null,
+          "recording_method": "active",
+          "manufacturer": "Apple Inc.",
+          "product_type": "Watch7,5"
+        },
+        "start_at": "2026-10-30T17:00:00+05:30",
+        "end_at": "2026-10-30T18:30:00+05:30",
+        "signal": "workout",
+        "unit": "minutes",
+        "activity": "cycling",
+        "value": 90,
+        "distance_m": 41000,
+        "avg_hr_bpm": 138,
+        "max_hr_bpm": 166,
+        "cycling": {
+          "power_w": 212,
+          "cadence_rpm": 88
+        },
+        "effort": {
+          "score": 6.4,
+          "method": "estimated"
+        }
+      },
+      {
+        "revision": 1793400000,
+        "day": "2026-10-30",
+        "utc_offset_minutes": 330,
+        "sample_id": "HK:1F0E7C9A-0000-4000-8000-000000000003",
+        "origin": {
+          "read_api": "healthkit",
+          "source_bundle_id": "com.apple.health.00000000-0000-0000-0000-000000000000",
+          "source_package_name": null,
+          "source_version": "11.1",
+          "source_revision": null,
+          "device_ref": null,
+          "recording_method": "active",
+          "manufacturer": "Apple Inc.",
+          "product_type": "Watch7,5"
+        },
+        "start_at": "2026-10-30T19:00:00+05:30",
+        "end_at": "2026-10-30T19:40:00+05:30",
+        "signal": "workout",
+        "unit": "minutes",
+        "activity": "swimming",
+        "value": 40,
+        "distance_m": 2000,
+        "swimming": {
+          "strokes": 1480
+        }
+      },
+      {
+        "revision": 1793400000,
+        "day": "2026-10-30",
+        "utc_offset_minutes": 330,
+        "sample_id": "HK:2A00B000-0000-4000-8000-000000000004",
+        "start_at": "2026-10-30T07:30:00+05:30",
+        "end_at": "2026-10-30T07:30:00+05:30",
+        "signal": "body_mass",
+        "unit": "kilograms",
+        "value": 72.4
+      },
+      {
+        "revision": 1793400000,
+        "day": "2026-10-30",
+        "utc_offset_minutes": 330,
+        "sample_id": "HK:2A00B000-0000-4000-8000-000000000005",
+        "start_at": "2026-10-30T07:30:00+05:30",
+        "end_at": "2026-10-30T07:30:00+05:30",
+        "signal": "body_fat_percentage",
+        "unit": "percent",
+        "value": 14.2
+      },
+      {
+        "revision": 1793400000,
+        "day": "2026-10-30",
+        "utc_offset_minutes": 330,
+        "sample_id": "HK:2A00B000-0000-4000-8000-000000000006",
+        "start_at": "2026-10-30T07:30:00+05:30",
+        "end_at": "2026-10-30T07:30:00+05:30",
+        "signal": "lean_body_mass",
+        "unit": "kilograms",
+        "value": 61.9
+      },
+      {
+        "revision": 1793400000,
+        "day": "2026-10-30",
+        "utc_offset_minutes": 330,
+        "sample_id": "apple:stand_hour:2026-10-30T09",
+        "start_at": "2026-10-30T09:00:00+05:30",
+        "end_at": "2026-10-30T10:00:00+05:30",
+        "signal": "stand_hour",
+        "unit": "count",
+        "value": 1
+      }
+    ],
+    "deletions": [
+      {
+        "sample_id": "HK:2A00B000-0000-4000-8000-000000000099",
+        "signal": "body_mass",
+        "revision": 1793400100
+      }
+    ]
+  }
+}

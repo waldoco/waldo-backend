@@ -101,3 +101,17 @@ Meta's Muse security post (full text, live), dps X post (verbatim via syndicatio
 screenshots (owner-provided), our current code (verified per claim). dps full-activity review:
 only the one post fetched so far; a full timeline needs a logged-in browser session - flagged
 as follow-up, not guessed.
+
+## September 29 addendum: Dots in the same experience comparison
+
+Source boundary: the [Dots launch URL](https://openai.com/index/introducing-dots/) returned HTTP 403 to independent retrieval. The owner supplied a transcription attributed to that page; **none of these Dots claims was independently verified or exercised**. This is not evidence about OpenAI internals or reliability. The Muse comparison above remains its dated September 25 snapshot.
+
+| Dimension | Dots launch-text claim (unverified transcription) | Waldo implication, not a parity finding |
+|---|---|---|
+| Persistent work | Always-on primary dot, separate cloud computer and browser, several projects, progress/questions across ChatGPT, Slack and Teams; texting described as future. | Measure real task completion, resumability and interruption burden against identical scenarios. A computer alone is not an owned responsibility. |
+| Skills/connectors | GPT-6 Astra and 4,000+ app plugins claimed, with feedback-driven preferences. | Compare useful connected workflows and safe permissions, not nominal plugin count or model brand. |
+| Proactive safety | Background app research described as read-only; Custom Rules allow/ask/block, automatic consequential-action review and Activity View. | Keep Waldo event detection, permission checks and effect receipts distinct; test the no-send/no-write boundary and useful interruption precision. |
+| Secrets and visibility | Saved-password sign-in without exposing passwords to the model; computer is inspectable; laptop access is separately permissioned. | Test credential custody, takeover and consent, with no claim of equivalent isolation until demonstrated. |
+| Rollout/cost | First dot included in Pro/Business Premium; Enterprise beta and deeper-work allowance described, eligible-market limited. | Do not infer per-user operating cost or Indian availability from plan inclusion. |
+
+Meta Muse, Instinct, Poke and Dots all set a useful-experience comparison, but this source is only a transcribed launch claim. The benchmark still needs observed tasks, outcomes, failures and repeated runs; none of these products' marketing establishes Waldo parity.

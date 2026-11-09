@@ -7,7 +7,7 @@ import { updateCardPrompt } from '../src/prompt/update-cards';
 
 let sequence = 0;
 const withSql = <T>(fn: (sql: SqlStorage) => T) =>
-  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`loops-${sequence++}`)), (_instance, state) => fn(state.storage.sql));
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`loops-${sequence++}`)), (_instance, state) => fn(state.storage.sql));
 const at = (iso: string) => Date.parse(iso);
 const run = (handler: ReturnType<typeof loopHandlers>[number], args: unknown) => (handler.handle as (input: unknown) => Promise<unknown>)(handler.schema.parse(args));
 
@@ -24,6 +24,54 @@ describe('open loops', () => {
       expect(closed).toMatchObject({ ok: true, data: { closed: true } });
       expect(book.close('o1', 'done')).toBe(false);
       expect(loopsSection(book, 'Asia/Kolkata')).toBe('Waldo is on\n- Check how the late call went (due 2026-09-24 18:00) [o2]\n- done: Find a physio near Indiranagar (2026-09-24)');
+    });
+  });
+
+  // An approved close card replays close_loop. When the loop already closed some other way, the replay must fail so the
+  // owner is told nothing changed, and the reason never repeats a title that may have come from a mail.
+  it('close_loop fails when nothing closes: an unknown id, or a loop already closed as done or dropped', async () => {
+    await withSql(async (sql) => {
+      let id = 0;
+      const book = loopBook(sql, { newId: () => String(++id), now: () => at('2026-09-24T04:00:00Z') });
+      const close = loopHandlers(book).find((handler) => handler.name === 'close_loop')!;
+      const paid = book.open({ title: 'Pay City Power', due: null });
+      const passport = book.open({ title: 'Renew the passport', due: null });
+      book.close(paid.id, 'done');
+      book.close(passport.id, 'dropped');
+      for (const [loopId, why] of [[paid.id, 'already closed as done'], [passport.id, 'already closed as dropped'], ['o-unknown', 'no loop with']] as const) {
+        const result = await run(close, { id: loopId, outcome: 'done' });
+        expect(result).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining(why) });
+        expect(JSON.stringify(result)).not.toContain('City Power');
+        expect(JSON.stringify(result)).not.toContain('passport');
+      }
+      expect([book.get(paid.id)?.status, book.get(passport.id)?.status]).toEqual(['done', 'dropped']);
+    });
+  });
+});
+
+describe('proactive follow-ups are on by default, per-owner opt-out', () => {
+  it('is on until the owner turns it off, kept when later calls omit it, and shown in the ledger line only when off', async () => {
+    await withSql(async (sql) => {
+      const book = loopBook(sql, { newId: () => 'x', now: () => at('2026-09-24T04:00:00Z') });
+      expect(book.proactivity().followups).not.toBe(false);
+      expect(proactivityLine(book.proactivity())).not.toContain('follow-ups');
+      book.setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', followups: false });
+      expect(book.proactivity().followups).toBe(false);
+      expect(proactivityLine(book.proactivity())).toBe('Proactivity: volume normal; no quiet hours; follow-ups off');
+      book.setProactivity({ quiet_start: '23:00', quiet_end: '07:00', volume: 'low' });
+      expect(book.proactivity().followups).toBe(false);
+      book.setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', followups: true });
+      expect(book.proactivity().followups).toBe(true);
+      expect(proactivityLine(book.proactivity())).not.toContain('follow-ups');
+    });
+  });
+  it('the set_proactivity tool accepts the field and rejects a non-boolean', async () => {
+    await withSql(async (sql) => {
+      const book = loopBook(sql, { newId: () => 'x', now: () => at('2026-09-24T04:00:00Z') });
+      const tool = loopHandlers(book).find((h) => h.name === 'set_proactivity')!;
+      await run(tool, { quiet_start: null, quiet_end: null, volume: 'normal', followups: false });
+      expect(book.proactivity().followups).toBe(false);
+      expect(() => tool.schema.parse({ quiet_start: null, quiet_end: null, volume: 'normal', followups: 'no' })).toThrow();
     });
   });
 });
@@ -54,15 +102,46 @@ describe('update card feedback', () => {
   it('records owner ratings on sent cards only and feeds them to the next update prompt', async () => {
     await withSql((sql) => {
       const updates = updateBook(sql);
-      const sent = updates.record('2026-09-24', 1, [{ source: 'calendar', kind: 'cancelled', detail: 'standup' }], 'Update\nStandup is off, you have 10-11 free.');
+      const sent = updates.record('2026-09-24', 1, [{ source: 'calendar', kind: 'cancelled', detail: 'standup' }], 'Standup is off, you have 10-11 free.');
       const held = updates.record('2026-09-24', 2, [{ source: 'mail', kind: 'new', detail: 'newsletter' }], null);
       expect(updates.rate(sent, 'useful')).toBe(true);
       expect(updates.rate(held, 'not useful')).toBe(false);
       const feedback = updates.feedback();
-      expect(feedback).toBe('- useful: Update Standup is off, you have 10-11 free.');
+      expect(feedback).toBe('- useful: Standup is off, you have 10-11 free.');
       const prompt = updateCardPrompt('2026-09-24T10:00', { changes: '- x', ledger: '', feedback, volume: 'high' });
-      expect(prompt).toContain('<feedback>\n- useful: Update Standup is off');
+      expect(prompt).toContain('<feedback>\n- useful: Standup is off');
       expect(prompt).toContain('also share smaller changes');
     });
+  });
+});
+
+describe('openLoopsPrompt', () => {
+  it('lists only open owner or agent made loops, with due, and is empty when none', async () => {
+    const { openLoopsPrompt } = await import('../src/channels/loops');
+    const rows: Array<Record<string, unknown>> = [];
+    const book = { list: () => rows } as never;
+    expect(openLoopsPrompt(book, 'UTC', 10_000)).toBe('');
+    rows.push({ id: 'a1', title: 'Send the shortlist', due: '2026-10-09T10:00', source_ref: null }, { id: 'b2', title: 'From mail', due: null, source_ref: 'gmail:x' });
+    const text = openLoopsPrompt(book, 'UTC', 10_000);
+    expect(text).toContain('Send the shortlist (due 2026-10-09 10:00) [a1]');
+    expect(text).not.toContain('From mail');
+  });
+  it('budgets to the room it is given, keeps soonest-due first and names what it left out', async () => {
+    const { openLoopsPrompt } = await import('../src/channels/loops');
+    const rows = Array.from({ length: 50 }, (_, i) => ({ id: `b${i}`, title: `Task ${i} ${'a'.repeat(100)}`, due: null, source_ref: null }));
+    const book = { list: () => rows } as never;
+    const text = openLoopsPrompt(book, 'UTC', 1000);
+    expect(text.length).toBeLessThanOrEqual(1000);
+    expect(text).toMatch(/\(\d+ more open loops exist beyond this list/);
+    const shown = (text.match(/^- /gm) ?? []).length;
+    expect(text).toContain(`(${50 - shown} more open loops exist beyond this list`);
+    expect(openLoopsPrompt(book, 'UTC', 10)).toBe('');
+    // A long row never hides a shorter one behind it, and when nothing fits the omission line still says loops exist.
+    const mixed = { list: () => [{ id: 'l1', title: 'x'.repeat(200), due: '2026-10-09T10:00', source_ref: null }, { id: 's2', title: 'short', due: null, source_ref: null }] } as never;
+    expect(openLoopsPrompt(mixed, 'UTC', 230)).toContain('- short [s2]');
+    expect(openLoopsPrompt(mixed, 'UTC', 230)).toContain('(1 more open loops exist beyond this list');
+    const none = openLoopsPrompt({ list: () => [{ id: 'l1', title: 'x'.repeat(200), due: null, source_ref: null }] } as never, 'UTC', 170);
+    expect(none).toContain('(1 more open loops exist beyond this list');
+    expect(none).not.toContain('xxxx');
   });
 });

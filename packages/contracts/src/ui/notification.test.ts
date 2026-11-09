@@ -27,6 +27,14 @@ const baseNotice = {
 } as const;
 
 describe('pushNotification', () => {
+  it('accepts an event push that carries its trigger alone, and refuses one that carries a card, a zone word or an approval', () => {
+    expect(pushNotificationSchema.safeParse({ trigger: 'event' }).success).toBe(true);
+    expect(pushNotificationSchema.safeParse({ trigger: 'event', card_ref: 'card:brief' }).success).toBe(false);
+    expect(pushNotificationSchema.safeParse({ trigger: 'event', form_zone: 'flagging' }).success).toBe(false);
+    for (const zone of [{ recovery_zone: 'mixed' }, { load_zone: 'heavy' }]) expect(pushNotificationSchema.safeParse({ trigger: 'event', ...zone }).success).toBe(false);
+    expect(pushNotificationSchema.safeParse({ trigger: 'event', approval_id: 'appr_01' }).success).toBe(false);
+  });
+
   it('accepts a zone-word alert payload with a stable card ref', () => {
     expect(pushNotificationSchema.safeParse(basePush).success).toBe(true);
   });
@@ -69,6 +77,42 @@ describe('pushNotification', () => {
 
   it('rejects an empty card_ref (stable IDs only)', () => {
     expect(pushNotificationSchema.safeParse({ ...basePush, card_ref: '' }).success).toBe(false);
+  });
+});
+
+describe('pushNotification for an approval', () => {
+  it('accepts the approval trigger with the id of the approval it opens', () => {
+    expect(pushNotificationSchema.safeParse({ trigger: 'approval', approval_id: 'p0001' }).success).toBe(true);
+  });
+
+  it.each([
+    ['no approval id', { trigger: 'approval' }],
+    ['an approval id on another trigger', { trigger: 'patrol', approval_id: 'p0001' }],
+    ['an id that is not an approval id', { trigger: 'approval', approval_id: 'not an id' }],
+    ['an empty approval id', { trigger: 'approval', approval_id: '' }],
+    ['a zone word', { trigger: 'approval', approval_id: 'p0001', form_zone: 'flagging' }],
+    ['a reason', { trigger: 'approval', approval_id: 'p0001', reason: 'A short night.' }],
+    ['a variant', { trigger: 'approval', approval_id: 'p0001', variant: 'morning' }],
+  ] as const)('rejects %s', (_shape, payload) => {
+    expect(pushNotificationSchema.safeParse(payload).success).toBe(false);
+  });
+});
+
+describe('pushNotification for an update to the day', () => {
+  it('accepts the update trigger alone, or with the day card it revised', () => {
+    expect(pushNotificationSchema.safeParse({ trigger: 'update' }).success).toBe(true);
+    expect(pushNotificationSchema.safeParse({ trigger: 'update', card_ref: 'card:brief' }).success).toBe(true);
+  });
+
+  it.each([
+    ['a zone word', { trigger: 'update', form_zone: 'flagging' }],
+    ['a load word', { trigger: 'update', card_ref: 'card:brief', load_zone: 'peak' }],
+    ['a variant', { trigger: 'update', variant: 'morning' }],
+    ['an approval id', { trigger: 'update', approval_id: 'p0001' }],
+    ['an empty card ref', { trigger: 'update', card_ref: '' }],
+    ['the changed meeting', { trigger: 'update', title: 'Sync with Krati' }],
+  ] as const)('rejects %s', (_shape, payload) => {
+    expect(pushNotificationSchema.safeParse(payload).success).toBe(false);
   });
 });
 

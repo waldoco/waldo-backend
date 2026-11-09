@@ -18,6 +18,7 @@
 // capability, an unbounded search_tools query or limit.
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { LLM_TOOLS_MAX } from '../adapters/llm';
 import { triggerTypeSchema } from '../core/trigger';
 import {
   ALWAYS_ON_TOOLS,
@@ -33,27 +34,40 @@ const triggersGranting = (tool: string): readonly string[] =>
   );
 
 describe('toolName', () => {
-  it('is exactly the 42 canonical tools, in order', () => {
+  it('matches the canonical closed tool registry in order', () => {
     expect(toolNameSchema.options).toEqual([
       'get_crs',
       'get_health',
       'query_calendar',
       'get_communication',
+      'search_communication',
+      'read_thread',
       'get_tasks',
       'get_master_metrics',
       'get_context',
+      'query_availability',
       'read_memory',
-      'update_memory',
+      'remember',
+      'forget_memory',
       'search_episodes',
       'propose_action',
       'execute_action',
       'send_message',
       'web_search',
       'read_document',
+      'list_artifacts',
+      'read_artifact',
       'call_mcp_tool',
+      'read_mcp_tool',
+      'search_mcp_tools',
+      'read_drive',
       'write_task',
       'update_task',
       'draft_document',
+      'create_artifact',
+      'revise_artifact',
+      'restore_artifact',
+      'export_artifact',
       'draft_email',
       'send_email',
       'search_connector',
@@ -70,13 +84,76 @@ describe('toolName', () => {
       'list_reminders',
       'cancel_reminder',
       'propose_calendar_change',
+      'propose_google_task_change',
       'open_loop',
       'close_loop',
+      'raise_approval',
+      'approve_shown',
+      'track_responsibility',
+      'update_todo',
+      'list_responsibilities',
+      'close_responsibility',
       'set_proactivity',
+      'set_schedule_preference',
       'read_tool_output',
       'connect_service',
+      'send_console_link',
       'browse_page',
       'browse_act',
+      'delegate_task',
+      'log_meal',
+      'log_workout',
+      'list_health_logs',
+      'delete_health_log',
+      'set_sleep_need',
+      'track_medication',
+      'log_medication',
+      'list_medications',
+      'stop_medication',
+      'set_standing_order',
+      'list_standing_orders',
+      'cancel_standing_order',
+      'propose_standing_grant',
+      'revoke_standing_grant',
+      'pause_autonomy',
+      'workspace_list',
+      'workspace_read',
+      'workspace_search',
+      'workspace_write',
+      'workspace_render',
+      'extract_archive',
+      'skills_list',
+      'skills_install',
+      'skills_disable',
+      'skills_load',
+      'use_mac',
+      'search_contacts',
+      'send_progress_note',
+      'owner_message_heard',
+      'attach_file',
+      'start_task',
+      'cancel_task',
+      'record_owner_finding',
+      'list_owner_findings',
+      'react_to_message',
+      'connect_app',
+      'send_agent_mail',
+      'offer_replies',
+      'search_history',
+      'get_screen_time',
+      'get_device_context',
+      'get_weather',
+      'propose_calendar_plan',
+      'set_quest',
+      'set_experiment',
+      'review_experiment',
+      'check_task',
+      'query_phone_calendar',
+      'steer_task',
+      'show_chart',
+      'show_health_chart',
+      'read_import',
+      'import_memories',
     ]);
   });
 
@@ -97,99 +174,165 @@ describe('TOOL_PERMISSIONS', () => {
     }
   });
 
+  it('every ACL fits the LLM request tools cap - drift here killed every live turn (2026-09-27)', () => {
+    // contracts/adapters/llm.ts validates the declared tools array with .max(LLM_TOOLS_MAX).
+    // user_message grants the full ratified surface minus execute_code, so the union growing
+    // past the cap made EVERY user_message turn fail validation in 0ms. This parity check
+    // fails CI instead.
+    for (const trigger of triggerTypeSchema.options) {
+      expect(TOOL_PERMISSIONS[trigger].length).toBeLessThanOrEqual(LLM_TOOLS_MAX);
+    }
+  });
+
   it('grants exactly the ADR-pinned ACL per trigger — any membership or order drift fails', () => {
     expect(TOOL_PERMISSIONS).toEqual({
       brief: [
         'get_crs',
         'get_health',
+        'get_screen_time',
+        'get_device_context',
+        'get_weather',
         'query_calendar',
+        'query_phone_calendar',
         'connect_service',
         'get_communication',
+        'search_communication',
+        'read_thread',
         'get_tasks',
         'get_master_metrics',
         'get_context',
+        'query_availability',
         'read_memory',
         'search_episodes',
         'search_connector',
         'propose_action',
         'send_message',
+        'skills_load',
       ],
-      fetch_alert: ['get_crs', 'get_health', 'read_memory', 'propose_action', 'send_message'],
-      patrol: ['get_crs', 'get_health', 'read_memory', 'search_connector', 'propose_action'],
+      fetch_alert: ['get_crs', 'get_health', 'get_screen_time', 'get_device_context', 'get_weather', 'read_memory', 'propose_action', 'send_message', 'skills_load'],
+      patrol: ['get_crs', 'get_health', 'get_screen_time', 'get_device_context', 'get_weather', 'read_memory', 'search_connector', 'propose_action', 'skills_load'],
       pre_brief_sweep: [
         'get_crs',
         'get_health',
+        'get_screen_time',
         'query_calendar',
         'connect_service',
         'get_communication',
+        'search_communication',
+        'read_thread',
         'get_tasks',
         'get_master_metrics',
         'get_context',
+        'query_availability',
         'read_memory',
         'search_episodes',
         'search_connector',
+        'skills_load',
       ],
       handoff_explore: [
         'get_crs',
         'get_health',
+        'get_screen_time',
         'query_calendar',
+        'query_phone_calendar',
         'connect_service',
         'get_communication',
+        'search_communication',
+        'read_thread',
         'get_tasks',
         'get_master_metrics',
         'get_context',
+        'query_availability',
         'read_memory',
         'search_episodes',
         'search_connector',
         'web_search',
         'browse_page',
         'read_document',
+        'list_artifacts',
+        'read_artifact',
         'search_tools',
+        'skills_load',
       ],
-      handoff_plan: ['get_crs', 'get_health', 'query_calendar', 'connect_service', 'get_tasks', 'propose_action'],
+      handoff_plan: ['get_crs', 'get_health', 'get_screen_time', 'get_device_context', 'get_weather', 'query_calendar', 'query_phone_calendar', 'connect_service', 'get_tasks', 'propose_action', 'skills_load'],
       handoff_act: [
         'execute_action',
         'write_task',
         'update_task',
         'draft_document',
+        'create_artifact',
+        'revise_artifact',
         'draft_email',
         'propose_schedule',
         'write_sheet_cell',
         'send_message',
+        'skills_load',
       ],
       handoff_replan: [
         'get_crs',
         'get_health',
+        'get_screen_time',
         'query_calendar',
         'connect_service',
         'get_tasks',
         'update_task',
         'propose_action',
+        'skills_load',
       ],
-      intervention: ['get_crs', 'get_health', 'read_memory', 'update_task', 'propose_action'],
+      intervention: ['get_crs', 'get_health', 'get_screen_time', 'get_device_context', 'get_weather', 'query_phone_calendar', 'read_memory', 'update_task', 'propose_action', 'skills_load'],
       user_message: [
+        'use_mac',
         'get_crs',
         'get_health',
+        'get_screen_time',
+        'get_device_context',
+        'get_weather',
         'query_calendar',
+        'query_phone_calendar',
         'connect_service',
+        'send_console_link',
+        'connect_app',
+        'send_progress_note',
+        'owner_message_heard',
+        'attach_file',
+        'react_to_message',
         'get_communication',
+        'search_communication',
+        'search_contacts',
+        'read_thread',
         'get_tasks',
         'get_master_metrics',
         'get_context',
+        'query_availability',
         'read_memory',
-        'update_memory',
+        'remember',
+        'forget_memory',
         'search_episodes',
         'search_connector',
         'web_search',
         'browse_page',
         'browse_act',
+        'delegate_task',
         'read_document',
+        'list_artifacts',
+        'read_artifact',
         'call_mcp_tool',
+        'read_mcp_tool',
+        'search_mcp_tools',
+        'read_drive',
         'write_task',
         'update_task',
         'draft_document',
+        'create_artifact',
+        'revise_artifact',
+        'restore_artifact',
+        'export_artifact',
         'draft_email',
         'send_email',
+        'send_agent_mail',
+        'offer_replies',
+        'show_chart',
+        'show_health_chart',
         'propose_schedule',
         'write_sheet_cell',
         'propose_action',
@@ -205,12 +348,55 @@ describe('TOOL_PERMISSIONS', () => {
         'list_reminders',
         'cancel_reminder',
         'propose_calendar_change',
+        'propose_calendar_plan',
+      'propose_google_task_change',
         'open_loop',
         'close_loop',
+        'raise_approval',
+        'approve_shown',
+        'track_responsibility',
         'set_proactivity',
+        'set_schedule_preference',
+        'set_quest',
+        'set_experiment',
+        'review_experiment',
         'read_tool_output',
+        'log_meal',
+        'log_workout',
+        'list_health_logs',
+        'delete_health_log',
+        'set_sleep_need',
+        'track_medication',
+        'log_medication',
+        'list_medications',
+        'stop_medication',
+        'set_standing_order',
+        'list_standing_orders',
+        'cancel_standing_order',
+        'propose_standing_grant',
+        'revoke_standing_grant',
+        'pause_autonomy',
+        'workspace_list',
+        'workspace_read',
+        'workspace_search',
+        'workspace_write',
+        'workspace_render',
+        'extract_archive',
+      'skills_list',
+      'skills_install',
+      'skills_disable',
+      'skills_load',
+      'start_task',
+      'cancel_task',
+      'check_task',
+      'steer_task',
+      'record_owner_finding',
+      'list_owner_findings',
+      'read_import',
+      'import_memories',
+      'search_history',
       ],
-      dreaming_mode: ['read_memory', 'update_memory', 'search_episodes'],
+      dreaming_mode: ['read_memory', 'search_episodes', 'skills_load'],
       pre_activity_spot: [
         'get_crs',
         'query_calendar',
@@ -219,21 +405,32 @@ describe('TOOL_PERMISSIONS', () => {
         'propose_schedule',
         'propose_action',
         'send_message',
+        'skills_load',
       ],
       work_unit_plan: [],
     });
   });
 
-  it('grants no trigger the full surface — user_message tops out at 41 of 42', () => {
+  it('grants no trigger the full surface', () => {
     for (const trigger of triggerTypeSchema.options) {
       expect(TOOL_PERMISSIONS[trigger].length).toBeLessThan(toolNameSchema.options.length);
     }
-    expect(TOOL_PERMISSIONS.user_message).toHaveLength(41);
+    const withheld = ['execute_code', 'update_todo', 'list_responsibilities', 'close_responsibility'];
+    expect(TOOL_PERMISSIONS.user_message).toHaveLength(toolNameSchema.options.length - withheld.length);
+    for (const name of withheld) expect(TOOL_PERMISSIONS.user_message).not.toContain(name);
   });
 
   it("keeps 'execute_code' typed but dispatchable nowhere (ADR-0050)", () => {
     expect(toolNameSchema.options).toContain('execute_code');
     expect(triggersGranting('execute_code')).toEqual([]);
+  });
+
+  it("grants 'read_mcp_tool' only in user_message, a read-only allowlisted bridge that is not privileged", () => {
+    expect(triggersGranting('read_mcp_tool')).toEqual(['user_message']);
+  });
+
+  it("grants 'search_mcp_tools' only in user_message, a read of the owner's connected servers' tool definitions", () => {
+    expect(triggersGranting('search_mcp_tools')).toEqual(['user_message']);
   });
 
   it("grants 'call_mcp_tool' only in user_message — MCP is a gated bridge, not a bypass (ADR-0049)", () => {
@@ -242,6 +439,14 @@ describe('TOOL_PERMISSIONS', () => {
 
   it("grants 'browse_act' in user_message only - bounded actions never run in a handoff", () => {
     expect(triggersGranting('browse_act')).toEqual(['user_message']);
+  });
+
+  it("grants 'send_console_link' in user_message only - a job, brief or handoff never mints a console credential", () => {
+    expect(triggersGranting('send_console_link')).toEqual(['user_message']);
+  });
+
+  it("grants 'connect_app' in user_message only - a job, brief, handoff or inbound mail never sends a connect link", () => {
+    expect(triggersGranting('connect_app')).toEqual(['user_message']);
   });
 
   it("grants 'web_search', 'browse_page' and 'read_document' only in the two verbose triggers", () => {
@@ -278,6 +483,10 @@ describe('TOOL_PERMISSIONS', () => {
     expect(TOOL_PERMISSIONS.pre_brief_sweep).not.toContain('execute_code');
   });
 
+  it('lets every trigger but the tool-less planner load a reviewed skill', () => {
+    expect(triggerTypeSchema.options.filter(trigger => !TOOL_PERMISSIONS[trigger].includes('skills_load'))).toEqual(['work_unit_plan']);
+  });
+
   it('keeps the Outcome-bound planning turn on a literal empty ACL', () => {
     expect(TOOL_PERMISSIONS.work_unit_plan).toEqual([]);
   });
@@ -293,8 +502,8 @@ describe('search_tools — ADR-0034 Option A, first-class', () => {
     expect(LAZY_DISCOVERY_TRIGGERS).toEqual(['user_message', 'handoff_explore']);
   });
 
-  it('pins the always-on set: the ADR-0034 four plus connect_service (connect intent without discovery)', () => {
-    expect(ALWAYS_ON_TOOLS).toEqual(['read_memory', 'send_message', 'propose_action', 'search_tools', 'connect_service']);
+  it('pins the always-on discovery and skill metadata set', () => {
+    expect(ALWAYS_ON_TOOLS).toEqual(['read_memory', 'remember', 'forget_memory', 'send_message', 'propose_action', 'search_tools', 'connect_service', 'send_console_link', 'connect_app', 'skills_list', 'use_mac']);
   });
 
   it('grants connect_service exactly where query_calendar is granted', () => {

@@ -22,7 +22,8 @@ describe('connect_service', () => {
     expect(JSON.stringify(result)).not.toContain('https://');
     expect(JSON.stringify(result)).not.toContain('state=');
     if (result.ok) return;
-    expect(result.error).toContain('connect button');
+    // The tool states what is missing; only the tool loop, after a delivered offer, may speak of a button.
+    expect(result.error).toBe('Google (calendar) is not connected.');
   });
 
   it('connected google reports connected, never invents a URL', async () => {

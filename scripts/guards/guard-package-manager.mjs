@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Static wall guard: the verify gate is pnpm-version-sensitive (a newer pnpm
-// major changes install semantics such as minimumReleaseAge, which fails the
-// wall before tests even run). This guard refuses to proceed when the pnpm
+// major changes lockfile/resolution semantics and can fail installation before
+// tests even run). This guard refuses to proceed when the pnpm
 // running the gate does not match the pinned major, so a version mismatch fails
 // loud and early instead of surfacing as a confusing downstream install error.
 

@@ -1,0 +1,1283 @@
+{
+  "base_bundles": {
+    "W01": "sha256:5f76ad4e95c28ce65bb05f1da08d0bfd24542325a857315b977ea3b8d70b3b14",
+    "W02": "sha256:d2784c5bd81c07768630d87af8ef0f48e958592866d7ede89f0b752ebd780a22",
+    "W03": "sha256:f3cddd09fd943e0a97009a5f27f7911b767155894fcdcd71a166c159d2512623",
+    "W04": "sha256:db8f08bf0520ac413e2cf6d6dd5e9ea32f0374c1347e6871998e4c56790bf3be",
+    "W05": "sha256:8f0aae674629f5f941bed7ba0b86001d6e7ce1df7b5e9b53ea8f1b39177aca18",
+    "W06": "sha256:d08214e64bff5e1f85ec2485649cf7a486d24f84631a51b5e04361e8e93b0f05"
+  },
+  "base_adapter": {
+    "version": 1,
+    "revision": "native36-v1-W01-W06-adapter-definitions-1",
+    "sources": [
+      {
+        "family": "calendar",
+        "row_fields": [
+          "owner_id",
+          "source_id",
+          "id",
+          "title",
+          "start",
+          "end",
+          "flexibility",
+          "timezone",
+          "revision",
+          "status",
+          "source_kind",
+          "etag",
+          "all_day"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "availability",
+        "row_fields": [
+          "owner_id",
+          "source_id",
+          "id",
+          "free",
+          "source_kind",
+          "revision",
+          "kind",
+          "minutes",
+          "windows"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "priorities",
+        "row_fields": [
+          "owner_id",
+          "source_id",
+          "id",
+          "title",
+          "required_minutes",
+          "status",
+          "source_kind",
+          "revision"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "owner_statements",
+        "row_fields": [
+          "owner_id",
+          "source_id",
+          "kind",
+          "id",
+          "at",
+          "bytes",
+          "revision"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "health_projection",
+        "row_fields": [
+          "owner_id",
+          "source_id",
+          "kind",
+          "id",
+          "at",
+          "freshness",
+          "energy",
+          "shareable",
+          "revision"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "private_health_notes",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "category",
+          "marker",
+          "bytes",
+          "revision"
+        ],
+        "read_methods": [],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "messages_window",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "category",
+          "marker",
+          "bytes",
+          "revision"
+        ],
+        "read_methods": [],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "project_b_notes",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "category",
+          "marker",
+          "bytes",
+          "revision"
+        ],
+        "read_methods": [],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "cross_owner_records",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "category",
+          "marker",
+          "bytes",
+          "revision"
+        ],
+        "read_methods": [],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "files",
+        "row_fields": [
+          "owner_id",
+          "source_id",
+          "kind",
+          "id",
+          "revision",
+          "dated",
+          "bytes",
+          "digest",
+          "attachment_id",
+          "media_type",
+          "source_kind"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "mail",
+        "row_fields": [
+          "owner_id",
+          "source_id",
+          "id",
+          "thread_id",
+          "at",
+          "from",
+          "to",
+          "subject",
+          "body",
+          "source_kind",
+          "revision"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "tasks",
+        "row_fields": [
+          "owner_id",
+          "source_id",
+          "id",
+          "title",
+          "duration_minutes",
+          "deadline",
+          "commitment",
+          "reducible",
+          "status",
+          "restart_context",
+          "source_kind",
+          "revision"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "drafts",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "recipient",
+          "subject",
+          "body",
+          "attachment_digest",
+          "approved_revision"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "sent",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "recipient",
+          "subject",
+          "body",
+          "attachment_digest",
+          "approved_revision"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      },
+      {
+        "family": "watches",
+        "row_fields": [
+          "owner_id",
+          "id",
+          "thread_id",
+          "sent_message_id",
+          "started_at",
+          "expires_at",
+          "status",
+          "cancelled_at",
+          "revision"
+        ],
+        "read_methods": [
+          "read",
+          "list"
+        ],
+        "selected_id_filter_required": true
+      }
+    ],
+    "effects": [
+      {
+        "kind": "calendar.create",
+        "state_family": "calendar",
+        "required_payload_fields": [
+          "title",
+          "start",
+          "end"
+        ],
+        "requires_exact_approval": true
+      },
+      {
+        "kind": "calendar.move",
+        "state_family": "calendar",
+        "required_payload_fields": [
+          "expected_etag",
+          "start",
+          "end"
+        ],
+        "requires_exact_approval": true
+      },
+      {
+        "kind": "calendar.cancel",
+        "state_family": "calendar",
+        "required_payload_fields": [
+          "expected_etag"
+        ],
+        "requires_exact_approval": true
+      },
+      {
+        "kind": "mail.draft",
+        "state_family": "drafts",
+        "required_payload_fields": [
+          "recipient",
+          "subject",
+          "body"
+        ],
+        "requires_exact_approval": false
+      },
+      {
+        "kind": "mail.send",
+        "state_family": "sent",
+        "required_payload_fields": [
+          "recipient",
+          "subject",
+          "body",
+          "attachment_digest",
+          "attachments",
+          "thread_id"
+        ],
+        "requires_exact_approval": true
+      },
+      {
+        "kind": "watch.start",
+        "state_family": "watches",
+        "required_payload_fields": [
+          "thread_id",
+          "sent_message_id",
+          "expires_at"
+        ],
+        "requires_exact_approval": true
+      },
+      {
+        "kind": "watch.stop",
+        "state_family": "watches",
+        "required_payload_fields": [
+          "thread_id",
+          "watch_id",
+          "reason"
+        ],
+        "requires_exact_approval": true
+      }
+    ]
+  },
+  "core_head": "d94701a122bf91920091fc6eeb15f3dfd7936d00",
+  "cases": {
+    "W07": {
+      "bundle_digest": "sha256:6f918753c7c9d25afb25e1572e492dce3b27acc92020ebc427c02680baaf553d",
+      "source_digest": "sha256:75b86534ec754a96a9d721743e1639b6c8034a98c83c2c11fe0042f28692ef88",
+      "rows": [
+        {
+          "family": "files",
+          "owner_id": "native36-w07-owner-candidate-v1",
+          "id": "selected-method-notes",
+          "digest": "sha256:fdecb8f4db7292e808286ea98ba3306f5addce80bd619eb3aa5bce0f26f825d7"
+        },
+        {
+          "family": "files",
+          "owner_id": "native36-w07-owner-candidate-v1",
+          "id": "selected-limitations",
+          "digest": "sha256:bee2ae9527a44acef309bb3589df7c272a6300dca4d21b0508c61002943b6e32"
+        },
+        {
+          "family": "files",
+          "owner_id": "native36-w07-owner-candidate-v1",
+          "id": "unrelated-paper",
+          "digest": "sha256:b523bb89ce9fe07c0e798dd423032f666bb39ddfbccfa8279773243792322c7d"
+        },
+        {
+          "family": "files",
+          "owner_id": "native36-w07-owner-candidate-v1",
+          "id": "application-observation",
+          "digest": "sha256:0b89d266658a0ea9ee9dbd0ea2315141d193d858f749af8687edf5f24c776e98"
+        },
+        {
+          "family": "files",
+          "owner_id": "native36-w07-owner-control-v1",
+          "id": "selected-method-notes",
+          "digest": "sha256:abe59339a41a6a0454a03b76d8a6b3260eda7eb6c50f2dd1daeb7747d7e192b3"
+        },
+        {
+          "family": "files",
+          "owner_id": "native36-w07-owner-control-v1",
+          "id": "selected-limitations",
+          "digest": "sha256:ae74f6e3ce1c03bd261126ff7f8d9211157ed13198464eb4afa78323744abd9d"
+        },
+        {
+          "family": "files",
+          "owner_id": "native36-w07-owner-control-v1",
+          "id": "unrelated-paper",
+          "digest": "sha256:4f36361ef6d92e5c1a4c2a7a2e9b3bad8d9721a2b15f9d58f226590965e8d9a7"
+        },
+        {
+          "family": "files",
+          "owner_id": "native36-w07-owner-control-v1",
+          "id": "application-observation",
+          "digest": "sha256:85f8f306e4a58f091800275a204ac08e0db0df67cbf990f83b377199f0d610f0"
+        },
+        {
+          "family": "project_questions",
+          "owner_id": "native36-w07-owner-candidate-v1",
+          "id": "project-question",
+          "digest": "sha256:e35ea86e462efa13edcbc6bc686ffd1faa09b3dd561d433940cb6e142d28fe4d"
+        },
+        {
+          "family": "project_questions",
+          "owner_id": "native36-w07-owner-control-v1",
+          "id": "project-question",
+          "digest": "sha256:d8803c617136790b8eab7a6366fe78417bbda376cbb114159fd1276b240afa55"
+        },
+        {
+          "family": "public_snapshots",
+          "owner_id": "native36-w07-owner-candidate-v1",
+          "id": "snapshot-paired-method",
+          "digest": "sha256:11840c784cb657e25a0d8b474c6423414bf5ff1e5bfd42371bfc0cd3d882144f"
+        },
+        {
+          "family": "public_snapshots",
+          "owner_id": "native36-w07-owner-candidate-v1",
+          "id": "snapshot-small-samples",
+          "digest": "sha256:22dc50455cef4dee4d796a73c1d88994c46a97d0a0b88897d3a2744a4fff9d90"
+        },
+        {
+          "family": "public_snapshots",
+          "owner_id": "native36-w07-owner-control-v1",
+          "id": "snapshot-paired-method",
+          "digest": "sha256:0ed1d15f292d8e523196a926ec16b12575f39052ebdae175c5af0f98f124caa3"
+        },
+        {
+          "family": "public_snapshots",
+          "owner_id": "native36-w07-owner-control-v1",
+          "id": "snapshot-small-samples",
+          "digest": "sha256:187f43f91f36f5416ecf7baef5555f9516f0881bca4bf5cd6c43c693d0761e03"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-w07-owner-candidate-v1",
+          "id": "application-scope",
+          "digest": "sha256:5994662c6ff68a990ab5370b6b5f6e03f1877bc3b68623915bfd27ca1c912700"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-w07-owner-control-v1",
+          "id": "application-scope",
+          "digest": "sha256:8fb132d7dbbd61250591f2000334af3535e5edf00b69cc451a49a19f101fadb5"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-w07-owner-candidate-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:319e54335c78e38fca2f40b3c3c509b445a89e489c0e8dd99738631574dfc773"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-w07-owner-control-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:7524f5af584ac00e284b055763628f1a4a176657d4fa67b9b703993ac95cc27f"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-w07-owner-candidate-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:b211c8c1e4f7b685c1cfe8574455e9f95206e391d0448acc67606db58aa08944"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-w07-owner-control-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:fd761582fe115e691ba268b582442e14e4b612c66e48a594e89c04562f12c3b3"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-w07-owner-candidate-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:baf00b12075e5654ebdcb6ab7cd084a63c4a663b20061d1bdaf1fb32f4aac4f9"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-w07-owner-control-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:fbb6f80df3ccb627f57014a1a60529af3e5c6f3a215da079d03d48b9b34813f8"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-w07-owner-candidate-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:7554aa48047de0a399ebaaefc3e8a6b8707bb452eb1463365d46d96ac01df7e3"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-w07-owner-control-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:3ad9f48c8be1d07633acfd4a9d076a78ad48f39f4f535def649daa74948b2215"
+        }
+      ],
+      "turns": [
+        {
+          "id": "original-owner-prompt",
+          "digest": "sha256:e5414f85464242699c8edfdacd05191c11bc133de41aabaea6a0710b6ebeccf6"
+        },
+        {
+          "id": "source-revision-application-observation",
+          "digest": "sha256:cd4e031895f76313b3dfdc2ce19749d054ac7b2b023d43ae184377dcff3c440c"
+        }
+      ],
+      "execution_missing": [
+        "unimplemented source adapter: files",
+        "unimplemented source adapter: project_questions",
+        "unimplemented source adapter: public_snapshots",
+        "unimplemented source adapter: owner_statements"
+      ]
+    },
+    "W08": {
+      "bundle_digest": "sha256:66dc84441c7efe837d3a58eaedeb118dbf00f7a4b45f91a74cd8a9c5e95e0009",
+      "source_digest": "sha256:3028902abcdaba6b4596ba32ccd7a0cc83c4f41114965060f7ffde3439d9f577",
+      "rows": [
+        {
+          "family": "coach_sessions",
+          "owner_id": "native36-w08-owner-candidate-v1",
+          "id": "coach-session-1",
+          "digest": "sha256:30fcae4c600b742bcc2e83849de57dafba4c9a8df8232a293666cb46d11ffd8a"
+        },
+        {
+          "family": "coach_sessions",
+          "owner_id": "native36-w08-owner-candidate-v1",
+          "id": "coach-session-2",
+          "digest": "sha256:f66fbe6319e06a7a9c7636a1ba39b6046e544641a747371bbef3e18ed3ddce53"
+        },
+        {
+          "family": "coach_sessions",
+          "owner_id": "native36-w08-owner-candidate-v1",
+          "id": "coach-session-3",
+          "digest": "sha256:cbd0d3ef364ffdd88770de39cfa0944796165555e4ada4a77b28a3d68a785202"
+        },
+        {
+          "family": "coach_sessions",
+          "owner_id": "native36-w08-owner-control-v1",
+          "id": "coach-session-1",
+          "digest": "sha256:3026357eae39105c6de9e350541c890bee897625d395aca77b3ef4044d59f600"
+        },
+        {
+          "family": "coach_sessions",
+          "owner_id": "native36-w08-owner-control-v1",
+          "id": "coach-session-2",
+          "digest": "sha256:7cb7c7dfc98dd7ea9e05b14c00431d0dd99ab35b615cafb7ca7e783a25380bbf"
+        },
+        {
+          "family": "coach_sessions",
+          "owner_id": "native36-w08-owner-control-v1",
+          "id": "coach-session-3",
+          "digest": "sha256:b5c06c40bc356a201ed4369b7878aa0f9cfb49fc011f1e2418e1c2a7dea55e38"
+        },
+        {
+          "family": "training_status",
+          "owner_id": "native36-w08-owner-candidate-v1",
+          "id": "coach-session-1",
+          "digest": "sha256:b902dd8ff7adc50de68f44927b949b1f72864ef13f4488159640bf11873df958"
+        },
+        {
+          "family": "training_status",
+          "owner_id": "native36-w08-owner-candidate-v1",
+          "id": "coach-session-2",
+          "digest": "sha256:d06633758b44f966776f04f6b4b61260510feac70b409aa35c31ac323c57afb2"
+        },
+        {
+          "family": "training_status",
+          "owner_id": "native36-w08-owner-candidate-v1",
+          "id": "coach-session-3",
+          "digest": "sha256:12ad530de232ccc0aa33807931384aae4705cc81b7ae70be5849c40601aa9d6a"
+        },
+        {
+          "family": "training_status",
+          "owner_id": "native36-w08-owner-control-v1",
+          "id": "coach-session-1",
+          "digest": "sha256:e3eb8cbed5c84ca156d3bb0fdbc3fdc5d9eaf6707bf64c7eee25d7c2ace495fe"
+        },
+        {
+          "family": "training_status",
+          "owner_id": "native36-w08-owner-control-v1",
+          "id": "coach-session-2",
+          "digest": "sha256:ace89bfd4eca443eb6488b4f486a305ae4185ff40296725c314131761af1a390"
+        },
+        {
+          "family": "training_status",
+          "owner_id": "native36-w08-owner-control-v1",
+          "id": "coach-session-3",
+          "digest": "sha256:142b72ac449abb0b1eb379c39da20cb5755e2dade59c41e67056b7561765bdc1"
+        },
+        {
+          "family": "calendar",
+          "owner_id": "native36-w08-owner-candidate-v1",
+          "id": "fixed-meeting-1",
+          "digest": "sha256:a6edcdf00012c0121304d9ccb70da206d987dbd7cad5a614cbfe43f51198dd53"
+        },
+        {
+          "family": "calendar",
+          "owner_id": "native36-w08-owner-candidate-v1",
+          "id": "fixed-meeting-2",
+          "digest": "sha256:08acf0b86307612d272bc0913dd96dc5984f1fb8a074bc7f607ad9fa71ba3921"
+        },
+        {
+          "family": "calendar",
+          "owner_id": "native36-w08-owner-candidate-v1",
+          "id": "travel-day",
+          "digest": "sha256:12d0b377921e34fba91fdac6fd9c79ce3592e81b8853ba18a0a8d5e3d3678525"
+        },
+        {
+          "family": "calendar",
+          "owner_id": "native36-w08-owner-candidate-v1",
+          "id": "family-evening",
+          "digest": "sha256:11dd6d8e8a7a16c0c43cd7fb18ae1b1135ef9b3f5f42e4577c64e029d49589b2"
+        },
+        {
+          "family": "calendar",
+          "owner_id": "native36-w08-owner-candidate-v1",
+          "id": "flexible-work",
+          "digest": "sha256:bd221a7541264508f159a01eed5d74fa0bbdd9740928db6307f018790fd1299d"
+        },
+        {
+          "family": "calendar",
+          "owner_id": "native36-w08-owner-control-v1",
+          "id": "fixed-meeting-1",
+          "digest": "sha256:8f931b8fffa5f9567ca13c99eb3018ebdb50b7c13a541f4986deb0772989ff69"
+        },
+        {
+          "family": "calendar",
+          "owner_id": "native36-w08-owner-control-v1",
+          "id": "fixed-meeting-2",
+          "digest": "sha256:e46010260776b33fa161fd4e07ac92678db968645528939e31648c54712d06cc"
+        },
+        {
+          "family": "calendar",
+          "owner_id": "native36-w08-owner-control-v1",
+          "id": "travel-day",
+          "digest": "sha256:ac7071bf7a81c1a70a07c73375e8fbc3b3e06d18ed5d52ce3a975ca554baf4ee"
+        },
+        {
+          "family": "calendar",
+          "owner_id": "native36-w08-owner-control-v1",
+          "id": "family-evening",
+          "digest": "sha256:f106b44f18b279494edea6bf23c00d52bd539999ff557203dc22054c2b04d8c8"
+        },
+        {
+          "family": "calendar",
+          "owner_id": "native36-w08-owner-control-v1",
+          "id": "flexible-work",
+          "digest": "sha256:19a6a4d631677ac9cf01e0927d657df00b38ff7b650f980bb2f09e01a6392708"
+        },
+        {
+          "family": "availability",
+          "owner_id": "native36-w08-owner-candidate-v1",
+          "id": "week-availability",
+          "digest": "sha256:282abd40bc386e03f505203bec97f7248863517b42c1be91af6bb8daad9120b3"
+        },
+        {
+          "family": "availability",
+          "owner_id": "native36-w08-owner-control-v1",
+          "id": "week-availability",
+          "digest": "sha256:f585b96bc16f34f5d8a067872f728086e005cee6a82860a1641279d1d4da3a30"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-w08-owner-candidate-v1",
+          "id": "schedule-scope",
+          "digest": "sha256:1609c7f6ad34ae4fa1a902498903268ba1dc5929ea0cfd636f11c7b0517c55cd"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-w08-owner-control-v1",
+          "id": "schedule-scope",
+          "digest": "sha256:47cab810b651ac8ebc5efe72f4bcfed8b3fcbc31604a3295c6ad326fb83a7221"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-w08-owner-candidate-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:e54eef9e831c31a0d7c8ccde79efbef1f97147dc7cccc7e85446fdfb57bcc4ff"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-w08-owner-control-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:7c71c5b70d5385808afe5c5d2a92f41ba84f2c6b6a130ad2cd8fa98767abd6d7"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-w08-owner-candidate-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:b9047c3c847aab5de1f7a0e5854c787e2d6c14c593eacf49c740b40adc86f188"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-w08-owner-control-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:e490cf4bcfdf31d60b9d25159fdc45bc236ae0625bb0fe0a96b033a0e762ca42"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-w08-owner-candidate-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:f2ad80c1ab3880f5322980ccb13b62d9a0e05993fe75afbf3ecb458d0c2ad41a"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-w08-owner-control-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:7f697480d8b54dad3bf4bf1b57d79c6f2a82faac564e6cdbb97307cfccb0f9a6"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-w08-owner-candidate-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:e89e416b5c038901b173237b720529cdd8e203d8a53db8e8e3a5647840f2a46d"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-w08-owner-control-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:b6b8d135ade6278af4816d7cec4bd246cae3d5ec7bf133c7bfa8392eff1b07ca"
+        }
+      ],
+      "turns": [
+        {
+          "id": "original-owner-prompt",
+          "digest": "sha256:a9885c9dcb31cd9f20df06e1b47935a78880d57440a912854642f30398b9c52c"
+        }
+      ],
+      "execution_missing": [
+        "unimplemented source adapter: coach_sessions",
+        "unimplemented source adapter: training_status",
+        "unimplemented source adapter: availability",
+        "unimplemented source adapter: owner_statements"
+      ]
+    },
+    "W09": {
+      "bundle_digest": "sha256:473d377e03d7d6f16ec8d5684a3c0acbd874ba8c4fe093161c51f2f785763dc9",
+      "source_digest": "sha256:d742f18d750d30ceccc60e320dbd40fc963784083b1c3a3d86dc21e5c2895edb",
+      "rows": [
+        {
+          "family": "calendar",
+          "owner_id": "native36-w09-owner-candidate-v1",
+          "id": "trip-meeting",
+          "digest": "sha256:75b7c197793aac06aeb2beafd26b46647ad2fd1ff0124168271ff30adb5a4504"
+        },
+        {
+          "family": "calendar",
+          "owner_id": "native36-w09-owner-control-v1",
+          "id": "trip-meeting",
+          "digest": "sha256:7112c0816fcd4799448968f9b48555971f91f848a84331fbbfa4a5b5e600fe18"
+        },
+        {
+          "family": "travel_constraints",
+          "owner_id": "native36-w09-owner-candidate-v1",
+          "id": "trip-constraints",
+          "digest": "sha256:35e8fd59f121ba996d1b9e6a1591f0fc29767a4ccb7b8aae620cfae572de9f62"
+        },
+        {
+          "family": "travel_constraints",
+          "owner_id": "native36-w09-owner-control-v1",
+          "id": "trip-constraints",
+          "digest": "sha256:989e334339a2cf114dfc3558ed3c4c81f0685e6efc3b101736188e419ef2ebd8"
+        },
+        {
+          "family": "travel_quotes",
+          "owner_id": "native36-w09-owner-candidate-v1",
+          "id": "option-A",
+          "digest": "sha256:f169847f7ce62dd8320f01fcc6152e82dbde74da0f7f6c1ddf64d357b0a6f24e"
+        },
+        {
+          "family": "travel_quotes",
+          "owner_id": "native36-w09-owner-candidate-v1",
+          "id": "option-B",
+          "digest": "sha256:33764f67a291218b0bf1e28600a4f782c15dc6d83d2753642cb97f3193046f94"
+        },
+        {
+          "family": "travel_quotes",
+          "owner_id": "native36-w09-owner-candidate-v1",
+          "id": "option-C",
+          "digest": "sha256:f9d2d7798c94707a350a0bd4590a93a552b18374ee960007f59e6cc3b72a6a92"
+        },
+        {
+          "family": "travel_quotes",
+          "owner_id": "native36-w09-owner-control-v1",
+          "id": "option-A",
+          "digest": "sha256:9a1bab92d0fdfd555aa8e045c3bfb065c480d973d4bbc768ebcba66e213bf432"
+        },
+        {
+          "family": "travel_quotes",
+          "owner_id": "native36-w09-owner-control-v1",
+          "id": "option-B",
+          "digest": "sha256:b070b6d9396754dc6a64b14c0cc665d1726da689e7eaac1663b226bce5ba4a71"
+        },
+        {
+          "family": "travel_quotes",
+          "owner_id": "native36-w09-owner-control-v1",
+          "id": "option-C",
+          "digest": "sha256:82b114b5ba59afff5e8e11bb9630aa6a3241627cf16fce45361c41771f3aaf47"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-w09-owner-candidate-v1",
+          "id": "travel-scope",
+          "digest": "sha256:10a419792c0eb7b938b8327ce5ee9d514caa0aebf2d2536aaf8f8d5d6622a257"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-w09-owner-control-v1",
+          "id": "travel-scope",
+          "digest": "sha256:d61c1dcff844d069a49b05dca5129f363ef8df35fbbc77879914b673484dfde6"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-w09-owner-candidate-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:d2b53053210bc504186c483e4f918e9d4586a5db08dadf29def6d7b6da2621a9"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-w09-owner-control-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:0c060b373d5ac924541fab57c87840e9c1ef6d30d3a0b5f09b47c5a70fd8300e"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-w09-owner-candidate-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:1de57c5eb601f50edcc4ecaa352acb311e353d04e5026a92ea705b4f14c6dc84"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-w09-owner-control-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:e29df62440cc8d6c7634e73085b9cbfd0f46f05b2170c3e1a35aff2056d041db"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-w09-owner-candidate-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:9265b6522d4cf972fc6cccddf6dbb3acd3c9facd1d390abf08e966060fb9779f"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-w09-owner-control-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:04157bba6354e135276714efeb259e27967e0a539b79a4c5b819f5762217b8f8"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-w09-owner-candidate-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:be82a7d94893a90721f869279ccacef15017e4cebd0d46f9094735b2cd1107df"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-w09-owner-control-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:42d2c204beb4771d44a619a268a4e3d299ee717dcdf0bbf71a83e48c9d81a700"
+        }
+      ],
+      "turns": [
+        {
+          "id": "original-owner-prompt",
+          "digest": "sha256:4cbecef4059980b7710c16176d5c0b724621b929ae21a29e108e2e247955cd58"
+        }
+      ],
+      "execution_missing": [
+        "unimplemented source adapter: travel_constraints",
+        "unimplemented source adapter: travel_quotes",
+        "unimplemented source adapter: owner_statements"
+      ]
+    },
+    "W10": {
+      "bundle_digest": "sha256:2556b8c8919ff8204d4b27c78a0006690080eb2c8e1489968c1242bb331ff554",
+      "source_digest": "sha256:b1c2faefb78f09024fab43ca0284af864aa89a58cf859d751e9b1218720533e4",
+      "rows": [
+        {
+          "family": "files",
+          "owner_id": "native36-w10-owner-candidate-v1",
+          "id": "owned-course",
+          "digest": "sha256:eca66ee286a8812576c2d6f0095daddd99f063246c9d5730501a56c071e51cf3"
+        },
+        {
+          "family": "files",
+          "owner_id": "native36-w10-owner-candidate-v1",
+          "id": "interview-materials",
+          "digest": "sha256:d801924ec5ea69dc833fae7a36e1063aacfd0a6d295d68b1acecc7b05f981d0f"
+        },
+        {
+          "family": "files",
+          "owner_id": "native36-w10-owner-control-v1",
+          "id": "owned-course",
+          "digest": "sha256:e3426eff735b3dae027716cc3266446f619572a248f23d8fccc2751fc52c63f7"
+        },
+        {
+          "family": "files",
+          "owner_id": "native36-w10-owner-control-v1",
+          "id": "interview-materials",
+          "digest": "sha256:a2ab62b88f07c07ea028c839353a647ac48d3f37dc0ac679778287d5064a2e7e"
+        },
+        {
+          "family": "course_access",
+          "owner_id": "native36-w10-owner-candidate-v1",
+          "id": "owned-course-access",
+          "digest": "sha256:46383b133356e531277908493b513b550fcecf201bc2d6a1a19e5a9fae0c6fc2"
+        },
+        {
+          "family": "course_access",
+          "owner_id": "native36-w10-owner-control-v1",
+          "id": "owned-course-access",
+          "digest": "sha256:1be4e29aafcf0f75a5fc449b793fa968c0f31bc1faa53d2759074123b8d0ede0"
+        },
+        {
+          "family": "course_quotes",
+          "owner_id": "native36-w10-owner-candidate-v1",
+          "id": "new-course-quote",
+          "digest": "sha256:4e9087077dfe918a306633dbe752797141ab8218c697000cc75110bf1527c5e8"
+        },
+        {
+          "family": "course_quotes",
+          "owner_id": "native36-w10-owner-control-v1",
+          "id": "new-course-quote",
+          "digest": "sha256:3906cba4cb41f200dbfa6748769801924696c8d015a8dea9995befeef8b42601"
+        },
+        {
+          "family": "availability",
+          "owner_id": "native36-w10-owner-candidate-v1",
+          "id": "rehearsal-availability",
+          "digest": "sha256:4be50cb92d50e80c82151c2e6adfca1de815fbcd87992587eaa0e45caf51b360"
+        },
+        {
+          "family": "availability",
+          "owner_id": "native36-w10-owner-control-v1",
+          "id": "rehearsal-availability",
+          "digest": "sha256:517999463d6e0b8899628b764c62d07258afd52ae59ee9174f4e6a0c8dbfb24e"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-w10-owner-candidate-v1",
+          "id": "practice-scope",
+          "digest": "sha256:48e9e8e9d6982c40f83685634afb3cb29a4c5e464b262d4f64a2539568fc3dce"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-w10-owner-control-v1",
+          "id": "practice-scope",
+          "digest": "sha256:8c6bfb4a19920567461da12b8ab9d00df15894d8f0b28dae3fa6674a906586e7"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-w10-owner-candidate-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:8cf95f44c4cc307e7bd8de98e5df4346d66ebcf6500411cc76e078d29e303222"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-w10-owner-control-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:28ab18cfe8d04bc8a0f1fb9374f94fba85f55428fb109f6093e267e2e18d53bf"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-w10-owner-candidate-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:e83570e05ecd13f0b17f3c12c098a305d0c604a008e1b14f7ce189987135cc16"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-w10-owner-control-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:4f3f8baf980f5622ab78e1b347c752271ec55cbdf81115b72348daf6f183adcb"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-w10-owner-candidate-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:ae63a69e083d6973b387c350db85a24404c91f562073cac9af3bfd72953242b3"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-w10-owner-control-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:51c5c72552fabadcc576ad1ba268b1bcb799a448e0a3d5b1d633caf1eef83db8"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-w10-owner-candidate-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:69f606444225e6667fb59afe77ace0783d1478693f063dd247a7a15f7dc654d2"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-w10-owner-control-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:1ec7fb428d1fecb1bf5bc47cfb1a5aaeb006f940515661e08ff0e6da2a04172b"
+        }
+      ],
+      "turns": [
+        {
+          "id": "original-owner-prompt",
+          "digest": "sha256:014b04e6da1ac3e452ca4c1992ff1454ae6e198bc9db77d175b5320d7aafce80"
+        }
+      ],
+      "execution_missing": [
+        "unimplemented source adapter: files",
+        "unimplemented source adapter: course_access",
+        "unimplemented source adapter: course_quotes",
+        "unimplemented source adapter: availability",
+        "unimplemented source adapter: owner_statements"
+      ]
+    },
+    "W11": {
+      "bundle_digest": "sha256:000c5bb90989ba7b73ac75a8f16f97360657c7b7b972cc1ab46b153289e751c3",
+      "source_digest": "sha256:f7f6686158b66fd19db05269a7cd33388303a2ac7f424b53ef6a9d549ae31d8f",
+      "rows": [
+        {
+          "family": "orders",
+          "owner_id": "native36-w11-owner-candidate-v1",
+          "id": "late-order",
+          "digest": "sha256:09e17d2ff9361cc4fcaaf171cfa0b81c5428ef92eb00dca7eff5f5bd65ce089e"
+        },
+        {
+          "family": "orders",
+          "owner_id": "native36-w11-owner-control-v1",
+          "id": "late-order",
+          "digest": "sha256:a2e9d3803cd9b0647eb357633c6e989bd3ada8b3572e09894a416eed279dba10"
+        },
+        {
+          "family": "refunds",
+          "owner_id": "native36-w11-owner-candidate-v1",
+          "id": "late-order-refund",
+          "digest": "sha256:86d769106eebeb223155cdba82d15bef73caafc65a5509bc27b9293d49bc50f9"
+        },
+        {
+          "family": "refunds",
+          "owner_id": "native36-w11-owner-control-v1",
+          "id": "late-order-refund",
+          "digest": "sha256:38f8baa7f3bdcde8a225b4ab984d7e4c6ab0bcfcebdec4e50e6176865ad8c2dd"
+        },
+        {
+          "family": "merchant_policies",
+          "owner_id": "native36-w11-owner-candidate-v1",
+          "id": "cancellation-policy",
+          "digest": "sha256:bc8dc5b98d1967bd716c40a6e15b7787b402828112a7aeae2cdd008195680372"
+        },
+        {
+          "family": "merchant_policies",
+          "owner_id": "native36-w11-owner-control-v1",
+          "id": "cancellation-policy",
+          "digest": "sha256:b74813e03f251f1ada95275da8778bba3efda6058ce91190482ec33d4fe37cac"
+        },
+        {
+          "family": "cancellation_quotes",
+          "owner_id": "native36-w11-owner-candidate-v1",
+          "id": "cancellation-quote",
+          "digest": "sha256:0e91dce70c054cfeda0c2f515c77235b5b53c7c6000fd0b7055a82198d5e8855"
+        },
+        {
+          "family": "cancellation_quotes",
+          "owner_id": "native36-w11-owner-control-v1",
+          "id": "cancellation-quote",
+          "digest": "sha256:d8b5918c942b85e4fdcb2e6e11f8759e2078a7bfc09b4b53a37800e62e0764d5"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-w11-owner-candidate-v1",
+          "id": "conditional-owner-words",
+          "digest": "sha256:374ed093ae36a05a38208d0c86de9dbe4c3a014a4cb848bd8b94e83478897b4a"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-w11-owner-control-v1",
+          "id": "conditional-owner-words",
+          "digest": "sha256:35c33c4d9b2d25f4921e8a263906cb5b92f505cefa6b0e714a84da4caee996e1"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-w11-owner-candidate-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:ef5c44ced16efda31ea303bb7e700d57192367343c5fab81d782ff4789783d7b"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-w11-owner-control-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:71d3577ca85b3f4c1e5075c3133d86215e6bd46ee47c5a58384030cbdb6c0caa"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-w11-owner-candidate-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:94daaa167331cccc3686622b82f2728eb0743a1ab3bc6da8569a79df6394618a"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-w11-owner-control-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:2a9f4b606fd7080ecf28e8ceac9e10c3a64cb57c0ffdd26b38c899e9836c4470"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-w11-owner-candidate-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:53ab22686d9b5a1343d4666b600ce8b2b7d3d6f569ce70b66be5199a139ae401"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-w11-owner-control-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:12c6c6f7288d6b4689eeed54c0081e7c27096795445c0910432f471093513b73"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-w11-owner-candidate-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:610b0cc5a60efcb0573a1d1e30b10d27fb594049a2d938aa0e128ec44d2b9f8a"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-w11-owner-control-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:f6fdf89e541da90b45ffd25320e997fc69b0cef94da458511c80f27427282df0"
+        }
+      ],
+      "turns": [
+        {
+          "id": "original-owner-prompt",
+          "digest": "sha256:3b15df251863dae50193c0e38df8bdac4905b6214ac58a3d908b3c43aba24e8a"
+        },
+        {
+          "id": "source-revision-cancellation-policy",
+          "digest": "sha256:31255b01f539b66773b0a38a3cbb091d6558a3128d0d46989c363df1ed5f5016"
+        },
+        {
+          "id": "source-revision-cancellation-quote",
+          "digest": "sha256:321831859138975bda71d6f4c68e93f15aecb010f80ee0f4fec7a063f64c24df"
+        }
+      ],
+      "execution_missing": [
+        "unimplemented source adapter: orders",
+        "unimplemented source adapter: refunds",
+        "unimplemented source adapter: merchant_policies",
+        "unimplemented source adapter: cancellation_quotes",
+        "unimplemented source adapter: owner_statements",
+        "unimplemented effect custody: order.cancel"
+      ]
+    },
+    "W12": {
+      "bundle_digest": "sha256:9d12763d2bd86151bca14d6974b17b55b166e2a9bcf1ebaf75d8221f6ae0b09c",
+      "source_digest": "sha256:a317999fc8e752af39431d072a5a166ea3c483eda932351f9c18dd0631649fe0",
+      "rows": [
+        {
+          "family": "reward_terms",
+          "owner_id": "native36-w12-owner-candidate-v1",
+          "id": "synthetic-program",
+          "digest": "sha256:4c60caa8eaaba8b6aa0bf05f2c99b96436b235677ac1ad412b7b27dd656c6a67"
+        },
+        {
+          "family": "reward_terms",
+          "owner_id": "native36-w12-owner-control-v1",
+          "id": "synthetic-program",
+          "digest": "sha256:6072c1c15ae0988569a4e67dd7fb0ce1d703b05802297ede90c4ac9e5f137c25"
+        },
+        {
+          "family": "spending",
+          "owner_id": "native36-w12-owner-candidate-v1",
+          "id": "already-paid",
+          "digest": "sha256:c07528bc659ff982d7d52c6fe030724a67893067109722433a2ab88bcd44d4fd"
+        },
+        {
+          "family": "spending",
+          "owner_id": "native36-w12-owner-candidate-v1",
+          "id": "planned-unpaid",
+          "digest": "sha256:1e07428ad30d94a9bf8a30a02d0a63b9a4077e2b53d2033c8321f8b369a472a2"
+        },
+        {
+          "family": "spending",
+          "owner_id": "native36-w12-owner-control-v1",
+          "id": "already-paid",
+          "digest": "sha256:39799ead354f3abffec3159e5bfdecafd0e4ea209c303c7c665b065aa087cad7"
+        },
+        {
+          "family": "spending",
+          "owner_id": "native36-w12-owner-control-v1",
+          "id": "planned-unpaid",
+          "digest": "sha256:8d60c636c893163878dcbc272ea86da6efd3bf880dcc8e38bb57b82f254cae3a"
+        },
+        {
+          "family": "carts",
+          "owner_id": "native36-w12-owner-candidate-v1",
+          "id": "optional-extra-basket",
+          "digest": "sha256:8e20e622314da90fe50d2d77f9749a3119e636058e18161ac69289d3aa836a49"
+        },
+        {
+          "family": "carts",
+          "owner_id": "native36-w12-owner-control-v1",
+          "id": "optional-extra-basket",
+          "digest": "sha256:05ccfeacd2c51c7740f4fa8bb4b0b875a06e1111ccb2fb611ea90729fa453a24"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-w12-owner-candidate-v1",
+          "id": "reward-scope",
+          "digest": "sha256:d4c7859c5ec70047eedf0905adf00479c4252178920e803e338fa36a9e455091"
+        },
+        {
+          "family": "owner_statements",
+          "owner_id": "native36-w12-owner-control-v1",
+          "id": "reward-scope",
+          "digest": "sha256:2907373607d0ed8f56fe9789f52a62d867aac08df56edb5c34246cf0ac9f2c80"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-w12-owner-candidate-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:e7663f75cf250fc625b707d14ba3e8829bb443b7dbc5d5bd891888c7df75e45e"
+        },
+        {
+          "family": "private_health_notes",
+          "owner_id": "native36-w12-owner-control-v1",
+          "id": "private_health_notes-denied",
+          "digest": "sha256:ae84e379f36deb7dd64d80a66510c7b68d57ff6740d2267d318803d269d4d0ca"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-w12-owner-candidate-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:70b75b869e75ad3d921fbaefd35c272fe55586d19535e91c5b015a9cb495aec6"
+        },
+        {
+          "family": "messages_window",
+          "owner_id": "native36-w12-owner-control-v1",
+          "id": "messages_window-denied",
+          "digest": "sha256:7b1ea5a852311f7df9d07765591eb33480809eec43b80c1808e3dc2a8e050b6e"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-w12-owner-candidate-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:26e4bb876b50ec57d50ffa98407a1be2d5afcbf7601339f945454775aceef743"
+        },
+        {
+          "family": "project_b_notes",
+          "owner_id": "native36-w12-owner-control-v1",
+          "id": "project_b_notes-denied",
+          "digest": "sha256:8ce5f20be180ffe552d64fdb3629efdfbd5d8268ea149564ba47cf0abdefa98e"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-w12-owner-candidate-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:1b1c633778eda3804a34ea8571b94ec42097ae7ef83b7db1386fdb14781f1c93"
+        },
+        {
+          "family": "cross_owner_records",
+          "owner_id": "native36-w12-owner-control-v1",
+          "id": "cross_owner_records-denied",
+          "digest": "sha256:9b86406e90ec3316a527510cc43bca39ad9ec9381fde7e72e004fcafa0840b73"
+        }
+      ],
+      "turns": [
+        {
+          "id": "original-owner-prompt",
+          "digest": "sha256:8d3bb0896a72a506c9e309dff4f055c16d32ed578c0b68fabd3050ceca9f240d"
+        }
+      ],
+      "execution_missing": [
+        "unimplemented source adapter: reward_terms",
+        "unimplemented source adapter: spending",
+        "unimplemented source adapter: carts",
+        "unimplemented source adapter: owner_statements"
+      ]
+    }
+  }
+}

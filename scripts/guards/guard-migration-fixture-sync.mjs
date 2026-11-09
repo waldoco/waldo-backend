@@ -16,6 +16,7 @@ const fixtureVersions = [...fixture.matchAll(/'(\d{14})'/g)].map((match) => matc
 
 const problems = [];
 if (mjsVersions.length === 0) problems.push('no migration versions parsed from verify-supabase-migrations.mjs');
+if (/'\d{14}'\s+'\d{14}'/.test(fixture)) problems.push('adjacent SQL migration strings concatenate without a comma');
 if (fixtureVersions.length === 0) problems.push('no migration versions parsed from assert-canonical-migration-history.sql');
 if (JSON.stringify(mjsVersions) !== JSON.stringify(fixtureVersions)) {
   problems.push(`canonical lists diverged: only in mjs [${mjsVersions.filter((v) => !fixtureVersions.includes(v))}], only in fixture [${fixtureVersions.filter((v) => !mjsVersions.includes(v))}]`);

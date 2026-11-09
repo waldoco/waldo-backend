@@ -1,0 +1,170 @@
+import { HEALTH_PROPOSAL_MODES, SCHEDULE_KINDS, setSchedulePreferenceArgsSchema, type SetSchedulePreferenceArgs, type ToolHandler } from '@waldo/contracts';
+import type { ScheduleEntry } from '@waldo/contracts';
+import type { Scheduler, ScheduleExecutors } from '../scheduler/multiplexer';
+import type { ToolDispatcherContext } from '../tools/dispatcher';
+import { TOOL_PERMISSIONS, triggerTypeSchema } from '@waldo/contracts';
+import { DAY_CARDS } from '../prompt/day-cards';
+import { applyDayPlan, defaultPlan, type DayPlanBook } from './day-cards';
+import { localIso } from './reminders';
+import { armBriefSweep, BRIEF_SWEEP_ID } from './event-briefs';
+import { armNightly, NIGHTLY_CATCH_UP_ID, NIGHTLY_ID } from './episodes';
+import { armHeartbeat, HEARTBEAT_ID } from './heartbeat';
+import type { LoopBook } from './loops';
+import type { MachineJob } from '../tasks/jobs';
+import { HEALTH_TRIGGER_ID, type HealthTriggerSetting } from '../health/trigger';
+import { MEMORY_DAYTIME_ID } from '../memory/consolidator';
+
+export type ScheduleKind = (typeof SCHEDULE_KINDS)[number];
+export type SchedulePreferences = Readonly<Record<ScheduleKind, boolean>>;
+type Sql = Pick<SqlStorage, 'exec'>;
+
+export const SCHEDULE_LABELS: Readonly<Record<ScheduleKind, string>> = {
+  daily_brief: 'daily brief cards (Brief, Check-in, Close)',
+  followups: 'mail and calendar follow-ups',
+  event_briefs: 'prep notes before events',
+  nightly: 'overnight memory consolidation',
+  heartbeat: 'periodic open-loop check',
+  health_proposals: 'one proposed plan change when a health zone change meets a coming decision',
+};
+
+// Every scheduled behavior is on by default (out of the box) and can be turned off per owner.
+// Followups keep their single source of truth in the proactivity setting; the rest live in one small table.
+export const schedulePreferences = (sql: Sql, loops: LoopBook) => {
+  sql.exec('CREATE TABLE IF NOT EXISTS schedule_preferences (kind TEXT PRIMARY KEY, enabled INTEGER NOT NULL)');
+  sql.exec('CREATE TABLE IF NOT EXISTS schedule_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+  const stored = (): Map<string, boolean> =>
+    new Map(sql.exec<{ kind: string; enabled: number }>('SELECT kind, enabled FROM schedule_preferences').toArray().map((row) => [row.kind, row.enabled === 1]));
+  return {
+    all(): SchedulePreferences {
+      const rows = stored();
+      return Object.fromEntries(SCHEDULE_KINDS.map((kind) => [kind, kind === 'followups' ? loops.proactivity().followups !== false : rows.get(kind) ?? true])) as SchedulePreferences;
+    },
+    enabled(kind: ScheduleKind): boolean { return this.all()[kind]; },
+    // How health proposals behave while they are on; auto until the owner says otherwise.
+    healthMode(): HealthTriggerSetting {
+      const value = sql.exec<{ value: string }>("SELECT value FROM schedule_settings WHERE key = 'health_proposal_mode'").toArray()[0]?.value;
+      return HEALTH_PROPOSAL_MODES.find(mode => mode === value) ?? 'auto';
+    },
+    setHealthMode(mode: HealthTriggerSetting): void {
+      sql.exec("INSERT INTO schedule_settings (key, value) VALUES ('health_proposal_mode', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", mode);
+    },
+    set(kind: ScheduleKind, enabled: boolean): void {
+      if (kind === 'followups') loops.setProactivity({ ...loops.proactivity(), followups: enabled });
+      else sql.exec('INSERT INTO schedule_preferences (kind, enabled) VALUES (?, ?) ON CONFLICT (kind) DO UPDATE SET enabled = excluded.enabled', kind, enabled ? 1 : 0);
+    },
+    reset(): void {
+      sql.exec('DELETE FROM schedule_preferences');
+      sql.exec('DELETE FROM schedule_settings');
+      if (loops.proactivity().followups === false) loops.setProactivity({ ...loops.proactivity(), followups: true });
+    },
+  };
+};
+export type SchedulePreferenceBook = ReturnType<typeof schedulePreferences>;
+
+export const schedulePreferencesLine = (prefs: SchedulePreferences, healthMode: HealthTriggerSetting = 'auto'): string =>
+  `Scheduled behaviors (owner can change any with set_schedule_preference): ${SCHEDULE_KINDS.map((kind) => `${kind} (${SCHEDULE_LABELS[kind]}) ${prefs[kind] ? (kind === 'health_proposals' ? `on, ${healthMode}` : 'on') : 'off'}`).join('; ')}`;
+
+// `armable` says whether a kind may be armed on this surface right now; a kind that is on but not armable is left as is.
+// `cancelMachine` stops the open background jobs of a kind the owner turned off, so no worker keeps reading for it.
+// alongHeartbeat: work that follows the owner's heartbeat preference (Waldo's own look), armed or dropped with it.
+export type ScheduleApplyContext = Readonly<{ scheduler: Scheduler; plans: DayPlanBook; timezone: string; now: number; armable?: (kind: ScheduleKind) => boolean; cancelMachine?: (job: MachineJob) => void;
+  alongHeartbeat?: (on: boolean) => Promise<void> }>;
+
+// The brief sweep runs both update cards and meeting prep, so turning it off stops the open jobs of both.
+const cancelSweepJobs = (ctx: ScheduleApplyContext): void => { ctx.cancelMachine?.('update_sweep'); ctx.cancelMachine?.('meeting_prep'); };
+
+// Bring the scheduler in line with the preferences: off cancels the entries, on arms them again.
+export const applySchedulePreferences = async (prefs: SchedulePreferences, ctx: ScheduleApplyContext, only?: ScheduleKind): Promise<void> => {
+  const { scheduler, plans, timezone, now } = ctx;
+  const want = (kind: ScheduleKind) => (only === undefined || only === kind) && (!prefs[kind] || (ctx.armable?.(kind) ?? true));
+  if (want('nightly')) { if (prefs.nightly) await armNightly(scheduler, timezone, now); else for (const id of [NIGHTLY_ID, NIGHTLY_CATCH_UP_ID, MEMORY_DAYTIME_ID]) await scheduler.cancelReadable(id); }
+  if (want('heartbeat')) { if (prefs.heartbeat) await armHeartbeat(scheduler, now); else { await scheduler.cancelReadable(HEARTBEAT_ID); ctx.cancelMachine?.('heartbeat'); } await ctx.alongHeartbeat?.(prefs.heartbeat); }
+  if (want('event_briefs')) { if (prefs.event_briefs) await armBriefSweep(scheduler, now); else { await scheduler.cancelReadable(BRIEF_SWEEP_ID); cancelSweepJobs(ctx); } }
+  // Health proposals are armed by a zone change, never by the clock, so on arms nothing.
+  if (want('health_proposals') && !prefs.health_proposals) await scheduler.cancelReadable(HEALTH_TRIGGER_ID);
+  if (want('daily_brief')) {
+    if (prefs.daily_brief) await applyDayPlan(scheduler, plans, timezone, now, defaultPlan(DAY_CARDS), true, true);
+    else for (const card of DAY_CARDS) await scheduler.cancelReadable(card.id);
+  }
+};
+
+// Re-plan every day card for today in the new zone after the zone changes: the time already planned for that date where
+// one exists, the default otherwise, pins kept. Entries armed in the old zone can name another date, so a card that is not
+// armed again (it already went out today) keeps no entry.
+export const replanDayCards = async (scheduler: Scheduler, plans: DayPlanBook, timezone: string, now: number): Promise<void> => {
+  const planned = new Map(plans.read(localIso(now, timezone).slice(0, 10)).map(({ card, time, reason }) => [card, { card, time, reason }]));
+  const handled = new Set((await applyDayPlan(scheduler, plans, timezone, now, defaultPlan(DAY_CARDS).map(card => planned.get(card.card) ?? card))).map(entry => entry.card));
+  for (const card of DAY_CARDS) if (!handled.has(card.id)) await scheduler.cancelReadable(card.id);
+};
+
+// Cancel-only pass for kinds that are off. Run at startup: a stop between saving a preference and cancelling
+// its entries must not leave a due entry behind. It never arms anything.
+export const reconcileSchedulePreferences = async (prefs: SchedulePreferences, ctx: ScheduleApplyContext): Promise<void> => {
+  const { scheduler } = ctx;
+  const cancelIf = (id: string) => scheduler.cancelReadable(id);
+  if (!prefs.nightly) for (const id of [NIGHTLY_ID, NIGHTLY_CATCH_UP_ID, MEMORY_DAYTIME_ID]) await cancelIf(id);
+  if (!prefs.heartbeat) { await cancelIf(HEARTBEAT_ID); ctx.cancelMachine?.('heartbeat'); await ctx.alongHeartbeat?.(false); }
+  if (!prefs.event_briefs) { await cancelIf(BRIEF_SWEEP_ID); cancelSweepJobs(ctx); }
+  if (!prefs.health_proposals) await cancelIf(HEALTH_TRIGGER_ID);
+  if (!prefs.daily_brief) for (const card of DAY_CARDS) await cancelIf(card.id);
+};
+
+// The kind an out-of-the-box schedule entry belongs to, or null for owner-created and internal entries.
+const scheduleKindOf = (entry: ScheduleEntry): ScheduleKind | null => {
+  // The daytime memory pass is part of the memory pass the owner can turn off.
+  if (entry.kind === 'dreaming' && (entry.id === NIGHTLY_ID || entry.id === NIGHTLY_CATCH_UP_ID || entry.id === MEMORY_DAYTIME_ID)) return 'nightly';
+  if (entry.kind === 'heartbeat' && entry.id === HEARTBEAT_ID) return 'heartbeat';
+  if (entry.kind === 'pre_activity_spot' && entry.id === BRIEF_SWEEP_ID) return 'event_briefs';
+  if (entry.kind === 'patrol' && entry.id === HEALTH_TRIGGER_ID) return 'health_proposals';
+  if (entry.kind === 'brief' && DAY_CARDS.some((card) => card.id === entry.id)) return 'daily_brief';
+  return null;
+};
+
+// Fire-time recheck: read the preference at dispatch, not only when arming. A disabled entry is cleared and
+// does nothing, so no send, no card state and no model call happens for something the owner turned off.
+// A held kind is skipped without cancelling: the occurrence passes and a recurring entry stays armed for its next one.
+// A dropped kind is cancelled: it cannot run on this surface at all, so it is not kept waking.
+export type ScheduleHold = 'hold' | 'drop' | false;
+export const gateScheduleExecutors = (executors: ScheduleExecutors, prefs: SchedulePreferenceBook, scheduler: Scheduler, held: (kind: ScheduleKind) => ScheduleHold = () => false, onHeld: (kind: ScheduleKind, outcome: Exclude<ScheduleHold, false>) => void = () => {}): ScheduleExecutors =>
+  Object.fromEntries(Object.entries(executors).map(([kind, executor]) => [kind, async (entry: ScheduleEntry) => {
+    const owned = scheduleKindOf(entry);
+    if (owned !== null && !prefs.enabled(owned)) { await scheduler.cancel(entry.id); return; }
+    const outcome = owned === null ? false : held(owned);
+    if (outcome === 'drop') await scheduler.cancel(entry.id);
+    if (outcome) { onHeld(owned!, outcome); return; }
+    return executor!(entry);
+  }])) as ScheduleExecutors;
+
+const allowlist = () => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('set_schedule_preference'));
+
+// cardTime sets the owner's every-day Brief or Close time (ownerCardTime) and returns its receipt; absent where it is not offered.
+export type CardTimeSetter = (card: 'card:brief' | 'card:close', time: string) => Promise<Readonly<{ state: 'recorded' | 'rejected'; message: string }>>;
+// confirmZone saves and confirms the owner's time zone as the console does and returns the IANA name it saved, null when the
+// zone is not one or the directory did not keep it; absent where it is not offered.
+export const schedulePreferenceHandlers = (book: SchedulePreferenceBook, context: () => ScheduleApplyContext | Promise<ScheduleApplyContext>, cardTime?: CardTimeSetter, confirmZone?: (zone: string) => Promise<string | null>) => [
+  {
+    name: 'set_schedule_preference',
+    description: "Turn one of Waldo's own scheduled behaviors off or back on, reset all of them to the out-of-the-box defaults, set when the Brief or the Close comes every day, or save the owner's time zone. Only when the owner asks or tells you where they are. The current state of every behavior is in the ledger; nothing is forced on the owner. Use kind for on and off. Tell the owner plainly what changed and that reset restores everything to on; after a time or time zone change, say what the result's said says.",
+    schema: setSchedulePreferenceArgsSchema,
+    trigger_allowlist: allowlist(),
+    autonomy_gated: false,
+    mutates_state: true,
+    async handle(args: SetSchedulePreferenceArgs) {
+      if (args.action === 'timezone') {
+        const saved = await confirmZone?.(args.timezone!);
+        if (!saved) return { ok: false, code: 'rejected', error: `${args.timezone} was not saved: it is not an IANA time zone name such as Asia/Kolkata, or it could not be saved here. Nothing changed.`, source_taint: null };
+        return { ok: true, data: { preferences: book.all(), said: `Saved. Waldo now runs on ${saved} time.` }, source_taint: null };
+      }
+      if (args.action === 'time') {
+        const receipt = cardTime ? await cardTime(args.card === 'brief' ? 'card:brief' : 'card:close', args.time!) : null;
+        if (receipt?.state !== 'recorded') return { ok: false, code: 'rejected', error: receipt?.message ?? 'The Brief and Close times cannot be set here.', source_taint: null };
+        return { ok: true, data: { preferences: book.all(), said: receipt.message }, source_taint: null };
+      }
+      if (args.action !== 'reset' && args.kind === undefined) return { ok: false, code: 'invalid_args', error: 'kind is required for on and off', source_taint: null };
+      if (args.action === 'reset') book.reset(); else book.set(args.kind!, args.action === 'on');
+      if (args.mode) book.setHealthMode(args.mode);
+      await applySchedulePreferences(book.all(), await context(), args.action === 'reset' ? undefined : args.kind);
+      return { ok: true, data: { preferences: book.all() }, source_taint: null };
+    },
+  } satisfies ToolHandler<SetSchedulePreferenceArgs, { preferences: SchedulePreferences; said?: string }, ToolDispatcherContext>,
+];

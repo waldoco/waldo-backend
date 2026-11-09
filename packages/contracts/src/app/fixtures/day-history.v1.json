@@ -1,0 +1,59 @@
+{
+  "notes": [
+    "Send x-waldo-app-contract: controls=6 to read view=days; an older revision gets 400 invalid_query.",
+    "GET /app/v1/controls?view=days lists the owner's last 14 local days, today first. &date=YYYY-MM-DD reads one of those days; a day outside them answers 404 not_found.",
+    "Read-only: the view takes no actions and its revision guards nothing.",
+    "complete is false for a day that began before Waldo kept day history (history_since), and for a night whose runs were partly trimmed or began before it. History has no backfill.",
+    "A card's state is sent or skipped once it finished; pending while today's card may still come; not_sent for an earlier day's card that never went out; unknown for a card that finished before Waldo recorded how.",
+    "latest names the Main chat row the card was delivered to, with an excerpt cut from what the chat shows now: null when the card has no app row or the row is gone, absent when the chat could not be read. text is reserved for the card's full words and is not sent yet.",
+    "updates lists the day's update cards that reached the Main chat, newest first; total counts every update card delivered that day on any surface.",
+    "night is the previous night, from the previous day's Close to this day's Brief (now, for a Brief still to come): the background runs started in it, oldest first, at most 50. Summaries are fixed outcome lines; render them as plain text."
+  ],
+  "queries": [{ "view": "days" }, { "view": "days", "date": "2026-10-27" }],
+  "list": {
+    "version": 1, "state": "available", "revision": "1111111111111111111111111111111111111111111111111111111111111111", "view": "days",
+    "data": {
+      "timezone": "Asia/Kolkata", "today": "2026-10-28", "history_since": "2026-10-27",
+      "days": [
+        { "date": "2026-10-28", "complete": true, "updates_total": 0, "cards": [
+          { "id": "card:brief", "name": "The Brief", "state": "sent", "latest": { "message_id": "scheduled-7d2c", "delivered_at": 1793154600000, "excerpt": "A light morning: the design review at 11 is the one to protect." } },
+          { "id": "card:midday", "name": "Check-in", "state": "pending", "latest": null },
+          { "id": "card:close", "name": "The Close", "state": "pending", "latest": null }
+        ] },
+        { "date": "2026-10-27", "complete": false, "updates_total": 1, "cards": [
+          { "id": "card:brief", "name": "The Brief", "state": "unknown", "latest": null },
+          { "id": "card:midday", "name": "Check-in", "state": "skipped", "latest": null },
+          { "id": "card:close", "name": "The Close", "state": "sent", "latest": { "message_id": "scheduled-61af", "delivered_at": 1793116800000, "excerpt": "Done today: the deck went out." } }
+        ] },
+        { "date": "2026-10-26", "complete": false, "updates_total": 0, "cards": [] }
+      ]
+    }
+  },
+  "day": {
+    "version": 1, "state": "available", "revision": "2222222222222222222222222222222222222222222222222222222222222222", "view": "days",
+    "data": {
+      "timezone": "Asia/Kolkata", "date": "2026-10-28", "complete": true,
+      "cards": [
+        { "id": "card:brief", "name": "The Brief", "state": "sent", "latest": { "message_id": "scheduled-7d2c", "delivered_at": 1793154600000, "excerpt": "A light morning: the design review at 11 is the one to protect." } },
+        { "id": "card:midday", "name": "Check-in", "state": "pending", "latest": null },
+        { "id": "card:close", "name": "The Close", "state": "pending", "latest": null }
+      ],
+      "updates": { "items": [], "total": 0 },
+      "night": {
+        "from": 1793116800000, "to": 1793154600000, "complete": true, "total": 2,
+        "runs": [
+          { "id": "bg:9a1b2c3d", "kind": "nightly", "status": "completed", "summary": "memory pass finished", "started_at": 1793136600000, "ended_at": 1793136660000 },
+          { "id": "bg:4e5f6a7b", "kind": "health_trigger", "status": "completed", "summary": "health check ran", "started_at": 1793143800000, "ended_at": 1793143805000 }
+        ]
+      }
+    }
+  },
+  "day_before_history": {
+    "version": 1, "state": "available", "revision": "3333333333333333333333333333333333333333333333333333333333333333", "view": "days",
+    "data": {
+      "timezone": "Asia/Kolkata", "date": "2026-10-26", "complete": false, "cards": [],
+      "updates": { "items": [], "total": 0 },
+      "night": { "from": 1792944000000, "to": 1792981800000, "complete": false, "runs": [], "total": 0 }
+    }
+  }
+}
