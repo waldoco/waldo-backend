@@ -3,7 +3,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { DashboardNavigation, isSettingsRoute, resolveRoute } from './App';
 import { SettingsNavigation } from './Settings';
 import { AdminHealthView, HealthView } from './Health';
-import { fetchAdminHealth, fetchHealth, readAdminHealth, readHealth, type AdminHealthRecord } from './health-model';
+import { healthSourceV1Schema } from '../../contracts/src/app/health-ingest';
+import { fetchAdminHealth, fetchHealth, readAdminHealth, readHealth, SOURCE_LABEL, type AdminHealthRecord } from './health-model';
 import { SignInRequired } from './model';
 
 const NOW = new Date('2026-10-23T12:00:00.000Z');
@@ -64,6 +65,17 @@ describe('owner health view', () => {
     expect(html).toContain('2 readings rejected');
     expect(html).toContain('3 uploads refused');
     expect(html).toContain('Only uploads refused after sign-in are counted.');
+  });
+  it('reads a Google Health consent and upload source and names them, as the admin page does', () => {
+    const google = { ...consent('storage_compute', 'granted'), source: 'google_health', version: 5 };
+    const uploads = { ...freshness, sources: [...freshness.sources, { ...freshness.sources[0], source: 'google_health' }] };
+    const html = view({ consents: [google], freshness: uploads });
+    expect(html.match(/Google Health/g)?.length).toBe(2);
+    expect(() => readAdminHealth({ version: 1, as_of: NOW.toISOString(), owners: [{ id: '00000000-0000-0000-0000-000000000001', email: null, state: 'active', created_at: NOW.toISOString(),
+      consents: [{ source: 'google_health', purpose: 'storage_compute', status: 'granted', granted_at: null, withdrawn_at: null }], freshness: uploads }] })).not.toThrow();
+  });
+  it('names every source the health contract names, so a new provider cannot fail the page', () => {
+    expect(Object.keys(SOURCE_LABEL).sort()).toEqual([...healthSourceV1Schema.options].sort());
   });
   it('shows both consents, each in its own state', () => {
     const html = view();
