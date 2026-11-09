@@ -294,6 +294,7 @@ describe('external-origin tool classification — ADR-0049', () => {
       'browse_act',
       'delegate_task',
       'list_owner_findings',
+      'read_import',
     ]);
   });
 

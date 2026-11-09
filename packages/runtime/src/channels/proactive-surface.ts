@@ -24,6 +24,11 @@ export const proactiveReads = (kv: Pick<Kv, 'get'>, bothDefault = false): ReadsA
   const wanted = wantedTargets(proactiveSurface(kv, bothDefault));
   return bothDefault && wanted.some(target => READS[target] === 'chat') ? 'chat' : READS[wanted[0] ?? 'app'];
 };
+// Whether a surface's delivery of proactive work is written into the owner's own chain: the app transcript is that chain,
+// while a chat surface's job runs on and writes that chat's chain.
+const ON_OWNER_CHAIN: Readonly<Record<ProactiveTarget, boolean>> = { app: true, whatsapp: false, imessage: false };
+export const proactiveOnOwnerChain = (kv: Pick<Kv, 'get'>, bothDefault = false): boolean =>
+  ON_OWNER_CHAIN[wantedTargets(proactiveSurface(kv, bothDefault))[0] ?? 'app'];
 // Whether a surface can take the work itself, so that its delivery settles the job; one that cannot only gets copies.
 const SETTLES: Readonly<Record<ProactiveTarget, boolean>> = { app: true, whatsapp: true, imessage: false };
 // The stored choice read as a list of surfaces, the one that takes the work first and then each that gets a copy. This is
@@ -134,9 +139,10 @@ export const rememberWhatsAppSubject = (kv: Kv, subject: string): void => {
 export const whatsappSubjects = (kv: Pick<Kv, 'get'>): ReadonlySet<string> => new Set(kv.get<string[]>(WHATSAPP_SUBJECTS_KEY) ?? []);
 
 // Whether a message is Waldo's own initiative, which the owner did not ask for: a day card, an update, meeting prep, a pause
-// notice, a mail follow-up, a health note, or a copy of one of those the app already has. This is where a message comes from,
-// not what it says, and it picks the door-knock template (whatsapp-window.ts): the reply template says the owner asked.
-const unaskedKind = (record: FinalRecord): boolean => !!(record.mailFollowup || record.update || record.calendarPrep || record.scheduleNotice || record.dayCard || record.healthNotice);
+// notice, a mail follow-up, a health note, a check-back on an open loop, or a copy of one of those the app already has. This is
+// where a message comes from, not what it says, and it picks the door-knock template (whatsapp-window.ts): the reply template
+// says the owner asked.
+const unaskedKind = (record: FinalRecord): boolean => !!(record.mailFollowup || record.update || record.calendarPrep || record.scheduleNotice || record.dayCard || record.healthNotice || record.heartbeat);
 export const unaskedRecord = (record: FinalRecord): boolean => unaskedKind(record) || record.id.startsWith(WHATSAPP_COPY_PREFIX);
 
 // What a scheduled job queued for one of those numbers: a reminder, a loop's check-back, a mail follow-up, an update card,
