@@ -343,6 +343,21 @@ describe('otlpTurnExporter', () => {
     expect(attrs(off.spans(0)[0]!)['langfuse.trace.input']).toBeUndefined();
   });
 
+  it('decides text capture per entry when it is asked as a question, so a switch turned off mid-life applies to the next entry; production still wins', async () => {
+    const text = { input: '[{"role":"user","content":"hi"}]', output: 'hello' };
+    let allowed = true;
+    const live = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, { ...context, captureText: () => allowed }, live.send, () => 5_000);
+    await log({ trace: 'tg-6', hop: 'turn', ms: 10, ok: true, text });
+    expect(attrs(live.spans(0)[0]!)['langfuse.observation.input']).toBe(text.input);
+    allowed = false;
+    await log({ trace: 'tg-7', hop: 'turn', ms: 10, ok: true, text });
+    expect([attrs(live.spans(1)[0]!)['langfuse.observation.input'], attrs(live.spans(1)[0]!)['langfuse.trace.input']]).toEqual([undefined, undefined]);
+    const prod = capture();
+    await otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, { ...context, environment: 'production', captureText: () => true }, prod.send, () => 5_000)({ trace: 'tg-8', hop: 'turn', ms: 10, ok: true, text });
+    expect(attrs(prod.spans(0)[0]!)['langfuse.observation.input']).toBeUndefined();
+  });
+
   it('exports what fills a model call\'s context as numeric metadata on its generation', async () => {
     const { send, spans } = capture();
     const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);

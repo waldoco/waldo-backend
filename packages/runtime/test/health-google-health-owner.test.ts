@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { oauthProxy } from '../src/connectors/oauth-proxy-client';
 import type { GoogleHealthConfig } from '../src/health/providers/google-health-client';
-import { googleHealthOwner, type GoogleHealthLog } from '../src/health/providers/google-health-owner';
+import { googleHealthOwner, holdsGoogleHealthData, type GoogleHealthLog } from '../src/health/providers/google-health-owner';
 import { NOW, planeRpc, syncedClock, edge, type Plane } from './helpers/whoop-fakes';
 import { routeEdgeFetch, vaultFake, workerToEdge, WORKER_ENV } from './support/oauth-edge-harness';
 
@@ -235,9 +235,20 @@ describe('Google Health owner: disconnecting', () => {
     await h.owner.hint({ type: 'sleep', from: iso(NOW - 10 * DAY), trace: 'trace-0007' });
     expect(await h.owner.disconnect()).toEqual({ revoked_at_provider: false });
     expect(h.world.revoked).toBeGreaterThan(0);
-    expect([...h.kv.keys()].filter(key => key.startsWith('google_health:'))).toEqual([]);
+    expect([...h.kv.keys()].filter(key => key.startsWith('google_health:'))).toEqual(['google_health:held']);
     expect(h.plane.vault.rows.filter(row => row.status !== 'revoked')).toHaveLength(0);
     expect(h.disarmed.count).toBe(1);
+  });
+
+  it('marks the owner as holding Google Health data from the first link, and keeps the mark after a disconnect, since what was stored stays until storage consent is withdrawn', async () => {
+    const h = harness();
+    const kv = { get: <T>(key: string) => h.kv.get(key) as T | undefined };
+    expect(holdsGoogleHealthData(kv)).toBe(false);
+    expect(await h.owner.exchange({ code: 'good-code', denied: false })).toBe('linked');
+    expect(holdsGoogleHealthData(kv)).toBe(true);
+    await h.owner.disconnect();
+    expect([h.kv.has('google_health:conn'), holdsGoogleHealthData(kv)]).toEqual([false, true]);
+    expect(holdsGoogleHealthData({ get: <T>(key: string) => (key === 'google_health:conn' ? { id: 'c' } : undefined) as T | undefined })).toBe(true);
   });
 
   it('keeps no reading, token or zone in a log line or in the object\'s own storage', async () => {
