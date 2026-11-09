@@ -54,6 +54,17 @@ export function edgeFunctionFacts(list, slugs) {
   });
 }
 
+// The ADR-0066 proof issuer is pinned to the spike project and throws on any other SUPABASE_URL, and nothing
+// consumes it, so it stays off staging (docs/ops/PRODUCTION_ALPHA_RUNBOOK_2026-10-22.md). Deployed, it fails.
+const KEPT_UNDEPLOYED = new Set(['mint-agent-jwt']);
+
+export function edgeFunctionCheck(f) {
+  const facts = f.missing ? null : `version ${f.version} ${f.status}`;
+  if (KEPT_UNDEPLOYED.has(f.slug)) return facts ? ['FAIL', `${facts} deployed, but it must stay undeployed`] : ['PASS', 'not deployed, on purpose'];
+  if (!facts) return ['FAIL', 'not deployed'];
+  return [f.status === 'ACTIVE' ? 'PASS' : 'FAIL', `${facts} verify_jwt ${f.verifyJwt} updated ${f.updatedAt}`];
+}
+
 const sameSha = (a, b) => SHA.test(a) && SHA.test(b) && (a.startsWith(b) || b.startsWith(a));
 const EXPECTATIONS = {
   healthz: ({ status, body }, expectSha) => {
@@ -162,10 +173,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, wait
   if (env.SUPABASE_ACCESS_TOKEN) {
     const slugs = functionSlugs(readdirSync(new URL('../supabase/functions/', import.meta.url), { withFileTypes: true }).map((d) => ({ name: d.name, dir: d.isDirectory() })));
     try {
-      for (const f of edgeFunctionFacts(await supabaseFunctions(env.SUPABASE_ACCESS_TOKEN), slugs)) {
-        if (f.missing) record(`edge-function ${f.slug}`, 'FAIL', 'not deployed');
-        else record(`edge-function ${f.slug}`, f.status === 'ACTIVE' ? 'PASS' : 'FAIL', `version ${f.version} ${f.status} verify_jwt ${f.verifyJwt} updated ${f.updatedAt}`);
-      }
+      for (const f of edgeFunctionFacts(await supabaseFunctions(env.SUPABASE_ACCESS_TOKEN), slugs)) record(`edge-function ${f.slug}`, ...edgeFunctionCheck(f));
     } catch (error) { record('edge-functions', 'FAIL', reason(error)); }
     try {
       const { appliedVersions, pending } = compareHistory(localManifest(new URL('../supabase/migrations/', import.meta.url)), await readHistory(env.SUPABASE_ACCESS_TOKEN, PROJECT));

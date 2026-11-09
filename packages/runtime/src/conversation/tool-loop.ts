@@ -158,6 +158,14 @@ export async function runToolLoop(input: Readonly<{
   // repeatable: whether a resumed call may be offered to run again once its result is cleared. This loop never saw those
   // calls run, so the caller that knows their effect class answers it.
   resume?: Readonly<{ turns: readonly LLMToolTurn[]; repeatable(name: string): boolean }>;
+  // Past atChars characters of results, every result but the latest `keep` is cleared at once, never into the newest round,
+  // and nothing more is cleared until the results outgrow it again. In place of halving them past TOOL_RESULTS_KEEP_CHARS.
+  clearToLatest?: Readonly<{ atChars: number; keep: number }>;
+  // How many UTF-8 bytes of tool turns (calls, results and cleared notes, as JSON) the call's hard ceiling leaves room for,
+  // given everything else the request carries. Past it every result but the newest round's is cleared, ahead of the other
+  // rules; the newest round is sent whole, so one round's results can still carry a call past the ceiling. Undefined, or
+  // absent, sets no ceiling.
+  resultRoomBytes?: () => number | undefined;
   // Awaited after each round's results, before the next model call: the worker's checkpoint. A throw ends the loop.
   afterRound?: (turns: readonly LLMToolTurn[]) => Promise<void>;
   // Offer the same tool list every round: the list leads the provider's cache prefix, so a change mid-turn re-bills the
@@ -252,6 +260,12 @@ export async function runToolLoop(input: Readonly<{
   const clearOldResults = () => {
     const newest = roundStarts.at(-1) ?? 0;
     let total = turns.slice(cleared).reduce((sum, turn) => sum + turn.output.length, 0);
+    const room = input.resultRoomBytes?.();
+    if (room !== undefined && new TextEncoder().encode(JSON.stringify(turns)).byteLength > room) clearThrough(newest);
+    if (input.clearToLatest) {
+      if (total > input.clearToLatest.atChars) clearThrough(Math.min(newest, turns.length - input.clearToLatest.keep));
+      return;
+    }
     if (total <= TOOL_RESULTS_KEEP_CHARS) return;
     while (cleared < newest && total > TOOL_RESULTS_KEEP_CHARS / 2) {
       total -= turns[cleared]!.output.length;

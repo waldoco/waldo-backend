@@ -55,14 +55,15 @@ export const whatsappTimelineContext = (host: ChatTimelineHost, active: () => Re
 });
 
 // After the owner's turns on a chat surface on the timeline, so an owner there who only writes on that chat still gets the
-// summary that carries their chats from before. It runs in its own budget, never inside a turn.
+// summary that carries their chats from before. It runs in its own budget, never inside a turn, and says when the alarm pass
+// has no room for that budget.
 export const compactChatTimeline = async (host: ChatTimelineHost, chat: TimelineChat,
   runtime: Readonly<{ compactChain(trace: string, context: OwnerContextCapability, scope: RunEffectScope): Promise<void>; log(entry: TurnLogEntry): void }>,
-  abort: AbortController, alarmEnd?: number): Promise<void> => {
+  abort: AbortController, alarmEnd?: number): Promise<'no_time' | undefined> => {
+  const started = Date.now(), deadline = started + COMPACTION_BUDGET_MS;
+  if (alarmEnd !== undefined && alarmEnd < deadline) return 'no_time';
   const owner = bound(host, chat);
   if (!owner) return;
-  const started = Date.now(), deadline = started + COMPACTION_BUDGET_MS;
-  if (alarmEnd !== undefined && alarmEnd < deadline) return;
   const trace = `compaction:${chat}:${started}`, timer = setTimeout(() => abort.abort(), COMPACTION_BUDGET_MS);
   // Like a turn's scope: the chat must still be the bound, linked one under the same owner name when anything commits.
   const within = () => {

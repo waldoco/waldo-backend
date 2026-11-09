@@ -55,6 +55,7 @@ import {
   getHealthArgsSchema,
   getScreenTimeArgsSchema,
   getDeviceContextArgsSchema,
+  queryPhoneCalendarArgsSchema,
   getWeatherArgsSchema,
   getMasterMetricsArgsSchema,
   getTasksArgsSchema,
@@ -71,6 +72,8 @@ import {
   ownerMessageHeardArgsSchema,
   reactToMessageArgsSchema,
   offerRepliesArgsSchema,
+  showChartArgsSchema,
+  showHealthChartArgsSchema,
   attachFileArgsSchema,
   queryCalendarArgsSchema,
   readDocumentArgsSchema,
@@ -136,6 +139,8 @@ import {
   writeTaskArgsSchema,
   archiveThreadArgsSchema,
   recordOwnerFindingArgsSchema,
+  readImportArgsSchema,
+  importMemoriesArgsSchema,
   listOwnerFindingsArgsSchema,
 } from '@waldo/contracts';
 import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, OPEN_PUBLIC_TOOLS, evaluateDeclaredEgress } from './egress-policy';
@@ -209,6 +214,7 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   get_health: getHealthArgsSchema,
   get_screen_time: getScreenTimeArgsSchema,
   get_device_context: getDeviceContextArgsSchema,
+  query_phone_calendar: queryPhoneCalendarArgsSchema,
   get_weather: getWeatherArgsSchema,
   connect_service: connectServiceArgsSchema,
   send_console_link: sendConsoleLinkArgsSchema,
@@ -218,6 +224,8 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   attach_file: attachFileArgsSchema,
   react_to_message: reactToMessageArgsSchema,
   offer_replies: offerRepliesArgsSchema,
+  show_chart: showChartArgsSchema,
+  show_health_chart: showHealthChartArgsSchema,
   query_calendar: queryCalendarArgsSchema,
   get_communication: getCommunicationArgsSchema,
   search_communication: searchCommunicationArgsSchema,
@@ -317,6 +325,8 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   check_task: checkTaskArgsSchema,
   steer_task: steerTaskArgsSchema,
   record_owner_finding: recordOwnerFindingArgsSchema,
+  read_import: readImportArgsSchema,
+  import_memories: importMemoriesArgsSchema,
   list_owner_findings: listOwnerFindingsArgsSchema,
 });
 
