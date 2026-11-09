@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { toolError, toolNameSchema, type LLMTool, type LLMToolCall, type ToolError } from '@waldo/contracts';
 import type { LoopToolResult } from '../conversation/tool-loop';
-import { BRAIN_NAMESPACES, TOOL_RECORDS, byToolName, type BrainNamespace, type ToolRecord } from './records';
+import { BRAIN_NAMESPACES, byToolName, offeredPlacement, type BrainNamespace } from './records';
 
 // The harness's own tool search, for any function-calling model. A round offers the core tools and two meta tools:
 // find_tools, whose result is the definitions asked for, and use_tool, which calls one of them by name. The system prompt
@@ -39,12 +39,11 @@ export const toolOfCall = (call: Pick<LLMToolCall, 'name' | 'arguments'>): strin
   const args = useArgsSchema.safeParse(parse(call.arguments));
   return args.success && toolNameSchema.safeParse(args.data.name).success ? args.data.name : call.name;
 };
-const placement = (name: string): 'core' | BrainNamespace => (TOOL_RECORDS as Partial<Record<string, ToolRecord>>)[name]?.brain ?? 'core';
 
 const deferredGroups = (names: readonly string[]): Map<BrainNamespace, string[]> => {
   const groups = new Map<BrainNamespace, string[]>();
   for (const name of names) {
-    const place = placement(name);
+    const place = offeredPlacement(name);
     if (place !== 'core') groups.set(place, [...(groups.get(place) ?? []), name]);
   }
   return groups;
@@ -66,7 +65,7 @@ export const toolCatalogue = (names: readonly string[]): string => {
 export function harnessToolLoader(tools: readonly LLMTool[], direct: ReadonlySet<string> = new Set()): ToolLoader {
   const byName = new Map(tools.map((tool) => [tool.name, tool] as const));
   const groups = deferredGroups(tools.map((tool) => tool.name).filter((name) => !direct.has(name)));
-  const core = tools.filter((tool) => direct.has(tool.name) || placement(tool.name) === 'core').sort(byToolName);
+  const core = tools.filter((tool) => direct.has(tool.name) || offeredPlacement(tool.name) === 'core').sort(byToolName);
   if (groups.size === 0) return { offered: core, route: (call) => ({ call }), definition: (name) => byName.get(name) };
   const offered: LLMTool[] = [
     ...core,

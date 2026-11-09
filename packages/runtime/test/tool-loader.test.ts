@@ -8,6 +8,7 @@ import { runToolLoop, toolDefinitions, type ToolLoopEvent } from '../src/convers
 import { sanitise } from '../src/scribe/sanitiser';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 import { FIND_TOOLS, USE_TOOL, harnessToolLoader, toolCatalogue, toolOfCall } from '../src/tools/loader';
+import { brainTools } from '../src/tools/records';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 const allowlist = (tool: ToolName): TriggerType[] => (Object.keys(TOOL_PERMISSIONS) as TriggerType[]).filter((trigger) => TOOL_PERMISSIONS[trigger].includes(tool));
@@ -262,4 +263,19 @@ describe('use_tool is no second way in', () => {
     // Every tool direct leaves nothing to load, so the meta tools go too.
     expect(harnessToolLoader([tool('propose_calendar_change')], new Set(['propose_calendar_change'])).offered.map((offered) => offered.name)).toEqual(['propose_calendar_change']);
   });
+
+  it('a turn that admitted the owner\'s connected tools offers finding and reading them with no find_tools hop; the write stays deferred', () => {
+    const tool = (name: string): LLMTool => ({ name, description: 'd', parameters: { type: 'object' } });
+    const connected = harnessToolLoader(['read_memory', 'search_mcp_tools', 'read_mcp_tool', 'call_mcp_tool', 'web_search'].map(tool)).offered.map((offered) => offered.name);
+    expect(connected).toEqual(expect.arrayContaining(['search_mcp_tools', 'read_mcp_tool', FIND_TOOLS, USE_TOOL]));
+    expect(connected).not.toContain('call_mcp_tool');
+    // An owner with nothing connected is admitted none of them, and the function list is as before.
+    expect(harnessToolLoader(['read_memory', 'web_search'].map(tool)).offered.map((offered) => offered.name)).not.toContain('search_mcp_tools');
+    // The catalogue does not list again what the function list already carries.
+    expect(toolCatalogue(['search_mcp_tools', 'read_mcp_tool', 'call_mcp_tool'])).not.toMatch(/search_mcp_tools|read_mcp_tool/);
+    // A provider's own tool search keeps them loaded too.
+    const provider = brainTools(['search_mcp_tools', 'read_mcp_tool', 'call_mcp_tool'].map(tool), true).tools!;
+    expect(provider.filter((offered) => offered.defer_loading).map((offered) => offered.name)).toEqual(['call_mcp_tool']);
+  });
 });
+
