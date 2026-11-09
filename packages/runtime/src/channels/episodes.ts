@@ -28,6 +28,15 @@ const episodeOf = ({ speaker, ...row }: StoredEpisode): Episode => speaker === O
 // ref is the index row's own id: unique per stored row, so a snippet traces to exactly its row
 // even if the same entry_id was indexed twice (entry_id is informational, not unique).
 // surface and links are set only with the recall chain on (history/recall-chain.ts).
+// Whether a past message may carry someone else's words: every row but the owner's own words, typed by them and not
+// answering outside content. A Waldo reply counts too, marked or not, because a reply stored before replies were marked may
+// have read mail, and history reaches every row.
+export const carriesOthersWords = (episode: Pick<Episode, 'speaker' | 'own' | 'answersOutside'>): boolean =>
+  !(episode.speaker === 'owner' && episode.own === true && episode.answersOutside !== true);
+// Whether a hit's links may: a link to a message by that message's row (unreadable counts), and any other link (a note, a
+// run, a task, a card) always, since its line is not the owner's own words.
+export const linksCarryOthersWords = (links: readonly RecallLink[] | undefined, rowCarries: (ref: string) => boolean): boolean =>
+  (links ?? []).some((link) => /^[1-9][0-9]*$/.test(link.ref) ? rowCarries(link.ref) : true);
 export type EpisodeHit = Readonly<{ ref: string; entry_id: string; speaker: Speaker; at: string | null; snippet: string; surface?: string | null; links?: readonly RecallLink[] }>;
 
 export type EpisodeIndex = Readonly<{

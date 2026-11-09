@@ -25,6 +25,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   LANGFUSE_CAPTURE_TEXT?: string;
   // 'on' sends per-day spend to waldo.cost_ledger_daily after each turn; anything else keeps it off.
   WALDO_COST_LEDGER_SYNC?: string;
+  // An invited owner's monthly spend ceiling in USD (llm/cost-ledger.ts ownerCeilingUsd); unset or invalid reads as 25.
+  OWNER_SPEND_CEILING_USD?: string;
   // 'on' turns conversation compaction on for the app chat; anything else keeps the plain window.
   WALDO_COMPACTION?: string;
   // '1' cuts chat history in steps and holds the start between cuts, so the provider's cache keeps the leading history.
@@ -132,6 +134,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" lets the owner approve a card shown in full in the conversation by telling Waldo to go ahead (approve_shown). Off
   // unless "1".
   APPROVE_IN_CHAT?: string;
+  // "1" runs a send, calendar change or Google task change the owner asked for in their own message with no card, reporting
+  // it with an undo where one exists; the cards that remain are approved on the surface showing them. Off unless "1".
+  AUTONOMOUS_BY_DEFAULT?: string;
   // "1" offers track/log/list/stop_medication on owner turns and words medicine reminders in the harness from a health-plane
   // read. Off unless "1".
   MEDICATIONS?: string;

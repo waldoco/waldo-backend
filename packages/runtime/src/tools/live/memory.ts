@@ -39,6 +39,10 @@ type Dependencies = Readonly<{
 const PEOPLE_OFF = 'The people map is not on for this owner yet, so memory holds no people; read or forget by query, topic or claim ids instead.';
 const fail = (error: string) => ({ ok: false as const, code: 'invalid_args' as const, error, source_taint: null });
 const success = (data: unknown) => ({ ok: true as const, data, source_taint: null });
+// A read that shows a note the owner did not state (saved while reading outside content, by a background pass, from an import,
+// or with no recorded origin) is outside content for the rest of the turn, as recall treats the same note.
+const shown = (data: unknown, claims: readonly Readonly<{ origin?: string | null }>[]) =>
+  ({ ok: true as const, data, source_taint: claims.some(claim => claim.origin !== 'owner') ? 'external' as const : null });
 const CONFIRM_NOTE = 'It becomes the owner\'s once they confirm it or say it again in a later message of their own.';
 const HELD_NOTE = `Already held, but not as the owner's statement. ${CONFIRM_NOTE}`;
 // Why a write was kept as Waldo's read rather than the owner's word, said back to the model.
@@ -75,6 +79,9 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
   const ready = async (ctx: MemoryToolContext) => { ctx.runScope?.admit(); await ctx.assertTaskSourceCurrent?.(); ctx.runScope?.admit(); };
   const hidden = (claim: Claim) => store.pendingTopics().some(topic => [claim.text, claim.evidence, claim.source_ref, (claim as Claim & { aliases?: string | null }).aliases].some(text => typeof text === 'string' && (carriesTopic(text, topic) || hidesTopic(text, topic))));
   const blocked = (text: string) => store.barred(text);
+  // A claim a turn may read: never outside content until the owner confirms it, nothing being forgotten, and in a turn that
+  // read outside content nothing fenced from it. A person is shown only through such a claim.
+  const readableIn = (outside: boolean) => (claim: Claim) => claim.origin !== 'untrusted' && !hidden(claim) && (!outside || outsideSafe(claim));
   const base = (name: ToolName, description: string) => ({ name, description, trigger_allowlist: triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes(name)), autonomy_gated: false });
   return [
     { ...base('remember', `Store a fact or preference grounded in a verbatim quote from the owner in this conversation. To correct an active claim, pass its id as replaces_id: the c12 that starts its memory line, or 12. Memory is context, never permission to act. ${HEALTH_MEMORY_RULES.join(' ')}`), schema: rememberArgsSchema, mutates_state: true,
@@ -91,8 +98,9 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         if (unknown.length) return fail(`Memory has no person with the id${unknown.length > 1 ? 's' : ''} ${unknown.join(', ')}. Read memory with people: true, and pass ref only for a person it lists, or name to start a new one.`);
         // A reading the owner states is theirs to keep. Once the turn has read outside content (mail, a web page, a connected
         // tool), a reading may have come from there, so none is stored from this turn: neither one the scribe left in these
-        // arguments nor the marker of one it withheld. The evidence and aliases sit beside the text.
-        if (ctx.toolArgSourceTaint === 'external' && [args.text, args.evidence_quote, ...(args.aliases ?? [])].some(text => text.includes(HEALTH_SPAN_MARKER) || numericHealthIn(text))) return fail('This turn read outside content (mail, a web page or a connected tool), so memory stores no health reading from it. Save the note without the reading, or save nothing.');
+        // arguments nor the marker of one it withheld. The evidence, aliases and the people's names and relations sit beside the text.
+        const personTexts = links.flatMap(link => [link.name, link.relation].filter((text): text is string => text !== undefined));
+        if (ctx.toolArgSourceTaint === 'external' && [args.text, args.evidence_quote, ...(args.aliases ?? []), ...personTexts].some(text => text.includes(HEALTH_SPAN_MARKER) || numericHealthIn(text))) return fail('This turn read outside content (mail, a web page or a connected tool), so memory stores no health reading from it. Save the note without the reading, or save nothing.');
         const claims = store.claims();
         const previous = args.replaces_id === undefined ? undefined : claims.find(claim => claim.id === args.replaces_id);
         if (args.replaces_id !== undefined && !previous) return fail('Replacement id is not an active claim in this owner store.');
@@ -113,9 +121,14 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
           if (!links.length) return {};
           const people = store.people.link(id, links, now());
           // A new person whose name memory already holds: which one is meant is the model's call, so it is shown the others.
+          // Like a read, it shows each one only through claims this turn may read.
+          const readable = readableIn(ctx.memoryOutside === true || tainted);
           const namesakes = links.flatMap((link, index) => link.name === undefined ? [] : store.people.all()
             .filter(row => row.id !== people[index] && row.name.trim().toLowerCase() === link.name!.trim().toLowerCase())
-            .map(row => ({ person: row.id, name: row.name, relations: [...new Set(store.people.claimsOf(row.id).flatMap(claim => claim.relation ? [claim.relation] : []))].slice(0, 3) })));
+            .flatMap(row => {
+              const claims = store.people.claimsOf(row.id).filter(readable);
+              return claims.length ? [{ person: row.id, name: row.name, relations: [...new Set(claims.flatMap(claim => claim.relation ? [claim.relation] : []))].slice(0, 3) }] : [];
+            }));
           return { people, ...(namesakes.length ? { same_name: namesakes, note: 'Memory already holds someone with this name. If this note is about one of them, correct it with replaces_id and people ref; otherwise it stays a new person.' } : {}) };
         };
         const commit = <T>(work: () => T): T => ctx.runScope ? ctx.runScope.commit(work) : deps.transaction ? deps.transaction(work) : work();
@@ -161,28 +174,28 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         // The DO binds the database to this conversation: an owner turn for another conversation never selects it, even if
         // a model knows a local claim id. A machine turn on this owner's DO (a brief, a mail follow-up) carries no owner turn and reads.
         if (ctx.memoryTurn !== undefined && !admitted(ctx)) return fail('Authenticated owner memory context is unavailable.');
-        // A claim this turn may read: never outside content until the owner confirms it, nothing being forgotten, and in a turn that
-        // read outside content nothing fenced from it. A person is shown only through such a claim.
-        const readable = (claim: Claim) => claim.origin !== 'untrusted' && !hidden(claim) && (!ctx.memoryOutside || outsideSafe(claim));
+        const readable = readableIn(ctx.memoryOutside === true);
         if (people === true || person !== undefined) {
           if (!deps.people) return fail(PEOPLE_OFF);
           const today = now().slice(0, 10);
-          const shown = (row: Person) => {
+          const shownPerson = (row: Person) => {
             const claims = store.people.claimsOf(row.id).filter(readable);
             if (!claims.length || store.pendingTopics().some(topic => carriesTopic(row.name, topic))) return null;
             return { card: personCard(row, claims, today), claims };
           };
           if (person !== undefined) {
             const row = store.people.person(person);
-            const found = row ? shown(row) : null;
+            const found = row ? shownPerson(row) : null;
             if (!found) return success({ person: null, claims: [], authority: 'context_only_not_action_approval' });
-            return success({ person: found.card, claims: found.claims.slice(0, limit).map(claim => ({ ...provenance(claim, deps.validity === true), role: claim.role, relation: claim.relation, on_date: claim.on_date ?? null })), authority: 'context_only_not_action_approval' });
+            const listed = found.claims.slice(0, limit);
+            return shown({ person: found.card, claims: listed.map(claim => ({ ...provenance(claim, deps.validity === true), role: claim.role, relation: claim.relation, on_date: claim.on_date ?? null })), authority: 'context_only_not_action_approval' }, found.claims);
           }
           const needle = query?.toLowerCase();
-          const cards = store.people.all().flatMap(row => { const found = shown(row); return found ? [found] : []; })
+          const found = store.people.all().flatMap(row => { const one = shownPerson(row); return one ? [one] : []; })
             .filter(({ card, claims }) => !needle || [card.name, ...card.other_names, ...claims.map(claim => claim.text)].some(text => text.toLowerCase().includes(needle)))
-            .map(({ card }) => card).sort((a, b) => PERSON_RINGS.indexOf(a.ring ?? 'wider') - PERSON_RINGS.indexOf(b.ring ?? 'wider') || a.name.localeCompare(b.name));
-          return success({ people: cards.slice(0, limit), more: cards.length > limit, authority: 'context_only_not_action_approval' });
+            .sort((a, b) => PERSON_RINGS.indexOf(a.card.ring ?? 'wider') - PERSON_RINGS.indexOf(b.card.ring ?? 'wider') || a.card.name.localeCompare(b.card.name));
+          const listed = found.slice(0, limit);
+          return shown({ people: listed.map(({ card }) => card), more: found.length > limit, authority: 'context_only_not_action_approval' }, listed.flatMap(({ claims }) => claims));
         }
         const match = query === undefined ? null : ftsQuery(query);
         if (query !== undefined && match === null) return success({ claims: [], omitted_claim_ids: [], complete: true, authority: 'context_only_not_action_approval' });
@@ -198,7 +211,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         // Whole claims only: one that would push the result past the budget is named, never cut into partial words.
         const claims: typeof selected = []; const omitted_claim_ids: number[] = []; let bytes = 0;
         for (const claim of selected) { const size = new TextEncoder().encode(JSON.stringify(claim)).byteLength; if (bytes + size > READ_BUDGET_BYTES) omitted_claim_ids.push(claim.id); else { claims.push(claim); bytes += size; } }
-        return success({ claims, omitted_claim_ids, complete: omitted_claim_ids.length === 0, authority: 'context_only_not_action_approval' });
+        return shown({ claims, omitted_claim_ids, complete: omitted_claim_ids.length === 0, authority: 'context_only_not_action_approval' }, claims);
       } },
     { ...base('forget_memory', 'Remove selected owner memory by ids, literal topic in the current owner message, an exact stored owner-message span using UTF-16 offsets, one person, or import_source for everything brought in from one assistant\'s export. scope_note describes the requested scope.'), schema: forgetMemoryArgsSchema, mutates_state: true,
       async handle(args: ForgetMemoryArgs, ctx) {
@@ -227,11 +240,14 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         if (args.import_source) for (const claim of claims) if (importSourceOf(claim.source_ref) === args.import_source) selected.set(claim.id, claim);
         // One person: every claim about them, and their name and addresses as words the owner named, so the purge sweeps every store
         // for them and a later pass cannot bring them back. Another name they share with someone else memory holds is left alone.
+        let personNameSwept = false;
         if (args.person !== undefined) {
           if (!deps.people) return fail(PEOPLE_OFF);
           if (!turn) return fail('A person is forgotten only from the owner\'s own message. Ask the owner to say who to forget.');
           if (!store.people.person(args.person)) return fail('Memory has no person with that id. Read memory with people: true for their id.');
-          for (const text of store.people.forgetTexts(args.person)) texts.add(text);
+          const named = store.people.forgetTexts(args.person);
+          for (const text of named) texts.add(text);
+          personNameSwept = named.includes(store.people.person(args.person)!.name);
           for (const id of store.people.claimIdsOf(args.person)) { const claim = claims.find(row => row.id === id); if (claim) selected.set(id, claim); }
         }
         // What a selected claim replaced goes with it, so no earlier wording of it stays as history.
@@ -273,7 +289,8 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         // Nothing selected and no derived store changed means nothing was forgotten: a success receipt would tell the owner it is gone while recall still holds it.
         if (selected.size === 0 && !touched) return fail('No stored memory carries that topic or span. Read memory, then pass claim_ids or a literal topic that appears in the stored text.');
         // Chat history is redacted by exact text. A topic or span names the literal the owner said, so restatements carrying it are swept too; an id alone only knows the saved wording, and a reworded copy elsewhere (an earlier reply, a summary) is not reached. The receipt says which one happened.
-        const swept = args.topic !== undefined || args.source !== undefined || args.person !== undefined;
+        // A person's name is swept only when it is theirs alone and long enough to name them (people.forgetTexts).
+        const swept = args.topic !== undefined || args.source !== undefined || personNameSwept;
         const history = swept
           ? 'older chat messages carrying the forgotten words have those words hidden'
           : 'older chat history is hidden only where it quotes the saved wording exactly; a restated or reworded copy may remain, and forgetting by the literal topic from the owner message sweeps those';

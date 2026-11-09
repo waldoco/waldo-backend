@@ -90,7 +90,7 @@ describe('a card raised after outside content', () => {
 
   it('a typed yes on a card approved only by its button is refused, as before, and now points to the button and its link', async () => {
     const handler = approveShownHandler({ approveShown: async () => ({ outcome: 'app_only', link: 'waldo://approvals/p1' }) });
-    const result = await handler.handle({ approval_id: 'p1' } as never, { ownerMessage: { messageRef: 'm1', receivedAt: NOW }, runOrigin: 'owner', trigger: 'user_message', toolArgSourceTaint: null } as never);
+    const result = await handler.handle({ approval_id: 'p1' } as never, { ownerMessage: { messageRef: 'm1', receivedAt: NOW, ownWordsOnly: true }, runOrigin: 'owner', trigger: 'user_message', toolArgSourceTaint: null } as never);
     expect(result).toMatchObject({ ok: false, code: 'rejected' });
     expect((result as { error: string }).error).toMatch(/never in words\. Nothing was done\./);
     expect((result as { error: string }).error).toContain("Point them to the card's own button, or to it in the Waldo app: waldo://approvals/p1");
