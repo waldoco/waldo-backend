@@ -275,7 +275,8 @@ import { SEND_UNASKED, bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppF
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler, executeMcp, McpConnectError, type McpGoogleAuth, type McpGoogleResolution } from '../tools/live/mcp';
 import { connectorsLine, googleConnectionFacts, mcpConnections, McpRefusal, MCP_FINISH_PATH, MCP_START_PATH, type ConnectOutcome, type McpConnections } from '../connectors/mcp-connections';
-import { catalogueTiles, MCP_CATALOGUE } from '../connectors/mcp-catalogue';
+import { catalogueEntry, catalogueTiles, MCP_CATALOGUE } from '../connectors/mcp-catalogue';
+import { firstLookPrompt, firstLookRead } from '../connectors/mcp-first-look';
 import { oauthProxy } from '../connectors/oauth-proxy-client';
 import { sendMessageHandler } from '../tools/live/messaging';
 import { agentMailToolHost, sendAgentMailHandler } from '../tools/live/agent-mail';
@@ -680,7 +681,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     await this.ctx.storage.delete(`connect_mcp_ticket:${nonce}`);
     const told = this.appConnects().settled(ticket, outcome);
     const tile = told !== null && 'tile' in told;
-    if (told && !('tile' in told)) await this.tellConnectOutcome(nonce, told);
+    const chat = told && !('tile' in told) ? told : undefined;
+    if (outcome.kind === 'linked') this.ctx.waitUntil(this.firstLook(nonce, outcome, chat));
+    else if (chat) await this.tellConnectOutcome(nonce, chat);
     const call = signedRpc(this.env);
     if (outcome.kind !== 'linked' || !call) return tile;
     const done = await call('connect_session_complete', `connsess.complete.${ticket}`, { p_ticket_hash: ticket }).catch(() => null);
@@ -707,6 +710,31 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async pollAppConnect(nonce: string): Promise<void> {
     const told = await this.appConnects().poll(nonce);
     if (told) await this.tellConnectOutcome(nonce, told);
+  }
+  // Read on connect (connectors/mcp-first-look.ts): one read of the new server, and one line on what Waldo can now see, to the
+  // conversation that asked or, for a tile, the surface that takes the owner's proactive work. With no read to make, a chat
+  // still hears its plain connected line and a tile hears nothing, as before.
+  private async firstLook(nonce: string, outcome: Extract<ConnectOutcome, { kind: 'linked' }>, chat?: Readonly<{ channel: ConnectAppChannel; thread?: string; text: string }>): Promise<void> {
+    const trace = `connect-first-look:${nonce.slice(0, 12)}`, started = Date.now();
+    let code: string = 'no_connection', line: string | undefined;
+    try {
+      const view = this.mcp().list().find((candidate) => candidate.id === outcome.id);
+      if (view) {
+        const read = await firstLookRead({ tools: async (server) => (await this.mcp().search({ server, ownerTurn: () => true })).tools, invoke: (input) => this.mcp().invoke(input) }, view);
+        code = read.status === 'read' ? 'read' : read.code;
+        if (read.status === 'read') {
+          const runtime = this.setup(chat?.channel ?? this.taskChannel());
+          const said = (await this.asOwnerJob('connect_first_look', trace, () => runtime.macFollowup(trace, runtime.owner, firstLookPrompt(view.name, catalogueEntry(view.server_url, view.issuer)?.about, read), async (_hop, work) => work(), [], undefined, undefined, undefined, 'external'))).trim();
+          if (said) line = said; else code = 'no_line';
+        }
+      }
+    } catch (error) {
+      code = 'failed';
+      console.log(JSON.stringify({ trace, hop: 'connect_first_look', ok: false, error: error instanceof Error ? error.message : String(error) }));
+    }
+    console.log(JSON.stringify({ trace, hop: 'connect_first_look', ms: Date.now() - started, ok: line !== undefined, code }));
+    const channel = chat?.channel ?? (line === undefined ? undefined : this.taskChannel());
+    if (channel) await this.tellConnectOutcome(nonce, { channel, ...(chat?.thread ? { thread: chat.thread } : {}), text: line ?? chat!.text });
   }
   // The settled line goes to the conversation the link was sent to, through that surface's delivery outbox, once per attempt.
   private async tellConnectOutcome(nonce: string, told: Readonly<{ channel: ConnectAppChannel; thread?: string; text: string }>): Promise<void> {
