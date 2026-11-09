@@ -33,6 +33,8 @@ export const healthReadSignalSchema = z.enum([
   'sleep_light', 'sleep_deep', 'sleep_rem', 'sleep_awake', 'sleep_efficiency', 'respiratory_rate', 'spo2', 'wrist_temperature',
   'walking_hr', 'hr_recovery', 'vo2_max', 'steps', 'active_energy', 'mindful',
   'body_mass', 'body_fat', 'lean_body_mass', 'stand_hours',
+  // Food the owner's own app logged to the phone's health store: energy and the three macros, each a day's sum.
+  'food_energy', 'protein', 'carbs', 'fat',
 ]);
 export type HealthReadSignal = z.infer<typeof healthReadSignalSchema>;
 const healthReadDaySchema = z.iso.date();
@@ -49,7 +51,7 @@ export const getHealthArgsSchema = z
   .refine((args) => dayOrdinal(args.to) - dayOrdinal(args.from) < HEALTH_READ_MAX_DAYS, { error: `at most ${HEALTH_READ_MAX_DAYS} days`, path: ['to'] });
 export type GetHealthArgs = z.infer<typeof getHealthArgsSchema>;
 
-export const healthReadUnitSchema = z.enum(['minutes', 'ms', 'bpm', 'minute_of_day', 'ratio', 'percent', 'breaths_per_minute', 'celsius', 'ml_per_kg_min', 'count', 'kcal', 'kg']);
+export const healthReadUnitSchema = z.enum(['minutes', 'ms', 'bpm', 'minute_of_day', 'ratio', 'percent', 'breaths_per_minute', 'celsius', 'ml_per_kg_min', 'count', 'kcal', 'kg', 'g']);
 // One workout as the watch measured it, from the same source as the workouts signal. A part the store holds in a shape this
 // does not admit is left out, never the session. zone_minutes are minutes in heart-rate zones 1 to 5.
 const sport = <Shape extends z.ZodRawShape>(shape: Shape) => z.strictObject(shape).partial();
@@ -163,6 +165,47 @@ export const getDeviceContextResultSchema = z.discriminatedUnion('state', [
 ]);
 export type GetDeviceContextResult = z.infer<typeof getDeviceContextResultSchema>;
 
+// The events on the owner's phone calendars, as each phone last sent them (DEVICE_CALENDAR): what Waldo sees of a work
+// Outlook or Exchange account, or a local calendar, that no connected account shows. phone numbers the owner's phones 1, 2, ...
+// most recently heard from first; each says when it was read and how many minutes ago, and whether it shared times only or
+// stopped at its cap (complete false). An event whose iCal UID matches a connected Google event is left out and counted;
+// may_be_on_google marks one that could still be a Google event under another id. Default window: now to 24 hours ahead.
+export const PHONE_CALENDAR_TOOL_MAX_EVENTS = 100;
+export const PHONE_CALENDAR_TOOL_MAX_RANGE_MS = 16 * 24 * 60 * 60_000;
+export const queryPhoneCalendarArgsSchema = z.strictObject({ date_range: dateRangeSchema.optional() })
+  .refine(args => !args.date_range || (Date.parse(args.date_range.from) < Date.parse(args.date_range.to)
+    && Date.parse(args.date_range.to) - Date.parse(args.date_range.from) <= PHONE_CALENDAR_TOOL_MAX_RANGE_MS), { error: 'a range that advances, of at most sixteen days', path: ['date_range'] });
+export type QueryPhoneCalendarArgs = z.infer<typeof queryPhoneCalendarArgsSchema>;
+const phoneNumber = z.int().min(1).max(8);
+export const phoneCalendarToolEventSchema = z.strictObject({
+  phone: phoneNumber,
+  calendar: z.string().min(1).max(120).nullable(),
+  account_type: z.enum(['local', 'exchange', 'google', 'icloud', 'caldav', 'other']),
+  start: z.string().min(10).max(64),
+  end: z.string().min(10).max(64),
+  all_day: z.boolean(),
+  title: z.string().min(1).max(300).optional(),
+  location: z.string().min(1).max(300).optional(),
+  availability: z.enum(['busy', 'free', 'tentative', 'unknown']),
+  may_be_on_google: z.boolean(),
+});
+export const queryPhoneCalendarResultSchema = z.discriminatedUnion('state', [
+  z.strictObject({
+    state: z.literal('available'),
+    from: z.iso.datetime(),
+    to: z.iso.datetime(),
+    phones: z.array(z.strictObject({ phone: phoneNumber, observed_at: z.iso.datetime(), age_minutes: z.int().min(0), times_only: z.boolean(), complete: z.boolean() })).min(1).max(8),
+    events: z.array(phoneCalendarToolEventSchema).max(PHONE_CALENDAR_TOOL_MAX_EVENTS),
+    // Events in the range past the page, and phone events left out as the same as a connected Google event.
+    more: z.int().min(0),
+    on_google: z.int().min(0),
+    // Whether the connected Google calendars could be read to compare.
+    google_compared: z.boolean(),
+  }),
+  z.strictObject({ state: z.literal('unavailable'), reason: z.enum(['consent_required', 'no_data', 'read_failed']) }),
+]);
+export type QueryPhoneCalendarResult = z.infer<typeof queryPhoneCalendarResultSchema>;
+
 // Today's and tomorrow's weather where the owner's most recently placed phone is, from the provider the place consent names
 // (WeatherKit), asked with the cell's centre only. Metric units as the provider gives them. condition is the provider's own
 // condition code (for example PartlyCloudy, Rain). place names the city the forecast is for and how old that reading is.
@@ -232,7 +275,7 @@ export const calendarPageSchema = z.strictObject({
     location:z.string().max(2000).optional(),description:z.string().max(2000).optional(),attendees:z.int().min(0).optional(),etag:z.string().max(1024).optional(),operation_marker:z.string().min(1).max(1024).optional(),
     status:z.enum(['confirmed','tentative','cancelled']).optional(),updated:iso8601Schema.optional(),recurring_event_id:z.string().max(1024).optional(),original_start:iso8601Schema.optional(),source_url:z.string().max(2048).optional(),attendee_names:z.array(z.string().max(320)).max(50).optional(),
     attendee_emails:z.array(z.string().min(1).max(320)).max(20).optional(),conference_url:z.string().max(2048).optional(),attachments:z.array(z.strictObject({title:z.string().min(1).max(255),file_id:z.string().max(1024).optional()})).max(20).optional(),
-    owner_status:z.enum(['organizer','accepted']).optional(),waldo_made:z.literal(true).optional(),
+    owner_status:z.enum(['organizer','accepted']).optional(),waldo_made:z.literal(true).optional(),ical_uid:z.string().min(1).max(1024).optional(),
   }).refine(event => {
     const time = event.all_day ? z.iso.date() : iso8601Schema;
     return time.safeParse(event.start).success && time.safeParse(event.end).success && Date.parse(event.start) < Date.parse(event.end);
@@ -365,7 +408,12 @@ export const readMemoryArgsSchema = z.strictObject({
   // Also read what used to be true: claims a later fact replaced, each with the dates it held. For a question about the past
   // ("when did I", "what changed"); the replaced ones are history, never current.
   include_replaced: z.boolean().optional(),
-}).refine((args) => args.ids === undefined || args.query === undefined, { error: 'read by ids or by query, not both', path: ['ids'] });
+  // The people memory holds, each as a card (name, ring, relation, next date, last contact); with query, those whose name or
+  // claims match it. Or one person (an id from a card) with what memory holds about them.
+  people: z.boolean().optional(),
+  person: z.int().positive().optional(),
+}).refine((args) => args.ids === undefined || args.query === undefined, { error: 'read by ids or by query, not both', path: ['ids'] })
+  .refine((args) => [args.ids, args.people || undefined, args.person].filter((value) => value !== undefined).length <= 1, { error: 'read ids, people or one person, not more than one', path: ['people'] });
 export type ReadMemoryArgs = z.infer<typeof readMemoryArgsSchema>;
 // A read shows each claim whole with its provenance; aliases are search keys and stay out. Untrusted claims never
 // return. A claim past the read's byte budget is named in omitted_claim_ids, never cut.

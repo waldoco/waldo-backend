@@ -198,6 +198,7 @@ function dependencies(sql: SqlStorage): ContextComposerDependencies {
           health: null,
           workspace: [],
           tool_outputs: [],
+          tool_outputs_omitted: 0,
         };
       },
     },
