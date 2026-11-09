@@ -1,7 +1,6 @@
 import type { CalendarItem } from '../connectors/google';
 import { isReviewedGranola } from '../connectors/granola-mcp';
 import type { McpToolDef } from '../connectors/mcp-tools';
-import { checkedGranola, type GranolaNotes } from './event-briefs';
 
 // Granola's notes from earlier meetings with the same people, for a meeting the owner organized or accepted. The harness
 // makes this read, not the model: one question built in code from the attendees' addresses alone, never the title or
@@ -23,6 +22,10 @@ export type PrepGranolaDeps = Readonly<{
   invoke(input: Readonly<{ server: string; tool: string; args: Readonly<Record<string, unknown>>; mode: 'read' }>): Promise<Readonly<{ server: string; result: unknown } | { server: string; input_required: unknown }>>;
 }>;
 
+// The other attendees a notetaker is asked about: well-formed addresses only, lower-cased, never the owner's own.
+export const prepAttendees = (event: CalendarItem, owner: string | null): string[] =>
+  [...new Set((event.attendee_emails ?? []).map(email => email.toLowerCase()).filter(email => email.length <= ADDRESS_CHARS && ADDRESS.test(email) && email !== owner?.toLowerCase()))].slice(0, ATTENDEES);
+
 export const granolaQuestion = (people: readonly string[]): string =>
   `What did I discuss in earlier meetings with ${people.slice(0, ATTENDEES).join(', ')}? What was decided, and what is still open or owed by anyone?`;
 
@@ -36,7 +39,7 @@ const questionArgument = (def: McpToolDef): string | null => {
   return schema.type === 'object' && candidates.length === 1 && typeof name === 'string' && schema.properties?.[name]?.type === 'string' ? name : null;
 };
 
-const answerText = (result: unknown): string => {
+export const answerText = (result: unknown): string => {
   const content = (result as { content?: unknown } | null)?.content;
   return Array.isArray(content) ? content.flatMap(part => (part as { type?: unknown; text?: unknown })?.type === 'text' && typeof (part as { text?: unknown }).text === 'string' ? [(part as { text: string }).text] : []).join('\n').trim() : '';
 };
@@ -47,7 +50,7 @@ export const prepGranola = async (deps: PrepGranolaDeps, event: CalendarItem, ow
   if (!connection) return skipped('not_connected');
   if (!isReviewedGranola(connection.server_url, connection.issuer)) return skipped('not_reviewed');
   if (connection.status !== 'active') return skipped('reauth_needed');
-  const people = [...new Set((event.attendee_emails ?? []).map(email => email.toLowerCase()).filter(email => email.length <= ADDRESS_CHARS && ADDRESS.test(email) && email !== owner?.toLowerCase()))];
+  const people = prepAttendees(event, owner);
   if (!people.length) return skipped('no_attendees');
   try {
     const argument = questionArgument((await deps.describe(connection.name, GRANOLA_PREP_TOOL)).def);
@@ -62,8 +65,3 @@ export const prepGranola = async (deps: PrepGranolaDeps, event: CalendarItem, ow
     return skipped('read_failed');
   }
 };
-
-// What the decision is told: Granola's guarded answer; that Granola is connected but could not be read; or nothing, when it
-// is not connected, has nothing, or the meeting has no one to ask about.
-export const granolaNotes = (read: GranolaRead): GranolaNotes | undefined => read.status === 'read' ? checkedGranola(read.text)
-  : ['reauth_needed', 'schema_unexpected', 'read_failed'].includes(read.code) ? { status: 'unavailable' } : undefined;

@@ -170,7 +170,7 @@ import { consolidateBacklog as consolidateNightly } from './nightly-backlog';
 import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
 import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandlers, applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, replanDayCards, type ScheduleHold, type ScheduleKind } from './schedule-preferences';
-import { armBriefSweep, BRIEF_SWEEP_ID, briefSweepRuns, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT, prepPushBody, type PrepGate } from './event-briefs';
+import { armBriefSweep, BRIEF_SWEEP_ID, briefSweepRuns, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT, notesFrom, prepPushBody, type PrepGate } from './event-briefs';
 import { mergedSteps, whyJson, withWhy, type TrailStep, type WhyHolder } from '../tools/why-trail';
 import { applyDayPlan, applyReplan, applyWake, ownerCardTime, setCardTime, parseWakeReply, takeWakeTurn, wakeTarget, wakeTurnsPerDay, heldCardsOn, coalesced, dayCardsWhy, movableCards, SET_FOR_TODAY, dayPlanTraceDetail, armDayCards, cardDeliveries, dayCardsLine, cardExpiry, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, cardStatus, retryDayCard, runDayCard } from './day-cards';
 import { DAY_CARDS, dayPlanInput, planningCard, waitingSection, type CardId } from '../prompt/day-cards';
@@ -181,7 +181,8 @@ import { DASHBOARD_ACCESS_LOG_PATH, readAccessLog, readAccessLogQuery } from './
 import { DASHBOARD_HELD_CHANGES_PATH, readHeldChanges } from './dashboard-held-changes';
 import { calendarSource, mailSource, reviewMailFollowup, titleDigester, updateBook, type DeltaAccount, type UpdateBook } from './update-cards';
 import { meetingPrepApplier, meetingPrepSpec } from './meeting-prep';
-import { granolaNotes, prepGranola } from './meeting-prep-granola';
+import { prepGranola } from './meeting-prep-granola';
+import { prepFireflies } from './meeting-prep-fireflies';
 import { emitObserved, observedEvents, UPDATE_CARD_FRESH_MS, UPDATE_JUDGE_WAKE_KEY, updateSweepApplier, updateSweepCheck, updateSweepTools, type ObservedSubscriber, type SweepGate } from './update-sweep';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { recallChain, recallChainOn } from '../history/recall-chain';
@@ -275,7 +276,7 @@ import { SEND_UNASKED, bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppF
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler, executeMcp, McpConnectError, type McpGoogleAuth, type McpGoogleResolution } from '../tools/live/mcp';
 import { connectorsLine, mcpConnections, McpRefusal, MCP_FINISH_PATH, MCP_START_PATH, type ConnectOutcome, type McpConnections } from '../connectors/mcp-connections';
-import { catalogueTiles, MCP_CATALOGUE } from '../connectors/mcp-catalogue';
+import { catalogueEntry, catalogueTiles, MCP_CATALOGUE } from '../connectors/mcp-catalogue';
 import { oauthProxy } from '../connectors/oauth-proxy-client';
 import { sendMessageHandler } from '../tools/live/messaging';
 import { agentMailToolHost, sendAgentMailHandler } from '../tools/live/agent-mail';
@@ -6158,11 +6159,20 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       client: () => google.client('calendar'),
       current: connectionId => calendarOwnerCurrent(connectionId, clock.timezone),
       transaction: work => storage.transactionSync(work),
-      granola: async (event, ownerEmail, trace) => {
-        const read = await prepGranola({ connection: () => this.granolaConnection(), describe: (server, tool) => this.mcp().describe(server, tool),
-          invoke: input => this.mcp().invoke(input) }, event, ownerEmail);
-        log({ trace, hop: 'prep_granola', ms: 0, ok: read.status === 'read' || read.code !== 'read_failed', code: read.status === 'read' ? 'read' : read.code });
-        return granolaNotes(read);
+      // Each connected notetaker answers on its own; one that fails or is not allowed leaves the others' notes.
+      notes: async (event, ownerEmail, trace) => {
+        const mcp = this.mcp(), tools = { describe: (server: string, tool: string) => mcp.describe(server, tool), invoke: (input: Parameters<typeof mcp.invoke>[0]) => mcp.invoke(input) };
+        const fireflies = () => mcp.list().find((server) => catalogueEntry(server.server_url, server.issuer)?.id === 'fireflies');
+        const asked = [
+          ['Granola', 'prep_granola', prepGranola({ connection: () => this.granolaConnection(), ...tools }, event, ownerEmail)],
+          ['Fireflies', 'prep_fireflies', prepFireflies({ connection: fireflies, ...tools }, event, ownerEmail)],
+        ] as const;
+        return (await Promise.all(asked.map(async ([notetaker, hop, pending]) => {
+          const read = await pending;
+          log({ trace, hop, ms: 0, ok: read.status === 'read' || read.code !== 'read_failed', code: read.status === 'read' ? 'read' : read.code });
+          const notes = notesFrom(read);
+          return notes ? [{ notetaker, notes }] : [];
+        }))).flat();
       },
       decide: (turn, prompt, current) => this.asOwnerJob('pre_activity_spot', turn, () => responder.prompt(turn, owner, prompt, async (_hop, work) => work(), [], current, CALENDAR_PREP_FORMAT)),
       enqueue: (id, text, receipt, commit) => prepEnqueue(receipt.connectionId, clock.timezone, () => calendarOwnerCurrent(receipt.connectionId, clock.timezone))(id, text, receipt, commit),
