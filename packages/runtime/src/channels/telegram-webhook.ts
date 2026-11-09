@@ -312,6 +312,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   EVENT_PUSH_PER_DAY?: string;
   // "1": Waldo's own sends follow the owner's choice among their other surfaces even while Telegram is linked.
   PROACTIVE_OVER_TELEGRAM?: string;
+  // '1': with no proactive template approved, Waldo's own work outside WhatsApp's window knocks with the re-engage template;
+  // and, whichever template knocks, a copy the window keeps raises one app push per closed window.
+  REENGAGE_PROACTIVE?: string;
   // '1' (with PROACTIVE_GATE) has Waldo look across the owner's plate on its own every PROACTIVE_REVIEW_EVERY_MIN minutes
   // (default 180, at least 30) and raise drift or an anomaly it judges worth one message or card, under the owner's limits.
   PROACTIVE_INTERVENTIONS?: string;
