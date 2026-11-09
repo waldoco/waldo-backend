@@ -2,8 +2,8 @@ import type { TrustedToolExecutionResult } from '@waldo/contracts';
 
 // Advisory check: a structured "done" claim must be backed by an accepted tool receipt of the
 // same effect (and the same ref when the claim names one) earlier in the same turn. It reads
-// structured data only: no text is parsed, so it makes no judgment about wording. Advisory and
-// unwired; where claims come from (a typed field on the reply) is a separate, reviewed step.
+// structured data only: no text is parsed, so it makes no judgment about wording. The claims are
+// a model's typed reading of the reply (claim-hook.ts); this check only compares.
 //
 // A receipt's state comes only from the tool result types that already exist: ok:true is
 // 'accepted' (the tool accepted the effect; this is NOT proof the source system holds it, and

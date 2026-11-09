@@ -40,6 +40,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_ONE_TIMELINE: gap('the owner\'s WhatsApp turns share the app chat\'s chain; the trial runs the app surface only, so it never sees a WhatsApp turn in its history'),
   WALDO_JOB_OUTCOME_ROWS: gap('a background job stores a keyed stub in place of its prompt, so a later job turn on the same chain (the Close after the Brief) no longer reads the earlier job\'s prompt; app owner turns already did not, and the trial runs no job turn after another'),
   WALDO_LIGHT_CHAT: gap("the owner's reply takes a light step on the auxiliary model that answers quick chat or hands the turn to the chat model, and task workers run on the chat model; the profile's trials stay on the chat model, and the lc- scenarios run with it on"),
+  WALDO_CLAIM_CHECK: gap('the owner\'s reply is checked against its turn\'s receipts by an auxiliary model call, and a claim with no accepted receipt goes out marked; the trials run without the check, so a trial reply is never marked'),
   WALDO_COMPACTION: mapped('the trial\'s chat runs on the canonical store with these compaction settings'),
   WALDO_STEPPED_WINDOW: mapped('the trial\'s chat history is windowed in steps under the same compaction settings'),
   WALDO_CONTEXT_CAPS: gap('caps the standing orders and quests a turn reads and clears tool results down to the latest few past a size (the context budget\'s settings); no trial holds that many orders or quests or runs that long a tool loop, so the trials read as they would with it on'),
