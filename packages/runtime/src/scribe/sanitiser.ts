@@ -144,6 +144,11 @@ const BARE_VALUE = String.raw`\d{2,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b|o'?cl
 // A weight that follows a bag or a parcel is the luggage's.
 const CARRIED = String.raw`(?:bags?|baggage|luggage|suitcases?|parcel|package|box|cargo|carry-on)`;
 const NOT_CARRIED = String.raw`(?<!\b${CARRIED}\s+)`;
+// A labelled value ends its item: the end of the text or of its line, a separator or closing mark, or a word that says it is
+// a reading ("58 bpm resting").
+const LABEL_END = String.raw`(?=\s*(?:$|[\n,;.)!?:]|(?:resting|asleep|average|avg)\b))`;
+// A day named as a label, the way a reply lists what the owner's apps recorded for it.
+const DAY_LABEL = String.raw`\b(?:yesterday|today|tonight|last\s+night|this\s+morning|(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?)\s*:\s*`;
 const reading = (source: string): RegExp => new RegExp(source, 'i');
 // REM the sleep stage is written in capitals; lowercase "rem" is usually "remaining".
 const casedReading = (source: string): RegExp => new RegExp(source);
@@ -285,6 +290,13 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`(?:\b(?:protein|carbs?|carbohydrates?|fat)\s+intake\b|\byour\s+(?:protein|carbs?|carbohydrates?|fat)\b)${READING_GAP}${READING_NUMBER}\s*(?:g|grams?)\b`),
   reading(String.raw`${OWNER_ATE}${READING_GAP}${READING_NUMBER}\s*(?:g|grams?)\s+(?:of\s+)?(?:protein|carbs?|carbohydrates?|fat)\b`),
   reading(String.raw`\b(?:protein|carbs?|carbohydrates?|fat)\b${READING_GAP}${READING_NUMBER}\s*(?:g|grams?)\s+(?:today|yesterday|so\s+far|logged|eaten)\b|\b${READING_NUMBER}\s*(?:g|grams?)\s+(?:of\s+)?(?:protein|carbs?|carbohydrates?|fat)\s+(?:today|yesterday|so\s+far|logged|eaten|a\s+day|per\s+day|daily)\b`),
+  // A reply's label shapes: a day with a colon ("Yesterday: 72 kg", "Mon: 1,022 kcal, 61 g protein"), or a macro's own label
+  // ("Protein: 61 g"). The value must end the item, so a label that measures something else ("5 kg laundry", "500 ms latency",
+  // "100 kcal per bar", "10 g butter") is not the owner's reading.
+  reading(String.raw`${DAY_LABEL}${READING_NUMBER}\s*(?:kcal|cal(?:ories)?|kgs?|lbs?|bpm|ms)\b${LABEL_END}`),
+  reading(String.raw`${DAY_LABEL}(?:[^\n:]{0,40}?,\s*)?${READING_NUMBER}\s*(?:g|grams?)\s+(?:of\s+)?(?:protein|carbs?|carbohydrates?|fat)\b${LABEL_END}`),
+  reading(String.raw`${DAY_LABEL}${READING_NUMBER}\s*%\s*(?:spo2|sp\s*o2|oxygen|blood\s+oxygen)\b`),
+  reading(String.raw`\b(?:protein|carbs?|carbohydrates?|fat)\s*:\s*${READING_NUMBER}\s*(?:g|grams?)\b${LABEL_END}`),
   reading(String.raw`\bcrs\b${BARE_GAP}\d`),
   reading(String.raw`\b(?:form|recovery|load|strain|readiness|sleep|hrv)\s+score\b${BARE_GAP}\d`),
   ...LAB_READINGS,
