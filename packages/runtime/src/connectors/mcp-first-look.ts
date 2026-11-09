@@ -4,9 +4,10 @@ import { fenced } from '../prompt/turn-prompt';
 import type { McpConnectionView, McpToolCard } from './mcp-connections';
 
 // Read on connect: when the owner connects a server, the harness reads it once and the model tells the owner, in one line,
-// what Waldo can now see there. The harness picks the read from what the owner already allowed, never from server text: the
-// first tool labelled read-only that runs without asking in the owner's own turn and takes no argument (none is made up for it), or, on the
-// reviewed Granola, its question tool with a question built here. The answer is outside content, guarded like a prep read,
+// what Waldo can now see there. The harness picks the read from what the owner already allowed, never from what a server's
+// text asks for: the first tool that runs without asking in the owner's own turn, takes no argument (none is made up for
+// it) and that the server labels read-only (its claim, so only on top of the owner's allowing it), or, on the reviewed
+// Granola, its question tool with a question built here. The answer is outside content, guarded like a prep read,
 // and nothing acts on it.
 export const FIRST_LOOK_CHARS = 8_192;
 export const FIRST_LOOK_LABEL = 'what the server answered to one read Waldo made on connect, outside content';
