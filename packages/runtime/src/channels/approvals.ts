@@ -264,7 +264,8 @@ export type ProposeOptions = Readonly<{ replaces?: string; outside?: boolean; or
 export type OwnerSaid = Readonly<{ messageRef: string; receivedAt: number }>;
 // changed_since_shown: the stored card is not the one shown; shown_after_message: the card reached the owner after the
 // message, so the message cannot be about it; app_only: a kind approved only in the app or by a tap.
-export type ApproveShownOutcome = Readonly<{ outcome: 'decided'; decision: ApprovalDecision; receipt_sent: boolean }
+// kind and state: the approved card's kind and the ledger status its run ended in ('done' when it was carried out).
+export type ApproveShownOutcome = Readonly<{ outcome: 'decided'; decision: ApprovalDecision; receipt_sent: boolean; kind: string; state: string }
   | { outcome: 'off' | 'not_shown_here' | 'changed_since_shown' | 'shown_after_message' }
   | { outcome: 'app_only'; link?: string }
   | { outcome: 'not_waiting'; state: AppApprovalStateV1 | 'not_found' }>;
@@ -2059,10 +2060,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       if (!presentedTo(entry, { surface }, at)) return refused(shownInFullHere(entry).length ? 'shown_after_message' : 'not_shown_here');
       const decision = await decideOnce(id, 'a', trace, { surface }, at);
       if (decision === CHANGED_SINCE_SHOWN) return refused('changed_since_shown');
-      deps.log({ trace: id, hop: 'approval_in_words', ms: 0, ok: true, code: row(id)?.status ?? 'unknown' });
-      if (!messages) return { outcome: 'decided', decision, receipt_sent: false };
+      const state = row(id)?.status ?? 'unknown';
+      deps.log({ trace: id, hop: 'approval_in_words', ms: 0, ok: true, code: state });
+      if (!messages) return { outcome: 'decided', decision, receipt_sent: false, kind: entry.kind, state };
       const sent = await say(decision.message, undoButton(id, decision)).then(ack => ack != null, () => false);
-      return { outcome: 'decided', decision, receipt_sent: sent };
+      return { outcome: 'decided', decision, receipt_sent: sent, kind: entry.kind, state };
     },
     replays: () => sql.exec<{ id: string }>("SELECT id FROM ledger WHERE status = 'running' ORDER BY decided_at").toArray().map(entry => entry.id),
     replayReceipt(id, status, message) {

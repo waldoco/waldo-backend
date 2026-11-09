@@ -19,6 +19,8 @@ export type LoopEventLike = Readonly<{
   delegated?: true;
   // When the tool call returned, epoch ms.
   at?: number;
+  // approve_shown only: the card it approved and the ledger state that card's run ended in.
+  card?: Readonly<{ kind: string; state: string }>;
 }>;
 
 // The ref a tool's receipt carries, taken from typed args only. A tool not listed has no ref.
@@ -48,10 +50,22 @@ export const receiptsFromLoopEvents = (events: readonly LoopEventLike[]): readon
   return [{ seq: event.seq, tool: name, effect, ok: event.ok, state, ...(event.delegated ? { delegated: true } : {}), ...(ref !== undefined ? { ref } : {}) }];
 });
 
+// A card approved in chat and carried out did what the tool that raised it proposes, so it also backs that tool's effect. The
+// card kinds a single tool raises; a card any tool can raise (a held outside action, an MCP call) backs only the approval.
+const CARD_TOOL: Readonly<Record<string, ToolName>> = {
+  message_send: 'send_message', email_send: 'send_email', agent_mail_send: 'send_agent_mail', calendar_change: 'propose_calendar_change',
+  calendar_plan: 'propose_calendar_plan', google_task_change: 'propose_google_task_change', standing_grant: 'propose_standing_grant',
+};
+const cardReceipts = (events: readonly LoopEventLike[]): readonly ToolReceipt[] => events.flatMap(event => {
+  const tool = event?.ok && event.card?.state === 'done' ? CARD_TOOL[event.card.kind] : undefined;
+  const effect = tool ? TOOL_CLAIM_EFFECT[tool] : null;
+  return tool && effect ? [{ seq: event.seq, tool, effect, ok: true, state: 'accepted' as const }] : [];
+});
+
 // No fallback: a failure here throws to the caller, who owns what a failed advisory check means.
 // Returning "no findings" on error would read as "all claims verified".
 export const evaluateTurnClaims = (claims: readonly DoneClaim[], events: readonly LoopEventLike[]): readonly ClaimFinding[] =>
-  checkClaimsAgainstReceipts(claims, receiptsFromLoopEvents(events));
+  checkClaimsAgainstReceipts(claims, [...receiptsFromLoopEvents(events), ...cardReceipts(events)].sort((a, b) => a.seq - b.seq));
 
 export const claimCheckEnabled = (env: Readonly<{ WALDO_CLAIM_CHECK?: string }>): boolean => env.WALDO_CLAIM_CHECK === '1';
 

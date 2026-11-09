@@ -35,7 +35,7 @@ import { JoinedConversationPath } from '../conversation/joined-path';
 import { COMPACTION, COMPACTION_INSTRUCTION, chainCarriesOutside, compactedHistory, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, seedBasePlan, ownerExchangeHistory, ownerRowsSince, planWithout, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
 import { ownerReadings, readingBeyondOwner, sanitise } from '../scribe/sanitiser';
 import { lightRoutePolicy, MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerModels, ownerRoutePolicy, strongRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
-import { MODEL_CALL_TIMEOUT_MS, OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
+import { MODEL_CALL_TIMEOUT_MS, OWNER_TURN_CALL_TIMEOUT_MS, THREAD_TITLE_BUDGET_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
 import { usageAnomalous } from '../llm/pricing';
 import { InMemoryCircuitBreaker, ModelUnavailableError, modelDownReason, observedBreaker, RuntimeLLMProvider, TurnSanitiseMemo, type LLMGatewayAdapter, type RouteSpendState } from '../llm/provider';
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine, voiceVersion } from '../prompt/messaging-behavior';
@@ -838,7 +838,11 @@ export const createOwnerResponder = (
           const receipt = event.call.name === 'remember' && event.ok ? JSON.parse(event.output) as { data?: { status?: string } } : undefined;
           // Loaded definitions are the turn's own catalogue: no receipt, and nothing a later turn should read back as a result.
           const loaded = event.call.name === FIND_TOOLS;
-          if (receipt?.data?.status !== 'duplicate' && !loaded) turnToolEvents.push({ seq: turnToolEvents.length + 1, call: { name: event.call.name, args: parseToolArgs(event.call.arguments, event.call.name) }, ok: event.ok, at: Date.now(), ...(event.code ? { code: event.code } : {}), ...(event.reason ? { reason: event.reason } : {}) });
+          const typed = { call: { name: event.call.name, args: parseToolArgs(event.call.arguments, event.call.name) }, ok: event.ok, at: Date.now(), ...(event.code ? { code: event.code } : {}), ...(event.reason ? { reason: event.reason } : {}) };
+          if (receipt?.data?.status !== 'duplicate' && !loaded) turnToolEvents.push({ seq: turnToolEvents.length + 1, ...typed });
+          // The claim check also counts a note remember already held, and the card an approval carried out.
+          const card = event.call.name === 'approve_shown' && event.ok ? approvedCard(event.output) : undefined;
+          if (!loaded) turnClaimEvents.push({ seq: turnClaimEvents.length + 1, ...typed, ...(card ? { card } : {}) });
           privateRunScope?.admit();
           log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, parallel_batches: event.parallel_batches, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...toolErrorCode(event), ...(event.guard ? { guard: event.guard } : {}), ...(event.blocked ? { blocked_reason: event.blocked } : {}), text: { input: event.call.arguments, output: event.output } });
           privateRunScope?.admit();
@@ -862,6 +866,14 @@ export const createOwnerResponder = (
   // Room left in the system prompt for owner memory: the sanitiser drops a system prompt over its limit whole.
   const systemRoom = (others: string) => SANITISE_DESTINATION_POLICIES.system_prompt.max_chars - others.length - 2_048;
   let turnToolEvents: LoopEventLike[] = [];
+  // Every call the claim check may rest on: the receipts above, a remember of a note already held, and approved cards.
+  let turnClaimEvents: LoopEventLike[] = [];
+  const approvedCard = (output: string): LoopEventLike['card'] => {
+    try {
+      const data = (JSON.parse(output.slice(0, output.lastIndexOf('}') + 1)) as { data?: { kind?: unknown; state?: unknown } }).data;
+      return typeof data?.kind === 'string' && typeof data.state === 'string' ? { kind: data.kind, state: data.state } : undefined;
+    } catch { return undefined; }
+  };
   // The claims this turn's recall showed in full and its read_memory calls returned (MEMORY_USED_SHOWN).
   const usedClaims = new Set<number>();
   const SAY_WHICH_MEMORY = '(If the owner asks which memory shaped a reply, on any surface, name the notes above you relied on, or say none did.)';
@@ -971,8 +983,10 @@ export const createOwnerResponder = (
   const unbackedClaims = async (reply: string): Promise<string | null> => {
     const started = Date.now();
     try {
-      const raw = await ask(traceId, 'claim_check', DONE_CLAIMS_INSTRUCTION, reply, DONE_CLAIMS_FORMAT, undefined, undefined, undefined, auxiliaryModel);
-      const findings = evaluateTurnClaims(doneClaims(raw, turnToolEvents.length + 1), turnToolEvents);
+      // Bounded like the other auxiliary calls that hold the owner's chat up: the reply waits on it.
+      const raw = await withCallDeadline(privateRunScope, Math.min(privateRunScope?.deadline ?? Infinity, started + THREAD_TITLE_BUDGET_MS),
+        () => ask(traceId, 'claim_check', DONE_CLAIMS_INSTRUCTION, reply, DONE_CLAIMS_FORMAT, undefined, undefined, undefined, auxiliaryModel));
+      const findings = evaluateTurnClaims(doneClaims(raw, turnClaimEvents.length + 1), turnClaimEvents);
       log({ trace: traceId, hop: 'claim_check', ms: Date.now() - started, ok: findings.length === 0, ...(findings.length ? { code: findings.map(finding => `${finding.effect}:${finding.reason}`).join(',') } : {}) });
       return unbackedClaimLine(findings);
     } catch (error) {
@@ -996,6 +1010,7 @@ export const createOwnerResponder = (
     // Past the spend ceiling every call already runs on the auxiliary route, so a light step would only add a call.
     lightFirst = fromOwner && privateOwner?.lightChat === true && turnOwnWordsOnly && !turnCapped();
     turnToolEvents = [];
+    turnClaimEvents = [];
     usedClaims.clear();
     control.begin(fromOwner);
     try {

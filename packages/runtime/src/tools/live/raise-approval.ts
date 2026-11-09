@@ -85,6 +85,6 @@ export const approveShownHandler = (desk: Pick<ApprovalDesk, 'approveShown'>) =>
     const result = await desk.approveShown(args.approval_id, ctx.ownerMessage, ctx.turnId ?? args.approval_id);
     if (result.outcome === 'app_only' && result.link) return { ok: false as const, error: `${NOT_APPROVED.app_only} Point them to the card's own button, or to it in the Waldo app: ${result.link}`, code: 'rejected' as const };
     if (result.outcome !== 'decided') return { ok: false as const, error: NOT_APPROVED[result.outcome], code: 'rejected' as const };
-    return { ok: true as const, data: { approval_id: args.approval_id, outcome: result.decision.toast, receipt: result.decision.message, ...(result.receipt_sent ? { note: RECEIPT_SENT } : {}) }, source_taint: null };
+    return { ok: true as const, data: { approval_id: args.approval_id, kind: result.kind, state: result.state, outcome: result.decision.toast, receipt: result.decision.message, ...(result.receipt_sent ? { note: RECEIPT_SENT } : {}) }, source_taint: null };
   },
 }) satisfies ToolHandler<ApproveShownArgs, unknown, ToolDispatcherContext>;
