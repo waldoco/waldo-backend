@@ -855,7 +855,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // REENGAGE_PROACTIVE: a copy of an app message that WhatsApp's closed window keeps raises a push, unless an app push already
   // reached the owner in this closed window (the Brief's own push, or this push for an earlier copy) or the owner set Waldo's
   // volume low. The sender holds quiet hours, and a push that reached no device leaves the next copy to try.
-  private ownerDay(at: number): string { return localIso(at, this.ctx.storage.kv.get<string>('timezone') ?? 'UTC').slice(0, 10); }
+  private ownerDay(at: number): string { return localIso(at, this.ctx.storage.kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC').slice(0, 10); }
   private async windowHeldPush(record: FinalRecord): Promise<void> {
     const kv = this.ctx.storage.kv;
     if (this.env.REENGAGE_PROACTIVE !== '1' || !record.id.startsWith(WHATSAPP_COPY_PREFIX) || !this.appBound()) return;
