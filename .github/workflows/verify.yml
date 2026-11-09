@@ -21,6 +21,8 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    # A run takes 12 to 17 minutes; past 45 something is hung, and failing then frees the runner instead of holding it for 6 hours.
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
