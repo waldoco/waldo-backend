@@ -142,6 +142,8 @@ export async function runToolLoop(input: Readonly<{
   onToolStart?: (tool: string) => void;
   // Fired once, just before the loop returns, with the truthful exit classification.
   onSettle?: (exit: LoopExit) => void;
+  // Fired when a call closed the turn with its own answer (ctx.closeTurn), with that answer, before the loop returns it.
+  onClose?: (reply: string) => void;
   // Shared tool-round budget across a parent turn and its children (subagent orchestration
   // spec): when present, every offered round in EVERY loop holding the same object decrements
   // it, so a turn's stated round cap is absolute - children can never dispatch past it. The
@@ -530,6 +532,7 @@ export async function runToolLoop(input: Readonly<{
       }
     }
     if (closing !== null) {
+      input.onClose?.(closing);
       input.onSettle?.('completed');
       return withInwardReceipts(closing, inward);
     }

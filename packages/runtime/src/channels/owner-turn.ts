@@ -155,6 +155,9 @@ const toolErrorCode = (event: ToolLoopEvent): { error_code?: string } => {
 };
 // Tool definitions are JSON: about four UTF-8 bytes per token on current tokenizers, close enough to compare rounds.
 const BYTES_PER_TOKEN_EST = 4;
+// How a reaction that stood for the reply reads in the model's history: a host note, so a later turn knows Waldo reacted
+// and does not take the bare emoji for a message it wrote.
+export const reactedNote = (emoji: string): string => `[You reacted ${emoji} to the owner's message instead of replying in words.]`;
 // The reply's system prompt with the byte size of each joined section, so a trace shows what fills it.
 type SystemPrompt = Readonly<{ text: string; sections: Readonly<Partial<Record<SystemSection, number>>>; contextSections?: Readonly<Partial<Record<SystemSection, number>>> }>;
 
@@ -663,6 +666,7 @@ export const createOwnerResponder = (
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
         maxSteps: turnRounds,
         ...(machine ? { yieldNow: machine.yieldNow } : {}),
+        onClose: (reply) => { turnAnswer.reaction = reply; },
         // The owner's own turn shows what kind of work a starting tool is on, where its reply streams.
         onToolStart: (tool) => { if (ownerTurnActive) activeOwnerTurn?.replyStream?.activity(toolActivity(tool)); },
         ctx: loopCtx,
@@ -857,6 +861,8 @@ export const createOwnerResponder = (
   // Room left in the system prompt for owner memory: the sanitiser drops a system prompt over its limit whole.
   const systemRoom = (others: string) => SANITISE_DESTINATION_POLICIES.system_prompt.max_chars - others.length - 2_048;
   let turnToolEvents: LoopEventLike[] = [];
+  // The reaction this turn answered with in place of words, if it did.
+  let turnAnswer: { reaction?: string } = {};
   // The claims this turn's recall showed in full and its read_memory calls returned (MEMORY_USED_SHOWN).
   const usedClaims = new Set<number>();
   const SAY_WHICH_MEMORY = '(If the owner asks which memory shaped a reply, on any surface, name the notes above you relied on, or say none did.)';
@@ -974,6 +980,7 @@ export const createOwnerResponder = (
     // Past the spend ceiling every call already runs on the auxiliary route, so a light step would only add a call.
     lightFirst = fromOwner && privateOwner?.lightChat === true && turnOwnWordsOnly && !turnCapped();
     turnToolEvents = [];
+    turnAnswer = {};
     usedClaims.clear();
     control.begin(fromOwner);
     try {
@@ -1009,7 +1016,11 @@ export const createOwnerResponder = (
       const out = [reply, notice?.line, receipt?.line].filter(Boolean).join('\n\n');
       const redact = literalTextRedactor([...removedTopics], FORGOTTEN);
       const answered = tree.get(publication.leafId)!;
-      const told = notice ? { ...answered, modelPayload: `${answered.modelPayload}\n\n${notice.modelLine}` } : answered;
+      // A reaction that stood for the reply reads to later turns as a reaction, not as words Waldo wrote.
+      const reaction = turnAnswer.reaction;
+      const reacted = reaction !== undefined && answered.modelPayload.startsWith(reaction)
+        ? { ...answered, modelPayload: `${reactedNote(reaction)}${answered.modelPayload.slice(reaction.length)}` } : answered;
+      const told = notice ? { ...reacted, modelPayload: `${reacted.modelPayload}\n\n${notice.modelLine}` } : reacted;
       const readOutside = readOthersWords() || turnLoopCtx?.toolArgSourceTaint === 'external';
       // The charts this turn drew go with its reply, so the app reads them back with it.
       const charts = fromOwner && context ? privateOwner?.turnCharts?.(id) ?? [] : [];

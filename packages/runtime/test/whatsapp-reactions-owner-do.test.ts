@@ -5,6 +5,7 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
+import { reactedNote } from '../src/channels/owner-turn';
 import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 type RequestBody = { tools?: { name?: string }[]; input: string | { type?: string; call_id?: string }[]; text?: { format?: { name?: string } } };
@@ -187,7 +188,10 @@ it('a "thanks" answered by a reaction alone sends only the reaction, and the nex
     expect(turns()).toHaveLength(1);
     model.plan = [];
     await deliver(text('when is my train?', 'wamid.next'));
-    expect(JSON.stringify(turns().at(-1)!.input)).toMatch(/"role":"assistant"[^}]*"🙏"|"🙏"[^}]*"role":"assistant"/);
+    // Later turns read the reaction as a reaction, never as a bare emoji Waldo wrote.
+    const input = turns().at(-1)!.input;
+    const answers = (Array.isArray(input) ? input : []).filter(item => (item as { role?: string }).role === 'assistant').map(item => JSON.stringify(item));
+    expect(answers.some(answer => answer.includes(reactedNote('🙏')))).toBe(true);
   });
 }, 60_000);
 
