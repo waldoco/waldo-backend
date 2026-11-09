@@ -117,6 +117,12 @@ describe('WAKE_BRIEF, BRIEF_DAY_PLAN and CALENDAR_PLAN in the Worker config', ()
   });
 });
 
+describe('WORKOUT_WAKE in the Worker config', () => {
+  it('is off in production until a judged trial uploads a finished workout, and on in staging', () => {
+    expect([parsed.vars.WORKOUT_WAKE, parsed.env.staging.vars.WORKOUT_WAKE]).toEqual(['0', '1']);
+  });
+});
+
 describe('SCREEN_TIME in the Worker config', () => {
   it('is on in staging, where migration 20261103120000 is applied (4 Nov 2026), and off in production', () => {
     expect(parsed.vars.SCREEN_TIME).toBe('0');
@@ -128,6 +134,34 @@ describe('DEVICE_PLACE in the Worker config', () => {
   it('is off in production and on in staging, where the deploy applies migration 20261105180000 first', () => {
     expect(parsed.vars.DEVICE_PLACE).toBe('0');
     expect(parsed.env.staging.vars.DEVICE_PLACE).toBe('1');
+  });
+});
+
+describe('DEVICE_CALENDAR in the Worker config', () => {
+  it('is off in production and on in staging; it needs no migration: the owner object keeps the consent and the events', () => {
+    expect(parsed.vars.DEVICE_CALENDAR).toBe('0');
+    expect(parsed.env.staging.vars.DEVICE_CALENDAR).toBe('1');
+  });
+});
+
+describe('CALENDAR_COVERAGE and FREE_WINDOW_OFFERS in the Worker config', () => {
+  it('are off in production and on in staging; neither needs a migration', () => {
+    expect([parsed.vars.CALENDAR_COVERAGE, parsed.vars.FREE_WINDOW_OFFERS]).toEqual(['0', '0']);
+    expect([parsed.env.staging.vars.CALENDAR_COVERAGE, parsed.env.staging.vars.FREE_WINDOW_OFFERS]).toEqual(['1', '1']);
+  });
+});
+
+describe('BLOCK_LIFECYCLE in the Worker config', () => {
+  it('is off in production and on in staging; it needs no migration', () => {
+    expect(parsed.vars.BLOCK_LIFECYCLE).toBe('0');
+    expect(parsed.env.staging.vars.BLOCK_LIFECYCLE).toBe('1');
+  });
+});
+
+describe('ARRIVAL_LOOK in the Worker config', () => {
+  it('is off in production and on in staging, where the deploy applies migration 20261107100000 first', () => {
+    expect(parsed.vars.ARRIVAL_LOOK).toBe('0');
+    expect(parsed.env.staging.vars.ARRIVAL_LOOK).toBe('1');
   });
 });
 

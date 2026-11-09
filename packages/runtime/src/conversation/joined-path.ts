@@ -26,6 +26,8 @@ export type JoinedConversationRequest = Readonly<{
   userEntry: ConversationEntry;
   assistantEntryId: string;
   historyStartRef?: string;
+  // The first row the chain's last turn kept, for the stepped window.
+  windowFrom?: string;
 }>;
 
 export type JoinedConversationPublication = Readonly<{
@@ -67,7 +69,7 @@ export class JoinedConversationPath {
     // F1: bound the model input before the call - the full ancestor path grows without limit
     // otherwise, and provider-side overflow is a failed turn (paper audit, arXiv 2609.20804).
     // With compaction on, a live summary row is kept ahead of the window instead of being its first casualty.
-    const windowed = compactedHistory(this.tree, request.userEntry.id, request.historyStartRef, this.compaction);
+    const windowed = compactedHistory(this.tree, request.userEntry.id, request.historyStartRef, this.compaction, request.windowFrom);
     this.observers?.onWindow?.(windowed.stats);
     request.runScope?.admit();
     const text = await this.model.complete({

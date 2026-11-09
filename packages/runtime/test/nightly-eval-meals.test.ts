@@ -27,7 +27,7 @@ const trial = async (id: string, logs: readonly Meal[]) => {
 describe('the Indian-meal set in the catalogue', () => {
   it('replaces two cases rather than adding any, and the weekly run stays within its cap', () => {
     expect(MEAL_SCENARIOS.map((entry) => entry.id)).toEqual(['n1-thali-portions', 'n2-breakfast-and-street-plate']);
-    expect(NIGHTLY_SCENARIOS).toHaveLength(156);
+    expect(NIGHTLY_SCENARIOS).toHaveLength(159);
     for (const gone of ['t16-rough-day', 't14-birthday-note']) {
       expect(NIGHTLY_SCENARIOS.map((entry) => entry.id)).not.toContain(gone);
     }

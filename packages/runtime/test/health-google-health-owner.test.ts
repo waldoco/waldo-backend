@@ -81,7 +81,7 @@ const newPlane = (): Plane => {
   return { samples: new Map(), requests: new Map(), ingests: 0, consent: 'granted', model: 'granted', epoch: 1, sessions: [], handoffs: [], vault };
 };
 
-const harness = (over: { world?: World; plane?: Plane; clock?: { now: number }; configured?: boolean } = {}) => {
+const harness = (over: { world?: World; plane?: Plane; clock?: { now: number }; configured?: boolean; produce?: (woke?: boolean, workout?: boolean) => Promise<void>; workoutWake?: true } = {}) => {
   const world = over.world ?? newWorld(), plane = over.plane ?? newPlane(), clock = over.clock ?? syncedClock(NOW), kv = new Map<string, unknown>();
   const logs: GoogleHealthLog[] = [], armed: number[] = [], produced = { count: 0 }, disarmed = { count: 0 };
   routeEdgeFetch(plane.vault, { fetcher: googleFetch(world) });
@@ -90,7 +90,7 @@ const harness = (over: { world?: World; plane?: Plane; clock?: { now: number }; 
     doName: () => 'owner-g', rpc: planeRpc(plane, 'owner-g', 'google_health'), config: configured ? CONFIG : null,
     proxy: configured ? oauthProxy(WORKER_ENV, workerToEdge(edge), () => clock.now) : null, now: () => clock.now, timezone: () => 'UTC',
     kv: { get: <T>(key: string) => kv.get(key) as T | undefined, put: (key, value) => { kv.set(key, value); }, delete: key => kv.delete(key), list: <T>({ prefix }: { prefix: string }) => [...kv].filter(([key]) => key.startsWith(prefix)) as [string, T][] },
-    produce: async () => { produced.count += 1; }, arm: async at => { armed.push(at); }, disarm: async () => { disarmed.count += 1; }, log: line => { logs.push(line); },
+    produce: async (woke, workout) => { produced.count += 1; await over.produce?.(woke, workout); }, ...(over.workoutWake ? { workoutWake: true as const } : {}), arm: async at => { armed.push(at); }, disarm: async () => { disarmed.count += 1; }, log: line => { logs.push(line); },
   });
   return { owner, world, plane, clock, kv, logs, armed, produced, disarmed };
 };
@@ -100,6 +100,8 @@ const linked = async (over: Parameters<typeof harness>[0] = {}) => {
   return h;
 };
 const stored = (plane: Plane, signal: string, id: string) => plane.samples.get(`${signal}|${id}`)?.payload;
+const exerciseEnding = (world: World, end: number) => add(world, 'exercise', iso(end - 45 * 60_000), { dataSource: fitbit, exercise: {
+  interval: { startTime: iso(end - 45 * 60_000), startUtcOffset: '0s', endTime: iso(end), endUtcOffset: '0s' }, exerciseType: 'RUNNING', updateTime: iso(end) } });
 
 describe('Google Health owner: connecting', () => {
   it('starts only with both grants live, and hands the app a first-party start link', async () => {
@@ -257,5 +259,19 @@ describe('Google Health owner: disconnecting', () => {
     await h.owner.sync();
     const text = JSON.stringify([h.logs, [...h.kv]]);
     expect(text).not.toMatch(/gh-access|gh-refresh|"420"|\b58\b|UTC/);
+  });
+});
+
+describe('Google Health owner: a workout that just ended', () => {
+  it('says so, only the yes, when WORKOUT_WAKE is on and a sync committed a fresh workout, as WHOOP does', async () => {
+    const said = async (workoutWake: boolean, minutesAgo: number) => {
+      const workouts: (boolean | undefined)[] = [];
+      const h = await linked({ produce: async (_woke, workout) => { workouts.push(workout); }, ...(workoutWake ? { workoutWake: true as const } : {}) });
+      workouts.length = 0;
+      exerciseEnding(h.world, h.clock.now - minutesAgo * 60_000);
+      expect(await h.owner.sync()).toBe('synced');
+      return workouts.some(Boolean);
+    };
+    expect([await said(true, 20), await said(false, 20), await said(true, 4 * 60)]).toEqual([true, false, false]);
   });
 });

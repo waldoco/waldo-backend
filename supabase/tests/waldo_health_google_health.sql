@@ -4,7 +4,7 @@ select plan(38);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
--- Google Health (Fitbit, Pixel Watch) is a cloud source like WHOOP, on its own consent notice (copy 4). Synthetic owners and
+-- Google Health (Fitbit, Pixel Watch) is a cloud source like WHOOP, on its own consent notice (copy 5). Synthetic owners and
 -- synthetic values throughout.
 create function pg_temp.sig(msg text,at bigint) returns text language sql as $$ select encode(extensions.hmac(at::text||'.'||msg,'fixture-router','sha256'),'hex') $$;
 create function pg_temp.h(op text,owner text,body jsonb default '{}') returns jsonb language plpgsql as $$
@@ -41,17 +41,17 @@ insert into waldo.owners(id,auth_user_id,do_name,email) values
  ('a3000000-0000-0000-0000-0000000000c3','a1000000-0000-0000-0000-0000000000c1','gh-owner-a','gh-a@example.invalid'),
  ('b3000000-0000-0000-0000-0000000000c4','b1000000-0000-0000-0000-0000000000c2','gh-owner-b','gh-b@example.invalid');
 
--- A Google Health grant rests on its own notice, copy 4, and no other source's copy is accepted for it or from it.
-select is(pg_temp.h('consent_grant','gh-owner-a',pg_temp.grant_body('grant-g-model-0','google_health','model_processing',4))->>'error','consent_required','Google Health model use is refused while storage is not granted');
+-- A Google Health grant rests on its own notice, copy 5, and no other source's copy is accepted for it or from it.
+select is(pg_temp.h('consent_grant','gh-owner-a',pg_temp.grant_body('grant-g-model-0','google_health','model_processing',5))->>'error','consent_required','Google Health model use is refused while storage is not granted');
 select is(pg_temp.h('consent_grant','gh-owner-a',pg_temp.grant_body('grant-g-dev-00','google_health','storage_compute',2))->>'error','invalid_request','Google Health storage on the device copy is refused');
-select is(pg_temp.h('consent_grant','gh-owner-a',pg_temp.grant_body('grant-g-whp-00','google_health','storage_compute',3))->>'error','invalid_request','and on the WHOOP copy');
-select is(pg_temp.h('consent_grant','gh-owner-a',pg_temp.grant_body('grant-w-ghc-00','whoop','storage_compute',4))->>'error','invalid_request','WHOOP storage on the Google Health copy is refused');
-select is(pg_temp.h('consent_grant','gh-owner-a',pg_temp.grant_body('grant-a-ghc-00','apple','storage_compute',4))->>'error','invalid_request','and a device source on it');
-select is(pg_temp.h('consent_grant','gh-owner-a',pg_temp.grant_body('grant-f-store-0','fitbit','storage_compute',4))->>'error','invalid_request','fitbit is not a source name; the source is google_health');
-select is(pg_temp.h('consent_grant','gh-owner-a',pg_temp.grant_body('grant-g-store-1','google_health','storage_compute',4))->'consent'->>'status','granted','Google Health storage is granted on copy 4');
-select is((select c.version from waldo.health_consents c join waldo.owners o on o.id=c.owner_id where o.do_name='gh-owner-a' and c.source='google_health' and c.purpose='storage_compute' and c.withdrawn_at is null),4,'and stored on copy 4');
-select is(pg_temp.h('consent_grant','gh-owner-a',pg_temp.grant_body('grant-g-model-1','google_health','model_processing',4))->'consent'->>'version','4','model use is granted on top of it, and the consent shows copy 4');
-select is(pg_temp.h('consent_grant','gh-owner-a',pg_temp.grant_body('grant-w-store-1','whoop','storage_compute',3))->'consent'->>'status','granted','WHOOP keeps its own copy 3');
+select is(pg_temp.h('consent_grant','gh-owner-a',pg_temp.grant_body('grant-g-whp-00','google_health','storage_compute',4))->>'error','invalid_request','and on the WHOOP copy');
+select is(pg_temp.h('consent_grant','gh-owner-a',pg_temp.grant_body('grant-w-ghc-00','whoop','storage_compute',5))->>'error','invalid_request','WHOOP storage on the Google Health copy is refused');
+select is(pg_temp.h('consent_grant','gh-owner-a',pg_temp.grant_body('grant-a-ghc-00','apple','storage_compute',5))->>'error','invalid_request','and a device source on it');
+select is(pg_temp.h('consent_grant','gh-owner-a',pg_temp.grant_body('grant-f-store-0','fitbit','storage_compute',5))->>'error','invalid_request','fitbit is not a source name; the source is google_health');
+select is(pg_temp.h('consent_grant','gh-owner-a',pg_temp.grant_body('grant-g-store-1','google_health','storage_compute',5))->'consent'->>'status','granted','Google Health storage is granted on copy 5');
+select is((select c.version from waldo.health_consents c join waldo.owners o on o.id=c.owner_id where o.do_name='gh-owner-a' and c.source='google_health' and c.purpose='storage_compute' and c.withdrawn_at is null),5,'and stored on copy 5');
+select is(pg_temp.h('consent_grant','gh-owner-a',pg_temp.grant_body('grant-g-model-1','google_health','model_processing',5))->'consent'->>'version','5','model use is granted on top of it, and the consent shows copy 5');
+select is(pg_temp.h('consent_grant','gh-owner-a',pg_temp.grant_body('grant-w-store-1','whoop','storage_compute',4))->'consent'->>'status','granted','WHOOP keeps its own copy 4');
 
 -- Ingest takes Google Health readings under the same rules as any other source.
 select is(pg_temp.h('ingest','gh-owner-a',pg_temp.batch('ingest-g-000001',1,jsonb_build_array(pg_temp.sleep('google_health:sleep-1',430))))->>'accepted','1','a Google Health reading is stored');

@@ -6,8 +6,9 @@ import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { numericHealthIn } from '../scribe/sanitiser';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import { isMachine, jobCheckpoint, jobResult, replayBrief, TASK_DEADLINE_MS, TASK_MAX_OPEN, TASK_MAX_PER_TURN, TASK_MAX_STEERS, taskBrief, type JobBook, type JobRow, type TaskBrief } from './jobs';
-import { TASK_PROFILE_SPECS } from './profiles';
+import { holdsPrivateAndEgress, TASK_PROFILE_SPECS } from './profile-tools';
 import { quoted } from '../prompt/turn-prompt';
+import { threadOfChain } from '../channels/app-threads';
 import { PARK_WORDS } from '../prompt/fixed-lines';
 
 // The brain's task tools. Whether a piece of work becomes a task is the model's call: nothing here routes work by its
@@ -48,11 +49,14 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
       if (unavailable) return refusal(unavailable, 'invalid_args');
       const now = deps.now();
       const tainted = ctx.toolArgSourceTaint === 'external';
-      const conversationRef = deps.conversationRef?.(ctx) ?? null;
+      // An approved replay runs outside any turn, so the thread comes from the turn whose card it was.
+      const askedThread = ctx.askedIn && threadOfChain(ctx.askedIn.conversation_ref) ? ctx.askedIn.conversation_ref : null;
+      const conversationRef = deps.conversationRef?.(ctx) ?? askedThread;
       const brief: TaskBrief = {
         title: args.title, goal: args.goal, context: args.context,
         done_when: args.done_when, effort: args.effort ?? 'standard', timezone: deps.timezone(), started_at: now,
-        ...(tainted ? { outside_text: true as const } : {}), ...(conversationRef ? { conversation_ref: conversationRef } : {}),
+        ...(tainted ? { outside_text: true as const } : {}), ...(tainted && ctx.approvedTaintedAction?.tool === 'start_task' ? { owner_approved: true as const } : {}),
+        ...(conversationRef ? { conversation_ref: conversationRef } : {}), ...(ctx.askedIn ? { asked_in: ctx.askedIn } : {}),
       };
       // A brief persists with the job, and the owner's health values are never stored: say it in zone words instead. Each
       // field is read as the model wrote it; in the brief's JSON a quote or a tab before a number is an escape the check misses.
@@ -76,7 +80,7 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
         await deps.wake(now);
       }
       const made = taskBrief(job);
-      return { ok: true as const, data: { status: 'started', job_id: job.id, profile: job.profile, title: made.title }, source_taint: null };
+      return { ok: true as const, data: { status: 'started', job_id: job.id, profile: job.profile, title: made.title, note: STARTED_NOTE }, source_taint: null };
     },
   } satisfies ToolHandler<StartTaskArgs, unknown, ToolDispatcherContext>,
   {
@@ -118,6 +122,7 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
         ok: true as const,
         data: {
           job_id, title: titleOf(row), profile: row.profile, state: stateOf(row),
+          ...(row.outcome ? { outcome: row.outcome } : {}), ...(row.settled_at ? { told_minutes_ago: Math.floor((deps.now() - row.settled_at) / 60_000) } : {}),
           ...(row.park_reason ? { why: PARK_WORDS[row.park_reason] } : {}),
           age_minutes: Math.floor((deps.now() - row.created_at) / 60_000), steps: row.rounds, tools_called,
           ...(asked ? { approval_id: asked } : {}), ...(result ? { result } : {}),
@@ -142,7 +147,10 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
       if (numericHealthIn(instruction)) return refusal('The change contains health values, which a task never stores. Describe them in words (for example "a low-recovery morning") and call steer_task again.', 'invalid_args');
       if (!ctx.turnId || !ctx.toolCallId) return refusal('Task invocation identity is unavailable.');
       const title = titleOf(row), now = deps.now();
-      const written = deps.book.steer(job_id, { key: `${ctx.turnId}:${ctx.toolCallId}`, text: instruction, mode, at: now }, ctx.toolArgSourceTaint === 'external' ? 'external' : null);
+      const outside = ctx.toolArgSourceTaint === 'external';
+      // As for a brief: a change replayed from the owner's own card for it keeps a task's mail and web together.
+      const approved = outside && ctx.approvedTaintedAction?.tool === 'steer_task';
+      const written = deps.book.steer(job_id, { key: `${ctx.turnId}:${ctx.toolCallId}`, text: instruction, mode, at: now, ...(outside ? { outside_text: true as const } : {}), ...(approved ? { owner_approved: true as const } : {}) }, outside ? 'external' : null);
       if (written === 'closed') {
         const after = deps.book.get(job_id);
         return refusal(`"${title}" ${after?.status === 'cancelled' ? 'was cancelled' : after?.park_reason ? 'already stopped' : 'already finished'}, so it cannot change. For more work, call start_task with a brief that says all of it.`);
@@ -152,10 +160,15 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
         deps.log({ trace: `task:${job_id}`, hop: 'task_steered', ms: 0, ok: true, job_id, ...(row.profile ? { job_profile: row.profile } : {}), code: mode });
         await deps.wake(now);
       }
-      return { ok: true as const, data: { job_id, title, mode, steered: true }, source_taint: null };
+      // A change written after outside text takes the web from a task that also reads the owner's data (tasks/profiles jobTools).
+      const webWithheld = outside && !approved && holdsPrivateAndEgress(row.profile ? TASK_PROFILE_SPECS[row.profile].tools : []);
+      return { ok: true as const, data: { job_id, title, mode, steered: true, ...(webWithheld ? { note: 'This change came after outside content, so the task goes on without the web: it keeps the owner\'s mail, calendar and files.' } : {}) }, source_taint: null };
     },
   } satisfies ToolHandler<SteerTaskArgs, unknown, ToolDispatcherContext>] : []),
 ];
+
+// The work is never invisible: the owner hears it started where they asked, and its report or early ending comes back there.
+const STARTED_NOTE = 'Tell the owner in one short line that it has started and that the report will come back here.';
 
 // The jobs the owner's turn may name: tasks the model started, and actions the owner approved. A retried owner message is the
 // brain's own promise, kept or noticed by the jobs lane, and a machine job is the brain's own background check, which the owner
