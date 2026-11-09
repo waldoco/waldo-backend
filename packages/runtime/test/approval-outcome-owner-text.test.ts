@@ -64,6 +64,13 @@ describe('an approved MCP card tells the owner what was done, never what the ser
       expect(rig.decision.message).toContain(rig.summary);
       for (const leaked of ['send_console_link', 'connect_app', 'the owner']) expect(ownerText(rig)).not.toContain(leaked);
     });
+
+    it(`a server no longer connected is told apart from one that may take it on a retry (${withEffects ? 'with' : 'without'} the effect ledger)`, async () => {
+      const gone = await approveMcp('gone', async () => { throw new McpRefusal('not_found', 'tracker is no longer connected.', true); }, withEffects);
+      const busy = await approveMcp('busy', async () => { throw new McpRefusal('transient', 'tracker did not answer in time.', true); }, withEffects);
+      expect([gone.decision.toast, busy.decision.toast]).toEqual(['Nothing ran', 'Nothing ran']);
+      expect(gone.decision.message.replace(gone.summary, '')).not.toBe(busy.decision.message.replace(busy.summary, ''));
+    });
   }
 });
 

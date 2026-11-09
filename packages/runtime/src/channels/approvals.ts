@@ -465,7 +465,7 @@ const describeBrowser = (p: BrowserSubmitProposal) => {
 };
 const describeMcp = (p: McpCallProposal) => `Run ${p.tool} on the ${p.server} MCP server`;
 // A refusal's own text was written for the model and names Waldo's tools, so the owner reads a fixed line for its code.
-const MCP_NOT_RUN: Partial<Record<McpRefusal['code'], string>> = { auth_failed: 'Its sign-in needs reconnecting in Connections first.' };
+const MCP_NOT_RUN: Partial<Record<McpRefusal['code'], string>> = { auth_failed: 'Its sign-in needs reconnecting in Connections first.', not_found: 'That tool is no longer connected; reconnect it in Connections first.' };
 // The heading over what the proposal read from the owner's own stores when it was made.
 const PREVIEW_HEADING: Readonly<Record<string, string>> = { forget_memory: 'It forgets', close_loop: 'It closes' };
 const clipped = (text: string) => text.length > 120 ? `${text.slice(0, 117)}...` : text;
