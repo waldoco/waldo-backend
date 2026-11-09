@@ -212,9 +212,9 @@ const KINDS: Readonly<Record<Kind, Readonly<{ text: string; run(owner: Owner, st
   } },
 };
 const ALL = Object.keys(KINDS) as Kind[];
-// Choice "both" copies to WhatsApp what the scheduled pass delivers and the outbox records it marks as copied (a check-back,
-// an update card); a task report and a reconnect notice are not copied, so with "both" they reach the app alone.
-const COPIED: ReadonlySet<Kind> = new Set(['brief', 'reminder', 'checkBack', 'update']);
+// Choice "both" copies to WhatsApp what the scheduled pass delivers and the outbox records it marks as copied: a check-back,
+// an update card, a task report and a reconnect notice. Meeting prep and pause notices stay in the app.
+const COPIED: ReadonlySet<Kind> = new Set(['brief', 'reminder', 'checkBack', 'update', 'taskReport', 'reconnect']);
 const inApp = (state: DurableObjectState, text: string) => appRows(state).includes(JSON.stringify(text).slice(1, -1));
 const onWhatsApp = (text: string) => world.texts.some(sent => sent.includes(text));
 

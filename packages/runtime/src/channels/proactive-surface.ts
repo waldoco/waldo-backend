@@ -156,8 +156,11 @@ export const answersOwnerIn = (subject: string) => (record: FinalRecord): boolea
 // thread chain, and every other surface answers where Waldo's own messages go.
 export const ANSWERS_WHERE_ASKED: ReadonlySet<string> = new Set(['whatsapp']);
 
-export const waitingForWhatsApp = (subjects: ReadonlySet<string>) => (record: FinalRecord): boolean =>
-  !!(record.reminder || record.heartbeat || record.mailFollowup || record.update || record.calendarPrep || record.scheduleNotice || record.dayCard || record.standingOrder)
+// A message of Waldo's own, nothing of it sent yet, still addressed to a chat surface that no longer takes this owner's
+// proactive work (an old WhatsApp number, or Telegram once PROACTIVE_OVER_TELEGRAM decides): a scheduled one and, with
+// `notices`, a notice a turn queued there.
+export const waldoFirstWaitingFor = (subjects: ReadonlySet<string>, notices = false) => (record: FinalRecord): boolean =>
+  !!((notices && record.notice) || record.reminder || record.heartbeat || record.mailFollowup || record.update || record.calendarPrep || record.scheduleNotice || record.dayCard || record.standingOrder)
   && subjects.has(record.ownerSubject) && record.payload.chat_id === Number(record.ownerSubject) && !tookPart(record);
 
 // A day card, an update card or a card's revision that reaches the app through this route links the app message it became,
