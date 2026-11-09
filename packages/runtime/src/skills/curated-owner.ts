@@ -136,7 +136,8 @@ export class CuratedOwnerSkills {
    // Another skill joins only while the turn's block fits; a token is at least one UTF-8 byte, so a block within its budget
    // in bytes is within it in tokens too. A first skill is measured where it renders, as before.
    const skills=next.map(n=>this.skillFor(n)!);
-   if(prior.length && new TextEncoder().encode(renderBlock(skills.map(renderSkill))).length>blockLimit(skills)) return overBudget();
+   const bytes=(text:string)=>new TextEncoder().encode(text).length;
+   if(prior.length && (bytes(renderSkill(s))>skillLimit(s) || bytes(renderBlock(skills.map(renderSkill)))>blockLimit(skills))) return overBudget();
    this.#selected.set(turn.turnId,next);
   }
   return {ok:true,source_taint:null,data:metadata(s,true)};

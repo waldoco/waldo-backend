@@ -38,7 +38,9 @@ describe('first-run tools are one find_tools hop away on an owner\'s first turn'
       await responder.respond(ownerTyped({ traceId: `owner-${crypto.randomUUID()}`, conversationRef: 'owner', surface: 'whatsapp', text: 'hello', messageRef: { id: 'wamid.first', conversationRef: 'owner' } }), timer);
 
       const first = requests.find((request) => !request.response_format)!;
-      expect(JSON.stringify({ ...first, tools: undefined })).toContain(tool.name);
+      // Offered in the function list, or named on its group's catalogue line ("- <group>: a, b. <what the group is for>").
+      const catalogued = new RegExp(`- [a-z_]+: (?:[a-z_]+, )*${tool.name}[,.]`).test(JSON.stringify({ ...first, tools: undefined }));
+      expect(catalogued || first.tools!.some((offered) => offered.name === tool.name)).toBe(true);
       expect(ran).toEqual([tool.args]);
     });
   }

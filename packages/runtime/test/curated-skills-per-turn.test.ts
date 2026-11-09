@@ -52,14 +52,20 @@ it('a skill that would take the turn past its skill budget is refused, and the o
   });
 });
 
-it('turning a skill off takes it out of a turn that loaded it, and leaves the others', async () => {
+it('turning a skill off takes it out of later loads; a turn already running with it fails closed', async () => {
   const a = sized('plan-a', 500), b = sized('plan-b', 500);
-  await withBook('skills-disable', [a, b], async (book) => {
-    book.load(a.name, a.version, turn('t1'));
-    book.load(b.name, b.version, turn('t1'));
-    expect(book.disable(a.name, a.version, { ...turn('t2'), ownerText: `/skills disable ${a.name}` }).ok).toBe(true);
-    const prompt = await book.prompt(turn('t1'), canaries);
-    expect(prompt).not.toContain(a.body_markdown);
-    expect(prompt).toContain(b.body_markdown);
+  await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('skills-disable')), async (_instance, state) => {
+    provisionDoSchema(state.storage);
+    // Each turn builds its own book over the owner's one store, as the host does.
+    const book = () => new CuratedOwnerSkills(state.storage.sql, owner, undefined, owner, [a, b]);
+    const running = book();
+    running.load(a.name, a.version, turn('t1'));
+    running.load(b.name, b.version, turn('t1'));
+    expect(book().disable(a.name, a.version, { ...turn('t2'), ownerText: `/skills disable ${a.name}` }).ok).toBe(true);
+    expect(await running.prompt(turn('t1'), canaries)).toBe('');
+    const next = book();
+    expect(next.load(a.name, a.version, turn('t3')).ok).toBe(false);
+    expect(next.load(b.name, b.version, turn('t3')).ok).toBe(true);
+    expect(await next.prompt(turn('t3'), canaries)).toContain(b.body_markdown);
   });
 });
