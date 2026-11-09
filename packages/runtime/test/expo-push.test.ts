@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { pushNotificationSchema } from '../../contracts/src/ui/notification';
-import { ownerPush, PUSH_DAILY_LIMIT, PUSHES, type OwnerPushDeps, type PushTarget } from '../src/channels/expo-push';
+import { EVENT_PUSH_DAILY_LIMIT, ownerPush, PUSH_DAILY_LIMIT, PUSHES, type OwnerPushDeps, type PushTarget } from '../src/channels/expo-push';
 
 const EXPO = 'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]', OTHER = 'ExpoPushToken[bbbbbbbbbbbbbbbbbbbb]';
 const ACCESS = 'synthetic-expo-access';
@@ -193,5 +193,18 @@ describe('an update push', () => {
     const { push, posted } = fixture();
     await push('brief', undefined, undefined, 'card:close');
     expect((posted[0]!.body as { data: object }[])[0]!.data).toEqual(BRIEF);
+  });
+});
+
+describe('an event push', () => {
+  it('is its fixed line whatever body it is handed, and counts on its own ceiling, never the one prep and update pushes share', async () => {
+    const { push, posted, store, logged } = fixture();
+    for (let n = 0; n <= EVENT_PUSH_DAILY_LIMIT; n += 1) await push('event', undefined, 'Deploy finished: see https://ci.example');
+    expect(posted).toHaveLength(EVENT_PUSH_DAILY_LIMIT);
+    expect(posted[0]!.body).toEqual([{ to: EXPO, body: PUSHES.event.body, data: { trigger: 'event' }, sound: 'default' }]);
+    expect(logged.at(-1)).toEqual({ code: 'daily_limit', count: 0 });
+    expect(store.get('app_push_proactive_budget_v1')).toBeUndefined();
+    await push('update', undefined, 'Your 15:00 moved to 17:00');
+    expect(posted).toHaveLength(EVENT_PUSH_DAILY_LIMIT + 1);
   });
 });

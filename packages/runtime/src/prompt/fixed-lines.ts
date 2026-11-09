@@ -74,6 +74,17 @@ export const fixedReport = (row: Pick<JobRow, 'brief_json' | 'park_reason'>, tim
     : `${name} finished, but I couldn't write it up and haven't kept what it found. Start it again when you need it.`;
 };
 
+// A task whose worker returned an early ending (partial, blocked or failed), when the apply turn chose to say nothing: an early
+// ending is always told, in the place the owner asked.
+const ENDED_WORDS: Readonly<Record<'partial' | 'blocked' | 'failed', string>> = {
+  partial: 'got part of the way and stopped', blocked: 'was blocked before it could finish', failed: 'failed before it finished',
+};
+export const earlyEndingReport = (row: Pick<JobRow, 'brief_json'>, status: 'partial' | 'blocked' | 'failed', timezone: string): string => {
+  const { title, started } = taskName(row, timezone);
+  const name = title === null ? `The background task you started at ${started}` : `Your background task "${title}"`;
+  return `${name} ${ENDED_WORDS[status]}. Tell me to try again and I'll start it again.`;
+};
+
 // A report whose apply turn was lost partway: that turn holds the owner's tools and may have acted, so it is not run again.
 export const interruptedReport = (row: Pick<JobRow, 'brief_json'>, timezone: string): string => {
   const { title, started } = taskName(row, timezone);

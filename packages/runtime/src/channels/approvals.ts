@@ -1,3 +1,4 @@
+import { WHATSAPP_REPLY_BODY_MAX } from './whatsapp-api';
 import { EffectNotAppliedError, EffectQuotaError, EffectRefusedError, EffectUnknownError, type OwnerEffectLedger, type EffectReceipt, type EffectReadback } from './owner-effect-ledger';
 import { AVAILABLE_CLASSES, GrantLimitError, type GrantUse, type StandingGrants } from './standing-grants';
 import type { ProxyIntent } from '../connectors/proxy-intent';
@@ -15,7 +16,11 @@ import { MASK, isCredentialKey, maskedUrl, maskedValue } from './secret-fields';
 import { APP_REVIEW_MAX_CHARS, appApprovalPart, type AppApprovalPart } from './surfaces/app';
 import { SEND_NOW_ONLY } from './delivery-routes';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
-import { replyApprovalPartV1Schema } from '@waldo/contracts';
+import type { z } from 'zod';
+import { replyApprovalPartV1Schema, taskProfileSchema } from '@waldo/contracts';
+import { holdsPrivateAndEgress, TASK_PROFILE_SPECS } from '../tasks/profile-tools';
+import { APP_CHAT_FREE_WINDOW_REVISION } from '../../../contracts/src/app/core';
+import { replyFreeWindowPartV1Schema } from '../../../contracts/src/app/parts';
 import { APP_APPROVALS_CONTRACT_REVISION, appApprovalExactV1Schema, appApprovalHealthV1Schema, appApprovalKindShownAt, appApprovalMessageV1Schema, appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
 import { addPlan, planOnCalendar, planReview, planSummary, undoPlan, type PlanUndo, type StoredPlan } from './calendar-plan';
 import { appApprovalStepUp } from './approval-step-up';
@@ -149,7 +154,9 @@ const mcpDigest = (p: McpCallProposal) => sha256Hex(stableJson({ server: p.serve
 // preview: what the call would change, read from the owner's own stores when it was proposed (the memories a forget
 // removes, the loop a close ends).
 // It is shown on the card and never replayed; the frozen args and their digest are what runs.
-export type TaintedActionProposal = Readonly<{ operation_ref?: string; tool: string; args: Record<string, unknown>; args_digest: string; reasoning: string; source: 'external'; preview?: readonly string[] }>;
+// asked_in: the owner's turn that raised it, so an approved replay answers there wherever the owner approved it. It rides with
+// the payload, outside the arguments and their digest.
+export type TaintedActionProposal = Readonly<{ operation_ref?: string; tool: string; args: Record<string, unknown>; args_digest: string; reasoning: string; source: 'external'; preview?: readonly string[]; asked_in?: Readonly<{ surface: string; conversation_ref: string }> }>;
 // What the replay could honestly establish: done means the handler ran and returned ok; rejected means the dispatcher
 // refused before the handler ran; failed means the tool reported its own typed failure; uncertain is everything else.
 // message is owner-facing and fixed; code is the dispatcher's typed code, for the trace only.
@@ -254,7 +261,8 @@ export type OwnerSaid = Readonly<{ messageRef: string; receivedAt: number }>;
 // changed_since_shown: the stored card is not the one shown; shown_after_message: the card reached the owner after the
 // message, so the message cannot be about it; app_only: a kind approved only in the app or by a tap.
 export type ApproveShownOutcome = Readonly<{ outcome: 'decided'; decision: ApprovalDecision; receipt_sent: boolean }
-  | { outcome: 'off' | 'not_shown_here' | 'changed_since_shown' | 'shown_after_message' | 'app_only' }
+  | { outcome: 'off' | 'not_shown_here' | 'changed_since_shown' | 'shown_after_message' }
+  | { outcome: 'app_only'; link?: string }
   | { outcome: 'not_waiting'; state: AppApprovalStateV1 | 'not_found' }>;
 // Whether a tool call runs in a turn that has read outside text.
 export const turnReadOutside = (ctx: Readonly<{ toolArgSourceTaint?: unknown }> | undefined): boolean => ctx?.toolArgSourceTaint === 'external';
@@ -330,7 +338,7 @@ const CARDS: Readonly<Record<string, Readonly<{ title: string; approve: string; 
   email_send: { title: 'Send this email?', approve: 'Send it', modify: true }, message_send: { title: 'Send this message?', approve: 'Send it', modify: true },
   agent_mail_send: { title: 'Send this email as Waldo?', approve: 'Send it', modify: true },
   browser_submit: { title: 'Approve this browser action?', approve: 'Do it', modify: false }, mcp_call: { title: 'Run this MCP tool?', approve: 'Do it', modify: false },
-  tainted_action: { title: 'Run this action?', approve: 'Do it', modify: false },
+  tainted_action: { title: 'Do this?', approve: 'Do it', modify: false },
   standing_grant: { title: 'Let Waldo do this on its own?', approve: 'Allow', modify: false },
 };
 const PROPOSAL_KINDS = Object.keys(CARDS);
@@ -356,7 +364,8 @@ const REVIEW_BUDGET = 3800;
 // Room an email card keeps for its closing lines: "Nothing has been sent." and the console review link.
 const EMAIL_TAIL_ROOM = 300;
 // Whether a card shows the whole review: present() and placement() both decide it here, so they never disagree.
-const reviewFits = (entry: LedgerRow) => reviewText(entry).length <= REVIEW_BUDGET - (entry.kind === 'email_send' ? EMAIL_TAIL_ROOM : 0);
+// chat: the card is handed to the app, so the chat shows the words only and the app review carries the exact call.
+const reviewFits = (entry: LedgerRow, chat = false) => reviewText(entry, true, chat).length <= REVIEW_BUDGET - (entry.kind === 'email_send' ? EMAIL_TAIL_ROOM : 0);
 // signed: the owner reviews the words the recipient reads; the model reads its own draft, so a rewrite never signs twice.
 const reviewEmail = (p: EmailSendProposal, signed: boolean) =>
   [...(p.account ? [`From: ${p.account}`] : []), `To: ${p.to.join(', ')}`,
@@ -415,12 +424,41 @@ const clipped = (text: string) => text.length > 120 ? `${text.slice(0, 117)}...`
 // The reasoning was written in a turn that read outside text and can name anything, so a card that read the owner's own
 // stores leads with that read, and the reasoning follows it as Waldo's.
 const sentence = (text: string) => /[.!?…]$/.test(text) ? text : `${text}.`;
+// What a frozen call does, in words, from its own arguments: the owner reads this, never the tool's name or its JSON.
+const said = (args: Record<string, unknown>, key: string) => typeof args[key] === 'string' ? clipped(args[key] as string) : '';
+const TAINTED_PLAIN: Readonly<Partial<Record<string, (args: Record<string, unknown>) => string>>> = {
+  start_task: (args) => `Start a background task: "${said(args, 'title')}"`,
+  steer_task: (args) => `Change a background task: "${said(args, 'instruction')}"`,
+  set_reminder: (args) => `Set a reminder${said(args, 'at') ? ` for ${said(args, 'at').replace('T', ' ')}` : ''}: "${said(args, 'note')}"`,
+  write_task: (args) => `Add a task: "${said(args, 'title')}"`,
+  log_meal: (args) => `Log a meal: "${said(args, 'description')}"`,
+  open_loop: (args) => `Keep track of: "${said(args, 'title')}"`,
+  track_responsibility: (args) => `Track: "${said(args, 'title')}"`,
+  set_standing_order: (args) => `Set a standing order: "${said(args, 'scope')}"`,
+  create_artifact: (args) => `Create "${said(args, 'name')}" in your artifacts`,
+  workspace_write: (args) => `Write ${said(args, 'path')} in your workspace`,
+  draft_document: (args) => `Draft a document: "${said(args, 'title')}"`,
+};
+// The one plain reason a background task is on a card at all: its worker would hold the owner's data and the web together.
+const COMBINED_TASK_WHY = 'It would read your mail and the web together, after reading outside content.';
+const combinedProfile = (profile: unknown): boolean => {
+  const parsed = taskProfileSchema.safeParse(profile);
+  return parsed.success && holdsPrivateAndEgress(TASK_PROFILE_SPECS[parsed.data].tools);
+};
+const words = (tool: string) => `${tool.charAt(0).toUpperCase()}${tool.slice(1).replaceAll('_', ' ')}`;
+// A tool with no words of its own is named plainly and described by Waldo's reasoning, as before.
+const plainTaintedAction = (p: TaintedActionProposal) => TAINTED_PLAIN[p.tool]?.(p.args) ?? `${words(p.tool)}: ${clipped(p.reasoning)}`;
 const describeTaintedAction = (p: TaintedActionProposal) => p.preview?.length
   ? `${PREVIEW_HEADING[p.tool] ?? 'It changes'}: ${p.preview[0]}${p.preview.length > 1 ? ` and ${p.preview.length - 1} more` : ''}`
-  : `Run ${p.tool}: ${clipped(p.reasoning)}`;
-const reviewTaintedAction = (p: TaintedActionProposal) => !p.preview?.length ? describeTaintedAction(p)
-  : `${p.preview.length === 1 ? describeTaintedAction(p) : `${PREVIEW_HEADING[p.tool] ?? 'It changes'}:\n${p.preview.map((line) => `- ${line}`).join('\n')}`}\n\nWaldo's reasoning: ${clipped(p.reasoning)}`;
+  : plainTaintedAction(p);
+const reviewTaintedAction = (p: TaintedActionProposal) => [
+  !p.preview?.length || p.preview.length === 1 ? `Do this? ${sentence(describeTaintedAction(p))}` : `${PREVIEW_HEADING[p.tool] ?? 'It changes'}:\n${p.preview.map((line) => `- ${line}`).join('\n')}`,
+  ...(p.tool === 'start_task' && combinedProfile(p.args.profile) ? [COMBINED_TASK_WHY] : []),
+  `Waldo's reasoning: ${clipped(p.reasoning)}`,
+].join('\n\n');
 const TAINTED_ACTION_WHY = 'It uses content from an email or web page, so it needs your approval before it runs.';
+// The exact call, one step below the words: the app shows it under Details; a chat card leaves it out.
+const taintedDetails = (p: TaintedActionProposal) => `Details: ${p.tool}\n${JSON.stringify(maskedValue(p.args), null, 2)}`;
 // Browser and MCP summaries are rebuilt from the payload, so a row stored before masking renders
 // masked too. A payload that no longer parses shows the card title, never the stored summary.
 const summaryOf = (entry: LedgerRow) => {
@@ -451,14 +489,15 @@ const reviewStandingGrant = (terms: AppAutonomyGrantTermsV1) => {
     'Only blocks Waldo made, with no guests. Undo each one until it starts; revoke or pause any time.'].join('\n');
 };
 // The full review a card shows for each kind, rebuilt from the frozen payload.
-const reviewText = (entry: LedgerRow, signed = true): string => {
+// chat: a chat card's first screen, which shows a tainted action in words only.
+const reviewText = (entry: LedgerRow, signed = true, chat = false): string => {
   const p = JSON.parse(entry.payload_json);
   if (entry.kind === 'standing_grant') return reviewStandingGrant(appAutonomyGrantTermsV1Schema.parse(p.terms));
   if (entry.kind === 'email_send') return `Send this email?${p.earlier_unknown_at ? ` An identical email from ${p.earlier_unknown_at} may already have gone out; check Gmail's Sent folder before sending it again.\n` : ' '}${reviewEmail(p, signed)}`;
   if (entry.kind === 'message_send') return `Send this message on ${p.channel}?\n\n${reviewMessage(p)}`;
   if (entry.kind === 'agent_mail_send') return `Send this email as Waldo? ${reviewAgentMail(p, signed)}`;
   if (entry.kind === 'mcp_call') return `Run this MCP tool? ${describeMcp(p)}\n\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}${p.questions?.length ? `\n\nThe server asked (its words):\n${p.questions.map((q: { id: string; message: string }) => `- ${q.message}`).join('\n')}\n\nYour answers:\n${JSON.stringify(maskedValue(p.answers?.responses ?? {}), null, 2)}` : ''}`;
-  if (entry.kind === 'tainted_action') return `Run this action? ${reviewTaintedAction(p)}\n\n${TAINTED_ACTION_WHY}\n\nTool: ${p.tool}\nArgs:\n${JSON.stringify(maskedValue(p.args), null, 2)}`;
+  if (entry.kind === 'tainted_action') return `${reviewTaintedAction(p)}\n\n${TAINTED_ACTION_WHY}${chat ? '' : `\n\n${taintedDetails(p)}`}`;
   if (entry.kind === 'browser_submit') return `Approve this browser action? ${describeBrowser(p)}`;
   if (entry.kind === 'google_task_change') return reviewGoogleTaskChange(googleTaskProposalSchema.parse(p));
   // A calendar change states the change itself, so the same text reads true before the owner decides and after it is done.
@@ -528,6 +567,8 @@ const withdrawalOf = (entry: LedgerRow): Pick<AppApprovalV1, 'withdrawal'> => en
 // The chat surfaces where a send to another person, and every other kind that reaches beyond the owner's own things, is
 // handed to the app rather than approved. Which kinds is the app's own rule; a request that cannot be classified is handed over.
 const HANDS_TO_APP: ReadonlySet<ApprovalSurface> = new Set(['whatsapp', 'imessage']);
+// The surfaces whose buttons show only while the card's words stay under a provider's body limit.
+const BUTTON_BODY_MAX: Readonly<Partial<Record<ApprovalSurface, number>>> = { whatsapp: WHATSAPP_REPLY_BODY_MAX };
 // Classified from every detail of the frozen request, never the app card's trimmed one.
 const stepUpFor = (entry: LedgerRow, action: ApprovalActionV1): boolean => {
   try { return appApprovalStepUp({ kind: entry.kind as AppApprovalV1['kind'], exact: exactFor(entry, true) }, action); } catch { return true; }
@@ -556,10 +597,34 @@ const NOT_IN_APP = "It can't be approved in the Waldo app either, so it can't be
 const CHANGED_IN_APP = 'It reaches other people or acts beyond your own things, so changes to it are asked for in the Waldo app, not in chat.';
 const NOT_CHANGED_IN_APP = "It can't be changed in the Waldo app either. Ask me for a fresh one instead.";
 // The app's card, rendered from the ledger row and its presentation, so the payload has one stored form.
-const appPartOf = (entry: LedgerRow, shown: Readonly<{ actions: AppApprovalPart['actions']; payload_digest: string }>): AppApprovalPart => {
-  const review = appReview(entry);
+// A free-window offer (propose_calendar_change with offer free_window): a block for a window that opens soon. Its card asks its
+// one line and names its answers by what they do to the window: Do it adds the block, Not now lets it pass, Keep it free says
+// the owner wants the time left open.
+const OFFER_LABELS: Readonly<Partial<Record<AppApprovalPart['actions'][number], string>>> = { approve: 'Do it', defer: 'Not now', skip: 'Keep it free' };
+const QUESTION_CHARS = 120;
+const offerOf = (entry: LedgerRow, offers: boolean): Readonly<{ line: string; title: string; start: number; end: number }> | null => {
+  if (!offers || entry.kind !== 'calendar_change') return null;
+  const p = JSON.parse(entry.payload_json) as Partial<Stored>;
+  if (p.offer !== 'free_window' || !p.start || !p.end || !p.reason || !p.title) return null;
+  const line = p.reason.replace(/\s+/g, ' ').trim();
+  return { line: line.length > QUESTION_CHARS ? `${line.slice(0, QUESTION_CHARS - 1).trimEnd()}…` : line, title: p.title, start: Date.parse(p.start), end: Date.parse(p.end) };
+};
+const offerLabels = (actions: AppApprovalPart['actions']) => Object.fromEntries(actions.flatMap(action => OFFER_LABELS[action] ? [[action, OFFER_LABELS[action]!]] : []));
+const appPartOf = (entry: LedgerRow, shown: Readonly<{ actions: AppApprovalPart['actions']; payload_digest: string }>, offers = false): AppApprovalPart => {
+  const review = appReview(entry), offer = offerOf(entry, offers);
   return { type: 'approval', approval_id: entry.id, kind: entry.kind as AppApprovalPart['kind'], review: review.text, payload_digest: shown.payload_digest,
-    actions: shown.actions, expires_at: expiresAt(entry), fallback_text: review.full ? summaryOf(entry).slice(0, 4000) : review.text };
+    actions: shown.actions, expires_at: expiresAt(entry), fallback_text: review.full ? summaryOf(entry).slice(0, 4000) : review.text,
+    ...(offer ? { question: offer.line, labels: offerLabels(shown.actions) } : {}) };
+};
+// Chat revision 10's line for an offer's live card: the same approval, its answers in the order the owner reads them.
+export type AppFreeWindowPart = z.infer<typeof replyFreeWindowPartV1Schema>;
+const freeWindowPartOf = (entry: LedgerRow, part: AppApprovalPart): AppFreeWindowPart | null => {
+  const offer = offerOf(entry, true);
+  if (!offer) return null;
+  const choices = (['approve', 'defer', 'skip'] as const).filter(action => part.actions.includes(action)).map(action => ({ action, label: OFFER_LABELS[action]! }));
+  const parsed = replyFreeWindowPartV1Schema.safeParse({ type: 'free_window', approval_id: part.approval_id, line: offer.line, title: offer.title, start: offer.start, end: offer.end, choices,
+    fallback_text: `${offer.line} ${choices.map(choice => choice.label).join(' / ')}` });
+  return parsed.success ? parsed.data : null;
 };
 // An app card approves only while today's app review still shows the full content; a stored flag alone never does.
 const appShowsInFull = (entry: LedgerRow) => { try { return appReview(entry).full; } catch { return false; } };
@@ -695,6 +760,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // The owner's standing grants: a calendar change one covers runs without a card. Only with the effect ledger. grant writes
   // the one the owner approved on a standing_grant card; without it such a card is never approvable here.
   grants?: Pick<StandingGrants, 'ownBlock' | 'enabled'> & Partial<Pick<StandingGrants, 'grant'>>;
+  // FREE_WINDOW_OFFERS: a calendar card marked as a free-window offer is labelled as one; off, it is an ordinary card.
+  freeWindowOffers?: () => boolean;
   // Whether the owner can approve a card shown here by telling Waldo to go ahead (APPROVE_IN_CHAT).
   approvesInChat?: () => boolean;
   // The app chat thread this turn is in, only on an app chat turn: a card is approved in words only in the thread it was shown in.
@@ -797,13 +864,17 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     return live;
   };
   // A closed browser card releases the browser task it paused, as a skip does; then its messaging buttons are cleared. One
-  // closed in a turn that read outside text is also told to the owner by the desk in its own fixed words.
+  // closed in a turn that read outside text is also told to the owner by the desk in its own fixed words. A replaced one is
+  // told as replaced, so the owner is not sent to ask again for what is already waiting, and is not told to trust the
+  // replacement either, since that same outside text shaped it.
   const afterWithdrawn = async (id: string, live: readonly Readonly<{ surface: string; message_ref: string }>[]) => {
     const entry = row(id)!;
     if (entry.kind === 'browser_submit') await deps.browserDeny?.(JSON.parse(entry.payload_json) as BrowserSubmitProposal).catch(() => deps.log({ trace: id, hop: 'approval_withdraw', ms: 0, ok: false, code: 'browser_deny_failed' }));
     await clearButtons(id, live);
     if (entry.withdrawn_outside === 1) {
-      await deps.notice?.(`withdrawn:${id}`, `Waldo closed a card while working with an email or web page: ${describeAny(entry)}. Nothing was sent or done. If you still want it, ask Waldo for it again.`)
+      await deps.notice?.(`withdrawn:${id}`, entry.replaced_by
+        ? `Waldo replaced a card while working with an email or web page: ${describeAny(entry)}. Nothing was sent or done. The newer card came out of that work, so read it before you approve it.`
+        : `Waldo closed a card while working with an email or web page: ${describeAny(entry)}. Nothing was sent or done. If you still want it, ask Waldo for it again.`)
         .catch(() => deps.log({ trace: id, hop: 'approval_withdraw_notice', ms: 0, ok: false, code: 'notice_failed' }));
     }
   };
@@ -854,6 +925,14 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const latestNumbered = () => sql.exec<{ approval_id: string; message_ref: string; retired_at: number | null }>(
     'SELECT approval_id, message_ref, retired_at FROM approval_presentations WHERE surface = ? AND approvable = 1 ORDER BY presented_at DESC, rowid DESC LIMIT 1', surface).toArray()[0];
   // Where a request a chat surface hands to the app can be approved: in the app, by its link when there is one, or nowhere.
+  // A card handed to the app is approved there, so its chat message only has to say what it is and where: on WhatsApp it is cut
+  // to the short form when the whole review would push it past the reply buttons' body limit, so its buttons still show.
+  // whole: the message kept the review it was given.
+  const handedText = (review: string, handoff: string, short: string): Readonly<{ text: string; whole: boolean }> => {
+    const text = `${review}\n\n${handoff}`;
+    const max = BUTTON_BODY_MAX[surface];
+    return max === undefined || text.length <= max ? { text, whole: true } : { text: `${short.slice(0, max - handoff.length - 3)}\n\n${handoff}`, whole: false };
+  };
   const appHandoff = (id: string, inApp: boolean) => !inApp ? `${NOT_IN_APP} Nothing was done.` : deps.appLink ? `Review and approve it there: ${deps.appLink(id)}` : 'Approve it in the Waldo app.';
   // A row opens only once a surface recorded the review: the origin card's provider acknowledgement
   // and, when the owner has the app, an app card that parses. Approvability is per surface, by how
@@ -864,7 +943,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const present = async (id: string, raise?: Readonly<{ runRef: string | undefined }>) => {
     const entry = row(id)!;
     const deferrable = raise !== undefined || entry.deferred_at == null;
-    const card = reviewText(entry), buttons = buttonsFor(entry, deferrable), title = CARDS[entry.kind]!.title;
+    // A card approved here shows the exact call it runs under Details; one handed to the app shows only its words here.
+    const handsToApp = HANDS_TO_APP.has(surface) && approvedInApp(entry);
+    const card = reviewText(entry, true, handsToApp), buttons = buttonsFor(entry, deferrable), title = CARDS[entry.kind]!.title;
     // An email's card also links its console review; the lookup runs while the app card is built, not ahead of the card.
     const reviewing = entry.kind === 'email_send' ? deps.reviewUrl?.().catch(() => null) ?? null : null;
     const digest = `sha256:${await sha256Hex(entry.payload_json)}`;
@@ -872,11 +953,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     let journalFailure: unknown, sendFailure: unknown, inApp: Readonly<{ approvable: boolean }> | null = null, waits = false;
     let sentHere: Readonly<{ surface: string; message_ref: string; approvable: boolean; in_full: boolean }> | undefined;
     // A request this chat surface hands to the app is put there even before the owner has the app, so the link has a card to open.
-    const handsToApp = HANDS_TO_APP.has(surface) && approvedInApp(entry);
     if (surface === 'app' || handsToApp || deps.appIdentity?.()) {
       try {
         const approvable = appReview(entry).full;
-        const part = appApprovalPart(appPartOf(entry, { actions: withDefer(entry, approvable ? approveActions(entry) : ['skip']), payload_digest: digest }));
+        const part = appApprovalPart(appPartOf(entry, { actions: withDefer(entry, approvable ? approveActions(entry) : ['skip']), payload_digest: digest }, deps.freeWindowOffers?.() === true));
         // The app may show only a card it can also decide: the approvals-list item must parse first.
         appApprovalV1Schema.parse({ approval_id: id, kind: part.kind, state: approvable ? 'open' : 'review_only', review: part.review, exact: exactFor(entry), payload_digest: digest, expires_at: part.expires_at, actions: part.actions, ...healthOf(entry) });
         inApp = { approvable };
@@ -889,19 +969,23 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       // An email's card is the owner's only message about it, so it also says nothing went out and where else to read it.
       const review = await reviewing;
       // An app handoff that cannot approve already ends with "Nothing was done."
-      const fits = reviewFits(entry), approvable = fits && !handsToApp, numbered = NUMBERED.has(surface);
+      const fits = reviewFits(entry, handsToApp), approvable = fits && !handsToApp, numbered = NUMBERED.has(surface);
       // A card handed to the app that shows every word here is approved by the owner telling Waldo to go ahead, or in the app.
       const inWords = handsToApp && fits && approvesInWords(entry);
       const unsent = entry.kind !== 'email_send' ? '' : [...(handsToApp && inApp?.approvable !== true && !inWords ? [] : ['Nothing has been sent.']), ...(review ? [`You can also review it at ${review}.`] : [])].join(' ');
       const link = inApp?.approvable && deps.appLink ? ` You can review and approve it in the Waldo app: ${deps.appLink(id)}` : '';
       const earlier = numbered && approvable ? latestNumbered() : undefined;
       const replaces = earlier && earlier.approval_id !== id && earlier.retired_at === null && row(earlier.approval_id)?.status === 'open' ? ' These numbers now answer this card, not the earlier one.' : '';
+      const handed = handsToApp && !inWords ? handedText(fits ? card : `${title} ${summaryOf(entry).slice(0, 1000)}`, `${HANDED_TO_APP} ${appHandoff(id, inApp?.approvable === true)}${unsent ? `\n\n${unsent}` : ''}`, `${title} ${summaryOf(entry)}`) : null;
+      // Shown in full only when the message sent here holds the whole review: a card cut to its short form never authorizes a
+      // decision in words, even after approving in chat is switched on while it waits.
+      const inFull = fits && handed?.whole !== false;
       const text = inWords ? `${card}\n\n${GO_AHEAD_HERE}${link}`
-        : handsToApp ? `${fits ? card : `${title} ${summaryOf(entry).slice(0, 1000)}`}\n\n${HANDED_TO_APP} ${appHandoff(id, inApp?.approvable === true)}`
+        : handed ? handed.text
         : approvable ? numbered ? `${card}\n\nReply 1 to ${numberedVerb(entry)}, or 2 to skip.${replaces}` : card : `${unreviewable(title, summaryOf(entry))}${link}`;
       try {
-        const sent = await say(unsent ? `${text}\n\n${unsent}` : text, numbered ? undefined : approvable ? buttons : laterButtons(id, deferrable), true);
-        if (sent != null) { sentHere = { surface, message_ref: sentRef(sent), approvable, in_full: fits }; shown.push(sentHere); }
+        const sent = await say(unsent && !handsToApp ? `${text}\n\n${unsent}` : text, numbered ? undefined : approvable ? buttons : laterButtons(id, deferrable), true);
+        if (sent != null) { sentHere = { surface, message_ref: sentRef(sent), approvable, in_full: inFull }; shown.push(sentHere); }
         else if (deps.writesFirstNow?.() === false) waits = true;
         else sendFailure = new Error('Approval card not confirmed');
       } catch (error) { sendFailure = error; }
@@ -994,7 +1078,12 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     return { approval_id: entry.id, kind: entry.kind as AppApprovalV1['kind'], state, review: appReview(entry).text,
       exact: exactFor(entry), payload_digest: `sha256:${await sha256Hex(entry.payload_json)}`, expires_at: expiresAt(entry), actions: [...actions],
       ...((actions as readonly string[]).includes('undo') && entry.decided_at !== null ? { undo_until: undoUntil(entry)! } : {}),
-      ...(surfaces.length ? { presented_surfaces: surfaces as AppApprovalV1['presented_surfaces'] } : {}), ...healthOf(entry), ...withdrawalOf(entry), ...whyOf(entry) };
+      ...(surfaces.length ? { presented_surfaces: surfaces as AppApprovalV1['presented_surfaces'] } : {}), ...healthOf(entry), ...withdrawalOf(entry), ...whyOf(entry), ...offerWords(entry, actions) };
+  };
+  // A live free-window offer asks its line on the approvals list too, with its answers named by what they do to the window.
+  const offerWords = (entry: LedgerRow, actions: readonly string[]) => {
+    const offer = actions.includes('approve') ? offerOf(entry, deps.freeWindowOffers?.() === true) : null;
+    return offer ? { question: offer.line, labels: offerLabels(actions as AppApprovalPart['actions']) } : {};
   };
   const describeAny = (entry: LedgerRow) => {
     if (entry.kind === 'task_sources') return 'Task sources (expired)';
@@ -1037,9 +1126,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const expiredReply = (entry: LedgerRow): ApprovalDecision =>
     ({ toast: 'This proposal expired', message: `That proposal expired, so nothing happened: ${describeAny(entry)}. Ask me again if you still want it.` });
   // Closed in a turn that read outside text, the answer is the desk's own fixed words, with neither the reason nor a pointer
-  // to the newer card.
+  // to the newer card; a replaced one says so rather than sending the owner to ask again.
   const withdrawnReply = (entry: LedgerRow): ApprovalDecision => {
-    if (entry.withdrawn_outside === 1) return { toast: 'Withdrawn', message: `That card was closed while I was working with an email or web page, so nothing was done: ${describeAny(entry)}. Ask me for it again if you still want it.` };
+    if (entry.withdrawn_outside === 1) return { toast: 'Withdrawn', message: entry.replaced_by
+      ? `That card was replaced while I was working with an email or web page, so nothing was done: ${describeAny(entry)}.`
+      : `That card was closed while I was working with an email or web page, so nothing was done: ${describeAny(entry)}. Ask me for it again if you still want it.` };
     const newer = entry.replaced_by ? row(entry.replaced_by) : undefined;
     const waiting = newer && (newer.status === 'open' || newer.status === 'review_only');
     return { toast: 'Withdrawn', message: `I withdrew that card, so nothing was done: ${describeAny(entry)}. ${entry.withdrawn_reason ?? ''}${waiting ? ' The newer version is waiting for you.' : ''}`.trim() };
@@ -1849,7 +1940,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       expireDue(id);
       const entry = row(id);
       if (!entry || !PROPOSAL_KINDS.includes(entry.kind) || !entry.id.startsWith('p')) return { outcome: 'not_waiting', state: 'not_found' };
-      if (!approvesInWords(entry)) return refused('app_only');
+      if (!approvesInWords(entry)) return { ...refused('app_only'), ...(deps.appLink ? { link: deps.appLink(id) } : {}) };
       if (entry.status !== 'open') return { outcome: 'not_waiting', state: stateNow(entry) };
       // No arrival on record (a surface without an owner inbox) fails closed.
       const arrived = deps.ownerMessageAt?.();
@@ -2248,7 +2339,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const waitsHere = sql.exec('SELECT 1 FROM ledger WHERE id = ? AND card_waits_on = ?', id, surface).toArray().length > 0;
       const handsToApp = !!entry && HANDS_TO_APP.has(surface) && approvedInApp(entry), numbered = NUMBERED.has(surface) && on(surface, true);
       // A card handed to the app shows the review whenever it fits, as present() decides.
-      const hereInFull = on(surface, true) || (handsToApp && on(surface) && reviewFits(entry!));
+      const hereInFull = on(surface, true) || (handsToApp && on(surface) && reviewFits(entry!, true));
       const chatApprovable = !!entry && shownInFullHere(entry).length > 0;
       return { here: on(surface), hereApprovable: on(surface, true), app: on('app'), appApprovable: on('app', true), ...(waitsHere ? { waitsHere } : {}), ...(handsToApp ? { handsToApp } : {}), ...(numbered ? { numbered } : {}), ...(hereInFull ? { hereInFull } : {}), ...(chatApprovable ? { chatApprovable } : {}) };
     },
@@ -2334,24 +2425,40 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
 // state of each approval comes from the approvals list. One row that cannot render drops only its card.
 // withheld: the text of each live card whose kind the reading build's approvals revision predates. Such a build would drop the
 // part unread, so the card's words go in the message text instead, never a card hidden without a word.
-export type AppApprovalCards = Readonly<{ live: readonly AppApprovalPart[]; fallbacks: readonly string[]; withheld?: readonly string[] }>;
+export type AppApprovalCards = Readonly<{ live: readonly AppApprovalPart[]; fallbacks: readonly string[]; withheld?: readonly string[]; offers?: readonly AppFreeWindowPart[] }>;
 const UPDATE_TO_REVIEW = 'Update the Waldo app to review and approve it.';
-export const appApprovalParts = (sql: SqlStorage, approvalsRevision = APP_APPROVALS_CONTRACT_REVISION) => (parentId: string): AppApprovalCards => {
+// One waiting card as the app shows it inline, wherever it was presented in the app: for a card that belongs beside the work it
+// came from rather than a reply (a background task's ask, in that task's thread). Null once it is decided or retired, or for a
+// kind the reading build's approvals revision predates, which keeps it in the Approvals list.
+export const appApprovalPartFor = (sql: SqlStorage, approvalId: string, approvalsRevision = APP_APPROVALS_CONTRACT_REVISION): AppApprovalPart | null => {
+  if (!sql.exec('PRAGMA table_info(approval_presentations)').toArray().length) return null;
+  const entry = sql.exec<LedgerRow & { approvable: number; payload_digest: string }>("SELECT l.*, p.approvable, p.payload_digest FROM approval_presentations p JOIN ledger l ON l.id = p.approval_id WHERE p.surface = 'app' AND p.approval_id = ? AND p.retired_at IS NULL ORDER BY p.presented_at DESC LIMIT 1", approvalId).toArray()[0];
+  if (!entry || (entry.status !== 'open' && entry.status !== 'review_only')) return null;
+  const approvable = entry.status === 'open' && entry.approvable === 1 && appShowsInFull(entry);
+  const part = replyApprovalPartV1Schema.safeParse(appPartOf(entry, { actions: withDefer(entry, approvable ? approveActions(entry) : ['skip']), payload_digest: entry.payload_digest }));
+  return part.success && appApprovalKindShownAt(part.data.kind, approvalsRevision) ? part.data : null;
+};
+
+export const appApprovalParts = (sql: SqlStorage, approvalsRevision = APP_APPROVALS_CONTRACT_REVISION, chatRevision = 1, offersOn = false) => (parentId: string): AppApprovalCards => {
   if (!sql.exec('PRAGMA table_info(approval_presentations)').toArray().length) return { live: [], fallbacks: [] };
-  const live: AppApprovalPart[] = [], fallbacks: string[] = [], withheld: string[] = [];
+  const live: AppApprovalPart[] = [], fallbacks: string[] = [], withheld: string[] = [], offers: AppFreeWindowPart[] = [];
   let dropped = 0;
   for (const entry of sql.exec<LedgerRow & { approvable: number; payload_digest: string; retired_at: number | null }>("SELECT l.*, p.approvable, p.payload_digest, p.retired_at FROM approval_presentations p JOIN ledger l ON l.id = p.approval_id WHERE p.surface = 'app' AND p.message_ref = ? ORDER BY p.presented_at, l.id", `run:${parentId}`).toArray()) {
     try {
       const approvable = entry.status === 'open' && entry.approvable === 1 && appShowsInFull(entry);
-      const part = replyApprovalPartV1Schema.safeParse(appPartOf(entry, { actions: withDefer(entry, approvable ? approveActions(entry) : ['skip']), payload_digest: entry.payload_digest }));
+      const part = replyApprovalPartV1Schema.safeParse(appPartOf(entry, { actions: withDefer(entry, approvable ? approveActions(entry) : ['skip']), payload_digest: entry.payload_digest }, offersOn));
       if (!part.success) { dropped++; continue; }
       const waiting = entry.retired_at === null && (entry.status === 'open' || entry.status === 'review_only');
       const unread = waiting && !appApprovalKindShownAt(part.data.kind, approvalsRevision), text = unread ? `${part.data.fallback_text} ${UPDATE_TO_REVIEW}` : part.data.fallback_text;
       fallbacks.push(text);
       if (unread) withheld.push(text);
-      else if (waiting) live.push(part.data);
+      else if (waiting) {
+        live.push(part.data);
+        const offer = offersOn && chatRevision >= APP_CHAT_FREE_WINDOW_REVISION ? freeWindowPartOf(entry, part.data) : null;
+        if (offer) offers.push(offer);
+      }
     } catch { dropped++; }
   }
   if (dropped) console.error(JSON.stringify({ hop: 'app_approval_parts', ok: false, dropped }));
-  return withheld.length ? { live, fallbacks, withheld } : { live, fallbacks };
+  return { live, fallbacks, ...(withheld.length ? { withheld } : {}), ...(offers.length ? { offers } : {}) };
 };

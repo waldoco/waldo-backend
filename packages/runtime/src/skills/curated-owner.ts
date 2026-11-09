@@ -8,11 +8,18 @@ const NAME = 'document-email-preparation';
 // Reviewed, instruction-only catalog. Workspace files and provider content cannot contribute rows.
 export const CURATED_PREPARATION_SKILL: Skill = CURATED_PACK_SKILLS.find(s=>s.name===NAME)!;
 // A reviewed skill behind a deployment switch reaches owner turns only while the switch is on: the health protocols with
-// HEALTH_ACTIONS. Off, the owner's index neither lists nor loads it.
+// HEALTH_ACTIONS, day shaping with CALENDAR_COVERAGE or FREE_WINDOW_OFFERS. Off, the owner's index neither lists nor loads it.
 export const HEALTH_PROTOCOLS_SKILL = 'health-protocols';
+export const DAY_SHAPING_SKILL = 'day-shaping';
 const ALL_SKILLS: readonly Skill[] = Object.freeze([CURATED_PREPARATION_SKILL, ...CURATED_PACK_SKILLS.filter(s=>s.name!==NAME)]);
-export const CURATED_SKILLS: readonly Skill[] = Object.freeze(ALL_SKILLS.filter(s=>s.name!==HEALTH_PROTOCOLS_SKILL));
-export const curatedSkills = (healthActions: boolean): readonly Skill[] => healthActions ? ALL_SKILLS : CURATED_SKILLS;
+export const CURATED_SKILLS: readonly Skill[] = Object.freeze(ALL_SKILLS.filter(s=>s.name!==HEALTH_PROTOCOLS_SKILL && s.name!==DAY_SHAPING_SKILL));
+// One frozen catalog per combination of switches, so the same switches always give the same catalog.
+const catalogFor = (health: boolean, shaping: boolean): readonly Skill[] =>
+  Object.freeze(ALL_SKILLS.filter(s => (health || s.name !== HEALTH_PROTOCOLS_SKILL) && (shaping || s.name !== DAY_SHAPING_SKILL)));
+const CATALOGS: Readonly<Record<string, readonly Skill[]>> = Object.freeze({
+  'false:false': CURATED_SKILLS, 'true:false': catalogFor(true, false), 'false:true': catalogFor(false, true), 'true:true': catalogFor(true, true),
+});
+export const curatedSkills = (healthActions: boolean, dayShaping = false): readonly Skill[] => CATALOGS[`${healthActions}:${dayShaping}`]!;
 const sourceOf = (name: string, version: number) => `reviewed-builtin:${name}@${version}`;
 
 // Conservative upper bound for byte-level BPE: each token consumes at least one UTF-8 byte.

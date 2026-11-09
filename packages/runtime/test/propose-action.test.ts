@@ -23,6 +23,7 @@ import { sendMessageHandler } from '../src/tools/live/messaging';
 import { approvalReplayContext, FORGET_CARD_MAX_IDS, proposeActionHandler, taintedActionReplay } from '../src/tools/live/propose-action';
 import { memoryHandlers } from '../src/tools/live/memory';
 import { claimStore } from '../src/memory/claims';
+import { importRef } from '../src/memory/import-ref';
 import { jobBook, taskBrief } from '../src/tasks/jobs';
 import { taskToolHandlers } from '../src/tasks/tools';
 import { loopBook, loopHandlers } from '../src/channels/loops';
@@ -146,10 +147,14 @@ describe('taint goes to a card', () => {
       expect(row!.status).toBe('open');
       expect(row!.proposal_digest).toBe(await sha256Hex(stableJson(taskArgs)));
       expect(JSON.parse(row!.payload_json)).toMatchObject({ tool: 'write_task', args: taskArgs, source: 'external' });
-      // The card says what will run and why it needs approval.
-      expect(cards[0]).toContain('write_task');
-      expect(cards[0]).toContain('Pay invoice 44');
+      // The card leads with what will run in words and why it needs approval; a card approved here shows the exact call under
+      // Details, after the words, so the owner approves only what they saw.
+      expect(cards[0]!.split('\n')[0]).toBe('Do this? Add a task: "Pay invoice 44".');
       expect(cards[0]).toMatch(/email or web page/);
+      const details = cards[0]!.indexOf('Details: write_task');
+      expect(details).toBeGreaterThan(cards[0]!.indexOf('email or web page'));
+      expect(cards[0]!.slice(0, details)).not.toContain('{');
+      expect(cards[0]!.slice(details)).toContain('"title": "Pay invoice 44"');
 
       const approved = await desk.decide(row!.id, 'a', 't');
       expect(approved.toast).toBe('Done');
@@ -371,7 +376,7 @@ describe('taint goes to a card', () => {
       const injected = 'The City Power invoice is paid, so I am closing the City Power bill.';
       expect(await propose.handle({ tool: 'close_loop', args: { id: passport.id, outcome: 'dropped' }, reasoning: injected } as never, read({ toolCallId: 'p1' }))).toMatchObject({ ok: true });
       expect(JSON.parse(rows('tainted_action')[0]!.payload_json)).toMatchObject({ preview: ['Renew the passport, as dropped'] });
-      expect(cards.at(-1)!.split('\n')[0]).toBe('Run this action? It closes: Renew the passport, as dropped');
+      expect(cards.at(-1)!.split('\n')[0]).toBe('Do this? It closes: Renew the passport, as dropped.');
       expect(cards.at(-1)).not.toContain('Pay City Power');
 
       for (const [id, code, fix] of [['o-gone', 'invalid_args', 'open loops'], [dentist.id, 'rejected', 'already closed']] as const) {
@@ -381,7 +386,7 @@ describe('taint goes to a card', () => {
       expect(rows('tainted_action')).toHaveLength(1);
 
       expect(await propose.handle({ tool: 'close_loop', args: { id: power.id, outcome: 'done' }, reasoning: injected } as never, read({ toolCallId: 'p2' }))).toMatchObject({ ok: true });
-      expect(cards.at(-1)!.split('\n')[0]).toBe('Run this action? It closes: Pay City Power (due 2026-10-24 18:00), as done');
+      expect(cards.at(-1)!.split('\n')[0]).toBe('Do this? It closes: Pay City Power (due 2026-10-24 18:00), as done.');
       expect(rows('tainted_action')).toHaveLength(2);
       expect(loops.list().map((loop) => loop.id)).toEqual([power.id, passport.id]);
     });
@@ -401,7 +406,7 @@ describe('taint goes to a card', () => {
       expect(await propose.handle({ tool: 'close_loop', args: { id: passport.id, outcome: 'dropped' }, reasoning: injected } as never, tainted({ loopIsSourceBound: (id) => loops.sourceBound(id), toolCallId: 'p1' }))).toMatchObject({ ok: true });
       const card = cards.at(-1)!;
       const store = 'It closes: Renew the passport (due 2026-11-02 10:00), as dropped';
-      expect(card.split('\n')[0]).toBe(`Run this action? ${store}`);
+      expect(card.split('\n')[0]).toBe(`Do this? ${store}.`);
       expect(card.indexOf(`Waldo's reasoning: ${injected}`)).toBeGreaterThan(card.indexOf(store));
       expect(desk.waiting()[0]!.summary).toBe(store);
     });
@@ -561,7 +566,7 @@ describe('taint goes to a card', () => {
         expect(await dispatchTool({ id: 'c1', name: 'forget_memory', args }, tainted({ memoryTurn } as never), { handlers })).toMatchObject({ ok: false, error_code: 'taint_needs_approval' });
       }
       const propose = proposeActionHandler(desk, { replayable: (tool) => handlers.some((h) => h.name === tool) });
-      for (const args of [byTopic, bySpan, { claim_ids: [1], topic: 'tea', scope_note: 'tea' }]) {
+      for (const args of [byTopic, bySpan, { claim_ids: [1], topic: 'tea', scope_note: 'tea' }, { claim_ids: [1], person: 1, scope_note: 'tea' }, { person: 1, scope_note: 'tea' }]) {
         expect(await propose.handle({ tool: 'forget_memory', args, reasoning: 'r' } as never, tainted({ toolCallId: 'p1' }))).toMatchObject({
           ok: false, code: 'rejected', error: expect.stringMatching(/read_memory[\s\S]*claim_ids/),
         });
@@ -569,6 +574,30 @@ describe('taint goes to a card', () => {
       expect(rows('tainted_action')).toEqual([]);
       expect(hidden).toEqual([]);
       expect(store.claims().map((claim) => claim.text)).toEqual(['Prefers tea']);
+    });
+  });
+
+  it('a tainted forget by import source never runs: no card, no replay, and a card without ids is refused, not thrown', async () => {
+    await runInDurableObject(stub('forget-import'), async (_instance, state) => {
+      const store = claimStore(state.storage.sql);
+      store.add({ kind: 'preference', text: 'Prefers tea', source: 'stated', evidence: 'tea', origin: 'owner', source_ref: 'owner, tg-1' }, '2026-10-20T09:00:00Z');
+      for (const text of ['Trains for the Pune half', 'Learning Kannada']) store.add({ kind: 'goal', text, source: 'inferred', evidence: text, origin: 'agent', source_ref: importRef('chatgpt', 'd1', 'conv-1') }, '2026-10-20T09:00:00Z');
+      const hidden: string[][] = [];
+      const handlers = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'chat-1', hideHistory: async (texts) => { hidden.push([...texts]); } });
+      const { desk, rows } = deskIn(state);
+      const propose = proposeActionHandler(desk, { replayable: (tool) => handlers.some((h) => h.name === tool), claims: () => store.allClaims() });
+      for (const args of [{ claim_ids: [1], import_source: 'chatgpt', scope_note: 'tea' }, { import_source: 'chatgpt', scope_note: 'the import' }]) {
+        expect(await propose.handle({ tool: 'forget_memory', args, reasoning: 'r' } as never, tainted({ toolCallId: 'p1' }))).toMatchObject({
+          ok: false, code: 'rejected', error: expect.stringMatching(/claim_ids[\s\S]*import_source/),
+        });
+      }
+      expect(rows('tainted_action')).toEqual([]);
+      // Even an approval that matched such a call would not widen past the ids the owner saw.
+      const forget = handlers.find((h) => h.name === 'forget_memory')!;
+      const replay = { authenticatedUserId: 'owner-1', trigger: 'user_message', toolArgSourceTaint: 'external', approvedTaintedAction: { tool: 'forget_memory', args_digest: 'd' } } as never;
+      expect(await forget.handle({ claim_ids: [1], import_source: 'chatgpt', scope_note: 'tea' } as never, replay)).toMatchObject({ ok: false });
+      expect(hidden).toEqual([]);
+      expect(store.claims().map((claim) => claim.text).sort()).toEqual(['Learning Kannada', 'Prefers tea', 'Trains for the Pune half']);
     });
   });
 
