@@ -172,7 +172,7 @@ export type McpConnectionsDeps = Readonly<{
   log?: (entry: Readonly<{ hop: string; ok: boolean; code?: string; ms: number }>) => void;
 }>;
 
-type Row = { id: string; name: string; server_url: string; auth: string; registration: string; issuer: string | null; scopes: string; step_up: string; status: string; era: string | null; version: string | null; expires_at: number | null; tools_fetched_at: number | null; tools_ttl_ms: number | null; hidden_tools: number; tools_capped: number; connected_at: number; workspace: string | null };
+type Row = { id: string; name: string; server_url: string; auth: string; registration: string; issuer: string | null; scopes: string; step_up: string; status: string; era: string | null; version: string | null; expires_at: number | null; tools_fetched_at: number | null; tools_ttl_ms: number | null; hidden_tools: number; tools_capped: number; connected_at: number; workspace: string | null; instructions: string | null };
 
 const b64url = (bytes: Uint8Array) => {
   let binary = '';
@@ -248,6 +248,8 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
   if (!sql.exec<{ name: string }>('PRAGMA table_info(mcp_connections)').toArray().some((column) => column.name === 'tools_capped')) sql.exec('ALTER TABLE mcp_connections ADD COLUMN tools_capped INTEGER NOT NULL DEFAULT 0');
   // The account the provider named when the owner signed in (a Slack team), shown with each send.
   if (!sql.exec<{ name: string }>('PRAGMA table_info(mcp_connections)').toArray().some((column) => column.name === 'workspace')) sql.exec('ALTER TABLE mcp_connections ADD COLUMN workspace TEXT');
+  // What the server's discovery says about using it: its own words, shown only beside its search results, never in a prompt.
+  if (!sql.exec<{ name: string }>('PRAGMA table_info(mcp_connections)').toArray().some((column) => column.name === 'instructions')) sql.exec('ALTER TABLE mcp_connections ADD COLUMN instructions TEXT');
   sql.exec('CREATE TABLE IF NOT EXISTS mcp_tools (connection TEXT NOT NULL, name TEXT NOT NULL, position INTEGER NOT NULL, digest TEXT NOT NULL, def TEXT NOT NULL, PRIMARY KEY (connection, name))');
   // A permission is for one tool definition: a changed definition no longer matches and asks again. source says who allowed
   // it: the owner in Connections ('owner'), or connecting an official server from its tile ('catalogue'), which allows
@@ -415,10 +417,12 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     // Stored in name order whatever order the server sent, so every list Waldo shows is stable.
     tools.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     const digests = await Promise.all(tools.map(toolDigest));
+    // A server that cannot answer discovery (a legacy one behind the edge) simply has no instructions.
+    const instructions = serverInstructions(await send(r, 'server/discover', {}).catch(() => null));
     deps.transaction(() => {
       sql.exec('DELETE FROM mcp_tools WHERE connection = ?', r.id);
       tools.forEach((tool, index) => sql.exec('INSERT INTO mcp_tools (connection, name, position, digest, def) VALUES (?, ?, ?, ?, ?)', r.id, tool.name, index, digests[index]!, JSON.stringify(tool)));
-      update(r.id, { tools_fetched_at: deps.now(), tools_ttl_ms: ttl ?? DEFAULT_TOOLS_TTL_MS, hidden_tools: hidden, tools_capped: capped ? 1 : 0 });
+      update(r.id, { tools_fetched_at: deps.now(), tools_ttl_ms: ttl ?? DEFAULT_TOOLS_TTL_MS, hidden_tools: hidden, tools_capped: capped ? 1 : 0, instructions });
     });
     log('mcp_tools', started);
   };
@@ -746,7 +750,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
 
     // The model's search over the owner's tools: words, or one server's full list, a page at a time. ownerTurn: whether this
     // turn lets that server's reads allowed on connect run without asking (the owner's own, untainted by anything else).
-    async search(input: Readonly<{ query?: string; server?: string; cursor?: string; ownerTurn?: (server: string) => boolean; sendTurn?: (server: string) => boolean }>): Promise<Readonly<{ tools: readonly McpToolCard[]; next_cursor?: string; servers: readonly Readonly<{ name: string; status: McpStatus; tools: number; tools_capped?: true }>[]; unmatched?: true; failures: readonly string[]; questions_waiting?: readonly McpWaiting[] }>> {
+    async search(input: Readonly<{ query?: string; server?: string; cursor?: string; ownerTurn?: (server: string) => boolean; sendTurn?: (server: string) => boolean }>): Promise<Readonly<{ tools: readonly McpToolCard[]; next_cursor?: string; servers: readonly Readonly<{ name: string; status: McpStatus; tools: number; tools_capped?: true; server_text?: Readonly<{ instructions: string }> }>[]; unmatched?: true; failures: readonly string[]; questions_waiting?: readonly McpWaiting[] }>> {
       const targets = input.server ? [live(input.server)] : rows().filter((r) => r.status === 'active');
       const failures: string[] = [];
       await Promise.all(targets.map((r) => freshTools(r).catch((error: unknown) => { failures.push(`${r.name}: ${directCause(error, r.name).message}`); })));
@@ -759,7 +763,7 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       return {
         tools: page.map((item) => card(item.r, item.def, runsWithoutAsking(item.r, item.def, item.digest, item.granted, input.ownerTurn?.(item.r.name) === true, input.sendTurn?.(item.r.name) === true))),
         ...(offset + SEARCH_PAGE < pool.length ? { next_cursor: String(offset + SEARCH_PAGE) } : {}),
-        servers: rows().map((r) => ({ name: r.name, status: r.status as McpStatus, tools: toolRows(r.id).length, ...(r.tools_capped === 1 ? { tools_capped: true as const } : {}) })),
+        servers: rows().map((r) => ({ name: r.name, status: r.status as McpStatus, tools: toolRows(r.id).length, ...(r.tools_capped === 1 ? { tools_capped: true as const } : {}), ...(r.instructions ? { server_text: { instructions: r.instructions } } : {}) })),
         ...(input.query && !ranked.length && items.length ? { unmatched: true as const } : {}),
         failures,
         ...(asked.length ? { questions_waiting: asked } : {}),
@@ -852,6 +856,12 @@ export const connectorsLine = (views: readonly McpConnectionView[], google: read
   ].filter(Boolean).join('\n');
 };
 
+// A server's instructions are bounded like a tool definition is: enough to say how to use it, never a page of prompt.
+export const MCP_INSTRUCTIONS_CHARS = 4_096;
+const serverInstructions = (discovered: unknown): string | null => {
+  const said = isRecord(discovered) && typeof discovered.instructions === 'string' ? discovered.instructions.trim() : '';
+  return said ? said.slice(0, MCP_INSTRUCTIONS_CHARS) : null;
+};
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const readOnlyDigest = (tools: readonly Readonly<{ name: string; digest: string }>[]) => sha256(tools.map((t) => `${t.name}:${t.digest}`).join('\n'));
 const card = (r: Readonly<{ name: string }>, def: McpToolDef, withoutAsking: boolean): McpToolCard => ({

@@ -28,6 +28,8 @@ export type FakeOptions = {
   // path-inserted address.
   path: string;
   rootMetadata: boolean;
+  // What server/discover says about using the server, when it says anything.
+  instructions?: string;
   // The scope the 401 challenge names, and the scopes the protected resource and the authorization server list.
   challengeScope: string;
   resourceScopes: string[];
@@ -121,7 +123,7 @@ export const fakeMcpWorld = (overrides: Partial<FakeOptions> = {}) => {
       return json({ jsonrpc: '2.0', id: body.id, error: { code: -32020, message: 'Header mismatch' } }, 400);
     }
     const reply = (result: unknown) => json({ jsonrpc: '2.0', id: body.id, result: { resultType: 'complete', ...(result as object) } });
-    if (body.method === 'server/discover') return reply({ supportedVersions: ['2026-07-28'], capabilities: { tools: {} } });
+    if (body.method === 'server/discover') return reply({ supportedVersions: ['2026-07-28'], capabilities: { tools: {} }, ...(options.instructions === undefined ? {} : { instructions: options.instructions }) });
     if (body.method === 'tools/list') {
       const cursor = body.params?.cursor as string | undefined;
       const page = cursor === 'p2' ? options.tools.slice(50) : options.tools.slice(0, 50);
