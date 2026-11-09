@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { GOOGLE_FEATURE_SCOPES } from '../src/connectors/google';
 import { MCP_CATALOGUE } from '../src/connectors/mcp-catalogue';
-import { connectorsLine, googleConnectionFacts, RECONNECT_NOTE, type McpConnectionView } from '../src/connectors/mcp-connections';
+import { connectorsLine, googleConnectionFacts, NOTHING_GRANTED, RECONNECT_NOTE, type McpConnectionView } from '../src/connectors/mcp-connections';
 import { executeMcp } from '../src/tools/live/mcp';
 
 const view = (name: string, status: McpConnectionView['status']): McpConnectionView => ({
@@ -41,6 +41,13 @@ describe('MCP connector entries and the per-turn host fact', () => {
     expect(line).toContain('mail');
     expect(line).toContain('me@home.example');
     expect(line).toContain(RECONNECT_NOTE);
+  });
+
+  it('says so when a Google account is connected but its grant reaches nothing Waldo reads', () => {
+    const line = connectorsLine([], googleConnectionFacts([{ id: 'g1', email: 'me@work.example', scopes: [] }], {}));
+    expect(line).toContain('me@work.example');
+    expect(line).toContain(NOTHING_GRANTED);
+    expect(line).not.toContain('()');
   });
 
   it('is empty when nothing is connected', () => {

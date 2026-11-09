@@ -838,6 +838,7 @@ export type McpConnections = ReturnType<typeof mcpConnections>;
 // The host fact for a turn: what the owner connected and what each connection holds, in Waldo's own words (a catalogue
 // tile's line, the features a Google grant covers), never server-written text. MCP tools are found with search_mcp_tools.
 export const RECONNECT_NOTE = 'needs reconnecting in Connections; nothing there can be read until then';
+export const NOTHING_GRANTED = 'connected, but its grant covers nothing Waldo reads';
 export type GoogleConnectionFact = Readonly<{ email: string; features: readonly GoogleFeature[]; reconnect: boolean }>;
 // A Google account whose grant is failing (the per-account health record) holds nothing a turn can read.
 export const googleConnectionFacts = (accounts: readonly Readonly<{ id: string; email: string; scopes: readonly string[] | null }>[], failing: Readonly<Record<string, string>>): readonly GoogleConnectionFact[] =>
@@ -845,7 +846,7 @@ export const googleConnectionFacts = (accounts: readonly Readonly<{ id: string; 
     ? { email: account.email, features: [], reconnect: true }
     : { email: account.email, features: (Object.keys(GOOGLE_FEATURE_SCOPES) as GoogleFeature[]).filter((feature) => googleHas(account.scopes, feature)), reconnect: false });
 export const connectorsLine = (views: readonly McpConnectionView[], google: readonly GoogleConnectionFact[] = []): string => {
-  const accounts = google.map((account) => `${account.email} (${account.reconnect ? RECONNECT_NOTE : account.features.join(', ')})`);
+  const accounts = google.map((account) => `${JSON.stringify(account.email)} (${account.reconnect ? RECONNECT_NOTE : account.features.join(', ') || NOTHING_GRANTED})`);
   const servers = views.map((view) => {
     const about = view.status === 'reauth_needed' ? RECONNECT_NOTE : catalogueEntry(view.server_url, view.issuer)?.about;
     return about ? `${view.name} (${about})` : view.name;
