@@ -310,6 +310,17 @@ it('connects Notion with a device code: the code under the reply, polls that wai
   }, { device: true, deviceAnswers: ['authorization_pending', 'slow_down', 'ok'] });
 });
 
+it('reads a connection a device code linked once, and tells the chat what Waldo can now see instead of "connected"', async () => {
+  await withRig('connect-app-chat-device-first-look', async (rig) => {
+    await rig.say('/chat/main', 'connect-client-device-look', 'Please connect my Notion with a code');
+    await rig.drain('/chat/main', FIRST_LOOK_LINE);
+    const messages = (await rig.read('/chat/main')).map((message) => message.text);
+    expect(messages.filter((text) => text === FIRST_LOOK_LINE)).toHaveLength(1);
+    expect(messages).not.toContain('Notion is connected.');
+  }, { device: true, deviceAnswers: ['ok'], tools: [{ name: 'recent_pages', annotations: { readOnlyHint: true } }],
+    results: () => ({ content: [{ type: 'text', text: 'Q4 plan (edited today).' }] }) });
+});
+
 it('tells the chat when the owner refuses at the device page, and offers no code where none is advertised', async () => {
   await withRig('connect-app-chat-device-denied', async (rig) => {
     await rig.say('/chat/main', 'connect-client-07', 'Please connect my Notion with a code');

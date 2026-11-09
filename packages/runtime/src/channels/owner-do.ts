@@ -709,7 +709,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // A device code's due poll, from the scheduler. A settled attempt tells the conversation that asked.
   private async pollAppConnect(nonce: string): Promise<void> {
     const told = await this.appConnects().poll(nonce);
-    if (told) await this.tellConnectOutcome(nonce, told);
+    if (!told) return;
+    const { outcome, ...chat } = told;
+    if (outcome.kind === 'linked') await this.firstLook(nonce, outcome, chat);
+    else await this.tellConnectOutcome(nonce, chat);
   }
   // Read on connect (connectors/mcp-first-look.ts): one read of the new server, and one line on what Waldo can now see, to the
   // conversation that asked or, for a tile, the surface that takes the owner's proactive work. With no read to make, a chat
