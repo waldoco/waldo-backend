@@ -95,6 +95,8 @@ const TABLES: Record<string, Row> = {
   device_calendar_changes: gap('phone-calendar changes waiting for the update sweep, at most two days; once taken they live in update_cards, which a forget purges; a forget does not edit a change still waiting'),
   waldo_block_owner: exempt('Google event ids of Waldo\'s blocks the owner moved, renamed or deleted, and when; no title or time of the block; kept 30 days'),
   observed_mail: exempt('provider source/thread/message IDs, update-card row pointer, observation time and judged/attached flags; no sender/subject/snippet/body; unattached pointers expire after seven days'),
+  source_notes: exempt('a triage note\'s key (mail message id, or event ref with the update id), source ref, the owner\'s own account, an open loop id and times; the note\'s one line lives in episodes as speaker source, which a forget redacts'),
+  triage_told: exempt('what triage told, by source ref and a version (mail message id, or change kind with a digest of the detail), the update id, card ids and a time; no text; rows expire after thirty days'),
   loop_mail_sources: exempt('loop/source/message IDs, due/timezone, fixed delivery-state code and revisit time; source-derived title lives in loops and source text in update_cards'),
   // Text the owner made or the runtime stored, not reached by a literal forget
   loop_governor_runs: gap('has a reason TEXT column; its writer was not traced'),

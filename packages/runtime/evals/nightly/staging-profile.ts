@@ -63,6 +63,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   CALENDAR_GROUNDED_PREP: gap('proactive prep jobs are not run; the eval runs the day cards as scenario steps'),
   WALDO_DAY_STATE: gap('the update sweep and its apply turn are not run in a trial'),
   GOOGLE_REALTIME_TRIAGE: gap('the sweep, its delta reads and watches are not run in a trial; the triage prompt runs as its own scenario step'),
+  TRIAGE_CARES: gap('the sweep and its triage turn are not run in a trial, so no note or told row is kept; the triage scenarios run its prompt with note and the told rule offered, and a note recalled in chat reads like any other episode'),
   PROACTIVE_GATE: gap('the owner\'s interruption limits act on the update sweep and health trigger, which a trial does not run'),
   PROACTIVE_INTERRUPTS_PER_DAY: gap('the default daily budget for unasked messages; no trial runs an unasked message'),
   PROACTIVE_URGENT_PER_DAY: gap('the default urgent allowance past that budget; no trial runs an unasked message'),

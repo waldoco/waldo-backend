@@ -35,6 +35,10 @@
   // the system prompt's tool catalogue; it wins over WALDO_TOOL_SEARCH. "off" is the rollback.
   // WALDO_COMPACTION: "on" summarises the oldest part of a long app chat into one row the model reads first; "off" keeps
   // the plain window, and is the rollback.
+  // TRIAGE_CARES: "1" (with GOOGLE_REALTIME_TRIAGE) lets the triage turn keep source-bound notes (DO table source_notes, text in
+  // the episodes index), record what it told the owner (DO table triage_told) so it never tells the same thing twice, and read
+  // the owner's recent conversation, the people in play and what they did after recent updates; "0" is the rollback, and
+  // notes already kept stay searchable.
   // WALDO_STEPPED_WINDOW: "1" cuts a chat's history in steps once it outgrows the budget and holds the start between cuts,
   // so the provider reads the same leading history from its cache turn after turn; "0" drops the oldest row every turn, and
   // is the rollback.
@@ -186,6 +190,7 @@
       "WALDO_ONE_TIMELINE": "0",
       "WALDO_LIGHT_CHAT": "0",
       "GOOGLE_REALTIME_TRIAGE": "0",
+      "TRIAGE_CARES": "0",
       "WALDO_WATCHDOG": "0",
       "PROACTIVE_GATE": "0",
       "PROACTIVE_INTERRUPTS_PER_DAY": "2",
@@ -424,6 +429,7 @@
           "WALDO_ONE_TIMELINE": "1",
           "WALDO_LIGHT_CHAT": "0",
           "GOOGLE_REALTIME_TRIAGE": "1",
+          "TRIAGE_CARES": "1",
           "WALDO_WATCHDOG": "1",
           "PROACTIVE_GATE": "1",
           "PROACTIVE_INTERRUPTS_PER_DAY": "2",
