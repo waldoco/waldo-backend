@@ -141,8 +141,8 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
 // extract_archive: an archive the owner sent themselves is their own material, so its listing does not taint the turn and
 // their "unzip this" holds across the follow-up calls a large archive needs; any other archive (a forward, a mail
 // attachment, Waldo's own output) is outside text. get_weather: a forecast is the weather provider's text; a refusal or
-// "unavailable" is Waldo's own words. search_episodes: a past message in the owner's own words, or a reply that read nothing
-// from outside, is theirs and Waldo's; a quote, a forward, a transcript or a reply that read outside content is not.
+// "unavailable" is Waldo's own words. search_episodes: only the owner's own words are theirs; a Waldo reply, a quote, a
+// forward, a transcript or a linked note may carry someone else's words.
 // search_history: a run, task or card summary records nothing of where its words came from, so any entry is outside text.
 export const VARYING_ORIGIN_TOOLS: readonly ToolName[] = ['raise_approval', 'extract_archive', 'get_weather', 'search_episodes', 'search_history'];
 

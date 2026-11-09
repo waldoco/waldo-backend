@@ -21,7 +21,7 @@ const owned = (store: ClaimStore, text: string, ref: string, kind = 'fact') =>
 // Reads a row as the search_episodes handler does for recall, with whether it may carry someone else's words.
 const fromIndex = (index: EpisodeIndex): RecallEpisodes => ({ search: async (query, limit) => index.search(query, limit), get: async (ref) => {
   const row = index.get(ref);
-  return row && { ...row, othersWords: carriesOthersWords(index, row) };
+  return row && { ...row, othersWords: carriesOthersWords(row) };
 } });
 const nothingHeld = () => false;
 // Answers like the real search_episodes handler and records who called it. A handler that throws would hide a call behind

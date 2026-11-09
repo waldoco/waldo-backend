@@ -22,14 +22,14 @@ export const searchEpisodesHandler = (index: EpisodeIndex, chain?: RecallChain):
     const host = ctx as { memoryOutside?: boolean; recallRowOnly?: boolean };
     const read = host.recallRowOnly ? undefined : chain?.open({ outside: host.memoryOutside === true, history: TOOL_PERMISSIONS[ctx.trigger]?.includes('search_history') ?? false });
     // A result that may carry someone else's words is outside content for the rest of the turn, like a mail it quotes.
-    const rowCarries = (rowRef: string) => { const row = index.get(rowRef); return row === null || carriesOthersWords(index, row); };
+    const rowCarries = (rowRef: string) => { const row = index.get(rowRef); return row === null || carriesOthersWords(row); };
     const taint = (shown: readonly Readonly<{ ref: string; links?: readonly RecallLink[] }>[]) =>
-      shown.some((row) => { const carries = rowCarries(row.ref); return carries || linksCarryOthersWords(row.links, carries, rowCarries); }) ? 'external' as const : null;
+      shown.some((row) => rowCarries(row.ref) || linksCarryOthersWords(row.links, rowCarries)) ? 'external' as const : null;
     if (ref !== undefined) {
       const found = index.get(ref);
       if (found === null) return { ok: true, data: { episode: null }, source_taint: null };
       const episode = { ref, entry_id: found.entry_id, speaker: found.speaker, saved_at: found.at > 0 ? new Date(found.at).toISOString() : null, text: found.text };
-      if (host.recallRowOnly) return { ok: true, data: { episode: { ...episode, othersWords: carriesOthersWords(index, found) } }, source_taint: null };
+      if (host.recallRowOnly) return { ok: true, data: { episode: { ...episode, othersWords: carriesOthersWords(found) } }, source_taint: null };
       const shown = read ? { ...episode, surface: surfaceOfTrace(episode.entry_id), links: read.ofEpisode(ref, REF_LINKS) } : episode;
       return { ok: true, data: { episode: shown }, source_taint: taint([shown]) };
     }

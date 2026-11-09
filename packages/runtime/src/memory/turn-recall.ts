@@ -175,10 +175,7 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
         try { row = await episodes.get(ref); } catch { /* an unreadable row counts as carrying */ }
         carries.set(ref, row?.othersWords !== false);
       }));
-      for (const hit of found) {
-        const hitCarries = carries.get(hit.ref) !== false;
-        if (hitCarries || linksCarryOthersWords(hit.links, hitCarries, (ref) => carries.get(ref) !== false)) outsideRefs.add(hit.ref);
-      }
+      for (const hit of found) if (carries.get(hit.ref) !== false || linksCarryOthersWords(hit.links, (ref) => carries.get(ref) !== false)) outsideRefs.add(hit.ref);
       // A link is judged by its own line, which the chain built from a row it already checked; one that holds is dropped alone.
       hits = found.filter((hit, index) => { const row = rows[index]; return row !== null && row !== undefined && !holds(row.text, row.entry_id, row.speaker, hit.snippet); })
         .map((hit, _index, kept) => {
