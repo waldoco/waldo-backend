@@ -120,3 +120,15 @@ it('an owner who joined openly runs under the open sign-up ceiling; every other 
     expect((owner as unknown as Spend).setup('app').monthSpend()?.ceilingUsd).toBe(MONTHLY_SPEND_CEILING_USD);
   }, ledger);
 });
+
+it('each owner kind reads its own configured ceiling', async () => {
+  type Spend = { setup(channel: string): { monthSpend(): { spentUsd: number; ceilingUsd: number } | undefined } };
+  const ledger = { WALDO_COST_LEDGER_SYNC: 'on', OPEN_SIGNUP_SPEND_CEILING_USD: '40', OWNER_SPEND_CEILING_USD: '60' };
+  await withOwner('app-open-owner-configured', async owner => {
+    await mark(owner, 'app-open-owner-configured');
+    expect((owner as unknown as Spend).setup('app').monthSpend()?.ceilingUsd).toBe(40);
+  }, ledger);
+  await withOwner('app-member-configured', async owner => {
+    expect((owner as unknown as Spend).setup('app').monthSpend()?.ceilingUsd).toBe(60);
+  }, ledger);
+});

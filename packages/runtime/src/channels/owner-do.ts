@@ -150,7 +150,7 @@ import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turn
 import { turnAbortedEntry, type AbortedTurn } from '../observability/turn-aborted';
 import { ownerTraceId, ownerTraceSalt, rowTraces, syncRatingScore, type RatingScoreChange } from '../observability/langfuse-scores';
 import { costRollup, costRollupEnabled } from '../observability/cost-rollup';
-import { MONTHLY_SPEND_CEILING_USD } from '../llm/cost-ledger';
+import { ownerCeilingUsd } from '../llm/cost-ledger';
 import { barrierMemory, type ForgetBarrierMode } from '../context-composer/forget-barrier';
 import { errorClass, gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
 import { nextDailyLocalOccurrence, nextOccurrence, Scheduler } from '../scheduler/multiplexer';
@@ -5359,7 +5359,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const router = { asyncTools: asyncToolsEnabled(this.env), lightChat: lightChatEnabled(this.env), lightRoles: lightChatRoles(this.env), jobOutcomeRows: jobOutcomeRowsEnabled(this.env), machineTime: () => this.machineTime() };
     const forgetPass = () => this.forgetPurgeJob().run();
     // An owner who joined openly runs under open sign-up's lower ceiling.
-    const spend = costs ? () => ({ spentUsd: costs.monthSpendUsd(deps.now()), ceilingUsd: this.openHold().open() ? openOwnerCeilingUsd(this.env) : MONTHLY_SPEND_CEILING_USD }) : undefined;
+    const spend = costs ? () => ({ spentUsd: costs.monthSpendUsd(deps.now()), ceilingUsd: this.openHold().open() ? openOwnerCeilingUsd(this.env) : ownerCeilingUsd(this.env) }) : undefined;
     // When every provider fails on the owner's own message, the reply promises a time and the retry job written with it keeps
     // the promise (tasks/retry-turn.ts): the row and its wake commit together before the text goes out. The alarm is then
     // moved earlier; if that never runs, the next arbitration arms it from the committed key.
