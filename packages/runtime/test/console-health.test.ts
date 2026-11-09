@@ -95,6 +95,12 @@ describe('owner health read', () => {
     const body = (await (await run(read(DASHBOARD_HEALTH_PATH), answers({ health_scores_read: { scores } })).response).json()) as { scores: Record<string, unknown> };
     expect(body.scores.sleep_debt).toEqual(blended);
   });
+  it('lists every consent row the owner holds, a Google Health grant and a WHOOP grant included', async () => {
+    const provider = (source: string, version: number) => ({ ...consent('storage_compute', 'granted'), source, version });
+    const listed = [consent('storage_compute', 'granted'), provider('whoop', 4), provider('google_health', 5)];
+    const body = (await (await run(read(DASHBOARD_HEALTH_PATH), answers({ health_consent_list: { consents: listed } })).response).json()) as { consents: { source: string }[] };
+    expect(body.consents.map((row) => row.source)).toEqual(['apple', 'whoop', 'google_health']);
+  });
   it('ages the newest row when it is read: fresh, stale after six hours, expired after three days', async () => {
     const freshnessAt = async (compiledAt: number, day?: string) => ((await (await run(read(DASHBOARD_HEALTH_PATH), answers({ health_scores_read: stored(compiledAt, day) })).response).json()) as { scores: { freshness: string } }).scores.freshness;
     expect(await freshnessAt(NOW - HOUR)).toBe('fresh');
