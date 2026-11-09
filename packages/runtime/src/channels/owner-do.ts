@@ -3295,6 +3295,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return adminRead(consoleAuth(this.env), this.ctx.storage.kv.get<string>('do_name'), session.csrf);
     }
     if (url.pathname === CONSOLE_ACTION_PATH && request.method === 'POST' && jsonAdmin) {
+      const limited = this.consoleRateLimited('action');
+      if (limited) return limited;
       return adminAction(request, session.csrf, consoleAuth(this.env), this.ctx.storage.kv.get<string>('do_name'));
     }
     const { ready, view, act, googleConsoleStart, google, openFile, desk } = this.setup(this.ownerSurface());

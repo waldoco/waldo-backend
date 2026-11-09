@@ -60,7 +60,7 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 type Owner = Readonly<{ fetch(request: Request): Promise<Response>; alarm(): Promise<void>; setup(channel: string): { ready: Promise<unknown>; announcementPass(): Promise<void>; ledger(): Promise<string> } }>;
-type Config = Readonly<{ switches?: Record<string, string>; release?: string; gate?: boolean; off?: boolean }>;
+type Config = Readonly<{ switches?: Record<string, string>; release?: string; gate?: boolean; off?: boolean; whatsNewChars?: string }>;
 
 const withOwner = async <T>(name: string, run: (owner: (config?: Config) => Owner, state: DurableObjectState) => Promise<T>): Promise<T> => {
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
@@ -74,7 +74,7 @@ const withOwner = async <T>(name: string, run: (owner: (config?: Config) => Owne
     await state.storage.put('google:accounts', MAIL_ONLY_GOOGLE);
     const owner = (config: Config = {}) => new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TELEGRAM_ID: undefined,
       WALDO_ENVIRONMENT: 'staging', WALDO_RELEASE: config.release ?? 'r1', WHATS_NEW: config.off ? '0' : '1', WALDO_SWITCHES: JSON.stringify(config.switches ?? { TRUSTED_COORDINATION: '1' }),
-      ...(config.gate ? { PROACTIVE_GATE: '1' } : {}) } as never) as unknown as Owner;
+      ...(config.gate ? { PROACTIVE_GATE: '1' } : {}), ...(config.whatsNewChars ? { WALDO_WHATS_NEW_CHARS: config.whatsNewChars } : {}) } as never) as unknown as Owner;
     try { return await run(owner, state); } finally { await state.storage.deleteAlarm(); poolAlarm.mockRestore(); }
   });
 };
@@ -90,6 +90,27 @@ const dueBrief = async (state: DurableObjectState) => {
   dayPlanBook(state.storage.sql).save(localIso(Date.now(), 'UTC').slice(0, 10), { card: 'card:brief', time: '00:00', reason: 'planned' });
   await new Scheduler(state.storage.sql, state.storage, productionDeps())
     .schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: Date.now() - 60_000, dueAt: Date.now() - 60_000, recurrence: null });
+};
+
+// The owner's own turn: one message in the app's main chat, answered through the app inbox.
+const ownerSays = async (owner: Owner, state: DurableObjectState, name: string, text: string) => {
+  const headers = { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' };
+  const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers, body: JSON.stringify({ client_message_id: `client-${name}`, text }) }));
+  expect(sent.status).toBe(202);
+  const { message_id: id } = await sent.json() as { message_id: string };
+  await vi.waitFor(() => expect(state.storage.kv.get<{ state: string }>(`app:inbox-record:${id}`)?.state).toBe('completed'), { timeout: 10_000, interval: 20 });
+};
+// The what's-new section of the model request that answered `text`, as sent: the fenced copy's length and what it listed.
+const whatsNewIn = (text: string) => {
+  const strings = (value: unknown): string[] => typeof value === 'string' ? [value] : Array.isArray(value) ? value.flatMap(strings) : value && typeof value === 'object' ? Object.values(value).flatMap(strings) : [];
+  const request = model.requests.map(sent => JSON.parse(sent) as unknown).find(sent => strings(sent).some(part => part.includes(text)));
+  if (!request) throw new Error('no model request answered the owner');
+  const prompt = strings(request).find(part => part.includes("What's new: capabilities"));
+  if (!prompt) return null;
+  const fence = prompt.indexOf('\n\n[', prompt.indexOf("What's new: capabilities")), open = prompt.indexOf('"', fence);
+  let close = open + 1;
+  while (prompt[close] !== '"') close += prompt[close] === '\\' ? 2 : 1;
+  return { chars: close + 1 - fence, listed: JSON.parse(JSON.parse(prompt.slice(open, close + 1)) as string) as { id: string; what_shipped?: string }[] };
 };
 
 describe('what\'s new in the owner object', () => {
@@ -314,6 +335,34 @@ describe('what\'s new in the owner object', () => {
       await runtime.setup('app').announcementPass();
       expect(stateOf(state)).toEqual({ family: 'card' });
       expect(await appChat(runtime, 'announce-no-gate')).not.toContain('Now!');
+    });
+  });
+
+  it('the owner\'s own turn carries what was decided, within WALDO_WHATS_NEW_CHARS, and nothing once feature news is off', async () => {
+    const asked = 'What is new in Waldo lately?';
+    await withOwner('announce-owner-turn', async (owner, state) => {
+      const runtime = owner();
+      await runtime.setup('app').announcementPass();
+      await ownerSays(runtime, state, 'announce-owner-turn', asked);
+      expect(whatsNewIn(asked)?.listed).toEqual([{ id: 'family', title: FAMILY.title, what_shipped: FAMILY.shipped }]);
+    });
+    model.requests = [];
+    await withOwner('announce-owner-turn-capped', async (owner, state) => {
+      const runtime = owner({ whatsNewChars: '120' });
+      await runtime.setup('app').announcementPass();
+      await ownerSays(runtime, state, 'announce-owner-turn-capped', asked);
+      const section = whatsNewIn(asked)!;
+      expect(section.chars).toBeLessThanOrEqual(120);
+      expect(section.listed.some(item => item.what_shipped)).toBe(false);
+    });
+    model.requests = [];
+    await withOwner('announce-owner-turn-off', async (owner, state) => {
+      const runtime = owner();
+      await runtime.setup('app').announcementPass();
+      state.storage.sql.exec('INSERT INTO proactivity (id, settings) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET settings = excluded.settings',
+        JSON.stringify({ quiet_start: null, quiet_end: null, volume: 'normal', feature_news: false }));
+      await ownerSays(runtime, state, 'announce-owner-turn-off', asked);
+      expect(whatsNewIn(asked)).toBeNull();
     });
   });
 });
