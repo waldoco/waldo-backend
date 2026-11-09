@@ -32,7 +32,7 @@ import { findingStore, observedPages, observeReads, ownerLookupHandlers } from '
 import { webSearchHandler } from '../../src/tools/live/web-search';
 import type { GoogleClient, MailItem, ThreadMessage } from '../../src/connectors/google';
 import type { OwnerClock } from '../../src/tools/live/get-context';
-import { mcpConnections } from '../../src/connectors/mcp-connections';
+import { connectorsLine, mcpConnections } from '../../src/connectors/mcp-connections';
 import { callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler } from '../../src/tools/live/mcp';
 import { evalConversation, type ConversationSeed } from './conversation-world';
 import { approvalDesk } from '../../src/channels/approvals';
@@ -480,6 +480,8 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     weekAhead: () => capacityBudgetContext(now(), TIMEZONE, client, false, ''),
     // The seeded claims are embedded before the first turn, as a long-lived owner's would be.
     ready: Promise.all([mcpReady, chat.seed(conversation), semantic?.sync(), cardsReady]),
+    // The host fact an owner turn carries about what the owner connected, as the owner object builds it.
+    ...(seed.mcp ? { connectors: () => connectorsLine(mcp.list()) } : {}),
     health: async () => (sharing === 'shared' ? toContextHealthMaterial(sharedHealth(), clock) : null),
     shareHealth(shared: boolean) { sharing = shared ? 'shared' : 'withdrawn'; },
     // New mail reaching the inbox mid-trial.
