@@ -26,7 +26,7 @@ const withdrawNote = (result: WithdrawOutcome): string => {
 export const approvalHandlers = (desk: Pick<ApprovalDesk, 'waiting' | 'reraise' | 'withdraw'>) => [
   {
     name: 'raise_approval',
-    description: "Your approval cards that the owner has not settled. list shows each one with when you raised it, who a send goes out from, the card's exact words, and which earlier card it replaces. raise shows one the owner put off to them again: do it when their conversation makes it matter again, never just because it waits. withdraw closes one of your own cards that is stale, such as an earlier draft you have since revised, with a short reason the owner reads; it never approves anything, and a card the owner already decided stays as it is. To revise a card, prefer proposing the new version with replaces, which closes the old one when the new one reaches the owner.",
+    description: "Your approval cards the owner has not settled. list shows each with when you raised it, the account a send goes from, its exact words and the card it replaces. raise shows one the owner put off to them again: do it when their conversation makes it matter again, never just because it waits. withdraw closes a stale card of your own, such as an earlier draft you have since revised, with a short reason the owner reads; it never approves anything, and a card the owner already decided stays as it is. To revise a card, prefer proposing the new version with replaces, which closes the old one when the new one reaches the owner.",
     schema: raiseApprovalArgsSchema,
     trigger_allowlist: allowlist('raise_approval'),
     autonomy_gated: false,

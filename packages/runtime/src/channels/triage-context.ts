@@ -1,3 +1,5 @@
+import type { ClaimStore } from '../memory/claims';
+import { heldTopicsOf } from '../memory/forget-guard';
 import { outsideSafe } from '../memory/outside-view';
 import { fromAddress, personAddresses, type PeopleTables, type Person } from '../memory/people';
 import { localIso } from './reminders';
@@ -76,4 +78,24 @@ export const peopleInPlay = (people: readonly Person[], changes: readonly Change
   const recent = people.filter(person => person.last_contact_at && !inBatch.includes(person))
     .sort((a, b) => b.last_contact_at!.localeCompare(a.last_contact_at!)).slice(0, RECENT_PEOPLE);
   return [...inBatch.map(person => personLine(person, true)), ...recent.map(person => personLine(person, false))].slice(0, limit).join('\n');
+};
+
+// What triage reads besides the changes: the owner's goals as their memory holds them, and today's day shaping. With
+// TRIAGE_CARES (signals given), bounded: what they did after recent updates, the last day of their conversation across surfaces
+// and, with PEOPLE_MAP, the people in play as an outside turn may see them; the conversation and the people wait while a
+// forget settles.
+export type TriageOwnerDeps = Readonly<{
+  claims: Pick<ClaimStore, 'claims' | 'pendingTopics' | 'people'>;
+  peopleMap: boolean;
+  shaping(): Promise<string>;
+  exchange(): string;
+  signals?: () => SignalDeps;
+}>;
+export const triageOwnerContext = async (deps: TriageOwnerDeps, changes: readonly Change[]) => {
+  const goals = deps.claims.claims().filter(claim => claim.kind === 'goal').slice(-12).map(claim => `- ${claim.text}`).join('\n');
+  const shaping = await deps.shaping();
+  if (!deps.signals) return { goals, shaping };
+  const settling = heldTopicsOf(deps.claims).length > 0;
+  return { goals, shaping, signals: responseSignals(deps.signals()),
+    ...(settling ? {} : { exchange: deps.exchange(), ...(deps.peopleMap ? { people: peopleInPlay(peopleOutsideMay(deps.claims.people), changes) } : {}) }) };
 };

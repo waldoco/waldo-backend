@@ -1,6 +1,6 @@
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { peopleInPlay, peopleOutsideMay } from '../src/channels/triage-context';
+import { peopleInPlay, peopleOutsideMay, triageOwnerContext } from '../src/channels/triage-context';
 import type { Change } from '../src/channels/update-cards';
 import type { MemoryToolContext } from '../src/tools/live/memory';
 import { stub, world, type Card } from './helpers/people-world';
@@ -25,5 +25,27 @@ describe('triage people in play', () => {
     expect(peopleInPlay(w.store.people.all(), [mail])).toMatch(/Dana.*in this batch/);
     const section = peopleInPlay(peopleOutsideMay(w.store.people), [mail]);
     expect(section).not.toMatch(/Dana|Rhea/);
+  }));
+});
+
+// The owner object hands triage its context through triageOwnerContext; PEOPLE_MAP decides whether the people in play join it.
+describe('the triage context the owner object builds', () => {
+  const signals = () => ({ sql: { exec: () => ({ toArray: () => [] }) } as never, told: { recent: () => [] } as never, timezone: 'UTC', rating: () => undefined, nextSpoke: () => null });
+  const mail: Change = { source: 'mail', kind: 'new', ref: 'message:m-1', detail: JSON.stringify({ from: 'Priya <priya@family.example>' }) };
+  const build = (w: ReturnType<typeof world>, peopleMap: boolean, cares = true) => triageOwnerContext({
+    claims: w.store, peopleMap, shaping: async () => 'shape the day', exchange: () => 'Owner: hi', ...(cares ? { signals } : {}),
+  }, [mail]);
+  it('names the people in play only with PEOPLE_MAP on, and only as an outside turn may see them', () => runInDurableObject(stub('triage-owner-context'), async (_instance, state) => {
+    const w = world(state);
+    const saved = await w.data('remember', { kind: 'fact', text: 'Priya is the owner\'s sister', evidence_quote: 'My sister Priya', people: [{ name: 'Priya', role: 'subject', relation: 'sister' }] }, w.ctx('My sister Priya')) as { id: number };
+    w.store.people.link(saved.id, [{ name: 'Priya', role: 'subject', addresses: ['priya@family.example'] }], '2026-11-07T09:00:00Z');
+    const people = async (peopleMap: boolean) => (await build(w, peopleMap) as { people?: string; shaping: string });
+    expect((await people(true)).people).toMatch(/Priya/);
+    expect((await people(true)).shaping).toBe('shape the day');
+    expect((await people(false)).people).toBeUndefined();
+  }));
+  it('without TRIAGE_CARES it gives the goals and the day shaping alone', () => runInDurableObject(stub('triage-owner-context-off'), async (_instance, state) => {
+    const context = await build(world(state), true, false);
+    expect(Object.keys(context).sort()).toEqual(['goals', 'shaping']);
   }));
 });

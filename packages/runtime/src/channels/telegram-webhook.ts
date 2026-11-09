@@ -25,8 +25,29 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   LANGFUSE_CAPTURE_TEXT?: string;
   // 'on' sends per-day spend to waldo.cost_ledger_daily after each turn; anything else keeps it off.
   WALDO_COST_LEDGER_SYNC?: string;
+  // An invited owner's monthly spend ceiling in USD (llm/cost-ledger.ts ownerCeilingUsd); unset or invalid reads as 25.
+  OWNER_SPEND_CEILING_USD?: string;
   // 'on' turns conversation compaction on for the app chat; anything else keeps the plain window.
   WALDO_COMPACTION?: string;
+  // '1' cuts chat history in steps and holds the start between cuts, so the provider's cache keeps the leading history.
+  WALDO_STEPPED_WINDOW?: string;
+  // '1' caps standing orders and quests in the prompt and clears a turn's tool results down to the latest few past a size.
+  WALDO_CONTEXT_CAPS?: string;
+  // '1' runs the compaction a drain makes due in a later alarm pass of its own, never in the pass that ran the owner's turns.
+  WALDO_COMPACTION_WAKE?: string;
+  // '1' holds every chat's history to the conversation layer of the call budget and measures each call against its class's ceiling.
+  WALDO_CALL_CEILINGS?: string;
+  // The context budget's sizes (conversation/context-budget.ts); each defaults to its value there.
+  WALDO_HISTORY_BUDGET_TOKENS?: string;
+  WALDO_CHAT_CEILING_TOKENS?: string;
+  WALDO_JOB_CEILING_TOKENS?: string;
+  WALDO_HARD_CEILING_TOKENS?: string;
+  WALDO_STEPPED_WINDOW_TARGET?: string;
+  WALDO_TOOL_RESULTS_CLEAR_AT_CHARS?: string;
+  WALDO_TOOL_RESULTS_KEEP_LATEST?: string;
+  WALDO_STANDING_ORDERS_CHARS?: string;
+  WALDO_QUESTS_CHARS?: string;
+  WALDO_TIMEZONE_ASK?: string;
   WALDO_ENVIRONMENT?: string;
   WALDO_OWNER_DO_NAMESPACE?: string;
   WALDO_RELEASE?: string;
@@ -118,12 +139,30 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   MEDICATIONS?: string;
   // "1" serves /app/v1/screen-time and offers get_screen_time, which reads the daily summaries the owner's phone sent. Off unless "1".
   SCREEN_TIME?: string;
+  // '1': app owner turns are offered show_health_chart, and app chat reads at chat=11 draw health charts from a live read.
+  HEALTH_CHARTS?: string;
   // '1': memory keeps people (who claims are about, rings, dates that come round); read_memory reads them and forget_memory
   // forgets one person. Off unless '1'.
   PEOPLE_MAP?: string;
   // "1" serves /app/v1/device-context (the owner's place consent and the latest coarse place per phone) and offers
   // get_device_context, which reads each phone's zone and city. Off unless "1".
   DEVICE_PLACE?: string;
+  // "1" serves /app/v1/device/calendar (the owner's phone-calendar consent and each phone's latest snapshot), hands the
+  // changes between snapshots to the update judge, and offers query_phone_calendar. Off unless "1".
+  DEVICE_CALENDAR?: string;
+  // "1" gives the Brief, the update triage and the intervention look the coverage facts (connected calendars and when each was
+  // read, whether the phone calendar is shared, events per weekday over two weeks) and the judgment of whether that is the
+  // owner's whole day. Off unless "1".
+  CALENDAR_COVERAGE?: string;
+  // "1" lets the update triage and the intervention look offer the one thing that deserves a free window, on a calendar card
+  // (a line answered Do it / Not now / Keep it free when the window opens soon), and with CAPACITY_PLAN and shared health one
+  // grade A or B health move a day. Off unless "1".
+  FREE_WINDOW_OFFERS?: string;
+  // "1" lists Waldo's blocks (from the approval ledger; each carries Waldo's private waldoBlock key on Google) for the update triage, the intervention look and the Brief with how
+  // to look after them (offer to move one a meeting lands on, offer to cancel one no longer needed, leave one the owner
+  // changed alone), lets the Close sometimes ask how a block went, and feeds the blocks' and offers' outcomes to the nightly
+  // capacity note. Off unless "1".
+  BLOCK_LIFECYCLE?: string;
   // "1" with DEVICE_PLACE "1": a place upload that says the phone just arrived home or at the gym (places the owner named on the
   // phone) brings Waldo's next look forward, as a move to another city does. Off unless "1".
   ARRIVAL_LOOK?: string;
@@ -271,6 +310,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   PROACTIVE_ACT_AHEAD?: string;
   // An owner who chose no proactive surface and has WhatsApp bound gets proactive work on the app and WhatsApp both.
   PROACTIVE_BOTH_DEFAULT?: string;
+  // '1' has an event notice that reaches the app chat raise one push, under quiet hours and the owner's own limits.
+  EVENT_PUSH?: string;
+  // The most event pushes in an owner's day, a backstop under the owner's limits (default 3).
+  EVENT_PUSH_PER_DAY?: string;
   // "1": Waldo's own sends follow the owner's choice among their other surfaces even while Telegram is linked.
   PROACTIVE_OVER_TELEGRAM?: string;
   // '1' (with PROACTIVE_GATE) has Waldo look across the owner's plate on its own every PROACTIVE_REVIEW_EVERY_MIN minutes

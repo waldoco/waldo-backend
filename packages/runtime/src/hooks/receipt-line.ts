@@ -14,7 +14,7 @@ const STATE_WORD = { accepted: 'accepted', failed: 'failed', unresolved: 'unconf
 // The tools whose repeat is harmless (forgetting twice forgets once), each with the arguments that pick its target, so a
 // retry that only rewords its note names the same target. Any other effect can land before a later step refuses it (an
 // oversize result, a post-call halt), so its retry may be a second copy and its refusal stays shown.
-const REPEATABLE_TARGET_ARGS: Partial<Record<ToolName, readonly string[]>> = { forget_memory: ['claim_ids', 'topic', 'source'] };
+const REPEATABLE_TARGET_ARGS: Partial<Record<ToolName, readonly string[]>> = { forget_memory: ['claim_ids', 'topic', 'source', 'import_source'] };
 const targetOf = (keys: readonly string[], args: unknown): string =>
   !args || typeof args !== 'object' ? stableJson(args ?? null)
     : stableJson(Object.fromEntries(keys.flatMap(key => (args as Record<string, unknown>)[key] === undefined ? [] : [[key, (args as Record<string, unknown>)[key]]])));

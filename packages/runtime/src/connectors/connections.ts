@@ -27,6 +27,18 @@ export type GoogleProxy = Readonly<{
 }>;
 
 const METHODS = GOOGLE_METHODS;
+// One approval can make several writes on one client: a day plan's blocks, their rollback, its undo. The edge's intent
+// ledger holds one payload per key and refuses any other under it, so a write that carries Waldo's operation marker is
+// keyed by it within the approval's intent. The route stays pinned on the intent's own id, so every write of one approval
+// reaches the same connection. A write with no marker keeps the bare intent id: one write per intent.
+const writeMarker = (method: string, args: readonly unknown[]): unknown =>
+  method === 'createEvent' ? (args[0] as { operationMarker?: unknown } | undefined)?.operationMarker
+    : method === 'moveEvent' ? args[4]
+      : method === 'cancelEvent' || method === 'restoreEvent' ? args[2] : undefined;
+const writeKey = (intent: ProxyIntent, method: string, args: readonly unknown[]): string => {
+  const marker = writeMarker(method, args);
+  return typeof marker === 'string' && /^[0-9a-f]{64}$/.test(marker) ? `${intent.id}:${marker}` : intent.id;
+};
 const sha256 = async (text: string) => hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
 
 export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()): GoogleProxy | null => {
@@ -69,7 +81,7 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
         const effect = ['draft','sendRaw','createEvent','moveEvent','cancelEvent','restoreEvent','createTask','patchTask'].includes(method);
         if(effect&&!intent)throw new ProxyIntentError('intent_required');
         // This Worker reads calendar detail fields and the owner's status, so it asks for both; a proxy that predates either ignores its key.
-        const { data } = await post({ do_name: doName, op: 'call', connection, method, args: wireArgs, calendar_details: true, calendar_owner_status: true, ...(effect?{intent_id:intent!.id}:{}) });
+        const { data } = await post({ do_name: doName, op: 'call', connection, method, args: wireArgs, calendar_details: true, calendar_owner_status: true, ...(effect?{intent_id:writeKey(intent!,method,wireArgs)}:{}) });
         health?.('');
         return data;
       } catch (error) {

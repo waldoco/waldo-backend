@@ -1,5 +1,5 @@
 import { PERSON_ADDRESSES_MAX, type PersonLink, type PersonRing, type PersonWrite } from '@waldo/contracts';
-import { carriesTopic } from './forget-guard';
+import { carriesTopic, forgettableTopic } from './forget-guard';
 import type { Claim } from './claims';
 
 // The people in the owner's memory. A person is an entity of kind person; everything said about them is a claim linked to
@@ -79,7 +79,8 @@ export const peopleTables = (sql: Sql) => {
       if (!row) return [];
       const others = all().filter(other => other.id !== id).flatMap(namesOf);
       const shared = (name: string) => others.some(other => carriesTopic(other, name) || carriesTopic(name, other));
-      return [...namesOf(row).filter(name => !shared(name)), ...listOf(row.addresses)];
+      // A name too short to forget as a word ("Al") would mask that word across all history; their claims still go by id.
+      return [...namesOf(row).filter(name => forgettableTopic(name) && !shared(name)), ...listOf(row.addresses)];
     },
     // Last contact: a person heard from when mail Waldo saw came from one of their addresses. Exact address, newest time kept.
     heardFrom(address: string, at: string): number {

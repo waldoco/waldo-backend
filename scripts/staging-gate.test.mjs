@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { STAGING_WORKER_URL, deployedWorker, edgeFunctionFacts, evaluateProbe, functionSlugs, main, verdict, versionFacts } from './staging-gate.mjs';
+import { STAGING_WORKER_URL, deployedWorker, edgeFunctionCheck, edgeFunctionFacts, evaluateProbe, functionSlugs, main, verdict, versionFacts } from './staging-gate.mjs';
 
 const V1 = '11111111-1111-4111-8111-111111111111';
 const V2 = '22222222-2222-4222-8222-222222222222';
@@ -139,6 +139,15 @@ test('--expect-sha without a value is refused, not treated as absent', async () 
 
 test('edge functions to check are the deployable directories, not _shared helpers', () => {
   assert.deepEqual(functionSlugs([{ name: '_shared', dir: true }, { name: 'connector-proxy', dir: true }, { name: 'README.md', dir: false }, { name: 'a-fn', dir: true }]), ['a-fn', 'connector-proxy']);
+});
+
+test('a function kept undeployed passes only while it is absent; every other function must be deployed and active', () => {
+  const live = { version: 3, status: 'ACTIVE', verifyJwt: false, updatedAt: '2026-10-24T00:00:00.000Z' };
+  assert.deepEqual(edgeFunctionCheck({ slug: 'mint-agent-jwt', missing: true }), ['PASS', 'not deployed, on purpose']);
+  assert.deepEqual(edgeFunctionCheck({ slug: 'mint-agent-jwt', ...live }), ['FAIL', 'version 3 ACTIVE deployed, but it must stay undeployed']);
+  assert.deepEqual(edgeFunctionCheck({ slug: 'connector-proxy', missing: true }), ['FAIL', 'not deployed']);
+  assert.deepEqual(edgeFunctionCheck({ slug: 'connector-proxy', ...live }), ['PASS', 'version 3 ACTIVE verify_jwt false updated 2026-10-24T00:00:00.000Z']);
+  assert.equal(edgeFunctionCheck({ slug: 'connector-proxy', ...live, status: 'THROTTLED' })[0], 'FAIL');
 });
 
 test('the staging target constants are shared with the probe suite and migration preflight', async () => {
