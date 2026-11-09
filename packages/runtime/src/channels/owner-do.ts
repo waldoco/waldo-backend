@@ -271,7 +271,7 @@ import { WHATSAPP_LINK_PATH, whatsappLinkDirectory } from '../identity/whatsapp-
 import { WA_LAST_INBOUND_ID_KEY, WHATSAPP_PARTIAL_NOTICE, whatsappAckId, whatsappForwarded, claimNewWhatsAppMessages, plainOwnerText, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim, whatsappTurnMessage, type WaIngressMessage } from './whatsapp-api';
 import { whatsAppWaldoNumber } from './whatsapp-send-url';
 import { forgetWhatsAppContext, noteWhatsAppReaction, recordWhatsAppSent, takeWhatsAppReactionNotes, whatsappSentText } from './whatsapp-context';
-import { SEND_UNASKED, bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, templateFor, whatsappProactiveTemplateConfig, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute, whatsappTemplates, WA_LAST_INBOUND_KEY, WHATSAPP_SERVICE_WINDOW_MS, markWindowPushed, windowPushed } from './whatsapp-window';
+import { SEND_UNASKED, bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, templateFor, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute, whatsappTemplates, markWindowPushed, windowPushed } from './whatsapp-window';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler, executeMcp, McpConnectError, type McpGoogleAuth, type McpGoogleResolution } from '../tools/live/mcp';
 import { connectorsLine, mcpConnections, McpRefusal, MCP_FINISH_PATH, MCP_START_PATH, type ConnectOutcome, type McpConnections } from '../connectors/mcp-connections';
@@ -855,12 +855,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // REENGAGE_PROACTIVE: a copy of an app message that WhatsApp's closed window keeps raises a push, unless an app push already
   // reached the owner in this closed window (the Brief's own push, or this push for an earlier copy) or the owner set Waldo's
   // volume low. The sender holds quiet hours, and a push that reached no device leaves the next copy to try.
+  private ownerDay(at: number): string { return localIso(at, this.ctx.storage.kv.get<string>('timezone') ?? 'UTC').slice(0, 10); }
   private async windowHeldPush(record: FinalRecord): Promise<void> {
     const kv = this.ctx.storage.kv;
     if (this.env.REENGAGE_PROACTIVE !== '1' || !record.id.startsWith(WHATSAPP_COPY_PREFIX) || !this.appBound()) return;
-    if (windowPushed(kv)) return;
+    if (windowPushed(kv, this.ownerDay(Date.now()))) return;
     if (loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now }).proactivity().volume === 'low') return;
-    await this.setup('app').push('event');
+    await this.setup('app').push('copy');
   }
   // A notice outside any turn, on `surface` as OUTSIDE_TURN_NOTICE declares. A transcript write is made under the turn queue
   // the caller holds, as every other writer of that transcript does. 'blocked': it certainly did not leave (the gate refused,
@@ -5071,7 +5072,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return call('app_push_retire', `app.push.retire.${doName}.${installation}.${epoch}`, { p_do_name: doName, p_installation_id: installation, p_device_epoch: epoch });
       },
       log: (code, count) => {
-        if (code === 'sent' || (code === 'partial' && count > 0)) markWindowPushed(this.ctx.storage.kv, Date.now());
+        if (code === 'sent' || (code === 'partial' && count > 0)) markWindowPushed(this.ctx.storage.kv, Date.now(), this.ownerDay(Date.now()));
         log({ trace: `push:${Date.now()}`, hop: 'app_push', ms: 0, ok: code === 'sent' || code === 'retired', code, detail: `${code}: ${count}` });
       },
       // An event push is an unasked message: with PROACTIVE_GATE it waits on the owner's limits and spends from them; without, it

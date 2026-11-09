@@ -14,6 +14,9 @@ export const PUSHES = {
   prep: { body: 'Waldo has a note before your next meeting', data: { trigger: 'pre_activity_spot' } },
   update: { body: 'Waldo has an update to your day', data: { trigger: 'update' } },
   event: { body: 'Waldo has a new notice for you', data: { trigger: 'event' } },
+  // A copy of an app message WhatsApp's closed window keeps: it opens Main chat as an event does, and, already admitted as the
+  // message it copies, it is no interruption of its own (the owner's limits apply to events only).
+  copy: { body: 'Waldo has a new message for you', data: { trigger: 'event' } },
 } as const satisfies Record<string, Readonly<{ body: string; data: Omit<PushNotification, 'approval_id'> }>>;
 export type PushKind = keyof typeof PUSHES;
 

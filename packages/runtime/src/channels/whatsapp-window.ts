@@ -58,7 +58,7 @@ const templateOf = (name: string | undefined, language: string | undefined): Wha
 export const whatsappTemplateConfig = (env: Readonly<{ WHATSAPP_REENGAGE_TEMPLATE?: string; WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string }>): WhatsAppTemplate | null =>
   templateOf(env.WHATSAPP_REENGAGE_TEMPLATE, env.WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE);
 // The knock for a message the owner did not ask for (a day card, an update): its own approved template, whose words do not say
-// the owner asked for anything. The reply template is never borrowed for it.
+// the owner asked for anything. The reply template stands in for it only under REENGAGE_PROACTIVE (whatsappTemplates).
 export const whatsappProactiveTemplateConfig = (env: Readonly<{ WHATSAPP_PROACTIVE_TEMPLATE?: string; WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE?: string }>): WhatsAppTemplate | null =>
   templateOf(env.WHATSAPP_PROACTIVE_TEMPLATE, env.WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE);
 export type WhatsAppTemplates = Readonly<{ reply: WhatsAppTemplate | null; proactive: WhatsAppTemplate | null }>;
@@ -90,11 +90,16 @@ export const recordWhatsAppInbound = (kv: Kv, messages: readonly object[], now: 
 };
 
 // An app push that reached the owner while their WhatsApp window is closed, by time or by Meta's refusal, reaches them for
-// that window; whatever else waits for it needs no push of its own.
-export const markWindowPushed = (kv: Kv, now: number): void => {
-  if (kv.get<string>('whatsapp_subject') && !whatsappWindowOpen(kv, now)) kv.put(PUSHED_KEY, kv.get<number>(WA_LAST_INBOUND_KEY) ?? 0);
+// that window on that day (the owner's local day); whatever else waits for it that day needs no push of its own. A window that
+// stays closed past the day gets one again, so a copy days later still reaches the owner.
+type WindowPush = Readonly<{ window: number; day: string }>;
+export const markWindowPushed = (kv: Kv, now: number, day: string): void => {
+  if (kv.get<string>('whatsapp_subject') && !whatsappWindowOpen(kv, now)) kv.put(PUSHED_KEY, { window: kv.get<number>(WA_LAST_INBOUND_KEY) ?? 0, day } satisfies WindowPush);
 };
-export const windowPushed = (kv: Kv): boolean => kv.get<number>(PUSHED_KEY) === (kv.get<number>(WA_LAST_INBOUND_KEY) ?? 0);
+export const windowPushed = (kv: Kv, day: string): boolean => {
+  const pushed = kv.get<WindowPush>(PUSHED_KEY);
+  return pushed?.window === (kv.get<number>(WA_LAST_INBOUND_KEY) ?? 0) && pushed.day === day;
+};
 
 export const whatsappWindowOpen = (kv: Kv, now: number): boolean => {
   const last = kv.get<number>(WA_LAST_INBOUND_KEY);

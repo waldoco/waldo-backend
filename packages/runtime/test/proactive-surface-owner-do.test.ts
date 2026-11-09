@@ -909,6 +909,30 @@ describe('the knock for proactive work outside the 24-hour window', { timeout: 2
     }, { surface: 'both', window: 'closed', env: REENGAGE });
   });
 
+  it('with the re-engage knock on, a copy\'s push is no interruption: it pushes with the owner\'s unasked budget spent, and spends none of it', async () => {
+    await withOwner('knock-reengage-gate', async (owner, state, ctx) => {
+      await dueReminder(state);
+      await schedulePass(owner, state);
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      expect(wire.pushes).toEqual(['event']);
+    }, { surface: 'both', window: 'closed', env: { ...REENGAGE, PROACTIVE_GATE: '1', PROACTIVE_INTERRUPTS_PER_DAY: '0' } });
+  });
+
+  it('with the re-engage knock on, a push on an earlier day of the same closed window does not stand for today\'s copy', async () => {
+    await withOwner('knock-reengage-next-day', async (owner, state, ctx) => {
+      await dueReminder(state);
+      await schedulePass(owner, state);
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      ctx.now += 24 * 3_600_000;
+      fixture.reminderText = 'Time to send the invoice.';
+      await reminderBook(state.storage.sql, scheduler(state), { timezone: 'UTC', now: () => new Date(Date.now() - 3_600_000) }, () => 'rem-2')
+        .set({ note: 'send the invoice', at: new Date(Date.now() - 30 * 60_000).toISOString().slice(0, 16), repeat: 'none' });
+      await schedulePass(owner, state);
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      expect(wire.pushes).toEqual(['event', 'event']);
+    }, { surface: 'both', window: 'closed', env: REENGAGE });
+  });
+
   it('with the re-engage knock on, a reminder waiting for WhatsApp alone knocks, and the app, which does not have it, does not push', async () => {
     await withOwner('knock-reengage-whatsapp-only', async (owner, state, ctx) => {
       await dueReminder(state);
