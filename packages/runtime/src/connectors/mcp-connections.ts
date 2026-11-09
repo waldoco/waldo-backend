@@ -417,8 +417,12 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
     // Stored in name order whatever order the server sent, so every list Waldo shows is stable.
     tools.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     const digests = await Promise.all(tools.map(toolDigest));
-    // A server that cannot answer discovery (a legacy one behind the edge) simply has no instructions.
-    const instructions = serverInstructions(await send(r, 'server/discover', {}).catch(() => null));
+    // Discovery is a modern-era method; a legacy server's instructions come only with initialize, which the edge does not pass on.
+    // One that fails keeps what it said before, and the miss is logged.
+    let instructions = r.instructions;
+    if (r.era !== 'legacy') {
+      try { instructions = serverInstructions(await send(r, 'server/discover', {})); } catch (error) { log('mcp_discover', started, error instanceof McpRefusal ? error.code : 'malformed'); }
+    }
     deps.transaction(() => {
       sql.exec('DELETE FROM mcp_tools WHERE connection = ?', r.id);
       tools.forEach((tool, index) => sql.exec('INSERT INTO mcp_tools (connection, name, position, digest, def) VALUES (?, ?, ?, ?, ?)', r.id, tool.name, index, digests[index]!, JSON.stringify(tool)));
@@ -760,10 +764,12 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       const offset = input.cursor && /^\d{1,6}$/.test(input.cursor) ? Number(input.cursor) : 0;
       const page = pool.slice(offset, offset + SEARCH_PAGE);
       const asked = waiting().filter((q) => !input.server || q.server === input.server);
+      // A server's instructions go only with its own tools on this page, or with the one server asked for.
+      const shown = new Set([...page.map((item) => item.r.name), ...(input.server ? [input.server] : [])]);
       return {
         tools: page.map((item) => card(item.r, item.def, runsWithoutAsking(item.r, item.def, item.digest, item.granted, input.ownerTurn?.(item.r.name) === true, input.sendTurn?.(item.r.name) === true))),
         ...(offset + SEARCH_PAGE < pool.length ? { next_cursor: String(offset + SEARCH_PAGE) } : {}),
-        servers: rows().map((r) => ({ name: r.name, status: r.status as McpStatus, tools: toolRows(r.id).length, ...(r.tools_capped === 1 ? { tools_capped: true as const } : {}), ...(r.instructions ? { server_text: { instructions: r.instructions } } : {}) })),
+        servers: rows().map((r) => ({ name: r.name, status: r.status as McpStatus, tools: toolRows(r.id).length, ...(r.tools_capped === 1 ? { tools_capped: true as const } : {}), ...(r.instructions && shown.has(r.name) ? { server_text: { instructions: r.instructions } } : {}) })),
         ...(input.query && !ranked.length && items.length ? { unmatched: true as const } : {}),
         failures,
         ...(asked.length ? { questions_waiting: asked } : {}),
