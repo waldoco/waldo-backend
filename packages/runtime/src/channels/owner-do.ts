@@ -274,7 +274,7 @@ import { forgetWhatsAppContext, noteWhatsAppReaction, recordWhatsAppSent, takeWh
 import { SEND_UNASKED, bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, recordWhatsAppInbound, releaseWhatsAppOutbox, templateFor, whatsappProactiveTemplateConfig, whatsappTemplateConfig, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from './whatsapp-window';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler, executeMcp, McpConnectError, type McpGoogleAuth, type McpGoogleResolution } from '../tools/live/mcp';
-import { connectorsLine, mcpConnections, McpRefusal, MCP_FINISH_PATH, MCP_START_PATH, type ConnectOutcome, type McpConnections } from '../connectors/mcp-connections';
+import { connectorsLine, googleConnectionFacts, mcpConnections, McpRefusal, MCP_FINISH_PATH, MCP_START_PATH, type ConnectOutcome, type McpConnections } from '../connectors/mcp-connections';
 import { catalogueTiles, MCP_CATALOGUE } from '../connectors/mcp-catalogue';
 import { oauthProxy } from '../connectors/oauth-proxy-client';
 import { sendMessageHandler } from '../tools/live/messaging';
@@ -5374,7 +5374,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return reply;
     } };
     // Built from the watch books on each owner turn: a push that is not running, and what fixes it.
-    const connectors = () => connectorsLine(this.mcp().list());
+    const connectors = () => connectorsLine(this.mcp().list(), googleConnectionFacts(identity.get<GoogleAccount[]>('google:accounts') ?? [], identity.get<Record<string, string>>('google:health') ?? {}));
     const watchStatus = () => watchStatusLine({ accounts: identity.get<GoogleAccount[]>('google:accounts') ?? [],
       gmail: gmailPushBook(identity).miss(), calendar: calendarPushBook(identity).miss(), timezone: clock.timezone,
       ...(realtimeTriage(this.env) ? { perAccount: { gmail: gmailWatchesBook(identity).misses(), calendar: calendarChannelsBook(identity).failures() } } : {}) });
