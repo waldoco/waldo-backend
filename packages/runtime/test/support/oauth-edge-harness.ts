@@ -25,14 +25,15 @@ export const vaultFake = (owners: readonly string[] = ['owner-a', 'owner-b'], op
   const handlers: Record<string, (a: Record<string, any>) => Promise<unknown> | unknown> = {
     oauth_store: (a) => {
       if (!owners.includes(a.p_do_name) || !a.p_secret || !a.p_account || !a.p_pins || custody[a.p_provider] !== 'oauth-proxy') return { error: 'invalid' };
-      const account = String(a.p_account).toLowerCase();
+      // A Google Health id is case-sensitive and kept as given; every other account is stored lowered.
+      const account = a.p_provider === 'google_health' ? String(a.p_account) : String(a.p_account).toLowerCase();
       const existing = rows.find((r) => r.owner === a.p_do_name && r.provider === a.p_provider && r.account === account && r.status !== 'revoked');
-      if (existing) { Object.assign(existing, { secret: a.p_secret, pins: a.p_pins, scopes: String(a.p_scopes).split(' ').filter(Boolean), status: 'active', last_error: null }); return { id: existing.id }; }
+      if (existing) { Object.assign(existing, { secret: a.p_secret, pins: a.p_pins, scopes: String(a.p_scopes).split(' ').filter(Boolean), status: 'active', last_error: null }); return { id: existing.id, account }; }
       if (options.uniqueAccounts?.includes(a.p_provider) && rows.some((r) => r.provider === a.p_provider && r.account === account && r.status !== 'revoked')) return { error: 'account_linked' };
       ids += 1;
       const id = `00000000-0000-4000-8000-${String(ids).padStart(12, '0')}`;
       rows.push({ id, owner: a.p_do_name, provider: a.p_provider, account, scopes: String(a.p_scopes).split(' ').filter(Boolean), secret: a.p_secret, pins: a.p_pins, status: 'active', last_error: null });
-      return { id };
+      return { id, account };
     },
     oauth_access: (a) => { const r = live(a.p_do_name, a.p_connection); return r ? [{ provider: r.provider, secret: r.secret, scopes: r.scopes, pins: r.pins }] : []; },
     oauth_rotate: async (a) => {
