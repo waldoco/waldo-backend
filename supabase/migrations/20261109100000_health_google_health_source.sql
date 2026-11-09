@@ -1,6 +1,6 @@
 -- Google Health (Fitbit, Pixel Watch) is a cloud source on the same health plane as WHOOP, behind the same seam: its
 -- tokens sit with the oauth-proxy Edge Function, its readings go through health_ingest, and its express authorization is
--- the two grants every source has. Its consent notice is its own, copy 4, which names Google's Limited Use terms and the AI
+-- the two grants every source has. Its consent notice is its own, copy 5, which names Google's Limited Use terms and the AI
 -- model providers that process the data. A Google Health user id is case-sensitive, so it is matched and signed exactly;
 -- WHOOP's numeric ids keep their lowered match.
 alter table waldo.health_consents drop constraint health_consents_source_check;
@@ -10,9 +10,9 @@ alter table waldo.health_scopes add constraint health_scopes_source_check check 
 alter table waldo.health_samples drop constraint health_samples_source_check;
 alter table waldo.health_samples add constraint health_samples_source_check check (source in ('apple','samsung','health_connect','whoop','google_health'));
 
--- waldo.health_consent_view: re-created whole from 20261021170000_health_consent_copy_version.sql; only the source list and copy version change.
+-- waldo.health_consent_view: re-created whole from 20261107090000_health_whoop_consent_copy_4.sql; only the source list and copy version change.
 create or replace function waldo.health_consent_view(p_scope waldo.health_scopes) returns jsonb language sql stable security definer set search_path = '' as $$
-  select jsonb_build_object('consent_class','health_processing','source',p_scope.source,'purpose',p_scope.purpose,'version',coalesce(c.version,case p_scope.source when 'whoop' then 3 when 'google_health' then 4 else 2 end),
+  select jsonb_build_object('consent_class','health_processing','source',p_scope.source,'purpose',p_scope.purpose,'version',coalesce(c.version,case p_scope.source when 'whoop' then 4 when 'google_health' then 5 else 2 end),
     'status',case when c.id is null then 'not_granted' when c.withdrawn_at is null then 'granted' else 'withdrawn' end,'epoch',p_scope.epoch,
     'granted_at',to_char(c.granted_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
     'withdrawn_at',to_char(c.withdrawn_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
@@ -22,7 +22,7 @@ create or replace function waldo.health_consent_view(p_scope waldo.health_scopes
       else 'completed' end)
   from (select 1) x left join waldo.health_consents c on c.id = p_scope.consent_id $$;
 
--- waldo.health_consent_grant: re-created whole from 20261021170000_health_consent_copy_version.sql; only the source list and copy version change.
+-- waldo.health_consent_grant: re-created whole from 20261107090000_health_whoop_consent_copy_4.sql; only the source list and copy version change.
 create or replace function waldo.health_consent_grant(p_do_name text, p_payload text, p_at bigint, p_sig text) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare
@@ -41,7 +41,7 @@ begin
   v_id := v_body->>'request_id'; v_source := v_body->>'source'; v_purpose := v_body->>'purpose';
   if v_id is null or v_id !~ '^[A-Za-z0-9_-]{8,96}$' or v_source is null or v_source not in ('apple','samsung','health_connect','whoop','google_health')
     or v_purpose is null or v_purpose not in ('storage_compute','model_processing')
-    or v_body->>'version' is distinct from (case v_source when 'whoop' then '3' when 'google_health' then '4' else '2' end) or v_body->>'age_attested_18_plus' is distinct from 'true'
+    or v_body->>'version' is distinct from (case v_source when 'whoop' then '4' when 'google_health' then '5' else '2' end) or v_body->>'age_attested_18_plus' is distinct from 'true'
     or (v_body->>'expected_epoch') is null or (v_body->>'expected_epoch') !~ '^[0-9]{1,9}$' then return '{"error":"invalid_request"}'; end if;
   select * into v_scope from waldo.health_scopes where owner_id = v_owner and source = v_source and purpose = v_purpose for update;
   v_epoch := coalesce(v_scope.epoch, 0);
@@ -57,7 +57,7 @@ begin
     where s.owner_id = v_owner and s.source = v_source and s.purpose = 'storage_compute' and c.withdrawn_at is null) then return '{"error":"consent_required"}'; end if;
   if (v_body->>'expected_epoch')::integer <> v_epoch
     or exists (select 1 from waldo.health_consents c where c.owner_id = v_owner and c.source = v_source and c.purpose = v_purpose and c.withdrawn_at is null) then return '{"error":"epoch_conflict"}'; end if;
-  insert into waldo.health_consents(owner_id, source, purpose, version, age_attested_18_plus) values (v_owner, v_source, v_purpose, case v_source when 'whoop' then 3 when 'google_health' then 4 else 2 end, true) returning * into v_consent;
+  insert into waldo.health_consents(owner_id, source, purpose, version, age_attested_18_plus) values (v_owner, v_source, v_purpose, case v_source when 'whoop' then 4 when 'google_health' then 5 else 2 end, true) returning * into v_consent;
   insert into waldo.health_scopes(owner_id, source, purpose, epoch, consent_id) values (v_owner, v_source, v_purpose, 1, v_consent.id)
     on conflict (owner_id, source, purpose) do update set epoch = waldo.health_scopes.epoch + 1, consent_id = excluded.consent_id returning * into v_scope;
   v_result := jsonb_build_object('consent', waldo.health_consent_view(v_scope), 'replayed', false, 'deletion_routed', false);
@@ -144,7 +144,7 @@ create or replace function waldo.health_freshness(p_owner uuid) returns jsonb la
       from public.health_context_daily c join waldo.owners o on o.auth_user_id = c.user_id join waldo.health_context_basis b on b.owner_id = o.id and b.day = c.day
       where o.id = p_owner order by c.day desc limit 1)) $$;
 
--- waldo.health_ingest: re-created whole from 20261031120000_health_coach_signals.sql; only the source list and copy version change.
+-- waldo.health_ingest: re-created whole from 20261108090000_health_nutrition.sql; only the source list and copy version change.
 create or replace function waldo.health_ingest(p_do_name text, p_payload text, p_at bigint, p_sig text) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare
@@ -155,7 +155,7 @@ declare
   v_per_sample boolean; v_index integer; v_rejected jsonb := '[]';
   v_signals constant text[] := array['sleep_duration','sleep_efficiency','sleep_midpoint','overnight_hrv','resting_heart_rate','daylight_duration','movement_duration','heart_rate_window','hrv_window','spo2','respiratory_rate','steps_window','active_energy_window','workout',
     'wrist_temperature','walking_heart_rate_average','vo2_max','heart_rate_recovery','mindful_duration',
-    'body_mass','body_fat_percentage','lean_body_mass','stand_hour'];
+    'body_mass','body_fat_percentage','lean_body_mass','stand_hour','nutrition'];
 begin
   if p_do_name is null or length(p_do_name) not between 1 and 240 or p_payload is null
     or waldo.router_signed('health.ingest.' || p_do_name || '.' || md5(p_payload), p_at, p_sig) is distinct from true then
@@ -213,7 +213,8 @@ begin
         ('steps_window','count',0,300000,true), ('active_energy_window','kilocalories',0,30000,true), ('workout','minutes',0,1440,false),
         ('wrist_temperature','celsius',-5,42,false), ('walking_heart_rate_average','beats_per_minute',0.000001,300,false), ('vo2_max','ml_per_kg_min',10,90,false),
         ('heart_rate_recovery','beats_per_minute',0,120,false), ('mindful_duration','minutes',0,1440,false),
-        ('body_mass','kilograms',20,400,false), ('body_fat_percentage','percent',2,75,false), ('lean_body_mass','kilograms',10,250,false), ('stand_hour','count',0,1,true)
+        ('body_mass','kilograms',20,400,false), ('body_fat_percentage','percent',2,75,false), ('lean_body_mass','kilograms',10,250,false), ('stand_hour','count',0,1,true),
+        ('nutrition','kilocalories',0,10000,false)
       ) r(signal, unit, lo, hi, windowed) where r.signal = v_signal;
       if v_unit is null or v_sample_id is null or v_sample_id !~ '^[A-Za-z0-9._:-]{1,128}$'
         or (v_change->>'revision') is null or (v_change->>'revision') !~ '^[0-9]{1,15}$'
@@ -234,6 +235,12 @@ begin
         or (v_signal = 'wrist_temperature' and not coalesce((v_change->>'method' = 'absolute' and v_value between 25 and 42) or (v_change->>'method' = 'baseline_delta' and v_value between -5 and 5), false))
         -- An hour stood or did not: 0 or 1, never a fraction.
         or (v_signal = 'stand_hour' and v_value not in (0, 1))
+        -- A food entry's grams are each a number from 0 to 1000 and its meal one of five words; nothing else, a food's name
+        -- included, is stored with it.
+        or (v_signal = 'nutrition' and (
+          exists (select 1 from jsonb_object_keys(v_change) k where k not in ('sample_id','revision','signal','unit','value','day','start_at','end_at','utc_offset_minutes','origin','protein_g','carbohydrate_g','fat_g','meal'))
+          or exists (select 1 from unnest(array['protein_g','carbohydrate_g','fat_g']) k where v_change ? k and (jsonb_typeof(v_change->k) is distinct from 'number' or (v_change->>k)::numeric not between 0 and 1000))
+          or (v_change ? 'meal' and coalesce(v_change->>'meal' not in ('breakfast','lunch','dinner','snack','unknown'), true))))
       then raise exception 'invalid health sample' using errcode = '22023'; end if;
     exception when data_exception then
       if not v_per_sample then raise; end if;
