@@ -1,4 +1,5 @@
-import { fromAddress, personAddresses, type Person } from '../memory/people';
+import { outsideSafe } from '../memory/outside-view';
+import { fromAddress, personAddresses, type PeopleTables, type Person } from '../memory/people';
 import { localIso } from './reminders';
 import type { ToldBook } from './triage-told';
 import type { Change } from './update-cards';
@@ -51,6 +52,11 @@ export const responseSignals = (deps: SignalDeps, limit = SIGNAL_BATCHES): strin
 
 // The people this batch involves whom the owner's memory knows (a sender by address, an attendee by name), then those the owner
 // was most recently in touch with. Matching is by address or exact name; what a person means for the batch is the model's call.
+// Triage reads mail, so it sees the owner's people as read_memory shows them to a turn that read outside content: a person
+// only through a claim not taken from outside content and carrying no health. Someone known only from mail, or only through
+// a body or mind note, is not named to it.
+export const peopleOutsideMay = (people: Pick<PeopleTables, 'all' | 'claimsOf'>): Person[] =>
+  people.all().filter(person => people.claimsOf(person.id).some(claim => claim.origin !== 'untrusted' && outsideSafe(claim)));
 export const PEOPLE_IN_PLAY = 8;
 const RECENT_PEOPLE = 5;
 const detailOf = (change: Change): Record<string, unknown> => { try { const parsed: unknown = JSON.parse(change.detail); return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {}; } catch { return {}; } };

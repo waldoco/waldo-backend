@@ -121,7 +121,7 @@ import { ownerAccountEmail } from '../identity/owner-account-email';
 import { DEFAULT_PROACTIVITY, isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine, storedProactivity } from './loops';
 import { sourceNoteBook } from './source-notes';
 import { toldBook } from './triage-told';
-import { peopleInPlay, responseSignals } from './triage-context';
+import { peopleInPlay, peopleOutsideMay, responseSignals } from './triage-context';
 import { armHeartbeat, HEARTBEAT_EVERY_MS, HEARTBEAT_ID, heartbeatTick, heartbeatEligible, heartbeatWake, settleHeartbeat } from './heartbeat';
 import { heartbeatApplier, heartbeatJobSpec } from './heartbeat-job';
 import { checkBackReply, LOOP_CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS, outsideReminderCheckBackText, reminderFloorText } from './check-back';
@@ -6173,8 +6173,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       ...(interrupts ? { interruptions: interrupts } : {}),
       ...(realtime ? { triage: {
         // The owner's goals as their memory holds them; the turn recalls people and the rest of memory as every job does. With
-        // TRIAGE_CARES, bounded: the last day of their conversation across surfaces, the people in play and what they did after
-        // recent updates (the turn already reads outside text); the conversation and the people wait while a forget settles.
+        // TRIAGE_CARES, bounded: the last day of their conversation across surfaces, the people in play (with PEOPLE_MAP, as an
+        // outside turn may see them) and what they did after recent updates (the turn already reads outside text); the
+        // conversation and the people wait while a forget settles.
         context: async (changes: readonly Change[]) => {
           const goals = claimStore(storage.sql).claims().filter(claim => claim.kind === 'goal').slice(-12).map(claim => `- ${claim.text}`).join('\n');
           if (!cares || !toldRecord) return { goals };
@@ -6182,7 +6183,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const ratings = replyRatings(storage.sql);
           return { goals,
             signals: responseSignals({ sql: storage.sql, told: toldRecord, timezone: clock.timezone, rating: row => ratings.get(row), nextSpoke: at => ownerNextSpoke(storage.sql, at) }),
-            ...(settling ? {} : { exchange: recentExchange(episodes, Date.now() - 24 * 3_600_000).text, people: peopleInPlay(claimStore(storage.sql).people.all(), changes) }) };
+            ...(settling ? {} : { exchange: recentExchange(episodes, Date.now() - 24 * 3_600_000).text,
+              ...(this.env.PEOPLE_MAP === '1' ? { people: peopleInPlay(peopleOutsideMay(claimStore(storage.sql).people), changes) } : {}) }) };
         },
         ...(sourceNotes ? { notes: { record: sourceNotes.record, loopOpen: (id: string) => loops.get(id)?.status === 'open' } } : {}),
         ...(toldRecord ? { told: { book: toldRecord,
