@@ -5,6 +5,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { INTERRUPTS_KEY } from '../src/channels/interruptions';
 import { APP_PROACTIVE_SURFACE_RECEIPTS_V1, appControlProjectionV1Schema } from '../../contracts/src/app/controls';
 import type { CalendarChange, CalendarItem } from '../src/connectors/google';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
@@ -915,6 +916,7 @@ describe('the knock for proactive work outside the 24-hour window', { timeout: 2
       await schedulePass(owner, state);
       for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
       expect(wire.pushes).toEqual(['event']);
+      expect(state.storage.kv.get(INTERRUPTS_KEY)).toBeUndefined();
     }, { surface: 'both', window: 'closed', env: { ...REENGAGE, PROACTIVE_GATE: '1', PROACTIVE_INTERRUPTS_PER_DAY: '0' } });
   });
 
