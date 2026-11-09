@@ -1822,15 +1822,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return whatsapp.finalOutbox.enqueue({ id, trace: id, payload: { chat_id: whatsapp.owner, text }, ownerSubject: String(whatsapp.owner),
       doName: this.ctx.storage.kv.get<string>('do_name') ?? '', expiresAt: Math.min(appAt + WHATSAPP_COPY_FRESH_MS, until ?? Infinity) });
   }
-  // Settles each record and, once a follow-up (a loop's check-back or a mail follow-up) has reached the app, queues a copy for
-  // each surface the owner chose under the record's own id, so settling it again queues nothing new. Meeting prep and pause
+  // Settles each record and, once a follow-up (a loop's check-back or a mail follow-up, and under PROACTIVE_OVER_TELEGRAM a
+  // record marked copied) has reached the app, queues a copy for each surface the owner chose under the record's own id, so
+  // settling it again queues nothing new. Meeting prep and pause
   // notices stay in the app: held for a chat surface, a copy could arrive after the moment it is for.
   private copiedFollowups(settle: (record: FinalRecord) => Promise<void>, copies: readonly ProactiveTarget[]): (record: FinalRecord) => Promise<void> {
     const app = this.setup('app');
     return async record => {
       await settle(record);
       // An in-place revision is an edit of a card WhatsApp does not have: copied, it would be a message the limits never counted.
-      if (record.inPlace || record.status !== 'delivered' || !(record.copied || record.heartbeat || record.mailFollowup || record.update || record.id.startsWith(MAC_FOLLOWUP_RECORD_PREFIX) || record.id.startsWith(LOOKUP_RECORD_PREFIX)) || record.payload.chat_id !== app.owner) return;
+      if (record.inPlace || record.status !== 'delivered' || !((record.copied && this.proactiveOverTelegram()) || record.heartbeat || record.mailFollowup || record.update || record.id.startsWith(MAC_FOLLOWUP_RECORD_PREFIX) || record.id.startsWith(LOOKUP_RECORD_PREFIX)) || record.payload.chat_id !== app.owner) return;
       for (const target of copies) {
         const copy = this.copyQueues[target];
         try { await copy?.queue(`${copy.prefix}${record.id}`, record.payload.fallback_text ?? record.payload.text, record.deliveredAt ?? record.createdAt, record.expiresAt); }
