@@ -91,7 +91,8 @@ export const announcementBook = (sql: Sql) => {
       for (const id of ids) sql.exec("UPDATE announcements SET state = 'card' WHERE id = ? AND state = 'messaged'", id);
     },
     // What's new for this owner: what the team shipped that is live for them, decided on since `since`, newest first.
-    recent: (since: number): readonly Row[] => sql.exec<Row>('SELECT * FROM announcements WHERE decided_at >= ? ORDER BY decided_at DESC, id', since).toArray(),
+    recent: (since: number): readonly Pick<Row, 'id' | 'title' | 'shipped' | 'capability'>[] =>
+      sql.exec<Pick<Row, 'id' | 'title' | 'shipped' | 'capability'>>('SELECT id, title, shipped, capability FROM announcements WHERE decided_at >= ? ORDER BY decided_at DESC, id', since).toArray(),
   };
 };
 export type AnnouncementBook = ReturnType<typeof announcementBook>;

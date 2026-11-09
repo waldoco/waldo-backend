@@ -170,15 +170,20 @@ describe('the card and the decision', () => {
     expect(listed.length).toBeLessThan(many.length);
     expect(section.split('x'.repeat(1_000)).length - 1).toBe(1);
     // The rest are counted, past any page the book once held back.
-    expect(section).toContain(String(many.length - listed.length));
+    expect(section).toContain(`\n${many.length - listed.length} more shipped`);
     const short = whatsNewSection([{ id: 'one', title: 'One', shipped: 'y' }], 10 * CAP);
     expect(section.length - short.length).toBeLessThanOrEqual(CAP);
   });
 
   it('the cap holds on the copy as quoted into the prompt, where escaping grows it', () => {
-    const hostile = Array.from({ length: 4 }, (_, i) => ({ id: `q${i}`, title: `Quoted ${i}`, shipped: '<"\\'.repeat(300) }));
-    const short = whatsNewSection([{ id: 'one', title: 'One', shipped: 'y' }], 10 * CAP);
-    expect(whatsNewSection(hostile, CAP).length - short.length).toBeLessThanOrEqual(CAP);
+    // Fits as raw JSON, overflows once quoted: only the quoted measure leaves it out.
+    const shipped = '"'.repeat(Math.floor(CAP * 0.4));
+    expect(JSON.stringify([{ id: 'q0', title: 'Quoted', what_shipped: shipped }]).length).toBeLessThan(CAP);
+    const section = whatsNewSection([{ id: 'q0', title: 'Quoted', shipped }], CAP);
+    const copy = section.slice(section.indexOf('\n\n['));
+    expect(copy.length).toBeLessThanOrEqual(CAP);
+    expect(copy).toContain('q0');
+    expect(copy).not.toContain('what_shipped');
   });
 
   it('the decision is one strict object', () => {
