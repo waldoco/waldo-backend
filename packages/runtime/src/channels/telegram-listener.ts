@@ -41,8 +41,12 @@ export type TelegramOwnerListenerOptions = Readonly<{
   // Surface fields on the reply (WhatsApp: the message it quotes, and the mark that it is the turn's own reply). Only for
   // surfaces whose reply is a direct send.
   replyFields?(turn: TelegramInboundTurn): Readonly<Pick<TelegramFinalPayload, 'quote_message_id' | 'turn_reply'>>;
-  // Sends the reaction the turn chose, after its reply and files. Best effort: a failed reaction never fails the turn.
+  // Sends the reaction the turn chose, after its reply and files. Best effort: a failed reaction never fails the turn, unless
+  // it is the turn's whole answer.
   deliverReaction?(turn: TelegramInboundTurn): Promise<void>;
+  // The reaction that is the turn's whole answer, sent in place of its reply; null when the turn answers in words. Only for
+  // surfaces whose reply is a direct send.
+  answeredWith?(turn: TelegramInboundTurn): string | null;
   // Where this turn's reply is shown while it is written. Absent (the default), the reply arrives whole.
   streamReply?(turn: TelegramInboundTurn): ReplyDraftSurface | undefined;
   turnTimeoutMs?: number;
@@ -173,7 +177,8 @@ export class TelegramOwnerListener {
       const guardedText = redactSecretUrls(text).text;
       await settle(guardedText);
       // WhatsApp and iMessage render plain text; Telegram HTML would arrive escaped.
-      const rich = this.options.surface === 'whatsapp' || this.options.surface === 'imessage' ? {text: plainChatText(guardedText)} : telegramRichReply(guardedText);
+      const format = (words: string) => this.options.surface === 'whatsapp' || this.options.surface === 'imessage' ? { text: plainChatText(words) } : telegramRichReply(words);
+      const rich = format(guardedText);
       if (this.options.queueFinal) {
         const chosen = telegramReaction(readyChoice);
         const finalReaction = chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌';
@@ -182,11 +187,21 @@ export class TelegramOwnerListener {
         if (this.options.closesTraceOnQueue) this.options.log?.({ trace, hop: 'turn', ms: now() - started, ok: true, detail: 'reply_frozen', text: { input: turn.text, output: text } });
         return 'queued';
       }
-      // A blocked send (unlinked or rebound owner) returns no message: the turn did not reach the owner.
-      const delivered = await time('send', () => sendTelegramFinal(payload => api.sendMessage(payload), { chat_id, ...(rich.text===guardedText ? {text: guardedText} : rich), ...this.options.replyFields?.(turn) }));
-      if (delivered === undefined) throw new Error('telegram send blocked');
+      // A reaction that is the turn's whole answer goes in place of the reply; lines the host added after it (an effect
+      // receipt, a memory notice) still go as text.
+      const answeredWith = this.options.answeredWith?.(turn) ?? null;
+      const shown = answeredWith !== null && guardedText.startsWith(answeredWith) ? guardedText.slice(answeredWith.length).trim() : guardedText;
+      if (shown.length > 0) {
+        const formatted = format(shown);
+        // A blocked send (unlinked or rebound owner) returns no message: the turn did not reach the owner.
+        const delivered = await time('send', () => sendTelegramFinal(payload => api.sendMessage(payload), { chat_id, ...(formatted.text === shown ? { text: shown } : formatted), ...this.options.replyFields?.(turn) }));
+        if (delivered === undefined) throw new Error('telegram send blocked');
+      }
       if (this.options.deliverAttachments) await time('attachments', () => this.options.deliverAttachments!(trace, turn.runScope));
-      if (this.options.deliverReaction) await time('reaction', () => this.options.deliverReaction!(turn)).catch(() => undefined);
+      if (this.options.deliverReaction) {
+        const reacted = time('reaction', () => this.options.deliverReaction!(turn));
+        await (answeredWith === null ? reacted.catch(() => undefined) : reacted);
+      }
       const chosen = telegramReaction(await choice);
       await react('resolved', chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌');
       this.options.log?.({ trace, hop: 'turn', ms: now() - started, ok: true, text: { input: turn.text, output: text } });

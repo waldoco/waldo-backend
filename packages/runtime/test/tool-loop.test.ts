@@ -5,6 +5,7 @@ import { googleHandlers } from '../src/tools/live/google';
 import { resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
 import { getContextHandler } from '../src/tools/live/get-context';
 import { webSearchHandler } from '../src/tools/live/web-search';
+import { reactToMessageHandler } from '../src/tools/live/react-to-message';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
@@ -31,6 +32,24 @@ describe('runToolLoop', () => {
     });
     expect(text).toBe('It is 1:50 pm.');
     expect(JSON.parse(seen[1]![0]!.output)).toMatchObject({ ok: true, data: { timezone: 'Asia/Kolkata', local_time: expect.stringContaining('13:50') } });
+  });
+
+  it('closes on a reaction that is the turn\'s whole answer, after its round runs out and without another model call', async () => {
+    const scope = { runId: 'run', attempt: 'a1', deadline: Date.now() + 15 * 60_000, signal: new AbortController().signal, admit: () => undefined, commit: <T,>(work: () => T) => work() };
+    const port = { anyEmoji: true as const, ready: async () => true, freeze: () => 'queued' as const, sendNow: async () => true };
+    const ran: string[] = [];
+    let steps = 0;
+    const text = await runToolLoop({
+      handlers: [reactToMessageHandler(port), ...handlers], ctx: { ...ctx, ownerInitiated: true, runScope: scope } as never, maxSteps: 4,
+      onTool: (event) => ran.push(event.call.name),
+      step: async () => {
+        steps += 1;
+        return { text: '', tool_calls: [{ call_id: 'r1', name: 'react_to_message', arguments: JSON.stringify({ reaction: '🙏', delivery: 'instead_of_reply' }) }, call] };
+      },
+    });
+    expect(text).toBe('🙏');
+    expect(steps).toBe(1);
+    expect(ran).toEqual(['react_to_message', 'get_context']);
   });
 
   it('refuses a repeated identical call and ends with no tools offered', async () => {

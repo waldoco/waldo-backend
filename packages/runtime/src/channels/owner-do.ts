@@ -532,6 +532,9 @@ const PROACTIVE_READS: Readonly<Record<ChannelKind, (kv: Pick<SyncKvStorage, 'ge
 const WHATSAPP_PENDING_PREFIX = 'wa_pending:';
 // Message ids only, never message text.
 type WhatsappPending = Readonly<{ subject: string; admittedAt: number; ids: readonly string[] }>;
+// The one reaction a WhatsApp turn holds. alone: it is the turn's whole answer, sent in place of a text reply. sent: whether
+// its one send went ('failed' also covers a send that may have gone).
+type WhatsAppTurnReaction = { emoji: string; alone: boolean; sent: 'no' | 'yes' | 'failed' };
 // How often an unfinished WhatsApp payload is looked at again. A cadence, not a limit on how long a turn may run.
 const WHATSAPP_PENDING_CHECK_MS = 60_000;
 
@@ -741,8 +744,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   // "Why this changed": the steps gathered from the cards a day card's turn raises, while it is written.
   private readonly whyHolder: WhyHolder = {};
   // The WhatsApp turn running now: the owner's message it answers (its wamid), whether that message was itself a swipe-reply,
-  // and the emoji the model chose for it, which goes out after the reply.
-  private activeWhatsApp: { scope: RunEffectScope; wamid: string; admittedAt: number; threaded: boolean; reaction?: string } | null = null;
+  // and the reaction the model chose for it.
+  private activeWhatsApp: { scope: RunEffectScope; wamid: string; admittedAt: number; threaded: boolean; reaction?: WhatsAppTurnReaction } | null = null;
   private activeAbort: AbortController | undefined;
   // The chain compaction running in the serial queue, if any; an owner's new app message stops it so its turn starts now.
   private compactionAbort: AbortController | undefined;
@@ -4476,26 +4479,42 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // owner_message_heard; a turn whose chat offers no newer messages (ownerChat) is answered not_owner_turn.
     const secondMessageTools = secondMessageEnabled(this.env) ? [this.secondMessages.handler] : [];
     // A tapback goes only where a host sends one: iMessage, while the turn's bridge reports tapbacks verified.
-    // On WhatsApp the reaction, any one emoji, is held for the running turn and sent after its reply, on the owner's message it
-    // answers.
+    // On WhatsApp the turn holds one reaction, any one emoji, on the owner's message it answers: sent at once, after the reply,
+    // or in its place. It is sent at most once: a send that failed or may have gone is never repeated, and closes reactions
+    // for the rest of the turn.
+    const runningReaction = (scope: RunEffectScope) => {
+      const active = this.activeWhatsApp;
+      if (!active || active.scope.runId !== scope.runId || active.scope.attempt !== scope.attempt) throw new ClosedRunError();
+      return active;
+    };
     const whatsappTapbacks: TapbackPort = {
       anyEmoji: true,
-      ready: async () => !!this.activeWhatsApp?.wamid,
-      freeze: (reaction: string, scope: RunEffectScope) => {
-        const active = this.activeWhatsApp;
-        if (!active || active.scope.runId !== scope.runId || active.scope.attempt !== scope.attempt) throw new ClosedRunError();
-        if (active.reaction && active.reaction !== reaction) return 'conflict';
-        active.reaction = reaction;
+      ready: async () => !!this.activeWhatsApp?.wamid && this.activeWhatsApp.reaction?.sent !== 'failed',
+      freeze: (emoji, scope, delivery) => {
+        const active = runningReaction(scope);
+        if (active.reaction && active.reaction.emoji !== emoji) return 'conflict';
+        active.reaction = { emoji, alone: active.reaction?.alone === true || delivery === 'instead_of_reply', sent: active.reaction?.sent ?? 'no' };
         return 'queued';
       },
+      sendNow: async scope => sendWhatsAppReaction(runningReaction(scope), scope),
+    };
+    const sendWhatsAppReaction = async (active: NonNullable<typeof this.activeWhatsApp>, scope: RunEffectScope | undefined): Promise<boolean> => {
+      const reaction = active.reaction;
+      if (!reaction || reaction.sent === 'failed') return false;
+      if (reaction.sent === 'yes') return true;
+      scope?.admit();
+      reaction.sent = 'failed';
+      const sent = await routedCall('sendReaction', { message_id: active.wamid, emoji: reaction.emoji }).catch(() => undefined);
+      if (sent !== undefined) reaction.sent = 'yes';
+      return sent !== undefined;
     };
     const tapbackTools = ({ imessage: () => [reactToMessageHandler(iMessageTapbacks(this.imessageHost, () => this.activeIMessage))], whatsapp: () => [reactToMessageHandler(whatsappTapbacks)] } as Partial<Record<ChannelKind, () => ReturnType<typeof reactToMessageHandler>[]>>)[channel]?.() ?? [];
     // What a surface adds around a turn's reply. WhatsApp: the owner's reactions since their last turn, each one line the turn
     // reads beside their words; the reply's quote of the owner's message where that helps (a later message of theirs came in
     // after it, or it was itself a swipe-reply) and the mark that it is the turn's own reply; and the reaction the model chose,
-    // sent after the reply.
+    // sent after the reply or in its place.
     type InboundTurn = import('./telegram-polling').TelegramInboundTurn;
-    type TurnHooks = Readonly<{ notes(turn: InboundTurn): readonly string[]; listener: Pick<import('./telegram-listener').TelegramOwnerListenerOptions, 'replyFields' | 'deliverReaction'> }>;
+    type TurnHooks = Readonly<{ notes(turn: InboundTurn): readonly string[]; listener: Pick<import('./telegram-listener').TelegramOwnerListenerOptions, 'replyFields' | 'deliverReaction' | 'answeredWith'> }>;
     const runningWhatsApp = (turn: InboundTurn) => { const active = this.activeWhatsApp; return active?.wamid && active.scope.runId === turn.runScope?.runId ? active : null; };
     const whatsappTurnHooks: TurnHooks = {
       notes: turn => { const take = () => takeWhatsAppReactionNotes(identity, Date.now()); return turn.runScope ? turn.runScope.commit(take) : take(); },
@@ -4507,10 +4526,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         },
         deliverReaction: async turn => {
           const active = runningWhatsApp(turn);
-          if (!active?.reaction) return;
-          turn.runScope?.admit();
-          await routedCall('sendReaction', { message_id: active.wamid, emoji: active.reaction });
+          if (active?.reaction && !await sendWhatsAppReaction(active, turn.runScope)) throw new Error('whatsapp reaction not sent');
         },
+        answeredWith: turn => { const reaction = runningWhatsApp(turn)?.reaction; return reaction?.alone ? reaction.emoji : null; },
       },
     };
     const turnHooks = ({ whatsapp: whatsappTurnHooks } as Partial<Record<ChannelKind, TurnHooks>>)[channel];

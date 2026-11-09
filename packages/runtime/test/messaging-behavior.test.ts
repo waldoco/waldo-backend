@@ -1,7 +1,7 @@
 // Prompt contract checks: what the model is told, on each surface. They cannot show what a live model does with it;
 // the everyday-errands eval judges that after deploy.
 import { describe, expect, it } from 'vitest';
-import { MESSAGING_BEHAVIOR, messagingSystemPrompt, ownerClockLine, surfacePresentationPrompt, TOOL_SEARCH_LINE, VOICE, VOICE_VERSION, WALDO_VOCABULARY, type SurfacePresentation } from '../src/prompt/messaging-behavior';
+import { MESSAGING_BEHAVIOR, messagingSystemPrompt, ownerClockLine, REACTING, surfacePresentationPrompt, TOOL_SEARCH_LINE, VOICE, VOICE_VERSION, WALDO_VOCABULARY, type SurfacePresentation } from '../src/prompt/messaging-behavior';
 import { sanitise, sanitiseVerifyOnly } from '../src/scribe/sanitiser';
 
 const presentation = (surface: string, approval: SurfacePresentation['delivery']['approval']): SurfacePresentation =>
@@ -386,6 +386,14 @@ describe('the voice block', () => {
       expect(surfacePresentationPrompt(surface, ['react_to_message']), surface.surface).toContain('Reactions: available.');
       expect(surfacePresentationPrompt(surface, ['send_message']), surface.surface).toContain(host ? 'Reactions: available.' : 'Reactions: unavailable.');
       expect(messagingSystemPrompt(['react_to_message'], surface), surface.surface).toContain('Reactions: available.');
+    }
+  });
+
+  // The model judges when a reaction fits; the framing for that judgment rides with the tool and nowhere else.
+  it('frames reaction judgment only on a turn that offers the reaction tool', () => {
+    for (const surface of SURFACES) {
+      expect(surfacePresentationPrompt(surface, ['react_to_message']), surface.surface).toContain(REACTING);
+      expect(surfacePresentationPrompt(surface, ['send_message']), surface.surface).not.toContain(REACTING);
     }
   });
 });

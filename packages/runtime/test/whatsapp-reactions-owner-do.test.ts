@@ -5,18 +5,24 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
+import { reactedNote } from '../src/channels/owner-turn';
 import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 type RequestBody = { tools?: { name?: string }[]; input: string | { type?: string; call_id?: string }[]; text?: { format?: { name?: string } } };
-const model = vi.hoisted(() => ({ requests: [] as RequestBody[], react: null as string | null }));
+// plan: the reaction calls the model makes in a turn, one per round, before it answers in words.
+const model = vi.hoisted(() => ({ requests: [] as RequestBody[], react: null as string | null, plan: [] as { reaction: string; delivery?: string }[] }));
 vi.mock('openai', () => ({ default: class {
   responses = { create: async (body: RequestBody) => {
     model.requests.push(structuredClone(body));
     const format = body.text?.format?.name;
-    const reacted = Array.isArray(body.input) && body.input.some(item => item.type === 'function_call_output' && item.call_id === 'react');
+    const results = Array.isArray(body.input) ? body.input.filter(item => item.type === 'function_call_output') : [];
+    const reacted = results.some(item => item.call_id === 'react');
     const offered = body.tools?.some(tool => tool.name === 'react_to_message');
-    const output = !format && model.react && offered && !reacted
-      ? [{ type: 'function_call', call_id: 'react', name: 'react_to_message', arguments: JSON.stringify({ reaction: model.react }) }] : [];
+    const planned = !format && offered ? model.plan[results.length] : undefined;
+    const output = planned
+      ? [{ type: 'function_call', call_id: `plan-${results.length}`, name: 'react_to_message', arguments: JSON.stringify(planned) }]
+      : !format && model.react && offered && !reacted
+        ? [{ type: 'function_call', call_id: 'react', name: 'react_to_message', arguments: JSON.stringify({ reaction: model.react }) }] : [];
     const text = format ? format === 'claim_ops'
       ? '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}'
       : format === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : '{}'
@@ -29,7 +35,9 @@ const OWNER = '00000000-0000-4000-8000-0000000000e2';
 const SUBJECT = '15550002222';
 type GraphCall = Record<string, unknown> & { type?: string; status?: string; context?: { message_id: string }; text?: { body: string }; reaction?: { message_id: string; emoji: string } };
 
-beforeEach(() => { model.requests = []; model.react = null; });
+beforeEach(() => { model.requests = []; model.react = null; model.plan = []; graphRefuses.reaction = false; });
+// Meta refusing every reaction (a closed window, an outage), as an error answer.
+const graphRefuses = { reaction: false };
 
 const whatsappOwner = (name: string, run: (deliver: (...messages: Record<string, unknown>[]) => Promise<void>, graph: GraphCall[], owner: OwnerDO) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
@@ -53,6 +61,7 @@ const whatsappOwner = (name: string, run: (deliver: (...messages: Record<string,
       if (url.startsWith('https://lookaside.fbsbx.com/')) return new Response(webp, { headers: { 'content-type': 'image/webp' } });
       if (url === 'https://graph.facebook.com/v26.0/fictional-phone-id/messages') {
         const body = JSON.parse(String(init?.body)) as GraphCall;
+        if (body.type === 'reaction' && graphRefuses.reaction) return Response.json({ error: { code: 131047, message: 'Re-engagement message' } }, { status: 400 });
         graph.push(body);
         return Response.json(body.status === 'read' ? { success: true } : { messages: [{ id: `wamid.out.${graph.length}` }] });
       }
@@ -167,5 +176,73 @@ it('a message the delivery outbox sent (an app message copied to WhatsApp, a Bri
     await deliver(text('can you push the 5pm too?', 'wamid.reply.copy', { from: '15550009999', id: copyId }));
     expect(lastMessage()).toContain('[Owner reacted 🙏 to your message: \\"Three meetings today; the 4pm moved to 5.');
     expect(lastTurn()).toContain('Transport-observed author: waldo; forwarded: false.');
+  });
+}, 60_000);
+
+it('a "thanks" answered by a reaction alone sends only the reaction, and the next turn reads that Waldo answered with it', async () => {
+  await whatsappOwner('wa-react-alone', async (deliver, graph) => {
+    model.plan = [{ reaction: '🙏', delivery: 'instead_of_reply' }];
+    await deliver(text('thanks!', 'wamid.thanks'));
+    expect(sends(graph)).toEqual([expect.objectContaining({ type: 'reaction', reaction: { message_id: 'wamid.thanks', emoji: '🙏' } })]);
+    // The closing round made no second model call for words.
+    expect(turns()).toHaveLength(1);
+    model.plan = [];
+    await deliver(text('when is my train?', 'wamid.next'));
+    // Later turns read the reaction as a reaction, never as a bare emoji Waldo wrote.
+    const input = turns().at(-1)!.input;
+    const answers = (Array.isArray(input) ? input : []).filter(item => (item as { role?: string }).role === 'assistant').map(item => JSON.stringify(item));
+    expect(answers.some(answer => answer.includes(reactedNote('🙏')))).toBe(true);
+  });
+}, 60_000);
+
+it('a long turn reacts at once, then answers, and the reaction is sent once', async () => {
+  await whatsappOwner('wa-react-now', async (deliver, graph) => {
+    model.plan = [{ reaction: '👀', delivery: 'now' }, { reaction: '👀', delivery: 'now' }];
+    await deliver(text('find me a train for tomorrow', 'wamid.slow'));
+    expect(sends(graph).map(call => call.type)).toEqual(['reaction', 'text']);
+    expect(sends(graph)[0]!.reaction).toEqual({ message_id: 'wamid.slow', emoji: '👀' });
+  });
+}, 60_000);
+
+it('a question answered in words sends the words, and a reaction only if the model chose one', async () => {
+  await whatsappOwner('wa-react-words', async (deliver, graph) => {
+    await deliver(text('when is my train?', 'wamid.q'));
+    expect(sends(graph).map(call => call.type)).toEqual(['text']);
+  });
+}, 60_000);
+
+it('a reaction sent now and then made the whole answer goes once, and a redelivered message runs no second turn', async () => {
+  await whatsappOwner('wa-react-replay', async (deliver, graph) => {
+    model.plan = [{ reaction: '👍', delivery: 'now' }, { reaction: '👍', delivery: 'instead_of_reply' }];
+    await deliver(text('ok, done', 'wamid.ok'));
+    await deliver(text('ok, done', 'wamid.ok'));
+    expect(sends(graph)).toEqual([expect.objectContaining({ type: 'reaction', reaction: { message_id: 'wamid.ok', emoji: '👍' } })]);
+  });
+}, 60_000);
+
+it('a reaction Meta refuses leaves nothing behind: sent now, the turn still answers in words and never retries it', async () => {
+  await whatsappOwner('wa-react-refused-now', async (deliver, graph) => {
+    graphRefuses.reaction = true;
+    model.plan = [{ reaction: '👀', delivery: 'now' }, { reaction: '👀', delivery: 'now' }];
+    await deliver(text('find me a train for tomorrow', 'wamid.slow'));
+    expect(sends(graph).map(call => call.type)).toEqual(['text']);
+    // The model heard that the reaction did not go, and the second call was refused without a send.
+    expect(lastTurn()).toContain('\\"queued\\":false,\\"reason\\":\\"unavailable\\"');
+    graphRefuses.reaction = false;
+    model.plan = [{ reaction: '🙏', delivery: 'instead_of_reply' }];
+    await deliver(text('thanks!', 'wamid.thanks'));
+    expect(sends(graph).at(-1)).toEqual(expect.objectContaining({ type: 'reaction', reaction: { message_id: 'wamid.thanks', emoji: '🙏' } }));
+  });
+}, 60_000);
+
+it('a reaction Meta refuses as the whole answer ends the turn without its reply: the owner gets the one check-first notice', async () => {
+  await whatsappOwner('wa-react-refused-alone', async (deliver, graph) => {
+    graphRefuses.reaction = true;
+    model.plan = [{ reaction: '🙏', delivery: 'instead_of_reply' }];
+    await deliver(text('thanks!', 'wamid.thanks'));
+    const out = sends(graph);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toEqual(expect.objectContaining({ type: 'text', context: { message_id: 'wamid.thanks' } }));
+    expect(out[0]!.text!.body).not.toContain('🙏');
   });
 }, 60_000);

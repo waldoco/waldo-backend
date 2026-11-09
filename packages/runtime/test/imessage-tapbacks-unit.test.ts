@@ -65,12 +65,51 @@ describe('react_to_message by surface', () => {
     expect(p.freeze).not.toHaveBeenCalled();
   });
 
+  const anyEmoji = (sent = true) => ({ anyEmoji: true as const, ready: vi.fn(async () => true), freeze: vi.fn((_emoji: string, _scope: RunEffectScope, _delivery: string): 'queued' | 'conflict' => 'queued'), sendNow: vi.fn(async () => sent) });
+  const queued = { ok: true, data: { queued: true }, source_taint: null };
+  const unqueued = (reason: string) => ({ ok: true, data: { queued: false, reason }, source_taint: null });
+
   it('an any-emoji surface sends the emoji itself, and a tapback name as its emoji', async () => {
-    const p = { anyEmoji: true as const, ready: vi.fn(async () => true), freeze: vi.fn((_emoji: string) => 'queued' as const) };
+    const p = anyEmoji();
     const handler = reactToMessageHandler(p);
     expect(handler.description).toMatch(/one emoji/);
     await handler.handle({ reaction: '🎉' }, owner);
     await handler.handle({ reaction: 'laugh' }, owner);
-    expect(p.freeze.mock.calls.map(([emoji]) => emoji)).toEqual(['🎉', '😂']);
+    expect(p.freeze.mock.calls.map(([emoji, , delivery]) => [emoji, delivery])).toEqual([['🎉', 'with_reply'], ['😂', 'with_reply']]);
+    expect(p.sendNow).not.toHaveBeenCalled();
+  });
+
+  it('a reaction sent now goes before the turn carries on; one that did not go is reported unqueued', async () => {
+    const p = anyEmoji();
+    expect(await reactToMessageHandler(p).handle({ reaction: '👀', delivery: 'now' }, owner)).toEqual(queued);
+    expect(p.sendNow).toHaveBeenCalledWith(scope);
+    const failed = anyEmoji(false);
+    expect(await reactToMessageHandler(failed).handle({ reaction: '👀', delivery: 'now' }, owner)).toEqual(unqueued('unavailable'));
+  });
+
+  it('a reaction instead of a reply closes the turn with that emoji, and only where the loop can close on it', async () => {
+    const p = anyEmoji(), closeTurn = vi.fn();
+    expect(await reactToMessageHandler(p).handle({ reaction: 'love', delivery: 'instead_of_reply' }, { ...(owner as object), closeTurn } as never)).toEqual(queued);
+    expect(closeTurn).toHaveBeenCalledWith('❤️');
+    expect(p.sendNow).not.toHaveBeenCalled();
+    const unclosable = anyEmoji();
+    expect(await reactToMessageHandler(unclosable).handle({ reaction: '❤️', delivery: 'instead_of_reply' }, owner)).toEqual(unqueued('unavailable'));
+    expect(unclosable.freeze).not.toHaveBeenCalled();
+  });
+
+  it('a second, different reaction in one turn is refused: nothing is sent and the turn is not closed', async () => {
+    const p = anyEmoji(), closeTurn = vi.fn();
+    p.freeze.mockReturnValue('conflict');
+    for (const delivery of ['now', 'instead_of_reply'] as const) {
+      expect(await reactToMessageHandler(p).handle({ reaction: '👍', delivery }, { ...(owner as object), closeTurn } as never)).toEqual(unqueued('already_reacted'));
+    }
+    expect(p.sendNow).not.toHaveBeenCalled();
+    expect(closeTurn).not.toHaveBeenCalled();
+  });
+
+  it.each(['now', 'instead_of_reply'] as const)('a tapback-only surface declines delivery %s and freezes nothing, since its tapback leaves with the reply', async (delivery) => {
+    const p = { ready: vi.fn(async () => true), freeze: vi.fn(() => 'queued' as const) };
+    expect(await reactToMessageHandler(p).handle({ reaction: 'love', delivery }, { ...(owner as object), closeTurn: vi.fn() } as never)).toEqual(unqueued('unavailable'));
+    expect(p.freeze).not.toHaveBeenCalled();
   });
 });

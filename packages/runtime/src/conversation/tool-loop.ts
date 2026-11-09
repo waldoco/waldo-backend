@@ -142,6 +142,8 @@ export async function runToolLoop(input: Readonly<{
   onToolStart?: (tool: string) => void;
   // Fired once, just before the loop returns, with the truthful exit classification.
   onSettle?: (exit: LoopExit) => void;
+  // Fired when a call closed the turn with its own answer (ctx.closeTurn), with that answer, before the loop returns it.
+  onClose?: (reply: string) => void;
   // Shared tool-round budget across a parent turn and its children (subagent orchestration
   // spec): when present, every offered round in EVERY loop holding the same object decrements
   // it, so a turn's stated round cap is absolute - children can never dispatch past it. The
@@ -182,6 +184,9 @@ export async function runToolLoop(input: Readonly<{
   const tools = input.remote ? [...input.remote.tools] : loader ? [...loader.offered] : toolDefinitions(input.handlers);
   const offeredNames = new Set(tools.map((tool) => tool.name));
   const turns: LLMToolTurn[] = [...(input.resume?.turns ?? [])];
+  // The turn's whole answer, once a call made it so; the round it came in still runs to its end.
+  let closing: string | null = null;
+  const closeTurn = (reply: string) => { closing = reply; };
   const seen = new Map<string, LoopToolResult>();
   // A resumed step that cannot be repeated and already ran is refused if called again, as it is within one slice. One whose
   // arguments were left out (they carried a health reading) no longer matches its repeat, so any later call of that tool
@@ -355,7 +360,7 @@ export async function runToolLoop(input: Readonly<{
     const run = (index: number) => {
       const { call, answer } = routed[index]!;
       if (healthFenced && (fencedCall(call) || fencedCall(calls[index]!))) return Promise.resolve(refusal(HEALTH_FENCE_ERROR, 'forbidden', 'health_fence'));
-      return answer ? Promise.resolve(answer) : input.remote ? input.remote.dispatch(call) : dispatchLoopTool(call, input);
+      return answer ? Promise.resolve(answer) : input.remote ? input.remote.dispatch(call) : dispatchLoopTool(call, { ...input, closeTurn });
     };
     let batchLead = true;
     for (const [index, made] of calls.entries()) {
@@ -526,6 +531,11 @@ export async function runToolLoop(input: Readonly<{
         return '';
       }
     }
+    if (closing !== null) {
+      input.onClose?.(closing);
+      input.onSettle?.('completed');
+      return withInwardReceipts(closing, inward);
+    }
     await input.afterRound?.(turns);
   }
 }
@@ -564,7 +574,7 @@ const refusal = (error: ToolError, code: string, reason?: string): LoopToolResul
 
 export async function dispatchLoopTool(
   call: LLMToolCall,
-  input: Readonly<{ handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']; ctx: ToolDispatcherContext; offload?: ToolOutputStore }>,
+  input: Readonly<{ handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']; ctx: ToolDispatcherContext; offload?: ToolOutputStore; closeTurn?: (reply: string) => void }>,
 ): Promise<LoopToolResult> {
   const name = toolNameSchema.safeParse(call.name);
   if (!name.success) return refusal(toolError('unknown_tool', `Unknown tool ${call.name}.`), 'invalid_args', 'unknown_tool');
@@ -574,7 +584,7 @@ export async function dispatchLoopTool(
   } catch {
     return refusal(toolError('invalid_json_args'), 'invalid_args', 'invalid_args');
   }
-  const result = await dispatchTool({ id: call.call_id, name: name.data, args }, input.ctx, { handlers: input.handlers, ...(input.offload === undefined ? {} : { offload: input.offload }) });
+  const result = await dispatchTool({ id: call.call_id, name: name.data, args }, input.ctx, { handlers: input.handlers, ...(input.offload === undefined ? {} : { offload: input.offload }), ...(input.closeTurn ? { closeTurn: input.closeTurn } : {}) });
   // The untrusted marker crosses the model boundary on BOTH arms: a successful external result
   // keeps source_taint 'external' in the JSON the model reads, so provider text never presents
   // as internal truth (security review 2026-09-26); the failure arm keeps it for the same reason.
