@@ -12,6 +12,12 @@ on:
 permissions:
   contents: read
 
+# A newer commit on the same PR or branch supersedes the run before it: only the newest head is ever merged or deployed,
+# and a superseded run would hold runners every other PR is queued behind.
+concurrency:
+  group: verify-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     runs-on: ubuntu-latest
