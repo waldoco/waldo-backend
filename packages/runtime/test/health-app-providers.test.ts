@@ -47,12 +47,22 @@ describe('the app provider routes', () => {
     expect([response.status, json]).toEqual([200, answer]);
   });
 
-  it('answers not_configured for Google Health, which this Worker cannot connect yet, without calling the owner object', async () => {
+  it('names Google Health to the owner object, and names nothing for WHOOP as before', async () => {
     const google = { request_id: 'provider-connect-g1', provider: 'google_health' };
-    for (const route of ['/connect', '/disconnect']) {
-      const { response, json, sent } = await run('POST', route, { body: google, headers: { 'idempotency-key': google.request_id } });
-      expect([route, response.status, json, sent]).toEqual([route, 503, { error: 'not_configured' }, []]);
+    for (const [route, op] of [['/connect', 'connect'], ['/disconnect', 'disconnect']] as const) {
+      const { sent } = await run('POST', route, { body: google, headers: { 'idempotency-key': google.request_id, 'x-waldo-app-contract': 'health=8' }, answer: () => Response.json({ error: 'not_configured' }, { status: 503 }) });
+      expect(sent).toEqual([{ op, text: '{"provider":"google_health"}', doName: 'owner-1' }]);
     }
+    expect((await run('POST', '/connect', { body: connect })).sent[0]).toMatchObject({ op: 'connect', text: '{}' });
+  });
+
+  it('shows a build that predates Google Health no Google Health row, and takes no Google Health request from it', async () => {
+    const google = { provider: 'google_health', state: 'connected', last_sync_at: null };
+    const listed = (header: string) => run('GET', '', { headers: { 'x-waldo-app-contract': header }, answer: () => Response.json({ providers: [status, google] }) });
+    expect((await listed('health=7')).json).toEqual({ providers: [status] });
+    expect((await listed('health=8')).json).toEqual({ providers: [status, google] });
+    const asked = await run('POST', '/connect', { body: { request_id: 'provider-connect-g2', provider: 'google_health' }, headers: { 'idempotency-key': 'provider-connect-g2', 'x-waldo-app-contract': 'health=7' } });
+    expect([asked.response.status, asked.sent]).toEqual([400, []]);
   });
 
   it('names the reason a connection cannot start, in closed codes', async () => {

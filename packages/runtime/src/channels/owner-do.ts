@@ -41,6 +41,8 @@ import { healthSnapshot, type HealthWakeReason } from '../health/wakes';
 import { wakeFreshMs, workoutStillFresh } from '../health/wake-notice';
 import { dispatchProviderCall, HEALTH_PROVIDER_PATH, verifiedProviderCall } from '../health/providers/provider-route';
 import { whoopOwner, WHOOP_SYNC_EVERY_MS, WHOOP_SYNC_ID, type WhoopOwner } from '../health/providers/whoop-owner';
+import { googleHealthOwner, GOOGLE_HEALTH_SYNC_ID, type GoogleHealthOwner } from '../health/providers/google-health-owner';
+import { googleHealthConfig } from '../health/providers/google-health-routes';
 import { whoopConfig } from '../health/providers/whoop-routes';
 import { dailyScoresFor } from '../health/scores';
 import { invokeHealth } from './app-health';
@@ -1952,11 +1954,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const headers={'cache-control':'no-store'};
     const call=await verifiedProviderCall(request,this.env.WALDO_ROUTER_HMAC_SECRET,name=>this.env.OWNER_DO?.idFromName(name).toString()===this.ctx.id.toString()&&this.ctx.storage.kv.get<string>('do_name')===name);
     if(!call)return Response.json({error:'unavailable'},{status:403,headers});
-    try{const answer=await dispatchProviderCall(this.providerOwner(),call.op,call.body);return Response.json(answer.json,{status:answer.status,headers});}
+    try{const answer=await dispatchProviderCall(this.providerOwner(),call.op,call.body,this.googleHealthOwner());return Response.json(answer.json,{status:answer.status,headers});}
     catch{return Response.json({error:'unavailable'},{status:503,headers});}
   }
   // One WHOOP owner per object, so its refresh of the edge's token stays single-file across every runtime the object builds.
   private whoop?: WhoopOwner;
+  private googleHealth?: GoogleHealthOwner;
   // Every durable store outside the claims table that holds the owner's text, in one list. The forget purge job cleans these
   // and nothing else does, so the forget tool, the console and the job cannot disagree on what a forget covers.
   private forgetStores(): ForgetStore[] {
@@ -2025,12 +2028,29 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return this.whoop??=whoopOwner({
       doName:()=>this.ctx.storage.kv.get<string>('do_name')??'',rpc:signedRpc(this.env),config:config?{clientId:config.clientId,redirectUri:config.redirectUri}:null,proxy:oauthProxy(this.env),kv:this.ctx.storage.kv,now:Date.now,
       timezone:()=>this.setup('app').timezone,
-      produce:(woke,workout)=>this.setup('app').healthSamples('readings',woke,workout),
-      ...(this.env.WAKE_BRIEF==='1'?{wakeFreshMs:wakeFreshMs(this.env.WAKE_BRIEF_FRESH_MIN)}:{}),
-      ...(this.env.WORKOUT_WAKE==='1'?{workoutWake:true as const}:{}),
+      ...this.providerWakes(),
       arm:async at=>{await this.setup('app').scheduler.schedule({id:WHOOP_SYNC_ID,kind:'provider_sync',occurrenceAt:at,dueAt:at,payloadRefs:{id:WHOOP_SYNC_ID},recurrence:{type:'interval',every_ms:WHOOP_SYNC_EVERY_MS,phase_ms:at%WHOOP_SYNC_EVERY_MS}});},
       disarm:async()=>{await this.setup('app').scheduler.cancelReadable(WHOOP_SYNC_ID);},
       log:line=>this.setup('app').log({trace:`whoop:${Date.now()}`,hop:line.hop,ms:0,ok:line.ok,code:line.code}),
+    });
+  }
+  // What a provider's committed readings wake, the same for every provider as for an app upload: the recompute, the morning
+  // Brief while the night is fresh (WAKE_BRIEF), and a workout that just ended (WORKOUT_WAKE).
+  private providerWakes() {
+    return {
+      produce:(woke?:boolean,workout?:boolean)=>this.setup('app').healthSamples('readings',woke,workout),
+      ...(this.env.WAKE_BRIEF==='1'?{wakeFreshMs:wakeFreshMs(this.env.WAKE_BRIEF_FRESH_MIN)}:{}),
+      ...(this.env.WORKOUT_WAKE==='1'?{workoutWake:true as const}:{}),
+    };
+  }
+  private googleHealthOwner(): GoogleHealthOwner {
+    return this.googleHealth??=googleHealthOwner({
+      doName:()=>this.ctx.storage.kv.get<string>('do_name')??'',rpc:signedRpc(this.env),config:googleHealthConfig(this.env),proxy:oauthProxy(this.env),kv:this.ctx.storage.kv,now:Date.now,
+      timezone:()=>this.setup('app').timezone,
+      ...this.providerWakes(),
+      arm:async at=>{await this.setup('app').scheduler.schedule({id:GOOGLE_HEALTH_SYNC_ID,kind:'provider_sync',occurrenceAt:at,dueAt:at,payloadRefs:{id:GOOGLE_HEALTH_SYNC_ID},recurrence:{type:'interval',every_ms:WHOOP_SYNC_EVERY_MS,phase_ms:at%WHOOP_SYNC_EVERY_MS}});},
+      disarm:async()=>{await this.setup('app').scheduler.cancelReadable(GOOGLE_HEALTH_SYNC_ID);},
+      log:line=>this.setup('app').log({trace:`google_health:${Date.now()}`,hop:line.hop,ms:0,ok:line.ok,code:line.code}),
     });
   }
   private async appRoute(request: Request): Promise<Response> {
@@ -3647,7 +3667,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
         // Watch upkeep reaches no responder, so it runs beside the owner jobs, not as one.
         const jobs = { ...Object.fromEntries(Object.entries(executors).map(([kind, run]) =>
-          [kind, (entry: ScheduleEntry) => this.asOwnerJob(kind as OwnerJob, `${entry.id}:${entry.occurrence_at}`, () => run(entry))])) as typeof executors, watch_upkeep: watches, provider_sync: async (entry: ScheduleEntry) => { if (entry.id === HEALTH_RECOMPUTE_ID) await this.setup('app').healthRecompute(); else await this.providerOwner().sync(); }, connect_poll: async (entry: ScheduleEntry) => { if (entry.payload_refs.id) await this.pollAppConnect(entry.payload_refs.id); }, forget_purge: async () => { await this.forgetPurgeJob().run(); } };
+          [kind, (entry: ScheduleEntry) => this.asOwnerJob(kind as OwnerJob, `${entry.id}:${entry.occurrence_at}`, () => run(entry))])) as typeof executors, watch_upkeep: watches, provider_sync: async (entry: ScheduleEntry) => { if (entry.id === HEALTH_RECOMPUTE_ID) await this.setup('app').healthRecompute(); else if (entry.id === GOOGLE_HEALTH_SYNC_ID) await this.googleHealthOwner().sync(); else await this.providerOwner().sync(); }, connect_poll: async (entry: ScheduleEntry) => { if (entry.payload_refs.id) await this.pollAppConnect(entry.payload_refs.id); }, forget_purge: async () => { await this.forgetPurgeJob().run(); } };
         const started = Date.now();
         let fired: readonly ScheduleEntry[];
         try {
