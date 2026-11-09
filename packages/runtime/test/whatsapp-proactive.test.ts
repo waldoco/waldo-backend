@@ -7,7 +7,7 @@ import { egressGuardedCaller } from '../src/channels/egress-guard';
 import { createTelegramCaller, gatedCaller } from '../src/channels/telegram-api';
 import { TelegramFinalOutbox } from '../src/channels/telegram-final-outbox';
 import { WHATSAPP_TEXT_MAX_CHARS, WhatsAppPartialSend, whatsappTelegramShim } from '../src/channels/whatsapp-api';
-import { WHATSAPP_HELD, WHATSAPP_HELD_RETENTION_MS, WHATSAPP_REFUSED, WA_HELD_PREFIX, WA_LAST_INBOUND_KEY, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, clearWhatsAppNumber, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappReceipt, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from '../src/channels/whatsapp-window';
+import { WHATSAPP_HELD, WHATSAPP_HELD_RETENTION_MS, WHATSAPP_REFUSED, WA_HELD_PREFIX, WA_LAST_INBOUND_KEY, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, clearWhatsAppNumber, recordWhatsAppInbound, releaseWhatsAppOutbox, whatsappReceipt, whatsappKnock, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute } from '../src/channels/whatsapp-window';
 
 const SUBJECT = '15550001111';
 const T0 = 1_700_000_000_000;
@@ -168,6 +168,20 @@ describe('Meta refusing a send later (a failed status with 131047)', () => {
     // The owner's real reply, stamped in the same whole second.
     recordWhatsAppInbound(kv, [{ id: 'wamid.in-c', timestamp: second }], T0 + 990);
     expect(whatsappWindowOpen(kv, T0 + 995)).toBe(true);
+  });
+
+  it('a same-second reply re-arms the knock as a later one does, and a later stamp starts the messages afresh', async () => {
+    const { kv, map } = fakeKv();
+    const second = String(T0 / 1000), knocks: string[] = [], knock = async () => { knocks.push('knock'); };
+    recordWhatsAppInbound(kv, [{ id: 'wamid.in-a', timestamp: second }], T0);
+    await whatsappKnock(kv, knock, template, vi.fn());
+    await whatsappKnock(kv, knock, template, vi.fn());
+    expect(knocks).toHaveLength(1);
+    recordWhatsAppInbound(kv, [{ id: 'wamid.in-b', timestamp: second }], T0 + 400);
+    await whatsappKnock(kv, knock, template, vi.fn());
+    expect(knocks).toHaveLength(2);
+    recordWhatsAppInbound(kv, [{ id: 'wamid.in-later', timestamp: String((T0 + 60_000) / 1000) }], T0 + 60_000);
+    expect(map.get('wa_last_inbound_ids')).toEqual(['wamid.in-later']);
   });
 
   it('a refusal from before the owner\'s latest message leaves the window open and asks for no knock', () => {

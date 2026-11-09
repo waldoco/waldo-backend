@@ -85,6 +85,8 @@ export const recordWhatsAppInbound = (kv: Kv, messages: readonly object[], now: 
   }
   if (latest > previous) kv.put(WA_LAST_INBOUND_KEY, latest);
   if (ids.size !== before.length || latest > previous) kv.put(LAST_INBOUND_IDS_KEY, [...ids]);
+  // A new message in the same second is a reply all the same: it re-arms the knock as a later stamp does.
+  if (latest === previous && ids.size !== before.length) kv.delete(KNOCKED_KEY);
 };
 // The window as Meta refused it: the latest inbound time and the messages seen at it.
 const refuseWindow = (kv: Kv, last: number): void => {
@@ -110,7 +112,8 @@ const holdBody = (kv: Kv, body: object, now: number): void => {
   kv.put(`${WA_HELD_PREFIX}${String(seq).padStart(12, '0')}`, { heldAt: now, body } satisfies Held);
 };
 
-// One knock per closed window: the marker is the inbound time it answered, so the next reply re-arms it.
+// One knock per closed window: the marker is the inbound time it answered, so the next reply re-arms it (one in the same
+// second clears it).
 // With no template there is no knock to mark, so a template configured later still knocks for this window.
 // The marker goes down before the send, so a second send during this one cannot knock again. Only a definite refusal
 // takes it back for a retry; a timed-out knock may have gone out, so it stays marked.
