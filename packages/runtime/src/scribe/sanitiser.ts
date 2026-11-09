@@ -144,8 +144,9 @@ const BARE_VALUE = String.raw`\d{2,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b|o'?cl
 // A weight that follows a bag or a parcel is the luggage's.
 const CARRIED = String.raw`(?:bags?|baggage|luggage|suitcases?|parcel|package|box|cargo|carry-on)`;
 const NOT_CARRIED = String.raw`(?<!\b${CARRIED}\s+)`;
-// A labelled value ends its item: the end of the text, a separator, or a word that says it is a reading ("58 bpm resting").
-const LABEL_END = String.raw`(?=\s*(?:$|[,;.)]|(?:resting|asleep|average|avg)\b))`;
+// A labelled value ends its item: the end of the text or of its line, a separator or closing mark, or a word that says it is
+// a reading ("58 bpm resting").
+const LABEL_END = String.raw`(?=\s*(?:$|[\n,;.)!?:]|(?:resting|asleep|average|avg)\b))`;
 // A day named as a label, the way a reply lists what the owner's apps recorded for it.
 const DAY_LABEL = String.raw`\b(?:yesterday|today|tonight|last\s+night|this\s+morning|(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?)\s*:\s*`;
 const reading = (source: string): RegExp => new RegExp(source, 'i');

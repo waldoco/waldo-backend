@@ -18,6 +18,10 @@ describe('the numeric health floor', () => {
     'Last night: 42 ms',
     'This morning: 97% SpO2',
     'Yesterday: 7.5 hours asleep',
+    'Yesterday: 72 kg\nNice work this week',
+    'Protein: 61 g\nAnything else?',
+    '- Mon: 72.4 kg\n- Tue: 3 calls',
+    'Yesterday: 72 kg!',
   ])('holds a reading framed by a label: %s', (text) => {
     expect(numericHealthIn(text)).toBe(true);
     expect(redactNumericHealth(text, '[H]')).not.toBe(text);
