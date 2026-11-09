@@ -5,7 +5,7 @@ import type { McpConnectionView, McpToolCard } from './mcp-connections';
 
 // Read on connect: when the owner connects a server, the harness reads it once and the model tells the owner, in one line,
 // what Waldo can now see there. The harness picks the read from what the owner already allowed, never from server text: the
-// first tool that runs without asking in the owner's own turn and takes no argument (none is made up for it), or, on the
+// first tool labelled read-only that runs without asking in the owner's own turn and takes no argument (none is made up for it), or, on the
 // reviewed Granola, its question tool with a question built here. The answer is outside content, guarded like a prep read,
 // and nothing acts on it.
 export const FIRST_LOOK_CHARS = 8_192;
@@ -28,7 +28,8 @@ const choose = (view: Pick<McpConnectionView, 'risk'>, tools: readonly McpToolCa
     const ask = open.find((card) => card.tool === GRANOLA_PREP_TOOL), argument = ask ? questionArgument({ inputSchema: ask.input_schema }) : null;
     return argument ? { tool: GRANOLA_PREP_TOOL, args: { [argument]: GRANOLA_QUESTION } } : null;
   }
-  const bare = open.find((card) => takesNothing(card.input_schema));
+  // An owner's grant can let a write run without asking; the first look only reads.
+  const bare = open.find((card) => card.read_only_hint && takesNothing(card.input_schema));
   return bare ? { tool: bare.tool, args: {} } : null;
 };
 

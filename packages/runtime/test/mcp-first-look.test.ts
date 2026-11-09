@@ -28,6 +28,15 @@ describe('read on connect: one bounded read through the read path, chosen withou
     expect(d.invoke).not.toHaveBeenCalled();
   });
 
+  it('never runs a write the owner let run without asking, even one that takes no argument', async () => {
+    const granted = { ...card('archive_all', 'without_asking'), read_only_hint: false };
+    const d = deps([granted, card('my_issues', 'without_asking')]);
+    expect(await firstLookRead(d, linear)).toMatchObject({ status: 'read', tool: 'my_issues' });
+    const only = deps([granted]);
+    expect(await firstLookRead(only, linear)).toEqual({ status: 'skipped', code: 'no_open_read' });
+    expect(only.invoke).not.toHaveBeenCalled();
+  });
+
   it('asks a reviewed Granola its one question, through its question tool', async () => {
     const d = deps([card(GRANOLA_PREP_TOOL, 'without_asking', { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] })], answer('Two meetings this week.'));
     const read = await firstLookRead(d, { name: 'Granola', risk: 'reviewed' });

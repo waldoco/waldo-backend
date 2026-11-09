@@ -682,7 +682,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const told = this.appConnects().settled(ticket, outcome);
     const tile = told !== null && 'tile' in told;
     const chat = told && !('tile' in told) ? told : undefined;
-    if (outcome.kind === 'linked') this.ctx.waitUntil(this.firstLook(nonce, outcome, chat));
+    if (outcome.kind === 'linked') this.ctx.waitUntil(this.serial(() => this.firstLook(nonce, outcome, chat)));
     else if (chat) await this.tellConnectOutcome(nonce, chat);
     const call = signedRpc(this.env);
     if (outcome.kind !== 'linked' || !call) return tile;
@@ -711,7 +711,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const told = await this.appConnects().poll(nonce);
     if (!told) return;
     const { outcome, ...chat } = told;
-    if (outcome.kind === 'linked') await this.firstLook(nonce, outcome, chat);
+    // The look runs as its own unit of work, not inside the alarm pass that polled: its model call is an owner job of its own.
+    if (outcome.kind === 'linked') this.ctx.waitUntil(this.serial(() => this.firstLook(nonce, outcome, chat)));
     else await this.tellConnectOutcome(nonce, chat);
   }
   // Read on connect (connectors/mcp-first-look.ts): one read of the new server, and one line on what Waldo can now see, to the
