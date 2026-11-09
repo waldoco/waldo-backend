@@ -106,7 +106,7 @@ jobs:
     name: Runtime tests (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     # All shards remain diagnostic on failure, but a failed shard must fail CI.
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
