@@ -2129,7 +2129,7 @@ it('R-4 on iMessage: the floor promises a time in the owner\'s zone, and the ret
 it('R-4 on iMessage: a retry that finds no model either still tells the owner, on iMessage, once', async () => {
   const w = await world();
   const { job } = await modelDownOnIMessage(w);
-  const said = zoneTime(Date.now(), OWNER_ZONE);
+  const said = zoneTime((JSON.parse(job.brief_json) as { said_at: number }).said_at, OWNER_ZONE);
   await retryDueNow(w, Date.now() - 1_000);
   const notice = `I still can't reach my model, so I couldn't answer your message from ${said}. Could you send it again in a little while?`;
   const delivery = await scheduledOnIMessage(w, notice);
