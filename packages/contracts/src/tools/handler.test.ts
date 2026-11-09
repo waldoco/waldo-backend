@@ -299,7 +299,7 @@ describe('external-origin tool classification — ADR-0049', () => {
   });
 
   it('a tool whose results are outside text on some calls only stamps each result, and is never also always-external', () => {
-    expect(VARYING_ORIGIN_TOOLS).toEqual(['raise_approval', 'extract_archive', 'get_weather', 'search_episodes', 'search_history']);
+    expect(VARYING_ORIGIN_TOOLS).toEqual(['raise_approval', 'extract_archive', 'get_weather', 'search_episodes', 'search_history', 'read_memory', 'list_reminders']);
     expect(VARYING_ORIGIN_TOOLS.filter(tool => EXTERNAL_ORIGIN_TOOLS.includes(tool))).toEqual([]);
   });
 });

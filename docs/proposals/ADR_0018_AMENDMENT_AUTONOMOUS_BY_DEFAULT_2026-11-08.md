@@ -8,7 +8,7 @@
 2. **"Carries from before" is the whole conversation the model can see** (owner ruling, 9 Nov):
    - the chain since the live summary: a reply that read outside content, a Brief or other machine input, a forward or quote, and a summary marked as covering any of those. The mark carries into every later summary, so a chat that read outside text stays marked; this fails closed;
    - what recall shows: a note whose origin is not the owner's (saved from outside content, or with no recorded origin), and a past message that is not the owner's own words (a whole message with quotes or a file transcript, a quote, a machine note, or any Waldo reply, since a reply stored before replies were marked may have read mail), including through the links it shows; a link to a note, run, task or card always counts;
-   - what `search_episodes` and `search_history` return during the turn, judged the same way: a hit or link that may carry someone else's words taints the turn like the mail it quotes, and a `search_history` entry always does, since a summary records nothing of where its words came from.
+   - what `search_episodes`, `search_history`, `read_memory` and `list_reminders` return during the turn, judged the same way (a note whose origin is not the owner's, a reminder set while reading outside content): a hit or link that may carry someone else's words taints the turn like the mail it quotes, and a `search_history` entry always does, since a summary records nothing of where its words came from.
 
    An email read last turn, or in another chat, therefore can't steer an "ok, handle it" into a send with no card.
 3. **It runs through the same decision as a tapped card.** The desk records an `asked` presentation and opens the row in one commit, then decides it with `decideOnce`: the effect is keyed (`<operation>:apply`), recorded before it is dispatched, and never dispatched inside the SQLite transaction. A replay in the turn answers with the first run; a retry after a restart is fenced by the effect key, the email dedupe key and Message-ID, and the message idempotency key. A revised request closes the card it replaces in the same commit, so the earlier version can no longer go out too. A run that ends before it acts (an account not connected) is settled not done, never left as an open card nobody saw.
@@ -23,7 +23,9 @@
 
 ## Unchanged
 
-Lasting-access grants, owner checks, the taint boundary for outward effects, credential masking, digest-bound payloads (an edited payload is never approved by an earlier yes), one writer per ledger row, and the closure rules. With the switch at `0` every decision is as before, with one tightening that applies either way: `approve_shown` takes a go-ahead only when every part of the owner's message is their own words. `raise_approval undo` is in its schema there too, and refuses.
+Lasting-access grants, owner checks, the taint boundary for outward effects, credential masking, digest-bound payloads (an edited payload is never approved by an earlier yes), one writer per ledger row, and the closure rules. With the switch at `0` every approval decision is as before, with these tightenings that apply either way:
+- `approve_shown` takes a go-ahead only when every part of the owner's message is their own words.
+- `search_episodes`, `search_history`, `read_memory` and `list_reminders` mark what they return as outside content when it may carry someone else's words. That taint has its usual effects in any turn: the health fence (a turn that has shown the owner's readings runs nothing that sends text out for the rest of it), notes saved in that turn kept as Waldo's inference, and memory read as outside content. These fail closed. `raise_approval undo` is in its schema there too, and refuses.
 
 ## Not built here
 
