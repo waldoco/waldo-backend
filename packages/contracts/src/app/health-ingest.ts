@@ -85,9 +85,11 @@ export const healthConsentStateV1Schema = z.strictObject({
   deletion_state: z.enum(['not_required', 'completed']),
 }).refine(copyItsSourceHad, { message: 'a stored grant carries a copy version its source has had', path: ['version'] });
 export const healthConsentListV1Schema = z.strictObject({ consents: z.array(healthConsentStateV1Schema).max(12) });
-// What a client at an older health revision may be shown: no provider rows, since it cannot parse them.
+// What a client at an older health revision may be shown: no row whose source it cannot parse. Provider rows came in revision 2,
+// Google Health's in HEALTH_GOOGLE_HEALTH_REVISION_V1; a build before either parses the list strictly and would refuse it whole.
 export const healthConsentListAtRevisionV1 = <Row extends { source: string }>(consents: readonly Row[], revision: number): Row[] =>
-  revision >= HEALTH_PROVIDER_REVISION_V1 ? [...consents] : consents.filter(row => !isHealthProviderSourceV1(row.source));
+  consents.filter(row => !isHealthProviderSourceV1(row.source) ? true
+    : row.source === 'google_health' ? revision >= HEALTH_GOOGLE_HEALTH_REVISION_V1 : revision >= HEALTH_PROVIDER_REVISION_V1);
 export const healthConsentChangeV1Schema = z.strictObject({ consent: healthConsentStateV1Schema, replayed: z.boolean(), deletion_routed: z.boolean() });
 
 // The permission API is not the physiological producer: keep the observed read origin and
@@ -224,6 +226,8 @@ export const HEALTH_OBSERVED_PEAK_REVISION_V1 = 6;
 // its grams and meal are kept when the store has them. A food's name is another app's text, so it never travels. An older
 // build never sends one, and a backend that does not know it rejects that reading alone.
 export const HEALTH_NUTRITION_REVISION_V1 = 7;
+// Health revision 8: a build that knows Google Health as a consent source. Below it, its rows are left out of the consent list.
+export const HEALTH_GOOGLE_HEALTH_REVISION_V1 = 8;
 const grams = z.number().finite().min(0).max(1_000);
 // Time in five heart-rate zones. The phone reads the beats and buckets them on the bounds it names, so the backend never sees a
 // beat series: lower_bounds_bpm are where zones 2 to 5 start, rising, on the named basis. A provider that reports only zone
