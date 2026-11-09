@@ -46,6 +46,24 @@ describe('chat channel links', () => {
     expect(await links().issue('telegram')).toEqual({ provider: 'telegram', code: CODE, text: `/link ${CODE}`, address: null, send_url: null, expires_in_seconds: 600 });
   });
 
+  it('opens WhatsApp to the Waldo number with the code filled in, where the number is configured', async () => {
+    const env = { ...ALL_ENV, WHATSAPP_WALDO_NUMBER: '919226067544' };
+    expect(await links({ env }).issue('whatsapp')).toEqual({
+      provider: 'whatsapp', code: CODE, text: `waldo ${CODE}`, address: '+919226067544', send_url: `https://wa.me/919226067544?text=waldo%20${CODE}`, expires_in_seconds: 600,
+    });
+    expect(await links({ env }).issue('imessage')).toEqual({ provider: 'imessage', code: CODE, text: `waldo ${CODE}`, address: '+15550100', send_url: `sms:+15550100&body=waldo%20${CODE}`, expires_in_seconds: 600 });
+    expect(await links({ env }).issue('telegram')).toMatchObject({ address: null, send_url: null });
+  });
+
+  it('still offers WhatsApp by code alone when the number is missing or not E.164 digits', async () => {
+    for (const number of ['', '+919226067544', '91 9226 067544', '0919226067544', '1234567', '1234567890123456', '91922606754x']) {
+      const env = { ...ALL_ENV, WHATSAPP_WALDO_NUMBER: number };
+      expect(await links({ env }).offered('whatsapp'), number).toBe(true);
+      expect(await links({ env }).issue('whatsapp'), number).toEqual({ provider: 'whatsapp', code: CODE, text: `waldo ${CODE}`, address: null, send_url: null, expires_in_seconds: 600 });
+    }
+    expect(await links({ env: { WHATSAPP_WALDO_NUMBER: '919226067544' } }).offered('whatsapp')).toBe(false);
+  });
+
   it('asks the directory for a code of the provider asked for, bound to this owner', async () => {
     const directory = auth();
     await links({ auth: directory }).issue('whatsapp');

@@ -5,7 +5,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { approvalDesk, proposalStatus, type ApprovalDesk } from '../src/channels/approvals';
+import { approvalDesk, CARD_SHOWN_IN_FULL, proposalStatus, type ApprovalDesk } from '../src/channels/approvals';
 import { STEP_UP_APPROVALS, appApprovalStepUp } from '../src/channels/console-step-up';
 import { ownerEffectLedger } from '../src/channels/owner-effect-ledger';
 import { APP_REVIEW_MAX_CHARS, appApprovalLink } from '../src/channels/surfaces/app';
@@ -13,6 +13,7 @@ import { whatsappIngressUpdates } from '../src/channels/whatsapp-api';
 import { sha256Hex, type GoogleClient } from '../src/connectors/google';
 import { stableJson } from '../src/context-composer/canonical';
 import { emailProposal } from './fixtures/email-send';
+import { agentMailProposal } from './fixtures/agent-mail-send';
 
 const NOW = Date.UTC(2026, 9, 25, 9, 0, 0);
 const OWNER = 447700900123;
@@ -56,7 +57,13 @@ const owner = (name: string, work: (state: DurableObjectState) => Promise<void>)
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`${name}-${crypto.randomUUID()}`)), (_instance, state) => work(state));
 
 const TASK = { source: 'google_tasks' as const, action: 'update' as const, task_list_id: 'l1', task_id: 't1', changes: { title: 'Buy oat milk' }, reason: 'Owner asked' };
+const GRANT = { scope: { class: 'calendar.move_own_block' as const, account: 'owner@example.test', window: { from: '08:00', to: '19:00' }, weekdays: [1, 2, 3, 4, 5], min_lead_minutes: 30 },
+  limits: { max_per_day: 3, timezone: 'UTC' }, valid_from: Date.UTC(2026, 9, 26), expires_at: Date.UTC(2026, 10, 20) };
 const HOLD = { action: 'create' as const, title: 'Focus', start: iso('2026-10-26T15:00:00Z'), end: iso('2026-10-26T16:00:00Z'), reason: 'deep work' };
+const PLAN = { day: '2026-10-26', time_zone: 'UTC', reason: 'your day, laid out', blocks: [
+  { title: 'Focus', start: '2026-10-26T15:00:00+00:00', end: '2026-10-26T16:00:00+00:00', block: 'deep_work' as const },
+  { title: 'Walk', start: '2026-10-26T16:00:00+00:00', end: '2026-10-26T16:30:00+00:00', block: 'rest' as const },
+] };
 const email = () => emailProposal({ to: ['sam@example.test'], subject: 'Weekly numbers', body: 'Hi Sam', message_id: `<${crypto.randomUUID()}@waldo-send>` });
 const message = (content = 'On my way') => ({ channel: 'whatsapp', content, idempotency_key: `key-${crypto.randomUUID()}` });
 const tainted = async () => {
@@ -68,14 +75,17 @@ const tainted = async () => {
 const PROPOSE: Readonly<Record<keyof typeof STEP_UP_APPROVALS, (desk: ApprovalDesk) => Promise<string>>> = {
   email_send: async desk => desk.proposeSendEmail(await email()),
   message_send: desk => desk.proposeSendMessage(message()),
+  agent_mail_send: async desk => desk.proposeAgentMailSend(await agentMailProposal()),
   calendar_change: desk => desk.propose(HOLD),
+  calendar_plan: desk => desk.proposeCalendarPlan(PLAN),
   calendar_shared: desk => desk.propose({ ...HOLD, attendees: ['sam@example.test'], send_updates: 'all' }),
   google_task_change: desk => desk.proposeGoogleTaskChange(TASK),
   browser_submit: desk => desk.proposeBrowserSubmit({ url: 'https://shop.example/checkout', action: { selector: '#pay', description: 'Pay' }, binding: { total: '12.00' }, steps: [] }),
   mcp_call: desk => desk.proposeMcpCall({ server: 'crm', tool: 'update_deal', args: { id: 1 } }),
   tainted_action: async desk => desk.proposeTaintedAction(await tainted()),
+  standing_grant: desk => desk.proposeStandingGrant(GRANT),
 };
-const HANDED_TO_APP = 'It reaches other people or acts beyond your own things, so it is approved in the Waldo app after a recent email check, not in chat.';
+const HANDED_TO_APP = 'It reaches other people or acts beyond your own things, so it is approved in the Waldo app, not in chat.';
 const CHANGED_IN_APP = 'It reaches other people or acts beyond your own things, so changes to it are asked for in the Waldo app, not in chat.';
 
 describe('a send proposed in a chat surface is handed to the app', () => {
@@ -92,9 +102,9 @@ describe('a send proposed in a chat surface is handed to the app', () => {
         expect(card.text).not.toContain('Reply 1');
         expect(f.presented(id)).toEqual([{ surface: 'app', approvable: 1 }, { surface, approvable: 0 }]);
         expect(f.status(id)).toBe('open');
-        expect(f.desk.placement(id)).toMatchObject({ here: true, hereApprovable: false, appApprovable: true, handsToApp: true });
+        expect(f.desk.placement(id)).toMatchObject({ here: true, hereApprovable: false, appApprovable: true, handsToApp: true, hereInFull: true });
         expect(proposalStatus(f.desk.placement(id), 'shown here', 'Nothing was sent.'))
-          .toBe('The review is shown here, but it is approved only in the Waldo app; the card carries the link. Nothing was sent.');
+          .toBe(`The review is shown here, but it is approved only in the Waldo app; the card carries the link. Nothing was sent. ${CARD_SHOWN_IN_FULL}`);
 
         const [item] = await f.desk.approvals(NOW, { id });
         expect(item!.actions).toContain('approve');
@@ -104,16 +114,32 @@ describe('a send proposed in a chat surface is handed to the app', () => {
       });
     });
 
-    it(`${surface}: an email's card and its receipt hand it to the app, and the console can still approve it`, async () => {
+    it(`${surface}: an email is one card that hands it to the app and says nothing was sent, and the console can still approve it`, async () => {
       await owner(`chat-to-app-email-${surface}`, async state => {
         const f = harness(state, surface);
         const id = await f.desk.proposeSendEmail(await email());
-        const [card, receipt] = f.cards.slice(-2);
+        expect(f.cards).toHaveLength(1);
+        const [card] = f.cards;
         expect(card!.text).toContain('To: sam@example.test');
-        expect(card!.text).toContain(`Review and approve it there: waldo://approvals/${id}`);
+        expect(card!.text).toContain('Subject: Weekly numbers\n\nHi Sam');
+        expect(card!.text).toContain(`${HANDED_TO_APP} Review and approve it there: waldo://approvals/${id}`);
+        expect(card!.text).toContain('Nothing has been sent.');
         expect(card!.buttons).not.toContain('Send it');
-        expect(receipt!.text).toBe(`Email ready for review: the card above has the exact recipients, subject and body. ${HANDED_TO_APP} Review and approve it there: waldo://approvals/${id} Nothing has been sent.`);
         expect(f.presented(id)).toEqual([{ surface: 'app', approvable: 1 }, { surface, approvable: 0 }]);
+        expect(f.desk.placement(id)).toMatchObject({ here: true, handsToApp: true, hereInFull: true });
+      });
+    });
+
+    it(`${surface}: an email too long for the chat card is one summary card that says nothing was sent, never claimed as shown in full`, async () => {
+      await owner(`chat-to-app-email-long-${surface}`, async state => {
+        const f = harness(state, surface);
+        const id = await f.desk.proposeSendEmail(await emailProposal({ to: ['sam@example.test'], subject: 'Long', body: 'x'.repeat(5000), message_id: `<${crypto.randomUUID()}@waldo-send>` }));
+        expect(f.cards).toHaveLength(1);
+        expect(f.cards[0]!.text).not.toContain('x'.repeat(1001));
+        expect(f.cards[0]!.text).toContain(`Review and approve it there: waldo://approvals/${id}`);
+        expect(f.cards[0]!.text).toContain('Nothing has been sent.');
+        expect(f.desk.placement(id).hereInFull).toBeUndefined();
+        expect(proposalStatus(f.desk.placement(id), 'shown here', 'Nothing was sent.')).not.toContain(CARD_SHOWN_IN_FULL);
       });
     });
   }
@@ -142,7 +168,7 @@ describe('a low-risk change to the owner\'s own things stays one tap in chat', (
         else expect(f.cards.at(-1)!.buttons).toEqual(['Do it', 'Modify', 'Not now', "Don't do this"]);
         expect(f.cards.at(-1)!.text).not.toContain('Waldo app');
         expect(f.presented(id)).toEqual([{ surface: 'app', approvable: 1 }, { surface, approvable: 1 }]);
-        expect(f.desk.placement(id)).toEqual({ here: true, hereApprovable: true, app: true, appApprovable: true, ...(surface === 'imessage' ? { numbered: true } : {}) });
+        expect(f.desk.placement(id)).toEqual({ here: true, hereApprovable: true, app: true, appApprovable: true, ...(surface === 'imessage' ? { numbered: true } : {}), hereInFull: true });
         await f.reply(`a:${id}`);
         await f.reply(`a:${id}`);
         expect(f.created).toHaveLength(1);
@@ -287,7 +313,7 @@ describe('every approval kind is either one tap in chat or handed to the app, by
           const gated = appApprovalStepUp(item!, 'approve');
           expect(gated).toBe(STEP_UP_APPROVALS[kind].gated);
           const card = f.cards[0]!;
-          expect(card.buttons.some(label => label === 'Do it' || label === 'Send it') || /Reply 1 to /.test(card.text)).toBe(!gated);
+          expect(card.buttons.some(label => label === 'Do it' || label === 'Send it' || label === 'Allow') || /Reply 1 to /.test(card.text)).toBe(!gated);
           expect(f.desk.placement(id).hereApprovable).toBe(!gated);
           const decided = await f.desk.decide(id, 'a', 'trace', { surface });
           expect(decided.toast === 'Review it in the app').toBe(gated);

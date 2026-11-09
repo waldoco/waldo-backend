@@ -9,6 +9,7 @@ import { conversationForgetSources, redactConversationEntries } from '../src/cha
 import { episodeIndex } from '../src/channels/episodes';
 import { claimStore, FORGOTTEN } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
+import { INTERRUPTED_NOTICES } from '../src/prompt/fixed-lines';
 
 // A thread is its own chat beside main: its own transcript, earlier tool results and fence, the owner's one memory.
 const model = vi.hoisted(() => ({ requests: [] as string[], hold: null as Promise<void> | null, held: 0 }));
@@ -158,7 +159,7 @@ describe('a thread message', () => {
       expect(appThreadOperationResultV1Schema.parse((await call('POST', `/threads/${id}/archive`, { operation_id: '0b6f3c1e-8a2d-4f5b-9c7e-000000000099', expected_revision: 1, archived: true })).body).revision).toBe(2);
       release();
       await vi.waitFor(() => expect(state.storage.kv.get<AppInboxRecord>(`app:inbox-record:${sent.body.message_id}`)?.state).toBe('interrupted'), { timeout: 10_000, interval: 20 });
-      await vi.waitFor(async () => expect(texts(await shown(call, `/threads/${id}`)).at(-1)).toMatch(/^This run did not finish\./), { timeout: 10_000, interval: 50 });
+      await vi.waitFor(async () => expect(texts(await shown(call, `/threads/${id}`)).at(-1)?.startsWith(`${INTERRUPTED_NOTICES.unfinished}\n\n`)).toBe(true), { timeout: 10_000, interval: 50 });
       expect(texts(await shown(call, `/threads/${id}`))).not.toContain('Noted.');
       expect(texts(await shown(call, '/chat/main'))).toEqual([]);
       expect(await call('POST', `/threads/${id}/messages`, { client_message_id: 'thread-client-02', text: 'Again?', expected_revision: 2 })).toEqual({ status: 409, body: { error: 'thread_archived' } });

@@ -1,7 +1,5 @@
 import { CONSOLE_STEP_UP_MS } from '../identity/console-auth';
-import { WHATSAPP_LINK_PATH, whatsappLinkToken } from '../identity/whatsapp-link';
 import { MCP_START_PATH } from '../connectors/mcp-connections';
-import { CONSOLE_DEVICES_PATH } from '../devices/contract';
 import { BROWSER_TRIAL_PATH } from './browser-trial-consent';
 import { CONSOLE_ACTION_PATH, CONSOLE_GOOGLE_START_PATH, type ConsoleSession } from './console';
 import { CONTROL_ACTION_PATH } from './dashboard-control-actions';
@@ -13,25 +11,38 @@ import type { AppChatProviderV1 } from '../../../contracts/src/app/onboarding';
 
 type StepUpRule = Readonly<{ gated: boolean; why: string }>;
 
-// Every action a console registry accepts. An action whose effect outlives this browser's session (a bound chat, a paired
-// Mac, a connected account or tool, a standing grant, an invite, the account's removal), or that sends to other people as the
-// owner, needs an email code from the last two hours, so a copied 30-day cookie cannot do it. Reading, arranging, deciding
-// one change to the owner's own things once, and removing access do not.
-// A test fails when a registry gains an action this table does not name.
+// Every action a console registry accepts. By owner ruling (beta), a signed-in session does everything without a fresh
+// email code: connecting accounts and tools, linking chats, pairing devices, editing memory and sending. Only deleting the
+// account, which cannot be undone, still needs an email code from the last two hours. Each reason says what the action
+// reaches, so the table stays the place to gate one again.
+// A test fails when a registry gains an action this table does not name. The app's stepUpGated treats an unnamed action as
+// gated; the console gates only the actions marked gated here.
 export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'spot.confirm': { gated: false, why: 'Confirms one thing Waldo remembers; grants no access.' },
   'spot.dismiss': { gated: false, why: 'Dismisses one thing Waldo remembers; grants no access.' },
   'spot.forget': { gated: false, why: 'Forgets one thing Waldo remembers; removes, grants nothing.' },
-  'spot.pin': { gated: true, why: 'Makes a claim the owner\'s own word on every turn: a copied cookie could plant anything Waldo then treats as said by the owner.' },
+  'spot.pin': { gated: false, why: 'Makes a claim the owner\'s own word on every turn: a copied cookie could plant anything Waldo then treats as said by the owner.' },
   'spot.unpin': { gated: false, why: 'Takes one line out of what Waldo keeps in mind every turn; removes, grants nothing.' },
-  'spot.edit': { gated: true, why: 'Writes new text as the owner\'s own word: a copied cookie could plant anything Waldo then treats as said by the owner.' },
+  'spot.area': { gated: false, why: 'Moves a claim between areas of the owner\'s life; moved out of body or mind, a pattern could reach a job that reads outside content.' },
+  'spot.quiet': { gated: false, why: 'Stops Waldo raising one thing on its own; keeps it, grants nothing.' },
+  'spot.unquiet': { gated: false, why: 'Lets Waldo raise one thing on its own again; grants no access.' },
+  'spot.edit': { gated: false, why: 'Writes new text as the owner\'s own word: a copied cookie could plant anything Waldo then treats as said by the owner.' },
   // The app's memory actions, named for themselves so each carries its own reason.
-  'claim.pin': { gated: true, why: 'Puts a claim in what Waldo reads every turn as the owner\'s own word: a stale or stolen app session could plant text.' },
+  'claim.pin': { gated: false, why: 'Puts a claim in what Waldo reads every turn as the owner\'s own word: a stale or stolen app session could plant text.' },
   'claim.unpin': { gated: false, why: 'Takes one line out of what Waldo keeps in mind every turn; removes, grants nothing.' },
-  'claim.edit': { gated: true, why: 'Writes new text as the owner\'s own word from the app: a stale or stolen app session could plant text.' },
+  'claim.confirm': { gated: false, why: 'Makes one thing Waldo inferred count as the owner\'s own word: a stale or stolen app session could confirm a guess.' },
+  'claim.forget': { gated: false, why: 'Forgets one thing Waldo remembers; removes, grants nothing.' },
+  'claim.dismiss': { gated: false, why: 'Stops Waldo using one thing it remembers; removes, grants nothing.' },
+  'claim.quiet': { gated: false, why: 'Stops Waldo raising one thing on its own; keeps it, grants nothing.' },
+  'claim.unquiet': { gated: false, why: 'Lets Waldo raise one thing on its own again; grants no access.' },
+  'claim.edit': { gated: false, why: 'Writes new text as the owner\'s own word from the app: a stale or stolen app session could plant text.' },
   'node.forget': { gated: false, why: 'Forgets one remembered item; removes, grants nothing.' },
   'node.confirm': { gated: false, why: 'Confirms one remembered pattern as the owner\'s own; grants no access.' },
-  'node.correct': { gated: true, why: 'Replaces a remembered pattern with words stored as the owner\'s own, which every later turn reads.' },
+  'node.correct': { gated: false, why: 'Replaces a remembered pattern with words stored as the owner\'s own, which every later turn reads.' },
+  'person.confirm': { gated: false, why: 'Says one person in memory is someone the owner knows; grants no access.' },
+  'person.rename': { gated: false, why: 'Writes a person\'s name as the owner\'s own word from the app: a stale or stolen app session could rename someone.' },
+  'person.ring': { gated: false, why: 'Sets how close one person is to the owner; grants no access.' },
+  'person.forget': { gated: false, why: 'Forgets one person and what memory held about them; removes, grants nothing.' },
   'forget.retry': { gated: false, why: 'Runs a pending forget cleanup again; removes, grants nothing.' },
   'proactivity.set': { gated: false, why: 'Sets how often Waldo reaches out; grants no access.' },
   'proactive_surface.set': { gated: false, why: 'Picks which already-linked chat Waldo reaches out on; links nothing new.' },
@@ -47,58 +58,60 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'approval.approve': { gated: false, why: 'Decides one held calendar change once; leaves no standing grant.' },
   'approval.skip': { gated: false, why: 'Declines one held change.' },
   'approval.undo': { gated: false, why: 'Reverses one decision.' },
-  'approval.send': { gated: true, why: 'Sends one held email or message as the owner, and an email reaches other people; it cannot be called back.' },
+  'approval.send': { gated: false, why: 'Sends one held email or message the owner read in full on its card; by owner ruling (beta) a signed-in session sends without a fresh code.' },
   'approval.edit': { gated: false, why: 'Asks Waldo for a new draft of one held send; sends nothing.' },
   'file.remove': { gated: false, why: 'Removes one file the owner sent; grants nothing.' },
   'session.signout': { gated: false, why: 'Ends this browser\'s session; removes access.' },
   'session.signout.all': { gated: false, why: 'Ends every console session; removes access.' },
   'session.revoke': { gated: false, why: 'Signs one other device out, with the sessions its renewals replaced; removes access.' },
-  'google.connect': { gated: true, why: 'Connects a Google account Waldo keeps using after this session.' },
+  'google.connect': { gated: false, why: 'Connects a Google account Waldo keeps using after this session.' },
   'google.disconnect': { gated: false, why: 'Disconnects a Google account; removes access.' },
-  'mcp.connect': { gated: true, why: 'Connects a tool server Waldo keeps calling after this session.' },
+  'mcp.connect': { gated: false, why: 'Connects a tool server Waldo keeps calling after this session.' },
   'mcp.disconnect': { gated: false, why: 'Disconnects a tool server; removes access.' },
-  'granola.connect': { gated: true, why: 'Connects Granola, whose meeting notes Waldo keeps reading after this session.' },
+  'granola.connect': { gated: false, why: 'Connects Granola, whose meeting notes Waldo keeps reading after this session.' },
   'granola.disconnect': { gated: false, why: 'Disconnects Granola; removes access.' },
   'app.connect': { gated: false, why: 'Opens a catalogue app\'s own sign-in; once the owner approves there, that app\'s read-only tools run without asking.' },
   'app.disconnect': { gated: false, why: 'Disconnects a catalogue app; removes access.' },
-  'mcp.runs': { gated: true, why: 'Lets a connected tool run without asking: a standing grant.' },
-  'telegram.link': { gated: true, why: 'Issues a code that binds a Telegram chat, which can then send console sign-in links.' },
+  'mcp.runs': { gated: false, why: 'Lets a connected tool run without asking: a standing grant.' },
+  'telegram.link': { gated: false, why: 'Issues a code that binds a Telegram chat, which can then send console sign-in links.' },
   'telegram.unlink': { gated: false, why: 'Unlinks Telegram; removes access.' },
-  'whatsapp.link': { gated: true, why: 'Issues a code that binds a WhatsApp number to this account.' },
-  'whatsapp.confirm': { gated: true, why: 'Binds a WhatsApp number to this account, replacing the linked one.' },
+  'whatsapp.link': { gated: false, why: 'Issues a code that binds a WhatsApp number to this account.' },
+  'whatsapp.confirm': { gated: false, why: 'Binds a WhatsApp number to this account, replacing the linked one.' },
   'whatsapp.unlink': { gated: false, why: 'Unlinks WhatsApp; removes access.' },
-  'imessage.enroll': { gated: true, why: 'Sets up the owner\'s iMessage number and issues a code that binds a handle.' },
-  'imessage.link': { gated: true, why: 'Issues a code that binds an iMessage handle, which can then send console sign-in links.' },
+  'imessage.enroll': { gated: false, why: 'Sets up the owner\'s iMessage number and issues a code that binds a handle.' },
+  'imessage.link': { gated: false, why: 'Issues a code that binds an iMessage handle, which can then send console sign-in links.' },
   'imessage.unlink': { gated: false, why: 'Unlinks iMessage; removes access.' },
-  'imessage.pair': { gated: true, why: 'Issues a code that pairs a Mac host to this account.' },
-  'imessage.pair_shared': { gated: true, why: 'Issues a code that pairs the shared number\'s host to this account.' },
-  'imessage.verify': { gated: true, why: 'Sets which Apple ID a pairing Mac host treats as the owner.' },
-  'imessage.activate': { gated: true, why: 'Puts a paired Mac host live for this account.' },
-  'imessage.activate_shared': { gated: true, why: 'Puts the shared number\'s host live for this account.' },
+  'imessage.pair': { gated: false, why: 'Issues a code that pairs a Mac host to this account.' },
+  'imessage.pair_shared': { gated: false, why: 'Issues a code that pairs the shared number\'s host to this account.' },
+  'imessage.verify': { gated: false, why: 'Sets which Apple ID a pairing Mac host treats as the owner.' },
+  'imessage.activate': { gated: false, why: 'Puts a paired Mac host live for this account.' },
+  'imessage.activate_shared': { gated: false, why: 'Puts the shared number\'s host live for this account.' },
   'imessage.revoke': { gated: false, why: 'Revokes a Mac host; removes access.' },
-  'device.pair': { gated: true, why: 'Issues a code that pairs a Mac to this account.' },
+  'device.pair': { gated: false, why: 'Issues a code that pairs a Mac to this account.' },
   'device.revoke': { gated: false, why: 'Unpairs a Mac; removes access.' },
   'device.query': { gated: false, why: 'Asks a Mac already paired one question; creates no new access.' },
   'device.notify': { gated: false, why: 'Shows one notice on a Mac already paired; creates no new access.' },
-  'invite.create': { gated: true, why: 'Creates an invite that brings a new owner in.' },
-  'invite.member': { gated: true, why: 'Invites someone to this Waldo.' },
+  'invite.create': { gated: false, why: 'Creates an invite that brings a new owner in.' },
+  'invite.member': { gated: false, why: 'Invites someone to this Waldo.' },
   'invite.revoke': { gated: false, why: 'Withdraws an unused invite; removes access.' },
   'account.delete': { gated: true, why: 'Deletes the account, which cannot be undone.' },
   'phone.sms_send': { gated: false, why: 'Texts a code only to the number on file, capped per day; grants nothing.' },
   'phone.sms_check': { gated: false, why: 'Proves the number on file with the code texted to it: possession, not the session, is the proof.' },
-  'phone.set': { gated: true, why: 'Changes the number Waldo knows the owner by: with it, a copied session could text a code to its own phone and prove that number on this account.' },
+  'phone.set': { gated: false, why: 'Changes the number Waldo knows the owner by: with it, a copied session could text a code to its own phone and prove that number on this account.' },
+  'agent_mail.claim': { gated: false, why: 'Opens an address that brings outside mail into Waldo; changing it gives up the old one for 180 days.' },
+  'agent_mail.release': { gated: false, why: 'Stops the owner\'s Waldo address receiving mail; removes access.' },
 };
 
-// Console routes that start access or record consent outside an action. A gated route is refused whatever its method.
+// Console routes that start access or record consent outside an action. A route marked gated is refused whatever its method.
 // startsFlow: a GET there begins a flow rather than reads, so the cross-site guard refuses it when another site sends
 // it. A path ending in "/" is a prefix that needs a token after it. This is the only list of flow-starting GETs: a new
 // one belongs here, or behind a POST.
 export const STEP_UP_ROUTES: Readonly<Record<string, StepUpRule & Readonly<{ startsFlow: boolean }>>> = {
-  [CONSOLE_PHOTON_START_PATH]: { gated: true, startsFlow: true, why: 'Starts connecting Photon, which binds an iMessage line to this account.' },
+  [CONSOLE_PHOTON_START_PATH]: { gated: false, startsFlow: true, why: 'Starts connecting Photon, which binds an iMessage line to this account.' },
   [BROWSER_TRIAL_PATH]: { gated: false, startsFlow: true, why: 'Consents to one 60-second public fixture session with no sign-ins; it cannot be renewed.' },
   '/console/browser-handoff': { gated: false, startsFlow: false, why: 'Shows or ends a browser run already in progress; it ends with that run.' },
-  [MCP_START_PATH]: { gated: false, startsFlow: true, why: 'Follows a single-use start link that only a gated mcp.connect mints.' },
-  [CONSOLE_GOOGLE_START_PATH]: { gated: false, startsFlow: true, why: 'Follows a single-use start link that only a gated google.connect mints.' },
+  [MCP_START_PATH]: { gated: false, startsFlow: true, why: 'Follows a single-use start link that only mcp.connect mints.' },
+  [CONSOLE_GOOGLE_START_PATH]: { gated: false, startsFlow: true, why: 'Follows a single-use start link that only google.connect mints.' },
   '/console/workspace': { gated: false, startsFlow: false, why: 'Uploads, reads or removes the owner\'s own files; grants no access.' },
 };
 const FLOW_STARTS = Object.entries(STEP_UP_ROUTES).filter(([, rule]) => rule.startsFlow).map(([path]) => path);
@@ -110,34 +123,25 @@ const GATED_ACTIONS = gated(STEP_UP_ACTIONS), GATED_ROUTES = gated(STEP_UP_ROUTE
 const ACTION_PATHS = new Set([CONSOLE_ACTION_PATH, CONTROL_ACTION_PATH, OWNER_CONTROLS_ACTION_PATH]);
 export const CONSOLE_CONFIRM_HREF = '/console/signin?confirm=1';
 
-// The sign-in page returns only to targets on its own allowlist, so this names the two classic pages it accepts.
-const returnTarget = (action: string, form: FormData | null): string | null => {
-  if (action === 'device.pair') return CONSOLE_DEVICES_PATH;
-  const token = form?.get('token');
-  const path = typeof token === 'string' ? `${WHATSAPP_LINK_PATH}/${token}` : '';
-  return action === 'whatsapp.confirm' && whatsappLinkToken(path) ? path : null;
-};
-const confirmPage = (target: string | null) => {
-  const href = target ? `${CONSOLE_CONFIRM_HREF}&amp;return_to=${encodeURIComponent(target)}` : CONSOLE_CONFIRM_HREF;
-  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Confirm it's you</title></head><body><h1>Confirm it's you</h1><p>This needs an email code from the last ${CONSOLE_STEP_UP_MS / 3_600_000} hours. You stay signed in.</p><p><a href="${href}">Get an email code</a></p></body></html>`,
+const confirmPage = () =>
+  new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Confirm it's you</title></head><body><h1>Confirm it's you</h1><p>This needs an email code from the last ${CONSOLE_STEP_UP_MS / 3_600_000} hours. You stay signed in.</p><p><a href="${CONSOLE_CONFIRM_HREF}">Get an email code</a></p></body></html>`,
     { status: 403, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'same-origin' } });
-};
 
-// Refuses a lasting-access action or route unless this browser proved an email code recently. It runs before any handler
-// and reads only the action name or path, so every console path that can grant such access passes through it.
+// Refuses a gated action or route unless this browser proved an email code recently. It runs before any handler and reads
+// only the action name or path, so every console path passes through it.
 export const consoleStepUpRefusal = async (request: Request, session: ConsoleSession, now: number): Promise<Response | null> => {
   const path = new URL(request.url).pathname;
   const route = GATED_ROUTES.has(path);
   if (!route && (request.method !== 'POST' || !ACTION_PATHS.has(path))) return null;
   if (session.verified_at !== undefined && now - session.verified_at < CONSOLE_STEP_UP_MS) return null;
-  if (route) return confirmPage(null);
+  if (route) return confirmPage();
   const form = await request.clone().formData().catch(() => null);
   const action = form?.get('action');
   if (typeof action !== 'string' || !GATED_ACTIONS.has(action)) return null;
   if (path !== CONSOLE_ACTION_PATH || (request.headers.get('accept') ?? '').includes('application/json')) {
     return Response.json({ error: 'step_up_required' }, { status: 403, headers: DASHBOARD_OVERVIEW_HEADERS });
   }
-  return confirmPage(returnTarget(action, form));
+  return confirmPage();
 };
 
 // error is what a client acts on; code names it for the core app problem shape.
@@ -150,7 +154,7 @@ export const appLinkStepUpAction = (provider: AppChatProviderV1): string => `${p
 
 // App routes with no console action of their own.
 export const APP_STEP_UP_ROUTES: Readonly<Record<string, StepUpRule>> = {
-  [`${APP_PROVIDERS_PATH}/connect`]: { gated: true, why: 'Connects a health provider Waldo keeps syncing after this session.' },
+  [`${APP_PROVIDERS_PATH}/connect`]: { gated: false, why: 'Connects a health provider Waldo keeps syncing after this session.' },
 };
 
 export { STEP_UP_APPROVALS, appApprovalStepUp } from './approval-step-up';

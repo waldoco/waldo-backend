@@ -8,9 +8,10 @@ import {
   runHooks,
   scribeSanitisePostLlmCallHook,
   scribeSanitisePostToolUseHook,
+  scribeSanitisePreToolUseHook,
   type HookRuntimeContext,
 } from '../src/hooks/registry';
-import { sanitise } from '../src/scribe/sanitiser';
+import { DEEP_ENCODING_MARKER, sanitise } from '../src/scribe/sanitiser';
 
 type TestContext = {
   calls: string[];
@@ -230,7 +231,11 @@ describe('hook registry', () => {
       tool_permissions: [
         'get_crs',
         'get_health',
+        'get_screen_time',
+        'get_device_context',
+        'get_weather',
         'query_calendar',
+        'query_phone_calendar',
         'connect_service',
         'get_communication',
         'search_communication',
@@ -244,6 +249,7 @@ describe('hook registry', () => {
         'search_connector',
         'propose_action',
         'send_message',
+        'skills_load',
       ],
       canary_tokens: validCanaries,
       iteration_count: 0,
@@ -757,6 +763,24 @@ describe('hook registry', () => {
     );
     if (draftResult.event !== 'PreToolUse') throw new Error('unreachable');
     expect(draftResult.args).toEqual(draftArgs);
+  });
+
+  it('refuses executable arguments that carry a value encoded past the decode limit, with the decode reason, and withholds it from rewritten ones', async () => {
+    const ctx = runtimeCtx({ sanitise, toolArgSourceTaint: 'external' });
+    const deep = btoa(btoa(btoa(`the code is ${validCanaries[0]}`)));
+    const executable = [
+      ['propose_action', { tool: 'log_workout', args: { type: `run ${deep}`, duration_minutes: 30 }, reasoning: 'r' }],
+      ['workspace_write', { title: 'Notes', text: `see ${deep}` }],
+      ['draft_email', { to: ['a@b.example'], subject: 's', body_markdown: `see ${deep}` }],
+    ] as const;
+    for (const [tool, args] of executable) {
+      await expect(runHooks('PreToolUse', { event: 'PreToolUse', tool, args }, ctx, { registry: [scribeSanitisePreToolUseHook] }), tool)
+        .rejects.toMatchObject({ hook: 'tool_arg_sanitise', reason: 'scribe:invalid_payload' });
+    }
+    const rewritten = await runHooks('PreToolUse', { event: 'PreToolUse', tool: 'browse_page', args: { url: `https://example.com/?q=${deep}` } }, ctx, { registry: [scribeSanitisePreToolUseHook] });
+    if (rewritten.event !== 'PreToolUse') throw new Error('unreachable');
+    expect(JSON.stringify(rewritten.args)).not.toContain(deep);
+    expect(JSON.stringify(rewritten.args)).toContain(DEEP_ENCODING_MARKER);
   });
 
   it('halts PostLLMCall when the Scribe sanitiser rejects generated text', async () => {

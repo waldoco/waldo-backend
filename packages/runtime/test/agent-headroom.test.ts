@@ -125,8 +125,8 @@ describe('the end of a turn', () => {
     });
     expect(exit).toBe('budget_exhausted');
     expect(text).toBe(unfinishedReply('budget_exhausted', ['get_context']));
-    expect(text).toContain('get context');
-    expect(text).toMatch(/continue/);
+    expect(text).not.toContain('context');
+    expect(text).toMatch(/partway through this\. Reply and I'll pick it up/);
   });
 
   it('hands back progress when no time is left for an answer', async () => {
@@ -143,9 +143,10 @@ describe('the end of a turn', () => {
 
   it('says nothing was finished when no step completed', () => {
     const text = unfinishedReply('time_exhausted', []);
-    expect(text).toMatch(/ran out of time/);
-    expect(text).toMatch(/continue/);
-    expect(unfinishedReply('budget_exhausted', ['a', 'b', 'a'])).toContain('a, b.');
+    expect(text).toMatch(/ran out of time before I got anywhere/);
+    expect(text).toMatch(/Reply and I'll try again/);
+    // Tool names are machinery: which reads ran never reaches the owner, only whether any did.
+    expect(unfinishedReply('budget_exhausted', ['search_communication', 'query_calendar'])).toBe(unfinishedReply('budget_exhausted', ['get_context']));
   });
 });
 

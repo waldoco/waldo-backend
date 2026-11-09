@@ -236,7 +236,7 @@ describe('sanitiseFailureReason', () => {
 });
 
 describe('redaction', () => {
-  it('is exactly the six redaction kinds, in order', () => {
+  it('is exactly the eight redaction kinds, in order', () => {
     expect(redactionKindSchema.options).toEqual([
       'email',
       'phone',
@@ -245,6 +245,7 @@ describe('redaction', () => {
       'credit_card',
       'instruction_pattern',
       'health_value',
+      'deep_encoding',
     ]);
   });
 

@@ -48,7 +48,7 @@ export const dayOf = (night: number) => new Date(Date.parse(`${FIRST_DAY}T00:00:
 const hourlyOf = (day: string, hrvMethod: 'rmssd' | 'sdnn', hrv: number, pulse: number, daylight: number, movement: number): HourlyBucket[] =>
   [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19].map(hour => ({
     startAt: new Date(Date.parse(`${day}T00:00:00Z`) + hour * 3_600_000).toISOString(),
-    heartRate: pulse, hrv, hrvMethod, daylightMinutes: daylight, movementMinutes: movement, activeEnergyKcal: null,
+    heartRate: pulse, hrvReadings: [{ value: hrv, method: hrvMethod }], daylightMinutes: daylight, movementMinutes: movement, activeEnergyKcal: null,
   }));
 
 export const history = (spec: OwnerSpec, nights: number, events: Events = () => ({})): DayRecord[] => {

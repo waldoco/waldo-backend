@@ -52,6 +52,9 @@ jobs:
       # after all tests pass (every run 2026-09-25, incl. docs-only commits) - the lane's 4
       # shards exit cleanly (#154). The scenario harness runs here, in the required job, below.
       - name: Verify (core)
+        env:
+          # The PR head the merge ref was built from (empty on push and dispatch), for guard-do-migration-lineage.
+          WALDO_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: node scripts/guards/guard-package-manager.mjs && pnpm -r typecheck && pnpm verify:node && pnpm verify:supabase && pnpm verify:guards
 
       # Report only: prints where Worker startup CPU goes so a timing budget can be set from runner
@@ -92,6 +95,10 @@ jobs:
       - name: Console ticket tenant routing
         working-directory: packages/runtime
         run: npx vitest run --config vitest.console-ticket.config.ts
+      # The main config excludes it: its Durable Object bindings must be the deployed entry's forwarders.
+      - name: Deployed entry forwarding
+        working-directory: packages/runtime
+        run: npx vitest run --config vitest.lazy-entry.config.ts
 
   # Matches the in-lane gate exactly: 4 shards, each a small process that exits cleanly.
   # Falsifier for coverage: the shard totals must sum to the full runtime test count.

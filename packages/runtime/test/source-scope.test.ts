@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import { provisionDoSchema } from '../src/do-schema';
-import { toolNameSchema } from '@waldo/contracts';
+import { EXTERNAL_ORIGIN_TOOLS, toolNameSchema } from '@waldo/contracts';
 import { CHILD_TOOL_NAMES } from '../src/conversation/subagent';
 import { guardExternalReads, EXTERNAL_READ_TOOLS, SOURCE_SCOPE_CLASS, SourceScopeStore } from '../src/tools/source-scope';
 
@@ -90,6 +90,8 @@ it('every tool name is classified deny or allow, and denies() agrees with the cl
     expect(Object.keys(SOURCE_SCOPE_CLASS).sort()).toEqual([...toolNameSchema.options].sort());
     for (const name of ['search_communication', 'get_communication', 'read_thread', 'read_drive', 'query_calendar', 'query_availability', 'web_search', 'browse_page', 'browse_act', 'read_memory', 'search_episodes', 'read_document', 'search_connector', 'read_tool_output', 'workspace_read', 'workspace_list', 'read_mcp_tool', 'call_mcp_tool'] as const) expect(s.denies(name)).toBe(true);
     for (const name of ['get_context', 'set_reminder', 'list_reminders', 'cancel_reminder', 'draft_email', 'set_proactivity'] as const) expect(s.denies(name)).toBe(false);
+    // Writers that read nothing back stay usable under the limit, the owner's stated health settings among them.
+    for (const name of ['log_meal', 'log_workout', 'set_sleep_need'] as const) expect(s.denies(name), name).toBe(false);
   });
 });
 
@@ -106,7 +108,7 @@ it('guard denies a read handler only while the limit is on', async () => {
   });
 });
 
-it('delegate children: every child tool is either denied under the limit or content-free, and the guard survives the child filter', async () => {
+it('delegate children: every outside read a child holds is denied under the limit, and the guard survives the child filter', async () => {
   await withDo('scope-child', async (sql) => {
     const s = new SourceScopeStore(sql);
     s.set('pasted_only', owner, NOW);
@@ -118,6 +120,8 @@ it('delegate children: every child tool is either denied under the limit or cont
       const r = await h.handle() as { ok: boolean; code?: string };
       if (r.ok) open.push(h.name); else expect(r.code).toBe('forbidden');
     }
-    expect(open).toEqual(['get_context']);
+    // What stays open reads only the owner's own Waldo state (clock, reminders, lists, skills), never a source.
+    expect(open).toContain('get_context');
+    for (const name of open) expect(EXTERNAL_ORIGIN_TOOLS as readonly string[], name).not.toContain(name);
   });
 });

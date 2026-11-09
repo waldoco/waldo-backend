@@ -186,8 +186,8 @@ it('a reply carrying a memory notice keeps its receipt line last', async () => {
     const store = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
     const tools = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async () => undefined });
     const args: Parameters<typeof createOwnerResponder> = ['fixture', undefined, store, undefined, undefined, tools];
-    const notice = 'Saved to memory from our earlier chat: "Prefers window seats" (c9).';
-    args[21] = { memoryNotice: () => ({ line: notice, taken: () => undefined }) };
+    const notice = 'I kept a note about your health from earlier. Say if you want it changed or gone, or turn health notes off in settings.';
+    args[21] = { memoryNotice: () => ({ line: notice, modelLine: `${notice}\n[Not shown to the owner: the notes are c9.]`, taken: () => undefined }) };
     seen.outputs.push([{ type: 'function_call', call_id: 'tea', name: 'remember', arguments: JSON.stringify({ kind: 'preference', text: 'Prefers tea', evidence_quote: 'tea' }) }], []);
     const reply = await createOwnerResponder(...args).respond(ownerTyped({ traceId: 'tg-notice', conversationRef: 'owner', surface: 'app', text: 'I prefer tea' }), timer);
     expect(reply).toBe(`Done\n\n${notice}\n\nDone: memory stored`);

@@ -24,6 +24,34 @@ describe('set_schedule_preference health mode', () => {
   });
 });
 
+describe('set_schedule_preference time', () => {
+  it('sets the time the Brief or the Close comes every day, as a 24-hour local time', () => {
+    for (const [card, time] of [['brief', '07:10'], ['close', '21:30'], ['brief', '00:00'], ['close', '23:59']] as const)
+      expect(setSchedulePreferenceArgsSchema.parse({ action: 'time', card, time })).toEqual({ action: 'time', card, time });
+  });
+
+  it('refuses a time without its card, a card without its time, a malformed time, another card, and either beside on, off or reset', () => {
+    for (const input of [{ action: 'time', card: 'brief' }, { action: 'time', time: '07:10' }, { action: 'time', card: 'brief', time: '7:10' }, { action: 'time', card: 'brief', time: '24:00' },
+      { action: 'time', card: 'brief', time: '7:10am' }, { action: 'time', card: 'midday', time: '14:00' }, { action: 'time', card: 'brief', time: '07:10', kind: 'daily_brief' },
+      { action: 'on', kind: 'daily_brief', time: '07:10' }, { action: 'off', kind: 'daily_brief', card: 'brief' }, { action: 'reset', card: 'close', time: '21:30' }])
+      expect(setSchedulePreferenceArgsSchema.safeParse(input).success, JSON.stringify(input)).toBe(false);
+  });
+});
+
+describe('set_schedule_preference timezone', () => {
+  it('sets the owner\'s time zone by its IANA name, and nothing else rides with it', () => {
+    for (const timezone of ['Asia/Kolkata', 'America/Argentina/Buenos_Aires', 'UTC']) {
+      expect(setSchedulePreferenceArgsSchema.parse({ action: 'timezone', timezone })).toEqual({ action: 'timezone', timezone });
+    }
+  });
+  it('refuses a zone without its action, the action without a zone, a zone beside a card or kind, and a zone too long to be one', () => {
+    for (const input of [{ action: 'on', kind: 'daily_brief', timezone: 'Asia/Kolkata' }, { action: 'timezone' }, { action: 'timezone', timezone: '' },
+      { action: 'timezone', timezone: 'Asia/Kolkata', card: 'brief' }, { action: 'timezone', timezone: 'Asia/Kolkata', kind: 'nightly' }, { action: 'timezone', timezone: 'A'.repeat(65) }]) {
+      expect(setSchedulePreferenceArgsSchema.safeParse(input).success, JSON.stringify(input)).toBe(false);
+    }
+  });
+});
+
 describe('open_loop source_ref', () => {
   // A loop bound to a mail source skips the owner's card (the taint gate's one exception), so the model must read it as a
   // guess at follow-up, not as something the owner agreed to.

@@ -1,8 +1,11 @@
 import type { RunEffectScope } from '../channels/run-effect-scope';
+import { peelWhy, type TrailRead, type TrailStep } from './why-trail';
+import type { RunOrigin } from '@waldo/contracts';
 import {
   TOOL_PERMISSIONS,
   ALWAYS_ON_TOOLS,
   EXTERNAL_ORIGIN_TOOLS,
+  VARYING_ORIGIN_TOOLS,
   LAZY_DISCOVERY_TRIGGERS,
   errorCodeSchema,
   rungBlockedOutcomeSchema,
@@ -12,6 +15,8 @@ import {
   sourceTaintSchema,
   trustedToolEffectReceiptUnavailableSchema,
   toolError,
+  toolResultFixSchema,
+  TOOL_SPILL_VIEW_MAX_CHARS,
   toolNameSchema,
   triggerTypeSchema,
   waldoCardSchema,
@@ -36,11 +41,13 @@ import {
 import {
   HookHaltError,
   HOOK_REGISTRY,
+  invalidArgumentsCause,
   runHooks,
+  type ArgumentIssue,
   type HookRegistry,
   type HookRuntimeContext,
 } from '../hooks/registry';
-import { guardForOffload, sanitiseDenialLabel } from '../scribe/sanitiser';
+import { DEEP_ENCODING_MARKER, guardForOffload, sanitiseDenialLabel } from '../scribe/sanitiser';
 import { sha256Hex, stableJson } from '../context-composer/canonical';
 import type { StoredPut, ToolOutputStore } from '../conversation/tool-output-store';
 
@@ -64,7 +71,11 @@ export type ParseToolCallsResult =
 export type ToolDispatcherContext = HookRuntimeContext & {
   authenticatedUserId: string;
   assertTaskSourceCurrent?: () => Promise<void>;
-  ownerInitiated?: boolean;
+  // What started this run, set once at its start; a standing grant acts only for the origins its class allows.
+  runOrigin?: RunOrigin;
+  // Set by the host only on a turn the owner's own message started, with no one else's words in it: that message's ref and
+  // when the turn took it. A tool that acts on the owner's word reads it here, never from its arguments.
+  ownerMessage?: Readonly<{ messageRef: string; receivedAt: number }>;
   // Where this turn's outside content came from, one entry per tainting result: the result's own taint_origin (for example
   // mcp:<server>), else '*'. The tool loop keeps it next to toolArgSourceTaint and never instead of it; absent means unknown.
   taintOrigins?: readonly string[];
@@ -78,7 +89,18 @@ export type ToolDispatcherContext = HookRuntimeContext & {
   // the handler can show a part of it and read_tool_output pages the rest from the guarded text it returns. Null when the
   // guard refuses the text.
   keepOutput?: (text: string) => Readonly<{ stored: StoredPut; text: string }> | null;
+  // "Why this changed": the turn's successful reads, which the tool loop records while the trail is on, and the steps a
+  // proposing call claimed (its `why`, taken off its arguments).
+  turnReads?: TrailRead[];
+  // Set by the tool loop once a request has shown the model the owner's health readings (conversation/health-fence).
+  healthShown?: boolean;
+  claimedWhy?: unknown;
+  whySteps?: readonly TrailStep[];
+  // Where the owner asked: the surface and conversation of the owner's own turn, or of the turn whose card an approved replay
+  // runs. Work it starts answers there.
+  askedIn?: AskedIn;
 };
+export type AskedIn = Readonly<{ surface: string; conversation_ref: string }>;
 
 export type DispatchToolResult = (
   | {
@@ -265,11 +287,12 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return failDispatch(call.id, tool.data, toolError('approval_denied'), 'forbidden', 'approval_denied');
   }
   const hookCtx: Ctx = handler.proposal_only === true ? { ...ctx, proposalOnlyCall: tool.data } : ctx;
+  const { args: callArgs, why: claimedWhy } = handler.takes_why === true ? peelWhy(call.args) : { args: call.args, why: undefined };
 
   let preToolPayload: Extract<HookPayload, { event: 'PreToolUse' }> = {
     event: 'PreToolUse',
     tool: tool.data,
-    args: call.args,
+    args: callArgs,
   };
   try {
     const nextPayload = await runTerminalHooks(
@@ -298,11 +321,13 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
   let args: unknown;
   try {
     args = handler.schema.parse(preToolPayload.args);
-  } catch {
+  } catch (error) {
+    // A handler's schema can be stricter than the registry's, which the PreToolUse hook already checked.
+    const issues = (error as { issues?: unknown } | null)?.issues;
     return failDispatch(
       call.id,
       tool.data,
-      toolError('invalid_args'),
+      toolError('invalid_args', Array.isArray(issues) ? invalidArgumentsCause(issues as readonly ArgumentIssue[]) : undefined),
       'invalid_args',
       'invalid_args',
     );
@@ -341,7 +366,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     } else {
       ctx.runScope?.admit();
       const store = options.offload;
-      handlerResult = await handler.handle(args, { ...ctx, toolCallId: call.id, ...(store ? { keepOutput: (text: string) => keepGuarded(call.id, text, ctx, store) } : {}) });
+      handlerResult = await handler.handle(args, { ...ctx, toolCallId: call.id, ...(claimedWhy === undefined ? {} : { claimedWhy }), ...(store ? { keepOutput: (text: string) => keepGuarded(call.id, text, ctx, store) } : {}) });
     }
   } catch (error) {
     // A trusted adapter can have crossed its side-effect boundary before an unexpected throw.
@@ -385,7 +410,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     const full = JSON.stringify(parsedHandlerResult.data);
     if (full.length > (options.maxResultJsonChars ?? DEFAULT_MAX_RESULT_JSON_CHARS)) {
       ctx.runScope?.admit();
-      const offloaded = offloadResult(call.id, tool.data, full, ctx, options.offload);
+      const offloaded = offloadResult(call.id, tool.data, full, ctx, options.offload, spillView(handler, parsedHandlerResult.data));
       if (!offloaded.ok) return withTrustedEffect(offloaded.result, settledTrustedEffect);
       effectiveHandlerResult = { ...parsedHandlerResult, data: offloaded.data };
     }
@@ -441,7 +466,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
       return withTrustedEffect(failDispatch(
         call.id,
         tool.data,
-        toolError(finalResult.code, 'The tool failed and its error text was too large to show.', finalResult.blocked),
+        toolError(finalResult.code, 'The tool failed and its error text was too large to show.', finalResult.blocked, finalResult.fix),
         finalResult.code,
         'tool_result_error',
       ), settledTrustedEffect);
@@ -450,7 +475,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return withTrustedEffect(failDispatch(
       call.id,
       tool.data,
-      toolError(finalResult.code, error, finalResult.blocked),
+      toolError(finalResult.code, error, finalResult.blocked, finalResult.fix),
       finalResult.code,
       'tool_result_error',
       finalResult.source_taint,
@@ -473,7 +498,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     if (options.offload !== undefined) {
       const full = JSON.stringify(finalResult.data);
       ctx.runScope?.admit();
-      const offloaded = offloadResult(call.id, tool.data, full, ctx, options.offload);
+      const offloaded = offloadResult(call.id, tool.data, full, ctx, options.offload, spillView(handler, finalResult.data));
       if (!offloaded.ok) return withTrustedEffect(offloaded.result, settledTrustedEffect);
       return withTrustedEffect({
         ok: true,
@@ -644,7 +669,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
       return withTrustedEffect(failDispatch(
         input.callRef,
         tool.data,
-        toolError(finalResult.code, 'The tool failed and its error text was too large to show.', finalResult.blocked),
+        toolError(finalResult.code, 'The tool failed and its error text was too large to show.', finalResult.blocked, finalResult.fix),
         finalResult.code,
         'tool_result_error',
       ), input.effect);
@@ -652,7 +677,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     return withTrustedEffect(failDispatch(
       input.callRef,
       tool.data,
-      toolError(finalResult.code, error, finalResult.blocked),
+      toolError(finalResult.code, error, finalResult.blocked, finalResult.fix),
       finalResult.code,
       'tool_result_error',
       finalResult.source_taint,
@@ -907,19 +932,41 @@ function failParse(error: string, repaired: boolean): ParseToolCallsResult & { o
 
 
 type OffloadedResult =
-  | { ok: true; data: { stored_output: string; total_chars: number; stored_chars: number; truncated: boolean; head: string; read_with: 'read_tool_output' } }
+  | { ok: true; data: { stored_output: string; total_chars: number; stored_chars: number; truncated: boolean; head?: string; inline?: unknown; read_with: 'read_tool_output'; withheld?: { count: number; note: string } } }
   | { ok: false; result: DispatchToolResult };
 
 // Raw external output is never stored: the offload guard runs the full sanitise pipeline minus
 // the destination size cap (storage is not model context). Only guarded text reaches the store,
 // so a read-back slice can never expose unguarded content, including a secret that would span
 // read chunks.
+// The handler's spill view of a result it is about to store, or undefined when it has none or the view cannot be built
+// from this data (a hook may have reshaped it): then the stored text's first characters are shown, as for any tool.
+const spillView = (handler: Pick<ToolHandler<unknown, unknown, ToolDispatcherContext>, 'spill'> | undefined, data: unknown): unknown => {
+  if (handler?.spill === undefined) return undefined;
+  try { return handler.spill(data); } catch { return undefined; }
+};
+// The view passes the same guard as the stored text, and is shown only when it survives whole and still parses.
+const guardedView = (view: unknown, ctx: ToolDispatcherContext): unknown => {
+  const text = JSON.stringify(view);
+  if (typeof text !== 'string' || text.length > TOOL_SPILL_VIEW_MAX_CHARS) return undefined;
+  const guarded = guardForOffload({ payload: text, destination: 'internal_context', canary_tokens: ctx.session?.canary_tokens ?? [], source_taint: 'external' });
+  if (!guarded.ok || typeof guarded.payload !== 'string') return undefined;
+  try { return JSON.parse(guarded.payload); } catch { return undefined; }
+};
+
+// The stored text's first characters, never ending in half of a character that takes two code units.
+const headOf = (text: string) => {
+  const last = text.charCodeAt(3_999);
+  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? 3_999 : 4_000);
+};
+
 const offloadResult = (
   callId: string,
   tool: ToolName,
   full: string,
   ctx: ToolDispatcherContext,
   store: ToolOutputStore,
+  view?: unknown,
 ): OffloadedResult => {
   const guarded = guardForOffload({
     payload: full,
@@ -947,11 +994,19 @@ const offloadResult = (
   }
   const text = typeof guarded.payload === 'string' ? guarded.payload : JSON.stringify(guarded.payload);
   const stored = store.put(text, { call_id: callId });
+  // A cut store still shows the view: it is built from the whole result, so it keeps every item's flags, and next says
+  // what read_tool_output cannot reach.
+  const inline = view === undefined ? undefined : guardedView(view, ctx);
+  const withheld = guarded.redactions.find((redaction) => redaction.kind === 'deep_encoding')?.count;
   return {
     ok: true,
     // total_chars is the full guarded length; stored_chars + truncated say what is actually
     // retrievable - the receipt never claims retrievable output the store did not keep
-    data: { stored_output: stored.id, total_chars: stored.original_chars, stored_chars: stored.stored_chars, truncated: stored.truncated, head: text.slice(0, 4_000), read_with: 'read_tool_output' },
+    data: {
+      stored_output: stored.id, total_chars: stored.original_chars, stored_chars: stored.stored_chars, truncated: stored.truncated, ...(inline === undefined ? { head: headOf(text) } : { inline }), read_with: 'read_tool_output',
+      ...(stored.truncated ? { next: `Only the first ${stored.stored_chars} characters were kept, so read_tool_output cannot reach the rest. Make the same call asking for less (a smaller limit, a narrower range, or one item) to see what was cut.` } : {}),
+      ...(withheld === undefined ? {} : { withheld: { count: withheld, note: `${withheld === 1 ? 'One value was' : `${withheld} values were`} withheld in place as ${DEEP_ENCODING_MARKER}, because the content was encoded too deeply to check. Nothing else in the result was withheld for this.` } }),
+    },
   };
 };
 
@@ -1040,7 +1095,7 @@ function reasonFromHook(hook: string): ToolDispatchErrorReason {
 
 type ParsedToolResult =
   | { ok: true; data: unknown; source_taint: SourceTaint; card?: WaldoCard }
-  | { ok: false; error: string; code: ErrorCode; source_taint?: 'external'; connect?: ConnectIntent; blocked?: RungBlockedOutcome };
+  | { ok: false; error: string; code: ErrorCode; source_taint?: 'external'; connect?: ConnectIntent; blocked?: RungBlockedOutcome; fix?: string };
 
 function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | null {
   if (!isRecord(value) || typeof value.ok !== 'boolean') {
@@ -1057,7 +1112,7 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
     const sourceTaint = sourceTaintSchema.safeParse(value.source_taint);
     if (!sourceTaint.success) return null;
     const expectsExternal = EXTERNAL_ORIGIN_TOOLS.includes(tool);
-    if (expectsExternal !== (sourceTaint.data === 'external')) return null;
+    if (!VARYING_ORIGIN_TOOLS.includes(tool) && expectsExternal !== (sourceTaint.data === 'external')) return null;
     if (!Object.prototype.hasOwnProperty.call(value, 'card')) {
       return { ok: true, data: value.data, source_taint: sourceTaint.data };
     }
@@ -1072,7 +1127,7 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
   if (
     !hasOnlyKeys(
       value,
-      expectsExternal || value.source_taint === null ? ['ok', 'error', 'code', 'source_taint', 'connect', 'blocked'] : ['ok', 'error', 'code', 'connect', 'blocked'],
+      expectsExternal || value.source_taint === null ? ['ok', 'error', 'code', 'source_taint', 'connect', 'blocked', 'fix'] : ['ok', 'error', 'code', 'connect', 'blocked', 'fix'],
     )
   ) {
     return null;
@@ -1087,7 +1142,9 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
   if (connect !== undefined && !connect.success) return null;
   const blocked = value.blocked === undefined ? undefined : rungBlockedOutcomeSchema.safeParse(value.blocked);
   if (blocked !== undefined && !blocked.success) return null;
-  const typed = { ...(connect?.success ? { connect: connect.data } : {}), ...(blocked?.success ? { blocked: blocked.data } : {}) };
+  const fix = value.fix === undefined ? undefined : toolResultFixSchema.safeParse(value.fix);
+  if (fix !== undefined && !fix.success) return null;
+  const typed = { ...(connect?.success ? { connect: connect.data } : {}), ...(blocked?.success ? { blocked: blocked.data } : {}), ...(fix?.success ? { fix: fix.data } : {}) };
 
   if (expectsExternal) {
     if (value.source_taint !== 'external') return null;

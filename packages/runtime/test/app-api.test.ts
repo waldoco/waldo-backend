@@ -119,6 +119,22 @@ describe('app sign-in and main chat routes', () => {
       ['GET', '/app/v1/threads?state=active', 'owner-1'], ['POST', '/app/v1/threads/thr_11111111-2222-4333-8444-555555555555/rename', 'owner-1']]);
     expect(keys).toEqual(['app-read:owner-1', 'app-chat-send:owner-1']);
   });
+  it('forwards the calendar day to the credential owner DO as a read, and refuses it without a credential or over the limit', async () => {
+    forwards.length = 0;
+    const keys: string[] = [];
+    const counted = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async ({ key }: { key: string }) => { keys.push(key); return { success: true }; } } } as never;
+    const auth = fakeAuth().auth, day = (headers: Record<string, string>) => new Request('https://w.test/app/v1/calendar/day?day=2026-10-27', { headers });
+    expect(await (await handleApp(day({ authorization: `Bearer ${CREDENTIAL}` }), counted, auth))!.json()).toEqual({ forwarded: true });
+    expect(forwards.map(r => [r.method, new URL(r.url).pathname + new URL(r.url).search, r.headers.get('x-waldo-do-name')])).toEqual([['GET', '/app/v1/calendar/day?day=2026-10-27', 'owner-1']]);
+    expect(keys).toEqual(['app-read:owner-1']);
+    expect((await handleApp(day({}), counted, auth))!.status).toBe(401);
+    const limited = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: false }) } } as never;
+    expect((await handleApp(day({ authorization: `Bearer ${CREDENTIAL}` }), limited, auth))!.status).toBe(429);
+    expect(forwards).toHaveLength(1);
+    expect((await handleApp(post('/app/v1/calendar/day', {}, { authorization: `Bearer ${CREDENTIAL}` }), counted, auth))!.status).toBe(405);
+    expect(forwards).toHaveLength(1);
+    expect(keys).toEqual(['app-read:owner-1', 'app-chat-send:owner-1']);
+  });
   it('rate limits chat sends per owner and fails closed without the limiter', async () => {
     const auth = fakeAuth().auth;
     const limited = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: false }) } } as never;
@@ -271,17 +287,25 @@ describe('Connect iMessage from the app', () => {
     expect(issued).toEqual(['owner-1:imessage']); // always the authenticated owner's own code
   });
 
-  it('issues no code to a session signed in over two hours ago, or whose sign-in time cannot be read', async () => {
+  it('issues a code to a session signed in over two hours ago, without asking for a fresh email code', async () => {
     const issued: string[] = [];
     const issueProviderLinkCode = async (doName: string, provider: string) => { issued.push(`${doName}:${provider}`); return 'ABCDEFGHJK'; };
-    const signedIn = (created_at: string) => fakeAuth({ issueProviderLinkCode, listSessions: async () => [{ session: await linkCodeHash(SESSION), created_at, last_seen_at: created_at, signed_in_at: created_at }] } as never).auth;
-    const old = await handleApp(authed(), withAddress(), signedIn(new Date(Date.now() - 3 * 60 * 60_000).toISOString()));
-    expect([old!.status, await old!.json()]).toEqual([403, { error: 'step_up_required', code: 'step_up_required' }]);
-    expect((await handleApp(authed(), withAddress(), fakeAuth({ issueProviderLinkCode, listSessions: async () => [] } as never).auth))!.status).toBe(403);
-    expect((await handleApp(authed(), withAddress(), fakeAuth({ issueProviderLinkCode, listSessions: async () => { throw new Error('directory down'); } } as never).auth))!.status).toBe(503);
-    expect(issued).toEqual([]);
-    expect((await handleApp(authed(), withAddress(), signedIn(new Date(Date.now() - 90 * 60_000).toISOString())))!.status).toBe(200);
+    const old = new Date(Date.now() - 3 * 60 * 60_000).toISOString();
+    const auth = fakeAuth({ issueProviderLinkCode, listSessions: async () => [{ session: await linkCodeHash(SESSION), created_at: old, last_seen_at: old, signed_in_at: old }] } as never).auth;
+    expect((await handleApp(authed(), withAddress(), auth))!.status).toBe(200);
     expect(issued).toEqual(['owner-1:imessage']);
+  });
+
+  it('starts a health provider connection for a session signed in over two hours ago', async () => {
+    const old = new Date(Date.now() - 3 * 60 * 60_000).toISOString();
+    const auth = fakeAuth({ listSessions: async () => [{ session: await linkCodeHash(SESSION), created_at: old, last_seen_at: old, signed_in_at: old }] } as never).auth;
+    const answer = { provider: 'whoop', authorize_url: 'https://api.prod.whoop.com/oauth/oauth2/auth?client_id=x&state=AbCd1234', expires_at: 1_790_000_000_000 };
+    const owner = { ...(env() as object), OWNER_DO: { idFromName: (n: string) => n, get: () => ({ fetch: async () => Response.json(answer) }) } } as never;
+    const request = new Request('https://w.test/app/v1/health/providers/connect', { method: 'POST',
+      headers: { authorization: `Bearer ${CREDENTIAL}`, 'x-waldo-app-contract': 'health=2', 'content-type': 'application/json' },
+      body: JSON.stringify({ request_id: 'provider-connect-1', provider: 'whoop' }) });
+    const response = await handleApp(request, owner, auth);
+    expect([response!.status, await response!.json()]).toEqual([200, answer]);
   });
 
   it('refuses without a session, other methods, and where the Waldo number is not configured', async () => {
@@ -290,5 +314,33 @@ describe('Connect iMessage from the app', () => {
     expect((await handleApp(authed('GET'), withAddress(), auth))!.status).toBe(405);
     expect((await handleApp(authed(), env(), auth))!.status).toBe(503);
     expect((await handleApp(authed(), withAddress(), fakeAuth({ issueProviderLinkCode: async () => null } as never).auth))!.status).toBe(503);
+  });
+});
+
+describe('a chat attachment upload at the Worker', () => {
+  const upload = (headers: Record<string, string>) => new Request('https://w.test/app/v1/chat/uploads', {
+    method: 'POST', body: new Uint8Array(1024).fill(7), headers: { authorization: `Bearer ${CREDENTIAL}`, ...headers } });
+  const on = () => ({ ...(env() as object), APP_CHAT_ATTACHMENTS: '1' }) as never;
+
+  it('refuses an upload its headers already rule out without reading its bytes or reaching the owner object', async () => {
+    for (const [headers, status, error] of [
+      [{ 'content-type': 'image/png', 'x-waldo-upload-kind': 'sticker' }, 400, 'invalid_kind'],
+      [{ 'content-type': 'image/png' }, 400, 'invalid_kind'],
+      [{ 'content-type': 'image/png', 'x-waldo-upload-kind': 'voice' }, 415, 'unsupported_type'],
+      [{ 'content-type': 'application/pdf', 'x-waldo-upload-kind': 'file', 'x-waldo-upload-name': '%E0%A4%A' }, 400, 'invalid_name'],
+      [{ 'content-type': 'application/pdf', 'x-waldo-upload-kind': 'file' }, 400, 'invalid_name'],
+    ] as const) {
+      forwards.length = 0;
+      const request = upload(headers);
+      const response = (await handleApp(request, on(), fakeAuth().auth))!;
+      expect([error, response.status, await response.json(), request.bodyUsed, forwards.length]).toEqual([error, status, { error }, false, 0]);
+    }
+  });
+
+  it('forwards an upload whose headers pass to the owner object, with its kind and name', async () => {
+    forwards.length = 0;
+    const response = (await handleApp(upload({ 'content-type': 'application/pdf', 'x-waldo-upload-kind': 'file', 'x-waldo-upload-name': 'lease.pdf' }), on(), fakeAuth().auth))!;
+    expect(await response.json()).toEqual({ forwarded: true });
+    expect([forwards[0]!.headers.get('x-waldo-upload-kind'), forwards[0]!.headers.get('x-waldo-upload-name'), (await forwards[0]!.arrayBuffer()).byteLength]).toEqual(['file', 'lease.pdf', 1024]);
   });
 });

@@ -63,7 +63,7 @@ const LONG_CONVERSATION_RECEIPTS: readonly Receipt[] = [
 ];
 
 export const LONG_CONVERSATION_SCENARIO: NightlyScenario = {
-  id: 'r3-long-conversation', title: 'A conversation past the window keeps its first instruction and its promise', pain: 'context', start: START,
+  id: 'r3-long-conversation', live_subset: true, title: 'A conversation past the window keeps its first instruction and its promise', pain: 'context', start: START,
   world: { history: LONG_HISTORY },
   steps: [
     { say: `Please forget everything about the ${FORGOTTEN_TOPIC}.` },

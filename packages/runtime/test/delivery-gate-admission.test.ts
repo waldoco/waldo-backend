@@ -39,6 +39,11 @@ function admit(store: DeliveryGateStore, user: string, candidate: DeliveryCandid
 const prep = (eventId: string, now: number): DeliveryCandidate => ({
   push_class: 'pre_activity_spot', trigger: 'pre_activity_spot', event_id: eventId, expires_at: now + 30 * 60_000,
 });
+// The class whose cooldown is still scoped per event, so the event-scoped store paths stay pinned.
+const SYNC_COOLDOWN_MS = 1_440 * 60_000;
+const syncError = (eventId: string, now: number): DeliveryCandidate => ({
+  push_class: 'sync_error', trigger: 'patrol', event_id: eventId, expires_at: now + 2 * SYNC_COOLDOWN_MS,
+});
 
 describe('delivery gate admission through the store', () => {
   it('charges counted budget for pre_activity_spot without exempt telemetry', async () => {
@@ -52,33 +57,47 @@ describe('delivery gate admission through the store', () => {
     });
   });
 
-  it('scopes pre_activity_spot cooldown by event id while class count still accumulates', async () => {
+  it('admits a prep note for the same meeting again and for every other meeting: no cap, no cooldown', async () => {
     await withStore((store) => {
       const now = at('2026-01-01T09:00:00Z');
-      expect(admit(store, USER, prep('meeting-a', now), now).verdict).toBe('send');
+      for (const [event, offset] of [['meeting-a', 0], ['meeting-a', 60_000], ['meeting-b', 60_000], ['meeting-c', 120_000]] as const) {
+        // The counted APNs budget may degrade a later note off APNs; the chat and in-app channels still take it.
+        const admission = admit(store, USER, prep(event, now + offset), now + offset);
+        expect(['send', 'degrade']).toContain(admission.verdict);
+        expect(admission.channels).toEqual(expect.arrayContaining(['telegram', 'in_app']));
+      }
+      expect(store.readClassState(USER, prep('meeting-b', now), now).pre_activity_spot?.count).toBe(4);
+      expect(store.readHeld(USER, 'meeting-a')).toBeNull();
+    });
+  });
+
+  it('scopes an event cooldown by event id while class count still accumulates', async () => {
+    await withStore((store) => {
+      const now = at('2026-01-01T09:00:00Z');
+      expect(admit(store, USER, syncError('sync-a', now), now).verdict).toBe('send');
       // The same event inside its cooldown holds; a different event is not held by it.
-      const repeat = admit(store, USER, prep('meeting-a', now + 60_000), now + 60_000);
-      expect(repeat).toMatchObject({ verdict: 'hold', reason: 'cooldown_active', hold_until: now + 60 * 60_000 });
-      expect(admit(store, USER, prep('meeting-b', now + 60_000), now + 60_000).verdict).toBe('send');
-      expect(store.readClassState(USER, prep('meeting-b', now), now).pre_activity_spot?.count).toBe(2);
+      const repeat = admit(store, USER, syncError('sync-a', now + 60_000), now + 60_000);
+      expect(repeat).toMatchObject({ verdict: 'hold', reason: 'cooldown_active', hold_until: now + SYNC_COOLDOWN_MS });
+      expect(admit(store, USER, syncError('sync-b', now + 60_000), now + 60_000).verdict).toBe('send');
+      expect(store.readClassState(USER, syncError('sync-b', now), now).sync_error?.count).toBe(2);
       expect(store.readBudget(USER, now).sends_total).toBe(2);
-      expect(store.readHeld(USER, 'meeting-a')).toMatchObject({ push_class: 'pre_activity_spot', hold_until: repeat.hold_until });
+      expect(store.readHeld(USER, 'sync-a')).toMatchObject({ push_class: 'sync_error', hold_until: repeat.hold_until });
     });
   });
 
   it('admits the same event again exactly when its cooldown ends, not a millisecond before', async () => {
     await withStore((store) => {
       const now = at('2026-01-01T09:00:00Z');
-      const cooldownEnd = now + 60 * 60_000;
-      expect(admit(store, USER, prep('meeting-repeat', now), now).verdict).toBe('send');
-      expect(admit(store, USER, prep('meeting-repeat', cooldownEnd - 1), cooldownEnd - 1)).toMatchObject({ verdict: 'hold', reason: 'cooldown_active', hold_until: cooldownEnd });
-      expect(admit(store, USER, prep('meeting-repeat', cooldownEnd), cooldownEnd)).toMatchObject({ verdict: 'send', reason: null });
+      const cooldownEnd = now + SYNC_COOLDOWN_MS;
+      expect(admit(store, USER, syncError('sync-repeat', now), now).verdict).toBe('send');
+      expect(admit(store, USER, syncError('sync-repeat', cooldownEnd - 1), cooldownEnd - 1)).toMatchObject({ verdict: 'hold', reason: 'cooldown_active', hold_until: cooldownEnd });
+      expect(admit(store, USER, syncError('sync-repeat', cooldownEnd), cooldownEnd)).toMatchObject({ verdict: 'send', reason: null });
     });
   });
 
   it('never holds a candidate with no prior send for cooldown, whatever the clock reads', () => {
     for (const now of [0, 1, 60 * 60_000 - 1]) {
-      const candidate: DeliveryCandidate = { push_class: 'pre_activity_spot', trigger: 'pre_activity_spot', event_id: 'first-ever', expires_at: null };
+      const candidate: DeliveryCandidate = { push_class: 'sync_error', trigger: 'patrol', event_id: 'first-ever', expires_at: null };
       expect(computeAdmission({ candidate, classState: {}, countedSends: 0, now })).toMatchObject({ verdict: 'send', reason: null });
     }
   });
@@ -90,14 +109,14 @@ describe('delivery gate admission through the store', () => {
       const second = 'own_c48e1a6d59b203f7e4c9180a6d2b5f73';
       sql.exec('INSERT INTO daily_push_budget (user_id, local_date, sends_total) VALUES (?, ?, ?)', first, '2026-01-01', DAILY_PUSH_BUDGET.pro);
       // The first tenant is at the counted cap: it degrades, yet still records the shared event's cooldown.
-      expect(admit(store, first, prep('shared-tenant-event', now), now)).toMatchObject({ verdict: 'degrade', budget_charged: false });
+      expect(admit(store, first, syncError('shared-tenant-event', now), now)).toMatchObject({ verdict: 'degrade', budget_charged: false });
       // A principal-only scope would hold the second tenant on the shared event and degrade the distinct one.
-      expect(admit(store, second, prep('shared-tenant-event', now), now)).toMatchObject({ verdict: 'send', budget_charged: true });
-      expect(admit(store, second, prep('second-tenant-budget-event', now), now)).toMatchObject({ verdict: 'send', budget_charged: true });
+      expect(admit(store, second, syncError('shared-tenant-event', now), now)).toMatchObject({ verdict: 'send', budget_charged: true });
+      expect(admit(store, second, syncError('second-tenant-budget-event', now), now)).toMatchObject({ verdict: 'send', budget_charged: true });
       expect(store.readBudget(first, now).sends_total).toBe(DAILY_PUSH_BUDGET.pro);
       expect(store.readBudget(second, now).sends_total).toBe(2);
       const cooldowns = sql.exec<{ user_id: string; event_id: string }>(
-        'SELECT user_id, event_id FROM event_cooldowns WHERE push_class = ? ORDER BY user_id, event_id', 'pre_activity_spot').toArray();
+        'SELECT user_id, event_id FROM event_cooldowns WHERE push_class = ? ORDER BY user_id, event_id', 'sync_error').toArray();
       expect(cooldowns).toEqual([
         { user_id: first, event_id: 'shared-tenant-event' },
         { user_id: second, event_id: 'second-tenant-budget-event' },
@@ -203,12 +222,12 @@ describe('delivery gate admission through the store', () => {
   it('refuses to record a non-held admission and deletes a held candidate on request', async () => {
     await withStore((store) => {
       const now = at('2026-01-01T09:00:00Z');
-      const candidate = prep('meeting-held', now);
+      const candidate = syncError('meeting-held', now);
       const send = computeAdmission({ candidate, classState: {}, countedSends: 0, now });
       expect(() => store.recordHeld(USER, candidate, send)).toThrow('recordHeld requires a held admission');
-      const hold = computeAdmission({ candidate, classState: { pre_activity_spot: { count: 0, last_sent_at: now } }, countedSends: 0, now });
+      const hold = computeAdmission({ candidate, classState: { sync_error: { count: 0, last_sent_at: now } }, countedSends: 0, now });
       store.recordHeld(USER, candidate, hold);
-      expect(store.readHeld(USER, 'meeting-held')).toMatchObject({ event_id: 'meeting-held', hold_until: now + 60 * 60_000 });
+      expect(store.readHeld(USER, 'meeting-held')).toMatchObject({ event_id: 'meeting-held', hold_until: now + SYNC_COOLDOWN_MS });
       store.deleteHeld(USER, 'meeting-held');
       expect(store.readHeld(USER, 'meeting-held')).toBeNull();
     });

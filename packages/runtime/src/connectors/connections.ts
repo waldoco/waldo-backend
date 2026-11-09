@@ -19,7 +19,8 @@ export type GoogleProxy = Readonly<{
   // grant: the edge attaches the token and runs the call; the runtime never sees a bearer.
   mcpCall(doName: string, connection: string, serverUrl: string, tool: string, args: Record<string, unknown>, intent?: ProxyIntent): Promise<unknown>;
   // Calendar push channels: the edge starts and stops them with the grant's token.
-  calendarWatch(doName: string, connection: string, input: Readonly<{ channelId: string; token: string; address: string }>): Promise<CalendarWatch>;
+  // A calendar other than the primary needs the edge's events_watch; an older edge refuses it as an unknown operation.
+  calendarWatch(doName: string, connection: string, input: Readonly<{ channelId: string; token: string; address: string; calendarId?: string }>): Promise<CalendarWatch>;
   stopChannel(doName: string, connection: string, channel: Readonly<{ channelId: string; resourceId: string }>): Promise<void>;
   gmailWatch(doName: string, connection: string, topic: string): Promise<GmailWatch>;
   revoke(doName: string, connection: string, account: string): Promise<GoogleRevokeResult>;
@@ -65,7 +66,7 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
         // moveEvent/cancelEvent's etag) would cross the wire as null and fail typed validation.
         const wireArgs = [...args];
         while (wireArgs.length > 0 && wireArgs[wireArgs.length - 1] === undefined) wireArgs.pop();
-        const effect = ['draft','sendRaw','createEvent','moveEvent','cancelEvent','createTask','patchTask'].includes(method);
+        const effect = ['draft','sendRaw','createEvent','moveEvent','cancelEvent','restoreEvent','createTask','patchTask'].includes(method);
         if(effect&&!intent)throw new ProxyIntentError('intent_required');
         // This Worker reads calendar detail fields and the owner's status, so it asks for both; a proxy that predates either ignores its key.
         const { data } = await post({ do_name: doName, op: 'call', connection, method, args: wireArgs, calendar_details: true, calendar_owner_status: true, ...(effect?{intent_id:intent!.id}:{}) });
@@ -84,7 +85,8 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       return(await post({ do_name: doName, op: 'mcp_call', connection, server_url: serverUrl, tool, args: [args], intent_id:intent.id, ...(readOnly ? { read_only: true } : {}) })).data;
     },
     calendarWatch: async (doName, connection, input) => {
-      const { data } = await post({ do_name: doName, op: 'calendar_watch', connection, channel_id: input.channelId, token: input.token, address: input.address }) as { data?: { channelId?: unknown; resourceId?: unknown; expiration?: unknown } };
+      const other = input.calendarId !== undefined && input.calendarId !== 'primary';
+      const { data } = await post({ do_name: doName, op: other ? 'events_watch' : 'calendar_watch', connection, channel_id: input.channelId, token: input.token, address: input.address, ...(other ? { calendar_id: input.calendarId } : {}) }) as { data?: { channelId?: unknown; resourceId?: unknown; expiration?: unknown } };
       if (data?.channelId !== input.channelId || typeof data.resourceId !== 'string' || typeof data.expiration !== 'number' || !Number.isSafeInteger(data.expiration)) throw new Error('calendar watch reply malformed');
       return { channelId: input.channelId, resourceId: data.resourceId, expiration: data.expiration };
     },

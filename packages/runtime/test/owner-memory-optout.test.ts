@@ -9,7 +9,7 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (body: u
 } }; } }));
 const { createOwnerResponder } = await import('../src/channels/owner-turn');
 const { rememberArgsSchema } = await import('@waldo/contracts');
-const memory = { pendingTopics: () => [], claims: () => [], allClaims: () => [], recall: () => [], nodes: () => [], edges: () => [], barriers: () => [], forgetGeneration: () => 0, settle: () => {} };
+const memory = { pendingTopics: () => [], claims: () => [], allClaims: () => [], recall: () => [], nodes: () => [], edges: () => [], statements: () => [], barriers: () => [], forgetGeneration: () => 0, settle: () => {} };
 const responder = () => createOwnerResponder('fixture', undefined, memory as never, undefined, undefined, [{ name: 'remember', description: 'fixture', schema: rememberArgsSchema, autonomy_gated: false, trigger_allowlist: ['user_message'], mutates_state: true, handle: async () => { calls.remember++; return { ok: true, data: { id: 1, status: 'stored' }, source_taint: null }; } }] as never);
 const advertised = () => JSON.parse(calls.inputs[0]!).tools.some((tool: { name: string }) => tool.name === 'remember');
 const timer = <T>(_name: string, work: () => Promise<T>) => work();

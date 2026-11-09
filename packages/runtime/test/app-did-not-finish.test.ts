@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { INTERRUPTED_NOTICES } from '../src/prompt/fixed-lines';
 import { appHistoryResultV1Schema } from '../../contracts/src/app/core';
 import { APP_UPDATE_BASE, appSubjectFor } from '../src/channels/app-api';
 import type { AppInboxRecord } from '../src/channels/app-inbox';
@@ -8,7 +9,7 @@ import { APP_INBOX_DUE_KEY, rearmSharedAlarm, TASK_JOBS_DUE_KEY } from '../src/s
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
-const NOTICE = 'This run did not finish. In-flight changes may still finish. Please check before retrying changes.';
+const NOTICE = INTERRUPTED_NOTICES.unfinished;
 const model = vi.hoisted(() => ({ requests: [] as string[], fail: false, effectThenFail: false }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
@@ -115,7 +116,7 @@ describe('an app turn that does not finish', () => {
       const unfinished = await send(owner(), state, name, 'ledger-client-01', 'Set quiet hours from 9pm to 7am.');
       expect(unfinished.outcome).toBe('completed');
       const [, promise] = await shown(owner(), name);
-      expect(promise!.text).toMatch(/^I can't answer properly right now\. I'll come back to you by \d{2}:\d{2}\.\n\nDone: proactivity set$/);
+      expect(promise!.text).toMatch(/^I can't answer properly right now\. I'll come back to you by \d{1,2}(:\d{2})?[ap]m\.\n\nDone: proactivity set$/);
       expect(record(state, unfinished.id).landed).toBeUndefined();
       model.effectThenFail = false; model.requests = [];
       expect((await send(owner(), state, name, 'ledger-client-02', 'Are my quiet hours set?')).outcome).toBe('completed');
@@ -134,7 +135,7 @@ describe('an app turn that does not finish', () => {
       const messages = await shown(owner(), name);
       expect(messages.map(message => [message.role, message.parent_id])).toEqual([['user', null], ['assistant', failed.id]]);
       expect(notices(messages)).toHaveLength(0);
-      expect(messages[1]!.text).toMatch(/^I can't answer properly right now\. I'll come back to you by \d{2}:\d{2}\.$/);
+      expect(messages[1]!.text).toMatch(/^I can't answer properly right now\. I'll come back to you by \d{1,2}(:\d{2})?[ap]m\.$/);
       expect(state.storage.sql.exec<{ kind: string; status: string }>('SELECT kind, status FROM task_jobs').toArray()).toEqual([{ kind: 'retry_turn', status: 'queued' }]);
       const [{ due_at: due }] = state.storage.sql.exec<{ due_at: number }>('SELECT due_at FROM task_jobs').toArray() as [{ due_at: number }];
       await vi.waitFor(async () => expect(await state.storage.getAlarm()).toBeLessThanOrEqual(due), { timeout: 2_000, interval: 20 });
@@ -175,6 +176,7 @@ describe('an app turn that does not finish', () => {
       await owner().alarm();
       expect(notices(await shown(owner(), name))).toHaveLength(1);
       expect(await state.storage.get(APP_INBOX_DUE_KEY)).toBeNull();
+      expect(state.storage.sql.exec("SELECT trace, ok, note FROM trace_log WHERE hop = 'turn_aborted'").toArray()).toEqual([{ trace: id, ok: 0, note: 'running' }]);
     });
   });
 

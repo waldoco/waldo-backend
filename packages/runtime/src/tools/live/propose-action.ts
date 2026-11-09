@@ -5,18 +5,18 @@ import {
 } from '@waldo/contracts';
 import type { z } from 'zod';
 import type { RunEffectScope } from '../../channels/run-effect-scope';
-import { proposalStatus, type CardPlacement, type TaintedActionOutcome, type TaintedActionProposal } from '../../channels/approvals';
-import { TOOL_ARG_SCHEMAS, taintedCallNeedsOwnerApproval } from '../../hooks/registry';
+import { callWhy, proposalStatus, type ProposeOptions, type CardPlacement, type TaintedActionOutcome, type TaintedActionProposal } from '../../channels/approvals';
+import { TAINT_REFUSED_CAUSE, TOOL_ARG_SCHEMAS, taintedCallNeedsOwnerApproval, taintedCallRefused } from '../../hooks/registry';
 import { argumentDigest, dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../dispatcher';
+import { TOOL_RECORDS } from '../records';
 
 export type TaintedActionDesk = Readonly<{
-  proposeTaintedAction(proposal: TaintedActionProposal): Promise<string>;
+  proposeTaintedAction(proposal: TaintedActionProposal, options?: Pick<ProposeOptions, 'why'>): Promise<string>;
   placement?(id: string): CardPlacement;
   waitingTaintedActions?(tool: string): readonly Readonly<{ approval_id: string; args: Readonly<Record<string, unknown>> }>[];
 }>;
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
-const OUTCOME_CHARS = 300;
 
 // The owner-confirm route the taint gate points at (ADR-0049). The handler only freezes the call: the tool, its
 // arguments validated against that tool's own schema, and their digest, on a card. Nothing runs here; the approval
@@ -44,7 +44,7 @@ const PREVIEW_CHARS = 200;
 
 export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActionHost = {}): ToolHandler<ProposeActionArgs, unknown, ToolDispatcherContext> => ({
   name: 'propose_action',
-  description: 'Ask the owner to approve one tool call in a turn that has read an email, web page or other outside content: an action, or any change (a reminder, loop, background task, standing order or setting, a health log, a file or document, or a forget by memory ids). Give the exact tool name and the exact arguments you would have passed it; the owner gets a card showing both, and on approval that call runs once. Nothing runs until they approve.',
+  description: 'Ask the owner to approve one tool call in a turn that has read an email, web page or other outside content: an action, or any change (a reminder, loop, background task, standing order or setting, a health log, a file or document, or a forget by memory ids). Give the exact tool name and arguments you would have passed it; the owner gets a card showing both, and on approval that call runs once. Nothing runs until they approve.',
   schema: proposeActionArgsSchema,
   trigger_allowlist: allowlist('propose_action'),
   autonomy_gated: false,
@@ -54,8 +54,13 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
     if ((ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint !== 'external') return { ok: false, error: 'Nothing in this turn came from an email, web page or other outside source, so no approval card is needed; call the tool directly.', code: 'rejected' };
     const tool = toolNameSchema.safeParse(args.tool);
     if (!tool.success) return { ok: false, error: `No tool is named ${args.tool}; propose one of the tools you were offered.`, code: 'invalid_args' };
-    // The same law and loop read as the autonomy gate, so "call it directly" holds exactly when the direct call is admitted.
-    if (!(await taintedCallNeedsOwnerApproval(tool.data, 'external', args.args, ctx))) return { ok: false, error: `${tool.data} needs no approval; call it directly.`, code: 'rejected' };
+    if (taintedCallRefused(tool.data, 'external')) return { ok: false, error: `${tool.data} is never put on a card. ${TAINT_REFUSED_CAUSE}`, code: 'rejected' };
+    // The same law and loop read as the autonomy gate, so "call it directly" holds exactly when the direct call is admitted. A
+    // call that only narrows runs directly where the turn holds its tool; a turn that does not (a job on outside text) may
+    // still put it on the owner's card.
+    const record = TOOL_RECORDS[tool.data].tainted;
+    const narrows = record !== undefined && 'exempt' in record && record.exempt === 'narrows';
+    if (!narrows && !(await taintedCallNeedsOwnerApproval(tool.data, 'external', args.args, ctx))) return { ok: false, error: `${tool.data} needs no approval; call it directly.`, code: 'rejected' };
     if (host.raisesOwnCard?.(tool.data) === true) return { ok: false, error: `${tool.data} already asks the owner on its own card; call it directly.`, code: 'rejected' };
     // use_mac admits only an untainted owner turn by its own law, so an approved replay could never run it.
     if (tool.data === 'use_mac' || host.replayable?.(tool.data) === false) {
@@ -70,9 +75,11 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
     }
     const frozen = parsed.data as Record<string, unknown>;
     // A topic or span selects by matching the owner's message, and outside text can name any fragment of it (one letter
-    // selects everything). Ids are what the owner can check on the card, and the replay admits only those.
-    if (tool.data === 'forget_memory' && (frozen.topic !== undefined || frozen.source !== undefined)) {
-      return { ok: false, error: 'After reading outside content, a forget goes to the owner only by memory ids. Call read_memory to find the claims to remove, then propose forget_memory with their claim_ids and a scope_note, without topic or source.', code: 'rejected' };
+    // selects everything); an import source selects every claim from that export. Ids are what the owner can check on the
+    // card, and the replay admits only those.
+    // A person selects every claim about them, so it is the owner's to name in a message of their own.
+    if (tool.data === 'forget_memory' && (frozen.claim_ids === undefined || frozen.topic !== undefined || frozen.source !== undefined || frozen.import_source !== undefined || frozen.person !== undefined)) {
+      return { ok: false, error: 'After reading outside content, a forget goes to the owner only by memory ids. Call read_memory to find the claims to remove, then propose forget_memory with their claim_ids and a scope_note, without topic, source, import_source or person. To forget a whole import or a whole person, the owner asks for it in a message of their own.', code: 'rejected' };
     }
     let preview: readonly string[] | undefined;
     if (tool.data === 'forget_memory' && host.claims) {
@@ -108,8 +115,8 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
     if (digest === null) return { ok: false, error: 'The args could not be frozen as plain JSON.', code: 'invalid_args' };
     const proposal_id = await desk.proposeTaintedAction({
       operation_ref: await ownerEffectOperationRef(ctx), tool: tool.data, args: frozen, args_digest: digest, reasoning: args.reasoning, source: 'external',
-      ...(preview ? { preview } : {}),
-    });
+      ...(preview ? { preview } : {}), ...(ctx.askedIn ? { asked_in: ctx.askedIn } : {}),
+    }, { why: callWhy(ctx) });
     return {
       ok: true,
       data: { proposal_id, tool: tool.data, status: proposalStatus(desk.placement?.(proposal_id), 'sent to the owner with Do it / Not now buttons', 'Nothing ran.'), executed: false },
@@ -135,15 +142,16 @@ export const taintedActionReplay = (input: Readonly<{
   const callRef = `approval:${approvalRef}`;
   const ctx: ToolDispatcherContext = {
     ...input.context(), toolArgSourceTaint: 'external', turnId: callRef, toolCallId: callRef,
-    approvedTaintedAction: { tool: tool.data, args_digest: proposal.args_digest },
+    approvedTaintedAction: { tool: tool.data, args_digest: proposal.args_digest }, ...(proposal.asked_in ? { askedIn: proposal.asked_in } : {}),
   };
   const result = await dispatchTool({ id: callRef, name: tool.data, args: proposal.args }, ctx, { handlers });
-  if (result.ok) {
-    const shown = JSON.stringify(result.data);
-    return { status: 'done', message: shown.length > OUTCOME_CHARS ? `${shown.slice(0, OUTCOME_CHARS - 1)}…` : shown };
-  }
-  if (!ran) return { status: 'rejected', message: result.error };
-  return { status: result.reason === 'tool_result_error' ? 'failed' : 'uncertain', message: result.error };
+  // The owner reads the outcome. The tool's payload and its error text were written for the model and can carry readings, ids
+  // or internal names, so the owner gets a fixed line and the trace keeps only the typed code.
+  if (result.ok) return { status: 'done', message: '' };
+  if (!ran) return { status: 'rejected', message: 'It was refused before it ran.', code: result.code };
+  return result.reason === 'tool_result_error'
+    ? { status: 'failed', message: result.code === 'rejected' ? 'It ran and changed nothing.' : 'It ran and failed.', code: result.code }
+    : { status: 'uncertain', message: 'Its result could not be confirmed.', code: result.code };
 };
 
 // The dispatcher context an approved replay runs under: the owner's identity and the host's own approval line,

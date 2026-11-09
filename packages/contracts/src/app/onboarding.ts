@@ -41,6 +41,9 @@ export const appConsentStateV1Schema = z.strictObject({
   // Whether the yes counts now: granted, at the current copy, offered by this server, with its prerequisite live. A yes the
   // server holds back (a switch off) or an older copy reads granted and not active; a settings screen shows active.
   active: z.boolean(),
+  // The copy version this server requires now. Listed for a build at onboarding revision 3 (see
+  // APP_ONBOARDING_CONSENT_VERSION_REVISION_V1), never in a grant or withdrawal answer.
+  current_version: z.int().positive().optional(),
 }).superRefine((state, ctx) => {
   if (state.active && state.status !== 'granted') ctx.addIssue({ code: 'custom', path: ['active'], message: 'only a granted purpose can be active' });
   if ((state.status === 'not_granted') !== (state.granted_at === null) || (state.status === 'not_granted') !== (state.version === null)) ctx.addIssue({ code: 'custom', path: ['granted_at'], message: 'only a never-granted purpose has no version or grant time' });
@@ -61,6 +64,13 @@ export const appConsentListV1Schema = z.strictObject({
   consents: z.array(appConsentStateV1Schema).length(appConsentPurposeV1Schema.options.length)
     .refine(rows => new Set(rows.map(row => row.purpose)).size === rows.length, 'each purpose is listed once'),
 });
+// Onboarding revision 3 (`onboarding=3`) adds current_version to each listed consent, so a build that carries an older copy can
+// say "update Waldo" before the owner ticks and Accept is refused stale_version. It is listed while the agreements are held back
+// too, naming the copy that would be required. A build below revision 3 gets each row exactly as before, without it.
+export const APP_ONBOARDING_CONSENT_VERSION_REVISION_V1 = 3;
+export const appConsentListAtRevision = (list: AppConsentListV1, revision: number): AppConsentListV1 =>
+  revision >= APP_ONBOARDING_CONSENT_VERSION_REVISION_V1 ? list
+    : { ...list, consents: list.consents.map(({ current_version: _current, ...row }) => row) };
 export const appConsentGrantV1Schema = z.strictObject({
   request_id: requestId, purpose: appConsentPurposeV1Schema, version: z.int().positive(), age_attested_18_plus: z.literal(true),
 });
@@ -91,17 +101,22 @@ export const appOnboardingChannelsV1Schema = z.strictObject({
 });
 // A one-time code the owner sends from their own phone, which links that account to their own Waldo. It has no request_id: it
 // is a secret that is never stored for a replay, and a repeat just issues another code. text is what to send; address and
-// send_url are set only where Waldo knows the number to open (iMessage). Linking is the owner's act in the app, never Waldo's:
-// no tool issues a code, and one that did would have to go through an approval card.
+// send_url are set only where Waldo knows the number to open: an sms: link that opens Messages for iMessage, a wa.me
+// click-to-chat link that opens WhatsApp for WhatsApp, each with the code filled in. Linking is the owner's act in the app,
+// never Waldo's: no tool issues a code, and one that did would have to go through an approval card.
 export const appChannelLinkRequestV1Schema = z.strictObject({ provider: appChatProviderV1Schema });
 export const appChannelLinkCodeV1Schema = z.strictObject({
   provider: appChatProviderV1Schema,
   code: z.string().regex(/^[A-HJ-NP-Z2-9]{10}$/),
   text: z.string().max(64),
   address: z.string().min(3).max(320).nullable(),
-  send_url: z.string().startsWith('sms:').max(512).nullable(),
+  send_url: z.string().max(512).regex(/^(sms:|https:\/\/wa\.me\/[1-9]\d{7,14}\?text=waldo%20[A-HJ-NP-Z2-9]{10}$)/).nullable(),
   expires_in_seconds: z.literal(600),
-}).refine(link => link.text.endsWith(link.code), { error: 'the text to send carries the code', path: ['text'] });
+}).refine(link => link.text.endsWith(link.code), { error: 'the text to send carries the code', path: ['text'] })
+  .refine(link => link.send_url === null
+    || (link.provider === 'imessage' && link.send_url.startsWith('sms:'))
+    || (link.provider === 'whatsapp' && link.send_url.endsWith(`?text=waldo%20${link.code}`) && link.send_url.startsWith('https://wa.me/')),
+  { error: 'the link opens this provider with this code', path: ['send_url'] });
 
 const steps = z.strictObject({
   agreements: appOnboardingStepStateV1Schema, name: appOnboardingStepStateV1Schema, google: appOnboardingStepStateV1Schema,
@@ -279,6 +294,7 @@ export const appOnboardingRoutesV1 = [
 
 export type AppConsentPurposeV1 = z.infer<typeof appConsentPurposeV1Schema>;
 export type AppConsentStateV1 = z.infer<typeof appConsentStateV1Schema>;
+export type AppConsentListV1 = z.infer<typeof appConsentListV1Schema>;
 export type AppOnboardingV1 = z.infer<typeof appOnboardingV1Schema>;
 export type AppOnboardingActionV1 = z.infer<typeof appOnboardingActionV1Schema>;
 export type AppOnboardingStepV1 = z.infer<typeof appOnboardingStepV1Schema>;

@@ -1,4 +1,4 @@
-import type { EmbeddingRunner } from '../../src/memory/semantic-recall';
+import type { EmbeddingRunner } from '../memory/semantic-recall';
 
 // A stand-in for the Workers AI embedding binding. Each concept is one dimension, and a text points along every concept whose
 // words it uses, so a paraphrase that shares no word with a claim can still share a concept. It proves the plumbing (writes,

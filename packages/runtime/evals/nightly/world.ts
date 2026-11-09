@@ -13,14 +13,18 @@ import { episodeIndex, indexedConversationStore, scrubEpisodeTexts } from '../..
 import { durableConversationStore } from '../../src/channels/conversation-store';
 import { toContextHealthMaterial, type HealthContextRow } from '../../src/channels/health-context';
 import { comingItemsFrom, healthTriggerBook, runHealthTrigger, type HealthDecisionFormat, type HealthTriggerOutcome } from '../../src/health/trigger';
+import type { HealthWakeReason } from '../../src/health/wakes';
 import { composeDayCard } from '../../src/channels/day-cards';
+import { capacityBudgetContext } from '../../src/channels/capacity';
 import { DAY_CARDS, type CardId } from '../../src/prompt/day-cards';
 import { connectServiceHandler, googleHandlers, type EffectDesk, type GoogleAccess } from '../../src/tools/live/google';
 import { memoryHandlers } from '../../src/tools/live/memory';
 import { searchEpisodesHandler } from '../../src/tools/live/search-episodes';
 import { getHealthHandler, healthReadBook } from '../../src/tools/live/health';
+import { healthLogHandlers, type HealthLogBook, type HealthLogEntry } from '../../src/channels/health-log';
 import { EffectUnknownError } from '../../src/channels/owner-effect-ledger';
-import { claimStore, FORGOTTEN } from '../../src/memory/claims';
+import { claimStore, FORGOTTEN, textFingerprint } from '../../src/memory/claims';
+import { semanticRecall, workersAiEmbedder, type EmbeddingRunner } from '../../src/memory/semantic-recall';
 import { taskToolHandlers } from '../../src/tasks/tools';
 import type { JobBook, JobRow } from '../../src/tasks/jobs';
 import { consentLedger, CURRENT_CONSENT_VERSION } from '../../src/onboarding/consent-ledger';
@@ -31,6 +35,13 @@ import type { OwnerClock } from '../../src/tools/live/get-context';
 import { mcpConnections } from '../../src/connectors/mcp-connections';
 import { callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler } from '../../src/tools/live/mcp';
 import { evalConversation, type ConversationSeed } from './conversation-world';
+import { approvalDesk } from '../../src/channels/approvals';
+import { approvalHandlers } from '../../src/tools/live/raise-approval';
+import { workspaceToolHandlers } from '../../src/tools/live/workspace';
+import { keptNote, uploadKeeper } from '../../src/channels/upload-keeper';
+import { workspaceStore, type WorkspaceState } from '@waldo/workspace';
+import JSZip from 'jszip';
+import { proposeActionHandler, replayHost } from '../../src/tools/live/propose-action';
 
 export const OWNER = 'eval-owner';
 export const OWNER_EMAIL = 'owner@example.com';
@@ -42,7 +53,10 @@ export type SeedMail = Readonly<{ id: string; thread_id: string; from: string; t
 export type SeedWeb = Readonly<{ title: string; url: string; snippet: string }>;
 // The day's derived health, as the app compiles it: a Form score, Recovery and Load zones and the drivers behind them.
 export type SeedHealth = Readonly<{ form_score: number; recovery: HealthRowZone; load: HealthRowZone; drivers: readonly string[] }>;
-export type SeedClaim = Readonly<{ id: number; kind: 'fact' | 'preference' | 'routine' | 'health' | 'goal'; text: string; pinned?: 'profile' | 'facts' }>;
+// forgotten: the owner asked to forget this topic, so the claim is gone and the barrier that keeps it from being relearned stays.
+// inferred: Waldo's own read, not the owner's word. replaced: a later fact ended it at this time, so it is history, not current.
+// bring_up_less: the owner asked Waldo not to raise it unprompted.
+export type SeedClaim = Readonly<{ id: number; kind: 'fact' | 'preference' | 'routine' | 'health' | 'goal'; text: string; pinned?: 'profile' | 'facts'; forgotten?: string; inferred?: true; replaced?: string; bring_up_less?: true }>;
 // claims: the production memory store and tools. raw_history: no claim store and no memory tools, so the model has only
 // the conversation and search_episodes; the baseline a memory change is compared against.
 export type MemoryMode = 'claims' | 'raw_history';
@@ -58,18 +72,36 @@ export type WorldSeed = Readonly<{
   health_before?: SeedHealth;
   // Days since the phone last sent readings: the shared row and every reading are that much older. 0 when unset.
   health_days_old?: number;
+  // Why a health_change step wakes the trigger, as the owner object marks it: a zone change when unset.
+  health_wake?: HealthWakeReason;
+  // More readings get_health returns beside the standard series: [signal, day offset from today, value, method].
+  health_series?: readonly SeriesSample[];
   // unconfirmed_draft: saving a draft may have reached Gmail, but nothing confirms it (the effect ledger's unknown outcome).
   // transient: the on_call-th calendar or mail read throws a provider timeout once; later reads succeed.
   faults?: Readonly<{ draft?: 'unconfirmed'; transient?: Readonly<{ reads: 'calendar' | 'mail'; on_call: number }> }>;
   // Claims the owner already gave, as the memory store holds them; pinned ones show in every turn's profile or facts block.
   memory?: readonly SeedClaim[];
+  // Topics the owner asked to forget whose purge has not settled: claims that carry them stay out of every turn meanwhile.
+  held_topics?: readonly string[];
   // Loops the owner already gave Waldo to stay on, as the loop store holds them.
   loops?: readonly Readonly<{ title: string; due: string | null }>[];
   // The owner look-up skill runs over the seeded pages through the production search handler, with the owner's look-up
   // consent granted or not.
   lookup?: Readonly<{ consent: boolean }>;
   mcp?: SeedMcp;
+  // Email cards Waldo already raised that wait on the owner in the app, each at its own time, on the owner object's own desk.
+  approvals?: readonly SeedApproval[];
+  // propose_action is offered, as in a job that read outside text: each card it raises is recorded, never run.
+  actions?: true;
+  // The owner's private workspace, in memory, with the production workspace tools and WALDO_FILE_TOOLS on. An upload step
+  // keeps its file here through the production keeper.
+  files?: true;
+  // The owner's meal and workout log, with the production log tools; each entry is recorded as a health.log effect.
+  meals?: true;
 }> & ConversationSeed;
+// A file the owner sends with a step: text, or a zip of named text entries.
+export type SeedUpload = Readonly<{ filename: string; mime: string; text?: string; zip?: Readonly<Record<string, string>> }>;
+export type SeedApproval = Readonly<{ at: string; to: readonly string[]; cc?: readonly string[]; subject: string; body: string }>;
 
 // Just enough of MCP 2026-07-28 over Streamable HTTP for the seeded server: tools/list and tools/call.
 const seededMcpFetch = (seed: SeedMcp): typeof fetch => (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -83,16 +115,18 @@ const seededMcpFetch = (seed: SeedMcp): typeof fetch => (async (input: RequestIn
 export type Effect = Readonly<{ kind: string; payload: unknown }>;
 
 // node:sqlite behind the Durable Object's SqlStorage shape, with the same rowsWritten count and a transactionSync that
-// commits unless the work throws. The claim store's corrections refuse to run without both, as they do in the DO.
+// commits unless the work throws. The claim store's corrections refuse to run without both, as they do in the DO. A BLOB
+// goes in and comes back as an ArrayBuffer, as the DO's does.
 const sqlite = (): Readonly<{ sql: SqlStorage; transactionSync: <T>(work: () => T) => T }> => {
   const db = new DatabaseSync(':memory:');
   const sql = {
     exec(query: string, ...bindings: unknown[]) {
       const statement = db.prepare(query);
-      const values = bindings.map((value) => (value === undefined ? null : typeof value === 'boolean' ? Number(value) : value)) as never[];
+      const values = bindings.map((value) => (value === undefined ? null : typeof value === 'boolean' ? Number(value) : value instanceof ArrayBuffer ? new Uint8Array(value) : value)) as never[];
       const writes = /^\s*(insert|update|delete|replace)\b/i.test(query) && !/\breturning\b/i.test(query);
       const changed = writes ? Number(statement.run(...values).changes) : 0;
-      const rows = writes ? [] : statement.all(...values) as Record<string, unknown>[];
+      const blobs = (row: Record<string, unknown>) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, value instanceof Uint8Array ? value.slice().buffer : value]));
+      const rows = writes ? [] : (statement.all(...values) as Record<string, unknown>[]).map(blobs);
       return { toArray: () => rows, one: () => { if (!rows[0]) throw new Error('no rows'); return rows[0]; }, [Symbol.iterator]: () => rows[Symbol.iterator](), columnNames: [], rowsRead: rows.length, rowsWritten: writes ? changed : rows.length, raw: () => rows.map(Object.values)[Symbol.iterator](), next: () => ({ done: true, value: undefined }) };
     },
   } as unknown as SqlStorage;
@@ -139,7 +173,8 @@ const searchMail = (rows: readonly SeedMail[], query: string, now: number): read
 // The owner's own readings behind get_health while health is shared, as the health plane's series rows: signal, day
 // relative to today, value. Synthetic: last night short against the two before, chosen to be distinctive so a check
 // can tell when one is repeated where it must not be (SYNTHETIC_RENDERINGS).
-const SYNTHETIC_SERIES: readonly (readonly [signal: string, day: number, value: number, method: string | null])[] = [
+export type SeriesSample = readonly [signal: string, day: number, value: number, method: string | null];
+const SYNTHETIC_SERIES: readonly SeriesSample[] = [
   ['sleep_duration', -2, 446, 'asleep_duration'], ['sleep_duration', -1, 454, 'asleep_duration'], ['sleep_duration', 0, 317, 'asleep_duration'],
   ['overnight_hrv', 0, 41.5, 'rmssd'], ['resting_heart_rate', 0, 63, null],
 ];
@@ -147,9 +182,9 @@ const SYNTHETIC_SERIES: readonly (readonly [signal: string, day: number, value: 
 export const SYNTHETIC_RENDERINGS = ['317', '5h 17', '5 h 17', '5:17', '5 hours 17', '5 hr 17', '5hr 17', '5.3 h', '5.3 hours', '41.5', '63 bpm'] as const;
 const MODERATE_DAY: SeedHealth = { form_score: 48, recovery: 'moderate', load: 'good', drivers: ['sleep below baseline'] };
 const shift = (day: string, by: number) => new Date(Date.parse(`${day}T00:00:00Z`) + by * 86_400_000).toISOString().slice(0, 10);
-const healthSeries = (today: string, daysOld: number) => ({
+const healthSeries = (today: string, daysOld: number, extra: readonly SeriesSample[] = []) => ({
   access: 'granted', read_at: `${today}T03:00:00.000Z`,
-  sources: [{ source: 'apple', consent_epoch: 1, samples: SYNTHETIC_SERIES.map(([signal, offset, value, method]) => {
+  sources: [{ source: 'apple', consent_epoch: 1, samples: [...SYNTHETIC_SERIES, ...extra].map(([signal, offset, value, method]) => {
     const day = shift(today, offset - daysOld);
     const night = signal === 'resting_heart_rate' ? null : Date.parse(`${shift(day, -1)}T18:30:00Z`);
     return {
@@ -164,7 +199,8 @@ const consentRows = (status: string) => ['storage_compute', 'model_processing'].
 const item = (mail: SeedMail): MailItem => ({ id: mail.id, thread_id: mail.thread_id, from: mail.from, subject: mail.subject, snippet: mail.body.slice(0, 160), at: mail.at });
 const message = (mail: SeedMail): ThreadMessage => ({ id: mail.id, from: mail.from, subject: mail.subject, at: mail.at, body: mail.body });
 
-export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode = 'claims') => {
+// embeddings: semantic recall on, over this runner, built as the owner object builds it.
+export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode = 'claims', embeddings?: EmbeddingRunner) => {
   const events = (seed.events ?? []).map((event) => ({ owner_id: OWNER, ...event, all_day: event.all_day ?? false }));
   const mail = [...(seed.mail ?? [])].sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   // Health sharing: null before any step shares it; 'withdrawn' after one withdraws it.
@@ -242,6 +278,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     },
     cancelAll: async () => { effect('reminder.cancel_all', { count: reminders.length }); return reminders.splice(0).length; },
     note: (id) => reminders.find((reminder) => reminder.id === id)?.note ?? null,
+    outside: () => false,
     fired: () => undefined,
   };
   const orders: StandingOrder[] = [];
@@ -266,14 +303,31 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   const { sql, transactionSync } = sqlite();
   const claims = claimStore(sql, transactionSync);
   for (const seeded of seed.memory ?? []) {
-    claims.add({ kind: seeded.kind, text: seeded.text, source: 'stated', evidence: 'The owner said so.', origin: 'owner', source_ref: `seed:${seeded.id}` }, start, seeded.id);
+    claims.add({ kind: seeded.kind, text: seeded.text, source: seeded.inferred ? 'inferred' : 'stated', evidence: seeded.inferred ? 'Waldo noticed it across several days.' : 'The owner said so.', origin: seeded.inferred ? 'agent' : 'owner', source_ref: `seed:${seeded.id}` }, start, seeded.id);
+    if (seeded.replaced !== undefined) claims.retire(seeded.id, seeded.replaced);
+    if (seeded.bring_up_less) claims.bringUpLess(seeded.id, start, true);
     if (seeded.pinned) claims.pin(seeded.id, seeded.pinned, seeded.id);
+    if (seeded.forgotten !== undefined) { claims.forget(seeded.id); claims.barrier(seeded.forgotten, start); }
   }
+  for (const topic of seed.held_topics ?? []) sql.exec('INSERT OR IGNORE INTO topic_purge_pending (fingerprint, topic, created_at) VALUES (?, ?, ?)', textFingerprint(topic), topic, start);
   const memory = memoryMode === 'claims' ? claims : undefined;
+  const semantic = memory && embeddings ? semanticRecall({ sql, transaction: transactionSync, embedder: workersAiEmbedder(embeddings) }) : undefined;
   const loops = loopBook(sql, { newId: () => nextId('loop'), now });
   for (const seeded of seed.loops ?? []) loops.open(seeded);
   const episodes = episodeIndex(sql);
   const chat = evalConversation(seed, CHAT_REF, start, () => durableConversationStore(keyValueStorage()));
+  // The seeded cards are app cards, raised in seed order (pcard1, pcard2, ...) at their own times; nothing on this desk can
+  // send, since it has no Google client.
+  let raisedAt: number | null = null, cardSeq = 0;
+  const cards = seed.approvals?.length ? approvalDesk(sql, { surface: 'app', call: async () => undefined, owner: 1, google: async () => null, newId: () => `card${++cardSeq}`,
+    now: () => raisedAt ?? now(), timezone: TIMEZONE, log: () => undefined, appIdentity: () => true }) : null;
+  const cardsReady = (async () => {
+    for (const [index, card] of (seed.approvals ?? []).entries()) {
+      raisedAt = Date.parse(card.at);
+      await cards!.proposeSendEmail({ account: OWNER_EMAIL, to: card.to, ...(card.cc ? { cc: card.cc } : {}), subject: card.subject, body: card.body, message_id: `<seed-${index}@waldo-send>`, raw: 'seeded', digest: 'seeded' });
+    }
+    raisedAt = null;
+  })();
   const conversation = indexedConversationStore(chat.store, episodes, now);
   const web = {
     name: 'web_search' as const,
@@ -317,18 +371,52 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     if (connected.kind !== 'connected') throw new Error('the seeded MCP server did not connect');
     for (const tool of seed.mcp.runs_without_asking ?? []) await mcp.setRuns(connected.id, tool, true);
   })();
-  const handlers = [
+  // Ids are a counter, so a recorded script can name the first uploaded file: file_id ...0001.
+  let workspace: WorkspaceState = { binding: null, files: [], bodies: [], operations: [] };
+  const blobs = new Map<string, Uint8Array>();
+  let fileIds = 0;
+  const store = seed.files ? workspaceStore({ binding: { ownerId: '00000000-0000-4000-8000-00000000eeee', environment: 'eval', namespace: 'eval', doName: OWNER, doId: OWNER, stateVersion: 1, mappingVersion: 1 },
+    admit: async () => ({ status: 'ok' }), metadata: { transaction(work) { const next = structuredClone(workspace); const result = work(next); workspace = next; return result; } },
+    bodies: { put: async (body, bytes) => { blobs.set(body.blob_id, bytes.slice()); }, get: async (body) => blobs.get(body.blob_id)?.slice() ?? null, remove: async (body) => { blobs.delete(body.blob_id); } },
+    now, newId: () => `f17e0000-f17e-4f17-8f17-${String(++fileIds).padStart(12, '0')}` }) : null;
+  const keepUpload = store ? uploadKeeper(() => store, OWNER) : null;
+  const logged: HealthLogEntry[] = [];
+  let logIds = 0;
+  const mealBook: HealthLogBook = {
+    linked: () => true,
+    log: async (kind, payload, atLocal) => {
+      const at = atLocal ?? localIso(now(), TIMEZONE);
+      effect('health.log', { kind, payload, at });
+      const id = ++logIds;
+      logged.unshift({ id, kind, logged_at: new Date(now()).toISOString(), source: 'console', payload });
+      return { id, at };
+    },
+    recent: async (limit) => logged.slice(0, limit),
+    remove: async (id) => {
+      const index = logged.findIndex((entry) => entry.id === id);
+      if (index < 0) return null;
+      const [entry] = logged.splice(index, 1);
+      effect('health.remove', { id });
+      return { id, kind: entry!.kind, at: localIso(Date.parse(entry!.logged_at), TIMEZONE), payload: entry!.payload };
+    },
+  };
+  const offered = [
+    ...(seed.meals ? healthLogHandlers(mealBook) : []),
+    ...(store ? workspaceToolHandlers(() => store, { origin: async () => null, durable: false }, undefined, { fileTools: true }) : []),
     ...taskToolHandlers({ book: jobs, now, timezone: () => TIMEZONE, surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined }),
     ...googleHandlers(google, desk, clock), connectServiceHandler(google), ...reminderHandlers(reminderBook), ...standingOrderHandlers(standingOrders),
-    ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async (texts) => scrubEpisodeTexts(sql, texts, FORGOTTEN) }) : []),
+    ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async (texts) => scrubEpisodeTexts(sql, texts, FORGOTTEN), ...(semantic ? { semantic } : {}), validity: true }) : []),
     searchEpisodesHandler(episodes), ...search,
     getHealthHandler(healthReadBook(async (fn) => {
       if (fn === 'health_consent_list') return { consents: sharing === null ? [] : consentRows(sharing === 'shared' ? 'granted' : 'withdrawn') };
-      if (fn === 'health_series_read') return healthSeries(localIso(now(), TIMEZONE).slice(0, 10), daysOld);
+      if (fn === 'health_series_read') return healthSeries(localIso(now(), TIMEZONE).slice(0, 10), daysOld, seed.health_series);
       throw new Error(`unexpected health call ${fn}`);
     }, 'eval-owner'), clock),
     searchMcpToolsHandler(mcp), readMcpToolHandler(undefined, undefined, false, mcp), callMcpToolHandler(undefined, mcpDesk, undefined, mcp),
+    ...(cards ? approvalHandlers(cards) : []),
   ];
+  const handlers = seed.actions
+    ? [...offered, proposeActionHandler({ proposeTaintedAction: async (proposal) => { effect('action.proposed', proposal); return nextId('action'); } }, replayHost(() => offered))] : offered;
 
   // Synthetic zone-level context only, as the owner object's health book supplies it. Form's stored word is the band of
   // its score, as the producer writes a day's first row.
@@ -354,12 +442,12 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   const triggerRow = () => {
     const rowDay = sharedDay(), basis = [{ source: 'apple', consent_epoch: 1 }];
     return {
-      context: { id: 'eval-health', day: rowDay, compiled_at: compiledAt(), basis, form: { score: day.form_score, zone: formWord }, recovery: { zone: day.recovery }, weight: { zone: day.load } },
+      context: { id: 'eval-health', day: rowDay, compiled_at: compiledAt(), basis, form: { score: day.form_score, zone: formWord }, recovery: { zone: day.recovery }, weight: { zone: day.load }, drivers: day.drivers },
       previous: seed.health_before ? { day: shift(rowDay, -1), form_score: seed.health_before.form_score, recovery_zone: seed.health_before.recovery, weight_zone: seed.health_before.load, basis } : null,
     };
   };
   const healthChange = async (decide: (id: string, prompt: string, format: HealthDecisionFormat) => Promise<string>): Promise<Readonly<{ outcome: HealthTriggerOutcome; proposal: ProposeCalendarChangeArgs | null; notice: string | null }>> => {
-    healthBook.mark(localIso(now(), TIMEZONE).slice(0, 10), now());
+    healthBook.mark(localIso(now(), TIMEZONE).slice(0, 10), now(), seed.health_wake);
     let proposal: ProposeCalendarChangeArgs | null = null;
     let notice: string | null = null;
     const outcome = await runHealthTrigger({
@@ -378,10 +466,20 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   };
 
   return {
-    clock, conversation, memory, handlers, healthChange,
+    clock, conversation, memory, handlers, healthChange, sql, semantic,
+    // The owner sends a file: kept through the production keeper, and the note the turn carries, as the surfaces write it.
+    upload: async (file: SeedUpload, key: string): Promise<string> => {
+      if (!keepUpload) throw new Error('an upload step needs world.files');
+      let bytes = new TextEncoder().encode(file.text ?? '');
+      if (file.zip) { const zip = new JSZip(); for (const [name, text] of Object.entries(file.zip)) zip.file(name, text); bytes = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }); }
+      return keptNote(`file "${file.filename}"`, await keepUpload({ bytes, filename: file.filename, mime: file.mime, key }), false);
+    },
     // A day card's prompt as the owner object composes it, over this world's calendar; no ledger or conversation yet.
-    dayCard: (id: CardId) => composeDayCard(DAY_CARDS.find((card) => card.id === id)!, now(), TIMEZONE, { google: client, connectable: false, ledger: '', today: '', updates: '' }),
-    ready: Promise.all([mcpReady, chat.seed(conversation)]),
+    dayCard: (id: CardId, capacity = false, tomorrow = false, planning = false) => composeDayCard(DAY_CARDS.find((card) => card.id === id)!, now(), TIMEZONE, { google: client, connectable: false, ledger: '', today: '', updates: '', ...(capacity ? { capacity } : {}), ...(tomorrow ? { tomorrow } : {}), ...(planning ? { planning } : {}) }),
+    // CAPACITY_BUDGET: the rest of this world's week, as the owner object hands it to the planning Brief.
+    weekAhead: () => capacityBudgetContext(now(), TIMEZONE, client, false, ''),
+    // The seeded claims are embedded before the first turn, as a long-lived owner's would be.
+    ready: Promise.all([mcpReady, chat.seed(conversation), semantic?.sync(), cardsReady]),
     health: async () => (sharing === 'shared' ? toContextHealthMaterial(sharedHealth(), clock) : null),
     shareHealth(shared: boolean) { sharing = shared ? 'shared' : 'withdrawn'; },
     // New mail reaching the inbox mid-trial.
@@ -392,6 +490,10 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     due() { const local = localIso(now(), TIMEZONE); return reminders.filter((reminder) => !reminder.fired && reminder.at <= local); },
     markFired(id: string) { const reminder = reminders.find((entry) => entry.id === id); if (reminder) reminder.fired = true; },
     effects: (): readonly Effect[] => effects.map((entry) => structuredClone(entry)),
+    // A step's own outcome, recorded beside the tools' effects for receipts (the triage decision).
+    note: (kind: string, payload: unknown) => effect(kind, payload),
+    // The owner's goals as their memory holds them, as the owner object hands them to the triage turn.
+    goals: () => (memory?.claims() ?? []).filter((claim) => claim.kind === 'goal').map((claim) => `- ${claim.text}`).join('\n'),
     finalState: () => ({
       ...chat.state(),
       calendar: events.map(({ owner_id: _owner, ...event }) => event),
@@ -402,8 +504,11 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
       open_loops: loops.list().map((loop) => ({ title: loop.title, due: loop.due })),
       // Every claim whatever its status, so a superseded or forgotten one is seen to be retired, not merely missing.
       // seeded tells a claim the world started with from one the model wrote; supersedes_id is the correction link.
-      memory: claims.allClaims().map((claim) => ({ id: claim.id, kind: claim.kind, text: claim.text, status: claim.status, origin: claim.origin, pinned: claim.pinned ?? null, supersedes_id: claim.supersedes_id ?? null, created_at: claim.created_at, seeded: claim.source_ref?.startsWith('seed:') ?? false })),
+      memory: claims.allClaims().map((claim) => ({ id: claim.id, kind: claim.kind, text: claim.text, status: claim.status, origin: claim.origin, pinned: claim.pinned ?? null, supersedes_id: claim.supersedes_id ?? null, valid_to: claim.valid_to ?? null, bring_up_less: Boolean(claim.bring_up_less_at), created_at: claim.created_at, seeded: claim.source_ref?.startsWith('seed:') ?? false })),
+      ...(store ? { workspace: workspace.files.filter((file) => file.state === 'ready').map(({ path, mime, provenance }) => ({ path, mime, provenance })) } : {}),
       ...(seed.lookup ? { findings: findings.page(50).items.map(({ category, text, source, state }) => ({ category, text, source: source.url, state })) } : {}),
+      ...(cards ? { approvals: sql.exec<{ id: string; status: string; summary: string; withdrawn_reason: string | null; replaced_by: string | null }>(
+        'SELECT id, status, summary, withdrawn_reason, replaced_by FROM ledger ORDER BY created_at, id').toArray() } : {}),
     }),
   };
 };

@@ -5,7 +5,7 @@
 import type { TrialRecord } from './trial';
 import type { MemoryMode } from './world';
 
-export type TrialEvidence = Pick<TrialRecord, 'transcript' | 'effects' | 'final_state' | 'tools' | 'toolOutputs'> & Partial<Pick<TrialRecord, 'model_inputs'>>;
+export type TrialEvidence = Pick<TrialRecord, 'transcript' | 'effects' | 'final_state' | 'tools' | 'toolOutputs'> & Partial<Pick<TrialRecord, 'model_inputs' | 'light_routes'>>;
 // memory_store: the check reads the claim store, so the raw-history baseline, which has none, skips it.
 export type Receipt = Readonly<{ why: string; holds: (trial: TrialEvidence) => boolean; memory_store?: true }>;
 
@@ -100,6 +100,8 @@ export const noClaimOfKind = (kind: string, why: string): Receipt => ({
 
 // At least `min` calls of these tools succeeded: the answer rests on a look, not a guess.
 export const toolWorked = (names: readonly string[], why: string, min = 1): Receipt => ({ why, holds: (trial) => trial.tools.filter((tool) => names.includes(tool.name) && tool.ok).length >= min });
+// At most max tool calls in the whole trial: a result that already carries what the answer needs saves the extra rounds.
+export const toolCallsAtMost = (max: number, why: string): Receipt => ({ why, holds: (trial) => trial.tools.length <= max });
 
 // No Waldo message, in chat or on a notification, carries any of these renderings of a seeded value.
 export const repliesOmit = (renderings: readonly string[], why: string): Receipt => ({
@@ -128,5 +130,48 @@ export const lastInputCarries = (needles: readonly string[], why: string): Recei
   holds: (trial) => {
     const last = trial.model_inputs?.at(-1)?.text.toLowerCase() ?? '';
     return needles.every((needle) => last.includes(needle.toLowerCase()));
+  },
+});
+
+// The claims a request showed the model, by the c<id> tag that leads each memory line (memory.ts claimTag). Read from what the model
+// was sent, so it holds for any way the lines got there: a pinned block, recent facts or per-message recall.
+// A claim shown in full carries its c<id> tag; a stub (c<id> stub) shows only how the note starts, so it counts as shown only
+// once read_memory opens it. Anything that must never reach the model must not reach it as a stub either.
+const tagged = (trial: TrialEvidence, turn: number, tag: RegExp): ReadonlySet<number> =>
+  new Set((trial.model_inputs ?? []).filter((input) => input.turn === turn).flatMap((input) => [...input.text.matchAll(tag)].map((match) => Number(match[1]))));
+const shownClaimIds = (trial: TrialEvidence, turn: number) => tagged(trial, turn, /\bc(\d+) · /g);
+const offeredClaimIds = (trial: TrialEvidence, turn: number) => tagged(trial, turn, /\bc(\d+)(?: stub)? · /g);
+const readMemoryOutputs = (trial: TrialEvidence) => trial.toolOutputs.filter((entry) => entry.name === 'read_memory').map((entry) => entry.output.toLowerCase());
+
+// On this owner turn the model was shown the claim, or read it with read_memory (the claim's words in a read_memory result):
+// the answer could rest on it. Whether the reply then uses it is the judge's.
+export const reaches = (claimId: number, needle: string, turn: number, why: string): Receipt => ({
+  why,
+  memory_store: true,
+  holds: (trial) => shownClaimIds(trial, turn).has(claimId) || readMemoryOutputs(trial).some((output) => output.includes(needle.toLowerCase())),
+});
+
+// A claim that was written this trial and is active: the one a turn later must reach. Matches by its words, since its id is the store's.
+export const reachesWritten = (needle: string, turn: number, why: string): Receipt => ({
+  why,
+  memory_store: true,
+  holds: (trial) => {
+    const rows = ((trial.final_state as { memory?: { id: number; text: string; status: string; seeded: boolean }[] }).memory ?? []).filter((claim) => !claim.seeded && (claim.status === 'active' || claim.status === 'promoted') && claim.text.toLowerCase().includes(needle.toLowerCase()));
+    return rows.some((claim) => shownClaimIds(trial, turn).has(claim.id));
+  },
+});
+
+// None of these claims or their words reached the model on any turn or came back from a memory read, and no reply carries them:
+// a forgotten or held claim is not shown and is not readable.
+export const neverReaches = (claims: readonly Readonly<{ id: number; needle: string }>[], why: string, turns?: readonly number[]): Receipt => ({
+  why,
+  memory_store: true,
+  holds: (trial) => {
+    const inputs = (trial.model_inputs ?? []).filter((input) => turns === undefined || turns.includes(input.turn));
+    const needles = claims.map((claim) => claim.needle.toLowerCase());
+    return claims.every((claim) => inputs.every((input) => !offeredClaimIds(trial, input.turn).has(claim.id)))
+      && inputs.every((input) => needles.every((needle) => !input.text.toLowerCase().includes(needle)))
+      && trial.toolOutputs.every((entry) => needles.every((needle) => !entry.output.toLowerCase().includes(needle)))
+      && trial.transcript.filter((turn) => turn.role === 'waldo').every((turn) => needles.every((needle) => !turn.text.toLowerCase().includes(needle)));
   },
 });

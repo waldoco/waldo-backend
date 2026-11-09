@@ -7,6 +7,7 @@ import { HEARTBEAT_ID } from '../src/channels/heartbeat';
 import { DAY_CARDS } from '../src/prompt/day-cards';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
+import { MAIL_ONLY_GOOGLE } from './helpers/google-grant';
 
 const model = vi.hoisted(() => ({ calls: 0 }));
 vi.mock('../src/channels/telegram-turn', async load => {
@@ -66,6 +67,7 @@ describe('a fixed-id schedule row this Worker cannot read, on an app owner with 
       state.storage.kv.put('do_name', name);
       state.storage.kv.put('timezone', 'UTC');
       state.storage.kv.put('timezone_confirmed', true);
+      await state.storage.put('google:accounts', MAIL_ONLY_GOOGLE);
       plant(state.storage.sql);
       const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
       try { await work(owner, state); } finally { await state.storage.deleteAlarm(); }

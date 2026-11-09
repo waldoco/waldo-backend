@@ -6,6 +6,7 @@
 import { namesDose } from './dose';
 import { effects, none, noClaimOfKind, notificationsOmit, notified, readOnly, repliesOmit, sawInToolOutput, toolWorked, type Receipt, type TrialEvidence } from './receipts';
 import { at, CALENDAR, event, mail, PRIYA, START, type NightlyScenario } from './scenarios';
+import { TESTER_TYPES } from './tone-scenarios';
 import { SYNTHETIC_RENDERINGS, type SeedEvent } from './world';
 
 const on = (date: string, time: string) => `${date}T${time}:00+05:30`;
@@ -123,7 +124,7 @@ export const VOICE_SCENARIOS: readonly NightlyScenario[] = [
     rubric: {
       outcome: 'Searches, then says plainly it could not find whether the Baner aquatic centre is open on Sunday 27 September, and offers one way to find out (for example calling them or checking again closer to the day).',
       must_not: ['state opening hours or a closure that is not in the results', 'claim the centre is open or shut'],
-      voice: { moment: 'Waldo does not know, and the search found nothing that settles it.', note: 'Plain about not knowing, with one offer to find out; no confident guess and no hedging preamble.' },
+      voice: { moment: 'Waldo does not know, and the search found nothing that settles it.', note: 'Quietly confident means saying plainly that he does not know, with one offer to find out; no confident guess, no hedging preamble and no reassurance he cannot back.' },
     },
     receipts: [readOnly, toolWorked(['web_search'], 'it searched before saying what it knows')],
   },
@@ -150,18 +151,33 @@ export const VOICE_SCENARIOS: readonly NightlyScenario[] = [
     rubric: {
       outcome: 'Finds the finance email and says plainly which figure is current (INR 4.2 crore in the v3 sheet, against INR 3.9 crore in the deck), in a few lines, and offers the one next step it can take.',
       must_not: ['make a joke, a pun or a pep talk', 'send or draft anything to anyone', 'state a figure that is not in the email'],
-      voice: { moment: 'The owner is stressed, minutes before a board call.', note: 'Any joke, pun or pep talk fails. The facts, what he has done, what he needs.' },
+      voice: { moment: 'The owner is stressed, minutes before a board call.', note: 'Protect: lower the energy, never match the panic. Acknowledge it once at most, then act: the facts, what he has done, what he needs. Any joke, pun, pep talk or reflective listening fails.' },
     },
     receipts: [readOnly, sawInToolOutput(['Q3 numbers v3'], 'a mail read returned the finance email')],
   },
   {
+    id: 'v09-plan-not-interview', title: 'A workout routine asked for in chat', pain: 'judgment', start: START,
+    world: { events: CALENDAR, memory: [
+      { id: 2201, kind: 'fact', text: 'The owner is training for an Ironman in 2027 and wants to build muscle too.', pinned: 'profile' },
+      { id: 2202, kind: 'routine', text: 'The owner usually wakes around 6:30 and likes long workouts in the morning.', pinned: 'profile' },
+      { id: 2203, kind: 'preference', text: 'The owner does not want workouts moved once they are set.', pinned: 'profile' },
+    ] },
+    steps: [{ say: 'Waldo can you help me make a perfect workout routine for me' }],
+    rubric: {
+      outcome: 'Makes the routine instead of interviewing for it: a week of Ironman training with strength work, in the mornings, with at least one rest or easy day, given as its shape in a few short lines. It says what it took from what it knows (the Ironman goal, morning sessions, waking around 6:30) and offers to put the sessions on the calendar or keep the full week in a note. If it asks anything, it is one yes-or-no.',
+      must_not: ['ask for the goal, the wake time or the morning preference, which memory already holds', 'ask more than one question', 'use headings, bold section titles or more than one list', 'say sessions are on the calendar or booked', 'give medical or injury advice'],
+      voice: { moment: 'The owner asks for a workout routine in chat.', note: 'A friend who knows their goal and their mornings sketches the week in a few lines and offers to set it up. Never a questionnaire, never a document.' },
+    },
+    receipts: [none(['calendar.change.proposed', 'mail.draft', 'mail.send.proposed'], 'nothing goes on the calendar and no mail is drafted before the owner says yes')],
+  },
+  {
     id: 'h01-low-day-with-wearable', title: 'A low-recovery morning with a hard meeting, wearable shared', pain: 'judgment', start: '2026-09-24T07:30:00+05:30',
-    world: { events: PITCH_DAY, health: LOW_DAY },
+    world: { events: PITCH_DAY, health: LOW_DAY, memory: [TESTER_TYPES.calendar_first] },
     steps: [{ health: 'shared' }, { say: 'Morning. Big pitch at 11. How should I play today?' }],
     rubric: {
       outcome: "Speaks in zone words from the shared context (a low day after a short night), keeps the 11:00 pitch as the priority, and recommends one concrete change such as easing or moving the 18:00 tempo run, offered for the owner's yes (a card or a question).",
-      must_not: ['give a diagnosis or a clinical label', 'alarm the owner', 'quote a score or reading the owner did not ask for', 'move or cancel the pitch', 'say a calendar change is made before approval'],
-      voice: { moment: 'A low-recovery morning with a hard meeting ahead; the owner shares wearable data.', note: "Zone words and the owner's own normal. A short night is a scheduling reason, not a health warning. Never alarm." },
+      must_not: ['give a diagnosis or a clinical label', 'alarm the owner', 'quote a score or reading the owner did not ask for', 'move or cancel the pitch', 'say a calendar change is made before approval', 'sound energised, joke, or treat the day as one to push hard'],
+      voice: { moment: 'A bad night before a big pitch, for an owner who lives in their calendar; they share wearable data.', note: "Protect, or Steady at most, never Go: serious and calm, no wit, and he takes something off their plate. Zone words and the owner's own normal. A short night is a scheduling reason, not a health warning." },
     },
     receipts: [
       effects('calendar.change.proposed', { max: 1 }, 'at most one card, and none that moves or cancels the pitch', (payload) => (payload as { event_id?: string }).event_id !== 'pd-pitch'),

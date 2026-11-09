@@ -17,6 +17,7 @@ import { presenceAuthority } from './helpers/directory-presence';
 import { consoleAccess } from '../src/channels/console';
 import { CONTROLS_PATH } from '../src/channels/dashboard-controls';
 import { CONTROL_ACTION_PATH } from '../src/channels/dashboard-control-actions';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 const REMINDER_TEXT = 'Time to call Sam.';
 // Counts the reminder turns only; the day plan the runtime boots also calls the model.
@@ -106,6 +107,7 @@ const drive = async (name: string, script: (steps: Readonly<{
     const owner = new OwnerDO(state, { ...env, ...directory, ...whatsapp, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     const turn = vi.spyOn(owner as unknown as { turn(): Promise<void> }, 'turn').mockImplementation(async () => { wire.events.push('turn'); });
     let seq = 0;
+    const draining: Promise<void>[] = [];
     try {
       await script({
         // A queued record falls due 250 ms after it is written, so each pass waits that out before the next. The wake a pass
@@ -118,7 +120,7 @@ const drive = async (name: string, script: (steps: Readonly<{
             body: JSON.stringify({ messages: [{ from, id: `wamid.in.${seq}`, timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: 'hi' } }] }),
           }));
           expect(response.status).toBe(200);
-          await Promise.all([...(owner as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+          await drainWhatsAppTurns(owner);
         },
         cancel: async () => { expect(await book.cancel(reminder.id)).toBe(true); },
         later: async (ms, step) => {
@@ -128,7 +130,6 @@ const drive = async (name: string, script: (steps: Readonly<{
         },
         reminderRuns: () => state.storage.sql.exec<{ status: string; summary: string | null }>("SELECT status, summary FROM background_runs WHERE kind = 'reminder' ORDER BY started_at").toArray(),
         hold: texts => texts.forEach((text, index) => state.storage.kv.put(`wa_held:${String(index + 1).padStart(12, '0')}`, { heldAt: Date.now(), body: { chat_id: Number(SUBJECT), text } })),
-        // The owner's message is admitted and its turn's work starts in the background, as after the webhook's ack.
         stall: text => {
           let release!: () => void, reached!: () => void;
           const started = new Promise<void>(resolve => { reached = resolve; });
@@ -143,11 +144,14 @@ const drive = async (name: string, script: (steps: Readonly<{
             body: JSON.stringify({ messages: [{ from: SUBJECT, id: `wamid.in.${seq}`, timestamp: String(Math.floor(sentAt / 1000)), type: 'text', text: { body: 'hi' } }] }),
           }));
           expect(response.status).toBe(200);
+          // Its turn's work starts in the background, as the alarm after the webhook's ack starts it.
+          draining.push(drainWhatsAppTurns(owner));
         },
         // The wake that work armed is cleared, as after an alarm pass: it would run on the platform's own instance of this object,
         // which shares this storage, and could move a record while a later step of the test is reading it.
         settled: async () => {
-          await Promise.all([...(owner as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+          await Promise.all(draining.splice(0));
+          await drainWhatsAppTurns(owner);
           await (owner as unknown as { serial(work: () => Promise<void>): Promise<void> }).serial(async () => undefined);
           await state.storage.deleteAlarm();
         },

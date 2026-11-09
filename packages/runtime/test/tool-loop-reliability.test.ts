@@ -251,7 +251,7 @@ describe('bounded tool-loop read recovery', () => {
     });
     expect(steps).toBe(2);
     expect(budget.remaining).toBe(2);
-    expect(text).toContain('No tools are available');
+    expect(text).toBe("I couldn't act on that here, so nothing was done.");
   });
 
   it.each([0, 1])('does not replenish exhausted shared budget under an empty ceiling (remaining %s)', async (remaining) => {

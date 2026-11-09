@@ -14,8 +14,7 @@ const hourly = (day: string, offset: number, opts: { hr?: number; hrv?: number |
   (opts.hours ?? [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]).map(h => ({
     startAt: new Date(Date.parse(`${day}T00:00:00Z`) + h * 3_600_000).toISOString(),
     heartRate: (opts.hr ?? 72) + wobble(h + offset, 2),
-    hrv: opts.hrv === undefined ? 55 : opts.hrv,
-    hrvMethod: opts.hrv === null ? null : 'rmssd',
+    hrvReadings: opts.hrv === null ? [] : [{ value: opts.hrv ?? 55, method: 'rmssd' }],
     daylightMinutes: 20, movementMinutes: 12, activeEnergyKcal: null,
   }));
 
@@ -214,7 +213,7 @@ const habitual = (d: string, tz: string, through = 24): DayRecord => ({
   overnightHrv: [{ value: 60, method: 'rmssd' }], restingHeartRate: [{ value: 55, method: 'provider_resting_daily' }], workouts: [], demand: null,
   hourly: Array.from({ length: through }, (_, h) => h).flatMap(h => {
     const at = wallHour(d, tz, h);
-    return at === null ? [] : [{ startAt: new Date(at).toISOString(), heartRate: 70, hrv: 55, hrvMethod: 'rmssd' as const, daylightMinutes: h >= 7 && h < 19 ? 20 : null, movementMinutes: h >= 7 && h < 22 ? 10 : null, activeEnergyKcal: null }];
+    return at === null ? [] : [{ startAt: new Date(at).toISOString(), heartRate: 70, hrvReadings: [{ value: 55, method: 'rmssd' as const }], daylightMinutes: h >= 7 && h < 19 ? 20 : null, movementMinutes: h >= 7 && h < 22 ? 10 : null, activeEnergyKcal: null }];
   }),
 });
 const formOn = (target: string, tz: string, through: number, historyTz: (i: number) => string = () => tz) => {
@@ -307,6 +306,18 @@ describe('health scores: time', () => {
     expect(hours('2026-03-29', 'Europe/London')).toBe(23);
     expect(hours('2026-04-05', 'Pacific/Auckland')).toBe(25);
     expect(hours('2026-03-20', 'Asia/Kolkata')).toBe(24);
+    expect(hours('2026-04-05', 'Australia/Lord_Howe')).toBe(24.5);
+    expect(hours('2026-10-04', 'Australia/Lord_Howe')).toBe(23.5);
+  });
+  it('starts a day at the jump where the clock skips midnight, and ends the day before there', () => {
+    const at = (iso: string) => Date.parse(iso);
+    expect(localDayWindow('2026-09-05', 'America/Santiago')).toEqual({ start: at('2026-09-05T04:00:00Z'), end: at('2026-09-06T04:00:00Z') });
+    expect(localDayWindow('2026-09-06', 'America/Santiago')).toEqual({ start: at('2026-09-06T04:00:00Z'), end: at('2026-09-07T03:00:00Z') });
+    expect(localDayWindow('2026-04-04', 'America/Santiago')).toEqual({ start: at('2026-04-04T03:00:00Z'), end: at('2026-04-05T04:00:00Z') });
+    expect(localDayWindow('2026-03-07', 'America/Havana')).toEqual({ start: at('2026-03-07T05:00:00Z'), end: at('2026-03-08T05:00:00Z') });
+    expect(localDayWindow('2026-03-08', 'America/Havana')).toEqual({ start: at('2026-03-08T05:00:00Z'), end: at('2026-03-09T04:00:00Z') });
+    expect(localDayWindow('2026-03-29', 'Europe/London')).toEqual({ start: at('2026-03-29T00:00:00Z'), end: at('2026-03-29T23:00:00Z') });
+    expect(localDayWindow('2026-11-01', 'America/New_York')).toEqual({ start: at('2026-11-01T04:00:00Z'), end: at('2026-11-02T05:00:00Z') });
   });
   it('drops hourly readings outside the day own local window', () => {
     const outside = { ...hourly(TARGET, 0)[0]!, startAt: `${addDays(TARGET, 1)}T12:00:00.000Z`, movementMinutes: 55 };
@@ -320,7 +331,7 @@ describe('health scores: time', () => {
   it('counts a 23-hour spring-forward day as full when every hour exists', () => {
     const target = '2026-03-08'; // America/New_York spring forward
     const days = Array.from({ length: 21 }, (_, i) => ({ ...dstDay(addDays(target, -i), 'America/New_York', i) }));
-    const hours = (d: string) => Array.from({ length: 23 }, (_, h) => ({ startAt: new Date(Date.parse(`${d}T05:00:00Z`) + h * 3_600_000).toISOString(), heartRate: 70, hrv: 50, hrvMethod: 'rmssd' as const, daylightMinutes: 20, movementMinutes: 10, activeEnergyKcal: null }));
+    const hours = (d: string) => Array.from({ length: 23 }, (_, h) => ({ startAt: new Date(Date.parse(`${d}T05:00:00Z`) + h * 3_600_000).toISOString(), heartRate: 70, hrvReadings: [{ value: 50, method: 'rmssd' as const }], daylightMinutes: 20, movementMinutes: 10, activeEnergyKcal: null }));
     days[0] = { ...days[0]!, hourly: hours(target) };
     const r = computeDailyScores({ access: 'granted', targetDay: target, days, sleepNeedMinutes: 480, asOf: '2026-03-08T23:00:00.000Z' });
     expect(r.form.state === 'available' || r.form.state === 'unavailable').toBe(true);

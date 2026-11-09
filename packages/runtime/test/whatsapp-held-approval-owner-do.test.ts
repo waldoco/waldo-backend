@@ -5,6 +5,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CARD_SHOWN_IN_FULL } from '../src/channels/approvals';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { traceBook } from '../src/channels/harness';
 import { reminderBook } from '../src/channels/reminders';
@@ -15,10 +16,15 @@ import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 const REPORT = 'Drafted the weekly numbers email to Sam for your approval.';
 const OWNER_SAYS = 'Morning, Waldo.';
 const EMAIL = { to: ['sam@example.test'], subject: 'Weekly numbers', body_markdown: 'Hi Sam, the weekly numbers are attached below.' };
+// The owner asks in chat. The model's first send_email passes to as a bare string, which the argument check refuses; it then
+// passes a list, and replies with only what the card cannot say.
+const OWNER_ASKS = 'Email Sam the weekly numbers.';
+const OWNER_REPLY = 'I used Sam at sam@example.test, the only Sam in your contacts.';
 // The order's turn proposes the email, then reports; the owner's own turns answer 'Noted.'. Each tool result the order's turn
 // got back is kept, so a test can read what the proposing tool told the model.
 const model = vi.hoisted(() => ({ orders: 0, toolResults: [] as string[] }));
@@ -35,6 +41,12 @@ vi.mock('../src/channels/telegram-turn', async load => {
       if (!results.length) { model.orders += 1; return reply('', [{ call_id: 'propose-email', name: 'send_email', arguments: JSON.stringify(EMAIL) }]); }
       model.toolResults.push(...results.map(turn => turn.output));
       return reply(REPORT);
+    }
+    if (asked.includes(OWNER_ASKS)) {
+      if (!results.length) { wire.events.push('turn'); return reply('', [{ call_id: 'email-string', name: 'send_email', arguments: JSON.stringify({ ...EMAIL, to: EMAIL.to[0] }) }]); }
+      if (results.length === 1) return reply('', [{ call_id: 'email-list', name: 'send_email', arguments: JSON.stringify(EMAIL) }]);
+      model.toolResults.push(...results.map(turn => turn.output));
+      return reply(OWNER_REPLY);
     }
     if (asked.includes(OWNER_SAYS)) wire.events.push('turn');
     return reply('Noted.');
@@ -121,7 +133,7 @@ const owned = async (name: string, script: (steps: Readonly<{
     const owner = new OwnerDO(state, { ...env, ...directory, ...whatsapp, ...google, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     let seq = 0;
     const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
-    const internals = owner as unknown as { bindWhatsApp(subject: string | null): void; runtimes: Record<string, unknown>; whatsappInflight: Set<Promise<void>>;
+    const internals = owner as unknown as { bindWhatsApp(subject: string | null): void; runtimes: Record<string, unknown>;
       setup(channel: string): { act(input: { action: 'node.forget' | 'spot.forget'; id: string; value: string }): Promise<boolean | string> } };
     const replyFrom = async (subject: string, text: string) => {
       seq += 1;
@@ -130,7 +142,7 @@ const owned = async (name: string, script: (steps: Readonly<{
         body: JSON.stringify({ messages: [{ from: subject, id: `wamid.in.${seq}`, timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: text } }] }),
       }));
       expect(response.status).toBe(200);
-      await Promise.all([...internals.whatsappInflight]);
+      await drainWhatsAppTurns(owner);
     };
     try {
       await script({
@@ -224,6 +236,27 @@ describe('an approval card for a WhatsApp-only owner raised while the 24-hour wi
       expect(cards).toHaveLength(1);
       expect(shown(approval!.id).find(row => row.surface === 'whatsapp')).toMatchObject({ message_ref: wire.ids.get(cards[0]!), approvable: 0 });
       expect(wire.events).not.toContain('template:waldo_update_ready');
+    }, HOUR);
+  });
+
+  it('an email the owner asks for in chat is one card and the reply: no receipt after the card, no refused call on the receipt line', async () => {
+    await owned('wa-chat-email-one-message', async ({ reply, approvals }) => {
+      await reply(OWNER_ASKS);
+      const [approval] = approvals();
+      expect(approval).toMatchObject({ kind: 'email_send', status: 'open' });
+      const turn = wire.events.slice(wire.events.indexOf('turn') + 1);
+      expect(turn).toHaveLength(2);
+      const [card, answer] = turn;
+      expect(isCard(approval!.id)(card!)).toBe(true);
+      expect(card).toContain('Subject: Weekly numbers');
+      expect(card).toContain('Nothing has been sent.');
+      expect(card).toContain('https://fixture.invalid');
+      expect(answer).toContain(OWNER_REPLY);
+      expect(answer).toContain('Needs your yes: email send');
+      expect(answer).not.toContain('(failed)');
+      // The tool told the model the owner already has the whole card, so its reply adds only what is new.
+      expect(model.toolResults.at(-1)).toContain(CARD_SHOWN_IN_FULL);
+      expect(mail.sent).toEqual([]);
     }, HOUR);
   });
 

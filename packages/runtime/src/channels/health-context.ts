@@ -12,6 +12,7 @@ import {
   type DerivedSleepDebt,
 } from '@waldo/contracts';
 import type { ContextHealthMaterial } from '../context-composer/types';
+import { TRAINING_LOAD_PHRASES } from '../health/scores/training-load';
 import { STEADY_SCORE_MOVE } from '../health/scores/zones';
 import type { OwnerClock } from '../tools/live/get-context';
 import { localIso } from './reminders';
@@ -54,6 +55,8 @@ export type HealthContextRow = Readonly<{
     // is given a word for the amount and, when the row names one, a word for the direction, never the minutes.
     sleep_debt?: unknown;
     windows?: unknown;
+    // The candidate training load: a closed phrase and method, or a closed reason, never a figure.
+    training_load?: unknown;
     // The row's updated_at: when the app last compiled this derived context. It becomes the
     // narrative's compiled_at - the truthful as-of the prepareHealth provenance bound checks
     // against the turn's snapshot time, which a read-time stamp would always violate.
@@ -130,6 +133,22 @@ const sleepDebtWords = (value: unknown): DerivedSleepDebt | undefined => {
 const energyWindows = (value: unknown): DerivedHealthDestinationView['energy_windows'] => {
   const parsed = derivedEnergyWindowsSchema.safeParse(value);
   return parsed.success && parsed.data.length > 0 ? parsed.data : undefined;
+};
+
+// The candidate training load as one sentence, from the closed vocabulary only; anything else is absence, never passed on.
+const LOAD_METHOD_WORDS: Readonly<Record<string, string>> = {
+  hr_zones: 'time in heart-rate zones',
+  hr_zones_observed_peak: 'time in approximate heart-rate zones, set from the highest heart rate seen in a workout rather than a measured maximum',
+  effort: 'session effort', minutes: 'workout minutes',
+};
+const LOAD_UNAVAILABLE_WORDS: Readonly<Record<string, string>> = { baseline_immature: 'not enough days yet', no_readings: 'no workouts in the last four weeks' };
+const trainingLoadWords = (value: unknown): string | null => {
+  if (!isRecord(value)) return null;
+  if (value['state'] === 'unavailable') return typeof value['reason'] === 'string' && Object.hasOwn(LOAD_UNAVAILABLE_WORDS, value['reason']) ? `Training load: ${LOAD_UNAVAILABLE_WORDS[value['reason']]}.` : null;
+  const { phrase, method } = value;
+  if (value['state'] !== 'available' || value['activation'] !== 'candidate_unaccepted' || typeof method !== 'string' || !Object.hasOwn(LOAD_METHOD_WORDS, method)
+    || !(TRAINING_LOAD_PHRASES as readonly unknown[]).includes(phrase)) return null;
+  return `Training load this week (candidate, from ${LOAD_METHOD_WORDS[method]}): ${String(phrase)} against your own usual.`;
 };
 
 const pillarDrivers = (value: unknown): readonly string[] =>
@@ -220,6 +239,8 @@ export const toContextHealthMaterial = (
     const summaryParts = [`${zone === undefined ? '' : `Form ${zone}; `}${zone === undefined ? 'Recovery' : 'recovery'} ${recovery}; load ${load ?? 'unavailable'}.`];
     if (drivers.length > 0) summaryParts.push(`Drivers: ${drivers.join('; ')}.`);
     if (tags.length > 0) summaryParts.push(`Tags: ${tags.join(', ')}.`);
+    const trainingLoad = trainingLoadWords(context.training_load);
+    if (trainingLoad !== null) summaryParts.push(trainingLoad);
 
     const viewParsed = derivedHealthDestinationViewSchema.safeParse(view);
     const narrativeParsed = narrativeContextSchema.safeParse({
@@ -258,9 +279,17 @@ export const toContextHealthMaterial = (
   }
 };
 
+// The zone words a rendered health block shows the model (renderHealth), for checks that keep them out of what leaves.
+export const healthZoneWords = (material: ContextHealthMaterial | null): readonly string[] => material === null ? [] : [
+  'form_zone' in material.view ? material.view.form_zone : material.view.recovery_zone,
+  material.narrative.recovery_descriptor, ...(material.narrative.load_descriptor ? [material.narrative.load_descriptor] : []),
+];
+
 export type HealthContextBook = Readonly<{
   linked(): boolean;
   latest(trace?: string): Promise<ContextHealthMaterial | null>;
+  // As latest, but a read that failed is 'unknown' rather than none shared, for a caller that must not take an outage for a revoke.
+  read(trace?: string): Promise<ContextHealthMaterial | null | 'unknown'>;
 }>;
 
 export const healthContextBook = (
@@ -269,21 +298,25 @@ export const healthContextBook = (
   clock: OwnerClock,
   onReadError?: (error: unknown, trace?: string) => void,
   onReadSuccess?: (present: boolean, trace?: string) => void,
-): HealthContextBook => ({
-  linked: () => call !== null && doName !== null,
-  async latest(trace) {
+): HealthContextBook => {
+  const read: HealthContextBook['read'] = async (trace) => {
     if (!call || !doName) return null;
     let row: unknown;
     try {
       row = await call('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName });
     } catch (error) {
       onReadError?.(error, trace);
-      return null;
+      return 'unknown';
     }
     if (row === null || typeof row !== 'object') { onReadSuccess?.(false, trace); return null; }
     let invalid = false;
     const material = toContextHealthMaterial(row as HealthContextRow, clock, (error) => { invalid = true; onReadError?.(error, trace); });
     if (!invalid) onReadSuccess?.(material !== null, trace);
-    return material;
-  },
-});
+    return invalid ? 'unknown' : material;
+  };
+  return {
+    linked: () => call !== null && doName !== null,
+    latest: async (trace) => { const found = await read(trace); return found === 'unknown' ? null : found; },
+    read,
+  };
+};

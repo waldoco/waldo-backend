@@ -1,5 +1,6 @@
 import {afterEach,describe,it,expect,vi} from 'vitest';
-import {fetchMemoryControls,readMemoryControls} from './MemoryActions';
+import {AREAS,fetchMemoryControls,readMemoryControls} from './MemoryActions';
+import {LIFE_AREAS} from '../../contracts/src/memory/area';
 import {SignInRequired} from './model';
 import {submitControl} from './controls-model';
 const id='owner:claim:5';
@@ -10,6 +11,12 @@ describe('Memory action review and transport',()=>{
   const node='owner:node:3',read={...wire,data:{id:node,status:'active',review:{label:'Deep work in the mornings',note:'Focused before noon'},actions:['node.confirm','node.correct','node.forget']}};
   expect(readMemoryControls(read,node).data.actions).toEqual(['node.confirm','node.correct','node.forget']);
   expect(()=>readMemoryControls({...read,data:{...read.data,actions:['node.promote']}},node)).toThrow();
+ });
+ it('offers the contracts\' life areas, reads a Spot\'s area, and drops one it does not know',()=>{
+  expect(AREAS).toEqual(LIFE_AREAS);
+  const read={...wire,data:{...wire.data,review:{...wire.data.review,area:'money'},actions:['spot.area','spot.forget']}};
+  expect(readMemoryControls(read,id).data).toMatchObject({review:{area:'money'},actions:['spot.area','spot.forget']});
+  expect(readMemoryControls({...read,data:{...read.data,review:{...read.data.review,area:'finance'}}},id).data.review).toEqual({label:'Current saved preference',note:'Writer note'});
  });
  it('requires a current review and exact target, never accepts another owner or a hidden pending body',()=>{
   expect(()=>readMemoryControls({...wire,data:{...wire.data,id:'other:claim:5'}},id)).toThrow();

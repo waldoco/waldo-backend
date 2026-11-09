@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
-import { sanitise } from '../src/scribe/sanitiser';
+import { DEEP_ENCODING_MARKER, sanitise } from '../src/scribe/sanitiser';
 
 // Three ordinary encodings, each one layer deep, in one card: a JSON escape, a URL percent escape and a mixed-case token
 // that reads as printable base64. No lone percent sign, which would turn the percent view off for the whole text.
@@ -148,7 +148,10 @@ describe('a realistic card with two-layer links beside one-layer siblings', () =
     const note = `Note ${btoa(encodeURIComponent('hrv: 42 ms resting heart rate 51 bpm'))}`;
     expect(scanAt(`${card}\n${note}`, 'external')).toMatchObject({ ok: false, reason: 'health_value_leak' });
     expect(scanAt(`${card}\n${note}`, null)).toMatchObject({ ok: true });
-    expect(scanAt(`${realistic}\n${note}`, 'external')).toMatchObject({ ok: false, reason: 'invalid_payload' });
+    // Beside the two-layer links the note nests past the limit, so external content withholds the whole value.
+    expect(scanAt(`${realistic}\n${note}`, 'external')).toEqual({
+      ok: true, source_taint: 'external', redactions: [{ kind: 'deep_encoding', count: 1 }], payload: [{ role: 'user', content: DEEP_ENCODING_MARKER }],
+    });
   });
 
   it('finds a canary two layers deep, and fails closed on one three layers deep', () => {

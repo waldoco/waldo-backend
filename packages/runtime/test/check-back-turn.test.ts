@@ -6,6 +6,7 @@ import { HEARTBEAT_EVERY_MS, HEARTBEAT_ID } from '../src/channels/heartbeat';
 import { traceBook } from '../src/channels/harness';
 import { loopBook } from '../src/channels/loops';
 import { reminderBook } from '../src/channels/reminders';
+import { EGRESS_READ_TOOLS } from '../src/tasks/profiles';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
 import { claimStore, textFingerprint } from '../src/memory/claims';
 import { FORGET_PURGE_ID } from '../src/memory/forget-purge';
@@ -25,6 +26,7 @@ const fixture = vi.hoisted(() => ({
   requests: [] as LLMGatewayRequest['request'][],
   script: undefined as ((request: LLMGatewayRequest['request'], asked: string) => { text: string; calls?: Call[] }) | undefined,
   outage: false,
+  refuse: false,
 }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
@@ -34,6 +36,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     if (request.response_format) return done(request.response_format.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}');
     const asked = String(request.messages.at(-1)?.content ?? '');
     if (fixture.outage) return { ok: false as const, code: 'transient' as const, error: 'synthetic provider outage' };
+    if (fixture.refuse) return { ok: false as const, code: 'invalid_args' as const, error: 'synthetic request refusal' };
     const step = fixture.script?.(request, asked) ?? { text: 'SKIP' };
     return done(step.text, step.calls);
   } };
@@ -54,7 +57,7 @@ const wire = { authority: 'current' as 'current' | 'revoked', sent: [] as string
 const clock = { now: AT };
 
 beforeEach(() => {
-  fixture.requests = []; fixture.script = undefined; fixture.outage = false; wire.authority = 'current'; wire.sent = [];
+  fixture.requests = []; fixture.script = undefined; fixture.outage = false; fixture.refuse = false; wire.authority = 'current'; wire.sent = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -136,6 +139,39 @@ describe('a due reminder runs a fresh check-back turn', () => {
     });
   });
 
+  // A check-back runs inside the alarm's own budget, so a careful one that needs more than 25 tool rounds (two minutes' worth)
+  // finishes instead of stopping at a flat two-minute cap.
+  it('runs on the alarm\'s time: more rounds than a flat two minutes allows', async () => {
+    await withOwner('check-back-reminder-long', async (owner, state) => {
+      await dueReminder(state);
+      fixture.script = (request) => (request.tool_turns?.length ?? 0) < 30
+        ? { text: '', calls: [{ call_id: `look-${request.tool_turns?.length ?? 0}`, name: 'get_context', arguments: '{}' }] }
+        : { text: FOUND };
+      await schedulePass(owner, state);
+      expect(checkBackRequests().at(-1)!.tool_turns).toHaveLength(30);
+      await transportPass(owner, state);
+      expect(wire.sent).toEqual([FOUND]);
+    });
+  });
+
+  // A reminder set while the owner's turn had read outside text may carry that text's words, so it fires as outside text: the
+  // note is data, the turn holds no read that sends text out, and any change it wants goes on the owner's card.
+  it('a reminder set after outside text fires as outside text, with no egress reads', async () => {
+    await withOwner('check-back-reminder-outside', async (owner, state) => {
+      await reminderBook(state.storage.sql, new Scheduler(state.storage.sql, state.storage, productionDeps()), { timezone: 'UTC', now: () => new Date(AT - 3_600_000) }, () => 'rem-o')
+        .set({ note: NOTE, at: new Date(AT - 30 * 60_000).toISOString().slice(0, 16), repeat: 'none' }, { outside: true });
+      fixture.script = looksThen(FOUND);
+      await schedulePass(owner, state);
+      const [first] = checkBackRequests();
+      expect(first!.messages.at(-1)!.content).toContain(NOTE);
+      expect(first!.messages.at(-1)!.content).toContain('not the owner\'s own words');
+      for (const egress of EGRESS_READ_TOOLS) expect(offered(first!)).not.toContain(egress);
+      expect(offered(first!)).toEqual(expect.arrayContaining(['get_context', 'propose_action']));
+      await transportPass(owner, state);
+      expect(wire.sent).toEqual([FOUND]);
+    });
+  });
+
   it('can end silent when the model decides nothing needs saying, and never falls back to the note', async () => {
     await withOwner('check-back-reminder-silent', async (owner, state) => {
       const reminder = await dueReminder(state);
@@ -158,6 +194,45 @@ describe('a due reminder runs a fresh check-back turn', () => {
       await transportPass(owner, state);
       expect(wire.sent).toEqual([]);
       expect(outbox(state)).toEqual([]);
+      expect(state.storage.sql.exec("SELECT outcome FROM schedule_runs WHERE kind = 'reminder'").toArray()).toEqual([{ outcome: 'failed' }]);
+    });
+  });
+
+  it('tells the model when the reminder was due and what time it is now, in the owner\'s local time', async () => {
+    await withOwner('check-back-reminder-lateness', async (owner, state) => {
+      await dueReminder(state);
+      fixture.script = looksThen(FOUND);
+      clock.now += 4.5 * 3_600_000;
+      await schedulePass(owner, state);
+      const [first] = checkBackRequests();
+      const asked = String(first!.messages.at(-1)!.content);
+      expect(asked).toContain('due at 2026-10-03 08:30');
+      expect(asked).toContain('now 2026-10-03 13:30');
+    });
+  });
+
+  it('a model outage never holds a reminder back: the owner gets their own words at once, marked as sent without the model', async () => {
+    await withOwner('check-back-reminder-outage', async (owner, state) => {
+      await dueReminder(state);
+      fixture.outage = true;
+      await schedulePass(owner, state);
+      await transportPass(owner, state);
+      expect(wire.sent).toEqual([`Reminder: ${NOTE}\n\n(I couldn't reach my model to add more.)`]);
+      expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM schedule WHERE kind = 'reminder'").one()).toEqual({ n: 0 });
+      expect(state.storage.sql.exec("SELECT outcome FROM schedule_runs WHERE kind = 'reminder'").toArray()).toEqual([{ outcome: 'ok' }]);
+      clock.now += 25 * 3_600_000;
+      await schedulePass(owner, state); await transportPass(owner, state);
+      expect(wire.sent).toHaveLength(1);
+    });
+  });
+
+  it('a request fault is not an outage: the reminder keeps its retry and never falls back to the note', async () => {
+    await withOwner('check-back-reminder-fault', async (owner, state) => {
+      await dueReminder(state);
+      fixture.refuse = true;
+      await schedulePass(owner, state);
+      await transportPass(owner, state);
+      expect(wire.sent).toEqual([]);
       expect(state.storage.sql.exec("SELECT outcome FROM schedule_runs WHERE kind = 'reminder'").toArray()).toEqual([{ outcome: 'failed' }]);
     });
   });

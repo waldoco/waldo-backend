@@ -1,18 +1,23 @@
 import { ownerEffectOperationRef, type OwnerEffectLedger } from '../../channels/owner-effect-ledger';
 import { taskSourceClient } from '../task-source-io';
+import { MAX_STORED_ITEM_CHARS } from '../../conversation/tool-output-store';
 import { availabilityWindows, ownerWindows } from './availability';
 import type { ProxyIntent } from '../../connectors/proxy-intent';
 import { artifactMarker, extractArtifacts, quarantineArtifacts, type ArtifactKind, type ExtractedArtifact } from '../../security/artifact-hygiene';
 import {
   calendarPageSchema, queryAvailabilityArgsSchema, type QueryAvailabilityArgs,
   googleCalendarListPageSchema, googleTaskListPageSchema, googleTasksPageSchema, type GoogleTasksPage,
-  connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema, contactMatchSchema, type ContactMatch, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
+  connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, searchContactsArgsSchema, contactMatchSchema, type ContactMatch, getTasksArgsSchema, proposeCalendarChangeArgsSchema, proposeCalendarPlanArgsSchema, type ProposeCalendarPlanArgs, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, TOOL_SPILL_VIEW_MAX_CHARS,
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type SearchContactsArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolEligibility, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
-import { PEOPLE_UNREADABLE, b64url, buildMime, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type FreeBusyResult, type GoogleClient, type GoogleFeature, type ThreadMessage } from '../../connectors/google';
-import { EmailProposalError, proposalStatus, type CardPlacement, type EmailSendProposal, type RecordedLedgerKind } from '../../channels/approvals';
+import { PEOPLE_UNREADABLE, UNKNOWN_THREAD_MESSAGE, b64url, validMessageId, validFreeBusyCalendar, GoogleError, sha256Hex, type CalendarPage, type FreeBusyResult, type GoogleClient, type GoogleFeature, type ThreadMessage } from '../../connectors/google';
+import { agentMailFirstName } from '../../channels/agent-mail/handles';
+import { renderOwnerMail } from '../../channels/agent-mail/render';
+import { ApprovalReplaceError, EmailProposalError, proposalStatus, replaceRefusal, replacementStatus, turnReadOutside, callWhy, type ApprovalDesk, type CardPlacement, type EmailSendProposal, type ProposeOptions, type RecordedLedgerKind, type Replacement } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
+import type { CalendarEgressScreen } from '../../health/trigger';
 import type { OwnerClock } from './get-context';
+import { planBlocks } from '../../channels/calendar-plan';
 import { connectNeededText } from './connect-text';
 import { carriesSecretOrCanary, sanitise } from '../../scribe/sanitiser';
 
@@ -22,16 +27,28 @@ export type GoogleAccess = Readonly<{
 }>;
 
 export type EffectDesk = Readonly<{
-  propose(proposal: ProposeCalendarChangeArgs, turnKey?: string, operationRef?: string): Promise<string>;
-  proposeSendEmail(proposal: EmailSendProposal): Promise<string>;
+  propose(proposal: ProposeCalendarChangeArgs, turnKey?: string, operationRef?: string, options?: ProposeOptions): Promise<string>;
+  proposeSendEmail(proposal: EmailSendProposal, options?: ProposeOptions): Promise<string>;
   record(kind: RecordedLedgerKind, summary: string, payload: unknown): void;
   placement?(id: string): CardPlacement;
+  replacement?(id: string): Replacement | null;
+  grantOutcome?(id: string): ReturnType<ApprovalDesk['grantOutcome']>;
 }>;
+
+// A Google call that fails the same way on every retry. Its code is never transient, and fix is the one step that would
+// make the call work, or why none will. Every other thrown error stays transient.
+class GoogleCallRefused extends Error {
+  constructor(readonly code: 'invalid_args' | 'not_found' | 'rejected', message: string, readonly fix: string) { super(message); }
+}
+// The connector this Waldo runs predates the read asked for: no retry or argument change makes it work.
+const connectorLacks = (what: string) => new GoogleCallRefused('rejected', `This Waldo's Google connector cannot ${what} yet.`, 'Do not retry. Use what the first page or the default read gives, and tell the owner what was not read.');
+// The connector answered outside what was asked (more items, another list, another window, another account).
+const answerMismatch = (what: string) => new GoogleCallRefused('rejected', `Google's answer did not match the request (${what}), so it was not used.`, 'Retrying fails the same way. Tell the owner this read could not be checked and what it would have covered.');
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 const DAY_MS = 24 * 60 * 60_000;
 const assertCollectionAccount = (observed: { connection_id: string | null; email: string | null }, client: GoogleClient) => {
-  if ((observed.connection_id !== null && observed.connection_id !== client.account?.connection_id) || (observed.email !== null && observed.email.toLowerCase() !== client.account?.email?.toLowerCase())) throw new Error('Google collection account does not match the selected connection');
+  if ((observed.connection_id !== null && observed.connection_id !== client.account?.connection_id) || (observed.email !== null && observed.email.toLowerCase() !== client.account?.email?.toLowerCase())) throw answerMismatch('another account');
 };
 
 // S4 (CONNECT_FLOW_DESIGN 4.4): auth failures are a typed intent, never a URL in text. The
@@ -57,7 +74,7 @@ async function withGoogle<T extends object>(google: GoogleAccess, feature: Googl
   try {
   const client = await google.client(feature, undefined, ctx?.assertTaskSourceCurrent, account);
   if (client === null) return authFailed(await missingClientReason(google, feature, account), feature);
-    if (account && client.account?.email?.toLowerCase() !== account.toLowerCase()) throw new Error('Selected Google account is unavailable; no other account was used');
+    if (account && client.account?.email?.toLowerCase() !== account.toLowerCase()) throw new GoogleCallRefused('not_found', `${account} is not a connected Google account that can do this; no other account was used.`, 'Pass account as one of the addresses connect_service lists, or leave account out to read every connected account.');
     const data = await work(taskSourceClient(client, ctx));
     return { ok: true, data: { ...data, account: client.account ?? {connection_id:null,email:null} }, source_taint: 'external' };
   } catch (error) {
@@ -69,6 +86,7 @@ async function withGoogle<T extends object>(google: GoogleAccess, feature: Googl
     // An answer that fails its schema fails the same way on every retry until one side is redeployed, so it is refused.
     // The model hears fixed words: the parse error names fields, never what the owner needs to hear.
     if (error instanceof UnreadableAnswer) return { ok: false, code: 'rejected', error: UNREADABLE_ANSWER, source_taint: 'external' };
+    if (error instanceof GoogleCallRefused) return { ok: false, code: error.code, error: error.message, fix: error.fix, source_taint: 'external' };
     if (error instanceof BodyWithheld) return { ok: false, code: 'rejected', error: 'This message body could not be checked safely, so it is withheld.', source_taint: 'external' };
     return { ok: false, code: 'transient', error: error instanceof Error ? error.message : String(error), source_taint: 'external' };
   }
@@ -116,7 +134,7 @@ const accountFix = (email: string, feature: GoogleFeature, failed: Failed): stri
   failed.connect?.reason === 'scope_missing' ? `Reconnect ${email} and allow ${FEATURE_NAMES[feature]} when Google asks.`
     : failed.connect?.reason === 'reauth_needed' ? `Reconnect ${email}: Google no longer accepts its sign-in.`
       : failed.connect ? `Connect ${email} again.`
-        : failed.code === 'transient' ? 'Try this account again.' : undefined;
+        : failed.code === 'transient' ? 'Try this account again.' : failed.fix;
 const NOT_READ = 'An account that was not read is unknown, not empty.';
 const ACCOUNT_ERROR_CHARS = 300;
 
@@ -176,10 +194,10 @@ const granted = (google: GoogleAccess, feature: 'calendar' | 'mail' | 'tasks') =
 // Reply intent is resolved from the selected account, never from model-supplied RFC headers.
 const replyHeaders = async (client: GoogleClient, args: DraftEmailArgs) => {
   if (!args.reply_to_thread_id) {
-    if (args.in_reply_to_msg_id) throw new Error('A reply parent requires its Gmail thread.');
+    if (args.in_reply_to_msg_id) throw new GoogleCallRefused('invalid_args', 'in_reply_to_msg_id was given without its thread.', 'Pass reply_to_thread_id with it, both as read_thread returned them, or drop both for a new email.');
     return {};
   }
-  if (!client.threadPage) throw new Error('Gmail reply metadata is unavailable.');
+  if (!client.threadPage) throw connectorLacks('read a thread to reply in it');
   let cursor: string | undefined;
   let parent: Awaited<ReturnType<NonNullable<GoogleClient['threadPage']>>>['messages'][number] | undefined;
   for (let pageNumber = 0; pageNumber < 10; pageNumber++) {
@@ -187,13 +205,15 @@ const replyHeaders = async (client: GoogleClient, args: DraftEmailArgs) => {
     if (args.in_reply_to_msg_id) parent ??= page.messages.find(m => m.id === args.in_reply_to_msg_id);
     else parent = page.messages.at(-1) ?? parent;
     if ((parent && args.in_reply_to_msg_id) || !page.cursor) break;
-    if (pageNumber === 9) throw new Error('Reply thread exceeds the metadata review budget; select a parent message.');
+    if (pageNumber === 9) throw args.in_reply_to_msg_id
+      ? new GoogleCallRefused('not_found', 'in_reply_to_msg_id is not among the first 200 messages of this thread, which is as far as Waldo looks.', 'Check the id against what read_thread returned for this thread; for a message further in, send it as a new email without reply_to_thread_id and tell the owner it will not sit in the thread.')
+      : new GoogleCallRefused('invalid_args', 'The thread is too long to find the latest message in it.', 'Pass in_reply_to_msg_id: the id of the message being replied to, from read_thread.');
     cursor = page.cursor;
   }
-  if (!parent || !validMessageId(parent.message_id)) throw new Error('Reply parent has no valid provider Message-ID in this thread.');
+  if (!parent || !validMessageId(parent.message_id)) throw new GoogleCallRefused('not_found', args.in_reply_to_msg_id ? 'in_reply_to_msg_id is not a message in this thread that can be replied to.' : 'The thread\'s latest message cannot be replied to.', 'Pass in_reply_to_msg_id as a message id read_thread returned for this thread, or send it as a new email without reply_to_thread_id.');
   const subject = (value: string) => value.replace(/^(?:\s*re:\s*)+/i, '').trim();
-  if (/[\r\n]/.test(args.subject) || subject(args.subject) !== subject(parent.subject)) throw new Error('Reply subject differs from its parent thread.');
-  if (parent.references && (parent.references.length > 100 || !parent.references.every(validMessageId))) throw new Error('Reply parent References are invalid.');
+  if (/[\r\n]/.test(args.subject) || subject(args.subject) !== subject(parent.subject)) throw new GoogleCallRefused('invalid_args', 'A reply keeps its thread\'s subject, and this one differs.', 'Use the subject read_thread shows for this thread, on one line (a leading Re: is fine), or send a new email without reply_to_thread_id.');
+  if (parent.references && (parent.references.length > 100 || !parent.references.every(validMessageId))) throw new GoogleCallRefused('rejected', 'The message being replied to carries thread headers Waldo cannot keep.', 'Send it as a new email without reply_to_thread_id, and tell the owner it will not sit in the thread.');
   return { inReplyTo: parent.message_id, references: [...new Set([...(parent.references ?? []), parent.message_id])] };
 };
 
@@ -233,6 +253,13 @@ export type ArtifactRelay = (from: string, artifacts: readonly ExtractedArtifact
 // message is cut silently; the rest of each body is read by offset.
 const BODY_CHUNK = 12_000;
 export const READ_BODY_BUDGET = 40_000;
+// A page whose headers are long (many recipients) gets less body, so the whole result stays within what the tool-output
+// store keeps; a cut store would leave the later messages' ids out of reach. The rest of each body follows by offset.
+const READ_RESULT_MAX_CHARS = MAX_STORED_ITEM_CHARS - 8_000;
+const pageBodyBudget = (messages: readonly ThreadMessage[]) => {
+  const headers = JSON.stringify(messages.map(({ body: _body, artifact_scan: _scan, ...shown }) => shown)).length;
+  return Math.max(0, Math.min(READ_BODY_BUDGET, READ_RESULT_MAX_CHARS - headers));
+};
 const RUN_MAX = 2_048;
 const CUT_GUARD = 256;
 export const omitLongRuns = (text: string): string => text.replace(/[^\s"'<>)\]]+/g, (run) => run.length > RUN_MAX ? `[${run.length} characters of unbroken text omitted]` : run);
@@ -256,11 +283,14 @@ export const scribedExternal = <T extends Parameters<typeof sanitise>[0]['payloa
 };
 export const scribedBody = (text: string, canaries: readonly string[]): string => scribedExternal({ body: text }, canaries).body;
 const freshCanaries = () => Array.from({ length: 3 }, () => crypto.randomUUID().replaceAll('-', '').slice(0, 16));
-type BodyRead = Readonly<{ relay?: ArtifactRelay; offset: number; first: boolean; canaries: readonly string[] }>;
+type BodyRead = Readonly<{ relay?: ArtifactRelay; offset: number; first: boolean; canaries: readonly string[]; budget?: number }>;
 // A connector-proxy older than the messageId read ignores it and returns the thread's first message, so the
 // message is then found by paging the thread, within the reply-parent lookup's budget of 10 pages.
+const UNKNOWN_MESSAGE = () => new GoogleCallRefused('not_found', 'body_message_id is not a message in this thread.', 'Read the thread without body_message_id to get its message ids, then pass one of those.');
 const messageById = async (client: GoogleClient, threadId: string, messageId: string): Promise<ThreadMessage> => {
-  const direct = await client.threadPage!(threadId, 1, undefined, { fullBodies: true, bodyChunks: true, messageId });
+  const direct = await client.threadPage!(threadId, 1, undefined, { fullBodies: true, bodyChunks: true, messageId }).catch((error: unknown) => {
+    throw error instanceof Error && error.message === UNKNOWN_THREAD_MESSAGE ? UNKNOWN_MESSAGE() : error;
+  });
   if (direct.messages.length === 1 && direct.messages[0]!.id === messageId) return direct.messages[0]!;
   let cursor: string | undefined;
   for (let pageNumber = 0; pageNumber < 10; pageNumber++) {
@@ -270,7 +300,7 @@ const messageById = async (client: GoogleClient, threadId: string, messageId: st
     if (!page.cursor) break;
     cursor = page.cursor;
   }
-  throw new Error('unknown message in thread');
+  throw UNKNOWN_MESSAGE();
 };
 
 // The connector lists a message's link targets after its body. A target the scribe would refuse (a token or key in a hidden
@@ -285,7 +315,7 @@ export const withoutFlaggedLinks = (body: string): string => {
 };
 
 const readMessages = async (messages: readonly ThreadMessage[], read: BodyRead) => {
-  let budget = read.first ? READ_BODY_BUDGET : BODY_CHUNK;
+  let budget = read.budget ?? (read.first ? READ_BODY_BUDGET : BODY_CHUNK);
   const shownMessages = [];
   for (const item of messages) {
     const { artifact_scan: scan, body_full_chars: clipped, attachments: listed, ...visible } = item;
@@ -303,7 +333,7 @@ const readMessages = async (messages: readonly ThreadMessage[], read: BodyRead) 
       safe = WITHHELD_BODY; withheld = true;
     }
     const prepared = [safe, ...new Set(linked.map((artifact) => artifactMarker(artifact.kind)))].join('\n');
-    if (!Number.isSafeInteger(read.offset) || read.offset < 0 || (read.offset > 0 && read.offset >= prepared.length)) throw new Error('invalid body offset');
+    if (!Number.isSafeInteger(read.offset) || read.offset < 0 || (read.offset > 0 && read.offset >= prepared.length)) throw new GoogleCallRefused('invalid_args', `body_offset is past the end of this message's body (${prepared.length} characters).`, 'Pass the body_next_offset the last read returned for this message; a read without it has reached the end.');
     const end = read.offset + Math.min(BODY_CHUNK, budget);
     const chunk = prepared.slice(read.offset, end);
     budget -= chunk.length;
@@ -321,16 +351,134 @@ const readMessages = async (messages: readonly ThreadMessage[], read: BodyRead) 
   return shownMessages;
 };
 
+// The view of a read_thread result too long to show: every message's id, sender, recipients, time, subject and opening,
+// with how much body it holds, so the model picks the message it needs and reads that one whole. The openings share what
+// is left of the view's cap after everything else. A thread too long for that drops the openings, then the recipients,
+// then all but id, sender, time, subject and the body flags, so every message stays named.
+const SPILL_OPENING_MAX = 300;
+const SPILL_RECIPIENTS = 5;
+const SPILL_HEADER_MAX = 120;
+const READ_ONE = 'To read one message, call read_thread with its id as body_message_id and body_offset 0 (then its body_next_offset). read_tool_output with stored_output reads what was stored, in order.';
+type ShownMessage = Readonly<{ id: string; from: string; at: string; subject: string; body: string; to?: readonly string[]; cc?: readonly string[]; recipients_capped?: true; body_source?: ThreadMessage['body_source']; attachments?: readonly unknown[]; quarantined?: readonly string[]; body_next_offset?: number; body_total_chars?: number; body_truncated?: true; body_withheld?: string }>;
+const recipients = (list: readonly string[] | undefined) => list === undefined ? {} : { addresses: list.slice(0, SPILL_RECIPIENTS), ...(list.length > SPILL_RECIPIENTS ? { more: list.length - SPILL_RECIPIENTS } : {}) };
+const fitsSpill = (view: unknown) => JSON.stringify(view).length <= TOOL_SPILL_VIEW_MAX_CHARS;
+const bodyFlags = (message: ShownMessage) => ({
+  ...(message.recipients_capped ? { recipients_capped: true } : {}),
+  ...(message.body_source === 'snippet' || message.body_source === 'none' ? { body_source: message.body_source } : {}),
+});
+export const threadSpill = (data: unknown) => {
+  const { thread_id, account, cursor, messages } = data as Readonly<{ thread_id: string; account: unknown; cursor: string | null; messages: readonly ShownMessage[] }>;
+  if (!Array.isArray(messages)) throw new Error('not a thread result');
+  const view = (shows: string, project: (message: ShownMessage) => Record<string, unknown>) => ({
+    thread_id, account, cursor, messages: messages.map(project),
+    next: `This thread is too long to show whole: each message above shows ${shows}. ${READ_ONE}`,
+  });
+  const detail = (message: ShownMessage, opening: number | null, withRecipients: boolean) => ({
+    id: message.id, from: message.from, at: message.at, subject: message.subject,
+    ...(withRecipients && message.to ? { to: recipients(message.to) } : {}), ...(withRecipients && message.cc ? { cc: recipients(message.cc) } : {}),
+    ...(opening === null ? {} : { opening: escapedCut(message.body, opening) }), body_chars_here: message.body.length, ...bodyFlags(message),
+    ...(message.body_next_offset !== undefined ? { body_next_offset: message.body_next_offset, body_total_chars: message.body_total_chars } : {}),
+    ...(message.body_truncated ? { body_truncated: true } : {}), ...(message.body_withheld ? { body_withheld: message.body_withheld } : {}),
+    ...(message.attachments?.length ? { attachments: message.attachments.length } : {}), ...(message.quarantined ? { quarantined: message.quarantined } : {}),
+  });
+  const withOpenings = (opening: number) => view('its opening', (message) => detail(message, opening, true));
+  const bare = withOpenings(0);
+  // Each opening is cut to its share as JSON writes it, so together they fill at most the room the bare view leaves.
+  if (fitsSpill(bare)) return withOpenings(Math.min(SPILL_OPENING_MAX, Math.floor((TOOL_SPILL_VIEW_MAX_CHARS - JSON.stringify(bare).length) / Math.max(1, messages.length))));
+  const steps = [
+    () => view('its recipients and how much body it holds, without an opening', (message) => detail(message, null, true)),
+    () => view('how much body it holds, without recipients or an opening', (message) => detail(message, null, false)),
+  ];
+  for (const step of steps) {
+    const shown = step();
+    if (fitsSpill(shown)) return shown;
+  }
+  // Senders and subjects share what is left as JSON writes them: each keeps the same cut, at most SPILL_HEADER_MAX,
+  // and what a shorter field leaves goes to the longer ones.
+  const headersOnly = (chars: number) => view('its id, sender, time and subject only', (message) => ({
+    id: message.id, from: escapedCut(message.from, chars), at: message.at, subject: escapedCut(message.subject, chars), ...bodyFlags(message),
+    ...(message.body_truncated ? { body_truncated: true } : {}), ...(message.body_withheld ? { body_withheld: message.body_withheld } : {}),
+    ...(message.attachments?.length ? { attachments: message.attachments.length } : {}), ...(message.quarantined ? { quarantined: message.quarantined } : {}),
+  }));
+  const fields = messages.flatMap((message) => [message.from, message.subject]).map((text) => JSON.stringify(text).length - 2).sort((a, b) => a - b);
+  let room = TOOL_SPILL_VIEW_MAX_CHARS - JSON.stringify(headersOnly(0)).length;
+  for (const [i, length] of fields.entries()) {
+    const share = Math.floor(room / (fields.length - i));
+    if (length > share) return headersOnly(Math.max(0, Math.min(SPILL_HEADER_MAX, share)));
+    room -= length;
+  }
+  return headersOnly(SPILL_HEADER_MAX);
+};
+// The longest start of text whose JSON-escaped form is at most max characters, cut between code points.
+const escapedCut = (text: string, max: number) => {
+  let used = 0, end = 0;
+  for (const char of text) {
+    used += JSON.stringify(char).length - 2;
+    if (used > max) break;
+    end += char.length;
+  }
+  return text.slice(0, end);
+};
+
+// An all-lists task read names each task's list by id only. The titles of those lists come with it, so the model can
+// say which list a task is on without a list_task_lists read. A failed title read leaves them out and fails nothing.
+const listTitles = async (client: GoogleClient, ids: readonly string[]): Promise<readonly Readonly<{ id: string; title: string }>[] | undefined> => {
+  if (!client.taskListsPage || ids.length === 0) return undefined;
+  try {
+    const lists = connectorAnswer(googleTaskListPageSchema, await client.taskListsPage(100));
+    return lists.items.filter((list) => ids.includes(list.id)).map(({ id, title }) => ({ id, title }));
+  } catch (error) {
+    console.log(JSON.stringify({ hop: 'task_list_titles', ok: false, code: error instanceof GoogleError ? `provider_${error.status}` : error instanceof UnreadableAnswer ? 'unreadable_answer' : 'failed' }));
+    return undefined;
+  }
+};
+
 // One content-free line per failed calendar read: which operation and how it failed, never the provider's words.
 const loggedCalendarRead = <T>(operation: QueryCalendarArgs['operation'], result: ToolResult<T>): ToolResult<T> => {
   if (!result.ok) console.log(JSON.stringify({ hop: 'calendar_read', ok: false, code: `op_${operation === 'list_calendars' ? 'calendars' : 'events'}:${result.error === UNREADABLE_ANSWER ? 'unreadable_answer' : result.code}${result.connect ? `:${result.connect.reason}` : ''}` }));
   return result;
 };
 
-export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay, effects?: OwnerEffectLedger) => [
+// ownerName: the name the owner gave, whose first word signs every email Waldo writes for them.
+// CALENDAR_PLAN: the day's new blocks on one card. It only proposes; the owner's tap adds every block or none.
+export const calendarPlanHandler = (google: GoogleAccess, desk: EffectDesk & Pick<ApprovalDesk, 'proposeCalendarPlan'>, clock: OwnerClock, calendarEgress?: CalendarEgressScreen) => ({
+  name: 'propose_calendar_plan',
+  description: "Propose a day plan's new blocks of time on one card, so the owner adds them all to their own calendar in one tap. Give the day and each block in their local time, in order; leave out events already on the calendar. No one is invited. Nothing is added until they approve. A title goes to Google: keep any mention of health out of it.",
+  schema: proposeCalendarPlanArgsSchema,
+  trigger_allowlist: allowlist('propose_calendar_plan'),
+  autonomy_gated: false,
+  requires_connector: true,
+  eligible: granted(google, 'calendar'),
+  mutates_state: true,
+  proposal_only: true,
+  async handle(args: ProposeCalendarPlanArgs, ctx?: ToolDispatcherContext) {
+    for (const block of args.blocks) {
+      const screened = await calendarEgress?.check(ctx?.turnId, { title: block.title });
+      if (screened === 'refused') return { ok: false, code: 'rejected', error: "Nothing was proposed: a word about the owner's health is in a block's title, and the calendar is read by others. Propose it again without it.", source_taint: null };
+      if (screened === 'unchecked') return { ok: false, code: 'rejected', error: "Nothing was proposed: the owner's health context could not be read to check the titles before they reach their calendar.", source_taint: null };
+    }
+    const timezone = clock.timezone, blocks = planBlocks(args, timezone);
+    if (typeof blocks === 'string') return { ok: false, code: 'rejected', error: `Nothing was proposed: ${blocks} in ${timezone}. Propose it again.`, source_taint: null };
+    const result = await withGoogle(google, 'calendar', ctx, async client => {
+      try {
+        const proposal_id = await desk.proposeCalendarPlan({ day: args.day, time_zone: timezone, blocks, reason: args.reason, ...(client.account?.email ? { account: client.account.email } : {}), operation_ref: await ownerEffectOperationRef(ctx) },
+          { ...(args.replaces ? { replaces: args.replaces } : {}), outside: turnReadOutside(ctx), why: callWhy(ctx) });
+        return { proposal_id, status: `${proposalStatus(desk.placement?.(proposal_id), 'sent to the owner with Do it / Modify / Not now buttons', 'Nothing has been added.')}${replacementStatus(desk.replacement?.(proposal_id) ?? null)}`, applied: false };
+      } catch (error) {
+        if (error instanceof ApprovalReplaceError) return { refused: replaceRefusal(args.replaces!, error) };
+        throw error;
+      }
+    }, args.account);
+    const refused = result.ok && 'refused' in result.data ? result.data.refused : undefined;
+    if (refused !== undefined) return { ok: false, code: 'rejected', error: refused, source_taint: null };
+    return result.ok ? { ...result, source_taint: null } : result;
+  },
+}) satisfies ToolHandler<ProposeCalendarPlanArgs, unknown, ToolDispatcherContext>;
+
+export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay, effects?: OwnerEffectLedger, ownerName: () => string | null = () => null, calendarEgress?: CalendarEgressScreen) => [
   {
     name: 'query_calendar',
-    description: "Read a bounded page of events, now through the next 24 hours by default. list_calendars lists each account's other calendars (id, name, access role, time zone; visible unless include_hidden); read one with its calendar_id and account. Continue next_page_token with that account and the same date_range, calendar_id, limit and include_declined. Each result holds only its current page, not a complete window. Legacy adapters report unknown account and incomplete coverage. Event enumeration, not availability.",
+    description: "Read a bounded page of events, now through the next 24 hours by default. list_calendars lists each account's other calendars (id, name, access role, time zone; visible unless include_hidden); read one with its calendar_id and account. Continue next_page_token with that account and the same date_range, calendar_id, limit and include_declined. Each result holds only its current page, not a complete window. Legacy adapters report unknown account and incomplete coverage.",
     schema: queryCalendarArgsSchema,
     trigger_allowlist: allowlist('query_calendar'),
     autonomy_gated: false,
@@ -339,9 +487,9 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     handle: async ({ date_range, include_declined, limit, calendar_id = 'primary', page_token, account, operation, include_hidden = false }: QueryCalendarArgs, ctx?: ToolDispatcherContext) => loggedCalendarRead(operation, await readAccounts(google, 'query_calendar', operation === 'list_calendars' ? 'calendar_list' : 'calendar', ctx, { account, limit }, 50,
       page_token ? 'A page_token' : operation !== 'list_calendars' && calendar_id !== 'primary' ? 'A calendar_id other than primary' : null, async (client, limit) => {
       if (operation === 'list_calendars') {
-        if (!client.calendarListsPage) throw new Error('Calendar discovery adapter unavailable');
+        if (!client.calendarListsPage) throw connectorLacks('list calendars');
         const page = connectorAnswer(googleCalendarListPageSchema, await client.calendarListsPage(limit, include_hidden, page_token));
-        if (page.fetched_count > limit) throw new Error('Calendar-list page exceeds requested limit');
+        if (page.fetched_count > limit) throw answerMismatch('more calendars than asked for');
         assertCollectionAccount(page.account, client);
         return { calendars: page.items, observed_at: page.observed_at, next_page_token: page.next_page_token, coverage: { scope: 'account_calendars', result_scope: 'current_page', include_hidden, page_limit: limit, fetched_count: page.fetched_count, returned_count: page.items.length, page_exhausted: page.next_page_token === null, complete: !page_token && page.next_page_token === null } };
       }
@@ -351,14 +499,15 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       let page: CalendarPage | null = null;
       if (typeof client.calendarPage === 'function') {
         try { page = connectorAnswer(calendarPageSchema, await client.calendarPage(calendar_id, from, to, limit, include_declined, page_token));
-          if (page.fetched_count > limit) throw new Error('Calendar page exceeds requested limit'); }
+          if (page.fetched_count > limit) throw answerMismatch('more events than asked for'); }
         catch (error) {
           if (!(error instanceof GoogleError && error.status === 404 && error.message === 'unknown operation') || page_token || calendar_id !== 'primary') throw error;
         }
       }
-      if (!page && (page_token || calendar_id !== 'primary')) throw new Error('Calendar pagination or selected calendar adapter unavailable');
-      // The operation marker is for the desk's reconciliation of its own writes, not for the model.
-      const events = (page?.events ?? await client.events(from,to,limit,include_declined)).map(({ operation_marker: _marker, ...event }) => event);
+      if (!page && (page_token || calendar_id !== 'primary')) throw connectorLacks('page through events or read a calendar other than primary');
+      // The operation marker is for the desk's reconciliation of its own writes, and the iCal UID for matching phone events, not for
+      // the model.
+      const events = (page?.events ?? await client.events(from,to,limit,include_declined)).map(({ operation_marker: _marker, waldo_made: _made, ical_uid: _uid, ...event }) => event);
       // One content-free line per calendar read: which window and which kind of calendar were asked for, and how many
       // events came back. Never the calendar id or the account, either of which can be an address. The primary calendar's
       // id is the account address, so a read by that id counts as primary. The code stays within [a-z0-9_:]{1,64}, so a
@@ -393,7 +542,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       const query=`in:inbox category:primary after:${Math.floor(since/1000)-1} before:${Math.ceil(Date.parse(to)/1000)}`;
       let paged=typeof client.mailPage==='function';
       let degraded=false;
-      if(page_token&&!paged)throw new Error('Gmail pagination adapter unavailable');
+      if(page_token&&!paged)throw connectorLacks('page through mail');
       let page=null as Awaited<ReturnType<NonNullable<typeof client.mailPage>>>|null;
       if(paged){
         try{page=await client.mailPage(query,limit,page_token);}
@@ -420,7 +569,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<GetCommunicationArgs, unknown, ToolDispatcherContext>,
   {
     name: 'search_communication',
-    description: "Search the owner's Gmail by sender, subject or words, optionally in a date range; read_thread reads a match's thread in full. Space-separated terms must all match: use distinctive sender or topic terms, never the owner's whole ask. An empty match is not absence: follow its recovery note, then report the search limit. Never silently rewrite a quoted or operator query. For 'what is new' use get_communication. Continue with cursor and the same query, date range and account.",
+    description: "Search the owner's Gmail by sender, subject or words, optionally in a date range; read_thread reads a match in full. Space-separated terms must all match: use distinctive sender or topic terms, never the owner's whole ask. An empty match is not absence: follow its recovery note, then report the search limit. Never silently rewrite a quoted or operator query. For 'what is new' use get_communication. Continue with cursor and the same query, date range and account.",
     schema: searchCommunicationArgsSchema,
     trigger_allowlist: allowlist('search_communication'),
     autonomy_gated: false,
@@ -449,7 +598,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     autonomy_gated: false,
     requires_connector: true,
     handle: ({ query, limit, account }: SearchContactsArgs, ctx?: ToolDispatcherContext) => readAccounts(google, 'search_contacts', 'contacts', ctx, { account, limit }, 10, null, async (client, limit) => {
-      if (!client.searchContacts) throw new Error('Google contacts adapter unavailable');
+      if (!client.searchContacts) throw connectorLacks('search contacts');
       // Only the contract's fields are picked, so a phone, organisation or photo can never ride along. The contract's
       // address check runs before an address is kept or counted: a refused address never takes one of a person's three
       // places, and never hides an address another person shares.
@@ -475,21 +624,22 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<SearchContactsArgs, unknown, ToolDispatcherContext>,
   {
     name: 'read_thread',
-    description: "Read one Gmail thread by thread_id - the messages with sender, recipients (to, cc, reply_to as plain addresses), subject, time and body. account.email is the owner's own address; send-as aliases are not marked. recipients_capped: a list was cut at 50 addresses, so reply-all would miss people: tell the owner. To reply to all, take the recipients from the message being replied to. Use after get_communication or search_communication lists the thread, with its account, before drafting a reply. Continue with cursor and the same thread/account; changed threads require restarting. body_next_offset means more body follows (body_total_chars in all): read it with body_message_id (the message's id) and body_offset set to body_next_offset, without a cursor. body_truncated: the message is longer than Waldo reads, so say the end is missing. attachments: name, type and size only, never read. body_source 'snippet': only Gmail's preview was readable; say so. body_withheld: not safe to show; tell the owner to open it in Gmail.",
+    description: "Read one Gmail thread by thread_id - the messages with sender, recipients (to, cc, reply_to as plain addresses), subject, time and body. account.email is the owner's own address; send-as aliases are not marked. recipients_capped: a list was cut at 50 addresses, so reply-all would miss people: tell the owner. To reply to all, take the recipients from the message being replied to. Use after get_communication or search_communication lists the thread, with its account, before drafting a reply. Continue with cursor and the same thread/account; changed threads require restarting. body_next_offset: more body follows (body_total_chars in all); read it with body_message_id and body_offset = body_next_offset, no cursor. body_truncated: the message is longer than Waldo reads, so say the end is missing. attachments: name, type and size only, never read. body_source 'snippet': only Gmail's preview was readable; say so. body_withheld: not safe to show; tell the owner to open it in Gmail.",
     schema: readThreadArgsSchema,
+    spill: threadSpill,
     trigger_allowlist: allowlist('read_thread'),
     autonomy_gated: false,
     requires_connector: true,
     eligible: granted(google, 'mail'),
     handle: ({ thread_id, limit, cursor, account, body_message_id, body_offset }: ReadThreadArgs, ctx?: ToolDispatcherContext) => readAccounts(google, 'read_thread', 'mail', ctx, { account, limit }, 20, 'A thread_id', async (client, limit) => {
-      if (!client.threadPage) throw new Error('Gmail thread pagination adapter unavailable');
+      if (!client.threadPage) throw connectorLacks('read a thread');
       const canaries = ctx?.session?.canary_tokens ?? freshCanaries();
       if (body_message_id !== undefined) {
         const message = await messageById(client, thread_id, body_message_id);
         return {thread_id, account: client.account ?? {connection_id:null,email:null}, cursor: null, messages: await readMessages([message], { offset: body_offset ?? 0, first: false, canaries })};
       }
       const page = await client.threadPage(thread_id, limit, cursor, { fullBodies: true, bodyChunks: true });
-      return {thread_id, account: client.account ?? {connection_id:null,email:null}, cursor: page.cursor, messages: await readMessages(page.messages, { relay: relayArtifact, offset: 0, first: true, canaries })};
+      return {thread_id, account: client.account ?? {connection_id:null,email:null}, cursor: page.cursor, messages: await readMessages(page.messages, { relay: relayArtifact, offset: 0, first: true, canaries, budget: pageBodyBudget(page.messages) })};
     }),
   } satisfies ToolHandler<ReadThreadArgs, unknown, ToolDispatcherContext>,
   {
@@ -502,9 +652,9 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     eligible: granted(google, 'tasks'),
     handle: ({ status, limit, account, operation, task_list_id, page_token }: GetTasksArgs, ctx?: ToolDispatcherContext) => readAccounts(google, 'get_tasks', 'tasks', ctx, { account, limit }, 100, page_token ? 'A page_token' : task_list_id ? 'A task_list_id' : null, async (client, limit) => {
       if (operation === 'list_task_lists') {
-        if (!client.taskListsPage) throw new Error('Task-list discovery adapter unavailable');
+        if (!client.taskListsPage) throw connectorLacks('list task lists');
         const page = connectorAnswer(googleTaskListPageSchema, await client.taskListsPage(limit, page_token));
-        if (page.fetched_count > limit) throw new Error('Task-list page exceeds requested limit');
+        if (page.fetched_count > limit) throw answerMismatch('more task lists than asked for');
         assertCollectionAccount(page.account, client);
         return { task_lists: page.items, observed_at: page.observed_at, next_page_token: page.next_page_token, coverage: { scope: 'account_task_lists', result_scope: 'current_page', page_limit: limit, fetched_count: page.fetched_count, returned_count: page.items.length, page_exhausted: page.next_page_token === null, complete: !page_token && page.next_page_token === null } };
       }
@@ -516,13 +666,14 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
           if (!(error instanceof GoogleError && error.status === 404 && error.message === 'unknown operation') || page_token || task_list_id && task_list_id !== '@default') throw error;
         }
       }
-      if (!page && (page_token || task_list_id && task_list_id !== '@default')) throw new Error('Tasks pagination or selected-list adapter unavailable');
+      if (!page && (page_token || task_list_id && task_list_id !== '@default')) throw connectorLacks('page through tasks or read a list other than the default');
       if (page) {
-        if (page.tasks.length > limit || task_list_id && page.task_list_ids.some(id => id !== task_list_id)) throw new Error('Tasks page does not match selected list or limit');
+        if (page.tasks.length > limit || task_list_id && page.task_list_ids.some(id => id !== task_list_id)) throw answerMismatch('another list or more tasks than asked for');
         assertCollectionAccount(page.account, client);
       }
       const tasks = page?.tasks ?? await client.tasks(status, limit);
-      return { status, tasks, next_page_token: page?.next_page_token ?? null, observed_at: page?.observed_at ?? clock.now().toISOString(),
+      const task_lists = page && !task_list_id ? await listTitles(client, page.task_list_ids) : undefined;
+      return { status, tasks, ...(task_lists ? { task_lists } : {}), next_page_token: page?.next_page_token ?? null, observed_at: page?.observed_at ?? clock.now().toISOString(),
         coverage: { scope: page ? task_list_id ? 'selected_task_list' : 'all_task_lists' : 'legacy_default_list_sample', task_list_ids: page?.task_list_ids ?? ['@default'], result_scope: 'current_page', page_limit: limit, fetched_count: page?.fetched_count ?? null, returned_count: tasks.length, page_exhausted: page ? page.next_page_token === null : null, complete: Boolean(page && !page_token && page.next_page_token === null), limitation: page ? 'One account. Each result contains its current page only; continue to cover further tasks/lists. Task due dates are provider date semantics, not scheduled times.' : 'Legacy default-list sample with unknown pagination; empty does not prove absence across lists.' },
         ...(status === 'in_progress' ? { note: 'Google Tasks has no in-progress state; showing open tasks.' } : {}),
       };
@@ -539,10 +690,25 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     mutates_state: true,
     proposal_only: true,
     async handle(args: ProposeCalendarChangeArgs, ctx?: ToolDispatcherContext) {
+      const screened = await calendarEgress?.check(ctx?.turnId, args);
+      if (screened === 'refused') return { ok: false, code: 'rejected', error: "Nothing was proposed: a word about the owner's health is in the title, notes, place or a guest's address, and the calendar is read by others. Propose it again without it.", source_taint: null };
+      if (screened === 'unchecked') return { ok: false, code: 'rejected', error: "Nothing was proposed: the owner's health context could not be read to check this change before it reaches their calendar.", source_taint: null };
+      // replaces is the desk's to act on, never part of the change the owner approves.
+      const { replaces, ...change } = args;
       const result = await withGoogle(google, 'calendar', ctx, async client => {
-        const proposal_id = await desk.propose({...args, ...(client.account?.email ? {account:client.account.email} : {})}, ctx?.turnId, await ownerEffectOperationRef(ctx));
-        return { proposal_id, status: proposalStatus(desk.placement?.(proposal_id), 'sent to the owner with Do it / Modify / Not now buttons', 'Nothing has changed.'), applied: false };
+        try {
+          const proposal_id = await desk.propose({...change, ...(client.account?.email ? {account:client.account.email} : {})}, ctx?.turnId, await ownerEffectOperationRef(ctx), { replaces, outside: turnReadOutside(ctx), ...(ctx?.runOrigin ? { origin: ctx.runOrigin } : {}), why: callWhy(ctx) });
+          // A change the owner's standing grant covers ran without a card; the reply tells them what was done.
+          const granted = desk.grantOutcome?.(proposal_id) ?? null;
+          if (granted) return { proposal_id, status: granted.message, applied: granted.state === 'done' };
+          return { proposal_id, status: `${proposalStatus(desk.placement?.(proposal_id), 'sent to the owner with Do it / Modify / Not now buttons', 'Nothing has changed.')}${replacementStatus(desk.replacement?.(proposal_id) ?? null)}`, applied: false };
+        } catch (error) {
+          if (error instanceof ApprovalReplaceError) return { refused: replaceRefusal(replaces!, error) };
+          throw error;
+        }
       }, args.account);
+      const refused = result.ok && 'refused' in result.data ? result.data.refused : undefined;
+      if (refused !== undefined) return { ok: false, code: 'rejected', error: refused, source_taint: null };
       return result.ok ? {...result, source_taint:null} : result;
     },
   } satisfies ToolHandler<ProposeCalendarChangeArgs, unknown, ToolDispatcherContext>,
@@ -578,7 +744,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<DraftEmailArgs, unknown, ToolDispatcherContext>,
   {
     name: 'send_email',
-    description: "Send an email from the owner's Gmail. The owner gets a review card showing the exact recipients, subject and body; nothing sends until they approve. A request to draft an email and send it once they approve is this tool: the card is the draft they approve. Use draft_email only when they want a saved Gmail draft to edit themselves. An earlier send whose outcome is unknown does not stop a new proposal the owner asks for: if an identical email may already have gone out, the card says so and the owner decides. When the owner says to email themselves, read their connected account address with connect_service instead of asking for it. To reply to all, address the replied-to message's reply_to (or its sender when there is none) and copy its to and cc, leaving out the owner's own address (account.email in read_thread); a plain reply goes to reply_to or the sender only.",
+    description: "Send an email from the owner's Gmail. The owner gets a review card showing the exact recipients, subject and body; nothing sends until they approve. to, cc and bcc are lists, even for one address. Write the body up to your closing word (\"Thanks,\"): Waldo's signature is added below it and shown on the card, so never sign with your name or role. A draft to send once they approve is this tool: the card is that draft. Use draft_email only for a saved Gmail draft they will edit themselves. An earlier send of unknown outcome does not block a new one the owner asks for: the card says if an identical email may have gone out. To email the owner, read their address with connect_service rather than asking. To reply to all, address the replied-to message's reply_to (or its sender when there is none) and copy its to and cc, leaving out the owner's own address (account.email in read_thread); a plain reply goes to reply_to or the sender only.",
     schema: sendEmailArgsSchema,
     trigger_allowlist: allowlist('send_email'),
     autonomy_gated: false,
@@ -600,24 +766,25 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       // may request an identical email deliberately; their distinct turn IDs stay independent.
       const dedupe_key = ctx?.turnId ? await sha256Hex(JSON.stringify([ctx.authenticatedUserId, ctx.turnId, args])) : undefined;
       const message_id = `<${crypto.randomUUID()}@waldo-send>`;
-      // The digest-bound bytes are exactly what crosses the Gmail wire: base64url MIME.
-      // (buildMime returns the MIME TEXT; messages/send rejects it unencoded - google 400
-      // "Base64 decoding failed" on the approved send path.)
-      const raw = b64url(new TextEncoder().encode(buildMime({
-        to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
-        subject: args.subject, body: args.body_markdown, messageId: message_id, ...gate.data.reply,
-      })));
+      // The digest-bound bytes are exactly what crosses the Gmail wire: base64url MIME, the draft and Waldo's signature.
+      // (messages/send rejects MIME text unencoded - google 400 "Base64 decoding failed" on the approved send path.)
+      const signature = { first_name: agentMailFirstName(ownerName()) };
+      const rendered = renderOwnerMail({ subject: args.subject, body_markdown: args.body_markdown }, signature.first_name,
+        { to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}) }, { messageId: message_id, ...gate.data.reply });
+      if (!rendered.ok) return { ok: false, code: 'invalid_args', error: `The email could not be prepared (${rendered.code}), so nothing was proposed. Fix it and propose it again.`, source_taint: null };
+      const raw = b64url(new TextEncoder().encode(rendered.mime));
       try {
         const proposal_id = await desk.proposeSendEmail({
           operation_ref: await ownerEffectOperationRef(ctx),
           to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
-          subject: args.subject, body: args.body_markdown,
+          subject: rendered.subject, body: args.body_markdown,
           ...(gate.data.account.email ? {account:gate.data.account.email} : {}),
           ...(args.reply_to_thread_id ? { thread_id: args.reply_to_thread_id } : {}),
-          ...gate.data.reply, message_id, raw, digest: await sha256Hex(raw), ...(dedupe_key ? { dedupe_key } : {}),
-        });
-        return { ok: true, data: { account: gate.data.account, proposal_id, status: proposalStatus(desk.placement?.(proposal_id), 'review card requested in chat; nothing was sent', 'Nothing was sent.'), sent: false }, source_taint: null };
+          ...gate.data.reply, message_id, raw, digest: await sha256Hex(raw), signature, ...(dedupe_key ? { dedupe_key } : {}),
+        }, { replaces: args.replaces, outside: turnReadOutside(ctx), why: callWhy(ctx) });
+        return { ok: true, data: { account: gate.data.account, proposal_id, status: `${proposalStatus(desk.placement?.(proposal_id), 'review card requested in chat; nothing was sent', 'Nothing was sent.')}${replacementStatus(desk.replacement?.(proposal_id) ?? null)}`, sent: false }, source_taint: null };
       } catch (error) {
+        if (error instanceof ApprovalReplaceError) return { ok: false, code: 'rejected', error: replaceRefusal(args.replaces!, error), source_taint: null };
         // A channel timeout may have delivered the card, but no email was sent and the
         // proposal remains blocked. Database/other faults are not card-delivery evidence.
         if (!(error instanceof EmailProposalError)) return { ok: false, code: 'transient', error: 'The email proposal could not be prepared. No email was sent; check chat before retrying.', source_taint: 'external' };
@@ -631,7 +798,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     },
   } satisfies ToolHandler<SendEmailArgs, unknown, ToolDispatcherContext>,
   {
-    name:'query_availability',description:"Find free time: the windows of at least duration_minutes that are free across the given calendars and supplied work windows. Use it whenever the owner asks when they are free or for a slot, and offer only windows it returns: each is already computed, with start and end in the owner's time zone and its length in minutes, so never work out free time from query_calendar events. Set duration_minutes to the length the owner needs, and include every calendar that holds their commitments (list them with query_calendar list_calendars). Busy blocks are Google's own free/busy answer for those calendars. A calendar that cannot be read is never free: free_windows stays empty and windows_free_on_answered_calendars holds time free on the calendars that answered, to offer only as tentative. Without account, primary means every connected account's primary calendar. Read-only, no booking.",
+    name:'query_availability',description:"Free windows of at least duration_minutes across the given calendars and work windows. Use it whenever the owner asks when they are free or for a slot, and offer only windows it returns (start and end in the owner's time zone, length in minutes); never work out free time from query_calendar events. Set duration_minutes to the length the owner needs and include every calendar holding their commitments (list them with query_calendar list_calendars). A calendar that cannot be read is never free: free_windows stays empty and windows_free_on_answered_calendars holds time free on the calendars that answered, to offer only as tentative. Without account, primary means every connected account's primary calendar. Read-only, no booking.",
     schema:queryAvailabilityArgsSchema,trigger_allowlist:allowlist('query_availability'),autonomy_gated:false,requires_connector:true,
     // state() does not report the freebusy scope; calendar is its superset here, and a missing scope still returns a connect intent.
     eligible:granted(google,'calendar'),
@@ -639,7 +806,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       const {date_range:range,calendar_ids:ids,work_windows:windows,duration_minutes:duration}=args;
       const observe=async(client:GoogleClient)=>{
         const observed=await client.freeBusy(range.from,range.to,ids,clock.timezone);
-        if(Date.parse(observed.from)!==Date.parse(range.from)||Date.parse(observed.to)!==Date.parse(range.to))throw new Error('availability coverage differs');
+        if(Date.parse(observed.from)!==Date.parse(range.from)||Date.parse(observed.to)!==Date.parse(range.to))throw answerMismatch('another time window');
         return observed.calendars??{};
       };
       const freeTime=(ids:readonly string[],calendars:FreeBusyResult['calendars'])=>{
@@ -675,7 +842,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
 // affordance (Telegram: a URL button minted at click time). No link ever enters model text.
 export const connectServiceHandler = (google: GoogleAccess): ToolHandler<ConnectServiceArgs, Readonly<{service:string;connected:boolean;message:string;accounts?:readonly Readonly<{id:string;email:string;calendar:boolean;mail:boolean;tasks:boolean;health:string;provenance:string}>[]}>, ToolDispatcherContext> => ({
   name: 'connect_service',
-  description: 'Read connected Google accounts with their granted features and health status, or connect Google; pass feature to offer one not yet granted. Use whenever the owner asks to connect, link or set up a service, asks why you cannot see their calendar or email, or mentions a connector. Host account metadata is not evidence that a message sender is the owner. The result says whether a connect button reached them or where else they connect; never write out a link.',
+  description: 'Read connected Google accounts (granted features, health status) or connect Google; pass feature to offer one not yet granted. Use whenever the owner asks to connect, link or set up a service, asks why you cannot see their calendar or email, or mentions a connector. Host account metadata is not evidence that a message sender is the owner. The result says whether a connect button reached them or where else they connect; never write out a link.',
   schema: connectServiceArgsSchema,
   trigger_allowlist: allowlist('connect_service'),
   autonomy_gated: false,

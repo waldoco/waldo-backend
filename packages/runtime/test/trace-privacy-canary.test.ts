@@ -74,6 +74,23 @@ describe('trace privacy canary', () => {
     expect(JSON.stringify(failed)).not.toContain(MARKER);
   });
 
+  it('keeps semantic recall\'s counts with capture off, and only counts', () => {
+    const kept = [
+      ['memory_embedding', 'sweep texts=32'], ['memory_embedding', 'query rows=118 scan_ms=3'], ['memory_embedding', 'query'],
+      ['memory_embed', 'embedded=31 withheld=1'], ['memory_embed', 'sweep'],
+    ] as const;
+    for (const [hop, detail] of kept) {
+      const entry: TurnLogEntry = { trace: 'memory:semantic', hop, ms: 0, ok: true, detail };
+      expect(gateTraceEntry(entry, false).detail).toBe(detail);
+      expect(gateTraceEntry(entry, true).detail).toBe(detail);
+    }
+    for (const detail of [`query rows=5 note=${MARKER}`, `sweep texts=2 ${MARKER}`, 'query rows=1234567890 scan_ms=1', MARKER]) {
+      const gated = gateTraceEntry({ trace: 'memory:semantic', hop: 'memory_embedding', ms: 0, ok: false, code: 'embed_failed', detail }, false);
+      expect(gated.detail).toBe('embed_failed');
+      expect(JSON.stringify(gated)).not.toContain(MARKER);
+    }
+  });
+
   it('rejects forged safe-hop codes that carry a private marker', () => {
     const bad = gateTraceEntry({ trace: 't', hop: 'constellation_evidence', ms: 0, ok: false, detail: `held:same_day:owner_observation_pattern:1 ${MARKER}`, code: MARKER }, false);
     expect(bad.detail).toBeUndefined();

@@ -1,16 +1,21 @@
 import { env } from 'cloudflare:workers';
+import { APP_SCHEDULE_RECEIPTS_V1 } from '../../contracts/src/app/controls';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { appSubjectFor } from '../src/channels/app-api';
 import { calendarPushBook } from '../src/channels/calendar-push';
-import { BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
+import { calendarChannelsBook } from '../src/channels/calendar-watches';
+import { armBriefSweep, BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
 import { gmailPushBook } from '../src/channels/gmail-push';
+import { gmailWatchesBook } from '../src/channels/gmail-watches';
 import { GOOGLE_FINISH_PATH } from '../src/channels/google-oauth';
 import { FINAL_OUTBOX_KEY } from '../src/channels/telegram-final-outbox';
 import { WATCH_UPKEEP_ID } from '../src/channels/watch-upkeep';
 import { startConsent, type ConsentFlow } from '../src/connectors/google-consent';
 import { CALENDAR_WATCH_URL, verifyCalendarChannel } from '../src/connectors/google-push';
 import { armAlarm } from '../src/scheduler/alarm-slot';
+import { Scheduler } from '../src/scheduler/multiplexer';
+import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
 
@@ -30,7 +35,7 @@ const CONFIG = { TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'syn
   SUPABASE_PROJECT_URL: 'https://edge.test', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', GMAIL_PUSH_PROJECT: 'waldo-dev' };
 
 const edge = vi.hoisted(() => ({ ops: [] as Record<string, unknown>[], exchange: { id: '', scopes: [] as string[], email: '' }, failing: new Set<string>(),
-  sends: [] as string[], models: 0, throwing: null as 'calendar' | 'gmail' | null, googleWatches: [] as Record<string, string>[] }));
+  sends: [] as string[], models: 0, throwing: null as 'calendar' | 'gmail' | null, googleWatches: [] as Record<string, string>[], calendars: [] as unknown[] }));
 // A locally held refresh token resolves to a bearer route without reaching Google.
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
@@ -39,6 +44,7 @@ vi.mock('../src/connectors/google', async load => {
     googleClient: (_app: unknown, _tokens: unknown, _fetch: unknown, _health: unknown, account: unknown) => ({
       account, events: async () => [], calendarPage: async () => ({ events: [], next_page_token: null, fetched_count: 0, account, observed_at: new Date().toISOString() }),
       event: async () => null, changedEvents: async () => [], newMail: async () => [],
+      calendarListsPage: async () => ({ items: edge.calendars, next_page_token: null, fetched_count: edge.calendars.length, account, observed_at: new Date().toISOString() }),
     }) };
 });
 vi.mock('../src/connectors/google-push', async load => {
@@ -75,13 +81,14 @@ const answer = (body: Record<string, unknown>): unknown => {
   if (edge.failing.has(String(body.op))) return { error: { status: 503, message: 'backend unavailable' } };
   if (body.op === 'exchange') return { id: edge.exchange.id, email: edge.exchange.email, scopes: edge.exchange.scopes };
   if (body.op === 'gmail_watch') return { data: { historyId: '555', expiration: Date.now() + 7 * DAY } };
-  if (body.op === 'calendar_watch') return { data: { channelId: body.channel_id, resourceId: 'res-1', expiration: Date.now() + 7 * DAY } };
+  if (body.op === 'calendar_watch' || body.op === 'events_watch') return { data: { channelId: body.channel_id, resourceId: 'res-1', expiration: Date.now() + 7 * DAY } };
+  if (body.op === 'call' && body.method === 'calendarListsPage') return { data: { items: edge.calendars, next_page_token: null, fetched_count: edge.calendars.length, account: { connection_id: body.connection, email: null }, observed_at: new Date().toISOString() } };
   if (body.op === 'call') return { data: [] };
   return { error: { status: 404, message: 'unknown operation' } };
 };
 
 beforeEach(() => {
-  edge.ops = []; edge.failing = new Set(); edge.sends = []; edge.models = 0; edge.throwing = null; edge.googleWatches = [];
+  edge.ops = []; edge.failing = new Set(); edge.sends = []; edge.models = 0; edge.throwing = null; edge.googleWatches = []; edge.calendars = [];
   vi.useFakeTimers({ toFake: ['Date'], now: START });
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
@@ -119,7 +126,7 @@ type World = Readonly<{
   // A verified Gmail push for this owner: 'wake' when it was admitted and pulled the sweep.
   push(connection: string, history: string): Promise<'wake' | 'ignore'>;
 }>;
-type Setup = Readonly<{ surface?: 'telegram' | 'app'; accounts?: readonly unknown[]; off?: readonly string[]; pushProject?: string }>;
+type Setup = Readonly<{ surface?: 'telegram' | 'app'; accounts?: readonly unknown[]; off?: readonly string[]; pushProject?: string; realtime?: boolean }>;
 
 const world = async (name: string, setup: Setup, run: (world: World) => Promise<void>) => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
@@ -131,7 +138,7 @@ const world = async (name: string, setup: Setup, run: (world: World) => Promise<
     if (setup.accounts) await state.storage.put('google:accounts', setup.accounts);
     state.storage.sql.exec('CREATE TABLE IF NOT EXISTS schedule_preferences (kind TEXT PRIMARY KEY, enabled INTEGER NOT NULL)');
     for (const kind of setup.off ?? []) state.storage.sql.exec('INSERT INTO schedule_preferences (kind, enabled) VALUES (?, 0)', kind);
-    const owner = new OwnerDO(state, { ...env, ...CONFIG, WALDO_OWNER_TELEGRAM_ID: setup.surface === 'app' ? undefined : '7', ...(setup.pushProject === undefined ? {} : { GMAIL_PUSH_PROJECT: setup.pushProject }) }) as unknown as Owner;
+    const owner = new OwnerDO(state, { ...env, ...CONFIG, WALDO_OWNER_TELEGRAM_ID: setup.surface === 'app' ? undefined : '7', ...(setup.pushProject === undefined ? {} : { GMAIL_PUSH_PROJECT: setup.pushProject }), ...(setup.realtime ? { WALDO_DAY_STATE: '1', GOOGLE_REALTIME_TRIAGE: '1' } : {}) }) as unknown as Owner;
     const logs: MockInstance = vi.spyOn(console, 'log');
     const connect = async (id: string, scopes: readonly string[], email = EMAIL) => {
       edge.exchange = { id, scopes: [...scopes], email };
@@ -429,7 +436,7 @@ describe('Gmail and Calendar watch upkeep', () => {
     await world('upkeep-owner-controls', {}, async w => {
       await w.connect('conn-1', [...MAIL, CALENDAR]);
       const runtime = w.owner.setup('telegram');
-      expect(await runtime.act({ action: 'schedule.set', id: 'event_briefs', value: 'off' })).toBe(true);
+      expect(await runtime.act({ action: 'schedule.set', id: 'event_briefs', value: 'off' })).toEqual(APP_SCHEDULE_RECEIPTS_V1.off);
       expect(w.row(WATCH_UPKEEP_ID)).toMatchObject({ status: 'armed' });
       expect(await runtime.act({ action: 'proactivity.set', value: '00:00|23:59|low' })).toBe(true);
       expect(await runtime.act({ action: 'schedule.reset' })).toBe(true);
@@ -437,6 +444,142 @@ describe('Gmail and Calendar watch upkeep', () => {
       expect(runtime.reminders.list()).toEqual([]);
       for (let n = 0; n < 2 && w.watches('gmail_watch').length === 0; n++) await w.pass();
       expect(w.watches('gmail_watch'), 'quiet hours and low volume don\'t stop it').toEqual(['conn-1']);
+    });
+  });
+});
+
+describe('GOOGLE_REALTIME_TRIAGE: every calendar the owner reads', () => {
+  const listed = (id: string, primary = false) => ({ id, title: id, access_role: primary ? 'owner' : 'reader', primary, selected: true, hidden: false });
+  it('upkeep watches each read calendar on its own channel, and a push on any of them wakes the owner\'s sweep', async () => {
+    edge.calendars = [listed(EMAIL, true), listed('team@group.example.test')];
+    await world('upkeep-realtime', { off: ['event_briefs'], realtime: true }, async w => {
+      await w.connect('conn-1', [...MAIL, CALENDAR]);
+      await w.pass();
+      expect(w.watches('calendar_watch'), 'the primary calendar').toEqual(['conn-1']);
+      const team = edge.ops.filter(body => body.op === 'events_watch');
+      expect(team.map(body => body.calendar_id)).toEqual(['team@group.example.test']);
+      expect(codes(w, 'calendar_watch')).toEqual(['calendar_watches:accounts=1:started=2:failed=0:stopped=0']);
+      for (const { raw } of w.lines('calendar_watch')) expect(raw).not.toMatch(/@|conn-|example/);
+      const push = (channel: string, number: number) => w.owner.fetch(new Request('https://owner.invalid/google-push', { method: 'POST',
+        headers: { 'x-waldo-gcal-channel': channel, 'x-waldo-gcal-state': 'exists', 'x-waldo-gcal-number': String(number) } }));
+      expect((await push(String(team[0]!.channel_id), 1)).status).toBe(200);
+      expect(w.lines('calendar_push')).toHaveLength(1);
+      expect((await push(String(team[0]!.channel_id), 1)).status).toBe(200);
+      expect(w.lines('calendar_push'), 'a redelivery wakes nothing').toHaveLength(1);
+    });
+  });
+
+  it('every connected account is watched on its own; a push marks only its account; a disconnect stops and forgets only that account', async () => {
+    edge.calendars = [listed(EMAIL, true)];
+    await world('upkeep-realtime-accounts', { off: ['event_briefs'], realtime: true }, async w => {
+      await w.connect('conn-1', [...MAIL, CALENDAR]);
+      await w.connect('conn-2', [...MAIL, CALENDAR], 'second@example.test');
+      for (let n = 0; n < 2 && w.watches('gmail_watch').length < 2; n++) await w.pass();
+      expect(w.watches('calendar_watch')).toEqual(['conn-1', 'conn-2']);
+      expect(w.watches('gmail_watch')).toEqual(['conn-1', 'conn-2']);
+      expect(codes(w, 'gmail_watch').at(-1)).toBe('gmail_watches:accounts=2:started=2:failed=0:skipped=0');
+      for (const { raw } of [...w.lines('gmail_watch'), ...w.lines('calendar_watch')]) expect(raw).not.toMatch(/@|conn-|example/);
+      const sql = w.state.storage.sql;
+      const waiting = () => sql.exec<{ key: string }>("SELECT key FROM watch_state WHERE key LIKE 'pending:%' ORDER BY key").toArray().map(row => row.key);
+      const second = edge.ops.find(body => body.op === 'calendar_watch' && body.connection === 'conn-2')!;
+      expect((await w.owner.fetch(new Request('https://owner.invalid/google-push', { method: 'POST',
+        headers: { 'x-waldo-gcal-channel': String(second.channel_id), 'x-waldo-gcal-state': 'exists', 'x-waldo-gcal-number': '1' } }))).status).toBe(200);
+      expect(waiting()).toEqual(['pending:cal:conn-2:primary']);
+      expect(await w.push('conn-2', '600')).toBe('wake');
+      expect(waiting()).toEqual(['pending:cal:conn-2:primary', 'pending:mail:conn-2']);
+      expect(await w.push('conn-2', '600'), 'a redelivery').toBe('ignore');
+      await w.push('conn-9', '700');
+      expect(codes(w, 'gmail_push').at(-1), 'a mailbox no connected account holds').toBe('unknown_account');
+      for (const { raw } of w.lines('gmail_push')) expect(raw).not.toMatch(/@|conn-|example/);
+      sql.exec("INSERT INTO watch_state (key, value) VALUES ('cursor:mail:conn-1', '5'), ('cursor:cal:conn-1:primary', 's1'), ('cursor:mail:conn-2', '9')");
+      const first = edge.ops.find(body => body.op === 'calendar_watch' && body.connection === 'conn-1')!;
+      expect(await w.owner.setup('telegram').act({ action: 'google.disconnect', id: 'conn-1' })).toBe(true);
+      expect(edge.ops.filter(body => body.op === 'channel_stop').map(body => [body.connection, body.channel_id])).toEqual([['conn-1', first.channel_id]]);
+      expect(sql.exec<{ key: string }>("SELECT key FROM watch_state WHERE key LIKE '%conn-%' ORDER BY key").toArray().map(row => row.key))
+        .toEqual(['cursor:mail:conn-2', 'pending:cal:conn-2:primary', 'pending:mail:conn-2']);
+      await w.push('conn-1', '800');
+      expect(codes(w, 'gmail_push').at(-1), 'a disconnected mailbox wakes nothing').toBe('unknown_account');
+      expect(waiting()).not.toContain('pending:mail:conn-1');
+    });
+  });
+
+  it('a reconnect clears that account\'s failed watches at once; one under a new connection forgets the old one\'s cursors', async () => {
+    edge.calendars = [listed(EMAIL, true)];
+    await world('upkeep-realtime-reconnect', { off: ['event_briefs'], realtime: true }, async w => {
+      edge.failing = new Set(['calendar_watch', 'gmail_watch']);
+      await w.connect('conn-1', [...MAIL, CALENDAR]);
+      await w.pass();
+      const kv = w.state.storage.kv;
+      expect(calendarChannelsBook(kv).failures().map(miss => miss.account)).toEqual(['conn-1']);
+      expect(gmailWatchesBook(kv).misses().map(miss => miss.account)).toEqual(['conn-1']);
+      edge.failing = new Set();
+      await w.connect('conn-1', [...MAIL, CALENDAR]);
+      expect(calendarChannelsBook(kv).failures()).toEqual([]);
+      expect(gmailWatchesBook(kv).misses()).toEqual([]);
+      w.state.storage.sql.exec("INSERT INTO watch_state (key, value) VALUES ('cursor:mail:conn-1', '5')");
+      await w.connect('conn-7', [...MAIL, CALENDAR]);
+      expect(w.state.storage.sql.exec("SELECT key FROM watch_state WHERE key LIKE '%conn-1%'").toArray()).toEqual([]);
+    });
+  });
+
+  it('with the switch off, only the primary calendar is watched, as before', async () => {
+    edge.calendars = [listed(EMAIL, true), listed('team@group.example.test')];
+    await world('upkeep-realtime-off', { off: ['event_briefs'] }, async w => {
+      await w.connect('conn-1', [...MAIL, CALENDAR]);
+      await w.pass();
+      expect(w.watches('calendar_watch')).toEqual(['conn-1']);
+      expect(edge.ops.filter(body => body.op === 'events_watch')).toEqual([]);
+      // A channel left from when the switch was on wakes nothing and marks nothing to read.
+      calendarChannelsBook(w.state.storage.kv).record('conn-1', 'team@group.example.test', { channelId: 'left-on', resourceId: 'res-left', expiration: Date.now() + DAY }, 'conn-1');
+      expect((await w.owner.fetch(new Request('https://owner.invalid/google-push', { method: 'POST',
+        headers: { 'x-waldo-gcal-channel': 'left-on', 'x-waldo-gcal-state': 'exists', 'x-waldo-gcal-number': '1' } }))).status).toBe(200);
+      expect(w.lines('calendar_push')).toEqual([]);
+    });
+  });
+});
+
+describe('the brief sweep follows the Google grant', () => {
+  // The wakes a day the armed recurring schedule asks for, read from each entry's own recurrence.
+  const wakesPerDay = (w: World) => w.state.storage.sql.exec<{ id: string; recurrence: string | null }>("SELECT id, recurrence_json AS recurrence FROM schedule WHERE status = 'armed'").toArray()
+    .reduce((n, row) => { const r = row.recurrence ? JSON.parse(row.recurrence) as { type: string; every_ms?: number } : null; return n + (r === null ? 0 : r.type === 'interval' ? DAY / r.every_ms! : 1); }, 0);
+  const boot = (w: World) => (w.owner.setup('telegram') as unknown as { ready: Promise<void> }).ready;
+
+  it('an owner with no grant is not woken for it, an armed one is ended at boot, a connect arms it and a disconnect ends it again', async () => {
+    let granted = 0;
+    await world('sweep-with-grant', { accounts: [{ id: 'conn-1', email: EMAIL, scopes: MAIL }] }, async w => {
+      await boot(w);
+      expect(w.row(BRIEF_SWEEP_ID)?.status).toBe('armed');
+      granted = wakesPerDay(w);
+    });
+    await world('sweep-follows-grant', {}, async w => {
+      // A sweep an earlier Worker armed for this owner, who has no Google account.
+      await armBriefSweep(new Scheduler(w.state.storage.sql, w.state.storage, productionDeps()), Date.now());
+      await boot(w);
+      expect(w.row(BRIEF_SWEEP_ID)?.status ?? 'none').not.toBe('armed');
+      const bare = wakesPerDay(w);
+      // The ten-minute sweep and the hourly watch upkeep are gone; the rest of the owner's own jobs stay.
+      expect(granted - bare).toBe(144 + 24);
+      expect(w.row('heartbeat-tick')?.status).toBe('armed');
+      await w.connect('conn-1', MAIL);
+      expect(w.row(BRIEF_SWEEP_ID)?.status).toBe('armed');
+      expect(wakesPerDay(w)).toBe(granted);
+      expect(await w.owner.setup('telegram').act({ action: 'google.disconnect', id: 'conn-1' })).toBe(true);
+      expect(w.row(BRIEF_SWEEP_ID)?.status ?? 'none').not.toBe('armed');
+      expect(wakesPerDay(w)).toBe(bare);
+    });
+  });
+
+  it('a connect with event briefs turned off, or turning them on with no grant, arms no sweep', async () => {
+    await world('sweep-briefs-off', { off: ['event_briefs'] }, async w => {
+      await w.connect('conn-1', MAIL);
+      expect(w.row(BRIEF_SWEEP_ID)).toBeNull();
+    });
+    await world('sweep-on-without-grant', { off: ['event_briefs'] }, async w => {
+      await boot(w);
+      expect(await w.owner.setup('telegram').act({ action: 'schedule.set', id: 'event_briefs', value: 'on' })).toEqual(APP_SCHEDULE_RECEIPTS_V1.on);
+      expect(w.row(BRIEF_SWEEP_ID)).toBeNull();
+      await w.connect('conn-1', MAIL);
+      expect(w.row(BRIEF_SWEEP_ID)?.status).toBe('armed');
     });
   });
 });

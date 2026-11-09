@@ -12,7 +12,7 @@ const TYPICAL_VARIABILITY = Math.exp(VARIABILITY_PRIOR.mu0);
 const hourly = (day: string, offset: number, hrv = 55, method: 'rmssd' | 'sdnn' = 'rmssd'): HourlyBucket[] =>
   [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19].map(h => ({
     startAt: new Date(Date.parse(`${day}T00:00:00Z`) + h * 3_600_000).toISOString(),
-    heartRate: 72 + wobble(h + offset, 2), hrv: hrv + wobble(h + offset, 3), hrvMethod: method,
+    heartRate: 72 + wobble(h + offset, 2), hrvReadings: [{ value: hrv + wobble(h + offset, 3), method }],
     daylightMinutes: 20 + wobble(h + offset, 2), movementMinutes: 12 + wobble(h + offset, 2), activeEnergyKcal: null,
   }));
 const day = (i: number, over: Partial<DayRecord> = {}): DayRecord => {

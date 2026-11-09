@@ -23,7 +23,7 @@ const stillLatest = () => true;
 const harness = (state: DurableObjectState) => {
   const cards: { text: string; markup: boolean }[] = [], applied: string[] = [], sent: string[] = [];
   // Outside a turn iMessage has no sender to answer, so a card waits for the owner's next message.
-  let n = 0, inTurn = true, now = NOW;
+  let n = 0, inTurn = true, now = NOW, duringSend: (() => Promise<void>) | undefined;
   const client = {
     account: { connection_id: 'local:owner@example.test', email: 'owner@example.test' },
     event: async (id: string) => ({ id, title: 'Standup', start: '2026-10-26T10:00:00Z', end: '2026-10-26T10:15:00Z', all_day: false, etag: 'v1' }),
@@ -34,6 +34,7 @@ const harness = (state: DurableObjectState) => {
     owner: OWNER, surface: 'imessage', appLink: appApprovalLink, appIdentity: () => true, writesFirstNow: () => false,
     call: async (method: string, body: object) => {
       if (method !== 'sendMessage' || !inTurn) return undefined;
+      const during = duringSend; duringSend = undefined; await during?.();
       const message = body as { text: string; reply_markup?: unknown };
       cards.push({ text: message.text, markup: message.reply_markup !== undefined });
       return { messages: [{ id: `wac_${cards.length}` }] };
@@ -43,7 +44,8 @@ const harness = (state: DurableObjectState) => {
     sendMessage: async proposal => { sent.push(proposal.content); return { provider_id: `sent-${sent.length}` }; },
   });
   const status = (id: string) => state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status;
-  return { desk, cards, applied, sent, status, outsideTurn: (outside: boolean) => { inTurn = !outside; }, later: (ms: number) => { now += ms; } };
+  return { desk, cards, applied, sent, status, outsideTurn: (outside: boolean) => { inTurn = !outside; },
+    whileNextSends: (work: () => Promise<void>) => { duringSend = work; }, later: (ms: number) => { now += ms; } };
 };
 const owner = (name: string, work: (state: DurableObjectState) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`${name}-${crypto.randomUUID()}`)), (_instance, state) => work(state));
@@ -186,6 +188,32 @@ describe('two cards waiting', () => {
   });
 });
 
+describe('a card Waldo withdrew while its send was out', () => {
+  it('a "1" on it gets the withdrawn answer, not the model, and nothing is done', async () => {
+    await owner('imsg-withdrawn-mid-send', async state => {
+      const f = harness(state);
+      f.whileNextSends(async () => { expect(await f.desk.withdraw('p1', 'You moved the focus block yourself.')).toMatchObject({ outcome: 'withdrawn' }); });
+      expect(await f.desk.propose(hold('Focus'))).toBe('p1');
+      expect(f.cards).toHaveLength(1);
+      expect(await f.desk.numberedReply('1', 'trace', ref => ref === 'wac_1')).toMatchObject({ toast: 'Withdrawn', message: expect.stringContaining('You moved the focus block yourself.') });
+      expect(f.applied).toEqual([]);
+      expect(f.status('p1')).toBe('withdrawn');
+    });
+  });
+
+  it('a "1" after it answers that card, never the earlier one still waiting', async () => {
+    await owner('imsg-withdrawn-mid-send-earlier', async state => {
+      const f = harness(state);
+      const earlier = await f.desk.propose(hold('Focus'));
+      f.whileNextSends(async () => { await f.desk.withdraw('p2', 'A duplicate of the focus block.'); });
+      await f.desk.propose(hold('Gym'));
+      expect(await f.desk.numberedReply('1', 'trace', ref => ref === 'wac_2')).toMatchObject({ toast: 'Withdrawn' });
+      expect(f.applied).toEqual([]);
+      expect(f.status(earlier)).toBe('open');
+    });
+  });
+});
+
 describe('a number counts only while the card is open', () => {
   it('a card the waiting() sweep expired takes no number: "1" and "2" are ordinary turns, and nothing is decided', async () => {
     await owner('imsg-numbered-expired-swept', async state => {
@@ -273,6 +301,17 @@ describe('on the iMessage outbox, the card must still be Waldo\'s latest message
       expect(await f.number(inbound(), '1')).toMatchObject({ toast: 'Done' });
       expect(f.status(id)).toBe('done');
       expect(f.applied).toEqual(['add Focus']);
+    });
+  });
+
+  it('a /stop\'s answer frozen after the card does not write past it: "1" still approves it', async () => {
+    await owner('imsg-latest-stop-answer', async state => {
+      const f = thread(state);
+      let id = '';
+      await f.turn(inbound(), async () => { id = await f.desk.propose(hold('Focus')); });
+      f.outbox.freeze(inbound(), 'Stopped.', 'stop');
+      expect(await f.number(inbound(), '1')).toMatchObject({ toast: 'Done' });
+      expect(f.status(id)).toBe('done');
     });
   });
 

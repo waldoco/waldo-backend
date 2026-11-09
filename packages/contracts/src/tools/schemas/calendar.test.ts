@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { proposeCalendarChangeArgsSchema } from './calendar';
+import { proposeCalendarChangeArgsSchema, proposeCalendarPlanArgsSchema } from './calendar';
 
 const create = { action: 'create', title: 'Design review', start: '2026-10-14T10:00:00+05:30', end: '2026-10-14T10:30:00+05:30', reason: 'asked for it' } as const;
 
@@ -46,5 +46,49 @@ describe('propose_calendar_change: the kind of protected time a new block is', (
     ['an empty kind', { ...create, block: '' }],
   ])('refuses %s', (_name, args) => {
     expect(proposeCalendarChangeArgsSchema.safeParse(args).success).toBe(false);
+  });
+});
+
+describe('propose_calendar_change: swapping an event for another in its slot', () => {
+  const move = { action: 'move', event_id: 'e1', start: create.start, end: create.end, reason: 'short night' } as const;
+  it('accepts a move that renames the event and keeps its times', () => {
+    const parsed = proposeCalendarChangeArgsSchema.safeParse({ ...move, title: 'Intervals', rename_to: 'Easy run' });
+    expect(parsed.success && parsed.data.rename_to).toBe('Easy run');
+  });
+
+  it.each([
+    ['a rename on a create', { ...create, rename_to: 'Easy run' }],
+    ['a rename on a cancel', { action: 'cancel', event_id: 'e1', rename_to: 'Easy run', reason: 'x' }],
+    ['an empty new title', { ...move, rename_to: '' }],
+    ['a new title over 200 characters', { ...move, rename_to: 'x'.repeat(201) }],
+  ])('refuses %s', (_name, args) => {
+    expect(proposeCalendarChangeArgsSchema.safeParse(args).success).toBe(false);
+  });
+});
+
+describe('propose_calendar_plan arguments', () => {
+  const valid = { day: '2026-11-05', reason: 'your day, laid out', blocks: [
+    { title: 'Write the board memo', start: '09:30', end: '11:30', block: 'deep_work' },
+    { title: 'Lunch and a walk', start: '13:00', end: '14:00', block: 'rest' },
+    { title: 'Reply to Priya', start: '14:00', end: '14:30' },
+  ] } as const;
+  it('accepts two to twelve new blocks on one local day, in order, back to back or apart', () => {
+    expect(proposeCalendarPlanArgsSchema.safeParse(valid).success).toBe(true);
+    expect(proposeCalendarPlanArgsSchema.safeParse({ ...valid, account: 'me@example.com', blocks: valid.blocks.slice(0, 2) }).success).toBe(true);
+  });
+  it.each([
+    ['one block', { ...valid, blocks: [valid.blocks[0]] }],
+    ['thirteen blocks', { ...valid, blocks: Array.from({ length: 13 }, (_, i) => ({ title: `B${i}`, start: `${String(i + 6).padStart(2, '0')}:00`, end: `${String(i + 6).padStart(2, '0')}:30` })) }],
+    ['a block ending before it starts', { ...valid, blocks: [valid.blocks[0], { ...valid.blocks[1], end: '12:00' }] }],
+    ['blocks out of order', { ...valid, blocks: [valid.blocks[1], valid.blocks[0]] }],
+    ['overlapping blocks', { ...valid, blocks: [valid.blocks[0], { ...valid.blocks[1], start: '11:00' }] }],
+    ['an instant instead of a local time', { ...valid, blocks: [valid.blocks[0], { ...valid.blocks[1], start: '2026-11-05T13:00:00Z' }] }],
+    ['24:00', { ...valid, blocks: [valid.blocks[0], { ...valid.blocks[1], end: '24:00' }] }],
+    ['guests on a block', { ...valid, blocks: [valid.blocks[0], { ...valid.blocks[1], attendees: ['sam@example.com'] }] }],
+    ['another calendar', { ...valid, calendar_id: 'team@group.calendar.google.com' }],
+    ['no reason', { ...valid, reason: '' }],
+    ['no day', { blocks: valid.blocks, reason: 'r' }],
+  ] as const)('rejects %s', (_label, args) => {
+    expect(proposeCalendarPlanArgsSchema.safeParse(args).success).toBe(false);
   });
 });

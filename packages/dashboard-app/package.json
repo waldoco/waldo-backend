@@ -12,7 +12,8 @@
   "dependencies": {
     "@lucasmarkes/hairline": "0.3.0",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "uqr": "0.1.3"
   },
   "devDependencies": {
     "@types/react": "19.2.14",

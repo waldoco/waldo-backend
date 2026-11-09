@@ -117,6 +117,13 @@ describe('produceHealthScores', () => {
     expect(weight.activation).toBe('candidate_unaccepted');
   });
 
+  it('scores Weight on a day read without a calendar it had to leave out (partial)', async () => {
+    const busy = Array.from({ length: 31 }, (_, i) => ({ day: addDays(TODAY, -i), busy_minutes: Math.round(240 + wobble(i, 40)), partial: true }));
+    const h = harness(seriesOf(history(25)), undefined, undefined, { readDemand: async () => ({ state: 'available', days: busy }) });
+    await run(h);
+    expect(typeof (h.writes.find(w => w.day === TODAY)!.weight as Record<string, unknown>).score).toBe('number');
+  });
+
   it('leaves Weight unavailable, and still writes Recovery and Form, when the calendar cannot be read', async () => {
     const cases: [string, ProducerDeps['readDemand'], string[]][] = [
       ['failed', async () => { throw new Error('do down'); }, ['demand_failed']],
@@ -172,6 +179,20 @@ describe('produceHealthScores', () => {
     const today = h.inputs.find(input => input.targetDay === TODAY)!.days.find(d => d.day === TODAY)!;
     // 8 hours x 12 movement minutes, plus the 06:00 workout; the 09:00 one falls in an hour movement already counts.
     expect(today.demand?.physicalLoad).toBe(96 + 60);
+  });
+
+  it('counts each workout minute once toward physical load, however many copies or sessions cover it', async () => {
+    const workout = (start: string, end: string, activity = 'run') => sample('workout', TODAY, { start_at: `${TODAY}T${start}:00.000Z`, end_at: `${TODAY}T${end}:00.000Z`, value: 60, activity });
+    const loadWith = async (workouts: Record<string, unknown>[]) => {
+      const h = harness(seriesOf([...history(25), ...workouts]), undefined, undefined, { readDemand: async () => ({ state: 'available', days: [] }) });
+      await run(h);
+      return h.inputs.find(input => input.targetDay === TODAY)!.days.find(d => d.day === TODAY)!.demand?.physicalLoad;
+    };
+    // Movement hours start at 08:00, so every minute below is workout time: 8 hours x 12 movement minutes, plus the union.
+    expect(await loadWith([workout('06:00', '07:00'), workout('06:01', '07:01')]), 'another app\'s copy').toBe(96 + 61);
+    expect(await loadWith([workout('06:00', '07:00'), workout('06:00', '07:00')]), 'one app recording twice').toBe(96 + 60);
+    expect(await loadWith([workout('06:00', '07:00'), workout('06:30', '07:30', 'cycling')]), 'two sports overlapping').toBe(96 + 90);
+    expect(await loadWith([workout('06:00', '07:00'), workout('07:00', '07:45')]), 'back to back').toBe(96 + 105);
   });
 
   it('takes the calendar baseline from every day the calendar reports, not only days with health readings', async () => {
@@ -288,9 +309,42 @@ describe('produceHealthScores', () => {
     const today = h.inputs[0]!.days.find(d => d.day === TODAY)!;
     expect(today.workouts).toEqual([{ startAt: `${TODAY}T06:00:00.000Z`, endAt: `${TODAY}T06:45:00.000Z` }]);
     expect(today.hourly).toHaveLength(8);
-    expect(today.hourly[0]).toMatchObject({ startAt: `${TODAY}T08:00:00.000Z`, daylightMinutes: 20, movementMinutes: 12, hrvMethod: 'rmssd' });
+    expect(today.hourly[0]).toMatchObject({ startAt: `${TODAY}T08:00:00.000Z`, daylightMinutes: 20, movementMinutes: 12, hrvReadings: [{ value: expect.any(Number), method: 'rmssd' }] });
     // Without a calendar reader only physical load is known: 8 hours x 12 movement minutes plus the 45-minute run.
     expect(today.demand).toEqual({ meetingMinutes: null, messageCount: null, openTaskMinutes: null, physicalLoad: 96 + 45 });
+  });
+
+  describe('an hour with HRV of both methods', () => {
+    // A Watch hour carries the platform's SDNN and, from its beat-to-beat series, RMSSD: two readings of one window.
+    const sdnnBeside = (samples: Sample[]) => samples.flatMap(s => (s.signal === 'hrv_window' ? [{ ...s, method: 'sdnn', value: 40 }, s] : [s]));
+    const reversed = (samples: Sample[]) => samples.flatMap(s => (s.signal === 'hrv_window' && s.method === 'sdnn' ? [] : s.signal === 'hrv_window' ? [s, { ...s, method: 'sdnn', value: 40 }] : [s]));
+    const runOn = async (samples: Sample[]) => {
+      const h = harness(seriesOf(samples));
+      await run(h);
+      const input = h.inputs[0]!;
+      return { input, today: input.days.find(d => d.day === TODAY)!, form: [computeDailyScores({ ...input, provisional: false }).form, computeDailyScores({ ...input, provisional: true }).form] };
+    };
+    const byMethod = (readings: readonly { method: string }[]) => [...readings].sort((a, b) => a.method.localeCompare(b.method));
+
+    it('reaches Form with both, whichever arrives first', async () => {
+      for (const samples of [sdnnBeside(history(25)), reversed(sdnnBeside(history(25)))]) {
+        const { today } = await runOn(samples);
+        expect(today.hourly).toHaveLength(8);
+        for (const bucket of today.hourly) expect(byMethod(bucket.hrvReadings)).toEqual([{ value: expect.any(Number), method: 'rmssd' }, { value: 40, method: 'sdnn' }]);
+      }
+    });
+
+    it('leaves Form as RMSSD alone gives it: SDNN beside it is never read in its place', async () => {
+      const alone = await runOn(history(25));
+      expect(alone.form.map(form => form.state)).toEqual(['available', 'available']);
+      for (const samples of [sdnnBeside(history(25)), reversed(sdnnBeside(history(25)))]) expect((await runOn(samples)).form).toEqual(alone.form);
+    });
+
+    it('keeps the later of a repeat within a method, never across methods', async () => {
+      const start_at = `${TODAY}T08:00:00.000Z`, end_at = `${TODAY}T09:00:00.000Z`;
+      const { today } = await runOn([...history(25), sample('hrv_window', TODAY, { start_at, end_at, value: 41, method: 'sdnn' }), sample('hrv_window', TODAY, { start_at, end_at, value: 42, method: 'sdnn' })]);
+      expect(byMethod(today.hourly[0]!.hrvReadings)).toEqual([{ value: expect.any(Number), method: 'rmssd' }, { value: 42, method: 'sdnn' }]);
+    });
   });
 
   describe('hour windows sent again on another grid', () => {

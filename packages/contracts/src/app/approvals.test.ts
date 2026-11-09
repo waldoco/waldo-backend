@@ -7,10 +7,16 @@ import {
   appApprovalRoutesV1,
   appApprovalStateV1Schema,
   appApprovalAtRevision,
+  appApprovalKindShownAt,
   appApprovalV1Schema,
+  APP_APPROVALS_AGENT_MAIL_REVISION,
+  APP_APPROVALS_CALENDAR_PLAN_REVISION,
   APP_APPROVALS_CONTRACT_REVISION,
+  APP_APPROVALS_STANDING_GRANT_REVISION,
+  APP_APPROVALS_WITHDRAWAL_REVISION,
   type AppApprovalV1,
 } from './approvals';
+import autonomy from './fixtures/autonomy.v1.json';
 import { appControlReceiptV1Schema, appControlRequestIdV1Schema } from './controls';
 import { payloadDigestV1Schema, replyApprovalPartV1Schema } from './parts';
 
@@ -276,7 +282,7 @@ describe('the exact draft of a send, approvals revision 3', () => {
   });
 
   it('a build reading revision 1 or 2 gets exactly the shape before the draft, and a revision 3 build gets the same object', () => {
-    expect(APP_APPROVALS_CONTRACT_REVISION).toBe(4);
+    expect(APP_APPROVALS_CONTRACT_REVISION).toBe(9);
     for (const [draft, before] of [[mailDraft, email], [messageDraft, message]] as const) {
       const parsed = appApprovalV1Schema.parse(draft) as AppApprovalV1;
       for (const revision of [1, 2]) expect([revision, JSON.stringify(appApprovalAtRevision(parsed, revision))]).toEqual([revision, JSON.stringify(before)]);
@@ -333,5 +339,160 @@ describe('the health origin of an approval, approvals revision 4', () => {
   it('serves the marker in a list only as the schema allows', () => {
     expect(appApprovalListV1Schema.safeParse({ approvals: [marked, email] }).success).toBe(true);
     expect(appApprovalListV1Schema.safeParse({ approvals: [{ ...marked, health: { reason: '' } }] }).success).toBe(false);
+  });
+});
+
+describe('a send as Waldo, approvals revision 5', () => {
+  const sender = { name: "Waldo, Sam's assistant", address: 'sam@mail.example.com' };
+  const asWaldo = {
+    ...email, approval_id: 'p0007', kind: 'agent_mail_send', review: `From: ${sender.name} <${sender.address}>\nTo: lee@example.com\nSubject: Friday\n\nSee you at 4.`,
+    exact: { recipients: { to: ['lee@example.com'], cc: [], bcc: [] }, sender, message: { subject: 'Friday', body: 'See you at 4.' } },
+  } as const;
+
+  it('accepts a send that names its sender, its recipients and its draft', () => {
+    expect(APP_APPROVALS_AGENT_MAIL_REVISION).toBe(5);
+    expect(appApprovalV1Schema.safeParse(asWaldo).success).toBe(true);
+    const { message: _draft, ...withoutDraft } = asWaldo.exact;
+    expect(appApprovalV1Schema.safeParse({ ...asWaldo, exact: withoutDraft }).success).toBe(true);
+    expect(appApprovalListV1Schema.safeParse({ approvals: [asWaldo, email] }).success).toBe(true);
+  });
+
+  it.each([
+    ['no sender', { ...asWaldo, exact: { recipients: asWaldo.exact.recipients } }],
+    ['no recipients', { ...asWaldo, exact: { sender } }],
+    ['a sender on a Gmail send', { ...email, exact: { ...email.exact, sender } }],
+    ['a sender on a message', { ...message, exact: { ...message.exact, sender } }],
+    ['a sender name that breaks its line', { ...asWaldo, exact: { ...asWaldo.exact, sender: { ...sender, name: 'Waldo\r\nBcc: x@example.com' } } }],
+    ['an empty sender name', { ...asWaldo, exact: { ...asWaldo.exact, sender: { ...sender, name: '' } } }],
+    ['a sender that is not an address', { ...asWaldo, exact: { ...asWaldo.exact, sender: { ...sender, address: 'waldo' } } }],
+    ['a sender with more than its name and address', { ...asWaldo, exact: { ...asWaldo.exact, sender: { ...sender, reply_to: 'x@example.com' } } }],
+    ['a draft without its subject', { ...asWaldo, exact: { ...asWaldo.exact, message: { subject: null, body: 'See you at 4.' } } }],
+  ] as const)('rejects %s', (_shape, approval) => {
+    expect(appApprovalV1Schema.safeParse(approval).success).toBe(false);
+  });
+});
+
+describe('a card that asks to create a standing grant, approvals revision 7', () => {
+  const card = autonomy.standing_grant_card;
+  const terms = card.exact.grant;
+
+  it('accepts a card that shows exactly the grant terms the autonomy settings confirm', () => {
+    expect([APP_APPROVALS_STANDING_GRANT_REVISION, APP_APPROVALS_CONTRACT_REVISION]).toEqual([7, 9]);
+    expect(appApprovalV1Schema.safeParse(card).success).toBe(true);
+    expect(appApprovalListV1Schema.safeParse({ approvals: [card, email] }).success).toBe(true);
+    expect(replyApprovalPartV1Schema.safeParse({ type: 'approval', approval_id: card.approval_id, kind: card.kind, review: card.review, payload_digest: card.payload_digest,
+      actions: ['approve', 'skip'], expires_at: card.expires_at, fallback_text: 'Waldo asks to move its own focus blocks without asking.' }).success).toBe(true);
+    // A done card reads done, with no undo: ending a grant is a revoke.
+    const { labels: _labels, ...decided } = card;
+    expect(appApprovalV1Schema.safeParse({ ...decided, state: 'done', actions: [] }).success).toBe(true);
+  });
+
+  it.each([
+    ['no grant', { ...card, exact: {} }],
+    ['grant terms beside another change', { ...card, exact: { grant: terms, scope: 'calendar' } }],
+    ['grant terms on another kind', { ...calendar, exact: { ...calendar.exact, grant: terms } }],
+    ['a grant past 90 days', { ...card, exact: { grant: { ...terms, expires_at: terms.valid_from + 91 * 86_400_000 } } }],
+    ['a daily cap past 20', { ...card, exact: { grant: { ...terms, limits: { ...terms.limits, max_per_day: 21 } } } }],
+    ['a class that is not one of the five', { ...card, exact: { grant: { ...terms, scope: { ...terms.scope, class: 'calendar.anything' } } } }],
+    ['a grant with more than its terms', { ...card, exact: { grant: { ...terms, autonomy: 'auto' } } }],
+  ] as const)('rejects %s', (_shape, approval) => {
+    expect(appApprovalV1Schema.safeParse(approval).success).toBe(false);
+  });
+});
+
+describe('a card Waldo withdrew, approvals revision 6', () => {
+  const replaced = { ...email, state: 'superseded', actions: [], withdrawal: { reason: 'Replaced by a newer draft.', replaced_by: 'p0009' } } as const;
+  const withdrawn = { ...email, state: 'superseded', actions: [], withdrawal: { reason: 'You said you will call Sam instead.' } } as const;
+
+  it('accepts a closed card that says why, with the card that replaced it when one did', () => {
+    expect(APP_APPROVALS_WITHDRAWAL_REVISION).toBe(6);
+    expect(appApprovalV1Schema.safeParse(replaced).success).toBe(true);
+    expect(appApprovalV1Schema.safeParse(withdrawn).success).toBe(true);
+    expect(appApprovalListV1Schema.safeParse({ approvals: [replaced, withdrawn, email] }).success).toBe(true);
+  });
+
+  it.each([
+    ['a withdrawal on a card still waiting', { ...email, withdrawal: withdrawn.withdrawal }],
+    ['a withdrawal on a done card', { ...email, state: 'done', actions: [], withdrawal: withdrawn.withdrawal }],
+    ['decisions on a withdrawn card', { ...withdrawn, actions: ['approve'] }],
+    ['an empty reason', { ...withdrawn, withdrawal: { reason: '' } }],
+    ['a reason past one short line', { ...withdrawn, withdrawal: { reason: 'x'.repeat(201) } }],
+    ['a reason that breaks its line', { ...withdrawn, withdrawal: { reason: 'Stale.\nApproved.' } }],
+    ['a replacement that is no approval id', { ...withdrawn, withdrawal: { reason: 'Replaced.', replaced_by: 'a newer one' } }],
+    ['more than the reason and the replacement', { ...withdrawn, withdrawal: { reason: 'Replaced.', by: 'waldo' } }],
+  ] as const)('rejects %s', (_shape, approval) => {
+    expect(appApprovalV1Schema.safeParse(approval).success).toBe(false);
+  });
+
+  it('a build reading revision 5 or below still gets the card, closed as superseded, without the withdrawal', () => {
+    const parsed = appApprovalV1Schema.parse(replaced) as AppApprovalV1;
+    for (const revision of [1, 4, 5]) {
+      const shown = appApprovalAtRevision(parsed, revision);
+      expect([revision, shown.state, shown.actions, shown.withdrawal]).toEqual([revision, 'superseded', [], undefined]);
+      expect(appApprovalV1Schema.safeParse(shown).success).toBe(true);
+    }
+    expect(appApprovalAtRevision(parsed, 6)).toBe(parsed);
+  });
+});
+
+describe('a day plan, approvals revision 9', () => {
+  const blocks = [
+    { title: 'Write the board memo', start: '2026-11-05T09:30:00+05:30', end: '2026-11-05T11:30:00+05:30', block: 'deep_work' },
+    { title: 'Lunch and a walk', start: '2026-11-05T13:00:00+05:30', end: '2026-11-05T14:00:00+05:30', block: 'rest' },
+    { title: 'Reply to Priya', start: '2026-11-05T14:00:00+05:30', end: '2026-11-05T14:30:00+05:30' },
+  ] as const;
+  const plan = {
+    ...email, approval_id: 'p0010', kind: 'calendar_plan', actions: ['approve', 'edit', 'skip', 'defer'],
+    review: 'Add 3 blocks to your calendar on Thu 5 Nov:\n09:30–11:30 Write the board memo\n13:00–14:00 Lunch and a walk\n14:00–14:30 Reply to Priya',
+    exact: { plan: { day: '2026-11-05', blocks, time_zone: 'Asia/Kolkata' } },
+  } as const;
+  const withBlocks = (next: readonly object[], day = '2026-11-05') => ({ ...plan, exact: { plan: { ...plan.exact.plan, day, blocks: next } } });
+
+  it('accepts a plan of new blocks in order, back to back or apart, with the account when it is not the default', () => {
+    expect(APP_APPROVALS_CALENDAR_PLAN_REVISION).toBe(9);
+    expect(appApprovalV1Schema.safeParse(plan).success).toBe(true);
+    expect(appApprovalV1Schema.safeParse({ ...plan, exact: { plan: { ...plan.exact.plan, account: 'me@example.com' } } }).success).toBe(true);
+    expect(appApprovalV1Schema.safeParse({ ...plan, state: 'done', actions: ['undo'], undo_until: expiresAtMs }).success).toBe(true);
+    expect(appApprovalListV1Schema.safeParse({ approvals: [plan, calendar] }).success).toBe(true);
+  });
+
+  it('holds a whole local day on the clock-change days: 25 hours in London on 25 Oct, 23 hours on 29 Mar', () => {
+    const long = [{ title: 'Early run', start: '2026-10-25T00:30:00+01:00', end: '2026-10-25T01:30:00+01:00' }, { title: 'Late reading', start: '2026-10-25T23:00:00+00:00', end: '2026-10-25T23:50:00+00:00' }];
+    expect(Date.parse(long[1]!.end) - Date.parse(long[0]!.start)).toBeGreaterThan(24 * 3_600_000);
+    expect(appApprovalV1Schema.safeParse(withBlocks(long, '2026-10-25')).success).toBe(true);
+    const short = [{ title: 'Early run', start: '2026-03-29T00:30:00+00:00', end: '2026-03-29T00:59:00+00:00' }, { title: 'Late reading', start: '2026-03-29T23:00:00+01:00', end: '2026-03-29T23:50:00+01:00' }];
+    expect(appApprovalV1Schema.safeParse(withBlocks(short, '2026-03-29')).success).toBe(true);
+  });
+
+  it.each([
+    ['no plan', { ...plan, exact: { changes: calendar.exact.changes } }],
+    ['a plan beside a single change', { ...plan, exact: { ...plan.exact, changes: calendar.exact.changes } }],
+    ['a plan that invites guests', { ...plan, exact: { ...plan.exact, recipients: { to: ['sam@example.com'], cc: [], bcc: [] } } }],
+    ['blocks on a single calendar change', { ...calendar, exact: { ...calendar.exact, plan: plan.exact.plan } }],
+    ['one block, which is a single calendar change', withBlocks([blocks[0]])],
+    ['more than twelve blocks', withBlocks(Array.from({ length: 13 }, (_, hour) => ({ title: `Block ${hour}`, start: `2026-11-05T${String(hour + 6).padStart(2, '0')}:00:00Z`, end: `2026-11-05T${String(hour + 6).padStart(2, '0')}:30:00Z` })))],
+    ['a block that ends before it starts', withBlocks([blocks[0], { ...blocks[1], end: blocks[1].start }])],
+    ['blocks out of order', withBlocks([blocks[1], blocks[0]])],
+    ['blocks that overlap', withBlocks([blocks[0], { ...blocks[1], start: '2026-11-05T11:00:00+05:30' }])],
+    ['a block on the next day', withBlocks([blocks[0], { ...blocks[1], start: '2026-11-06T13:00:00+05:30', end: '2026-11-06T14:00:00+05:30' }])],
+    ['a plan whose day is not its blocks\' day', withBlocks([...blocks], '2026-11-04')],
+    ['a time without its offset', withBlocks([blocks[0], { ...blocks[1], start: '2026-11-05T13:00:00' }])],
+    ['an empty title', withBlocks([blocks[0], { ...blocks[1], title: '' }])],
+    ['a block kind other than rest or deep work', withBlocks([blocks[0], { ...blocks[1], block: 'workout' }])],
+    ['a block that names guests', withBlocks([blocks[0], { ...blocks[1], guests: ['sam@example.com'] }])],
+    ['a plan without its time zone', { ...plan, exact: { plan: { day: '2026-11-05', blocks } } }],
+    ['a plan on another calendar', { ...plan, exact: { plan: { ...plan.exact.plan, calendar: 'team@group.calendar.google.com' } } }],
+  ] as const)('rejects %s', (_shape, approval) => {
+    expect(appApprovalV1Schema.safeParse(approval).success).toBe(false);
+  });
+
+  it('is never shown as a card to a build reading revision 8 or below, which cannot parse it, while other kinds stay as they were', () => {
+    for (const revision of [1, 5, 7, 8]) expect([revision, appApprovalKindShownAt('calendar_plan', revision)]).toEqual([revision, false]);
+    expect(appApprovalKindShownAt('calendar_plan', 9)).toBe(true);
+    for (const revision of [1, 4]) expect(appApprovalKindShownAt('agent_mail_send', revision)).toBe(false);
+    expect(appApprovalKindShownAt('agent_mail_send', 5)).toBe(true);
+    for (const kind of ['calendar_change', 'email_send', 'message_send', 'browser_submit', 'mcp_call', 'google_task_change', 'tainted_action'] as const) expect(appApprovalKindShownAt(kind, 1)).toBe(true);
+    const parsed = appApprovalV1Schema.parse(plan) as AppApprovalV1;
+    expect(appApprovalAtRevision(parsed, 9)).toBe(parsed);
   });
 });

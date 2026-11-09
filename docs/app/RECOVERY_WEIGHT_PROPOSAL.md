@@ -1,3 +1,5 @@
+> Superseded by [docs/foundation/WALDO_HEALTH_USE_CASES.md](../foundation/WALDO_HEALTH_USE_CASES.md) for use cases and status.
+
 ## Recovery and Weight: what is missing and a proposed definition (proposal, owner/Claude to ratify)
 
 What exists [source: brain flows + ADR-0081]: Form is the only accepted algorithm (`form.safte-fast.v1`). Recovery and Weight have UI specs and DB columns (`recovery`, `weight`, `tier2` jsonb in `health_context_daily`) but no accepted formula, weights, zones, freshness rules or golden vectors. ADR-0081 says any new algorithm/version needs a registry entry and fixtures.

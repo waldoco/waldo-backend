@@ -16,10 +16,18 @@ export async function persistAppInboxWake(txn: DurableObjectTransaction, due: nu
   await armAlarm(txn, existing === null ? due : Math.min(existing, due));
 }
 
+// Unsent app uploads expire here: the app lane drops each at its expiry (app-uploads). It is apart from the inbox's own
+// wake, so an upload nobody sends never reads as an owner message waiting (owner-first).
+export const APP_UPLOADS_DUE_KEY = 'app_uploads_due_v1';
+
 export const WHATSAPP_PENDING_DUE_KEY = 'whatsapp_pending_due_v1';
+export const WHATSAPP_INBOX_DUE_KEY = 'whatsapp_owner_inbox_due_v1';
 
 // The jobs lane's next work: a task attempt to start or restart, a report to apply, a retried turn or a progress note.
 export const TASK_JOBS_DUE_KEY = 'task_jobs_due_v1';
+
+// Chats a drain made due a compaction, which runs in a later alarm pass than the one that ran the owner's turns.
+export const COMPACTION_DUE_KEY = 'compaction_due_v1';
 
 // The owner alarm handler's own retry after a failed pass; the pass that is that retry consumes it.
 export const ALARM_RETRY_DUE_KEY = 'owner_alarm_retry_due_v1';
@@ -30,10 +38,10 @@ export const ALARM_FAILED_LANE_KEY = 'owner_alarm_failed_lane_v1';
 // arms a wake writes its key first and no re-arm can drop it. guard-wake-due-keys fails on a due key written in the
 // runtime but missing here, and on a lane that arms the alarm without naming one.
 export const WAKE_DUE_KEYS = [
-  'imessage_owner_inbox_due_v1', 'imessage_final_outbox_due_v1', APP_INBOX_DUE_KEY,
+  'imessage_owner_inbox_due_v1', 'imessage_final_outbox_due_v1', APP_INBOX_DUE_KEY, APP_UPLOADS_DUE_KEY,
   'telegram_final_outbox_due_v1', 'telegram_owner_inbox_due_v1', 'telegram_link_due_v1',
-  'browser_owner_task_due_v1', 'common_browser_due_v1', 'common_browser_lease_due_v1', WHATSAPP_PENDING_DUE_KEY,
-  'mac_results_due_v1', 'agent_mail_due_v1', TASK_JOBS_DUE_KEY, ALARM_RETRY_DUE_KEY,
+  'browser_owner_task_due_v1', 'common_browser_due_v1', 'common_browser_lease_due_v1', WHATSAPP_PENDING_DUE_KEY, WHATSAPP_INBOX_DUE_KEY,
+  'mac_results_due_v1', 'agent_mail_due_v1', 'agent_mail_rule_due_v1', TASK_JOBS_DUE_KEY, COMPACTION_DUE_KEY, ALARM_RETRY_DUE_KEY,
 ] as const;
 
 // The lanes of an owner alarm pass, each with the wakes of the work it runs; 'schedule' owns the schedule's next entry.
@@ -44,14 +52,20 @@ export const ALARM_LANES = {
   transport: ['telegram_final_outbox_due_v1'],
   schedule: [],
   browser: ['browser_owner_task_due_v1', 'common_browser_due_v1', 'common_browser_lease_due_v1'],
-  app: [APP_INBOX_DUE_KEY],
+  app: [APP_INBOX_DUE_KEY, APP_UPLOADS_DUE_KEY],
   imessage: ['imessage_owner_inbox_due_v1', 'imessage_final_outbox_due_v1'],
   mac: ['mac_results_due_v1'],
-  mail: ['agent_mail_due_v1'],
+  mail: ['agent_mail_due_v1', 'agent_mail_rule_due_v1'],
   whatsapp: [WHATSAPP_PENDING_DUE_KEY],
+  whatsapp_turns: [WHATSAPP_INBOX_DUE_KEY],
   jobs: [TASK_JOBS_DUE_KEY],
+  compaction: [COMPACTION_DUE_KEY],
 } as const satisfies Readonly<Record<string, readonly (typeof WAKE_DUE_KEYS)[number][]>>;
 export type AlarmLane = keyof typeof ALARM_LANES | 'pass';
+// Lanes no hold delays: their work catches its own failures and defers its own wake, so no failure is ever recorded against
+// them, and a hold elsewhere (another lane, or the whole pass) never pushes their wake back to its retry. WhatsApp turns are
+// one: an owner waiting on a reply must not wait out another lane's backoff.
+const UNHELD_LANES: ReadonlySet<AlarmLane | null | undefined> = new Set<AlarmLane>(['whatsapp_turns']);
 const LANE_OF = new Map<string, AlarmLane>(Object.entries(ALARM_LANES).flatMap(([lane, keys]) => keys.map(key => [key, lane as AlarmLane])));
 
 // The lane a failed pass left waiting, while its retry is still ahead. The one test of it: the handler's, on whether a pass
@@ -61,8 +75,8 @@ export function heldLane(retryDue: number | null | undefined, lane: AlarmLane | 
 }
 
 // A lane a failed pass can name. The browser lane only hands its work to waitUntil, so it can't fail a pass; its wakes are
-// still its own.
-type FailingLane = Exclude<AlarmLane, 'pass' | 'browser'>;
+// still its own. WhatsApp turns catch their own failures (UNHELD_LANES).
+type FailingLane = Exclude<AlarmLane, 'pass' | 'browser' | 'whatsapp_turns'>;
 // What a lane of an alarm pass throws, so the handler holds that lane: keyed by the lane, never by the error's message.
 export class AlarmLaneFailure extends Error {
   constructor(readonly lane: FailingLane, cause: unknown) { super(`alarm lane ${lane} failed`, { cause }); }
@@ -102,6 +116,13 @@ export async function armTaskJobsWake(storage: DurableObjectStorage, due: number
   await armAlarm(storage, Math.max(Date.now() + 250, existing === null ? next : Math.min(existing, next)));
 }
 
+export async function armCompactionWake(storage: DurableObjectStorage, due: number): Promise<void> {
+  const held = await storage.get<number | null>(COMPACTION_DUE_KEY);
+  await storage.put(COMPACTION_DUE_KEY, held === undefined || held === null ? due : Math.min(held, due));
+  const existing = await storage.getAlarm();
+  await armAlarm(storage, Math.max(Date.now() + 250, existing === null ? due : Math.min(existing, due)));
+}
+
 // How long a failed alarm pass waits before the next attempt: the platform's own retry curve (2 s, doubling) plus a fixed
 // share of up to a quarter more, taken from the object's id so owners that fail together retry apart, capped at capMs.
 export function alarmRetryDelay(streak: number, objectId: string, capMs: number): number {
@@ -125,7 +146,7 @@ export async function alarmPass(storage: DurableObjectStorage, work: () => Promi
   let last: PassRearm | null | undefined;
   try { await work(); last = passRearms.get(storage); } finally { passRearms.delete(storage); }
   const now = Date.now();
-  if (last || heldLane(await storage.get<number>(ALARM_RETRY_DUE_KEY), null, now)) await arbitrate(storage, last?.scheduleDue ?? null, now, last?.retryDelayMs ?? 250, false);
+  if (last || heldLane(await storage.get<number>(ALARM_RETRY_DUE_KEY), null, now)) await arbitrate(storage, last?.scheduleDue ?? null, now, last?.retryDelayMs ?? REARM_FLOOR_MS, false);
 }
 
 // The one arbiter: arms the earliest of the schedule's next entry and every listed lane's wake, never sooner than the
@@ -134,18 +155,19 @@ export async function alarmPass(storage: DurableObjectStorage, work: () => Promi
 // wake already in the slot stays (the platform's retry of a pass that died, or an admission's); otherwise the retry goes in.
 // With nothing due, a re-arm outside the handler clears the alarm; a pass leaves it. The schedule's next entry is not a
 // persisted key, so a caller passes it (Scheduler.rearm reads it) or the re-arm drops that wake.
-export async function rearmSharedAlarm(storage: DurableObjectStorage, scheduleDue: number | null, now: number, retryDelayMs = 250): Promise<void> {
+export async function rearmSharedAlarm(storage: DurableObjectStorage, scheduleDue: number | null, now: number, retryDelayMs = REARM_FLOOR_MS): Promise<void> {
   if (passRearms.has(storage)) { passRearms.set(storage, { scheduleDue, retryDelayMs }); return; }
   await arbitrate(storage, scheduleDue, now, retryDelayMs, true);
 }
 
-async function arbitrate(storage: DurableObjectStorage, scheduleDue: number | null, now: number, retryDelayMs: number, outside: boolean): Promise<void> {
+// When each kept wake can run: its due time, or the retry's for a lane a failed pass holds. `free` says one runs as due.
+async function wakeBounds(storage: DurableObjectStorage, scheduleDue: number | null, now: number): Promise<Readonly<{ bounds: number[]; free: boolean }>> {
   const retryDue = (await storage.get<number | null>(ALARM_RETRY_DUE_KEY)) ?? null;
   const held = heldLane(retryDue, await storage.get<AlarmLane>(ALARM_FAILED_LANE_KEY), now);
   const bounds: number[] = [];
   let free = false;
   const add = (lane: AlarmLane | null | undefined, due: number) => {
-    if (held === 'pass' || (held !== null && lane === held)) bounds.push(Math.max(due, retryDue!));
+    if (!UNHELD_LANES.has(lane) && (held === 'pass' || (held !== null && lane === held))) bounds.push(Math.max(due, retryDue!));
     else { bounds.push(due); free = true; }
   };
   if (scheduleDue !== null) add('schedule', scheduleDue);
@@ -153,6 +175,20 @@ async function arbitrate(storage: DurableObjectStorage, scheduleDue: number | nu
     const due = (await storage.get<number | null>(key)) ?? null;
     if (due !== null) add(key === ALARM_RETRY_DUE_KEY ? held : LANE_OF.get(key), due);
   }
+  return { bounds, free };
+}
+
+// The soonest a re-arm sets the alarm. A wake written for now (an admission's now + 250 ms) is due by then.
+const REARM_FLOOR_MS = 250;
+// Whether no kept wake can run before the arbiter's floor. A pass that finds none has nothing to run: its re-arm would set
+// the alarm for the same wake, no sooner.
+export async function nothingDueBy(storage: DurableObjectStorage, scheduleDue: number | null, now: number): Promise<boolean> {
+  const { bounds } = await wakeBounds(storage, scheduleDue, now);
+  return !bounds.length || Math.min(...bounds) > now + REARM_FLOOR_MS;
+}
+
+async function arbitrate(storage: DurableObjectStorage, scheduleDue: number | null, now: number, retryDelayMs: number, outside: boolean): Promise<void> {
+  const { bounds, free } = await wakeBounds(storage, scheduleDue, now);
   if (!bounds.length) { if (outside) await storage.deleteAlarm(); return; }
   const wake = Math.max(Math.min(...bounds), now + retryDelayMs);
   if (outside && !free) {

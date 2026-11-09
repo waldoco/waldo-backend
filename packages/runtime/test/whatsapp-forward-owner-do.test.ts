@@ -5,6 +5,7 @@ import { expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
 import { handleWhatsAppWebhook } from '../src/channels/whatsapp-webhook';
 import type { OwnerDirectory } from '../src/identity/owner-directory';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 const { modelInputs } = vi.hoisted(() => ({ modelInputs: [] as unknown[] }));
 vi.mock('openai', () => ({ default: class {
@@ -29,8 +30,8 @@ const deliver = async (instance: OwnerDO, messages: readonly Record<string, unkn
   const owners = { idFromName: (name: string) => name, get: () => ({ fetch: (url: string, init?: RequestInit) => instance.fetch(new Request(url, init)) }) } as unknown as DurableObjectNamespace;
   const directory: OwnerDirectory = { byPresence: async () => ({ doName: 'wa-forward', subject: SUBJECT, timezone: null }), redeem: async () => null };
   const request = new Request('https://w.test/whatsapp/webhook', { method: 'POST', body, headers: { 'x-hub-signature-256': await sign(body) } });
-  expect((await handleWhatsAppWebhook(request, { OWNER_DO: owners, WHATSAPP_APP_SECRET: APP_SECRET }, () => undefined, directory)).status).toBe(200);
-  await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+  expect((await handleWhatsAppWebhook(request, { OWNER_DO: owners, WHATSAPP_APP_SECRET: APP_SECRET, WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' }, () => undefined, directory)).status).toBe(200);
+  await drainWhatsAppTurns(instance);
 };
 const message = (id: string, body: string, context: Record<string, unknown>) => ({ context, from: SUBJECT, id, timestamp: '1700000000', text: { body }, type: 'text' });
 const labelled = (text: string) => JSON.stringify(`[Forwarded by the owner from someone else:]\n${JSON.stringify(text)}\n[End of forwarded text.]`).slice(1, -1);

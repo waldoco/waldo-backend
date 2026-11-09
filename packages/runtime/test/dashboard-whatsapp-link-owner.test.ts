@@ -28,7 +28,9 @@ describe('new console WhatsApp link',()=>{
   issued.provider.length=0;issued.telegram=0;issued.code='ABCDEFGHJK';
   const response=await (await open('wa-link-owner'))('wa-link-request-01');
   expect(response.status).toBe(200);
-  expect(await response.json()).toMatchObject({receipt:{state:'recorded',message:'Send this to the Waldo WhatsApp number within 10 minutes: waldo ABCDEFGHJK'}});
+  const body=await response.json() as {receipt:{state:string;message:string};reveal:unknown};
+  expect(body.receipt.state).toBe('recorded');expect(body.receipt.message).not.toContain('ABCDEFGHJK');
+  expect(body.reveal).toEqual({kind:'link_code',value:'waldo ABCDEFGHJK'});
   expect(issued.provider).toEqual(['wa-link-owner:whatsapp']);expect(issued.telegram).toBe(0);
  });
  it('rejects honestly when no code could be issued',async()=>{

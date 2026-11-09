@@ -6,6 +6,8 @@ import { handleWhatsAppWebhook } from '../src/channels/whatsapp-webhook';
 import type { OwnerDirectory } from '../src/identity/owner-directory';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 import { ownerOnboardingHost, type OwnerOnboardingDeps } from '../src/channels/app-onboarding';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
+import { surfaceOfTrace } from '../src/channels/owner-turn-envelope';
 
 const model = vi.hoisted(() => ({ requests: [] as string[], all: [] as string[] }));
 vi.mock('../src/channels/telegram-turn', async load => {
@@ -37,8 +39,8 @@ const deliver = async (instance: InstanceType<typeof OwnerDO>, id: string, text:
   const owners = { idFromName: (name: string) => name, get: () => ({ fetch: (url: string, init?: RequestInit) => instance.fetch(new Request(url, init)) }) } as unknown as DurableObjectNamespace;
   const directory: OwnerDirectory = { byPresence: async () => ({ doName: NAME, subject: SUBJECT, timezone: null }), redeem: async () => null };
   const request = new Request('https://w.test/whatsapp/webhook', { method: 'POST', body, headers: { 'x-hub-signature-256': await sign(body) } });
-  expect((await handleWhatsAppWebhook(request, { OWNER_DO: owners, WHATSAPP_APP_SECRET: APP_SECRET }, () => undefined, directory)).status).toBe(200);
-  await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+  expect((await handleWhatsAppWebhook(request, { OWNER_DO: owners, WHATSAPP_APP_SECRET: APP_SECRET, WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' }, () => undefined, directory)).status).toBe(200);
+  await drainWhatsAppTurns(instance);
 };
 
 it('a WhatsApp turn that asks for the console link sends it as its own message now, and keeps it out of history, search and every model request', async () => {
@@ -63,6 +65,10 @@ it('a WhatsApp turn that asks for the console link sends it as its own message n
       expect(kvRows.some(([, value]) => JSON.stringify(value).includes('Sent it here as its own message.'))).toBe(true);
       expect(kvRows.filter(([, value]) => JSON.stringify(value).includes('console?t=')).map(([key]) => key)).toEqual([]);
       expect(JSON.stringify(state.storage.sql.exec('SELECT * FROM episodes').toArray())).toContain('Sent it here as its own message.');
+      // The recall chain reads a stored turn's surface back from its id, as the WhatsApp path wrote it.
+      const entryIds = state.storage.sql.exec<{ entry_id: string }>('SELECT entry_id FROM episodes').toArray().map(row => row.entry_id);
+      expect(entryIds.length).toBeGreaterThan(0);
+      expect(entryIds.map(surfaceOfTrace)).toEqual(entryIds.map(() => 'whatsapp'));
       const tables = state.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%'").toArray().map(row => row.name);
       for (const table of tables) {
         let rows: unknown[];

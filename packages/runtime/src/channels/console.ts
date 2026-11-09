@@ -1,7 +1,7 @@
 import type { AppTile } from './connect-app';
 import { APP_CLAIM_TEXT_MAX_V1 } from '../../../contracts/src/app/controls';
 import { PROFILE_KINDS } from '../memory/claims';
-import { calendarInviteDetails, type ApprovalItem, type ApprovalReview } from './approvals';
+import { calendarInviteDetails, DRAFT_SEND_KINDS, type ApprovalItem, type ApprovalReview } from './approvals';
 import type { CardLatest, CardViewState } from './day-cards';
 import { SCHEDULE_KINDS } from '@waldo/contracts';
 import { SCHEDULE_LABELS, type SchedulePreferences } from './schedule-preferences';
@@ -136,6 +136,12 @@ export const signInPage = (token: string): Response => new Response(
   { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'same-origin' } },
 );
 
+// An owner who joined without an invite finishes setting up in the app, agreements first, before the console opens.
+export const openOwnerConsolePage = (): Response => new Response(
+  `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Waldo console</title><style>body{font-family:system-ui,sans-serif;background:#FAFAF8;color:#1A1A1A;display:grid;place-items:center;min-height:100vh;margin:0}p{max-width:28em;text-align:center;padding:0 16px}</style></head><body><p>Finish setting up Waldo in the app first. The console opens once you've accepted the terms there.</p></body></html>`,
+  { status: 403, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'same-origin' } },
+);
+
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
 
@@ -145,7 +151,7 @@ export const grantHeaders = (doName: string, request: Request): Record<string, s
   return { 'x-waldo-do-name': doName, ...(current ? { cookie: `${CONSOLE_COOKIE}=${current}` } : {}) };
 };
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'spot.pin', 'spot.unpin', 'spot.edit', 'node.forget', 'node.confirm', 'node.correct', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'schedule.resume', 'card.retry', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'granola.connect', 'granola.disconnect', 'session.signout', 'session.signout.all', 'session.revoke', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'health_memory.set', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'spot.pin', 'spot.unpin', 'spot.edit', 'spot.area', 'spot.quiet', 'spot.unquiet', 'node.forget', 'node.confirm', 'node.correct', 'person.confirm', 'person.rename', 'person.ring', 'person.forget', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'schedule.resume', 'card.retry', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'granola.connect', 'granola.disconnect', 'session.signout', 'session.signout.all', 'session.revoke', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'health_memory.set', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'agent_mail.claim', 'agent_mail.release'] as const;
 // made: where the owner made a memory pin or edit, recorded on the claim it writes (app:claim.edit); absent, the console's own.
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string; made?: string }>;
 
@@ -175,7 +181,6 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'proactivity.set': 'Saved. Waldo will reach out on your new settings.',
   'proactive_surface.set': 'Saved. Waldo sends its next messages there.',
   'health_memory.set': 'Saved. Notes Waldo keeps on its own include health only while this is on; what you ask it to remember is kept either way.',
-  'schedule.set': 'Saved. That scheduled behavior is updated.',
   'schedule.reset': 'Reset. Every scheduled behavior is back to its default (on).',
   'invite.create': 'Invite saved. Send the code to the intended person yourself; Waldo did not email anyone.',
   'invite.member': 'Invite saved. Send the code yourself; Waldo did not email anyone.',
@@ -187,6 +192,11 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'spot.pin.failed': 'Nothing was pinned. Refresh Memory and try again.',
   'spot.unpin': 'Unpinned. Waldo still remembers it and finds it when it matters.',
   'spot.edit': 'Saved in your words. Waldo uses this from now on; the old version is kept as history.',
+  'spot.area': 'Moved. Waldo keeps it in the area you chose.',
+  'spot.quiet': 'Okay. Waldo keeps it and uses it when you ask, but will not bring it up on its own.',
+  'spot.unquiet': 'Okay. Waldo may bring it up on its own again when it matters.',
+  'spot.quiet.failed': 'Nothing changed. Refresh and try again.',
+  'spot.area.failed': 'Nothing was moved. Pick one of the listed areas, then refresh Memory and try again.',
   'spot.edit.failed': 'Nothing was changed. The text must be 1 to 1,000 characters and hold no password, key or token.',
   'spot.forget': 'Removed from long-term memory and blocked from relearning. Waldo no longer sees it; older copies are cleared from storage in the background.',
   'forget.retry': 'Clearing started again. The topic leaves this list once every store is clean.',
@@ -194,6 +204,12 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'node.forget.incomplete': 'The pattern was hidden and blocked from relearning, but retained conversation text could not be fully redacted. Supporting Spots remain. Ask Waldo in chat to inspect the incomplete removal; no dashboard retry target is available.',
   'node.forget': 'Pattern removed and its name blocked from relearning. What Waldo read behind it goes with it; anything you said yourself stays - forget that too to remove it. The current chat may still mention it until the conversation moves on.',
   'node.confirm': 'Confirmed. Waldo now treats this pattern as yours.',
+  'person.confirm': 'Confirmed. Waldo now knows them as someone you know.',
+  'person.rename': 'Renamed. Waldo now uses the name you gave.',
+  'person.rename.failed': 'Nothing was changed. The name must be 1 to 120 characters and hold no password, key or token.',
+  'person.ring': 'Saved. Waldo now keeps them where you put them.',
+  'person.ring.failed': 'Nothing was changed. Choose inner, close or wider.',
+  'person.forget': 'Forgotten: everything Waldo held about them, and their name and addresses are blocked from relearning, unless someone else you know shares the name. Older copies are cleared from storage in the background. Their mail and calendar events stay in Gmail and Google Calendar.',
   'node.correct': 'Corrected. Waldo now keeps your words instead, and will not bring back its earlier read.',
   'node.correct.failed': 'Nothing was changed. The text must be 1 to 140 characters and hold no password, key or token.',
   'schedule.resume': 'Resumed. It runs now.',
@@ -213,9 +229,10 @@ export const NOTICES: Readonly<Record<string, string>> = {
   invalid: 'That change could not be applied.',
 };
 
-// latest is the Main chat row today's card was delivered to; only the app's day view reads it.
+// latest is the Main chat row today's card was delivered to; only the app's day view reads it. revision and revisedAt say
+// the card was revised after it was delivered (controls revision 9), and latest then names the newest revision's row.
 export type ConsoleCard = Readonly<{ id: string; name: string; defaultTime: string; time: string | null; reason: string; sent: boolean; pin: string | null;
-  latest?: CardLatest | null; state?: CardViewState; stateReason?: string; retriesLeft?: number }>;
+  latest?: CardLatest | null; state?: CardViewState; stateReason?: string; retriesLeft?: number; revision?: number; revisedAt?: number }>;
 
 export type ConsoleView = Readonly<{
   release: string;
@@ -230,7 +247,7 @@ export type ConsoleView = Readonly<{
   usage: readonly Readonly<{ model: string; calls: number; input: number; cached: number; output: number; usd: number }>[];
   csrf: string;
   notice: string | null;
-  google: Readonly<{ accounts: readonly Readonly<{ id: string; email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean }>[]; connectAvailable: boolean }>;
+  google: Readonly<{ accounts: readonly Readonly<{ id: string; email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean; drive?: boolean; docs?: boolean; sheets?: boolean; slides?: boolean }>[]; connectAvailable: boolean }>;
   // Granola, read from the owner's MCP connections. Only the app's read fills it; the console lists every server under mcp.
   granola?: Readonly<{ connectAvailable: boolean; connection: Readonly<{ status: 'active' | 'reauth_needed'; connected_at: number }> | null }>;
   // Every catalogue app as a Connections tile. Only the app's read fills it.
@@ -245,6 +262,8 @@ export type ConsoleView = Readonly<{
   spots: readonly Claim[];
   retiredSpots: readonly Claim[];
   forgettingSpots: readonly Claim[];
+  // The owner's yes to a node's words; never listed as claims, read only to say whether a node is confirmed.
+  statements: readonly Claim[];
   // Topics a forget is still clearing from storage, masked: Waldo no longer sees them, and the owner can retry.
   forgettingTopics: readonly ForgetHold[];
   holds: readonly Readonly<{ id: number; kind: string; reason: string; created_at: string }>[];
@@ -254,6 +273,8 @@ export type ConsoleView = Readonly<{
   ledger: string;
   proactivity: Proactivity;
   schedules: SchedulePreferences;
+  // WAKE_BRIEF: a wake may bring the Brief earlier than its time, so the owner's Brief time is the latest it comes.
+  wakeBrief?: boolean;
   // Jobs the scheduler paused after their own runs failed, as the owner knows them, with the retry's local time.
   pausedJobs: readonly Readonly<{ id: string; name: string; until: string }>[];
   files: readonly StoredFile[];
@@ -337,21 +358,22 @@ const serviceStatus = (view: ConsoleView) => {
 // for open send proposals. That also un-strands proposals whose Telegram approval card lost its
 // inline keyboard.
 export const consoleMayDismiss = (item: ApprovalItem): boolean =>
-  (item.state === 'open' || item.state === 'review_only') && !(consoleMayApprove(item) && item.review?.kind === item.kind) && (item.kind === 'email_send' || item.kind === 'message_send');
+  (item.state === 'open' || item.state === 'review_only') && !(consoleMayApprove(item) && item.review?.kind === item.kind) && DRAFT_SEND_KINDS.includes(item.kind);
 export const consoleMayApprove = (item: ApprovalItem | undefined): boolean => Boolean(item && item.state === 'open' && item.kind === 'calendar_change' && item.review?.kind === 'calendar_change' && !calendarInviteDetails(item.review));
 // The Waiting view shows a send's whole draft and binds each decision to the read that showed it, so it sends
 // (approval.send) and changes an open email or message. Sending is its own action so the step-up table can ask for a
 // recent email code; the retired page's form route binds no read and handles no send.
 export const waitingMaySend = (item: ApprovalItem | undefined): boolean =>
-  Boolean(item && item.state === 'open' && (item.kind === 'email_send' || item.kind === 'message_send') && item.review?.kind === item.kind);
+  Boolean(item && item.state === 'open' && DRAFT_SEND_KINDS.includes(item.kind) && item.review?.kind === item.kind);
 
 const APPROVAL_LABELS: Readonly<Record<string, string>> = {
-  calendar_change: 'Calendar adjustment', email_send: 'Email send', message_send: 'Message send',
-  browser_submit: 'Browser action', mcp_call: 'MCP tool call', google_task_change: 'Google task change',
+  calendar_change: 'Calendar adjustment', email_send: 'Email send', message_send: 'Message send', agent_mail_send: 'Email as Waldo',
+  browser_submit: 'Browser action', mcp_call: 'MCP tool call', google_task_change: 'Google task change', standing_grant: 'Standing grant',
 };
 const reviewDetails = (review: ApprovalReview): string => {
   if (review.kind === 'email_send') return `<div class="approval-review"><div>To: ${esc(review.to.join(', '))}</div>${review.cc.length ? `<div>CC: ${esc(review.cc.join(', '))}</div>` : ''}${review.bcc.length ? `<div>BCC: ${esc(review.bcc.join(', '))}</div>` : ''}<div>Subject: ${esc(review.subject)}</div><pre>${esc(review.body)}</pre></div>`;
   if (review.kind === 'message_send') return `<div class="approval-review"><div>Channel: ${esc(review.channel)}</div><pre>${esc(review.content)}</pre></div>`;
+  if (review.kind === 'agent_mail_send') return `<div class="approval-review"><div>From: ${esc(`${review.from.name} <${review.from.address}>`)}</div><div>To: ${esc(review.to.join(', '))}</div>${review.cc.length ? `<div>CC: ${esc(review.cc.join(', '))}</div>` : ''}<div>Subject: ${esc(review.subject)}</div><pre>${esc(review.body)}</pre></div>`;
   if ('text' in review) return `<div class="approval-review"><pre>${esc(review.text)}</pre></div>`;
   if (review.kind === 'google_task_change') {
     const { args, list, before } = review.proposal;
@@ -379,10 +401,10 @@ const approvals = (view: ConsoleView) => {
         ? dismissible ? form(view.csrf, 'approval.skip', "Don't do this", { id: item.id }) : ''
         : item.undoable ? form(view.csrf, 'approval.undo', 'Undo', { id: item.id }, { tone: 'danger', confirm: 'Undo this calendar change?' }) : '';
     const review = safeReview ? reviewDetails(safeReview) : '';
-    const holdReason = item.state === 'review_only' ? '<div class="sub">The full email did not fit in the chat card, so no Send it button was offered. Nothing has been sent. Ask for a shorter version or a draft to review.</div>' : item.state === 'unconfirmed' ? '<div class="sub">Review card delivery was not confirmed. This email cannot be approved here or in chat; nothing has been sent. Check chat before making a fresh request.</div>' : item.state !== 'open' || canApprove ? '' : item.kind === 'email_send' || item.kind === 'message_send'
+    const holdReason = item.state === 'review_only' ? '<div class="sub">The full email did not fit in the chat card, so no Send it button was offered. Nothing has been sent. Ask for a shorter version or a draft to review.</div>' : item.state === 'unconfirmed' ? '<div class="sub">Review card delivery was not confirmed. This email cannot be approved here or in chat; nothing has been sent. Check chat before making a fresh request.</div>' : item.state !== 'open' || canApprove ? '' : DRAFT_SEND_KINDS.includes(item.kind)
       ? '<div class="sub">Review the exact sender, recipient and words in your chat - approving this send happens there. Don\'t do this dismisses it, here or in chat.</div>'
       : '<div class="sub">Full action details are not available here. This console cannot approve or dismiss it. Ask Waldo to show the proposal in full before deciding.</div>';
-    const changeHint = (item.state === 'open' || item.state === 'review_only') && ['calendar_change', 'email_send', 'message_send'].includes(item.kind)
+    const changeHint = (item.state === 'open' || item.state === 'review_only') && ['calendar_change', ...DRAFT_SEND_KINDS].includes(item.kind)
       ? '<div class="sub">Want to change it? Ask Waldo to prepare a new proposal before approving.</div>' : '';
     return `<div class="row approval-row"><div class="main"><div class="sub">${chip(label)}</div><div class="line">${esc(item.summary)}</div>${review}${holdReason}${changeHint}</div>${chip(item.state === 'review_only' ? 'Too long to approve' : item.state === 'unconfirmed' ? 'Card unconfirmed' : item.state === 'open' ? 'Waiting on you' : 'Done', item.state === 'done' ? 'good' : 'neutral')}<div class="act">${actions}</div></div>`;
   }).join('');

@@ -61,7 +61,7 @@ describe('read_memory as the one recall function', () => {
       return m.call({ query: 'workout' }, ownerTurn());
     }) as { data: { claims: Record<string, unknown>[] } };
     expect(result.data.claims).toHaveLength(1);
-    expect(Object.keys(result.data.claims[0]!).sort()).toEqual(['evidence', 'id', 'kind', 'last_seen_at', 'origin', 'source', 'source_ref', 'supersedes_id', 'text', 'verification_status']);
+    expect(Object.keys(result.data.claims[0]!).sort()).toEqual(['area', 'evidence', 'id', 'kind', 'last_seen_at', 'origin', 'source', 'source_ref', 'supersedes_id', 'text', 'verification_status']);
   });
 
   it('reads a claim stored before provenance was recorded as unverified, as the memory prompt labels it', async () => {

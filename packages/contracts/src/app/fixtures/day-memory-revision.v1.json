@@ -1,0 +1,16 @@
+{
+  "notes": [
+    "Send x-waldo-app-contract: controls=8 to receive memory_revision on view=day; a build below 8 never receives it.",
+    "memory_revision is a per-owner count that moves whenever the owner's memory changes (a claim written, edited, confirmed, dismissed or forgotten; a pattern or a link between patterns saved or removed), from chat or from anything else: the nightly pass, the welcome build, the console. Re-reading a claim does not move it.",
+    "It is a signal to refresh, not a version to compare across owners or to do arithmetic on: when it differs from the value the open screen was built from, re-read the constellation.",
+    "It carries no content, and it is not part of the day view's revision, so a memory change never makes a pending day action stale."
+  ],
+  "day": {
+    "version": 1, "state": "available", "view": "day", "revision": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "data": {
+      "timezone": "Asia/Kolkata", "date": "2026-10-30", "name": "Priya", "memory_revision": 42,
+      "cards": [], "proactivity": { "quiet_start": null, "quiet_end": null, "volume": "normal" },
+      "schedules": { "daily_brief": true, "followups": true, "event_briefs": true, "nightly": true, "heartbeat": true }
+    }
+  }
+}

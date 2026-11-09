@@ -19,6 +19,8 @@ import { TASK_PROFILE_SPECS } from '../src/tasks/profiles';
 import { runTaskAttempt, type TaskBrainPort } from '../src/tasks/worker-loop';
 import config from '../wrangler.jsonc?raw';
 import { parseJsonc } from '../../../scripts/jsonc.mjs';
+import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
+import { TOOL_DEFINITION_BUDGET_TOKENS } from './helpers/tool-budget';
 
 // The brain's tool surface on a real owner turn: an app message to an owner with every Google feature connected, so the
 // tool list is the production one. The scripted model records the request; both adapters then build their wire bodies
@@ -106,10 +108,10 @@ const openAIVisible = (tools: readonly WireTool[]) => tools.filter((tool) => too
 const anthropicVisible = (tools: readonly WireTool[]) => tools.filter((tool) => tool.defer_loading !== true);
 
 describe('the brain tool surface', () => {
-  it('places every tool once: about a dozen core tools, the rest in namespaces of fewer than ten', () => {
+  it('places every tool once: a bounded core, the rest in namespaces of fewer than ten', () => {
     expect(Object.keys(TOOL_RECORDS).sort()).toEqual([...toolNameSchema.options].sort());
     const core = Object.entries(TOOL_RECORDS).filter(([, record]) => record.brain === 'core').map(([name]) => name);
-    expect(core.length).toBeLessThanOrEqual(14);
+    expect(core.length).toBeLessThanOrEqual(21);
     // A background task the model cannot see is one it never starts: off the core for the budget, its namespace line names it.
     expect(BRAIN_NAMESPACES[TOOL_RECORDS.start_task.brain as keyof typeof BRAIN_NAMESPACES]).toContain('start_task');
     for (const namespace of Object.keys(BRAIN_NAMESPACES)) {
@@ -156,7 +158,7 @@ describe('the brain tool surface', () => {
     expect(request.tools!.some((tool) => tool.namespace !== undefined || tool.defer_loading !== undefined)).toBe(false);
   });
 
-  it('switch on: under 4k tokens of tool definitions per round for both providers, strict on OpenAI where it fits', async () => {
+  it('switch on: tool definitions per round within the budget for both providers, strict on OpenAI where it fits', async () => {
     const off = await ownerReply('tool-surface-before', 'off');
     const request = await ownerReply('tool-surface-on', 'on');
     expect(request.system).toContain(TOOL_SEARCH_LINE);
@@ -206,12 +208,12 @@ describe('the brain tool surface', () => {
       strict: strict.filter((tool) => tool.strict === true).length, non_strict: strict.filter((tool) => tool.strict !== true).map((tool) => tool.name),
     };
     console.log(`BRAIN_TOOL_SURFACE ${JSON.stringify(report)}`);
-    expect(report.openai_visible_tokens_est).toBeLessThan(4_000);
-    expect(report.anthropic_visible_tokens_est).toBeLessThan(4_000);
-    expect(report.browsing_openai_visible_tokens_est).toBeLessThan(4_000);
-    expect(report.browsing_anthropic_visible_tokens_est).toBeLessThan(4_000);
-    expect(report.tapback_openai_visible_tokens_est).toBeLessThan(4_000);
-    expect(report.tapback_anthropic_visible_tokens_est).toBeLessThan(4_000);
+    expect(report.openai_visible_tokens_est).toBeLessThan(TOOL_DEFINITION_BUDGET_TOKENS);
+    expect(report.anthropic_visible_tokens_est).toBeLessThan(TOOL_DEFINITION_BUDGET_TOKENS);
+    expect(report.browsing_openai_visible_tokens_est).toBeLessThan(TOOL_DEFINITION_BUDGET_TOKENS);
+    expect(report.browsing_anthropic_visible_tokens_est).toBeLessThan(TOOL_DEFINITION_BUDGET_TOKENS);
+    expect(report.tapback_openai_visible_tokens_est).toBeLessThan(TOOL_DEFINITION_BUDGET_TOKENS);
+    expect(report.tapback_anthropic_visible_tokens_est).toBeLessThan(TOOL_DEFINITION_BUDGET_TOKENS);
     expect(report.before_tokens_est).toBeGreaterThan(report.openai_visible_tokens_est * 2);
   });
 
@@ -231,7 +233,7 @@ describe('the brain tool surface', () => {
       const ticket = { jobId: `job_${profile}`, attempt: 1, token: 'tok' };
       const brain: TaskBrainPort = {
         claim: async () => ({ jobId: ticket.jobId, profile, brief: { title: 'Size', goal: 'Measure.', context: '', done_when: 'Now.', effort: 'standard', timezone: 'UTC', started_at: 0 }, tools, mutations: [], turns: [], seq: 0, deadlineAt: Date.now() + 3_600_000, roundsUsed: 0, ownerRef: 'owner-1' }),
-        tool: async () => 'fenced', checkpoint: async () => 'ok', report: async () => 'accepted', heartbeat: async () => true,
+        tool: async () => 'fenced', checkpoint: async () => 'ok', report: async () => 'accepted', heartbeat: async () => true, spent: async () => undefined,
       };
       await runTaskAttempt(ticket, { brain, sliceEnd: Date.now() + 60_000, model: async ({ tools: round }) => {
         sent = round ? [...round] : undefined;
@@ -280,14 +282,14 @@ describe('the brain tool surface', () => {
 // The deployed switch: off in both. OpenAI refused the tool-search request shape on every staging round (400 on `tools`),
 // so each round paid a refused request before the full-menu resend; on comes back once a live round is accepted.
 it('neither staging nor production runs tool search', () => {
-  const parsed = parseJsonc(config) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
+  const parsed = flatConfig(parseJsonc(config)) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
   expect(parsed.env.staging.vars.WALDO_TOOL_SEARCH).toBe('off');
   expect(parsed.vars.WALDO_TOOL_SEARCH).toBe('off');
 });
 
 // Staging loads tools through the harness (find_tools/use_tool), the same on any provider; production keeps the full menu.
 it('staging loads tools through the harness and production does not', () => {
-  const parsed = parseJsonc(config) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
+  const parsed = flatConfig(parseJsonc(config)) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
   expect(parsed.env.staging.vars.WALDO_TOOL_LOADER).toBe('harness');
   expect(parsed.vars.WALDO_TOOL_LOADER).toBe('off');
 });

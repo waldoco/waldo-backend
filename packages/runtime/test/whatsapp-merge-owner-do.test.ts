@@ -1,0 +1,248 @@
+// WhatsApp messages the owner sends close together get one reply, through the owner object's real admission path: texts in
+// one payload or within the quiet window are one turn, and a reply that newer texts overtook before it did anything is not
+// sent; one turn answers them all. Forwards and files ride in that turn too. A turn that acted keeps its reply.
+import { env, runInDurableObject } from 'cloudflare:test';
+import { beforeEach, expect, it, vi } from 'vitest';
+import { OwnerDO } from '../src/channels/owner-do';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
+
+type RequestBody = { tools?: { name?: string }[]; input: string | { type?: string; call_id?: string }[]; text?: { format?: { name?: string } } };
+const model = vi.hoisted(() => ({ requests: [] as RequestBody[], react: null as string | null, gate: null as Promise<void> | null, entered: () => {} }));
+vi.mock('openai', () => ({ default: class {
+  responses = { create: async (body: RequestBody) => {
+    model.requests.push(structuredClone(body));
+    const format = body.text?.format?.name;
+    const reacted = Array.isArray(body.input) && body.input.some(item => item.type === 'function_call_output' && item.call_id === 'react');
+    const offered = body.tools?.some(tool => tool.name === 'react_to_message');
+    if (!format && offered) { model.entered(); const gate = model.gate; model.gate = null; if (gate) await gate; }
+    const output = !format && model.react && offered && !reacted
+      ? [{ type: 'function_call', call_id: 'react', name: 'react_to_message', arguments: JSON.stringify({ reaction: model.react }) }] : [];
+    const text = format ? format === 'claim_ops'
+      ? '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}'
+      : format === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : '{}'
+      : output.length ? '' : `Reply ${model.requests.length}.`;
+    return { id: `fixture-${model.requests.length}`, output_text: text, output, usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
+  } };
+} }));
+
+const OWNER = '00000000-0000-4000-8000-0000000000e3';
+const SUBJECT = '15550002222';
+type GraphCall = Record<string, unknown> & { type?: string; status?: string; context?: { message_id: string }; text?: { body: string }; reaction?: { message_id: string; emoji: string } };
+
+beforeEach(() => { model.requests = []; model.react = null; model.gate = null; model.entered = () => {}; });
+
+type Admit = (...messages: Record<string, unknown>[]) => Promise<void>;
+const whatsappOwner = (name: string, run: (admit: Admit, drain: () => Promise<void>, graph: GraphCall[], storage: DurableObjectStorage) => Promise<void>, quietMs = '0', merge: string | null = '1') =>
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    const bytes = new Map<string, Uint8Array>();
+    const graph: GraphCall[] = [];
+    const mapping = { owner_id: OWNER, environment: 'fixture', namespace: 'fixture-owner-namespace', do_name: name, do_id: state.id.toString(), state_version: 0, mapping_version: 1 };
+    const fixtureEnv = { ...env, WHATSAPP_QUIET_MS: quietMs, WHATSAPP_REPLY_MERGE: merge ?? undefined, OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id',
+      WALDO_ENVIRONMENT: mapping.environment, WALDO_OWNER_DO_NAMESPACE: mapping.namespace,
+      SUPABASE_PROJECT_URL: 'https://signed-metadata.invalid', SUPABASE_PUBLISHABLE_KEY: 'fictional-publishable', WALDO_ROUTER_HMAC_SECRET: 'fictional-router-secret',
+      ARTIFACTS: {
+        put: async (key: string, value: Uint8Array) => { bytes.set(key, value.slice()); return null; },
+        get: async (key: string) => { const value = bytes.get(key); return value ? { arrayBuffer: async () => value.slice().buffer } : null; },
+        delete: async (key: string) => { bytes.delete(key); },
+      } as unknown as R2Bucket,
+    };
+    // A 1x1 WebP, the shape of a static sticker.
+    const webp = Uint8Array.from(atob('UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAwA0JaQAA3AA/vuUAAA='), c => c.charCodeAt(0));
+    const network = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url === 'https://graph.facebook.com/v26.0/media-sticker') return Response.json({ url: 'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=sticker' });
+      if (url === 'https://graph.facebook.com/v26.0/media-notes') return Response.json({ url: 'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=notes' });
+      if (url.endsWith('mid=notes')) return new Response('# Saved workout references\nMon heavy lift, Fri rest.', { headers: { 'content-type': 'text/markdown' } });
+      if (url.startsWith('https://lookaside.fbsbx.com/')) return new Response(webp, { headers: { 'content-type': 'image/webp' } });
+      if (url === 'https://graph.facebook.com/v26.0/fictional-phone-id/messages') {
+        const body = JSON.parse(String(init?.body)) as GraphCall;
+        graph.push(body);
+        return Response.json(body.status === 'read' ? { success: true } : { messages: [{ id: `wamid.out.${graph.length}` }] });
+      }
+      if (url === `${fixtureEnv.SUPABASE_PROJECT_URL}/rest/v1/rpc/workspace_owner_binding`) return Response.json({ ...mapping });
+      if (url.startsWith(`${fixtureEnv.SUPABASE_PROJECT_URL}/rest/v1/rpc/`)) return Response.json(url.endsWith('health_log_recent') ? [] : url.endsWith('assert_channel_presence') ? true : null);
+      throw new Error(`local fixture denies unexpected network: ${url}`);
+    });
+    const instance = new OwnerDO(state, fixtureEnv);
+    // Admission only: the turns run when the owner's alarm pass drains the inbox, as drain() does here.
+    const admit: Admit = async (...messages) => {
+      const response = await instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
+        method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT, 'x-waldo-do-name': name, 'x-waldo-origin': 'https://waldo.example' },
+        body: JSON.stringify({ messages: messages.map(message => ({ from: SUBJECT, timestamp: String(Math.floor(Date.now() / 1000)), ...message })) }),
+      }));
+      expect(response.status).toBe(200);
+    };
+    try { await run(admit, () => drainWhatsAppTurns(instance), graph, state.storage); } finally { network.mockRestore(); await state.storage.deleteAlarm(); }
+  });
+
+const replies = (graph: readonly GraphCall[]) => graph.filter(call => call.type === 'text').map(call => call.text!.body);
+const turns = () => model.requests.filter(request => !request.text?.format && request.tools?.length);
+const lastMessage = () => { const input = turns().at(-1)!.input; return JSON.stringify(Array.isArray(input) ? input.at(-1) : input); };
+const text = (body: string, id: string, context?: object) => ({ id, type: 'text', text: { body }, ...(context ? { context } : {}) });
+// Holds the next reply's model call until released, and says when it has started.
+const holdReply = () => {
+  let release!: () => void, started!: () => void;
+  model.gate = new Promise<void>(done => { release = done; });
+  const entered = new Promise<void>(done => { started = done; });
+  model.entered = () => { started(); model.entered = () => {}; };
+  return { release, entered };
+};
+
+it('texts in one payload are one turn and one reply', async () => {
+  await whatsappOwner('wa-merge-payload', async (admit, drain, graph) => {
+    await admit(text('Hey Waldo', 'wamid.hey'), text('I have lost my axis bank debit card', 'wamid.card'));
+    await drain();
+    expect(turns()).toHaveLength(1);
+    expect(lastMessage()).toContain('Hey Waldo\\nI have lost my axis bank debit card');
+    expect(replies(graph)).toHaveLength(1);
+  });
+}, 60_000);
+
+it('a greeting overtaken by the real question while Waldo is answering gets no reply of its own: one reply answers both', async () => {
+  await whatsappOwner('wa-merge-overtaken', async (admit, drain, graph) => {
+    const hold = holdReply();
+    await admit(text('Hey Waldo', 'wamid.hey'));
+    const draining = drain();
+    await hold.entered;
+    await admit(text('I have lost my axis bank debit card can you help me deactivate it', 'wamid.card'));
+    hold.release();
+    await draining;
+    expect(turns()).toHaveLength(2);
+    expect(lastMessage()).toContain('Hey Waldo\\nI have lost my axis bank debit card');
+    expect(replies(graph)).toHaveLength(1);
+  });
+}, 60_000);
+
+it('keeps the reply of a turn that acted, and answers the newer message on its own', async () => {
+  await whatsappOwner('wa-merge-acted', async (admit, drain, graph) => {
+    model.react = '👍';
+    const hold = holdReply();
+    await admit(text('Moved my gym to mornings', 'wamid.gym'));
+    const draining = drain();
+    await hold.entered;
+    await admit(text('also book a table for two', 'wamid.table'));
+    hold.release();
+    await draining;
+    await drain();
+    expect(turns().map(turn => JSON.stringify(turn.input)).filter(input => input.includes('also book a table')).length).toBeGreaterThan(0);
+    expect(replies(graph)).toHaveLength(2);
+  });
+}, 60_000);
+
+it('a forward that arrives while a reply is being written overtakes it: one reply answers both, the forward still marked as forwarded', async () => {
+  await whatsappOwner('wa-merge-forward', async (admit, drain, graph) => {
+    const hold = holdReply();
+    await admit(text('Hey Waldo', 'wamid.hey'));
+    const draining = drain();
+    await hold.entered;
+    await admit(text('Meeting moved to 4pm', 'wamid.fwd', { forwarded: true }));
+    hold.release();
+    await draining;
+    await drain();
+    expect(lastMessage()).toContain('Hey Waldo');
+    expect(lastMessage()).toMatch(/[Ff]orwarded[^"]*\\n\\"Meeting moved to 4pm/);
+    expect(replies(graph)).toHaveLength(1);
+  });
+}, 60_000);
+
+it('a forwarded note, a file and a text sent together are one turn: the model reads all three and one reply answers them', async () => {
+  await whatsappOwner('wa-merge-burst', async (admit, drain, graph) => {
+    await admit(
+      text('Found both saved workout references', 'wamid.fwd', { forwarded: true }),
+      { id: 'wamid.file', type: 'document', document: { id: 'media-notes', filename: 'workout-info.md', mime_type: 'text/markdown' }, context: { forwarded: true } },
+      text('i had asked instinct to save this some time back', 'wamid.said'),
+    );
+    await drain();
+    expect(turns()).toHaveLength(1);
+    const input = JSON.stringify(turns()[0]!.input);
+    expect(input).toContain('Found both saved workout references');
+    expect(input).toContain('workout-info.md');
+    expect(input).toContain('i had asked instinct to save this some time back');
+    expect(replies(graph)).toHaveLength(1);
+  });
+}, 60_000);
+
+// A burst holds at most as many files as the model takes; the file past that waits for the next turn, and the turn that is
+// running does not drop its reply for a message it could not have carried.
+it('five files in one burst are a turn of four and a turn of one: two replies, and no turn is dropped for the fifth', async () => {
+  await whatsappOwner('wa-merge-five-files', async (admit, drain, graph) => {
+    const file = (n: number) => ({ id: `wamid.file${n}`, type: 'document', document: { id: 'media-notes', filename: `notes-${n}.md`, mime_type: 'text/markdown' } });
+    await admit(...[1, 2, 3, 4, 5].map(file));
+    // A drain that keeps overtaking its own turn never ends; fail instead of hanging.
+    await Promise.race([drain(), new Promise<never>((_, reject) => setTimeout(() => reject(new Error('the drain did not settle')), 20_000))]);
+    expect(turns()).toHaveLength(2);
+    const first = JSON.stringify(turns()[0]!.input), second = JSON.stringify(turns()[1]!.input);
+    for (const n of [1, 2, 3, 4]) expect(first).toContain(`notes-${n}.md`);
+    expect(first).not.toContain('notes-5.md');
+    expect(second).toContain('notes-5.md');
+    expect(replies(graph)).toHaveLength(2);
+  });
+}, 60_000);
+
+// A burst message that does not parse is left out of the turn, and the owner object says so by count, never by content.
+it('a burst message that fails the schema is left out and logged by count only', async () => {
+  await whatsappOwner('wa-merge-schema-drop', async (admit, drain, graph, storage) => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await admit(
+        { id: 'wamid.bad', type: 'document', document: { id: 'media-notes', filename: 'secret-name.md', mime_type: 'text/markdown' } },
+        text('Here is the plan', 'wamid.said'),
+      );
+      for (const [key, row] of storage.kv.list<{ update: { message: { document?: unknown } } | null }>({ prefix: 'whatsapp:inbox-record:' })) {
+        if (row.update?.message.document !== undefined) { row.update.message.document = { file_name: 'secret-name.md' }; storage.kv.put(key, row); }
+      }
+      await drain();
+      const dropped = log.mock.calls.map(call => String(call[0])).filter(line => line.includes('whatsapp_burst_dropped'));
+      expect(dropped).toHaveLength(1);
+      expect(JSON.parse(dropped[0]!)).toMatchObject({ hop: 'whatsapp_burst_dropped', ok: false, detail: 'schema_rejected:1' });
+      expect(dropped[0]).not.toContain('secret-name');
+      expect(lastMessage()).toContain('Here is the plan');
+      expect(replies(graph)).toHaveLength(1);
+    } finally { log.mockRestore(); }
+  });
+}, 60_000);
+
+it('texts sent a moment apart within the quiet window are one turn', async () => {
+  await whatsappOwner('wa-merge-quiet', async (admit, drain, graph) => {
+    await admit(text('Hey Waldo', 'wamid.hey'));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    await admit(text('I have lost my axis bank debit card', 'wamid.card'));
+    // Still inside the quiet window: nothing has started yet.
+    await drain();
+    expect(turns()).toHaveLength(0);
+    await new Promise(resolve => setTimeout(resolve, 350));
+    await drain();
+    expect(turns()).toHaveLength(1);
+    expect(lastMessage()).toContain('Hey Waldo\\nI have lost my axis bank debit card');
+    expect(replies(graph)).toHaveLength(1);
+  }, '300');
+}, 60_000);
+
+// WHATSAPP_REPLY_MERGE unset, '' or '0' is WhatsApp as it was: no quiet window, no joining, no dropped reply.
+for (const merge of [null, '', '0']) {
+  it(`with the merge switch ${merge === null ? 'unset' : `'${merge}'`}, close-together texts are two turns and two replies, with no wait`, async () => {
+    await whatsappOwner(`wa-merge-off-${merge ?? 'unset'}`, async (admit, drain, graph) => {
+      await admit(text('Hey Waldo', 'wamid.hey'));
+      await admit(text('I have lost my axis bank debit card', 'wamid.card'));
+      await drain();
+      expect(turns()).toHaveLength(2);
+      expect(lastMessage()).not.toContain('Hey Waldo');
+      expect(replies(graph)).toHaveLength(2);
+    }, '300', merge);
+  }, 60_000);
+}
+
+it('with the merge switch off, a reply the owner\'s newer text arrives behind is still sent', async () => {
+  await whatsappOwner('wa-merge-off-overtaken', async (admit, drain, graph) => {
+    const hold = holdReply();
+    await admit(text('Hey Waldo', 'wamid.hey'));
+    const draining = drain();
+    await hold.entered;
+    await admit(text('I have lost my axis bank debit card', 'wamid.card'));
+    hold.release();
+    await draining;
+    await drain();
+    expect(turns()).toHaveLength(2);
+    expect(replies(graph)).toHaveLength(2);
+  }, '0', '0');
+}, 60_000);

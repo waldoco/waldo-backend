@@ -170,12 +170,20 @@ it('with the switch off, no compaction or flush call is made, no attempt is note
     model.requests = [];
     return sent;
   });
-  const off = await sentWith('compaction-post-reply-off', 'off');
+  // Each turn's message carries the owner's clock to the minute, so both runs read one instant: a minute that turns between
+  // them would otherwise differ the bytes this test compares.
+  const realNow = Date.now;
+  const instant = realNow();
+  Date.now = () => instant;
+  let off: Awaited<ReturnType<typeof sentWith>>, on: Awaited<ReturnType<typeof sentWith>>;
+  try {
+    off = await sentWith('compaction-post-reply-off', 'off');
+    on = await sentWith('compaction-post-reply-on-first', 'on');
+  } finally { Date.now = realNow; }
   expect(off.requests.filter(request => request.system === COMPACTION_INSTRUCTION || request.response_format?.name === 'claim_ops')).toEqual([]);
   expect(off.attempt).toBeUndefined();
   expect(off.summaries).toBe(0);
   // Before any summary exists the switch changes nothing the turn sends: the reply's history is byte for byte the same.
-  const on = await sentWith('compaction-post-reply-on-first', 'on');
   const reply = (requests: readonly Request[]) => JSON.stringify(requests.filter(request => request.response_format === undefined && request.system !== COMPACTION_INSTRUCTION).map(request => request.messages));
   expect(reply(on.requests)).toBe(reply(off.requests));
   expect(on.summaries).toBe(1);

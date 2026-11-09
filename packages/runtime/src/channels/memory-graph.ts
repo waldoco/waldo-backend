@@ -1,7 +1,7 @@
 // Owner-scoped read projection. No initializer, model calls, URLs or mutation helpers.
 import { holdsIn } from '../memory/forget-guard';
 import type { Claim } from '../memory/claims';
-import { nodeConfirmation, nodeSources } from '../memory/node-sources';
+import { NODE_STATEMENT, nodeConfirmation, nodeSources } from '../memory/node-sources';
 export const MEMORY_GRAPH_PATH='/console/dashboard/api/v1/memory';
 type Row=Record<string,unknown>;
 const text=(v:unknown)=>typeof v==='string'?v:'';
@@ -16,7 +16,12 @@ export const projectMemoryGraph=(input:Readonly<{scope:string;claims:readonly Ro
  // A claim mid-purge adds its text, not its evidence: evidence is often a shared citation ("owner agreed"), and the owner's
  // own quoted words reach held through the forget's custody.
  const holds=holdsIn([...(input.held??[]),...suppressed.map(c=>text(c.text))]);
- const claims=input.claims.filter(c=>!holds(text(c.text),text(c.evidence),text(c.source_ref),text(c.aliases))).filter(c=>id(c.id)&&['active','promoted'].includes(text(c.status))&&!text(c.text).includes('[forgotten]')).map(c=>({id:ref(input.scope,'claim',c.id as number),local_id:c.id as number,kind:text(c.kind),text:text(c.text),source:text(c.source),origin:['owner','agent','shared','untrusted'].includes(text(c.origin))?text(c.origin):'legacy',status:text(c.status),evidence:{kind:'writer_note' as const,text:text(c.evidence)},source_reference:{state:text(c.source_ref)?'unverified' as const:'unavailable' as const,link:null,visibility:'withheld_unverified_pointer' as const,retrievable:false},recorded_at:text(c.created_at),writer_seen_count:Number.isSafeInteger(c.seen_count)&&Number(c.seen_count)>=1?Number(c.seen_count):null}));
+ // A node statement is the owner's yes to a node's words: it is not listed as a claim, it only confirms its node.
+ const kept=input.claims.filter(c=>!holds(text(c.text),text(c.evidence),text(c.source_ref),text(c.aliases)));
+ const statements=new Set(kept.filter(c=>c.kind===NODE_STATEMENT&&c.status==='active'&&id(c.id)).map(c=>c.id as number));
+ const statementRows=new Set(input.claims.filter(c=>c.kind===NODE_STATEMENT&&id(c.id)).map(c=>c.id as number));
+ const retired=new Set(kept.filter(c=>id(c.id)&&['superseded','dismissed'].includes(text(c.status))).map(c=>c.id as number));
+ const claims=kept.filter(c=>c.kind!==NODE_STATEMENT).filter(c=>id(c.id)&&['active','promoted'].includes(text(c.status))&&!text(c.text).includes('[forgotten]')).map(c=>({id:ref(input.scope,'claim',c.id as number),local_id:c.id as number,kind:text(c.kind),text:text(c.text),source:text(c.source),origin:['owner','agent','shared','untrusted'].includes(text(c.origin))?text(c.origin):'legacy',status:text(c.status),evidence:{kind:'writer_note' as const,text:text(c.evidence)},source_reference:{state:text(c.source_ref)?'unverified' as const:'unavailable' as const,link:null,visibility:'withheld_unverified_pointer' as const,retrievable:false},recorded_at:text(c.created_at),writer_seen_count:Number.isSafeInteger(c.seen_count)&&Number(c.seen_count)>=1?Number(c.seen_count):null}));
  if(input.claims.some(c=>!id(c.id)||!['active','promoted','dismissed','purging','forgotten','superseded'].includes(text(c.status))))partial=true;
  if(claims.some(c=>c.writer_seen_count===null||!validDate(c.recorded_at)))partial=true;
  const byId=new Map(claims.map(c=>[c.local_id,c]));
@@ -24,13 +29,16 @@ export const projectMemoryGraph=(input:Readonly<{scope:string;claims:readonly Ro
  // Fail closed for interpretations until existing purge completes, not a delete guarantee.
  const nodes=input.nodes.filter(n=>!holds(text(n.label),text(n.summary))).filter(n=>id(n.id)&&!text(n.label).includes('[forgotten]')&&!text(n.summary).includes('[forgotten]')).map(n=>{
   let support:number[]=[];let valid=true;try{const value=JSON.parse(text(n.supporting_spots));if(!Array.isArray(value)||!value.every(id))valid=false;else support=[...new Set(value)];}catch{valid=false}
-  const available=support.filter(i=>byId.has(i));if(!valid||!support.length||available.length!==support.length)partial=true;
-  if(!valid||available.length!==support.length||support.length===0)return null;
-  const supports=input.claims.filter(c=>available.includes(c.id as number)) as unknown as Claim[];
-  const sourceRefs=new Set(supports.map(c=>text(c.source_ref)).filter(Boolean));
+  const available=support.filter(i=>byId.has(i)||statements.has(i)),cited=available.filter(i=>!statements.has(i));
+  // A node whose note was replaced or dismissed stays reachable, marked incomplete and never confirmed, so the owner can
+  // correct or forget it. One whose note is being forgotten, is held by a forget or was never stored stays hidden.
+  const missing=support.filter(i=>!available.includes(i)),lost=missing.filter(i=>!statementRows.has(i));
+  if(!valid||!support.length||!missing.every(i=>retired.has(i))){partial=true;return null;}
+  const supports=input.claims.filter(c=>available.includes(c.id as number)) as unknown as Claim[],worded={id:n.id as number,label:text(n.label),summary:text(n.summary),supporting_spots:JSON.stringify(available)};
+  const sourceRefs=new Set(supports.filter(c=>c.kind!==NODE_STATEMENT).map(c=>text(c.source_ref)).filter(Boolean));
   const estimate=finite(n.strength);
   if(estimate===null||estimate<0||estimate>1||!validDate(n.last_confirmed)||!['active','stale'].includes(text(n.status)))partial=true;
-  return{id:ref(input.scope,'node',n.id as number),local_id:n.id as number,type:'interpretation' as const,label:text(n.label),summary:text(n.summary),domain:text(n.domain),stored_status:text(n.status),recorded_active_at:text(n.last_confirmed),estimate:estimate!==null&&estimate>=0&&estimate<=1?estimate:null,estimate_kind:'uncalibrated_model_estimate' as const,support:{state:!valid?'invalid' as const:available.length===support.length?'stored_links' as const:'incomplete' as const,claim_ids:available.map(i=>ref(input.scope,'claim',i)),unavailable_count:support.length-available.length,distinct_source_refs:sourceRefs.size,independent_observations:'unverified' as const},sources:nodeSources(supports,{supporting_spots:JSON.stringify(available)}),confirmation:nodeConfirmation(supports,{supporting_spots:JSON.stringify(available)})};
+  return{id:ref(input.scope,'node',n.id as number),local_id:n.id as number,type:'interpretation' as const,label:text(n.label),summary:text(n.summary),domain:text(n.domain),stored_status:text(n.status),recorded_active_at:text(n.last_confirmed),estimate:estimate!==null&&estimate>=0&&estimate<=1?estimate:null,estimate_kind:'uncalibrated_model_estimate' as const,support:{state:lost.length?'incomplete' as const:'stored_links' as const,claim_ids:cited.map(i=>ref(input.scope,'claim',i)),unavailable_count:lost.length,distinct_source_refs:sourceRefs.size,independent_observations:'unverified' as const},sources:nodeSources(supports,worded),confirmation:lost.length?'waldos_read' as const:nodeConfirmation(supports,worded)};
  }).filter((n):n is NonNullable<typeof n>=>n!==null);
  if(nodes.length!==input.nodes.length)partial=true;
  const nodeIds=new Set(nodes.map(n=>n.local_id));

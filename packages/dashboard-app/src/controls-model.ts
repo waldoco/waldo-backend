@@ -1,6 +1,6 @@
 import { isStepUpRefusal, SignInRequired, StepUpRequired } from './model';
 
-export type ControlsView = 'day' | 'connections' | 'waiting' | 'activity' | 'profile' | 'setup' | 'usage' | 'files' | 'imessage' | 'devices' | 'phone';
+export type ControlsView = 'day' | 'connections' | 'waiting' | 'activity' | 'profile' | 'setup' | 'usage' | 'files' | 'imessage' | 'devices' | 'phone' | 'agent_mail';
 type Base<V extends ControlsView, D> = { version: 1; view: V; state: 'available'; csrf: string; revision: string; data: D };
 export const CARD_STATES = ['pending', 'held', 'sent', 'skipped', 'generating', 'failed', 'paused'] as const;
 export type CardState = (typeof CARD_STATES)[number];
@@ -14,7 +14,11 @@ export type DayRecord = Base<'day', {
   proactive_surface?: ProactiveSurface;
   // Whether notes Waldo keeps on its own include health. Absent from a Worker that does not say.
   health_memory?: boolean;
+  // What schedule.set changes: each schedule's switch, and the Brief and Close times. Absent from a Worker that does not say.
+  schedule_controls?: ScheduleControl[];
 }>;
+export const SCHEDULE_IDS = ['daily_brief', 'followups', 'event_briefs', 'nightly', 'heartbeat', 'card:brief', 'card:close'] as const;
+export type ScheduleControl = { id: (typeof SCHEDULE_IDS)[number]; on: boolean; accepts: 'on_off' | 'time'; time: string | null; no_later_than: boolean };
 export type ProactiveSurface = { value: 'app' | 'whatsapp' | 'both' | 'app_imessage'; app_linked: boolean; whatsapp_linked: boolean; imessage_linked?: boolean; telegram_linked: boolean };
 export type ConnectionsRecord = Base<'connections', {
   google: { connectAvailable: boolean; accounts: { id: string; email: string; calendar: boolean; mail: boolean; tasks: boolean; health: 'access_granted' | 'needs_reconnect' }[] };
@@ -29,8 +33,11 @@ export type ConnectionsRecord = Base<'connections', {
 export type McpCatalogueTile = { id: string; label: string; about: string; consent?: string | null; url: string; connected: boolean };
 // A remote MCP server the owner connected. Titles are the server's own text; read_only_hint is its claim.
 export type McpServerRecord = { id: string; name: string; host: string; server_url: string; auth: 'oauth' | 'none'; status: 'active' | 'reauth_needed'; scopes: string[]; wants_scopes: string[]; tools: number; hidden_tools: number; runs_without_asking: number; marked_read_only: number; tools_changed: boolean; tools_capped: boolean; read_only_digest: string; tool_list: { tool: string; runs: 'without_asking' | 'asks_first'; read_only_hint: boolean; title?: string; digest: string; allowed_on_connect?: true }[] };
+// The sends whose review is their exact draft, sent from the Waiting page with approval.send.
+export const DRAFT_SENDS: readonly string[] = ['email_send', 'message_send', 'agent_mail_send'];
 export type ProposalReview = { kind: 'email_send'; account?: string; to: string[]; cc: string[]; bcc: string[]; subject: string; body: string; earlier_unknown_at?: string }
   | { kind: 'message_send'; channel: string; content: string }
+  | { kind: 'agent_mail_send'; from: { name: string; address: string }; to: string[]; cc: string[]; subject: string; body: string }
   | { kind: 'mcp_call' | 'tainted_action' | 'browser_submit'; text: string }
   | { kind: 'calendar_change'; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string };
 export type WaitingRecord = Base<'waiting', { timezone: string | null; proposals: { id: string; kind: string; summary: string; state: 'open' | 'done' | 'unconfirmed' | 'review_only'; review: ProposalReview | null; actions: ('approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo')[] }[] }>;
@@ -65,15 +72,22 @@ export type PhoneRecord = Base<'phone', {
   phone: string | null; verified: boolean; sms: boolean; actions: (typeof PHONE_ACTIONS)[number][];
   challenge: { state: (typeof PHONE_STATES)[number]; expires_at: number; retry_at: number | null; checks_left: number } | null;
 }>;
-type Records = { day: DayRecord; connections: ConnectionsRecord; waiting: WaitingRecord; activity: ActivityRecord; profile: ProfileRecord; setup: SetupRecord; usage: UsageRecord; files: FilesRecord; imessage: IMessageRecord; devices: DevicesRecord; phone: PhoneRecord };
+const AGENT_MAIL_ACTIONS = ['agent_mail.claim', 'agent_mail.release'] as const, AGENT_MAIL_RULES = ['pending', 'live', 'failed', 'unknown'] as const;
+/** The owner's Waldo address. handle, address and rule come together, once a handle is held; domain and notice while agent mail is enabled. */
+export type AgentMailRecord = Base<'agent_mail', {
+  enabled: boolean; domain?: string; handle?: string; address?: string; rule?: (typeof AGENT_MAIL_RULES)[number]; rule_reason?: 'not_configured';
+  notice?: { version: string; text: string }; display_name: string; actions: (typeof AGENT_MAIL_ACTIONS)[number][];
+}>;
+type Records = { day: DayRecord; connections: ConnectionsRecord; waiting: WaitingRecord; activity: ActivityRecord; profile: ProfileRecord; setup: SetupRecord; usage: UsageRecord; files: FilesRecord; imessage: IMessageRecord; devices: DevicesRecord; phone: PhoneRecord; agent_mail: AgentMailRecord };
 export type ControlRecord = Records[ControlsView];
-export type ControlAction = 'card.retry' | 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'spot.pin' | 'spot.unpin' | 'spot.edit' | 'node.forget' | 'node.confirm' | 'node.correct' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'health_memory.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
-  | (typeof IMESSAGE_TOP)[number] | (typeof IMESSAGE_ROW)[number] | 'device.pair' | (typeof DEVICE_ROW)[number] | (typeof PHONE_ACTIONS)[number];
-export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string; subject?: string; chat?: string; phone?: string; query_kind?: string; body?: string; severity?: string; code?: string };
+export type ControlAction = 'card.retry' | 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'spot.pin' | 'spot.unpin' | 'spot.edit' | 'spot.area' | 'node.forget' | 'node.confirm' | 'node.correct' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'schedule.set' | 'health_memory.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
+  | (typeof IMESSAGE_TOP)[number] | (typeof IMESSAGE_ROW)[number] | 'device.pair' | (typeof DEVICE_ROW)[number] | (typeof PHONE_ACTIONS)[number] | (typeof AGENT_MAIL_ACTIONS)[number];
+export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string; subject?: string; chat?: string; phone?: string; query_kind?: string; body?: string; severity?: string; code?: string; notice?: string };
 export type ActionReceipt = { state: 'recorded' | 'incomplete' | 'rejected' | 'unconfirmed'; message: string; navigation?: string; signed_out?: boolean };
 // A code or challenge shown once with its receipt. It lives only in component state: never in a URL, history or storage.
 /** to: where a link code is texted (a phone number or Apple ID address), when the server names it. */
-export type ActionReveal = { kind: 'link_code' | 'host_code' | 'challenge' | 'pairing_code'; value: string; to?: string };
+// app is set by the reader from the action, never taken from the server: it picks the app the link code is sent from.
+export type ActionReveal = { kind: 'link_code' | 'host_code' | 'challenge' | 'pairing_code'; value: string; to?: string; app?: 'whatsapp' };
 export type ActionResult = { receipt: ActionReceipt; duplicate: boolean; reveal?: ActionReveal };
 export class ControlsActionError extends Error {
   constructor(readonly code: string, message: string, readonly uncertain = false) { super(message); }
@@ -96,6 +110,8 @@ function readProposalReview(value: unknown): ProposalReview | null {
   if (value.kind === 'email_send' && (value.account === undefined || string(value.account)) && strings(value.to) && strings(value.cc) && strings(value.bcc) && string(value.subject) && string(value.body) && (value.earlier_unknown_at === undefined || string(value.earlier_unknown_at)))
     return { kind: value.kind, ...(value.account === undefined ? {} : { account: value.account }), to: [...value.to], cc: [...value.cc], bcc: [...value.bcc], subject: value.subject, body: value.body, ...(value.earlier_unknown_at === undefined ? {} : { earlier_unknown_at: value.earlier_unknown_at }) };
   if (value.kind === 'message_send' && string(value.channel) && string(value.content)) return { kind: value.kind, channel: value.channel, content: value.content };
+  if (value.kind === 'agent_mail_send' && obj(value.from) && string(value.from.name) && string(value.from.address) && strings(value.to) && strings(value.cc) && string(value.subject) && string(value.body))
+    return { kind: value.kind, from: { name: value.from.name, address: value.from.address }, to: [...value.to], cc: [...value.cc], subject: value.subject, body: value.body };
   if ((value.kind === 'mcp_call' || value.kind === 'tainted_action' || value.kind === 'browser_submit') && string(value.text)) return { kind: value.kind, text: value.text };
   if (value.kind === 'calendar_change' && ['create', 'move', 'cancel'].includes(String(value.action)) && [value.title, value.event_id, value.start, value.end].every(optionalString) && string(value.reason)) return { kind: value.kind, action: value.action as 'create' | 'move' | 'cancel', title: value.title as string | null, event_id: value.event_id as string | null, start: value.start as string | null, end: value.end as string | null, reason: value.reason };
   throw shapeError();
@@ -113,6 +129,8 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
     const surface = data.proactive_surface;
     if (surface !== undefined && (!obj(surface) || !['app', 'whatsapp', 'both', 'app_imessage'].includes(String(surface.value)) || ![surface.app_linked, surface.whatsapp_linked, surface.telegram_linked].every(value => typeof value === 'boolean') || (surface.imessage_linked !== undefined && typeof surface.imessage_linked !== 'boolean'))) throw shapeError();
     if (data.health_memory !== undefined && typeof data.health_memory !== 'boolean') throw shapeError();
+    const schedules = data.schedule_controls;
+    if (schedules !== undefined && (!Array.isArray(schedules) || !schedules.every(row => obj(row) && SCHEDULE_IDS.includes(row.id as ScheduleControl['id']) && typeof row.on === 'boolean' && ['on_off', 'time'].includes(String(row.accepts)) && optionalClock(row.time) && typeof row.no_later_than === 'boolean'))) throw shapeError();
     return { ...base, view: 'day', data: {
       timezone: data.timezone,
       date:data.date,
@@ -121,6 +139,7 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
       proactivity: { quiet_start: data.proactivity.quiet_start, quiet_end: data.proactivity.quiet_end, volume: data.proactivity.volume },
       ...(obj(surface) ? { proactive_surface: { value: surface.value, app_linked: surface.app_linked, whatsapp_linked: surface.whatsapp_linked, ...(surface.imessage_linked === undefined ? {} : { imessage_linked: surface.imessage_linked }), telegram_linked: surface.telegram_linked } } : {}),
       ...(typeof data.health_memory === 'boolean' ? { health_memory: data.health_memory } : {}),
+      ...(Array.isArray(schedules) ? { schedule_controls: schedules.map(row => ({ id: row.id, on: row.on, accepts: row.accepts, time: row.time, no_later_than: row.no_later_than })) } : {}),
     } } as Records[V];
   }
   if (expected === 'connections') {
@@ -145,7 +164,7 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
       if (!obj(item) || !string(item.id) || !string(item.kind) || !string(item.summary) || !['open', 'done', 'unconfirmed', 'review_only'].includes(String(item.state)) || !strings(item.actions) || !item.actions.every(action => ['approval.approve', 'approval.send', 'approval.edit', 'approval.skip', 'approval.undo'].includes(action))) throw shapeError();
       const review = readProposalReview(item.review);
       // Send and Change it need the open draft itself on the page; approving a calendar change needs its change.
-      const draft = item.state === 'open' && (item.kind === 'email_send' || item.kind === 'message_send') && review?.kind === item.kind;
+      const draft = item.state === 'open' && DRAFT_SENDS.includes(item.kind) && review?.kind === item.kind;
       if (review && review.kind !== item.kind || item.actions.includes('approval.approve') && (item.kind !== 'calendar_change' || item.state !== 'open' || review?.kind !== 'calendar_change')
         || (item.actions.includes('approval.send') || item.actions.includes('approval.edit')) && !draft || item.actions.includes('approval.undo') && (item.kind !== 'calendar_change' || item.state !== 'done')) throw shapeError();
       return { id: item.id, kind: item.kind, summary: item.summary, state: item.state, review, actions: [...item.actions] };
@@ -215,6 +234,18 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
     return { ...base, view: 'phone', data: { phone: data.phone, verified: data.verified, sms: data.sms, actions: [...data.actions] as PhoneRecord['data']['actions'],
       challenge: obj(challenge) ? { state: challenge.state as Challenge['state'], expires_at: challenge.expires_at as number, retry_at: challenge.retry_at as number | null, checks_left: challenge.checks_left as number } : null } } as Records[V];
   }
+  if (expected === 'agent_mail') {
+    const notice = data.notice, held = data.handle !== undefined;
+    if (typeof data.enabled !== 'boolean' || !string(data.display_name) || !listed(data.actions, AGENT_MAIL_ACTIONS) || (data.domain !== undefined && !string(data.domain))
+      || (held ? !(string(data.handle) && string(data.address) && (AGENT_MAIL_RULES as readonly string[]).includes(String(data.rule))) : data.address !== undefined || data.rule !== undefined)
+      || (data.rule_reason !== undefined && data.rule_reason !== 'not_configured') || (notice !== undefined && !(obj(notice) && string(notice.version) && string(notice.text)))) throw shapeError();
+    return { ...base, view: 'agent_mail', data: {
+      enabled: data.enabled, display_name: data.display_name, actions: [...data.actions] as AgentMailRecord['data']['actions'],
+      ...(string(data.domain) ? { domain: data.domain } : {}), ...(obj(notice) ? { notice: { version: notice.version as string, text: notice.text as string } } : {}),
+      ...(held ? { handle: data.handle as string, address: data.address as string, rule: data.rule as NonNullable<AgentMailRecord['data']['rule']> } : {}),
+      ...(data.rule_reason === 'not_configured' ? { rule_reason: 'not_configured' as const } : {}),
+    } } as Records[V];
+  }
   if (expected === 'files') {
     if (data.storage !== 'telegram_reference' || !Array.isArray(data.items) || !data.items.every(item => obj(item) && count(item.id) && item.id > 0 && string(item.kind) && string(item.name) && optionalString(item.mime) && (item.size === null || count(item.size)) && string(item.caption) && typeof item.at === 'number' && Number.isFinite(item.at))) throw shapeError();
     return { ...base, view: 'files', data: { storage: 'telegram_reference', items: data.items.map(item => ({ id: item.id, kind: item.kind, name: item.name, mime: item.mime, size: item.size, caption: item.caption, at: item.at })) } } as Records[V];
@@ -275,6 +306,7 @@ export function readActionResult(value: unknown, action: ControlAction, origin: 
 // Each one-time value has one action and one exact shape; anything else is refused, never shown.
 const REVEALS: Partial<Record<ControlAction, { kind: ActionReveal['kind']; shape: RegExp }>> = {
   'imessage.link': { kind: 'link_code', shape: /^waldo [A-HJ-NP-Z2-9]{10}$/ }, 'imessage.enroll': { kind: 'link_code', shape: /^waldo [A-HJ-NP-Z2-9]{10}$/ },
+  'whatsapp.link': { kind: 'link_code', shape: /^waldo [A-HJ-NP-Z2-9]{10}$/ },
   'imessage.pair': { kind: 'host_code', shape: /^wim_[a-f0-9]{48}$/ }, 'imessage.pair_shared': { kind: 'host_code', shape: /^wim_[a-f0-9]{48}$/ },
   'imessage.verify': { kind: 'challenge', shape: /^wic_[a-f0-9]{48}$/ },
   'device.pair': { kind: 'pairing_code', shape: /^wp1\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[A-Za-z0-9_-]{43}$/ },
@@ -283,8 +315,9 @@ function readReveal(value: unknown, action: ControlAction, fresh: boolean): Acti
   const expected = REVEALS[action];
   const unsupported = () => new ControlsActionError('receipt_unavailable', 'The code in this receipt is unsupported. Refresh the controls before trying again.', true);
   if (!fresh || !expected || !obj(value) || value.kind !== expected.kind || !string(value.value) || !expected.shape.test(value.value)) throw unsupported();
-  const to = expected.kind === 'link_code' && string(value.to) && /^(\+[1-9]\d{6,14}|[^\s@<>]{1,64}@[^\s@<>]{1,190})$/.test(value.to) ? value.to : undefined;
-  return { kind: expected.kind, value: value.value, ...(to ? { to } : {}) };
+  const whatsapp = action === 'whatsapp.link';
+  const to = expected.kind === 'link_code' && string(value.to) && (whatsapp ? /^\+[1-9]\d{7,14}$/ : /^(\+[1-9]\d{6,14}|[^\s@<>]{1,64}@[^\s@<>]{1,190})$/).test(value.to) ? value.to : undefined;
+  return { kind: expected.kind, value: value.value, ...(to ? { to } : {}), ...(whatsapp ? { app: 'whatsapp' as const } : {}) };
 }
 
 export async function submitControl(data: Pick<ControlRecord,'csrf'|'revision'> & {view:ControlsView|'memory'}, action: ControlAction, fields: ControlFields, requestId: string, origin = globalThis.location?.origin ?? ''): Promise<ActionResult> {

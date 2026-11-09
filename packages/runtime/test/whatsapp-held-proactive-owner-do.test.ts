@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cardExpiry, dayPlanBook } from '../src/channels/day-cards';
 import { traceBook } from '../src/channels/harness';
 import { loopBook } from '../src/channels/loops';
+import { questBook } from '../src/channels/quests';
 import { standingOrderBook } from '../src/channels/standing-orders';
 import { updateBook } from '../src/channels/update-cards';
 import type { LLMGatewayRequest } from '../src/llm/provider';
@@ -17,8 +18,9 @@ import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
 import { applyAndSend, reportMachineJobs } from './helpers/heartbeat-job';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
-const CARD = 'The Brief\nOne call at 15:00; keep the morning clear.';
+const CARD = 'The Daily Brief\nOne call at 15:00; keep the morning clear.';
 const REPORT = 'Checked the forecast: dry all day.';
 const UPDATE = 'Lunch moved to 13:00.';
 // Counts the job turns by the prompt each one opens with; the runtime's other model calls answer 'Noted.'.
@@ -30,7 +32,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete(request: LLMGatewayRequest) {
     const asked = request.request.messages.at(-1)?.content ?? '';
-    const text = asked.includes('[Scheduled card "The Brief"') ? (model.cards += 1, CARD)
+    const text = asked.includes('[Scheduled card "The Daily Brief"') ? (model.cards += 1, CARD)
       : asked.includes('[Standing order due now') ? (model.reports += 1, model.slowReportMs && ((shift: number) => { const before = Date.now; Date.now = () => before() + shift; })(model.slowReportMs), model.reportOnce && model.reports > 1 ? '' : REPORT)
         : asked.includes('[Update check,') ? (model.updates += 1, UPDATE) : 'Noted.';
     return { ok: true as const, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
@@ -50,7 +52,7 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 const OWNER_ID = '6a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
 const SUBJECT = '15550002222';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
-const whatsapp = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en' };
+const whatsapp = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en', WHATSAPP_PROACTIVE_TEMPLATE: 'waldo_proactive_update', WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE: 'en' };
 const HOUR = 60 * 60_000;
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -88,6 +90,9 @@ const owned = async (name: string, script: (steps: Readonly<{
   // Runs the step with the clock moved forward, as when the owner next writes much later.
   later<T>(ms: number, step: () => Promise<T>): Promise<T>;
   card(): Promise<void>;
+  // A daily quest started ten days ago with a week-long experiment that ended two days ago, so the Close falls due with the
+  // quest due and the verdict to offer; answers its last check-in and when the verdict counted as offered.
+  closeWithQuest(): Promise<Readonly<{ checkedIn(): string | null; offered(): string | null }>>;
   // Arms the Check-in this far ahead; answers when it is due.
   checkIn(ms: number): Promise<number>;
   // Daily unless a cron expression is given.
@@ -144,7 +149,7 @@ const owned = async (name: string, script: (steps: Readonly<{
             body: JSON.stringify({ messages: [{ from: SUBJECT, id: `wamid.in.${seq}`, timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: 'hi' } }] }),
           }));
           expect(response.status).toBe(200);
-          await Promise.all([...(owner as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+          await drainWhatsAppTurns(owner);
         },
         restart: () => { owner = build(); },
         later: async (ms, step) => {
@@ -153,6 +158,16 @@ const owned = async (name: string, script: (steps: Readonly<{
           try { return await step(); } finally { Date.now = now; }
         },
         card: async () => { await scheduler.schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: Date.now() - 60_000, dueAt: Date.now() - 60_000, recurrence: null }); },
+        closeWithQuest: async () => {
+          const book = (ago: number) => questBook(state.storage.sql, { timezone: 'UTC', now: () => new Date(Date.now() - ago) }, () => 'q1');
+          book(240 * HOUR).set({ title: 'Daylight before ten', check_in_days: 1 }, 'owner');
+          book(216 * HOUR).startExperiment('quest:q1', 'A walk outside before work', 7);
+          await scheduler.schedule({ id: 'card:close', kind: 'brief', payloadRefs: { id: 'card:close' }, occurrenceAt: Date.now() - 60_000, dueAt: Date.now() - 60_000, recurrence: null });
+          return {
+            checkedIn: () => state.storage.sql.exec<{ at: string | null }>('SELECT last_check_in_at AS at FROM goals').one().at,
+            offered: () => state.storage.sql.exec<{ at: string | null }>('SELECT offered_at AS at FROM experiments').one().at,
+          };
+        },
         checkIn: async ms => {
           const at = Date.now() + ms;
           await scheduler.schedule({ id: 'card:midday', kind: 'brief', payloadRefs: { id: 'card:midday' }, occurrenceAt: at, dueAt: at, recurrence: null });
@@ -211,7 +226,7 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
       update();
       await card();
       await alarms(3);
-      expect(wire.events).toEqual(['template:waldo_update_ready']);
+      expect(wire.events).toEqual(['template:waldo_proactive_update']);
       expect(model.cards).toBe(1);
       expect(planned()).toMatchObject({ sent: false });
       expect(folded()).toEqual([0]);
@@ -221,12 +236,12 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
       // Later passes neither knock again, nor send, nor write the card again, even when the card is armed again that day.
       await card();
       await alarms(3);
-      expect(wire.events).toEqual(['template:waldo_update_ready']);
+      expect(wire.events).toEqual(['template:waldo_proactive_update']);
       expect(model.cards).toBe(1);
       expect(outbox()).toHaveLength(1);
 
       await reply();
-      expect(wire.events).toEqual(['template:waldo_update_ready', `text:${CARD}`, 'turn']);
+      expect(wire.events).toEqual(['template:waldo_proactive_update', `text:${CARD}`, 'turn']);
       // Meta accepted it; it is recorded once Meta reports it reached the phone.
       expect(planned()).toMatchObject({ sent: false });
       expect(outbox()).toEqual([{ id: `day-card:${today()}:card:brief`, status: 'accepted' }]);
@@ -249,6 +264,20 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
       await card();
       await alarms(3);
       expect(expiryOf('card:brief')).toBe(Date.parse(`${today()}T00:00:00Z`) + 24 * HOUR);
+    });
+  });
+
+  it('counts a held Close\'s quests checked in and its verdicts offered only once it reaches the owner', async () => {
+    await owned('wa-held-close-quest', async ({ alarms, reply, arrived, closeWithQuest, outbox }) => {
+      const quest = await closeWithQuest();
+      await alarms(3);
+      expect(outbox()).toEqual([{ id: `day-card:${today()}:card:close`, status: 'pending' }]);
+      expect([quest.checkedIn(), quest.offered()]).toEqual([null, null]);
+      await reply();
+      expect([quest.checkedIn(), quest.offered()]).toEqual([null, null]);
+      await arrived();
+      expect(outbox()).toEqual([{ id: `day-card:${today()}:card:close`, status: 'delivered' }]);
+      expect([quest.checkedIn()?.slice(0, 10), quest.offered()?.slice(0, 10)]).toEqual([today(), today()]);
     });
   });
 
@@ -292,7 +321,7 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
       expect(outbox()).toMatchObject([{ status: 'pending' }]);
 
       await later(24 * HOUR, reply);
-      expect(wire.events).toEqual(['template:waldo_update_ready', 'turn']);
+      expect(wire.events).toEqual(['template:waldo_proactive_update', 'turn']);
       expect(planned()).toMatchObject({ sent: false });
       // What the card covered stays for the next card.
       expect(folded()).toEqual([0]);
@@ -309,7 +338,7 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
       expect(await forget(kind, 'keep the morning clear')).toBe(true);
       expect(outbox()).toEqual([{ id: `day-card:${today()}:card:brief`, status: 'blocked', reason: 'owner_forget' }]);
       await reply();
-      expect(wire.events).toEqual(['template:waldo_update_ready', 'turn']);
+      expect(wire.events).toEqual(['template:waldo_proactive_update', 'turn']);
       expect(planned()).toMatchObject({ sent: false });
     });
   });
@@ -463,7 +492,7 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
 
       restart();
       await alarms(2);
-      expect(wire.events).toEqual(['template:waldo_update_ready']);
+      expect(wire.events).toEqual(['template:waldo_proactive_update']);
       expect(planned()).toMatchObject({ sent: false });
       expect(runs()).toEqual([{ status: 'running', summary: null }]);
 

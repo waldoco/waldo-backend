@@ -12,6 +12,7 @@ import { armHeartbeat, HEARTBEAT_ID } from './heartbeat';
 import type { LoopBook } from './loops';
 import type { MachineJob } from '../tasks/jobs';
 import { HEALTH_TRIGGER_ID, type HealthTriggerSetting } from '../health/trigger';
+import { MEMORY_DAYTIME_ID } from '../memory/consolidator';
 
 export type ScheduleKind = (typeof SCHEDULE_KINDS)[number];
 export type SchedulePreferences = Readonly<Record<ScheduleKind, boolean>>;
@@ -65,7 +66,9 @@ export const schedulePreferencesLine = (prefs: SchedulePreferences, healthMode: 
 
 // `armable` says whether a kind may be armed on this surface right now; a kind that is on but not armable is left as is.
 // `cancelMachine` stops the open background jobs of a kind the owner turned off, so no worker keeps reading for it.
-export type ScheduleApplyContext = Readonly<{ scheduler: Scheduler; plans: DayPlanBook; timezone: string; now: number; armable?: (kind: ScheduleKind) => boolean; cancelMachine?: (job: MachineJob) => void }>;
+// alongHeartbeat: work that follows the owner's heartbeat preference (Waldo's own look), armed or dropped with it.
+export type ScheduleApplyContext = Readonly<{ scheduler: Scheduler; plans: DayPlanBook; timezone: string; now: number; armable?: (kind: ScheduleKind) => boolean; cancelMachine?: (job: MachineJob) => void;
+  alongHeartbeat?: (on: boolean) => Promise<void> }>;
 
 // The brief sweep runs both update cards and meeting prep, so turning it off stops the open jobs of both.
 const cancelSweepJobs = (ctx: ScheduleApplyContext): void => { ctx.cancelMachine?.('update_sweep'); ctx.cancelMachine?.('meeting_prep'); };
@@ -74,8 +77,8 @@ const cancelSweepJobs = (ctx: ScheduleApplyContext): void => { ctx.cancelMachine
 export const applySchedulePreferences = async (prefs: SchedulePreferences, ctx: ScheduleApplyContext, only?: ScheduleKind): Promise<void> => {
   const { scheduler, plans, timezone, now } = ctx;
   const want = (kind: ScheduleKind) => (only === undefined || only === kind) && (!prefs[kind] || (ctx.armable?.(kind) ?? true));
-  if (want('nightly')) { if (prefs.nightly) await armNightly(scheduler, timezone, now); else for (const id of [NIGHTLY_ID, NIGHTLY_CATCH_UP_ID]) await scheduler.cancelReadable(id); }
-  if (want('heartbeat')) { if (prefs.heartbeat) await armHeartbeat(scheduler, now); else { await scheduler.cancelReadable(HEARTBEAT_ID); ctx.cancelMachine?.('heartbeat'); } }
+  if (want('nightly')) { if (prefs.nightly) await armNightly(scheduler, timezone, now); else for (const id of [NIGHTLY_ID, NIGHTLY_CATCH_UP_ID, MEMORY_DAYTIME_ID]) await scheduler.cancelReadable(id); }
+  if (want('heartbeat')) { if (prefs.heartbeat) await armHeartbeat(scheduler, now); else { await scheduler.cancelReadable(HEARTBEAT_ID); ctx.cancelMachine?.('heartbeat'); } await ctx.alongHeartbeat?.(prefs.heartbeat); }
   if (want('event_briefs')) { if (prefs.event_briefs) await armBriefSweep(scheduler, now); else { await scheduler.cancelReadable(BRIEF_SWEEP_ID); cancelSweepJobs(ctx); } }
   // Health proposals are armed by a zone change, never by the clock, so on arms nothing.
   if (want('health_proposals') && !prefs.health_proposals) await scheduler.cancelReadable(HEALTH_TRIGGER_ID);
@@ -99,8 +102,8 @@ export const replanDayCards = async (scheduler: Scheduler, plans: DayPlanBook, t
 export const reconcileSchedulePreferences = async (prefs: SchedulePreferences, ctx: ScheduleApplyContext): Promise<void> => {
   const { scheduler } = ctx;
   const cancelIf = (id: string) => scheduler.cancelReadable(id);
-  if (!prefs.nightly) for (const id of [NIGHTLY_ID, NIGHTLY_CATCH_UP_ID]) await cancelIf(id);
-  if (!prefs.heartbeat) { await cancelIf(HEARTBEAT_ID); ctx.cancelMachine?.('heartbeat'); }
+  if (!prefs.nightly) for (const id of [NIGHTLY_ID, NIGHTLY_CATCH_UP_ID, MEMORY_DAYTIME_ID]) await cancelIf(id);
+  if (!prefs.heartbeat) { await cancelIf(HEARTBEAT_ID); ctx.cancelMachine?.('heartbeat'); await ctx.alongHeartbeat?.(false); }
   if (!prefs.event_briefs) { await cancelIf(BRIEF_SWEEP_ID); cancelSweepJobs(ctx); }
   if (!prefs.health_proposals) await cancelIf(HEALTH_TRIGGER_ID);
   if (!prefs.daily_brief) for (const card of DAY_CARDS) await cancelIf(card.id);
@@ -108,7 +111,8 @@ export const reconcileSchedulePreferences = async (prefs: SchedulePreferences, c
 
 // The kind an out-of-the-box schedule entry belongs to, or null for owner-created and internal entries.
 const scheduleKindOf = (entry: ScheduleEntry): ScheduleKind | null => {
-  if (entry.kind === 'dreaming' && (entry.id === NIGHTLY_ID || entry.id === NIGHTLY_CATCH_UP_ID)) return 'nightly';
+  // The daytime memory pass is part of the memory pass the owner can turn off.
+  if (entry.kind === 'dreaming' && (entry.id === NIGHTLY_ID || entry.id === NIGHTLY_CATCH_UP_ID || entry.id === MEMORY_DAYTIME_ID)) return 'nightly';
   if (entry.kind === 'heartbeat' && entry.id === HEARTBEAT_ID) return 'heartbeat';
   if (entry.kind === 'pre_activity_spot' && entry.id === BRIEF_SWEEP_ID) return 'event_briefs';
   if (entry.kind === 'patrol' && entry.id === HEALTH_TRIGGER_ID) return 'health_proposals';
@@ -133,20 +137,34 @@ export const gateScheduleExecutors = (executors: ScheduleExecutors, prefs: Sched
 
 const allowlist = () => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('set_schedule_preference'));
 
-export const schedulePreferenceHandlers = (book: SchedulePreferenceBook, context: () => ScheduleApplyContext) => [
+// cardTime sets the owner's every-day Brief or Close time (ownerCardTime) and returns its receipt; absent where it is not offered.
+export type CardTimeSetter = (card: 'card:brief' | 'card:close', time: string) => Promise<Readonly<{ state: 'recorded' | 'rejected'; message: string }>>;
+// confirmZone saves and confirms the owner's time zone as the console does and returns the IANA name it saved, null when the
+// zone is not one or the directory did not keep it; absent where it is not offered.
+export const schedulePreferenceHandlers = (book: SchedulePreferenceBook, context: () => ScheduleApplyContext | Promise<ScheduleApplyContext>, cardTime?: CardTimeSetter, confirmZone?: (zone: string) => Promise<string | null>) => [
   {
     name: 'set_schedule_preference',
-    description: "Turn one of Waldo's own scheduled behaviors off or back on, or reset all of them to the out-of-the-box defaults. Only when the owner asks. The current state of every behavior is in the ledger; nothing is forced on the owner. Use kind for on and off. Tell the owner plainly what changed and that reset restores everything to on.",
+    description: "Turn one of Waldo's own scheduled behaviors off or back on, reset all of them to the out-of-the-box defaults, set when the Brief or the Close comes every day, or save the owner's time zone. Only when the owner asks or tells you where they are. The current state of every behavior is in the ledger; nothing is forced on the owner. Use kind for on and off. Tell the owner plainly what changed and that reset restores everything to on; after a time or time zone change, say what the result's said says.",
     schema: setSchedulePreferenceArgsSchema,
     trigger_allowlist: allowlist(),
     autonomy_gated: false,
     mutates_state: true,
     async handle(args: SetSchedulePreferenceArgs) {
+      if (args.action === 'timezone') {
+        const saved = await confirmZone?.(args.timezone!);
+        if (!saved) return { ok: false, code: 'rejected', error: `${args.timezone} was not saved: it is not an IANA time zone name such as Asia/Kolkata, or it could not be saved here. Nothing changed.`, source_taint: null };
+        return { ok: true, data: { preferences: book.all(), said: `Saved. Waldo now runs on ${saved} time.` }, source_taint: null };
+      }
+      if (args.action === 'time') {
+        const receipt = cardTime ? await cardTime(args.card === 'brief' ? 'card:brief' : 'card:close', args.time!) : null;
+        if (receipt?.state !== 'recorded') return { ok: false, code: 'rejected', error: receipt?.message ?? 'The Brief and Close times cannot be set here.', source_taint: null };
+        return { ok: true, data: { preferences: book.all(), said: receipt.message }, source_taint: null };
+      }
       if (args.action !== 'reset' && args.kind === undefined) return { ok: false, code: 'invalid_args', error: 'kind is required for on and off', source_taint: null };
       if (args.action === 'reset') book.reset(); else book.set(args.kind!, args.action === 'on');
       if (args.mode) book.setHealthMode(args.mode);
-      await applySchedulePreferences(book.all(), context(), args.action === 'reset' ? undefined : args.kind);
+      await applySchedulePreferences(book.all(), await context(), args.action === 'reset' ? undefined : args.kind);
       return { ok: true, data: { preferences: book.all() }, source_taint: null };
     },
-  } satisfies ToolHandler<SetSchedulePreferenceArgs, { preferences: SchedulePreferences }, ToolDispatcherContext>,
+  } satisfies ToolHandler<SetSchedulePreferenceArgs, { preferences: SchedulePreferences; said?: string }, ToolDispatcherContext>,
 ];

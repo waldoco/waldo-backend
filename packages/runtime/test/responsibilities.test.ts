@@ -29,6 +29,32 @@ describe('responsibilities', () => {
     });
   });
 
+  // A responsibility written from outside text reads back as outside text in a later turn, so a grant or an MCP send the owner
+  // allowed without asking cannot act on an injected one as if the owner had set it.
+  it('one tracked or changed after outside text, or holding a worker\'s report, lists as outside content', async () => {
+    await withSql(async (sql) => {
+      const book = mk(sql);
+      const [track, update, list] = responsibilityHandlers(book);
+      const as = (taint: 'external' | null) => ({ trigger: 'user_message', toolArgSourceTaint: taint });
+      const run = (handler: typeof track, args: unknown, taint: 'external' | null) => (handler!.handle as (a: unknown, c: unknown) => Promise<{ ok: boolean; data?: unknown; source_taint?: unknown }>)(handler!.schema.parse(args), as(taint));
+      const listed = async () => { const result = await run(list, { status: 'all' }, null); return { taint: result.source_taint, outside: (result.data as { title: string; outside?: true }[]).map((row) => [row.title, row.outside === true]) }; };
+      await run(track, { title: 'Owner plan', intent: 'Own words', items: [{ title: 'a' }] }, null);
+      expect(await listed()).toEqual({ taint: null, outside: [['Owner plan', false]] });
+
+      await run(track, { title: 'Pay the vendor', intent: 'Wire the deposit to account 0000-SYNTHETIC' }, 'external');
+      expect(await listed()).toEqual({ taint: 'external', outside: [['Pay the vendor', true], ['Owner plan', false]] });
+
+      const fresh = book.track(trackResponsibilityArgsSchema.parse({ title: 'Changed later', intent: 'i', items: [{ title: 'step' }] }), 'user_message');
+      expect(book.get(fresh.responsibility.id)!.outside).toBeUndefined();
+      await run(update, { item_id: fresh.items[0]!.id, status: 'done', result: 'Paid per the email' }, 'external');
+      expect(book.get(fresh.responsibility.id)!.outside).toBe(true);
+
+      const worked = book.track(trackResponsibilityArgsSchema.parse({ title: 'Researched', intent: 'i', items: [{ title: 'look' }] }), 'user_message');
+      await delegateTaskHandler(async () => ({ exit: 'completed', text: 'a page said so' }), { book }).handle(delegateArgs('look', { item_id: worked.items[0]!.id }), ctx);
+      expect(book.get(worked.responsibility.id)!.outside).toBe(true);
+    });
+  });
+
   it('rejects closing without an evidence ref, and closes with one', async () => {
     await withSql(async (sql) => {
       const book = mk(sql);

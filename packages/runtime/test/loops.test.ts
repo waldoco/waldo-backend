@@ -102,14 +102,14 @@ describe('update card feedback', () => {
   it('records owner ratings on sent cards only and feeds them to the next update prompt', async () => {
     await withSql((sql) => {
       const updates = updateBook(sql);
-      const sent = updates.record('2026-09-24', 1, [{ source: 'calendar', kind: 'cancelled', detail: 'standup' }], 'Update\nStandup is off, you have 10-11 free.');
+      const sent = updates.record('2026-09-24', 1, [{ source: 'calendar', kind: 'cancelled', detail: 'standup' }], 'Standup is off, you have 10-11 free.');
       const held = updates.record('2026-09-24', 2, [{ source: 'mail', kind: 'new', detail: 'newsletter' }], null);
       expect(updates.rate(sent, 'useful')).toBe(true);
       expect(updates.rate(held, 'not useful')).toBe(false);
       const feedback = updates.feedback();
-      expect(feedback).toBe('- useful: Update Standup is off, you have 10-11 free.');
+      expect(feedback).toBe('- useful: Standup is off, you have 10-11 free.');
       const prompt = updateCardPrompt('2026-09-24T10:00', { changes: '- x', ledger: '', feedback, volume: 'high' });
-      expect(prompt).toContain('<feedback>\n- useful: Update Standup is off');
+      expect(prompt).toContain('<feedback>\n- useful: Standup is off');
       expect(prompt).toContain('also share smaller changes');
     });
   });

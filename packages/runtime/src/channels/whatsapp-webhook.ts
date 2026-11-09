@@ -1,9 +1,11 @@
 import { consoleAuth } from '../identity/console-auth';
-import { hex, ownerDirectory, signedRpc, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
+import { hex, OwnerDirectoryError, ownerDirectory, signedRpc, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { newWhatsAppLinkToken, whatsappLinkDirectory, whatsappLinkTokenHash, whatsappLinkUrl, type WhatsAppLinkDirectory } from '../identity/whatsapp-link';
-import { createWhatsAppCaller, sendWhatsAppText, WhatsAppApiError, whatsappForwarded } from './whatsapp-api';
+import { createWhatsAppCaller, sendWhatsAppText, sendWhatsAppWaldoCard, WhatsAppApiError, whatsappForwarded } from './whatsapp-api';
+import { whatsAppWaldoNumber } from './whatsapp-send-url';
 import { WHATSAPP_REENGAGEMENT_ERROR } from './whatsapp-window';
 import { publicOrigin, type PublicOriginEnv } from '../connectors/public-origin';
+import { CONSOLE_PATH } from './console';
 
 export type WhatsAppWebhookEnv = PublicOriginEnv & Readonly<{
   OWNER_DO?: DurableObjectNamespace;
@@ -13,6 +15,8 @@ export type WhatsAppWebhookEnv = PublicOriginEnv & Readonly<{
   WHATSAPP_PHONE_NUMBER_ID?: string;
   // Where a sender with no Waldo account is sent (the waitlist). Unset, the reply carries no link.
   WHATSAPP_ONBOARDING_URL?: string;
+  // Waldo's own number, as E.164 digits: sent as a contact card after a link. Unset, no card is sent.
+  WHATSAPP_WALDO_NUMBER?: string;
   // 'true' logs whole signed payloads and Graph refusals while testing, on staging only (whatsappDebugLog).
   WHATSAPP_DEBUG_LOG?: string;
   WALDO_ENVIRONMENT?: string;
@@ -49,7 +53,18 @@ const textFirstReply = async (sender: string, origin: string, env: WhatsAppWebho
   // pending: the link sent earlier still works, so the sender is not sent a second one.
   if (opened === 'linked' || opened === 'pending') return null;
   const waitlist = /^https:\/\/[^\s]+$/.test(env.WHATSAPP_ONBOARDING_URL ?? '') ? ` Join the waitlist: ${env.WHATSAPP_ONBOARDING_URL}` : '';
-  return `Waldo is invite-only for now.${waitlist}\n\nAlready on Waldo? Link WhatsApp from your console.`;
+  return `Waldo is invite-only for now.${waitlist}\n\nAlready on Waldo? Link WhatsApp from your console: ${origin}${CONSOLE_PATH}#/connections. It gives you a code that opens this chat ready to send.`;
+};
+
+// What a "waldo CODE" text is told. A refusal by the directory leaves the code unspent, so a link refused for its number can be
+// tried again with the same code once that is sorted; a link that could not be confirmed may have gone through.
+type LinkOutcome = 'linked' | 'rejected' | 'claimed' | 'number_held' | 'uncertain';
+export const LINK_REPLIES: Readonly<Record<LinkOutcome, string>> = {
+  linked: 'Linked. This chat now talks to your Waldo.',
+  rejected: 'That code did not work. Codes work once, for 10 minutes. Get a new one from your console.',
+  claimed: 'This number is already linked to another Waldo account, so it was not moved. Unlink it in that account\'s console first, then send the code again.',
+  number_held: 'This number is verified on another Waldo account, so it can\'t be linked to this one. Remove it from that account first, then send the code again.',
+  uncertain: 'Linking could not be confirmed just now. Check your console before trying again.',
 };
 
 export const WHATSAPP_WEBHOOK_PATH = '/whatsapp/webhook';
@@ -78,6 +93,18 @@ const DEFINITE_ADMIT_REFUSALS = new Set([400, 403, 404]);
 
 // Presences are keyed by phone digits and nothing downstream checks the shape, so only E.164 digits are a sender.
 const phoneOf = (message: WaMessage): string | null => message.from && /^\d{1,15}$/.test(message.from) ? message.from : null;
+
+// One Meta app can serve several business numbers, and every reply goes out from WHATSAPP_PHONE_NUMBER_ID, so only
+// messages written to that number are this deployment's to answer. Status reports are matched by message id and stay whole.
+const addressedHere = (body: WaBody, phoneNumberId: string | undefined): { inbound: WaBody; elsewhere: number } => {
+  let elsewhere = 0;
+  const entry = (body.entry ?? []).map(({ changes }) => ({ changes: (changes ?? []).filter(change => {
+    const here = !!phoneNumberId && change.value?.metadata?.phone_number_id === phoneNumberId;
+    if (!here) elsewhere += change.value?.messages?.length ?? 0;
+    return here;
+  }) }));
+  return { inbound: { entry }, elsewhere };
+};
 
 // One payload can carry several senders; each owner's DO receives only its own sender's messages.
 const bySender = (body: WaBody): { sender: string; value: WaValue }[] => {
@@ -188,6 +215,8 @@ export const handleWhatsAppWebhook = async (
   const payload = JSON.parse(body) as WaBody;
   const debug = whatsappDebugLog(env);
   if (debug) console.log(JSON.stringify({ hop: 'whatsapp_debug_payload', payload }));
+  const { inbound, elsewhere } = addressedHere(payload, env.WHATSAPP_PHONE_NUMBER_ID);
+  if (elsewhere) console.log(JSON.stringify({ hop: 'whatsapp_other_number', messages: elsewhere }));
   const owners = env.OWNER_DO;
   const origin = publicOrigin(env, url);
   // Admission before the ack: a payload is acknowledged only after each owner's Durable Object has durably admitted it.
@@ -199,7 +228,7 @@ export const handleWhatsAppWebhook = async (
   // deferred: it is not a message turn.
   let unavailable = false;
   const deferred: Promise<unknown>[] = [];
-  for (const { sender, value } of bySender(payload)) {
+  for (const { sender, value } of bySender(inbound)) {
     let route;
     try { route = await directory.byPresence('whatsapp', sender); } catch (error) {
       console.log(JSON.stringify({ hop: 'whatsapp_route', ok: false, error: String(error) })); unavailable = true; continue;
@@ -213,7 +242,7 @@ export const handleWhatsAppWebhook = async (
       } catch (error) { console.log(JSON.stringify({ hop: 'whatsapp_admit', ok: false, error: String(error) })); unavailable = true; }
       continue;
     }
-    const code = linkCode(payload, sender);
+    const code = linkCode(inbound, sender);
     if (!env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) continue;
     if (!code) {
       if (!textFirst) continue;
@@ -229,9 +258,16 @@ export const handleWhatsAppWebhook = async (
     deferred.push((async () => {
       // Past the limit the try is dropped unanswered. Without the directory's throttle there is no directory to redeem in.
       if (textFirst && !(await textFirst.throttle(`walinkcode.${await senderKeyOf(sender)}`, LINK_CODE_TRIES, LINK_CODE_WINDOW_SECONDS))) return;
-      const linked = await directory.redeem('whatsapp', sender, code).catch(() => null);
+      const outcome = await directory.redeem('whatsapp', sender, code).then(
+        (route): LinkOutcome => (route ? 'linked' : 'rejected'),
+        (error: unknown): LinkOutcome => error instanceof OwnerDirectoryError && (error.claimedElsewhere || error.numberHeld)
+          ? (error.claimedElsewhere ? 'claimed' : 'number_held') : 'uncertain');
+      console.log(JSON.stringify({ hop: 'whatsapp_link_redeem', ok: outcome === 'linked', outcome }));
       const call = createWhatsAppCaller(env.WHATSAPP_ACCESS_TOKEN!, env.WHATSAPP_PHONE_NUMBER_ID!);
-      await sendWhatsAppText(call, sender, linked ? 'Linked. This chat now talks to your Waldo.' : 'That code did not work. Get a new one from your console.');
+      await sendWhatsAppText(call, sender, LINK_REPLIES[outcome]);
+      const waldo = whatsAppWaldoNumber(env.WHATSAPP_WALDO_NUMBER);
+      if (outcome === 'linked' && waldo) await sendWhatsAppWaldoCard(call, sender, waldo)
+        .catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_contact_card', ok: false, ...sendFailure(error, debug) })));
     })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'whatsapp_link_code', ok: false, ...sendFailure(error, debug) }))));
   }
   for (const codes of failedStatusCodes(payload)) console.log(JSON.stringify({ hop: 'whatsapp_status_failed', codes }));
@@ -249,7 +285,7 @@ export const handleWhatsAppWebhook = async (
   }
   // At most one reply per sender per 30 days and 20 an hour overall, decided by the directory from the hash alone.
   const onboard = signedRpc(env);
-  for (const userId of hiddenNumberSenders(payload)) {
+  for (const userId of hiddenNumberSenders(inbound)) {
     // The reply is the only answer such a sender can get, so it needs the token and the durable per-sender limit;
     // without either the sender is only logged. Outside staging's debug log, the BSUID is never logged.
     if (!onboard || !env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) {

@@ -6,6 +6,7 @@ import { OwnerDO } from '../src/channels/owner-do';
 import { handleWhatsAppWebhook } from '../src/channels/whatsapp-webhook';
 import { WA_UPDATE_BASE, WAMID_RETENTION_MS } from '../src/channels/whatsapp-api';
 import type { OwnerDirectory } from '../src/identity/owner-directory';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
 // Runtime initialization can start a background day-plan call. It is outside this ingress proof.
 vi.mock('openai', () => ({ default: class {
@@ -14,9 +15,9 @@ vi.mock('openai', () => ({ default: class {
 
 const SUBJECT = '15550001111';
 const SECRET = 'fictional-whatsapp-app-secret';
-const body = (id: string) => JSON.stringify({ entry: [{ changes: [{ value: {
-  metadata: { phone_number_id: 'fictional-phone-id' },
-  messages: [{ from: SUBJECT, id, type: 'text', text: { body: '/stop' } }],
+const body = (id: string | undefined, phoneNumberId = 'fictional-phone-id') => JSON.stringify({ entry: [{ changes: [{ value: {
+  metadata: { phone_number_id: phoneNumberId },
+  messages: [{ from: SUBJECT, ...(id === undefined ? {} : { id }), type: 'text', text: { body: '/stop' } }],
 } }] }] });
 
 async function signedRequest(payload: string): Promise<Request> {
@@ -57,7 +58,7 @@ describe('WhatsApp owner DO replay', () => {
         const response = await instance.fetch(new Request(url, init));
         expect(response.status).toBe(200);
         // Admission acks first; the turns run after, so wait for them before the test inspects effects.
-        await Promise.all([...(instance as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+        await drainWhatsAppTurns(instance);
         return response;
       });
       const directory: OwnerDirectory = {
@@ -74,7 +75,7 @@ describe('WhatsApp owner DO replay', () => {
       const deliver = async (payload: string) => {
         const pending: Promise<unknown>[] = [];
         const response = await handleWhatsAppWebhook(await signedRequest(payload), {
-          OWNER_DO: localNamespace, WHATSAPP_APP_SECRET: SECRET,
+          OWNER_DO: localNamespace, WHATSAPP_APP_SECRET: SECRET, WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id',
         }, work => { pending.push(work); }, directory);
         expect(response.status).toBe(200);
         await Promise.all(pending);
@@ -99,6 +100,19 @@ describe('WhatsApp owner DO replay', () => {
         expect(state.storage.kv.get('wamid:wamid.B')).toBe(now);
         expect(await state.storage.get('wa_seq')).toBe(2);
         expect(await state.storage.get('wa_offset')).toBe(WA_UPDATE_BASE + 3);
+
+        // A message with no wamid cannot be told apart from its redelivery, so it never runs.
+        await deliver(body(undefined));
+        await deliver(body(undefined));
+        expect(turns).toHaveBeenCalledTimes(2);
+        expect(await state.storage.get('wa_seq')).toBe(2);
+
+        // A message to another business number on the same app is not this deployment's to answer.
+        routed.mockClear();
+        await deliver(body('wamid.C', 'fictional-other-phone-id'));
+        expect(routed).not.toHaveBeenCalled();
+        expect(turns).toHaveBeenCalledTimes(2);
+        expect(state.storage.kv.get('wamid:wamid.C')).toBeUndefined();
       } finally {
         await state.storage.deleteAlarm();
       }

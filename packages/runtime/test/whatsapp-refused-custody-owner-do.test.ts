@@ -16,16 +16,18 @@ import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
+import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
-const CARD = 'The Brief\nOne call at 15:00; keep the morning clear.';
+const CARD = 'The Daily Brief\nOne call at 15:00; keep the morning clear.';
 const REPORT = 'Checked the forecast: dry all day.';
-const KNOCK = 'template:waldo_update_ready';
+const KNOCK = 'template:waldo_proactive_update';
+const REPLY_KNOCK = 'template:waldo_update_ready';
 const model = vi.hoisted(() => ({ card: null as string | null }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete(request: LLMGatewayRequest) {
     const asked = request.request.messages.at(-1)?.content ?? '';
-    const text = asked.includes('[Scheduled card "The Brief"') ? model.card ?? CARD : asked.includes('[Standing order due now') ? REPORT : 'Noted.';
+    const text = asked.includes('[Scheduled card "The Daily Brief"') ? model.card ?? CARD : asked.includes('[Standing order due now') ? REPORT : 'Noted.';
     return { ok: true as const, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
@@ -35,7 +37,7 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 const OWNER_ID = '7b3c4d5e-6f70-4a8b-9c0d-1e2f3a4b5c6d';
 const SUBJECT = '15550003333';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
-const whatsapp = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en' };
+const whatsapp = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en', WHATSAPP_PROACTIVE_TEMPLATE: 'waldo_proactive_update', WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE: 'en' };
 const HOUR = 60 * 60_000;
 const today = () => new Date().toISOString().slice(0, 10);
 const CARD_ID = () => `day-card:${today()}:card:brief`;
@@ -114,7 +116,7 @@ const owned = async (name: string, script: (steps: Readonly<{
     const turn = vi.spyOn(owner as unknown as { turn(): Promise<void> }, 'turn').mockImplementation(async () => { wire.events.push('turn'); });
     const records = () => state.storage.kv.get<Record[]>('telegram_final_outbox_v1') ?? [];
     const settled = async () => {
-      await Promise.all([...(owner as unknown as { whatsappInflight: Set<Promise<void>> }).whatsappInflight]);
+      await drainWhatsAppTurns(owner);
       await (owner as unknown as { serial(work: () => Promise<void>): Promise<void> }).serial(async () => undefined);
     };
     let seq = 0;
@@ -268,7 +270,7 @@ describe.each([['just after midnight', '2026-10-22T00:30:00Z'], ['just before mi
       await status('refused', ids());
       expect(runs()).toEqual([{ status: 'running', summary: null }]);
       await reply();
-      expect(wire.events).toEqual([`text:${REPORT}`, KNOCK, `text:${REPORT}`, 'turn']);
+      expect(wire.events).toEqual([`text:${REPORT}`, REPLY_KNOCK, `text:${REPORT}`, 'turn']);
       expect(runs()).toEqual([{ status: 'running', summary: null }]);
 
       await status('delivered', ids());

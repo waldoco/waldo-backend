@@ -1,17 +1,13 @@
-import { appApprovalAtRevision, appApprovalDecisionResultV1Schema, appApprovalDecisionV1Schema, appApprovalListQueryV1Schema, appApprovalListV1Schema, appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
+import { appApprovalAtRevision, appApprovalKindShownAt, appApprovalDecisionResultV1Schema, appApprovalDecisionV1Schema, appApprovalListQueryV1Schema, appApprovalListV1Schema, appApprovalV1Schema, type AppApprovalStateV1, type AppApprovalV1 } from '../../../contracts/src/app/approvals';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import { approvalControlReceipt, controlRevision, loadReceiptBook, receiptCapacityReached, RECEIPT_BOOK_KEY, type ControlReceipt } from './dashboard-control-actions';
 import { APP_APPROVAL_DECISIONS_PATH, APP_APPROVALS_PATH } from './app-api';
-import { appStepUpRefusal } from './console-step-up';
-import { signedInRecently } from '../identity/console-auth';
 import type { ApprovalDesk } from './approvals';
 
 export type AppApprovalsHost = Readonly<{
   csrf: string; expires: number; storage: DurableObjectStorage;
-  // The session row's created_at: the proof of a recent email code that approving a send needs.
-  signedInAt: string;
   assertCurrent(): Promise<void>; sessions(): Promise<readonly { csrf: string; expires: number }[]>;
-  desk: Pick<ApprovalDesk, 'approvals' | 'decide' | 'stepUp'>;
+  desk: Pick<ApprovalDesk, 'approvals' | 'decide'>;
 }>;
 const reply = (body: object, status = 200) => Response.json(body, { status, headers: { 'cache-control': 'private, no-store' } });
 const LETTER = { approve: 'a', skip: 's', edit: 'e', undo: 'u', defer: 'd' } as const;
@@ -31,7 +27,10 @@ export async function appApprovalsRequest(request: Request, host: AppApprovalsHo
     if ([...url.searchParams.keys()].some(key => key !== 'state' || url.searchParams.getAll(key).length !== 1)) return reply({ error: 'invalid_query' }, 400);
     const query = appApprovalListQueryV1Schema.safeParse(Object.fromEntries(url.searchParams)); if (!query.success) return reply({ error: 'invalid_query' }, 400);
     const revision = appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'approvals');
-    const parsed = appApprovalListV1Schema.safeParse({ approvals: (await listed(query.data)).map(item => appApprovalAtRevision(item, revision)) });
+    // A kind with no shape an older build can parse (a send as Waldo, a standing grant, a day plan) is left out of its list;
+    // its chat carries the card's words instead.
+    const shown = (await listed(query.data)).filter(item => appApprovalKindShownAt(item.kind, revision));
+    const parsed = appApprovalListV1Schema.safeParse({ approvals: shown.map(item => appApprovalAtRevision(item, revision)) });
     await host.assertCurrent(); return parsed.success ? reply(parsed.data) : reply({ error: 'projection_unavailable' }, 503);
   }
   if (url.pathname !== APP_APPROVAL_DECISIONS_PATH) return reply({ error: 'not_found' }, 404);
@@ -44,14 +43,13 @@ export async function appApprovalsRequest(request: Request, host: AppApprovalsHo
   const result = (receipt: ControlReceipt, state: AppApprovalStateV1, duplicate = false) => appApprovalDecisionResultV1Schema.parse({ request_id, receipt, duplicate, approval_state: state });
   // A stale digest records nothing, so retrying it repeats the same answer and the request id stays free.
   if (item.payload_digest !== expected_digest) return reply(result({ state: 'rejected', message: 'That proposal changed since you reviewed it. Review the current version before deciding.' }, 'superseded'), 409);
-  // Refused before the receipt book, so a refusal records nothing and the same request can be sent again after signing in.
-  if (host.desk.stepUp(id, action) && !signedInRecently(host.signedInAt, Date.now())) return appStepUpRefusal();
   const session = await controlRevision(host.csrf), key = `${session}:${request_id}`, fingerprint = await controlRevision({ approval_id: id, action, expected_digest });
   const book = await loadReceiptBook(host.storage, host.sessions), prior = book[key];
   if (prior) return prior.fingerprint === fingerprint ? reply(result(prior.receipt, (prior.approval_state ?? item.state) as AppApprovalStateV1, true), prior.status) : reply({ error: 'request_reused', code: 'request_reused' }, 409);
   if (receiptCapacityReached(book, session)) return reply({ error: 'receipt_capacity', code: 'receipt_capacity', message: 'This session has reached its change limit. Sign in again after this session expires; existing receipts remain available.' }, 429);
   // Reading the approval closes it at its expiry; the desk still answers a decision on it, so the owner hears it expired.
-  if (!item.actions.includes(action) && item.state !== 'expired') return reply({ error: 'no_longer_eligible', code: 'no_longer_eligible', message: 'This decision is no longer available. Refresh the approvals.' }, 409);
+  if (!item.actions.includes(action) && item.state !== 'expired') return reply({ error: 'no_longer_eligible', code: 'no_longer_eligible',
+    message: item.withdrawal ? `Waldo withdrew this card, so nothing was done. ${item.withdrawal.reason}` : 'This decision is no longer available. Refresh the approvals.' }, 409);
   const pending: ControlReceipt = { state: 'unconfirmed', message: 'The outcome is not confirmed. Refresh the approvals before deciding again.' };
   book[key] = { fingerprint, status: 503, receipt: pending, expires: host.expires, approval_state: 'outcome_unknown' }; await host.storage.put(RECEIPT_BOOK_KEY, book);
   let receipt = pending, status = 503, state: AppApprovalStateV1 = 'outcome_unknown';

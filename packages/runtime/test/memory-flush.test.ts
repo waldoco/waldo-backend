@@ -26,13 +26,19 @@ describe('the health notes setting', () => {
 });
 
 describe('the notice of health notes saved on Waldo\'s own', () => {
-  it('names each saved note still in memory once, in its current words, then clears when taken', () => inOwner((state) => {
+  const ONE = 'I kept a note about your health from earlier. Say if you want it changed or gone, or turn health notes off in settings.';
+  const forModel = (line: string, ids: readonly number[]) => `${line}\n[Not shown to the owner: the notes are ${ids.map((id) => `c${id}`).join(', ')}. forget_memory takes them as claim_ids; remember takes one as replaces_id.]`;
+
+  it('tells the owner how many notes it kept, never their words or ids, and gives the model the ids; then clears when taken', () => inOwner((state) => {
     const kv = kvOf(state);
     const claims = [{ id: 3, text: 'Sleeps badly after late coffee' }, { id: 5, text: 'Feels flat on days without a walk' }];
     noteHealthSaved(kv, [3, 4]);
     noteHealthSaved(kv, [5, 3]);
     const notice = healthNotice(kv, () => claims);
-    expect(notice?.line).toBe('Saved to memory from our earlier chat: "Sleeps badly after late coffee" (c3); "Feels flat on days without a walk" (c5). Tell me to correct or forget any of it, or turn health notes off in your settings.');
+    const line = 'I kept 2 notes about your health from earlier. Say if you want any changed or gone, or turn health notes off in settings.';
+    expect(notice?.line).toBe(line);
+    expect(notice?.line).not.toMatch(/c\d|coffee|walk|\bour\b/i);
+    expect(notice?.modelLine).toBe(forModel(line, [3, 5]));
     notice!.taken();
     expect(kv.get(HEALTH_SAVED_KEY)).toBeUndefined();
     expect(healthNotice(kv, () => claims)).toBeNull();
@@ -44,12 +50,12 @@ describe('the notice of health notes saved on Waldo\'s own', () => {
     const kv = kvOf(state);
     const claims = [{ id: 3, text: 'Sleeps badly after late coffee' }, { id: 6, text: 'Sleeps better after a walk' }];
     noteHealthSaved(kv, [3]);
-    expect(healthNotice(kv, () => claims)?.line).toContain('(c3)');
+    expect(healthNotice(kv, () => claims)?.modelLine).toBe(forModel(ONE, [3]));
     const notice = healthNotice(kv, () => claims);
-    expect(notice?.line).toContain('(c3)');
+    expect(notice?.modelLine).toBe(forModel(ONE, [3]));
     noteHealthSaved(kv, [6]);
     notice!.taken();
-    expect(healthNotice(kv, () => claims)?.line).toBe('Saved to memory from our earlier chat: "Sleeps better after a walk" (c6). Tell me to correct or forget any of it, or turn health notes off in your settings.');
+    expect(healthNotice(kv, () => claims)?.modelLine).toBe(forModel(ONE, [6]));
   }));
 
   it('says nothing when every waiting note was forgotten first, and names at most five', () => inOwner((state) => {
@@ -59,17 +65,20 @@ describe('the notice of health notes saved on Waldo\'s own', () => {
     expect(kv.get(HEALTH_SAVED_KEY)).toBeUndefined();
     const many = Array.from({ length: 7 }, (_, index) => ({ id: index + 1, text: `Note ${index + 1}` }));
     noteHealthSaved(kv, many.map((claim) => claim.id));
-    expect(healthNotice(kv, () => many)?.line).toMatch(/\(c5\); and 2 more\. /);
+    const capped = healthNotice(kv, () => many);
+    const line = 'I kept 5 notes about your health from earlier. Say if you want any changed or gone, or turn health notes off in settings.';
+    expect(capped?.line).toBe(line);
+    expect(capped?.modelLine).toBe(forModel(line, [1, 2, 3, 4, 5]));
   }));
 
-  // "and 2 more" names nothing, so taking the line clears only the five it named; the other two are named next time.
-  it('clears only the notes the line named, and names the ones it only counted in the next reply', () => inOwner((state) => {
+  // Taking the line clears only the five it counted; the other two are counted in the next reply, so the owner hears 5 then 2.
+  it('clears only the notes the line counted, and counts the rest in the next reply', () => inOwner((state) => {
     const kv = kvOf(state);
     const many = Array.from({ length: 7 }, (_, index) => ({ id: index + 1, text: `Note ${index + 1}` }));
     noteHealthSaved(kv, [...many.map((claim) => claim.id), 9]);
     healthNotice(kv, () => many)!.taken();
     expect(kv.get(HEALTH_SAVED_KEY)).toEqual([6, 7]);
-    expect(healthNotice(kv, () => many)?.line).toBe('Saved to memory from our earlier chat: "Note 6" (c6); "Note 7" (c7). Tell me to correct or forget any of it, or turn health notes off in your settings.');
+    expect(healthNotice(kv, () => many)?.modelLine).toBe(forModel('I kept 2 notes about your health from earlier. Say if you want any changed or gone, or turn health notes off in settings.', [6, 7]));
   }));
 });
 
@@ -104,7 +113,8 @@ describe('the flush before older chat leaves Waldo\'s view', () => {
     expect(sides).toMatchObject({ owner: 'I sleep badly after late coffee', shared: 'Forwarded: Sam sleeps badly too', ownerMessages: [{ ref: 'tg-1', text: 'I sleep badly after late coffee' }] });
     expect(policy).toEqual({ health: true });
     const notice = hooks.memoryNotice();
-    expect(notice?.line).toBe('Saved to memory from our earlier chat: "Sleeps badly after late coffee" (c1). Tell me to correct or forget any of it, or turn health notes off in your settings.');
+    expect(notice?.line).toBe('I kept a note about your health from earlier. Say if you want it changed or gone, or turn health notes off in settings.');
+    expect(notice?.modelLine).toContain('the notes are c1.');
     notice!.taken();
     expect(hooks.memoryNotice()).toBeNull();
 

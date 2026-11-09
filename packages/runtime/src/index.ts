@@ -28,6 +28,9 @@ import { serveDashboard } from './channels/dashboard-static';
 import { consoleLog, consoleTrace, withConsoleTrace } from './observability/console-correlation';
 import type { GatewaySecretBinding } from './llm/gateway';
 import { receiveAgentMail } from './channels/agent-mail/ingress';
+import { agentMailRouting, sweepAgentMailRules } from './channels/agent-mail/rules';
+import { agentMailHeldHandles } from './channels/agent-mail/handles';
+import type { AgentMailSenderBinding } from './channels/agent-mail/send';
 
 // The entry exports only Durable Object classes and the default handler. `wrangler dev --local`
 // rejects constants or arrays exported from the Worker entry, so helpers are imported from their
@@ -43,6 +46,7 @@ import { handleIMessageHost, isIMessageHostPath } from './channels/imessage/http
 import { photonCallback } from './channels/imessage/photon-routes';
 import { PHOTON_CALLBACK_PATH, photonConfig } from './channels/imessage/photon';
 import { photonKeepAlive } from './channels/imessage/enrollment';
+import { withSwitches } from './switches';
 
 // Augment the ambient worker env so both the DO base (typed on Cloudflare.Env)
 // and the test's `env` import (also Cloudflare.Env) see the DO bindings.
@@ -85,6 +89,11 @@ declare global {
       WALDO_RELEASE?: string;
       AGENT_MAIL_INBOUND?: string;
       AGENT_MAIL_DOMAIN?: string;
+      AGENT_MAIL_ZONE_ID?: string;
+      CLOUDFLARE_EMAIL_ROUTING_TOKEN?: string;
+      AGENT_MAIL_SEND?: string;
+      // The Email Service send binding; sending as Waldo stays off without it.
+      AGENT_MAIL_SENDER?: AgentMailSenderBinding;
       LANGFUSE_PUBLIC_KEY?: string;
       LANGFUSE_SECRET_KEY?: string;
       LANGFUSE_BASE_URL?: string;
@@ -222,8 +231,8 @@ const worker = {
       },
     });
   },
-  // Mail to <handle>@AGENT_MAIL_DOMAIN, from the Email Routing rule for that handle. It never calls setReject: a reject bounces
-  // to the sender, which for forged mail is backscatter.
+  // Mail to <handle>@AGENT_MAIL_DOMAIN, from the Email Routing rule for that handle. It throws only while the message could
+  // not be recorded (receiveAgentMail's failure policy), and never calls setReject: a bounce to a forged sender is backscatter.
   async email(message: ForwardableEmailMessage, env: Env): Promise<void> {
     await receiveAgentMail(message, env);
   },
@@ -232,6 +241,9 @@ const worker = {
     // A Photon refresh token ages out after 30 idle days; the daily cron rotates it weekly.
     if (photonConfig(env as never)) ctx.waitUntil(photonKeepAlive(env as never).then((outcome) => console.log(`photon keepalive ${outcome}`), () => console.log('photon keepalive unavailable')));
     ctx.waitUntil(sweepHealthRetention(signedRpc(env)).then((outcome) => console.log(`health retention sweep ${outcome.state} owners=${outcome.owners} rounds=${outcome.rounds}`)));
+    // Waldo's routing rules no held handle accounts for: an account deleted with its owner object leaves its rule behind.
+    const mailRouting = agentMailRouting(env), mailHeld = agentMailHeldHandles(env);
+    if (mailRouting && mailHeld) ctx.waitUntil(sweepAgentMailRules(mailRouting, mailHeld).then((outcome) => console.log(JSON.stringify({ hop: 'agent_mail_rule_sweep', ...outcome }))));
     // Traces older than the privacy notice's thirty days: shipped off; "dry" counts what would go, "1" deletes it. A trace
     // already past the thirty days means the promise is broken now, so that line is an error, not an info line.
     if (env.LANGFUSE_RETENTION_SWEEP === '1' || env.LANGFUSE_RETENTION_SWEEP === 'dry') ctx.waitUntil(sweepLangfuseRetention(env).then((outcome) => (outcome.overdue ? console.error : console.log)(langfuseSweepLogLine(outcome))));
@@ -239,6 +251,7 @@ const worker = {
 } satisfies ExportedHandler<Env>;
 
 export default {
-  ...worker,
-  fetch: async (request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> => isolateConsolePage(request, await worker.fetch(request, env, ctx)),
+  fetch: async (request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> => isolateConsolePage(request, await worker.fetch(request, withSwitches(env), ctx)),
+  email: (message: ForwardableEmailMessage, env: Env): Promise<void> => worker.email(message, withSwitches(env)),
+  scheduled: (controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> => worker.scheduled(controller, withSwitches(env), ctx),
 } satisfies ExportedHandler<Env>;

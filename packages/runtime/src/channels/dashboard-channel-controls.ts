@@ -7,11 +7,12 @@ import type { DeviceBridgeDO } from '../devices/device-bridge-do';
 import type { PhoneSmsEnv } from '../identity/phone-sms';
 import { phoneControlAct, phoneControls, type IMessageProof, type PhoneControls } from './dashboard-phone';
 import { deviceControlAct, devicesControls, devicesControlsStatus, type DashboardDeviceDirectory, type DevicesControls } from '../devices/dashboard-devices';
+import { agentMailControlAct, agentMailControls, type AgentMailControls, type AgentMailControlsDeps } from './agent-mail/controls';
 
 // iMessage, device and phone setup read the owner directory and bridge objects, not the console view,
 // so their reads and actions never build it. Their actions use the one control-action path; the owner DO
 // runs them on their own queue, apart from turns, so their receipts keep a book of their own.
-export const CHANNEL_CONTROL_VIEWS = ['imessage', 'devices', 'phone'] as const;
+export const CHANNEL_CONTROL_VIEWS = ['imessage', 'devices', 'phone', 'agent_mail'] as const;
 export type ChannelControlView = (typeof CHANNEL_CONTROL_VIEWS)[number];
 export const CHANNEL_RECEIPT_BOOK_KEY = 'console:channel-control-receipts';
 export const channelControlView = (value: unknown): ChannelControlView | null => CHANNEL_CONTROL_VIEWS.find((view) => view === value) ?? null;
@@ -29,12 +30,15 @@ export type ChannelControlsDeps = Readonly<{
   onWhatsAppUnlinked(): Promise<void>;
   // Whether the owner can prove a number by sending their iMessage link code from it; absent means they cannot.
   imessageProof?: IMessageProof;
+  // The owner's Waldo address; absent where the owner object does not offer it.
+  agentMail?: AgentMailControlsDeps;
 }>;
 
+const offered = (deps: ChannelControlsDeps): AgentMailControlsDeps => { if (!deps.agentMail) throw new Error('agent mail not offered'); return deps.agentMail; };
 // One entry per view. fresh() pairs the hashed read with an executor bound to that same read.
 type ChannelControl = Readonly<{
-  status(deps: ChannelControlsDeps): Promise<Readonly<{ controls: IMessageControls | DevicesControls | PhoneControls; status: unknown }>>;
-  fresh(deps: ChannelControlsDeps): Promise<Readonly<{ controls: IMessageControls | DevicesControls | PhoneControls; act(action: ConsoleAction, fields: Readonly<Record<string, string>>): Promise<ControlReceipt | RevealingReceipt> }>>;
+  status(deps: ChannelControlsDeps): Promise<Readonly<{ controls: IMessageControls | DevicesControls | PhoneControls | AgentMailControls; status: unknown }>>;
+  fresh(deps: ChannelControlsDeps): Promise<Readonly<{ controls: IMessageControls | DevicesControls | PhoneControls | AgentMailControls; act(action: ConsoleAction, fields: Readonly<Record<string, string>>): Promise<ControlReceipt | RevealingReceipt> }>>;
 }>;
 const CHANNEL_CONTROLS: Readonly<Record<ChannelControlView, ChannelControl>> = {
   imessage: {
@@ -51,6 +55,13 @@ const CHANNEL_CONTROLS: Readonly<Record<ChannelControlView, ChannelControl>> = {
   phone: {
     status: async (deps) => ({ controls: await phoneControls(deps.phone, deps.owner, deps.csrf, deps.imessageProof), status: {} }),
     fresh: async (deps) => ({ controls: await phoneControls(deps.phone, deps.owner, deps.csrf, deps.imessageProof), act: (action, fields) => phoneControlAct(deps.phone, deps.owner, action, fields, deps.onWhatsAppUnlinked, deps.imessageProof) }),
+  },
+  agent_mail: {
+    status: async (deps) => ({ controls: await agentMailControls(offered(deps), deps.csrf), status: {} }),
+    fresh: async (deps) => {
+      const controls = await agentMailControls(offered(deps), deps.csrf);
+      return { controls, act: (action, fields) => agentMailControlAct(offered(deps), controls, action, fields) };
+    },
   },
 };
 

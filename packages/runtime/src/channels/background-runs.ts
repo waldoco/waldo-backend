@@ -1,4 +1,5 @@
 import type { HealthTriggerOutcome } from '../health/trigger';
+import type { HistoryArchive } from '../history/archive';
 import type { OwnerClock } from '../tools/live/get-context';
 
 // A5b (BUILD_PLAN_2026-09-25: "Background task tracking - tasks table, trace hops, console
@@ -6,8 +7,9 @@ import type { OwnerClock } from '../tools/live/get-context';
 // fire, a proactive beat - records one row. parent_id carries the trace hop: a child run
 // points at the turn or run that spawned it, so the console can show what came from what.
 // Summaries are one-line outcomes written by the runner itself, never provider text.
-// nightly is the night's memory pass and its catch-ups; health_trigger is the health check that may raise one change.
-export const RUN_KINDS = ['delegate_task', 'reminder', 'loop', 'standing_order', 'heartbeat', 'brief', 'event', 'nightly', 'health_trigger'] as const;
+// nightly is the night's memory pass and its catch-ups; memory_daytime is the daytime pass over mail and calendar changes;
+// health_trigger is the health check that may raise one change.
+export const RUN_KINDS = ['delegate_task', 'reminder', 'loop', 'standing_order', 'heartbeat', 'brief', 'event', 'nightly', 'memory_daytime', 'health_trigger'] as const;
 export type RunKind = (typeof RUN_KINDS)[number];
 export const RUN_STATUSES = ['running', 'completed', 'failed', 'stopped'] as const;
 export type RunStatus = (typeof RUN_STATUSES)[number];
@@ -36,11 +38,12 @@ export type RunBook = Readonly<{
 
 type Sql = Pick<SqlStorage, 'exec'>;
 
-// Runs are audit residue, not operational state: the oldest rows trim past the cap so a chatty
-// loop can never grow the table without bound. The console list reads the newest page.
+// Runs are audit residue, not operational state: the oldest rows leave the hot table past the cap so a chatty loop can
+// never grow it without bound. The console list reads the newest page. With the history archive on, they move there
+// (never a running row, which finish() still writes); off, they are deleted as before.
 export const MAX_RUN_ROWS = 500;
 
-export const runBook = (sql: Sql, clock: OwnerClock, newId: () => string): RunBook => {
+export const runBook = (sql: Sql, clock: OwnerClock, newId: () => string, archive?: HistoryArchive): RunBook => {
   sql.exec(`CREATE TABLE IF NOT EXISTS background_runs (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT,
     parent_id TEXT, started_at INTEGER NOT NULL, ended_at INTEGER)`);
@@ -54,10 +57,17 @@ export const runBook = (sql: Sql, clock: OwnerClock, newId: () => string): RunBo
         'INSERT INTO background_runs (id, kind, status, summary, parent_id, started_at, ended_at) VALUES (?, ?, ?, NULL, ?, ?, NULL)',
         run.id, run.kind, run.status, run.parent_id, run.started_at,
       );
-      sql.exec(
-        'DELETE FROM background_runs WHERE id NOT IN (SELECT id FROM background_runs ORDER BY started_at DESC LIMIT ?)',
-        MAX_RUN_ROWS,
-      );
+      if (archive === undefined || archive.mode === 'off') {
+        sql.exec(
+          'DELETE FROM background_runs WHERE id NOT IN (SELECT id FROM background_runs ORDER BY started_at DESC LIMIT ?)',
+          MAX_RUN_ROWS,
+        );
+      } else {
+        archive.retire('background_runs', sql.exec<{ id: string }>(
+          "SELECT id FROM background_runs WHERE status <> 'running' AND id NOT IN (SELECT id FROM background_runs ORDER BY started_at DESC LIMIT ?)",
+          MAX_RUN_ROWS,
+        ).toArray().map(row => row.id));
+      }
       return run;
     },
     finish(id, status, summary) {
@@ -100,6 +110,18 @@ export const NIGHTLY_RUN: RunSummary<'done' | 'more' | 'failed' | 'capped'> = {
     more: { status: 'completed', summary: 'memory pass read part of the backlog; a catch-up follows' },
     capped: { status: 'completed', summary: 'memory pass stopped at the day\'s limit; the rest waits' },
     failed: { status: 'failed', summary: 'memory pass did not finish; a catch-up follows' },
+  } as const)[outcome],
+};
+// A daytime pass is recorded only when it asked the model or failed, so passes that found nothing new do not fill the
+// night's run history.
+export const DAYTIME_RUN: RunSummary<'empty' | 'consolidated' | 'more' | 'raced' | 'failed'> = {
+  threw: 'daytime memory pass failed',
+  settled: outcome => ({
+    empty: { status: 'completed', summary: 'nothing new from mail or calendar' },
+    consolidated: { status: 'completed', summary: 'read the new mail and calendar changes' },
+    more: { status: 'completed', summary: 'read part of the new changes; the rest waits' },
+    raced: { status: 'completed', summary: 'another memory pass had already read these changes' },
+    failed: { status: 'failed', summary: 'daytime memory pass did not finish; the changes wait' },
   } as const)[outcome],
 };
 // One fixed line per health-trigger outcome: codes become words here, never zone words or values. A new outcome has no

@@ -104,6 +104,16 @@ describe('modern owner controls read', () => {
     ]) expect(() => readControls({ ...value, data: { proposals: [wrong] } }, 'waiting')).toThrow();
   });
 
+  it('reads a send as Waldo with its sender, and offers Send and Change it on its open draft', () => {
+    const review = { kind: 'agent_mail_send', from: { name: "Waldo, Sam's assistant", address: 'sam@mail.test.invalid' }, to: ['lee@test.invalid'], cc: [], subject: 'Friday', body: 'See you at 4.' };
+    const asWaldo = { id: 'waldo', kind: 'agent_mail_send', state: 'open', summary: 'Send email as Waldo', actions: ['approval.send', 'approval.edit', 'approval.skip'], review };
+    const value = { ...day, view: 'waiting', data: { proposals: [asWaldo] } };
+    expect(readControls(value, 'waiting').data.proposals[0]).toMatchObject({ review, actions: asWaldo.actions });
+    expect(readControls({ ...value, data: { proposals: [{ ...asWaldo, review: { ...review, raw: 'never-retain' } }] } }, 'waiting').data.proposals[0]?.review).toEqual(review);
+    for (const wrong of [{ ...review, from: 'sam@mail.test.invalid' }, { ...review, from: { name: 'Waldo' } }, { ...review, cc: undefined }, { ...review, subject: 7 }].map(changed => ({ ...asWaldo, review: changed })))
+      expect(() => readControls({ ...value, data: { proposals: [wrong] } }, 'waiting')).toThrow();
+  });
+
   it('keeps activity summaries narrow and passes independently selected cursors', async () => {
     const activity = { ...day, view: 'activity', data: { steps: [], last_request: { at: '2026-10-02 10:00', ok: true, partial: false, recorded_steps: 1, hops: [{ hop: 'llm_reply', ok: true, ms: 5, note: '', raw: 'never-retain' }] }, runs: [], ledger: 'Recorded reminders', page: { trace_before: 10, runs_before: null, trace_applied: 20, runs_applied: 30 }, trace: [{ time: '10:00', hop: 'skip', ok: true, ms: 0, summary: 'Recorded quiet-hour suppression', detail: 'never-retain', error: 'never-retain' }] } };
     const parsed = readControls(activity, 'activity');
@@ -236,6 +246,9 @@ describe('one-time values in receipts', () => {
     expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'host_code', value: host } }, 'imessage.pair', 'https://x.test').reveal).toEqual({ kind: 'host_code', value: host });
     expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'pairing_code', value: pairing, extra: 'never-retain' } }, 'device.pair', 'https://x.test').reveal).toEqual({ kind: 'pairing_code', value: pairing });
     expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'link_code', value: 'waldo ABCDEFGHJK', send_url: 'sms:waldo@test.invalid&body=waldo%20ABCDEFGHJK' } }, 'imessage.link', 'https://x.test').reveal).toEqual({ kind: 'link_code', value: 'waldo ABCDEFGHJK' });
+    expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'link_code', value: 'waldo ABCDEFGHJK', to: '+919226067544' } }, 'whatsapp.link', 'https://x.test').reveal).toEqual({ kind: 'link_code', value: 'waldo ABCDEFGHJK', to: '+919226067544', app: 'whatsapp' });
+    expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'link_code', value: 'waldo ABCDEFGHJK', to: 'woof@heywaldo.in' } }, 'whatsapp.link', 'https://x.test').reveal).toEqual({ kind: 'link_code', value: 'waldo ABCDEFGHJK', app: 'whatsapp' });
+    expect(readActionResult({ receipt: recorded, duplicate: false, reveal: { kind: 'link_code', value: 'waldo ABCDEFGHJK', to: '+16285550100', app: 'whatsapp' } }, 'imessage.link', 'https://x.test').reveal).toEqual({ kind: 'link_code', value: 'waldo ABCDEFGHJK', to: '+16285550100' });
     for (const [value, action] of [
       [{ receipt: recorded, duplicate: false, reveal: { kind: 'host_code', value: host } }, 'device.pair'],
       [{ receipt: recorded, duplicate: false, reveal: { kind: 'challenge', value: host } }, 'imessage.pair'],

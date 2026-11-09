@@ -1,10 +1,12 @@
 import { fromRowZone } from '@waldo/contracts';
+import { sleepJustEnded, workoutJustEnded } from '../health/wake-notice';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import {
   checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_PER_SAMPLE_REVISION_V1, healthConsentListAtRevisionV1, isHealthProviderSourceV1,
   healthApiErrorV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema, healthConsentListV1Schema, healthConsentWithdrawV1Schema,
   healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthScoresQueryV1Schema, healthScoresResponseV1Schema,
   healthBaselineV1Schema, healthScoresUnavailableV1Schema, healthScoresV1Schema, healthSleepDebtV1Schema, HEALTH_SLEEP_DEBT_REVISION_V1, HEALTH_SCORES_HISTORY_REVISION_V1,
+  healthSettingsV1Schema,
 } from '../../../contracts/src/app/health-ingest';
 import { healthHistoryView, historyWindowOf } from './app-health-history';
 import { rowFreshness } from './health-context';
@@ -25,8 +27,19 @@ export type AppHealthInput = Readonly<{
   // it, once for a run of uploads, in the owner's own zone; without a way to tell it, or when it cannot take the notice, the
   // Worker recomputes here, in the zone the batch was read in, since only the owner's object holds the owner's zone.
   defer?: (work: Promise<unknown>) => void;
-  notifySamples?: () => Promise<void>;
+  // `woke` says the upload carries a night that just ended, `workout` a workout that just ended; the notice carries those yeses
+  // and nothing else.
+  notifySamples?: (woke?: boolean, workout?: boolean) => Promise<void>;
+  // WORKOUT_WAKE: on, an upload with a workout that just ended tells the owner's object so. Absent, no upload says so.
+  workoutWake?: boolean;
+  // WAKE_BRIEF: how fresh a night's end must be to tell the owner's object they just woke. Absent, no upload says so.
+  wakeFreshMs?: number;
+  // Tells the owner's object that their stated sleep need changed, so it recomputes their rows on it.
+  notifySettings?: () => Promise<void>;
   compute?: ProducerDeps['compute'];
+  trainingLoad?: boolean;
+  // On, the recompute reads the owner's health settings and computes on the sleep need they stated.
+  coaching?: boolean;
   // The owner's calendar busy minutes for Weight, read from the owner's Durable Object. Without it Weight is unavailable.
   readDemand?: ProducerDeps['readDemand'];
   // Tells the owner's Durable Object that today's derived row moved zone, so the health trigger can look at it.
@@ -192,9 +205,25 @@ const scoresHistory = async ({ request, url, doName, rpc }: AppHealthInput): Pro
   return answer(healthHistoryView(await invokeHealth(rpc, doName, 'scores_history', JSON.stringify({ days })), days, readers));
 };
 
+// The owner's stated sleep need. The health plane answers with when it last changed too; the app is shown the need alone.
+// A saved need asks the owner's object for a recompute after the answer, so the app's rows move to it before the next upload.
+const settings = async ({ request, doName, rpc, readBody, defer, notifySettings }: AppHealthInput): Promise<Response> => {
+  const shown = (result: unknown) => {
+    const stored = asObject(result);
+    return settle(stored && !('error' in stored) ? { sleep_need_minutes: stored.sleep_need_minutes } : result, healthSettingsV1Schema);
+  };
+  if (request.method === 'GET') return shown(await invokeHealth(rpc, doName, 'settings_read', '{}'));
+  if (request.method !== 'PUT') return refuse('unavailable', 405);
+  const body = await readJson(request, healthSettingsV1Schema, readBody);
+  if ('response' in body) return body.response;
+  const response = shown(await invokeHealth(rpc, doName, 'settings_write', JSON.stringify(body.data)));
+  if (response.status === 200 && notifySettings) defer?.(notifySettings().catch(() => { console.error('health settings notice failed'); }));
+  return response;
+};
+
 // A batch that changed nothing (a replay, or only ignored readings) leaves every derived row as it was. The recompute cannot
 // fail the ingest: it starts after the database has answered and its outcome is not part of the response.
-const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, notifyZoneChange }: AppHealthInput, result: unknown, timezone: string): void => {
+const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, notifyZoneChange, trainingLoad, coaching }: AppHealthInput, result: unknown, timezone: string, woke: boolean, workout: boolean): void => {
   const receipt = healthIngestReceiptV1Schema.safeParse(result);
   if (!defer || (!notifySamples && !compute) || !receipt.success || receipt.data.replayed || receipt.data.accepted + receipt.data.deleted === 0) return;
   const here = async () => compute && produceHealthScores({
@@ -203,10 +232,12 @@ const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, not
     readScores: day => invokeHealth(rpc, doName, 'scores_read', JSON.stringify({ day })),
     readHistory: days => invokeHealth(rpc, doName, 'scores_history', JSON.stringify({ days })),
     compute,
+    ...(trainingLoad ? { trainingLoad } : {}),
+    ...(coaching ? { readSettings: () => invokeHealth(rpc, doName, 'settings_read', '{}') } : {}),
     ...(readDemand ? { readDemand } : {}),
     ...(notifyZoneChange ? { onZoneChange: notifyZoneChange } : {}),
   }, { now: Date.now(), timezone });
-  defer(notifySamples ? notifySamples().catch(() => { console.error('health samples notice failed'); return here(); }) : here());
+  defer(notifySamples ? notifySamples(woke, workout).catch(() => { console.error('health samples notice failed'); return here(); }) : here());
 };
 
 // Health revision 3: each change is checked on its own. A rejected change stays in its position as its reason and kind of
@@ -247,6 +278,8 @@ export const handleAppHealth = async (input: AppHealthInput): Promise<Response> 
     return answer(healthConsentView(await invokeHealth(rpc, doName, 'consent_list', '{}'), appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'health')));
   }
   if (route === '/scores/history') return scoresHistory(input);
+  // The stated need is stored only while the coaching switch is on; off, the route is not served.
+  if (route === '/settings') return input.coaching === true ? settings(input) : refuse('unavailable', 404);
   if (route === '/scores') return request.method === 'GET' ? scores(input) : refuse('unavailable', 405);
   const write = writes[route];
   if (!write) return refuse('unavailable', 404);
@@ -268,6 +301,10 @@ export const handleAppHealth = async (input: AppHealthInput): Promise<Response> 
   // would refuse whole as invalid; this answers as the oversize body it is.
   if (new TextEncoder().encode(payload).byteLength > HEALTH_INGEST_MAX_REQUEST_BYTES_V1) return logRefusal(input, refuse('invalid_request', 413));
   const result = await invokeHealth(rpc, doName, operation, payload);
-  recompute(input, result, body.data.timezone);
+  // A workout counts only when the ingest took it: a sample the database rejected never says one just ended.
+  const answered = healthIngestReceiptV1Schema.safeParse(result);
+  const refused = new Set(answered.success ? (answered.data.rejected ?? []).filter(rejection => rejection.change === 'sample').map(rejection => rejection.index) : []);
+  recompute(input, result, body.data.timezone, input.wakeFreshMs !== undefined && sleepJustEnded(body.data.samples, Date.now(), input.wakeFreshMs),
+    input.workoutWake === true && workoutJustEnded(body.data.samples.filter((_, index) => !refused.has(index)), Date.now()));
   return logRefusal(input, settle(result, responseSchema));
 };

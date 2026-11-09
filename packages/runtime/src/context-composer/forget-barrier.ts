@@ -18,7 +18,7 @@ export type BarrierTally = { dropped: number; redacted: number };
 
 export const FORGET_MARKER = '[forgotten]';
 export const WITHHELD_OUTPUT = '[waldo: this tool returned data that mentions a topic the owner asked to forget, so it is withheld. The tool DID return data - do not report it as empty or failed; say that part is withheld.]';
-const OWNER_STORE_TOOLS: ReadonlySet<string> = new Set(['read_memory', 'search_episodes']);
+const OWNER_STORE_TOOLS: ReadonlySet<string> = new Set(['read_memory', 'search_episodes', 'search_history']);
 export const resultOrigin = (tool: string): ResultOrigin => (OWNER_STORE_TOOLS.has(tool) ? 'owner_store' : 'external');
 
 // Every string in a structured value (keys and values), unserialised: JSON.stringify would double a stored backslash and
@@ -213,5 +213,8 @@ export const barrierMemory = (store: ClaimStore, held: () => readonly string[]):
     // The held set is read once per call, not once per claim.
     claims: (status) => { const holds = claimHolds(holdsIn(held())); return store.claims(status).filter((claim) => !holds(claim)); },
     recall: (query, limit, near) => { const holds = claimHolds(holdsIn(held())); return store.recall(query, limit, near).filter((claim) => !holds(claim)); },
+    recallReplaced: (query, limit) => { const holds = claimHolds(holdsIn(held())); return store.recallReplaced(query, limit).filter((claim) => !holds(claim)); },
+    replacedClaims: (limit) => { const holds = claimHolds(holdsIn(held())); return store.replacedClaims(limit).filter((claim) => !holds(claim)); },
+    statements: () => { const holds = claimHolds(holdsIn(held())); return store.statements().filter((claim) => !holds(claim)); },
   };
 };

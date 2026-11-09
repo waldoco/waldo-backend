@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getHealthResultSchema } from '@waldo/contracts';
+import { getHealthResultSchema, HEALTH_READ_MAX_SESSIONS } from '@waldo/contracts';
 import { md5Hex } from '../src/channels/md5';
 import { getHealthHandler, healthReadBook } from '../src/tools/live/health';
 
@@ -91,21 +91,33 @@ describe('get_health', () => {
   it('reads nothing when a consent is withdrawn, and says so', async () => {
     const { calls, handler } = fake({ consent: consent('granted', 'withdrawn') });
     const result = await handler.handle({ signals: ['sleep'], from: '2026-10-12', to: '2026-10-12', aggregation: 'daily' }, ctx);
-    expect(result).toEqual({ ok: true, data: { state: 'unavailable', reason: 'consent_withdrawn' }, source_taint: null });
+    expect(result).toMatchObject({ ok: true, data: { state: 'unavailable', reason: 'consent_withdrawn' }, source_taint: null });
     expect(calls.map((call) => call.fn)).toEqual(['health_consent_list']);
   });
 
   it('names the other reasons: consent not granted, not linked, no readings, a failed read', async () => {
     const asked = { signals: ['sleep' as const], from: '2026-10-12', to: '2026-10-12', aggregation: 'daily' as const };
     const reason = async (answers: Parameters<typeof fake>[0]) => { const result = await fake(answers).handler.handle(asked, ctx); return result.ok ? result.data : result; };
-    expect(await reason({ consent: consent('not_granted', 'granted') })).toEqual({ state: 'unavailable', reason: 'consent_required' });
-    expect(await reason({ consent: { consents: [] } })).toEqual({ state: 'unavailable', reason: 'consent_required' });
-    expect(await reason({ consent: { error: 'not_linked' } })).toEqual({ state: 'unavailable', reason: 'not_linked' });
-    expect(await reason({ series: { error: 'not_linked' } })).toEqual({ state: 'unavailable', reason: 'not_linked' });
-    expect(await reason({ series: { access: 'granted', read_at: '2026-10-13T06:00:00.000Z', sources: [] } })).toEqual({ state: 'unavailable', reason: 'no_readings' });
-    expect(await reason({ series: new Error('router down') })).toEqual({ state: 'unavailable', reason: 'read_failed' });
-    expect(await reason({ consent: new Error('router down') })).toEqual({ state: 'unavailable', reason: 'read_failed' });
-    expect(await reason({ series: { access: 'granted' } })).toEqual({ state: 'unavailable', reason: 'read_failed' });
+    expect(await reason({ consent: consent('not_granted', 'granted') })).toMatchObject({ state: 'unavailable', reason: 'consent_required' });
+    expect(await reason({ consent: { consents: [] } })).toMatchObject({ state: 'unavailable', reason: 'consent_required' });
+    expect(await reason({ consent: { error: 'not_linked' } })).toMatchObject({ state: 'unavailable', reason: 'not_linked' });
+    expect(await reason({ series: { error: 'not_linked' } })).toMatchObject({ state: 'unavailable', reason: 'not_linked' });
+    expect(await reason({ series: { access: 'granted', read_at: '2026-10-13T06:00:00.000Z', sources: [] } })).toMatchObject({ state: 'unavailable', reason: 'no_readings' });
+    expect(await reason({ series: new Error('router down') })).toMatchObject({ state: 'unavailable', reason: 'read_failed' });
+    expect(await reason({ consent: new Error('router down') })).toMatchObject({ state: 'unavailable', reason: 'read_failed' });
+    expect(await reason({ series: { access: 'granted' } })).toMatchObject({ state: 'unavailable', reason: 'read_failed' });
+  });
+
+  // Each reason needs a different reply (retry once, try a wider range, or answer without readings), so each says its own.
+  it('gives each unavailable reason its own next step', async () => {
+    const asked = { signals: ['sleep' as const], from: '2026-10-12', to: '2026-10-12', aggregation: 'daily' as const };
+    const next = async (answers: Parameters<typeof fake>[0]) => { const result = await fake(answers).handler.handle(asked, ctx); return result.ok && result.data.state === 'unavailable' ? result.data.next : undefined; };
+    const steps = await Promise.all([
+      next({ consent: consent('not_granted', 'granted') }), next({ consent: consent('granted', 'withdrawn') }), next({ consent: { error: 'not_linked' } }),
+      next({ series: { access: 'granted', read_at: '2026-10-13T06:00:00.000Z', sources: [] } }), next({ series: new Error('router down') }),
+    ]);
+    expect(steps.every((step) => typeof step === 'string' && step.length > 0)).toBe(true);
+    expect(new Set(steps).size).toBe(5);
   });
 
   it('reads only the sources whose own purposes are both granted, whatever their epochs say', async () => {
@@ -119,7 +131,7 @@ describe('get_health', () => {
     expect(live.ok && live.data.state === 'available' && live.data.signals[0]?.source).toBe('samsung');
     // Storage granted but model use never asked on the only source: not withdrawn, not granted.
     const asked = await fake({ consent: consent('granted', 'not_granted') }).handler.handle({ signals: ['sleep'], from: '2026-10-12', to: '2026-10-12', aggregation: 'daily' }, ctx);
-    expect(asked).toEqual({ ok: true, data: { state: 'unavailable', reason: 'consent_required' }, source_taint: null });
+    expect(asked).toMatchObject({ ok: true, data: { state: 'unavailable', reason: 'consent_required' }, source_taint: null });
   });
 
   it('summarises a signal with no reading in the range as nulls, never as zeros', async () => {
@@ -197,6 +209,15 @@ describe('get_health', () => {
       ]);
       expect(JSON.parse(String(calls[1]!.args.p_payload)).signals).toEqual(['sleep_duration']);
     });
+    it('keeps a staged night\'s stages when the same source and day also has an unstaged reading: only a day\'s sums need every entry', async () => {
+      const mixed = { ...series, sources: [{ source: 'apple', consent_epoch: 3, samples: [
+        night('2026-10-12', 430, { light: 200, deep: 70, rem: 90, unspecified: 70, awake: 22 }, '2026-10-11T17:30:00Z', '2026-10-12T00:50:00Z'),
+        night('2026-10-12', 25, null, '2026-10-12T08:00:00Z', '2026-10-12T08:25:00Z'),
+      ] }] };
+      const { handler } = fake({ series: mixed });
+      const result = await handler.handle({ signals: ['sleep_deep'], from: '2026-10-12', to: '2026-10-12', aggregation: 'daily' }, ctx);
+      expect(result.ok && result.data.state === 'available' && result.data.signals.map(entry => [entry.signal, value(entry)])).toEqual([['sleep_deep', 70]]);
+    });
     it('gives the night\'s means, a day\'s sums and the day\'s newest single readings in their own units', async () => {
       const { signals } = await one(['sleep_efficiency', 'respiratory_rate', 'spo2', 'walking_hr', 'hr_recovery', 'vo2_max', 'steps', 'active_energy', 'mindful']);
       expect(signals && signals.map(entry => [entry.signal, entry.unit, value(entry)])).toEqual([
@@ -213,5 +234,114 @@ describe('get_health', () => {
       const { signals } = await one(every);
       expect(signals && signals.length).toBeGreaterThan(10);
     });
+  });
+
+  // Health contract revision 5: what a coach reads. Every value is synthetic.
+  describe('coach reads', () => {
+    const session = (day: string, minutes: number, activity: string, workout?: Record<string, unknown>, start = `${day}T01:00:00Z`) =>
+      reading('workout', day, minutes, { activity, start_at: start, end_at: `${day}T02:00:00Z`, ...(workout ? { workout } : {}) });
+    const full = { energy_kcal: 640, distance_m: 12400, elevation_gain_m: 85, avg_hr_bpm: 152, max_hr_bpm: 181,
+      hr_zones: { basis: 'heart_rate_reserve', lower_bounds_bpm: [120, 136, 151, 166], seconds: [300, 900, 1500, 600, 180] },
+      effort: { score: 7, method: 'rated' }, running: { power_w: 285, cadence_spm: 176 } };
+    const coach = { ...series, sources: [{ source: 'apple', consent_epoch: 3, samples: [
+      session('2026-10-12', 58, 'running', full),
+      session('2026-10-12', 40, 'swimming', { distance_m: 2000, swimming: { strokes: 1480 } }, '2026-10-12T11:00:00Z'),
+      session('2026-10-11', 30, 'walking'),
+      session('2026-10-10', 45, 'cycling', { avg_hr_bpm: 170, max_hr_bpm: 150, distance_m: 30000 }),
+      reading('body_mass', '2026-10-12', 72.4, { start_at: '2026-10-12T01:30:00Z', end_at: '2026-10-12T01:30:00Z' }),
+      reading('body_mass', '2026-10-11', 72.9, { start_at: '2026-10-11T01:30:00Z', end_at: '2026-10-11T01:30:00Z' }),
+      reading('body_fat_percentage', '2026-10-12', 14.2, { start_at: '2026-10-12T01:30:00Z', end_at: '2026-10-12T01:30:00Z' }),
+      reading('lean_body_mass', '2026-10-12', 61.9, { start_at: '2026-10-12T01:30:00Z', end_at: '2026-10-12T01:30:00Z' }),
+      reading('stand_hour', '2026-10-12', 1, { start_at: '2026-10-12T03:30:00Z', end_at: '2026-10-12T04:30:00Z' }),
+      reading('stand_hour', '2026-10-12', 0, { start_at: '2026-10-12T04:30:00Z', end_at: '2026-10-12T05:30:00Z' }),
+      reading('stand_hour', '2026-10-12', 1, { start_at: '2026-10-12T05:30:00Z', end_at: '2026-10-12T06:30:00Z' }),
+    ] }] };
+    const ask = async (signals: string[], aggregation: 'daily' | 'summary' = 'daily', from = '2026-10-10') => {
+      const { calls, handler } = fake({ series: coach });
+      const result = await handler.handle({ signals: signals as never, from, to: '2026-10-12', aggregation }, ctx);
+      if (!result.ok || result.data.state !== 'available') throw new Error(JSON.stringify(result));
+      return { calls, data: getHealthResultSchema.parse(result.data) as Extract<ReturnType<typeof getHealthResultSchema.parse>, { state: 'available' }> };
+    };
+
+    it('lists each workout session with what the watch measured, oldest first, beside the daily minutes', async () => {
+      const { data } = await ask(['workouts']);
+      expect(data.signals.map(entry => entry.days?.map(day => day.value))).toEqual([[45, 30, 98]]);
+      expect(data.sessions).toEqual([
+        { day: '2026-10-10', activity: 'cycling', minutes: 45, distance_m: 30000 },
+        { day: '2026-10-11', activity: 'walking', minutes: 30 },
+        { day: '2026-10-12', activity: 'running', minutes: 58, energy_kcal: 640, distance_m: 12400, elevation_gain_m: 85, avg_hr_bpm: 152, max_hr_bpm: 181,
+          zone_minutes: [5, 15, 25, 10, 3], effort: { score: 7, method: 'rated' }, running: { power_w: 285, cadence_spm: 176 } },
+        { day: '2026-10-12', activity: 'swimming', minutes: 40, distance_m: 2000, swimming: { strokes: 1480 } },
+      ]);
+    });
+    it('drops a session part that cannot be one session (an average above the maximum), never the session', async () => {
+      const { data } = await ask(['workouts']);
+      expect(data.sessions?.[0]).not.toHaveProperty('avg_hr_bpm');
+      expect(data.sessions?.[0]).not.toHaveProperty('max_hr_bpm');
+    });
+    it('lists only the sessions of the days asked for, even when the read returns more', async () => {
+      const { data } = await ask(['workouts'], 'daily', '2026-10-11');
+      expect(data.sessions?.map(entry => [entry.day, entry.activity])).toEqual([['2026-10-11', 'walking'], ['2026-10-12', 'running'], ['2026-10-12', 'swimming']]);
+    });
+    it('keeps the newest sessions up to the cap, so a busy month still reads', async () => {
+      const many = Array.from({ length: HEALTH_READ_MAX_SESSIONS + 1 }, (_, i) => {
+        const day = `2026-10-1${i % 3}`;
+        return session(day, 20, 'running', undefined, `${day}T${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}:00Z`);
+      });
+      const { handler } = fake({ series: { ...series, sources: [{ source: 'apple', consent_epoch: 3, samples: many }] } });
+      const result = await handler.handle({ signals: ['workouts'], from: '2026-10-10', to: '2026-10-12', aggregation: 'daily' }, ctx);
+      if (!result.ok || result.data.state !== 'available') throw new Error(JSON.stringify(result));
+      const data = getHealthResultSchema.parse(result.data) as Extract<ReturnType<typeof getHealthResultSchema.parse>, { state: 'available' }>;
+      // 34 sessions on the 10th, 34 on the 11th, 33 on the 12th: the one dropped is the oldest.
+      expect(data.sessions).toHaveLength(HEALTH_READ_MAX_SESSIONS);
+      expect(data.sessions?.filter(entry => entry.day === '2026-10-10')).toHaveLength(33);
+      expect(data.sessions?.filter(entry => entry.day === '2026-10-12')).toHaveLength(33);
+    });
+    it('lists no sessions for a summary or when workouts were not asked', async () => {
+      expect((await ask(['workouts'], 'summary')).data).not.toHaveProperty('sessions');
+      expect((await ask(['body_mass'])).data).not.toHaveProperty('sessions');
+    });
+    it('gives body mass, body fat and lean mass as the day\'s newest reading, and stand hours as a day count', async () => {
+      const { data, calls } = await ask(['body_mass', 'body_fat', 'lean_body_mass', 'stand_hours'], 'daily', '2026-10-12');
+      expect(data.signals.map(entry => [entry.signal, entry.unit, entry.days?.[0]?.value])).toEqual([
+        ['body_mass', 'kg', 72.4], ['body_fat', 'percent', 14.2], ['lean_body_mass', 'kg', 61.9], ['stand_hours', 'count', 2],
+      ]);
+      expect(JSON.parse(String(calls[1]!.args.p_payload)).signals).toEqual(['body_mass', 'body_fat_percentage', 'lean_body_mass', 'stand_hour']);
+    });
+  });
+});
+
+describe('get_health food from the owner\'s app', () => {
+  const food = (id: number, kcal: number, macros: Record<string, number>) => reading('nutrition', '2026-10-12', kcal, {
+    start_at: `2026-10-12T0${id}:00:00Z`, end_at: `2026-10-12T0${id}:00:00Z`, nutrition: { meal: 'lunch', ...macros } });
+  it('sums the day\'s food energy and its macros, from the one source, and asks for nutrition', async () => {
+    const meals = { ...series, sources: [{ source: 'apple', consent_epoch: 3, samples: [
+      food(1, 612.4, { protein_g: 38.5, carbohydrate_g: 64, fat_g: 21.2 }), food(2, 410, { protein_g: 22, carbohydrate_g: 30, fat_g: 9 }),
+    ] }] };
+    const { calls, handler } = fake({ series: meals });
+    const result = await handler.handle({ signals: ['food_energy', 'protein', 'carbs', 'fat'], from: '2026-10-12', to: '2026-10-12', aggregation: 'daily' }, ctx);
+    if (!result.ok || result.data.state !== 'available') throw new Error(JSON.stringify(result));
+    expect(getHealthResultSchema.parse(result.data).state).toBe('available');
+    expect(result.data.signals.map(entry => [entry.signal, entry.unit, entry.days?.[0]?.value])).toEqual([
+      ['food_energy', 'kcal', 1022], ['protein', 'g', 61], ['carbs', 'g', 94], ['fat', 'g', 30],
+    ]);
+    expect(JSON.parse(String(calls[1]!.args.p_payload)).signals).toEqual(['nutrition']);
+  });
+
+  it('gives a macro for a day only when every entry that day carries it, so a day total is never a partial one', async () => {
+    const day = (date: string, id: number, kcal: number, macros: Record<string, number>) => reading('nutrition', date, kcal, {
+      start_at: `${date}T0${id}:00:00Z`, end_at: `${date}T0${id}:00:00Z`, nutrition: { meal: 'lunch', ...macros } });
+    const meals = { ...series, sources: [{ source: 'apple', consent_epoch: 3, samples: [
+      day('2026-10-11', 1, 500, { protein_g: 30, carbohydrate_g: 50, fat_g: 10 }), day('2026-10-11', 2, 400, { protein_g: 20, carbohydrate_g: 40, fat_g: 15 }),
+      day('2026-10-12', 1, 612, { protein_g: 38.5, carbohydrate_g: 64, fat_g: 21.2 }), day('2026-10-12', 2, 410, { protein_g: 22 }),
+    ] }] };
+    const { handler } = fake({ series: meals });
+    const result = await handler.handle({ signals: ['food_energy', 'protein', 'carbs', 'fat'], from: '2026-10-11', to: '2026-10-12', aggregation: 'daily' }, ctx);
+    if (!result.ok || result.data.state !== 'available') throw new Error(JSON.stringify(result));
+    const { signals } = result.data;
+    const valueOn = (signal: string, date: string) => signals.find(entry => entry.signal === signal)?.days?.find(d => d.day === date)?.value ?? null;
+    expect(['food_energy', 'protein', 'carbs', 'fat'].map(signal => [signal, valueOn(signal, '2026-10-11'), valueOn(signal, '2026-10-12')])).toEqual([
+      ['food_energy', 900, 1022], ['protein', 50, 61], ['carbs', 90, null], ['fat', 25, null],
+    ]);
   });
 });

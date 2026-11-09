@@ -148,6 +148,16 @@ export class Scheduler {
     return moved;
   }
 
+  // Moves an armed entry with no retry pending to `at`, earlier or later; nothing else about it changes. It does not re-arm:
+  // an alarm pass that re-armed to hold its schedule keeps that hold. Returns whether it moved.
+  retime(id: string, at: number): boolean {
+    return this.sql.exec(
+      `UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = MAX(?, updated_at + 1)
+        WHERE id = ? AND status = 'armed' AND attempts = 0 AND due_at != ?`,
+      at, at, this.deps.now(), id, at,
+    ).rowsWritten > 0;
+  }
+
   // The owner lifts a pause: the row runs now, with a fresh count. Only a paused row moves.
   async resume(id: string): Promise<boolean> {
     const now = this.deps.now();
@@ -423,11 +433,12 @@ export class Scheduler {
   private recordRunStart(entry: ScheduleEntry, now: number): string {
     // The id's run ordinal comes from the append-only history, not schedule.attempts:
     // policy state resets (schedule upsert, quarantine reap) but history never does, so
-    // a retry after a reset can never collide with a crashed run's row.
+    // a retry after a reset can never collide with a crashed run's row. The highest ordinal, not the count: a settled row
+    // moved to the history archive leaves a gap that a count would land back on.
     const [lower, upper] = occurrenceIdRange(entry.id, entry.occurrence_at);
     const prior = this.sql
       .exec<{ n: number }>(
-        'SELECT count(*) AS n FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ?',
+        'SELECT COALESCE(MAX(attempt), 0) AS n FROM schedule_runs WHERE +schedule_id = ? AND id >= ? AND id < ?',
         entry.id,
         lower,
         upper,
@@ -455,7 +466,7 @@ export class Scheduler {
     const [lower, upper] = occurrenceIdRange(scheduleId, occurrenceAt);
     const row = this.sql
       .exec<{ id: string }>(
-        `SELECT id FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ? AND outcome = 'running' ORDER BY attempt DESC, id DESC LIMIT 1`,
+        `SELECT id FROM schedule_runs WHERE +schedule_id = ? AND id >= ? AND id < ? AND outcome = 'running' ORDER BY attempt DESC, id DESC LIMIT 1`,
         scheduleId,
         lower,
         upper,
@@ -471,7 +482,7 @@ export class Scheduler {
     const [lower, upper] = occurrenceIdRange(scheduleId, occurrenceAt);
     const row = this.sql
       .exec<{ delivery: string }>(
-        `SELECT delivery FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ? AND delivery IN ('sent', 'failed') ORDER BY id LIMIT 1`,
+        `SELECT delivery FROM schedule_runs WHERE +schedule_id = ? AND id >= ? AND id < ? AND delivery IN ('sent', 'failed') ORDER BY id LIMIT 1`,
         scheduleId,
         lower,
         upper,
@@ -524,7 +535,9 @@ export class Scheduler {
   private hasRunningRun(scheduleId: string, occurrenceAt: number): boolean {
     const [lower, upper] = occurrenceIdRange(scheduleId, occurrenceAt);
     // Preserve crashed attempts as evidence; a later terminal attempt of that exact
-    // occurrence supersedes them. Removing the numeric attempt suffix isolates its prefix.
+    // occurrence supersedes them. Removing the numeric attempt suffix isolates its prefix,
+    // and that prefix's occurrence range lets the lookup search the primary key.
+    const prefix = 'substr(running.id, 1, length(running.id) - length(CAST(running.attempt AS TEXT)))';
     return (
       this.sql
         .exec(
@@ -532,10 +545,11 @@ export class Scheduler {
             WHERE running.schedule_id = ? AND running.outcome = 'running' AND NOT (running.id >= ? AND running.id < ?)
               AND NOT EXISTS (
                 SELECT 1 FROM schedule_runs AS recovered
-                 WHERE recovered.schedule_id = running.schedule_id
+                 WHERE recovered.id >= ${prefix} AND recovered.id < substr(${prefix}, 1, length(${prefix}) - 1) || ';'
+                   AND +recovered.schedule_id = running.schedule_id
                    AND recovered.attempt > running.attempt
                    AND (recovered.outcome = 'ok' OR recovered.delivery IN ('sent', 'failed'))
-                   AND recovered.id = substr(running.id, 1, length(running.id) - length(CAST(running.attempt AS TEXT))) || recovered.attempt
+                   AND recovered.id = ${prefix} || recovered.attempt
               )
             LIMIT 1`,
           scheduleId,
@@ -554,7 +568,7 @@ export class Scheduler {
       `INSERT INTO schedule_runs (id, schedule_id, kind, fired_at, attempt, outcome, settled_at, duration_ms)
        SELECT ?, ?, ?, ?, 0, 'missed', ?, 0
        WHERE NOT EXISTS (
-         SELECT 1 FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ?
+         SELECT 1 FROM schedule_runs WHERE +schedule_id = ? AND id >= ? AND id < ?
        )`,
       `${entry.id}:${occurrenceAt}:0`,
       entry.id,
@@ -650,14 +664,18 @@ export class Scheduler {
     );
   }
 
+  // The schedule's next entry: the wake rearm() passes to the arbiter.
+  nextWake(): number | null {
+    return nextWakeBound(readable(this.sql.exec<ScheduleSqlRow>('SELECT * FROM schedule').toArray()).entries);
+  }
+
   async rearm(): Promise<void> {
-    const bound = nextWakeBound(
-      readable(this.sql.exec<ScheduleSqlRow>('SELECT * FROM schedule').toArray()).entries,
-    );
-    await rearmSharedAlarm(this.storage, bound, this.deps.now());
+    await rearmSharedAlarm(this.storage, this.nextWake(), this.deps.now());
   }
 }
 
+// Queries over this range write `+schedule_id = ?`: the unary plus keeps the exact-schedule filter but stops SQLite from
+// choosing the schedule_id index, which walks every run the schedule ever had, over the primary-key range it bounds.
 // workerd SQLite enforces a ~50-byte LIKE/GLOB pattern limit
 // (SQLITE_LIMIT_LIKE_PATTERN_LENGTH), and a real schedule id alone exceeds it
 // ("handoff:<uuid>" plus the occurrence suffix), so occurrence-prefix matching cannot

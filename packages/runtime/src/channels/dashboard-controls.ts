@@ -1,6 +1,7 @@
-import type { ApprovalReview } from './approvals';
+import { DRAFT_SEND_KINDS, type ApprovalReview } from './approvals';
 import { consoleMayApprove, waitingMaySend, type ConsoleView } from './console';
 import { E2E_STEPS } from './harness';
+import { APP_SCHEDULE_IDS_V1, APP_SCHEDULE_TIME_IDS_V1 } from '../../../contracts/src/app/controls';
 
 export const CONTROLS_PATH = '/console/dashboard/api/v1/controls';
 export const CONTROLS_VIEWS = ['day', 'connections', 'waiting', 'activity', 'profile', 'setup', 'usage', 'files'] as const;
@@ -26,6 +27,7 @@ const safeReview = (review: ApprovalReview | null): ApprovalReview | null => {
   if (!review) return null;
   if (review.kind === 'email_send') return { kind: review.kind, ...(review.account ? { account: review.account } : {}), to: [...review.to], cc: [...review.cc], bcc: [...review.bcc], subject: review.subject, body: review.body, ...(review.earlier_unknown_at ? { earlier_unknown_at: review.earlier_unknown_at } : {}) };
   if (review.kind === 'message_send') return { kind: review.kind, channel: review.channel, content: review.content };
+  if (review.kind === 'agent_mail_send') return { kind: review.kind, from: { name: review.from.name, address: review.from.address }, to: [...review.to], cc: [...review.cc], subject: review.subject, body: review.body };
   if ('text' in review) return { kind: review.kind, text: review.text };
   if (review.kind === 'google_task_change') return { kind: review.kind, account: review.account, proposal: review.proposal, proposal_digest: review.proposal_digest };
   return { kind: review.kind, action: review.action, title: review.title, event_id: review.event_id, start: review.start, end: review.end, reason: review.reason };
@@ -38,10 +40,16 @@ const projections = {
     date: view.now.slice(0,10),
     // Every controls revision's day; the app route reads revision 3's states and fields down for an older build.
     cards: view.cards.map((card) => ({ id: card.id, name: card.name, defaultTime: card.defaultTime, time: card.time, reason: card.reason, sent: card.sent, pin: card.pin, ...(card.latest === undefined ? {} : { latest: card.latest }), ...(card.state === undefined ? {} : { state: card.state }),
-      ...(card.stateReason === undefined ? {} : { state_reason: card.stateReason }), ...(card.retriesLeft === undefined ? {} : { retries_left: card.retriesLeft }) })),
+      ...(card.stateReason === undefined ? {} : { state_reason: card.stateReason }), ...(card.retriesLeft === undefined ? {} : { retries_left: card.retriesLeft }),
+      ...(card.revision === undefined || card.revisedAt === undefined ? {} : { revision: card.revision, revised_at: card.revisedAt }) })),
     proactivity: { quiet_start: view.proactivity.quiet_start, quiet_end: view.proactivity.quiet_end, volume: view.proactivity.volume },
     // app.v1 names five behaviors in a strict object; a later kind stays out until a contract revision names it.
     schedules: { daily_brief: view.schedules.daily_brief, followups: view.schedules.followups, event_briefs: view.schedules.event_briefs, nightly: view.schedules.nightly, heartbeat: view.schedules.heartbeat },
+    // What schedule.set changes: each schedule's switch, and the Brief and the Close at the owner's time (the default until set).
+    schedule_controls: [
+      ...APP_SCHEDULE_IDS_V1.map((id) => ({ id, on: view.schedules[id], accepts: 'on_off' as const, time: null, no_later_than: false })),
+      ...APP_SCHEDULE_TIME_IDS_V1.flatMap((id) => view.cards.filter((card) => card.id === id).map((card) => ({ id, on: view.schedules.daily_brief, accepts: 'time' as const, time: card.pin ?? card.defaultTime, no_later_than: id === 'card:brief' && view.wakeBrief === true }))),
+    ],
   }),
   connections: (view: ConsoleView) => ({
     google: {
@@ -65,7 +73,7 @@ const projections = {
     proposals: view.approvals.map((item) => {
       const review = item.review?.kind === item.kind ? safeReview(item.review) : null;
       const canApprove = consoleMayApprove(item) && review !== null, canSend = waitingMaySend(item) && review !== null;
-      const dismissible = (item.state === 'open' || item.state === 'review_only') && !canApprove && (item.kind === 'email_send' || item.kind === 'message_send');
+      const dismissible = (item.state === 'open' || item.state === 'review_only') && !canApprove && DRAFT_SEND_KINDS.includes(item.kind);
       const actions = canApprove ? ['approval.approve', 'approval.skip'] : canSend ? ['approval.send', 'approval.edit', 'approval.skip']
         : item.state === 'open' || item.state === 'review_only' ? dismissible ? ['approval.skip'] : []
           : item.undoable ? ['approval.undo'] : [];

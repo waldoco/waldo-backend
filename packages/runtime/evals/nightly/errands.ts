@@ -79,7 +79,7 @@ export const ERRANDS: readonly Errand[] = [
     trace: { tools: ['get_communication', 'read_thread'] }, run: 'nightly', competitors: NOT_RUN,
     pass: ['No draft, no send card', 'Judge: names Arjun (clause 7, by tomorrow) and Sara (offsite numbers, by Friday) and nothing else as needing a reply'],
     scenario: {
-      id: 'x01-inbox-triage', title: 'What needs a reply', pain: 'context', start: START, world: { mail: INBOX },
+      id: 'x01-inbox-triage', live_subset: true, title: 'What needs a reply', pain: 'context', start: START, world: { mail: INBOX },
       steps: [{ say: 'What actually needs a reply from me today?' }],
       rubric: {
         outcome: "Names the two emails that need the owner's reply, with what each asks: Arjun Mehta wants clause 7 confirmed by tomorrow, and Sara Khan needs offsite numbers for 9-10 October by Friday. Treats the newsletter, the receipt, the one-time code and Priya's FYI as needing nothing.",
@@ -130,7 +130,7 @@ export const ERRANDS: readonly Errand[] = [
     trace: { tools: ['query_calendar', 'search_communication', 'read_thread'] }, run: 'nightly', competitors: NOT_RUN,
     pass: ['No draft, no send, no calendar change', 'Judge: the three agenda items and the open ask, from the thread'],
     scenario: {
-      id: 'x04-meeting-prep', title: 'Meeting prep', pain: 'context', start: START,
+      id: 'x04-meeting-prep', live_subset: true, title: 'Meeting prep', pain: 'context', start: START,
       world: { events: QBR_DAY, mail: [mail('qbr-1', 'thread-qbr', 'Priya Nair <priya@northwind.example>', 'QBR agenda',
         "For Thursday's QBR: 1) Q3 renewals, 2) the onboarding backlog, 3) next quarter's pilot list. Open ask: can you bring the churn numbers for September?", at('22', '17:00'))] },
       steps: [{ say: 'Prep me for the 2pm.' }],
@@ -148,7 +148,7 @@ export const ERRANDS: readonly Errand[] = [
     run: 'nightly', competitors: NOT_RUN,
     pass: ['A draft or send card to sales@vendor.example, and nothing to anyone else'],
     scenario: {
-      id: 'x05-follow-up-chase', title: 'Chase a quiet thread', pain: 'follow_through', start: START,
+      id: 'x05-follow-up-chase', live_subset: true, title: 'Chase a quiet thread', pain: 'follow_through', start: START,
       world: { mail: [mail('quote-2', 'thread-quote-2', `Owner <${OWNER_EMAIL}>`, 'Quote for the QA work', 'Hi, could you send a quote for the QA work we discussed by the end of the week? Thanks.', at('18', '10:00'), ['sales@vendor.example'])] },
       steps: [{ say: 'Chase the vendor on that QA quote, politely.' }],
       rubric: {
@@ -262,7 +262,7 @@ export const ERRANDS: readonly Errand[] = [
     trace: { tools: ['web_search'] }, run: 'nightly', competitors: NOT_RUN,
     pass: ['No booking, no mail, no card', 'Judge: recommends the one listing that meets all three constraints, names the source, says the rate is unchecked on the booking page'],
     scenario: {
-      id: 'x11-hotel-research', title: 'Hotel research, the 14 October test', pain: 'judgment', start: START,
+      id: 'x11-hotel-research', live_subset: true, title: 'Hotel research, the 14 October test', pain: 'judgment', start: START,
       world: { web: [
         { title: 'Leafy Lane Suites, Indiranagar - StayFinder', url: 'https://stayfinder.example/leafy-lane', snippet: '400 m from Indiranagar metro. From INR 5,400 a night for 8-10 Oct. Free cancellation until 6 Oct. Rated 8.6.' },
         { title: 'The Courtyard Inn, Domlur - StayFinder', url: 'https://stayfinder.example/courtyard-inn', snippet: '2.5 km from Indiranagar. From INR 4,900 a night. Non-refundable rate. Rated 8.1.' },
@@ -319,7 +319,7 @@ export const ERRANDS: readonly Errand[] = [
     run: 'nightly', competitors: NOT_RUN,
     pass: ['One move card for the design review starting 25 September 16:00', 'A draft or send card to priya@northwind.example', 'One reminder at 18:00 today', 'Missing any one of the three fails'],
     scenario: {
-      id: 'x21-three-part-ask', title: 'Three asks in one message', pain: 'follow_through', start: START, world: { events: CALENDAR, mail: [PRIYA] },
+      id: 'x21-three-part-ask', live_subset: true, title: 'Three asks in one message', pain: 'follow_through', start: START, world: { events: CALENDAR, mail: [PRIYA] },
       steps: [{ say: "Move Friday's design review to 4pm, tell Priya the deck comes Friday, and remind me at 6 to pack." }],
       rubric: {
         outcome: 'Does all three: raises one card moving Friday 25 September\'s design review to 16:00-17:00 (waiting for approval), prepares a message to Priya Nair saying the deck comes on Friday (a draft, or a send card waiting for approval), and sets a reminder at 18:00 today to pack. Says in a line or two what is done and what waits for approval.',
@@ -339,7 +339,7 @@ export const ERRANDS: readonly Errand[] = [
     trace: { tools: ['set_reminder', 'search_communication', 'search_communication', 'draft_email'] }, run: 'nightly', competitors: NOT_RUN,
     pass: ['A mail read failed and a later one succeeded', 'One reminder at 17:00 today', 'One draft to sara@northwind.example', 'No send card'],
     scenario: {
-      id: 'x22-mail-read-fails-mid-errand', title: 'A mail read fails partway through a two-part errand', pain: 'follow_through', start: START,
+      id: 'x22-mail-read-fails-mid-errand', live_subset: true, title: 'A mail read fails partway through a two-part errand', pain: 'follow_through', start: START,
       world: { mail: INBOX, faults: { transient: { reads: 'mail', on_call: 1 } } },
       steps: [{ say: "Remind me at 5 to call the bank, and draft Sara a yes for the offsite. Don't send it." }],
       rubric: {

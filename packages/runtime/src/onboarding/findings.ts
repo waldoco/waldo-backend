@@ -4,6 +4,7 @@ import {
 } from '@waldo/contracts';
 import { APP_FINDING_UNCONFIRMED_DAYS_V1, type AppFindingCategoryV1, type AppFindingV1 } from '../../../contracts/src/app/onboarding';
 import { FORGOTTEN, textFingerprint, type ClaimStore } from '../memory/claims';
+import { refPointers, refSource, supportIds, writtenOn } from '../memory/node-sources';
 import { HEALTH_SPAN_MARKER, numericHealthIn } from '../scribe/sanitiser';
 import type { MemoryToolContext } from '../tools/live/memory';
 import type { ConsentLedger } from './consent-ledger';
@@ -37,7 +38,9 @@ const squash = (text: string) => text.replace(/\s+/g, ' ').trim().toLowerCase();
 // Whether a page is about the owner or a namesake is not decided here: no string rule can tell, and a handle rule refuses the
 // owner's own pages that print no handle. The model judges what to record, and the owner decides each finding. What code
 // holds is grounding: the page was read in this run and the quote is on it.
-export type RecordRefusal = 'not_offered' | 'consent_required' | 'source_not_observed' | 'quote_not_on_page' | 'health_value' | 'forgotten';
+// The app shows a finding's page address as plain text up to this length, so the store keeps none longer.
+export const FINDING_URL_MAX = 2048;
+export type RecordRefusal = 'not_offered' | 'consent_required' | 'source_not_observed' | 'quote_not_on_page' | 'health_value' | 'forgotten' | 'url_too_long';
 const newId = () => `fnd_${crypto.randomUUID().replaceAll('-', '')}`;
 const shown = (row: Row): AppFindingV1 => ({ finding_id: row.id, category: row.category, text: row.text, source: { url: row.source_url, title: row.source_title.slice(0, 300) }, state: row.state, found_at: row.found_at, decided_at: row.decided_at });
 
@@ -46,12 +49,16 @@ const UNCONFIRMED_MS = APP_FINDING_UNCONFIRMED_DAYS_V1 * 86_400_000;
 const LOOKUP_REF_PREFIX = 'owner, look-up ';
 export const isLookupRef = (ref: string | null | undefined): boolean => typeof ref === 'string' && ref.startsWith(LOOKUP_REF_PREFIX);
 
-// Findings about the owner from the public web. They are external content: kept apart from owner memory and never put in a
-// prompt, until the owner keeps or corrects one, which turns it into an owner claim through the claim store. Forgetting one,
-// or withdrawing the look-up consent, which erases them all, bars their text from being recorded again and purges any claim
-// one became. The caller hides retained copies of texts() before it commits either. When the look-up stops counting any other
-// way, what was found stays listed so the owner can still forget it. One left unconfirmed past its age limit is deleted at
-// the first read or write after that.
+// Findings about the owner from the public web. They are external content, kept apart from owner memory: no owner turn's
+// prompt carries one until the owner keeps or corrects it, which turns it into an owner claim through the claim store. The
+// one prompt that reads them before that is the second welcome build's web stage (WELCOME_V2), where they arrive fenced as
+// outside text and anything built on them is Waldo's untrusted read (origin untrusted, source web), never the owner's word.
+// That read goes with its finding: forgetting one, correcting one, its expiry unconfirmed, or withdrawing the look-up purges
+// every welcome read citing it, and with it the node that read held up. Forgetting one, or withdrawing the look-up
+// consent, which erases them all, also bars their text from being recorded again and purges any claim one became. The
+// caller hides retained copies of texts() before it commits either. When the look-up stops counting any other way, what was
+// found stays listed so the owner can still forget it. One left unconfirmed past its age limit is deleted at the first read
+// or write after that.
 export const findingStore = (sql: Sql, claims: ClaimStore, consent: ConsentLedger, now: () => number) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS owner_findings (
     id TEXT PRIMARY KEY, category TEXT NOT NULL, text TEXT NOT NULL, evidence TEXT NOT NULL, source_url TEXT NOT NULL, source_title TEXT NOT NULL,
@@ -63,10 +70,30 @@ export const findingStore = (sql: Sql, claims: ClaimStore, consent: ConsentLedge
   // A literal forget redacts this table with the other stores, and a forget by claim id removes a kept finding's claim. Either
   // way the finding is gone for the owner, so it is deleted here before anything reads it, as is one left unconfirmed too long.
   // Expiry is not the owner's no, so it bars nothing: the same page found again is a new finding.
+  const live = (status: string) => status === 'active' || status === 'promoted';
+  // Waldo's welcome reads citing any of these findings go, through the purge every derived store follows. A node written on one
+  // (writtenOn) goes with it, since its words may carry what the finding said. One the read only added evidence to kept
+  // its own words, so the read is taken off it first and the node stands, the owner's yes to it included.
+  const dropWebReads = (ids: readonly string[], at: number): void => {
+    if (!ids.length) return;
+    const gone = new Set(ids);
+    const reads = claims.allClaims().filter(claim => live(claim.status) && refSource(claim.source_ref) === 'web' && refPointers(claim.source_ref).some(id => gone.has(id))).map(claim => claim.id);
+    if (!reads.length) return;
+    const iso = new Date(at).toISOString(), all = claims.allClaims();
+    for (const node of claims.nodes()) {
+      const held = supportIds(node), added = held.filter(id => reads.includes(id)), origin = writtenOn(all, node)?.id;
+      if (added.length && origin !== undefined && !reads.includes(origin)) claims.saveNode({ id: node.id, domain: node.domain, label: node.label, summary: node.summary, strength: node.strength, status: node.status, supporting_spots: held.filter(id => !added.includes(id)) }, iso);
+    }
+    if (claims.purge(reads, iso).ready) claims.settle(reads);
+  };
   const settle = () => {
+    const leaving = sql.exec<{ id: string }>(`SELECT id FROM owner_findings WHERE (state = 'unconfirmed' AND found_at <= ?)
+      OR instr(text, ?) > 0 OR instr(evidence, ?) > 0 OR instr(source_url, ?) > 0 OR instr(source_title, ?) > 0
+      OR (claim_id IS NOT NULL AND claim_id NOT IN (SELECT id FROM claims WHERE status IN ('active', 'promoted')))`, now() - UNCONFIRMED_MS, FORGOTTEN, FORGOTTEN, FORGOTTEN, FORGOTTEN).toArray().map(row => row.id);
     sql.exec("DELETE FROM owner_findings WHERE state = 'unconfirmed' AND found_at <= ?", now() - UNCONFIRMED_MS);
     sql.exec(`DELETE FROM owner_findings WHERE instr(text, ?) > 0 OR instr(evidence, ?) > 0 OR instr(source_url, ?) > 0 OR instr(source_title, ?) > 0`, FORGOTTEN, FORGOTTEN, FORGOTTEN, FORGOTTEN);
     sql.exec(`DELETE FROM owner_findings WHERE claim_id IS NOT NULL AND claim_id NOT IN (SELECT id FROM claims WHERE status IN ('active', 'promoted'))`);
+    dropWebReads(leaving, now());
   };
   const byId = (id: string) => sql.exec<Row>('SELECT * FROM owner_findings WHERE id = ?', id).toArray()[0] ?? null;
   const lookupRef = (row: Pick<Row, 'id'>) => `${LOOKUP_REF_PREFIX}${row.id}`;
@@ -79,6 +106,7 @@ export const findingStore = (sql: Sql, claims: ClaimStore, consent: ConsentLedge
     const kept = rows.flatMap(row => row.claim_id !== null && refs.get(row.claim_id) === lookupRef(row) ? [row.claim_id] : []);
     for (const text of texts) claims.barrier(text, iso);
     if (kept.length && claims.purge(kept, iso).ready) claims.settle(kept);
+    dropWebReads(rows.map(row => row.id), at);
     for (const row of rows) sql.exec('DELETE FROM owner_findings WHERE id = ?', row.id);
     return texts;
   };
@@ -95,8 +123,9 @@ export const findingStore = (sql: Sql, claims: ClaimStore, consent: ConsentLedge
     lookup: () => { const status = consent.state('owner_lookup').status; return status === 'granted' && !consent.active('owner_lookup') ? 'not_granted' as const : status; },
     // Whether this server offers the look-up at all; off, nobody can say yes to it, so the model must not ask.
     offered: () => consent.offered('owner_lookup'),
-    record(args: RecordOwnerFindingArgs, title: string, at: number): Readonly<{ id: string; duplicate: boolean }> | 'consent_required' | 'forgotten' {
+    record(args: RecordOwnerFindingArgs, title: string, at: number): Readonly<{ id: string; duplicate: boolean }> | 'consent_required' | 'forgotten' | 'url_too_long' {
       if (!consent.active('owner_lookup')) return 'consent_required';
+      if (args.source_url.length > FINDING_URL_MAX) return 'url_too_long';
       settle();
       if (barred(args.text) || barred(args.evidence_quote)) return 'forgotten';
       const existing = sql.exec<Row>('SELECT * FROM owner_findings WHERE source_url = ?', args.source_url).toArray().find(row => squash(row.text) === squash(args.text));
@@ -117,6 +146,19 @@ export const findingStore = (sql: Sql, claims: ClaimStore, consent: ConsentLedge
       return { items: items.map(shown), total, next_cursor: rows.length > limit ? items[items.length - 1]!.id : null };
     },
     get: (id: string): AppFindingV1 | null => { settle(); const row = byId(id); return row ? shown(row) : null; },
+    // How many findings were recorded at or after this time and are still listed.
+    foundSince: (at: number): number => { settle(); return sql.exec<{ n: number }>('SELECT count(*) AS n FROM owner_findings WHERE found_at >= ?', at).one().n; },
+    // The sites those findings came from, most findings first: a host only, never a path or a page title.
+    sourcesSince(at: number): readonly string[] {
+      settle();
+      const counts = new Map<string, number>();
+      for (const row of sql.exec<{ source_url: string }>('SELECT source_url FROM owner_findings WHERE found_at >= ?', at).toArray()) {
+        let host: string;
+        try { host = new URL(row.source_url).hostname.replace(/^www\./, ''); } catch { continue; }
+        if (host) counts.set(host, (counts.get(host) ?? 0) + 1);
+      }
+      return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([host]) => host);
+    },
     // Keep and correct are the owner's own act in the app, so the claim they write carries owner provenance.
     decide(id: string, decision: Readonly<{ action: 'keep' } | { action: 'correct'; text: string }>, at: number): 'kept' | 'corrected' | 'not_found' {
       settle();
@@ -133,6 +175,8 @@ export const findingStore = (sql: Sql, claims: ClaimStore, consent: ConsentLedge
       const saved = same();
       if (!saved) throw new Error('finding claim not stored');
       sql.exec('UPDATE owner_findings SET state = ?, text = ?, claim_id = ?, decided_at = ? WHERE id = ?', decision.action === 'keep' ? 'kept' : 'corrected', text, saved.id, at, id);
+      // A correction says the words Waldo built on were wrong.
+      if (decision.action === 'correct') dropWebReads([id], at);
       return decision.action === 'keep' ? 'kept' : 'corrected';
     },
     // The texts whose retained copies (chat history, stored tool output, episodes) the caller hides: one finding's, or all.
@@ -162,6 +206,7 @@ const REFUSAL: Readonly<Record<RecordRefusal, string>> = {
   quote_not_on_page: 'The evidence quote does not appear in what that page returned. Quote the page exactly.',
   health_value: 'Findings never hold health values. Nothing was stored.',
   forgotten: 'The owner asked Waldo to forget this, or withdrew the look-up that found it. Nothing was stored.',
+  url_too_long: 'That page address is too long to keep. Nothing was stored.',
 };
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes(name));
@@ -198,7 +243,7 @@ export const ownerLookupHandlers = (deps: Deps): ToolHandler<any, unknown, Memor
         const write = () => deps.store.record(args, page.title, now());
         const atomic = () => deps.transaction ? deps.transaction(write) : write();
         const result = ctx.runScope ? ctx.runScope.commit(atomic) : atomic();
-        if (result === 'consent_required' || result === 'forgotten') return refuse(result);
+        if (result === 'consent_required' || result === 'forgotten' || result === 'url_too_long') return refuse(result);
         return { ok: true, data: { finding_id: result.id, state: 'unconfirmed', duplicate: result.duplicate }, source_taint: null };
       },
     } satisfies ToolHandler<RecordOwnerFindingArgs, unknown, MemoryToolContext>,

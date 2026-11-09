@@ -354,7 +354,7 @@ describe('console pages and session clocks, through the Worker', () => {
 });
 
 describe('a fresh email code before lasting access, through the Worker', () => {
-  it('the cookies a confirm replaced keep ordinary access for now, but not the code', async () => {
+  it('the cookies a confirm replaced keep ordinary access for now, but not the code to delete the account', async () => {
     const f = await fixture();
     await runInDurableObject(f.member, async (instance) => { Object.assign((instance as unknown as { env: Record<string, unknown> }).env, directoryEnv); });
     const bindings = { ...f.bindings, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } } as unknown as Cloudflare.Env;
@@ -366,52 +366,57 @@ describe('a fresh email code before lasting access, through the Worker', () => {
       expect(verified.status).toBe(303);
       return cookies(verified);
     };
-    const invite = async (cookie: string, requestId: string) => {
-      const read = await worker.fetch(new Request(`${ORIGIN}${OWNER_CONTROLS_PATH}?view=invites`, { headers: { cookie, accept: 'application/json' } }), bindings);
+    const deleteAccount = async (cookie: string, requestId: string) => {
+      const read = await worker.fetch(new Request(`${ORIGIN}${OWNER_CONTROLS_PATH}?view=account`, { headers: { cookie, accept: 'application/json' } }), bindings);
       expect(read.status, 'an ordinary read').toBe(200);
       const current = await read.json() as { csrf: string; revision: string };
       return worker.fetch(new Request(`${ORIGIN}${OWNER_CONTROLS_ACTION_PATH}`, {
         method: 'POST', headers: { cookie, origin: ORIGIN, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ csrf: current.csrf, revision: current.revision, view: 'invites', action: 'invite.member', value: 'friend@example.test', request_id: requestId }),
+        body: new URLSearchParams({ csrf: current.csrf, revision: current.revision, view: 'account', action: 'account.delete', confirmation: 'DELETE', request_id: requestId }),
       }), bindings);
     };
     const proved = await confirm(cookies(await worker.fetch(f.post(), bindings)));
     const confirmed = await confirm(proved);
-    const replaced = await invite(proved, 'replaced-cookie-invite');
+    const replaced = await deleteAccount(proved, 'replaced-cookie-delete');
     expect(replaced.status).toBe(403);
     expect(await replaced.json()).toEqual({ error: 'step_up_required' });
-    expect(f.rpcCalls.map(call => call.name)).not.toContain('issue_member_invite');
-    expect((await invite(confirmed, 'confirmed-cookie-invite')).status).toBe(200);
-    expect(f.rpcCalls.map(call => call.name)).toContain('issue_member_invite');
+    expect(f.rpcCalls.map(call => call.name)).not.toContain('delete_owner');
+    const deleted = await deleteAccount(confirmed, 'confirmed-cookie-delete');
+    expect(await deleted.text()).not.toContain('step_up_required');
+    expect(f.rpcCalls.map(call => call.name)).toContain('delete_owner');
   });
 
 
-  it('a link sign-in is asked for a code before inviting someone, and the same invite runs after the code', async () => {
+  it('a link sign-in invites someone without a code, but is asked for one before deleting the account, and the deletion runs after the code', async () => {
     const f = await fixture();
     await runInDurableObject(f.member, async (instance) => { Object.assign((instance as unknown as { env: Record<string, unknown> }).env, directoryEnv); });
     const bindings = { ...f.bindings, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } } as unknown as Cloudflare.Env;
     let signedIn = cookies(await worker.fetch(f.post(), bindings));
-    const invite = async () => {
-      const read = await worker.fetch(new Request(`${ORIGIN}${OWNER_CONTROLS_PATH}?view=invites`, { headers: { cookie: signedIn, accept: 'application/json' } }), bindings);
+    const act = async (view: string, fields: Record<string, string>) => {
+      const read = await worker.fetch(new Request(`${ORIGIN}${OWNER_CONTROLS_PATH}?view=${view}`, { headers: { cookie: signedIn, accept: 'application/json' } }), bindings);
       expect(read.status).toBe(200);
       const current = await read.json() as { csrf: string; revision: string };
       return worker.fetch(new Request(`${ORIGIN}${OWNER_CONTROLS_ACTION_PATH}`, {
         method: 'POST', headers: { cookie: signedIn, origin: ORIGIN, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ csrf: current.csrf, revision: current.revision, view: 'invites', action: 'invite.member', value: 'friend@example.test', request_id: 'step-up-invite-request' }),
+        body: new URLSearchParams({ csrf: current.csrf, revision: current.revision, view, request_id: `step-up-${fields.action!.replace('.', '-')}-request`, ...fields }),
       }), bindings);
     };
-    const refused = await invite();
+    const invite = () => act('invites', { action: 'invite.member', value: 'friend@example.test' });
+    const deleteAccount = () => act('account', { action: 'account.delete', confirmation: 'DELETE' });
+    expect((await invite()).status).toBe(200);
+    expect(f.rpcCalls.map(call => call.name)).toContain('issue_member_invite');
+    const refused = await deleteAccount();
     expect(refused.status).toBe(403);
     expect(await refused.json()).toEqual({ error: 'step_up_required' });
-    expect(f.rpcCalls.map(call => call.name)).not.toContain('issue_member_invite');
+    expect(f.rpcCalls.map(call => call.name)).not.toContain('delete_owner');
     const verified = await worker.fetch(new Request(`${ORIGIN}/console/verify`, {
       method: 'POST', redirect: 'manual', headers: { cookie: signedIn, origin: ORIGIN, 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ email: 'member@example.test', code: '246810' }),
     }), bindings);
     expect(verified.status).toBe(303);
     signedIn = cookies(verified);
-    const done = await invite();
-    expect(done.status).toBe(200);
-    expect(f.rpcCalls.map(call => call.name)).toContain('issue_member_invite');
+    const done = await deleteAccount();
+    expect(await done.text()).not.toContain('step_up_required');
+    expect(f.rpcCalls.map(call => call.name)).toContain('delete_owner');
   });
 });

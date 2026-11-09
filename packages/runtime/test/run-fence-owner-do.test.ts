@@ -1,6 +1,7 @@
 import { TELEGRAM_TURN_DEADLINE_MS } from '../src/channels/telegram-owner-inbox';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
+import { INTERRUPTED_NOTICES } from '../src/prompt/fixed-lines';
 import { OwnerDO } from '../src/channels/owner-do';
 import { OpenAIResponsesAdapter } from '../src/llm/openai';
 const seen=vi.hoisted(()=>({sends:[] as unknown[],pause:false,entered:undefined as undefined|(()=>void),finish:undefined as undefined|((r:unknown)=>void)}));
@@ -33,7 +34,7 @@ it('actual DO stop closes before late completion and creates fixed host notice o
   (i as unknown as {activeAbort:AbortController}).activeAbort.abort();
   await running;seen.finish!({id:'late',output_text:'LATE_FORBIDDEN',output:[],usage:{input_tokens:1,output_tokens:1}});await new Promise(r=>setTimeout(r,25));
   const finals=s.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1')!;
-  expect(finals).toHaveLength(1);expect(finals[0]?.id).toContain('failure:');expect(finals[0]?.payload.text).toContain('Stopped. In-flight changes may still finish.');expect(finals[0]?.payload.text).toContain('Request received:');expect(JSON.stringify(finals)).not.toContain('LATE_FORBIDDEN');expect(s.storage.kv.get('conv-leaf')).toBeUndefined();
+  expect(finals).toHaveLength(1);expect(finals[0]?.id).toContain('failure:');expect(finals[0]?.payload.text).toContain(INTERRUPTED_NOTICES.stopped);expect(finals[0]?.payload.text).toContain('Request received:');expect(JSON.stringify(finals)).not.toContain('LATE_FORBIDDEN');expect(s.storage.kv.get('conv-leaf')).toBeUndefined();
  });seen.pause=false;
 });
 it('success wins a later stop race without a second failure notice',async()=>{
@@ -53,7 +54,7 @@ it('deadline uses the claim clock and late completion cannot publish',async()=>{
   try {seen.finish!({id:'expired',output_text:'LATE_DEADLINE',output:[],usage:{input_tokens:1,output_tokens:1}});await running;}
   finally {Date.now=real;}
   expect((await inbox.records())[0]?.state).toBe('quarantined');expect(s.storage.kv.get('conv-leaf')).toBeUndefined();
-  const finals=s.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1')!;expect(finals).toHaveLength(1);expect(finals[0]?.payload.text).toContain('In-flight changes may still finish');expect(JSON.stringify(finals)).not.toContain('LATE_DEADLINE');
+  const finals=s.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1')!;expect(finals).toHaveLength(1);expect(finals[0]?.payload.text).toContain('may still go through');expect(JSON.stringify(finals)).not.toContain('LATE_DEADLINE');
  });seen.pause=false;
 });
 it('a host closure failure retains the serial queue when durable closure cannot be verified',async()=>{
@@ -73,8 +74,8 @@ it('a host closure failure retains the serial queue when durable closure cannot 
 it('failure notice storage failure does not retain stale run slots or block the next run',async()=>{
  seen.pause=true;await setup('fence-do-notice-fault',async(i,s)=>{
   const inbox=await admit(i,s,6);let enter!:()=>void;const ready=new Promise<void>(r=>{enter=r;});seen.entered=enter;
-  const internal=i as unknown as {drainInbox:()=>Promise<void>;closeRunAtomic:(r:unknown,reason:string)=>void;activeAbort?:AbortController;activeScope?:unknown;activeInbox?:unknown;liveAttempts:Set<string>;setup:()=>{finalOutbox:{enqueueFenced:(...args:unknown[])=>Promise<void>}}};
-  const running=internal.drainInbox();await ready;const row=(await inbox.records())[0]!;const outbox=internal.setup().finalOutbox;const original=outbox.enqueueFenced.bind(outbox);outbox.enqueueFenced=async()=>{throw new Error('injected failure notice storage fault');};
+  const internal=i as unknown as {drainInbox:()=>Promise<void>;closeRunAtomic:(r:unknown,reason:string)=>void;activeAbort?:AbortController;activeScope?:unknown;activeInbox?:unknown;liveAttempts:Set<string>;setup:(channel:string)=>{finalOutbox:{enqueueFenced:(...args:unknown[])=>Promise<void>}}};
+  const running=internal.drainInbox();await ready;const row=(await inbox.records())[0]!;const outbox=internal.setup('telegram').finalOutbox;const original=outbox.enqueueFenced.bind(outbox);outbox.enqueueFenced=async()=>{throw new Error('injected failure notice storage fault');};
   internal.closeRunAtomic(row,'owner_stopped');internal.activeAbort!.abort();await running;
   expect(internal.activeInbox).toBeNull();expect(internal.activeScope).toBeUndefined();expect(internal.activeAbort).toBeUndefined();expect(internal.liveAttempts.size).toBe(0);expect(await s.storage.getAlarm()).not.toBeNull();
   seen.finish!({id:'late',output_text:'LATE',output:[],usage:{input_tokens:1,output_tokens:1}});seen.pause=false;outbox.enqueueFenced=original;

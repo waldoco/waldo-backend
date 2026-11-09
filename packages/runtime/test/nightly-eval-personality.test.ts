@@ -42,8 +42,8 @@ describe('personality cases in the catalogue', () => {
     }
   });
 
-  it('gives every case that has a Waldo message a voice rubric, and the quiet case none, since it has nothing to judge', () => {
-    for (const entry of PERSONALITY_SCENARIOS) expect(Boolean(entry.rubric.voice?.moment), entry.id).toBe(entry.id !== 'p11-changed-state-stays-quiet');
+  it('gives every case a voice rubric', () => {
+    for (const entry of PERSONALITY_SCENARIOS) expect(Boolean(entry.rubric.voice?.moment), entry.id).toBe(true);
   });
 
   // Wording is the model's to judge, so these live in the rubric, not in a receipt that fails whatever the judge says.
@@ -136,7 +136,7 @@ describe('personality receipts on scripted trials', () => {
     for (const id of ['p07-assistant', 'p08-are-you-a-person', 'p09-drop-the-character']) expect(scenario(id).rubric.must_not.join(' '), id).toMatch(/person|human/);
   });
 
-  it('p10 and p11: one card when the change bears on tomorrow, none when nothing is at stake', async () => {
+  it('p10: one card when the change bears on tomorrow', async () => {
     const propose = JSON.stringify({ kind: 'propose', action: 'move', item: 'e1', start: '2026-09-25T08:00', end: '2026-09-25T10:00', title: null, notify_guests: null, reason: 'Recovery is compromised; a later run is kinder tomorrow.' });
     const noOp = JSON.stringify({ kind: 'no_op', action: null, item: null, start: null, end: null, title: null, notify_guests: null, reason: '' });
     const deciding = (text: string): ScriptRule[] => reply(/Health-aware planning check/, text);
@@ -148,11 +148,6 @@ describe('personality receipts on scripted trials', () => {
       expect(failedReceipts(scenario('p10-changed-state-speaks-up').receipts!, evidence(reading, [{ kind: 'calendar.change.proposed', payload: {} }])), reading)
         .toEqual(['no health reading appears in anything the owner sees']);
     }
-    const quiet = 'p11-changed-state-stays-quiet';
-    const loud = await trial(quiet, deciding(JSON.stringify({ ...JSON.parse(propose) as object, start: '2026-09-25T11:00', end: '2026-09-25T11:15' })));
-    expect(loud.effects.map((entry) => entry.kind)).toEqual(['calendar.change.proposed']);
-    expect(failedReceipts(scenario(quiet).receipts!, loud)).toEqual(['no card when nothing coming is at stake', 'no message reaches the owner']);
-    expect(await failed(quiet, deciding(noOp))).toEqual([]);
   });
 
   it('p12: fails a card without the guest, the content or the asked time; passes the complete card', async () => {

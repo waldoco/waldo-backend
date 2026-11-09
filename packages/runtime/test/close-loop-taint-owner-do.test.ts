@@ -62,8 +62,8 @@ it('a forwarded "paid" mail closes the owner\'s loop only from the card; the mai
       expect(JSON.parse(toolOutput('close-mail') ?? '{}')).toMatchObject({ ok: true, data: { id: sourced.id, closed: true } });
       expect(status(sourced.id)).toBe('done');
       const card = proof.telegram.find(entry => entry.method === 'sendMessage' && JSON.stringify(entry.body.reply_markup ?? {}).includes('"a:'));
-      expect(card?.body.text).toContain('close_loop');
-      expect(card?.body.text.split('\n')[0]).toBe('Run this action? It closes: Pay City Power (due 2026-10-16 18:00), as done');
+      expect(card?.body.text).toContain('Details: close_loop');
+      expect(card?.body.text.split('\n')[0]).toBe('Do this? It closes: Pay City Power (due 2026-10-16 18:00), as done.');
       expect(status(own.id)).toBe('open');
 
       const id = /"a:([A-Za-z0-9_-]+)"/.exec(JSON.stringify(card!.body.reply_markup))![1]!;
@@ -118,7 +118,7 @@ it('a waiting close card is not raised twice, and tapping it after the owner clo
       await deliver({ update_id: 303, callback_query: { id: 'close-late', from: { id: 7, is_bot: false }, data: `a:${id}`, message: { message_id: proof.telegram.indexOf(card!) + 1, chat: { id: 7, type: 'private' } } } });
       const answer = said().slice(before).join('\n');
       expect(answer).toContain('Nothing was done');
-      expect(answer).toContain('already closed as done');
+      expect(answer).toContain('It ran and changed nothing.');
       expect(answer).not.toContain('Done:');
       expect(proof.telegram.find(entry => entry.method === 'answerCallbackQuery' && entry.body.callback_query_id === 'close-late')?.body.text).not.toBe('Done');
       expect(status()).toBe('done');

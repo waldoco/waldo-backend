@@ -4,8 +4,9 @@ import { APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1 } from '../.
 import { phoneSms, type OwnerPhoneState, type PhoneSetOutcome, type PhoneSmsEnv, type PhoneSmsOutcome } from '../identity/phone-sms';
 
 type IMessageFrom = 'none' | 'number' | 'email' | 'other_number';
+type WhatsAppFrom = 'none' | 'number' | 'other_number';
 export type PhoneControls = Readonly<{ version: 1; view: 'phone'; state: 'available'; csrf: string;
-  data: OwnerPhoneState & Readonly<{ actions: readonly ('phone.sms_send' | 'phone.sms_check' | 'phone.set' | 'imessage.enroll')[]; proof: readonly ('sms' | 'imessage')[]; imessage_from?: IMessageFrom }> }>;
+  data: OwnerPhoneState & Readonly<{ actions: readonly ('phone.sms_send' | 'phone.sms_check' | 'phone.set' | 'imessage.enroll')[]; proof: readonly ('sms' | 'imessage' | 'whatsapp')[]; imessage_from?: IMessageFrom; whatsapp_from?: WhatsAppFrom }> }>;
 
 // How this owner reaches Waldo on iMessage. address: the one they text, the shared address or, with Photon, their own assigned
 // number once enrolled (null otherwise, or where no link code can be issued); photon: Waldo's iMessage runs on Photon, so a number
@@ -17,6 +18,12 @@ export type IMessageEnrolled = 'enrolled' | 'phone_taken' | 'invalid' | 'throttl
 // their iMessage is linked from, null when not linked; enroll: given only where the owner can enroll from this surface (the
 // app; the console enrolls from its iMessage view), enrolls a number with Photon at the owner's tap.
 export type IMessageProof = Readonly<{ read(): Promise<IMessageReach>; hint(): Promise<string | null>; enroll?(phone: string): Promise<IMessageEnrolled> }>;
+// The third way: the owner sends their WhatsApp link code from the number, which proves it and, while none is proven, makes it the
+// number on file, so no number is set first. offered: this server can link WhatsApp for the owner (rejects when the directory cannot
+// say); hint: the last characters of the number their WhatsApp is linked from, null when not linked.
+export type WhatsAppProof = Readonly<{ offered(): Promise<boolean>; hint(): Promise<string | null> }>;
+const NO_WHATSAPP: WhatsAppProof = { offered: async () => false, hint: async () => null };
+const whatsappFrom = (hint: string | null, phone: string | null): WhatsAppFrom => hint === null ? 'none' : phone?.endsWith(hint) ? 'number' : 'other_number';
 const NO_IMESSAGE: IMessageProof = { read: async () => ({ address: null, photon: false, enrollable: false, enrolled: null }), hint: async () => null };
 // A reach the directory cannot confirm counts as none, so the view still answers.
 const reachOf = (imessage: IMessageProof) => imessage.read().catch(() => null);
@@ -29,10 +36,10 @@ const imessageFrom = (hint: string | null, phone: string | null): IMessageFrom =
 // nothing is in flight and the ledger's wait has passed; checking only while a code is waiting with checks left; setting
 // the number to an active owner while it can be proven, by a texted code or an iMessage link code. The ledger re-checks
 // each when the owner acts, and also applies the daily caps, which this read does not show.
-export async function phoneControls(env: PhoneSmsEnv, owner: string, csrf: string, imessage: IMessageProof = NO_IMESSAGE, now = Date.now()): Promise<PhoneControls> {
+export async function phoneControls(env: PhoneSmsEnv, owner: string, csrf: string, imessage: IMessageProof = NO_IMESSAGE, now = Date.now(), whatsapp: WhatsAppProof = NO_WHATSAPP): Promise<PhoneControls> {
   if (!owner) throw new Error('owner_unbound');
   const sms = phoneSms(env);
-  const [read, reach] = await Promise.all([sms.state(owner), reachOf(imessage)]);
+  const [read, reach, byWhatsApp] = await Promise.all([sms.state(owner), reachOf(imessage), whatsapp.offered().catch(() => false)]);
   const state = read ?? { phone: null, verified: false, sms: sms.offered, challenge: null }, byLink = linkable(reach);
   // With Photon, the number on file is enrolled before its link code can go to the owner's own Waldo number.
   const enrollable = !!imessage.enroll && !!reach?.photon && reach.enrollable && state.phone !== null && !state.verified && reach.enrolled !== state.phone;
@@ -42,9 +49,10 @@ export async function phoneControls(env: PhoneSmsEnv, owner: string, csrf: strin
     ...(open && challenge?.state === 'pending' && challenge.checks_left > 0 ? ['phone.sms_check' as const] : []),
     ...((sms.offered || byLink) && read !== null ? ['phone.set' as const] : []),
     ...(enrollable ? ['imessage.enroll' as const] : [])];
-  const proof = [...(sms.offered ? ['sms' as const] : []), ...(byLink ? ['imessage' as const] : [])];
-  const hint = byLink ? await imessage.hint().catch(() => undefined) : undefined;
-  return { version: 1, view: 'phone', state: 'available', csrf, data: { ...state, actions, proof, ...(hint !== undefined ? { imessage_from: imessageFrom(hint, state.phone) } : {}) } };
+  const proof = [...(sms.offered ? ['sms' as const] : []), ...(byLink ? ['imessage' as const] : []), ...(byWhatsApp ? ['whatsapp' as const] : [])];
+  const [hint, whatsappHint] = await Promise.all([byLink ? imessage.hint().catch(() => undefined) : undefined, byWhatsApp ? whatsapp.hint().catch(() => undefined) : undefined]);
+  return { version: 1, view: 'phone', state: 'available', csrf, data: { ...state, actions, proof, ...(hint !== undefined ? { imessage_from: imessageFrom(hint, state.phone) } : {}),
+    ...(whatsappHint !== undefined ? { whatsapp_from: whatsappFrom(whatsappHint, state.phone) } : {}) } };
 }
 
 const rejected = (message: string): ControlReceipt => ({ state: 'rejected', message });

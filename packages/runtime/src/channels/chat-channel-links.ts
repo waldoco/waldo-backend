@@ -2,8 +2,9 @@ import type { AppChannelLinkCodeV1, AppChatProviderV1 } from '../../../contracts
 import type { ConsoleAuth } from '../identity/console-auth';
 import { telegramLinked } from './console';
 import { iMessageSendUrl } from './imessage/send-url';
+import { whatsAppSendUrl, whatsAppWaldoNumber } from './whatsapp-send-url';
 
-type Env = Readonly<{ IMESSAGE_WALDO_ADDRESS?: string; WHATSAPP_ACCESS_TOKEN?: string; WHATSAPP_PHONE_NUMBER_ID?: string; TELEGRAM_BOT_TOKEN?: string }>;
+type Env = Readonly<{ IMESSAGE_WALDO_ADDRESS?: string; WHATSAPP_ACCESS_TOKEN?: string; WHATSAPP_PHONE_NUMBER_ID?: string; WHATSAPP_WALDO_NUMBER?: string; TELEGRAM_BOT_TOKEN?: string }>;
 type Kv = Readonly<{ get<T>(key: string): T | undefined }>;
 type LinkState = 'linked' | 'not_linked' | 'unknown';
 
@@ -30,6 +31,8 @@ type Provider = Readonly<{
   linked(context: Context): Promise<LinkState>;
   code(context: Context): Promise<string | null>;
   text(code: string): string;
+  // The one-tap link that opens the provider's app at that address with the text filled in.
+  sendUrl?(address: string, code: string): string;
 }>;
 
 const hinted = async (hint: Promise<string | null> | undefined): Promise<LinkState> => {
@@ -57,12 +60,19 @@ const PROVIDERS: Readonly<Record<AppChatProviderV1, Provider>> = {
     linked: ({ auth, doName }) => hinted(auth.iMessageHandleHint?.(doName)),
     code: ({ auth, doName }) => auth.issueProviderLinkCode!(doName, 'imessage'),
     text: sendWaldo,
+    sendUrl: iMessageSendUrl,
   },
   whatsapp: {
-    ready: async ({ env, auth }) => env.WHATSAPP_ACCESS_TOKEN && env.WHATSAPP_PHONE_NUMBER_ID && auth.issueProviderLinkCode ? always : null,
+    // Offered by code alone without the number: the owner then finds Waldo on WhatsApp and types the text.
+    ready: async ({ env, auth }) => {
+      if (!env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID || !auth.issueProviderLinkCode) return null;
+      const number = whatsAppWaldoNumber(env.WHATSAPP_WALDO_NUMBER);
+      return number ? { address: `+${number}` } : always;
+    },
     linked: ({ auth, doName }) => hinted(auth.whatsAppHandleHint?.(doName)),
     code: ({ auth, doName }) => auth.issueProviderLinkCode!(doName, 'whatsapp'),
     text: sendWaldo,
+    sendUrl: (address, code) => whatsAppSendUrl(address.slice(1), code),
   },
   telegram: {
     ready: async ({ env }) => env.TELEGRAM_BOT_TOKEN ? always : null,
@@ -80,12 +90,12 @@ export const chatChannelLinks = (deps: Readonly<{ env: Env; kv: Kv; doName: stri
     linked: provider => context ? PROVIDERS[provider].linked(context) : Promise.resolve('unknown'),
     async issue(provider) {
       if (!context) return null;
-      const { ready, code, text } = PROVIDERS[provider];
+      const { ready, code, text, sendUrl } = PROVIDERS[provider];
       const where = await ready(context);
       if (!where) return null;
       const issued = await code(context);
       if (!issued) return null;
-      return { provider, code: issued, text: text(issued), address: where.address, send_url: where.address ? iMessageSendUrl(where.address, issued) : null, expires_in_seconds: 600 };
+      return { provider, code: issued, text: text(issued), address: where.address, send_url: where.address && sendUrl ? sendUrl(where.address, issued) : null, expires_in_seconds: 600 };
     },
   };
 };

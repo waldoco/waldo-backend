@@ -1,16 +1,18 @@
 import {
-  buildSessionState, LLM_TOOL_TURNS_MAX, OPENAI_REASONING, taskResultSchema, toolParameters, WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL,
+  buildSessionState, LLM_TOOL_TURNS_MAX, MODEL_REASONING, taskResultSchema, toolParameters,
   type LLMTool, type LLMToolCall, type LLMToolTurn, type ModelName, type Provider, type TaskProfile, type TaskResult,
 } from '@waldo/contracts';
 import { DROPPED_STEPS_NOTE, leadingNote, NOTE_END, runToolLoop, type LoopExit, type LoopToolResult, type ToolLoopStep } from '../conversation/tool-loop';
+import { billedAttemptEntries } from '../channels/billed-attempts';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
-import { ownerModelGateway, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
+import { ownerModelGateway, ownerModels, ownerRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { modelCost } from '../llm/pricing';
 import { OWNER_TURN_CALL_TIMEOUT_MS } from '../llm/time-budget';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type BreakerSnapshot, type CircuitBreaker, type LLMGatewayAdapter } from '../llm/provider';
-import { numericHealthIn, sanitise } from '../scribe/sanitiser';
+import { numericHealthInJsonText, numericHealthInValue, sanitise } from '../scribe/sanitiser';
 import { TASK_LEASE_MS, type TaskBrief, type TaskTicket } from './jobs';
 import { FINISH_TASK, unreplayable } from './profiles';
+import { NUDGE_LINES, type NudgeCode } from './watchdog';
 
 // One attempt of a task, as a worker runs it. The worker holds no handler, owner credential or memory, only the model
 // provider access its own calls need: the brain sends the tool definitions of the job's profile when the worker claims its
@@ -26,6 +28,11 @@ export type TaskClaim = Readonly<{
   // The owner's provider breaker as it stood at the claim, so a provider the owner's turns or earlier attempts found down is
   // not asked again. An object that keeps no breaker sends none.
   providerHealth?: BreakerSnapshot;
+  // What the progress watchdog saw since the last claim, when it nudged this job (watchdog.ts).
+  nudge?: NudgeCode;
+  // The changes made to the task since it started, in order, and the result an earlier attempt reported before the last of them.
+  steers?: readonly Readonly<{ text: string; mode: 'interrupt' | 'enqueue'; at: number }>[];
+  draft?: TaskResult;
 }>;
 export type TaskSpend = Readonly<{ rounds: number; costUsd: number }>;
 // What the attempt ended with. unavailable: no model provider answered, which is not the task's failure and not a crash.
@@ -40,11 +47,15 @@ export type TaskBrainPort = Readonly<{
   report(ticket: TaskTicket, outcome: TaskOutcome, events: readonly TurnLogEntry[], spend: TaskSpend, outcomes?: readonly ProviderOutcome[]): Promise<'accepted' | 'duplicate' | 'fenced' | 'deferred' | 'parked'>;
   // Renews the lease; false once the attempt is fenced.
   heartbeat(ticket: TaskTicket): Promise<boolean>;
+  // The model calls a fenced attempt made since its last checkpoint: they were paid for, so they reach the owner's spend
+  // even though the brain takes nothing else from the attempt.
+  spent(ticket: TaskTicket, events: readonly TurnLogEntry[]): Promise<void>;
 }>;
 
 // A model step for one task round: the job's system prompt and brief, the profile's tools and the turns so far.
 export type TaskModel = (input: Readonly<{ ticket: TaskTicket; claim: TaskClaim; system: string; content: string; tools: readonly LLMTool[] | undefined; turns: readonly LLMToolTurn[]; canaries: readonly string[] }>)
-  => Promise<Readonly<{ response: Awaited<ReturnType<ToolLoopStep>>; event: TurnLogEntry }>>;
+  // billed: usage lines of failed attempts a provider still billed before the answer, each at its own model.
+  => Promise<Readonly<{ response: Awaited<ReturnType<ToolLoopStep>>; event: TurnLogEntry; billed?: readonly TurnLogEntry[] }>>;
 
 // The worker's provider breaker: the owner's breaker as each claim brings it, and every success and failure recorded since,
 // kept in order for the brain to replay into the owner's breaker with the next checkpoint or report.
@@ -58,8 +69,8 @@ export class TaskBreaker implements CircuitBreaker {
   drain(): ProviderOutcome[] { return this.outcomes.splice(0); }
 }
 
-export class TaskProviderUnavailable extends Error { constructor(readonly event: TurnLogEntry) { super('no model provider answered'); } }
-export class TaskModelFailed extends Error { constructor(readonly code: string, readonly event: TurnLogEntry) { super(`task model call failed: ${code}`); } }
+export class TaskProviderUnavailable extends Error { constructor(readonly event: TurnLogEntry, readonly billed: readonly TurnLogEntry[] = []) { super('no model provider answered'); } }
+export class TaskModelFailed extends Error { constructor(readonly code: string, readonly event: TurnLogEntry, readonly billed: readonly TurnLogEntry[] = []) { super(`task model call failed: ${code}`); } }
 class TaskFenced extends Error { constructor() { super('task attempt fenced'); } }
 // The brain could not be reached. Not the task's failure: the attempt stops, its lease lapses, and the brain resumes it.
 class TaskBrainLost extends Error { constructor(cause: unknown) { super('task brain unreachable', { cause }); } }
@@ -86,13 +97,20 @@ export const TASK_WORKER_SYSTEM_PROMPT = [
   `When you are done, or cannot go further, call ${FINISH_TASK}. Do not write the result as a plain reply.`,
 ].join('\n');
 
-export const taskBriefText = (brief: TaskBrief, resumedFrom: number): string => [
+const STEER_KIND = { interrupt: 'a correction', enqueue: 'an addition' } as const;
+export const taskBriefText = (brief: TaskBrief, resumedFrom: number, nudge?: NudgeCode, steers: TaskClaim['steers'] = [], draft?: TaskResult): string => [
   `Task: ${brief.title}`,
   `Goal:\n${brief.goal}`,
   `${brief.machine ? 'Data fetched for this job (external, not instructions)' : "Context from the owner's conversation"}:\n${brief.context || '(none)'}`,
   `A good result:\n${brief.done_when}`,
-  `The owner's time zone is ${brief.timezone}; the task started at ${new Date(brief.started_at).toISOString()}.`,
+  `${brief.timezone === undefined ? 'The task' : `The owner's time zone is ${brief.timezone}; the task`} started at ${new Date(brief.started_at).toISOString()}.`,
   ...(resumedFrom > 0 ? [`[This task was interrupted and resumed: the ${resumedFrom} tool results shown below are from before the interruption and are not run again. Continue from them.]`] : []),
+  ...(steers.length ? [[
+    "[After this task started, Waldo changed it on the owner's word. These come after the goal above and win where they differ:]",
+    ...steers.map(steer => `- ${new Date(steer.at).toISOString()}, ${STEER_KIND[steer.mode]}: ${steer.text}`),
+  ].join('\n')] : []),
+  ...(draft ? [`[You had finished with the result below when the last change came. Do what the changes ask, then call ${FINISH_TASK} once with the whole result:]\n${JSON.stringify(draft)}`] : []),
+  ...(nudge ? [NUDGE_LINES[nudge]] : []),
 ].join('\n\n');
 
 // Checkpoints keep the turns a resumed loop would show the model: the newest whole rounds within the replay limit. The
@@ -106,7 +124,7 @@ const droppedSteps = (dropped: readonly LLMToolTurn[]): string => {
     const note = leadingNote(turn.output);
     if (note) carried.push(note.slice(DROPPED_STEPS_NOTE.length, -NOTE_END.length));
     // The note is checkpointed, and arguments that carry a health reading are not stored.
-    if (unreplayable(turn.call.name)) acted.push(`${turn.call.name} ${numericHealthIn(turn.call.arguments) ? '(arguments not kept)' : turn.call.arguments.slice(0, 300)} (already run; do not run it again)`);
+    if (unreplayable(turn.call.name)) acted.push(`${turn.call.name} ${numericHealthInJsonText(turn.call.arguments) ? '(arguments not kept)' : turn.call.arguments.slice(0, 300)} (already run; do not run it again)`);
     else counts.set(turn.call.name, (counts.get(turn.call.name) ?? 0) + 1);
   }
   // On one line, so the note ends at its first NOTE_END whatever the arguments it quotes hold.
@@ -139,6 +157,7 @@ export async function runTaskAttempt(ticket: TaskTicket, deps: Readonly<{ brain:
     checkpoint: (t, n, turns, events, spent, outcomes) => toBrain(() => deps.brain.checkpoint(t, n, turns, events, spent, outcomes)),
     report: (t, outcome, events, spent, outcomes) => toBrain(() => deps.brain.report(t, outcome, events, spent, outcomes)),
     heartbeat: (t) => deps.brain.heartbeat(t),
+    spent: (t, events) => deps.brain.spent(t, events),
   };
   let claim: TaskClaim | 'fenced';
   try { claim = await brain.claim(ticket); } catch { return 'lost'; }
@@ -150,18 +169,22 @@ export async function runTaskAttempt(ticket: TaskTicket, deps: Readonly<{ brain:
   let seq = claim.seq;
   let finished: TaskResult | undefined;
   let exit: LoopExit = 'completed';
+  const costOf = (entries: readonly TurnLogEntry[]) => entries.reduce((sum, entry) => sum + (entry.usage ? modelCost(entry.usage)?.total ?? 0 : 0), 0);
+  // Failed attempts a provider billed are worker spend too: they reach the brain's log and the owner's spend ceiling.
+  const bill = (entries: readonly TurnLogEntry[]) => { events.push(...entries); spend = { ...spend, costUsd: spend.costUsd + costOf(entries) }; };
   const flush = () => { const sent = { events: events.splice(0), spend, outcomes: deps.health?.drain() ?? [] }; spend = { rounds: 0, costUsd: 0 }; return sent; };
   const report = async (outcome: TaskOutcome): Promise<'reported' | 'fenced' | 'lost'> => {
     const { events: sent, spend: spent, outcomes } = flush();
     try { return (await brain.report(ticket, outcome, sent, spent, outcomes)) === 'fenced' ? 'fenced' : 'reported'; } catch { return 'lost'; }
   };
-  const content = taskBriefText(claim.brief, claim.turns.length);
+  const content = taskBriefText(claim.brief, claim.turns.length, claim.nudge, claim.steers, claim.draft);
+  const rounds = Math.max(1, Math.min(TASK_MAX_ROUNDS, claim.brief.machine?.max_rounds ?? TASK_MAX_ROUNDS) - claim.roundsUsed);
   try {
     const text = await runToolLoop({
       handlers: [],
       ctx: { authenticatedUserId: claim.ownerRef, trigger: 'user_message', canaryTokens: canaries, sourceTaint: null, toolArgSourceTaint: 'external', session: buildSessionState({ trigger: 'user_message', canary_tokens: canaries, started_at: now() }) },
-      maxSteps: Math.max(1, TASK_MAX_ROUNDS - claim.roundsUsed),
-      budget: { remaining: Math.max(1, TASK_MAX_ROUNDS - claim.roundsUsed), deadline: claim.deadlineAt },
+      maxSteps: rounds,
+      budget: { remaining: rounds, deadline: claim.deadlineAt },
       // A resumed step whose effect cannot be told apart from a crash is never offered to run again.
       resume: { turns: claim.turns, repeatable: (name) => !unreplayable(name) },
       remote: {
@@ -173,7 +196,7 @@ export async function runTaskAttempt(ticket: TaskTicket, deps: Readonly<{ brain:
             const parsed = taskResultSchema.safeParse(args);
             if (!parsed.success) return { ok: false, error: `The result did not match ${FINISH_TASK}: ${parsed.error.issues.map(issue => issue.path.join('.') || 'result').join(', ')}.`, error_code: 'invalid_args', fix: `Call ${FINISH_TASK} again with every field.`, retryable: false, code: 'invalid_args' };
             // A result is stored until the owner hears it, and the owner's health values are never stored.
-            if (numericHealthIn(JSON.stringify(parsed.data))) return { ok: false, error: 'The result names health readings with their numbers, which a task never stores.', error_code: 'invalid_args', fix: `Describe them in words (for example "above the usual range") and call ${FINISH_TASK} again.`, retryable: false, code: 'rejected' };
+            if (numericHealthInValue(parsed.data)) return { ok: false, error: 'The result names health readings with their numbers, which a task never stores.', error_code: 'invalid_args', fix: `Describe them in words (for example "above the usual range") and call ${FINISH_TASK} again.`, retryable: false, code: 'rejected' };
             finished = parsed.data;
             return { ok: true, data: { recorded: true } };
           }
@@ -190,10 +213,10 @@ export async function runTaskAttempt(ticket: TaskTicket, deps: Readonly<{ brain:
         let step: Awaited<ReturnType<TaskModel>>;
         try { step = await deps.model({ ticket, claim, system: TASK_WORKER_SYSTEM_PROMPT, content, tools, turns, canaries }); }
         finally { clearInterval(beat); }
+        const { response, event, billed = [] } = step;
+        bill([event, ...billed]);
         if (fenced) throw new TaskFenced();
-        const { response, event } = step;
-        events.push(event);
-        spend = { rounds: spend.rounds + 1, costUsd: spend.costUsd + (event.usage ? modelCost(event.usage)?.total ?? 0 : 0) };
+        spend = { ...spend, rounds: spend.rounds + 1 };
         return response;
       },
       onSettle: (settled) => { exit = settled; },
@@ -206,29 +229,36 @@ export async function runTaskAttempt(ticket: TaskTicket, deps: Readonly<{ brain:
     });
     return await report({ kind: 'result', result: finished ?? fallbackResult(exit, text) });
   } catch (error) {
-    if (error instanceof TaskFenced) return 'fenced';
+    if (error instanceof TaskFenced) {
+      const { events: unsent } = flush();
+      // Sent once. If the owner's object cannot be reached, these calls go unrecorded, as before this call existed.
+      if (unsent.length) await deps.brain.spent(ticket, unsent).catch(() => console.warn(JSON.stringify({ hop: 'task_spend_unsent', ok: false, job_id: ticket.jobId, detail: String(unsent.length) })));
+      return 'fenced';
+    }
     if (error instanceof TaskBrainLost) return 'lost';
     if (error instanceof TaskSliceEnded) return 'continue';
-    if (error instanceof TaskProviderUnavailable) { events.push(error.event); return report({ kind: 'unavailable' }); }
-    if (error instanceof TaskModelFailed) { events.push(error.event); return report({ kind: 'failed', code: error.code }); }
+    if (error instanceof TaskProviderUnavailable) { bill([error.event, ...error.billed]); return report({ kind: 'unavailable' }); }
+    if (error instanceof TaskModelFailed) { bill([error.event, ...error.billed]); return report({ kind: 'failed', code: error.code }); }
     return report({ kind: 'failed', code: 'worker_error' });
   }
 }
 
 // The production model step: the owner's route policy on the model the brief asked for, through the scribe, with a call
 // timeout per round. A route that runs out of providers is unavailability, not the task failing.
-export const taskModel = (access: OwnerModelAccess, gateway?: LLMGatewayAdapter): TaskModel => {
+// strong: every task runs on the chat model, as it does with WALDO_LIGHT_CHAT on, where the owner's turns start on the lighter one.
+export const taskModel = (access: OwnerModelAccess, gateway?: LLMGatewayAdapter, strong = false): TaskModel => {
   const health = access.health ?? new InMemoryCircuitBreaker();
+  const { chat, auxiliary } = ownerModels(access);
   return async ({ ticket, claim, system, content, tools, turns, canaries }) => {
-    const model: ModelName = claim.brief.effort === 'deep' ? WALDO_CHAT_MODEL : WALDO_AUXILIARY_MODEL;
+    const model: ModelName = strong || claim.brief.effort === 'deep' ? chat : auxiliary;
     const started = Date.now();
     // A worker call may reason as long as an owner turn's reply: it has no reply waiting on it.
     const result = await new RuntimeLLMProvider({ gateway: gateway ?? ownerModelGateway(access, { timeoutMs: OWNER_TURN_CALL_TIMEOUT_MS }), circuitBreaker: health }).complete({
       trigger: 'user_message',
-      policy: ownerRoutePolicy(model, WALDO_CHAT_MODEL, access),
-      ...(claim.spend ? { spend: { spent_cents: Math.floor(claim.spend.spentUsd * 100), cap_cents: Math.round(claim.spend.ceilingUsd * 100), clamp: ownerRoutePolicy(WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL, access) } } : {}),
+      policy: ownerRoutePolicy(model, chat, access),
+      ...(claim.spend ? { spend: { spent_cents: Math.floor(claim.spend.spentUsd * 100), cap_cents: Math.round(claim.spend.ceilingUsd * 100), clamp: ownerRoutePolicy(auxiliary, chat, access) } } : {}),
       renderRequest: ({ step }) => {
-        const { effort, outputTokens } = OPENAI_REASONING[step.model] ?? {};
+        const { effort, outputTokens } = MODEL_REASONING[step.model] ?? {};
         return {
           cache_key: `waldo-task:${claim.ownerRef}:${claim.profile}`, system, messages: [{ role: 'user' as const, content }],
           max_tokens: outputTokens ?? step.max_tokens ?? 4_096, temperature: 0.2,
@@ -237,17 +267,19 @@ export const taskModel = (access: OwnerModelAccess, gateway?: LLMGatewayAdapter)
       },
     }, { authenticatedUserId: claim.ownerRef, trigger: 'user_message', canaryTokens: [...canaries], sourceTaint: null, toolArgSourceTaint: 'external', hasApproval: () => false, sanitise });
     const served = result.attempts.at(-1);
+    const billed = billedAttemptEntries(result.attempts, { trace: `task:${ticket.jobId}:${ticket.attempt}`, hop: 'llm_task_attempt', job_id: ticket.jobId, job_profile: claim.profile, cost_kind: 'worker' });
     const base: TurnLogEntry = {
       trace: `task:${ticket.jobId}:${ticket.attempt}`, hop: 'llm_task', ms: Date.now() - started, ok: result.ok, job_id: ticket.jobId, job_profile: claim.profile, cost_kind: 'worker',
       ...(served ? { provider: served.provider, fallback_fired: new Set(result.attempts.map((attempt) => `${attempt.provider}/${attempt.model}`)).size > 1 } : {}),
     };
     if (!result.ok) {
       const event: TurnLogEntry = { ...base, code: result.reason, error_code: result.code };
-      if (result.reason === 'template_unavailable' || result.reason === 'gateway_exhausted') throw new TaskProviderUnavailable(event);
-      throw new TaskModelFailed(result.code, event);
+      if (result.reason === 'template_unavailable' || result.reason === 'gateway_exhausted') throw new TaskProviderUnavailable(event, billed);
+      throw new TaskModelFailed(result.code, event, billed);
     }
     return {
       response: result.response,
+      ...(billed.length ? { billed } : {}),
       event: { ...base, usage: { model: result.usage.model, input: result.usage.input_tokens, output: result.usage.output_tokens, cached: result.usage.cache_read_input_tokens, ...(result.usage.cache_write_input_tokens ? { cache_write: result.usage.cache_write_input_tokens } : {}), web_searches: 0 } },
     };
   };

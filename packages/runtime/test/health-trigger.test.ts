@@ -1,7 +1,10 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import type { ProposeCalendarChangeArgs } from '@waldo/contracts';
+import { TOOL_PERMISSIONS, type ProposeCalendarChangeArgs } from '@waldo/contracts';
+import { CURATED_PACK_SKILLS } from '../src/skills/curated-catalog';
+import { CURATED_SKILLS, CuratedOwnerSkills, curatedSkills } from '../src/skills/curated-owner';
+import { numericHealthIn } from '../src/scribe/sanitiser';
 import type { Proactivity } from '../src/channels/loops';
 import { localIso } from '../src/channels/reminders';
 import type { CalendarItem, TaskItem } from '../src/connectors/google';
@@ -10,7 +13,7 @@ import { DeliveryGateStore } from '../src/delivery-gate/store';
 import { ensureSchema } from '../src/tracer/schema';
 import {
   calendarEgressClear, comingItemsFrom, healthCardBudget, healthTriggerBook, healthTriggerDueAt, healthTriggerPrompt, healthTriggerView, ownerInstant, parseHealthDecision, runHealthTrigger,
-  HEALTH_ASK_AFTER_SKIPS, HEALTH_FALSE_ALARM_WINDOW_MS, HEALTH_KEEP_ASKING, HEALTH_TRIGGER_FLOOR_MS, HEALTH_TRIGGER_FORMAT, resolveHealthMode, type ComingItem, type HealthTriggerDeps, type HealthTriggerOutcome,
+  HEALTH_ASK_AFTER_SKIPS, HEALTH_FALSE_ALARM_WINDOW_MS, HEALTH_KEEP_ASKING, HEALTH_TRIGGER_FLOOR_MS, HEALTH_TRIGGER_FORMAT, healthTriggerFormat, resolveHealthMode, type ComingItem, type HealthTriggerDeps, type HealthTriggerOutcome,
 } from '../src/health/trigger';
 
 // Distinctive synthetic values: if any of them shows up in a prompt, a ledger row, a log line or a proposal, a reading leaked.
@@ -582,6 +585,63 @@ describe('proposal checks', () => {
   });
 });
 
+describe('easing a workout', () => {
+  const RUN: ComingItem = { kind: 'event', id: 'gcal-run-3', title: 'Track intervals', start: '2026-10-21T12:30:00Z', end: '2026-10-21T13:30:00Z' };
+  const swap = (rename: unknown) => JSON.stringify({ kind: 'propose', action: 'move', item: 'e1', start: '2026-10-21T18:00', end: '2026-10-21T19:00', title: null, block: null, notify_guests: null, rename_to: rename, reason: 'Keep tonight easy.' });
+  const view = () => healthTriggerView(ROW, NOW, TZ)!;
+
+  it('offers a swap in the prompt and the answer format only while it is on', () => {
+    const on = healthTriggerPrompt({ view: view(), items: [RUN], now: NOW, timezone: TZ, feedback: {}, easeWorkout: true });
+    const off = healthTriggerPrompt({ view: view(), items: [RUN], now: NOW, timezone: TZ, feedback: {} });
+    expect(on).toContain('swap a hard session for an easier one in the same slot');
+    expect(on).toContain('rename_to');
+    expect(off).not.toContain('rename_to');
+    expect(healthTriggerFormat(true).schema.required).toContain('rename_to');
+    expect((healthTriggerFormat(true).schema.properties as Record<string, unknown>).rename_to).toEqual({ type: ['string', 'null'] });
+    expect(healthTriggerFormat(false)).toBe(HEALTH_TRIGGER_FORMAT);
+  });
+
+  it('turns a rename into a move that keeps the slot and names the event as it is now', () => {
+    expect(parseHealthDecision(swap('Easy run'), [RUN], NOW, TZ, undefined, true)).toEqual({ kind: 'propose', args: {
+      action: 'move', event_id: 'gcal-run-3', title: 'Track intervals', rename_to: 'Easy run', start: '2026-10-21T12:30:00.000Z', end: '2026-10-21T13:30:00.000Z', reason: 'Keep tonight easy.',
+    } });
+    expect(parseHealthDecision(swap(null), [RUN], NOW, TZ, undefined, true)).toMatchObject({ args: { action: 'move' } });
+    expect(parseHealthDecision(swap(null), [RUN], NOW, TZ, undefined, true)).not.toHaveProperty('args.rename_to');
+  });
+
+  it('refuses a rename while it is off, an empty or overlong one, and one on a cancel', () => {
+    expect(() => parseHealthDecision(swap('Easy run'), [RUN], NOW, TZ)).toThrow('invalid health decision rename');
+    expect(() => parseHealthDecision(swap('  '), [RUN], NOW, TZ, undefined, true)).toThrow('invalid health decision rename');
+    expect(() => parseHealthDecision(swap('x'.repeat(201)), [RUN], NOW, TZ, undefined, true)).toThrow('invalid health decision rename');
+    const cancel = JSON.stringify({ kind: 'propose', action: 'cancel', item: 'e1', start: null, end: null, title: null, block: null, notify_guests: null, rename_to: 'Easy run', reason: 'x' });
+    expect(() => parseHealthDecision(cancel, [RUN], NOW, TZ, undefined, true)).toThrow('invalid health decision rename');
+  });
+
+  it('keeps health words out of the new name, which reaches Google', () => {
+    expect(calendarEgressClear({ title: 'Track intervals', rename_to: 'Easy run' }, ['recovery', 'low'])).toBe(true);
+    expect(calendarEgressClear({ title: 'Track intervals', rename_to: 'Recovery jog' }, ['recovery', 'low'])).toBe(false);
+  });
+
+  it('scans only what Google receives: on a move the current name names the event on the card and is never sent', () => {
+    expect(calendarEgressClear({ action: 'move', title: 'Form drills', rename_to: 'Easy walk' }, ['form'])).toBe(true);
+    expect(calendarEgressClear({ action: 'move', title: 'Form drills', rename_to: 'Form walk' }, ['form'])).toBe(false);
+    expect(calendarEgressClear({ action: 'create', title: 'Form drills' }, ['form'])).toBe(false);
+  });
+
+  it('swaps a workout whose current name has a health word', () => withTrigger(async ({ deps, proposals }) => {
+    const heavy: ComingItem = { ...RUN, title: 'Heavy load day' };
+    deps().book.mark('2026-10-21', NOW - 60_000);
+    expect(await runHealthTrigger(deps({ comingItems: async () => [heavy], easeWorkout: () => true, decide: async () => swap('Easy walk') }))).toBe('proposed');
+    expect(proposals).toEqual([expect.objectContaining({ action: 'move', title: 'Heavy load day', rename_to: 'Easy walk' })]);
+  }));
+
+  it('puts the swap up as one card when the run has it on', () => withTrigger(async ({ deps, proposals }) => {
+    deps().book.mark('2026-10-21', NOW - 60_000);
+    expect(await runHealthTrigger(deps({ comingItems: async () => [RUN], easeWorkout: () => true, decide: async () => swap('Easy run') }))).toBe('proposed');
+    expect(proposals).toEqual([expect.objectContaining({ action: 'move', event_id: 'gcal-run-3', rename_to: 'Easy run' })]);
+  }));
+});
+
 describe('coming decisions', () => {
   const from = NOW, to = NOW + 24 * 3_600_000;
   const event = (over: Partial<CalendarItem>): CalendarItem => ({ id: 'ev', title: 'Standup', start: '2026-10-21T05:00:00Z', end: '2026-10-21T05:15:00Z', all_day: false, ...over });
@@ -729,5 +789,98 @@ describe('telling the app a health card is up', () => {
       await expect(runHealthTrigger(h.deps({ decide, reschedule: async () => { throw new Error('scheduler unavailable'); } }))).resolves.toBe('no_op');
       expect(h.logs.at(-1)).toContain('"code":"failed"');
     });
+  });
+});
+
+// HEALTH_ACTIONS: the decision reasons from the reviewed health protocols and reads through the owner's next day. The protocols
+// are content the model weighs; nothing in code picks one, sets a bedtime or a target.
+describe('the health trigger with the health protocols', () => {
+  const PROTOCOLS = CURATED_PACK_SKILLS.find(skill => skill.name === 'health-protocols')!.body_markdown;
+  const UNTIL = Date.parse('2026-10-22T18:30:00Z');
+  const actions = { protocols: PROTOCOLS, until: () => UNTIL, through: 'through the end of tomorrow' };
+
+  it('golden: the decision reads the protocols and the owner\'s plan through tomorrow, and proposes one move in words only', async () => {
+    await withTrigger(async ({ sql, deps, prompts, proposals, logs }) => {
+      const windows: [number, number][] = [];
+      deps().book.mark('2026-10-21', NOW - 60_000);
+      expect(await runHealthTrigger(deps({ actions, comingItems: async (from, to) => { windows.push([from, to]); return [REVIEW, DRIVE]; } }))).toBe('proposed');
+      expect(windows).toEqual([[NOW, UNTIL]]);
+      expect(prompts[0]).toContain(PROTOCOLS);
+      expect(proposals).toHaveLength(1);
+      for (const leak of LEAKS) for (const text of [...prompts, ...logs, everything(sql), JSON.stringify(proposals)]) expect(text).not.toContain(leak);
+    });
+  });
+
+  it('with the switch off the decision is as before: no protocols, the next 24 hours', async () => {
+    await withTrigger(async ({ deps, prompts }) => {
+      const windows: [number, number][] = [];
+      deps().book.mark('2026-10-21', NOW - 60_000);
+      await runHealthTrigger(deps({ comingItems: async (from, to) => { windows.push([from, to]); return [REVIEW]; } }));
+      expect(windows).toEqual([[NOW, NOW + 24 * 60 * 60_000]]);
+      expect(prompts[0]).not.toContain(PROTOCOLS);
+    });
+  });
+
+  it('health not shared: no decision is asked for, so nothing invents how the owner is', async () => {
+    await withTrigger(async ({ deps, prompts, proposals }) => {
+      deps().book.mark('2026-10-21', NOW - 60_000);
+      expect(await runHealthTrigger(deps({ actions, readHealth: async () => null }))).toBe('no_health');
+      expect([prompts, proposals]).toEqual([[], []]);
+    });
+  });
+
+  it('a health-only day: the note reads the protocols too, and a note with a reading in it is refused', async () => {
+    await withTrigger(async ({ deps, prompts }) => {
+      deps().book.mark('2026-10-21', NOW - 60_000);
+      const delivered: string[] = [];
+      const soloNotice = { enabled: () => true, held: () => null, deliver: async (_id: string, text: string, commit: () => void) => { delivered.push(text); commit(); } };
+      const noting = (text: string) => deps({ actions, comingItems: async () => [], soloNotice, decide: async (_id, prompt) => { prompts.push(prompt); return JSON.stringify({ kind: 'notice', text }); } });
+      expect(await runHealthTrigger(noting('You slept 4.5 hours, so take it easy.'))).toBe('egress_refused');
+      expect(prompts[0]).toContain(PROTOCOLS);
+      expect(delivered).toEqual([]);
+    });
+  });
+
+  it('reasons written for the person pass the reading check; a reading does not', () => {
+    for (const reason of ['Your first meeting is at 9, so an earlier night keeps the morning sharp.', 'A short night and a full afternoon, so I moved the 6 pm run to tomorrow.', 'Light day after two hard sessions: an easy walk instead of intervals at 7.'])
+      expect(numericHealthIn(reason), reason).toBe(false);
+    expect(numericHealthIn('Your HRV is 38 ms, so rest today.')).toBe(true);
+  });
+});
+
+describe('the health-protocols skill', () => {
+  const skill = CURATED_PACK_SKILLS.find(entry => entry.name === 'health-protocols');
+
+  it('is a bundled skill over existing owner-turn tools that any owner turn can load', () => {
+    expect(skill).toBeDefined();
+    for (const tool of skill!.required_tools) expect(TOOL_PERMISSIONS.user_message, tool).toContain(tool);
+    expect(skill!.trigger_types).toEqual(['user_message']);
+  });
+
+  it('reaches owner turns only while HEALTH_ACTIONS is on: off, the owner\'s book neither lists nor loads it', async () => {
+    expect(curatedSkills(true).map(entry => entry.name)).toContain('health-protocols');
+    expect(curatedSkills(false).map(entry => entry.name)).not.toContain('health-protocols');
+    expect(CURATED_SKILLS).toBe(curatedSkills(false));
+    await withTrigger(async ({ sql }) => {
+      const turn = { owner: 'o-1', turnId: 't-1', trigger: 'user_message' as const, ownerText: '', assertCurrent: async () => undefined };
+      const off = new CuratedOwnerSkills(sql as SqlStorage, 'o-1');
+      expect(off.list().map(entry => entry.name)).not.toContain('health-protocols');
+      expect(off.load('health-protocols', skill!.version, turn).ok).toBe(false);
+      const on = new CuratedOwnerSkills(sql as SqlStorage, 'o-1', undefined, 'o-1', curatedSkills(true));
+      expect(on.load('health-protocols', skill!.version, turn).ok).toBe(true);
+      // Switched back off, the row the switch left in the book stays dormant.
+      const later = new CuratedOwnerSkills(sql as SqlStorage, 'o-1');
+      expect(later.list().map(entry => entry.name)).not.toContain('health-protocols');
+      expect(later.load('health-protocols', skill!.version, { ...turn, turnId: 't-2' }).ok).toBe(false);
+    });
+  });
+
+  it('every evidence line carries its grade, so the model can tell science from habit', () => {
+    const body = skill!.body_markdown, start = body.indexOf('## Evidence'), end = body.indexOf('\nDone:', start);
+    expect([start, end].every(at => at > 0)).toBe(true);
+    const evidence = body.slice(start, end);
+    const lines = evidence.split('\n').filter(line => line.startsWith('- '));
+    expect(lines.length).toBeGreaterThan(10);
+    for (const line of lines) expect(line, line).toMatch(/\((?:[A-D](?:\/[A-D])?)[;,)]|\((?:[A-D](?:\/[A-D])?), /);
   });
 });

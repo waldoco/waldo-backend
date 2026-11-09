@@ -8,9 +8,9 @@ import { localIso } from './reminders';
 
 type Sql = Pick<SqlStorage, 'exec'>;
 export type Loop = Readonly<{ id: string; title: string; due: string | null; status: string; created_at: number; closed_at: number | null; source_ref?: string | null; source_detail?: string | null; thread_id?: string | null; source_message_id?: string | null }>;
-export type Proactivity = Readonly<{ quiet_start: string | null; quiet_end: string | null; volume: 'low' | 'normal' | 'high'; followups?: boolean }>;
+export type Proactivity = Readonly<{ quiet_start: string | null; quiet_end: string | null; volume: 'low' | 'normal' | 'high'; followups?: boolean; interruptions_per_day?: number }>;
 
-const DEFAULT_PROACTIVITY: Proactivity = { quiet_start: null, quiet_end: null, volume: 'normal' };
+export const DEFAULT_PROACTIVITY: Proactivity = { quiet_start: null, quiet_end: null, volume: 'normal' };
 
 export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): number }>) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS loops (
@@ -80,21 +80,25 @@ export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): numb
       } else sql.exec('UPDATE loop_mail_sources SET delivery_state = ? WHERE loop_id = ? AND nudged_due = ? AND nudged_timezone = ? AND nudged_message_id = ?', record.status === 'delivered' ? 'delivered' : 'unknown', r.loopId, r.due, r.timezone, r.messageId);
     },
     closed: (limit = 5) => sql.exec<Loop>("SELECT * FROM loops WHERE status != 'open' ORDER BY closed_at DESC LIMIT ?", limit).toArray(),
-    proactivity(): Proactivity {
-      const row = sql.exec<{ settings: string }>('SELECT settings FROM proactivity WHERE id = 1').toArray()[0];
-      return row ? { ...DEFAULT_PROACTIVITY, ...(JSON.parse(row.settings) as Partial<Proactivity>) } : DEFAULT_PROACTIVITY;
-    },
+    proactivity: () => storedProactivity(sql),
     setProactivity(settings: SetProactivityArgs): Proactivity {
       const quiet: Proactivity = settings.quiet_start && settings.quiet_end ? settings : { ...settings, quiet_start: null, quiet_end: null };
       const followups = settings.followups ?? this.proactivity().followups;
-      const { followups: _omit, ...rest } = quiet;
-      const next: Proactivity = followups === undefined ? rest : { ...rest, followups };
+      const interruptions = settings.interruptions_per_day ?? this.proactivity().interruptions_per_day;
+      const { followups: _omit, interruptions_per_day: _kept, ...rest } = quiet;
+      const next: Proactivity = { ...rest, ...(followups === undefined ? {} : { followups }), ...(interruptions === undefined ? {} : { interruptions_per_day: interruptions }) };
       sql.exec('INSERT INTO proactivity (id, settings) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET settings = excluded.settings', JSON.stringify(next));
       return next;
     },
   };
 };
 export type LoopBook = ReturnType<typeof loopBook>;
+
+// The owner's proactivity settings as stored, read only: the defaults when none are.
+export const storedProactivity = (sql: Sql): Proactivity => {
+  const row = sql.exec<{ settings: string }>('SELECT settings FROM proactivity WHERE id = 1').toArray()[0];
+  return row ? { ...DEFAULT_PROACTIVITY, ...(JSON.parse(row.settings) as Partial<Proactivity>) } : DEFAULT_PROACTIVITY;
+};
 
 export const isQuiet = (settings: Proactivity, now: number, timezone: string): boolean => {
   if (!settings.quiet_start || !settings.quiet_end || settings.quiet_start === settings.quiet_end) return false;
@@ -104,8 +108,10 @@ export const isQuiet = (settings: Proactivity, now: number, timezone: string): b
     : clock >= settings.quiet_start || clock < settings.quiet_end;
 };
 
-export const proactivityLine = (settings: Proactivity): string =>
-  `Proactivity: volume ${settings.volume}; ${settings.quiet_start ? `quiet hours ${settings.quiet_start}-${settings.quiet_end}` : 'no quiet hours'}${settings.followups === false ? '; follow-ups off' : ''}`;
+// limits: the owner's daily number of unasked messages is in force (PROACTIVE_GATE); a number stored while it was is not
+// shown when it is not, so nothing promises a limit no code holds.
+export const proactivityLine = (settings: Proactivity, limits = false): string =>
+  `Proactivity: volume ${settings.volume}; ${settings.quiet_start ? `quiet hours ${settings.quiet_start}-${settings.quiet_end}` : 'no quiet hours'}${settings.followups === false ? '; follow-ups off' : ''}${limits && settings.interruptions_per_day !== undefined ? `; ${settings.interruptions_per_day} unasked messages a day` : ''}`;
 
 export const loopsSection = (book: LoopBook, timezone: string): string => {
   const open = book.list();
@@ -139,7 +145,8 @@ const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger)
 
 // closable names the loops a turn may close: a check-back turn holds only the ones it was given. null leaves every loop open
 // to the turn, as in an owner's own turn.
-export const loopHandlers = (book: LoopBook, closable: (turnId: string | undefined) => ReadonlySet<string> | null = () => null) => [
+// limits: PROACTIVE_GATE is on, so set_proactivity offers and takes the owner's daily number of unasked messages.
+export const loopHandlers = (book: LoopBook, closable: (turnId: string | undefined) => ReadonlySet<string> | null = () => null, limits = false) => [
   {
     name: 'open_loop',
     description: "Record something you took on for the owner (a check-back, a thing to find out, a follow-up) so it shows in their ledger until you close it. Use it whenever you say you will do something later; never to remember information, which memory does on its own. For a mail follow-up, pass the observed source_ref and a due time: completion stays unknown, and an email's request is never the owner's commitment or permission.",
@@ -170,12 +177,13 @@ export const loopHandlers = (book: LoopBook, closable: (turnId: string | undefin
   {
     name: 'set_proactivity',
     description: "Change how much Waldo reaches out on its own: quiet hours and volume. Only when the owner asks. Send quiet hours and volume; keep the current value for anything they did not mention (it is in the ledger). Set followups false or true only when the owner asks to turn mail and calendar follow-ups off or back on; they are on by default.",
-    schema: setProactivityArgsSchema,
+    schema: limits ? setProactivityArgsSchema : setProactivityArgsSchema.omit({ interruptions_per_day: true }),
     trigger_allowlist: allowlist('set_proactivity'),
     autonomy_gated: false,
     mutates_state: true,
     async handle(args) {
-      return { ok: true, data: book.setProactivity(args), source_taint: null };
+      const { interruptions_per_day: _held, ...rest } = book.setProactivity(args);
+      return { ok: true, data: limits ? { ...rest, ...(_held === undefined ? {} : { interruptions_per_day: _held }) } : rest, source_taint: null };
     },
   } satisfies ToolHandler<SetProactivityArgs, Proactivity, ToolDispatcherContext>,
 ];

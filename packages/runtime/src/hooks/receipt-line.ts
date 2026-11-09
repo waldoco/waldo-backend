@@ -14,16 +14,19 @@ const STATE_WORD = { accepted: 'accepted', failed: 'failed', unresolved: 'unconf
 // The tools whose repeat is harmless (forgetting twice forgets once), each with the arguments that pick its target, so a
 // retry that only rewords its note names the same target. Any other effect can land before a later step refuses it (an
 // oversize result, a post-call halt), so its retry may be a second copy and its refusal stays shown.
-const REPEATABLE_TARGET_ARGS: Partial<Record<ToolName, readonly string[]>> = { forget_memory: ['claim_ids', 'topic', 'source'] };
+const REPEATABLE_TARGET_ARGS: Partial<Record<ToolName, readonly string[]>> = { forget_memory: ['claim_ids', 'topic', 'source', 'import_source'] };
 const targetOf = (keys: readonly string[], args: unknown): string =>
   !args || typeof args !== 'object' ? stableJson(args ?? null)
     : stableJson(Object.fromEntries(keys.flatMap(key => (args as Record<string, unknown>)[key] === undefined ? [] : [[key, (args as Record<string, unknown>)[key]]])));
 // A refused attempt of a repeatable tool that a later call in the same turn made good (the same target, accepted) is
 // superseded, not a failure of the turn. A transient failure (a handler that threw, a timeout) may have crossed its effect,
 // and an unconfirmed receipt may have landed: those stay shown, as does any failure never made good.
+// A call whose arguments the schema check refused (a string where it wants a list) never reached its handler, so it did
+// nothing and the line leaves it off. A handler's own refusal stays shown, and claim checks still see both as failed.
+const refusedArguments = (event: LoopEventLike | undefined) => event?.code === 'invalid_args' && event.reason === 'invalid_args';
 const shownReceipts = (events: readonly LoopEventLike[]) => {
-  const receipts = receiptsFromLoopEvents(events).filter(r => !NOT_SHOWN.has(r.effect));
   const eventOf = new Map(events.map(event => [event.seq, event]));
+  const receipts = receiptsFromLoopEvents(events).filter(r => !NOT_SHOWN.has(r.effect) && !refusedArguments(eventOf.get(r.seq)));
   const superseded = (r: (typeof receipts)[number]) => {
     const keys = REPEATABLE_TARGET_ARGS[r.tool as ToolName], code = eventOf.get(r.seq)?.code;
     if (!keys || r.state !== 'failed' || code === undefined || code === 'transient') return false;
@@ -37,21 +40,33 @@ const TARGET_MAX = 200;
 // A proposal's effect only asks the owner for an approval: accepted, it is waiting on their yes, never done.
 const PROPOSED = '_proposed';
 
+// One thing done more than once in a turn (three memories saved) is one entry with its count: a text-only channel shows this
+// line as the reply's last line, where the same words three times read as a glitch. The typed items stay one per receipt.
+type Entry = { part: 'receipts' | 'done' | 'asked'; label: string; note: string; count: number };
+
 export const receiptLine = (events: readonly LoopEventLike[]): string | null => {
   const receipts = shownReceipts(events);
   if (receipts.length === 0) return null;
   const stateOf = (r: (typeof receipts)[number]) => STATE_WORD[r.state ?? (r.ok ? 'accepted' : 'failed')];
   const label = (r: (typeof receipts)[number], effect = r.effect) => `${effect.split('_').join(' ')}${r.ref ? ` ${r.ref}` : ''}`;
-  const named = receipts.slice(0, MAX_NAMED);
-  const more = receipts.length - named.length > 0 ? `; and ${receipts.length - named.length} more` : '';
   // A turn where every effect was accepted reads as plain words; any other state keeps every entry's state explicit.
-  if (!receipts.every(r => stateOf(r) === 'accepted')) {
-    return `Receipts: ${named.map(r => `${label(r)} (${stateOf(r)}${r.delegated ? ', via task' : ''})`).join('; ')}${more}`;
+  const explicit = !receipts.every(r => stateOf(r) === 'accepted');
+  const entries = new Map<string, Entry>();
+  for (const r of receipts) {
+    const entry: Entry = explicit ? { part: 'receipts', label: label(r), note: ` (${stateOf(r)}${r.delegated ? ', via task' : ''})`, count: 1 }
+      : r.effect.endsWith(PROPOSED) ? { part: 'asked', label: label(r, r.effect.slice(0, -PROPOSED.length)), note: r.delegated ? ' (via task)' : '', count: 1 }
+      : { part: 'done', label: label(r), note: r.delegated ? ' (via task)' : '', count: 1 };
+    const key = stableJson([entry.part, entry.label, entry.note]);
+    const seen = entries.get(key);
+    if (seen) seen.count += 1; else entries.set(key, entry);
   }
-  const plain = (r: (typeof receipts)[number], effect: string) => `${label(r, effect)}${r.delegated ? ' (via task)' : ''}`;
-  const done = named.filter(r => !r.effect.endsWith(PROPOSED)).map(r => plain(r, r.effect));
-  const asked = named.filter(r => r.effect.endsWith(PROPOSED)).map(r => plain(r, r.effect.slice(0, -PROPOSED.length)));
-  return [done.length ? `Done: ${done.join('; ')}` : '', asked.length ? `Needs your yes: ${asked.join('; ')}` : ''].filter(Boolean).join('. ') + more;
+  const named = [...entries.values()].slice(0, MAX_NAMED);
+  const unnamed = receipts.length - named.reduce((sum, entry) => sum + entry.count, 0);
+  const more = unnamed > 0 ? `; and ${unnamed} more` : '';
+  const list = (part: Entry['part']) => named.filter(entry => entry.part === part).map(entry => `${entry.label}${entry.count > 1 ? ` ×${entry.count}` : ''}${entry.note}`).join('; ');
+  if (explicit) return `Receipts: ${list('receipts')}${more}`;
+  const done = list('done'), asked = list('asked');
+  return [done ? `Done: ${done}` : '', asked ? `Needs your yes: ${asked}` : ''].filter(Boolean).join('. ') + more;
 };
 
 // The same receipts in typed form, with the line as their text. A target too long for the part is left out, not cut.

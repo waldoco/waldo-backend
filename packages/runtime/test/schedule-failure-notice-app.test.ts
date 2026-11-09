@@ -16,11 +16,15 @@ vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof im
     if (method === 'sendMessage') sent.push(payload);
     return { message_id: sent.length, chat: { id: payload.chat_id } };
   } }));
-vi.mock('openai', () => ({ default: class { responses = { create: async () => { throw new Error('model unavailable'); } }; } }));
+// A request the provider refuses (400) is a failure of the reminder itself: a model outage would send the owner's note instead.
+vi.mock('openai', () => {
+  class APIError extends Error { status = 400; code = 'invalid_request_error'; param = null; }
+  return { default: class { static APIError = APIError; responses = { create: async () => { throw new APIError('request refused'); } }; } };
+});
 
 const OWNER_ID = '5c4d3e2f-1a0b-4c9d-8e7f-6a5b4c3d2e1f';
 const PRINCIPAL = `prn_${OWNER_ID.replaceAll('-', '')}`;
-const LINE = 'One of your reminders failed 3 times in a row, so I\'ve paused it. I\'ll try again around Sat 2 Nov, 23:01.';
+const LINE = 'One of your reminders failed 3 times in a row, so I\'ve paused it. I\'ll try again around Sat 2 Nov at 11:01pm.';
 
 beforeEach(() => {
   sent.length = 0;

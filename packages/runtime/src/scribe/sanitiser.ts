@@ -1,10 +1,12 @@
 import { validId } from '@waldo/workspace';
+import { asciiDigits } from '../security/decimal-digits';
 import {
   DERIVED_SCORE_PATTERNS,
   HEALTH_DESTINATION_RULES,
   MODEL_CONTEXT_MAX_CHARS,
   PLAIN_WORD_DERIVED_SCORES,
   derivedHealthDestinationViewSchema,
+  PHONE_OUTSIDE_US,
   PII_PATTERNS,
   RAW_SENSOR_PATTERNS,
   ROLE_TAG_PATTERN,
@@ -91,16 +93,22 @@ const DERIVED_HEALTH_ELIGIBILITIES = new Set([
 ]);
 const HEALTH_UNIT_VALUE = /^(?:ms|bpm|beats|breaths?(?: per minute)?|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories|steps?|hours?|hrs?|minutes?|mins?|celsius|fahrenheit|°c|°f|degrees?\s*[cf]|mg\/dl|mmol\/l)$/i;
 // Health phrases with a number: the free-text floor for destinations the structured checks do not cover.
-const HEALTH_FREE_TEXT_NUMERIC: readonly RegExp[] = [
+export const HEALTH_FREE_TEXT_NUMERIC: readonly RegExp[] = [
   /\b(?:hrv|heart[\s_-]*rate(?:[\s_-]*variability)?|resting[\s_-]*heart[\s_-]*rate|pulse|spo2|oxygen[\s_-]*saturation|blood[\s_-]*oxygen|systolic|diastolic|blood[\s_-]*pressure|bp|body[\s_-]*(?:weight|mass)|weight|calorie[\s_-]*burn|calories[\s_-]*burned|active[\s_-]*energy|sleep(?:[\s_-]*(?:hours?|duration|minutes?|mins?))?|rem[\s_-]*sleep|deep[\s_-]*sleep|crs|form(?:[\s_-]*score)?|recovery(?:[\s_-]*score)?|load(?:[\s_-]*score)?)\b\s*,\s*["']?-?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?["']?\s*,\s*(?:ms|bpm|beats|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories|hours?|hrs?|minutes?|mins?)(?=$|[^a-z0-9])/i,
-  /\b(?:hrv|heart[\s_-]*rate(?:[\s_-]*variability)?|resting[\s_-]*heart[\s_-]*rate|pulse|spo2|oxygen[\s_-]*saturation|blood[\s_-]*oxygen|systolic|diastolic|body[\s_-]*(?:weight|mass)|calorie[\s_-]*burn|calories[\s_-]*burned|active[\s_-]*energy)\b(?:\s+\w+){0,3}?\s*[:=,]?\s*["']?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:ms|bpm|beats|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories)?(?=$|[^a-z0-9])/i,
-  /\b(?:blood[\s_-]*pressure|bp)\b(?:\s+\w+){0,2}?\s*[:=,]?\s*["']?\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?/i,
-  /\b(?:blood[\s_-]*pressure|bp)\b(?:\s+\w+){0,2}?\s*[:=,]?\s*["']?\d+(?:\.\d+)?\s*mmhg\b/i,
-  /\b(?:sleep|slept|rem[\s_-]*sleep|deep[\s_-]*sleep|time[\s_-]*asleep)\b(?:\s+\w+){0,3}?\s*[:=,]?\s*["']?\d+(?:\.\d+)?\s*(?:hours?|hrs?|minutes?|mins?)\b/i,
-  /\b(?:crs|form|recovery|load)(?:[\s_-]*score)?\b(?:\s+\w+){0,2}?\s*[:=,]?\s*["']?\d{1,3}\b/i,
-  /\b(?:steps|step[\s_-]*count|motion|circadian|sleep[\s_-]*efficiency|sleep[\s_-]*stages?|body[\s_-]*temperature|respiratory[\s_-]*rate|breathing[\s_-]*rate|blood[\s_-]*glucose|glucose|provider[\s_-]*payload|health[\s_-]*payload|raw[\s_-]*payload)\b(?:\s+\w+){0,3}?\s*[:=,]?\s*["']?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:steps|percent|pct|%|minutes?|mins?|celsius|fahrenheit|breaths?(?:\s+per\s+minute)?|mg\/dl|mmol\/l)?(?=$|[^a-z0-9])/i,
-  /\b(?:hrv|heart[\s_-]*rate|spo2|blood[\s_-]*pressure|body[\s_-]*weight|steps|sleep[\s_-]*duration|body[\s_-]*temperature|respiratory[\s_-]*rate|glucose|crs|form|recovery|load)\b(?:\s+\w+){0,3}?\s*[:=,]?\s*["']?[+-]?(?:\d+(?:\.\d*)?|\.\d+)[eE][+-]?\d+["']?(?=$|[^a-z0-9])/i,
-  /\b(?:hrv|heart[\s_-]*rate|spo2|blood[\s_-]*pressure|body[\s_-]*(?:weight|temperature)|steps|sleep[\s_-]*(?:duration|efficiency)|respiratory[\s_-]*rate|glucose|crs|form|recovery|load)\b(?:\s+\w+){0,3}?\s*[:=,]?\s*["']?-?\d+(?:\.\d+)?["']?(?:\s*,?\s*)(?:°[cf]|degrees?\s*[cf])(?=$|[^a-z0-9])/i,
+  /\b(?:hrv|rmssd|sdnn|heart[\s_-]*rate(?:[\s_-]*variability)?|resting[\s_-]*heart[\s_-]*rate|pulse|spo2|oxygen[\s_-]*saturation|blood[\s_-]*oxygen|systolic|diastolic|body[\s_-]*(?:weight|mass)|calorie[\s_-]*burn|calories[\s_-]*burned|active[\s_-]*energy)\b(?:\s*\(\s*(?:rmssd|sdnn)\s*\))?(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:ms|bpm|beats|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories)?(?=$|[^a-z0-9])/i,
+  /\b(?:blood[\s_-]*pressure|bp)\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,2}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?/i,
+  /\b(?:blood[\s_-]*pressure|bp)\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,2}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?\s*mmhg\b/i,
+  /\b(?:sleep|slept|rem[\s_-]*sleep|deep[\s_-]*sleep|time[\s_-]*asleep)\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?(?:~\s*)?["']?\d+(?:\.\d+)?\s*(?:hours?|hrs?|minutes?|mins?|h(?:\s*\d{1,2}\s*m(?:ins?|inutes?)?)?)\b/i,
+  /\b(?:crs|form|recovery|load)(?:[\s_-]*score)?\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,2}?\s*(?:[:=,]\s*)?["']?\d{1,3}\b/i,
+  /\b(?:steps|step[\s_-]*count|motion|circadian|sleep[\s_-]*efficiency|sleep[\s_-]*stages?|body[\s_-]*temperature|respiratory[\s_-]*rate|breathing[\s_-]*rate|blood[\s_-]*glucose|glucose|provider[\s_-]*payload|health[\s_-]*payload|raw[\s_-]*payload)\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:steps|percent|pct|%|minutes?|mins?|celsius|fahrenheit|breaths?(?:\s+per\s+minute)?|mg\/dl|mmol\/l)?(?=$|[^a-z0-9])/i,
+  /\b(?:hrv|heart[\s_-]*rate|spo2|blood[\s_-]*pressure|body[\s_-]*weight|steps|sleep[\s_-]*duration|body[\s_-]*temperature|respiratory[\s_-]*rate|glucose|crs|form|recovery|load)\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?[+-]?(?:\d+(?:\.\d*)?|\.\d+)[eE][+-]?\d+["']?(?=$|[^a-z0-9])/i,
+  /\b(?:hrv|heart[\s_-]*rate|spo2|blood[\s_-]*pressure|body[\s_-]*(?:weight|temperature)|steps|sleep[\s_-]*(?:duration|efficiency)|respiratory[\s_-]*rate|glucose|crs|form|recovery|load)\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?-?\d+(?:\.\d+)?["']?(?:\s*(?:,\s*)?)(?:°[cf]|degrees?\s*[cf])(?=$|[^a-z0-9])/i,
+  // A wrist temperature is a deviation from the owner's baseline: a signed number, a decimal or a number with a degree sign, after
+  // the few words a reading puts between ("wrist temp up 0.4°C"), so "wrist temperature feature in iOS 17" is not one.
+  /\bwrist[\s_-]*temp(?:erature)?\b(?:\s+(?:deviation|delta|change|is|was|of|at|about|around|up|down|by|rose|fell|dropped|climbed|to|from|reads?|reading)\b)*\s*(?:[:=,]\s*)?["']?(?:[+\-−]\s?\d+(?:\.\d+)?|\d+\.\d+|\d+(?=\s*(?:°|degrees?\b|[cf]\b|celsius|fahrenheit)))/i,
+  // Hours and minutes glued with no minute unit ("sleep 7h22"), right after the sleep word: with a word between it is as
+  // often a clock time ("sleep at 10h30").
+  /\b(?:sleep|slept|rem[\s_-]*sleep|deep[\s_-]*sleep|time[\s_-]*asleep)\b\s*(?:[:=,]\s*)?(?:~\s*)?\d{1,2}h[0-5]\d\b/i,
 ];
 // Health phrases without a number (a state named in words). Kept apart so a later qualitative entry can never join the
 // numeric floor by accident.
@@ -115,21 +123,32 @@ const HEALTH_FREE_TEXT: readonly RegExp[] = [...HEALTH_FREE_TEXT_NUMERIC, ...HEA
 // A trend ("dropped to", "went from") carries the value too, except after a word ordinary life shares ("HR jumped to 30
 // candidates").
 const STEADY_WORDS = String.raw`is|was|were|are|of|about|around|roughly|approx(?:imately)?|averag(?:e|es|ed|ing)|avg|only|just|under|over|below|above|nearly|almost|hit|reads?|reading|down\s+to|up\s+to`;
-const READING_WORDS = String.raw`${STEADY_WORDS}|(?:rose|fell|dropped|dipped|climbed|jumped|increased|decreased|declined|went\s+(?:up|down|from))(?:\s+(?:to|from|by))?`;
-const gapOf = (words: string): string => String.raw`(?:\s*(?:[:=~]|\b(?:${words})\b))*\s*`;
+const READING_WORDS = String.raw`${STEADY_WORDS}|now|(?:rose|fell|dropped|dipped|slipped|climbed|jumped|increased|decreased|declined|went\s+(?:up|down|from))(?:\s+(?:to|from|by))?`;
+// An arrow ties a metric to its value as a trend word does: "HRV →", "HRV ↓" before the number. Words ordinary life shares
+// (an HR arrow before a head count) take no arrow: their gap is the plain one.
+const plainGapOf = (words: string): string => String.raw`(?:\s*(?:[:=~]|\b(?:${words})\b))*\s*`;
+const gapOf = (words: string): string => String.raw`(?:\s*(?:[:=~→↓↑]|->|\b(?:${words})\b))*\s*`;
 const READING_GAP = gapOf(String.raw`${READING_WORDS}|at`);
 const BARE_GAP = gapOf(READING_WORDS);
-const STEADY_GAP = gapOf(STEADY_WORDS);
+// A gap that also takes some words of its own is one gap with more words, not a gap inside a repeat: a repeat around a gap
+// that can match nothing and ends in `\s*` splits a run of blanks between its turns every way there is.
+const SLEEP_GAP = gapOf(String.raw`${READING_WORDS}|at|for|a|an|less\s+than|more\s+than`);
+const WRIST_GAP = gapOf(String.raw`${READING_WORDS}|at|up|down|rose|fell|dropped|climbed|by`);
+const STEADY_GAP = plainGapOf(STEADY_WORDS);
+const SEPARATOR_GAP = String.raw`(?:\s*[:=~])*\s*`;
 const READING_NUMBER = String.raw`\d+(?:[.,]\d+)?`;
+// The owner eating or logging, as a relayed food reading says it. Someone else's meal is not the owner's reading.
+const OWNER_ATE = String.raw`\b(?:you|i)(?:'ve|\s+have)?\s+(?:ate|eaten|had|logged|consumed)\b`;
 // A bare two- or three-digit value that is not a clock time ("10:30", "7am", "10h30") or the first group of a phone number.
 const BARE_VALUE = String.raw`\d{2,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|[-–]?\s*\d))`;
 // A weight that follows a bag or a parcel is the luggage's.
-const NOT_CARRIED = String.raw`(?<!\b(?:bags?|baggage|luggage|suitcase|parcel|package|box|cargo|carry-on)\s+)`;
+const CARRIED = String.raw`(?:bags?|baggage|luggage|suitcases?|parcel|package|box|cargo|carry-on)`;
+const NOT_CARRIED = String.raw`(?<!\b${CARRIED}\s+)`;
 const reading = (source: string): RegExp => new RegExp(source, 'i');
 // REM the sleep stage is written in capitals; lowercase "rem" is usually "remaining".
 const casedReading = (source: string): RegExp => new RegExp(source);
 // HRV with the method get_health labels it by, or the method alone.
-const HRV = String.raw`(?:(?:hrv|heart\s+rate\s+variability)\b(?:\s*\(?\s*(?:rmssd|sdnn)\b\s*\)?)?|(?:rmssd|sdnn)\b)`;
+const HRV = String.raw`(?:(?:hrv|heart\s+rate\s+variability)\b(?:\s*(?:\(\s*)?(?:rmssd|sdnn)\b(?:\s*\))?)?|(?:rmssd|sdnn)\b)`;
 const DURATION = String.raw`(?:h|hrs?|hours?|m|mins?|minutes?)\b`;
 // The minute signals get_health returns beside sleep.
 const MINUTE_SIGNAL = String.raw`(?:movement|daylight|workouts?|mindfulness)`;
@@ -138,6 +157,51 @@ const STAGE_HOURS = String.raw`\d{1,2}\s*h(?:rs?|ours?)?\s*`;
 const STAGE_MINUTES = String.raw`\d{1,2}\s*m(?:ins?|inutes?)?\b`;
 const STAGE_DURATION = `${STAGE_HOURS}${STAGE_MINUTES}`;
 const AT_NIGHT = String.raw`(?:overnight|at\s+night|last\s+night|(?:in|during)\s+the\s+night|during\s+sleep)`;
+// Lab results as a report or a clinic mail sets them out: the analyte, then its value with a unit, a reference range or a
+// high or low flag. A dose is not a result ("Vitamin D 1000 IU", "60k weekly"), nor is a date, a year, a clock time or a count
+// after the name.
+const LAB_GAP = gapOf(String.raw`${READING_WORDS}|results?|levels?|values?`);
+// A gap with a separator or a reading word in it ("TSH: 4", "ferritin is 15"), as against blanks alone ("TSH 14 Nov").
+const LAB_SAID = String.raw`(?:\s*(?:[:=~]|\b(?:${READING_WORDS}|results?|levels?|values?)\b))+\s*`;
+const MONTH = String.raw`(?:jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*`;
+const NOT_A_RESULT = String.raw`(?:iu|i\.u\.|mcg|µg|ug|mg|k|capsules?|tablets?|tabs?|units?|drops?|sachets?|bottles?|minutes?|mins?|hours?|weeks?|days?|daily|weekly|monthly|once|twice|a\s+(?:day|week|month)|${MONTH})\b`;
+const LAB_VALUE = String.raw`(?:[<>≤≥]\s*)?(?!(?:19|20)\d\d(?![\d.,]))\d{1,4}(?:[.,]\d+)?(?![\d\/]|[.,]\d|\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|${NOT_A_RESULT}))`;
+const LAB_DECIMAL = String.raw`(?:[<>≤≥]\s*)?\d{1,4}[.,]\d+(?![\d\/]|[.,]\d|\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|${NOT_A_RESULT}))`;
+// The units only a lab result uses: thyroid hormone, vitamin D, PSA, ferritin, haemoglobin. mL/min is also a pump or a drip
+// rate, so it counts only after an analyte's name.
+const LAB_UNIT_ALONE = String.raw`(?:[mµμu]\s*iu\s*\/\s*m?l|ng\s*\/\s*ml|[nµμup]mol\s*\/\s*l|[µμu]g\s*\/\s*l|g\s*\/\s*dl)`;
+const LAB_UNIT = String.raw`(?:${LAB_UNIT_ALONE}|ml\s*\/\s*min(?:\s*\/\s*1[.,]73\s*m?(?:2|²)?)?)`;
+// A bare H or L is a flag only in brackets or after a decimal value ("Hb 9.8 L"); after a whole number it is as likely litres
+// or hours ("Hb 2 L of water"). A flag word never starts a compound ("high-priority").
+const LAB_RANGE = String.raw`(?:${LAB_UNIT}|g\s*\/\s*l|\(\s*(?:[<>]\s*)?\d|\(\s*(?:[HL]|high|low)\s*\)|\b(?:high|low)(?![\w-]))`;
+const LAB_FLAG = String.raw`\s*\b[HL](?![\w-])`;
+// One blank run, then a unit, a reference range or a flag; a second optional blank run beside it scanned blanks quadratically.
+const LAB_MARK = String.raw`\s*${LAB_RANGE}`;
+// A whole number after blanks alone counts only where a line, a table cell or the text ends, or a mark follows: a sentence
+// that ends on one ("Take Vitamin D 3.", "Hgb 3.") is a dose or a list as often as a result.
+const LAB_ENDS = String.raw`(?=[^\S\n]*(?:\||\n|$))`;
+const QUALIFIER = String.raw`(?:\s*\([\w\s-]{1,24}\)|\s*,\s*(?:serum|plasma|blood|total|free)\b)?`;
+const LAB_NAME = String.raw`(?:tsh|thyroid[\s-]+stimulating[\s-]+hormone|25[\s-]*(?:\(\s*oh\s*\)|oh|hydroxy)[\s-]*(?:vitamin|vit\.?)\s*d[23]?|ha?emoglobin|hgb|egfr|(?:serum\s+)?creatinine|ferritin)`;
+// Plain vitamin D is bought, taken and dosed far more often than it is measured, and "D 2" or "D 3" is its form: it counts
+// only with a lab unit or a reference range ("(30-100)", "(<20)"), or after a lab qualifier ("Vitamin D (25-OH) 18").
+const VITAMIN_D = String.raw`(?:vitamin|vit\.?)\s*d(?:\s*[23](?![\d.,]))?`;
+const RANGE_SHAPE = String.raw`\(\s*(?:[<>≤≥]\s*\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?\s*[-–]\s*\d+(?:[.,]\d+)?)\s*\)`;
+const D_QUALIFIER = String.raw`\(\s*(?:25[\s-]*(?:\(\s*oh\s*\)|oh|hydroxy)|hydroxy|total|serum)\s*\)`;
+// "PSA" is also an announcement and "Hb" a pencil, so these count only with a unit, a range, a flag or a level.
+const SHARED_LAB_NAME = String.raw`(?:(?:total\s+|free\s+)?psa|hb)`;
+const LAB_READINGS: readonly RegExp[] = [
+  reading(String.raw`\b${READING_NUMBER}\s*${LAB_UNIT_ALONE}`),
+  reading(String.raw`\b${LAB_NAME}\b${QUALIFIER}${LAB_SAID}${LAB_VALUE}`),
+  reading(String.raw`\b${LAB_NAME}\b${QUALIFIER}\s*${LAB_DECIMAL}`),
+  reading(String.raw`\b${LAB_NAME}\b${QUALIFIER}\s*${LAB_VALUE}(?:${LAB_MARK}|${LAB_ENDS})`),
+  reading(String.raw`\b${VITAMIN_D}\b${LAB_GAP}${LAB_VALUE}\s*(?:${LAB_UNIT}|${RANGE_SHAPE})`),
+  reading(String.raw`\b${VITAMIN_D}\s*${D_QUALIFIER}\s*${LAB_VALUE}(?:${LAB_MARK}|${LAB_ENDS})`),
+  reading(String.raw`\b${SHARED_LAB_NAME}\b${QUALIFIER}${LAB_GAP}${LAB_VALUE}${LAB_MARK}`),
+  casedReading(String.raw`\b(?:(?:[Tt]otal\s+|[Ff]ree\s+)?(?:PSA|psa|Psa)|H[Bb]|hb)\b${QUALIFIER}${LAB_GAP}${LAB_DECIMAL}${LAB_FLAG}`),
+  reading(String.raw`\b${SHARED_LAB_NAME}\s+(?:levels?|results?)\b${LAB_GAP}${LAB_VALUE}`),
+  // A trend whose last value carries the unit ("Hb 10.9 → 11.4 g/dL") is the reading from its first value.
+  reading(String.raw`\b${SHARED_LAB_NAME}\b${QUALIFIER}${LAB_GAP}${LAB_DECIMAL}(?=\s*(?:→|->|=>|\bto\b)\s*\d+(?:[.,]\d+)?\s*${LAB_UNIT_ALONE})`),
+];
 // Readings in an owner's own words: a metric tied to its number through a reading gap, or a number carrying a unit only a
 // health measurement uses. Words a metric shares with ordinary life (form, load, recovery, steps, pulse, hr, temperature)
 // count only with a score, a unit or a plausible value, so "Form 16", "Laundry load at 6" or a meeting with HR at a
@@ -149,6 +213,7 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\b(?:resting\s+(?:hr|heart\s+rate|pulse)|heart\s+rate|rhr)\b${BARE_GAP}${BARE_VALUE}`),
   reading(String.raw`\b${HRV}${BARE_GAP}${BARE_VALUE}`),
   reading(String.raw`\b${HRV}${READING_GAP}${READING_NUMBER}\s*ms\b`),
+  reading(String.raw`\b${READING_NUMBER}\s*ms\s+(?:of\s+)?${HRV}(?![\w-])`),
   // Apple names VO2 max "Cardio Fitness", which is also a class with a length.
   reading(String.raw`\b(?:vo2\s*max|cardio\s+fitness)\b${BARE_GAP}${BARE_VALUE}(?!\s*${DURATION})`),
   reading(String.raw`\b${READING_NUMBER}\s*ml\s*\/\s*kg\s*\/\s*min\b`),
@@ -157,9 +222,17 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\b(?:bp|blood\s+pressure)\b${READING_GAP}(?:[6-9]\d|1\d\d|2[0-4]\d)\s*(?:\/|over)\s*(?:[3-9]\d|1[0-4]\d)\b`),
   reading(String.raw`\b(?:blood\s+pressure|systolic|diastolic)\b${BARE_GAP}${BARE_VALUE}`),
   // A body weight has two or three digits, so a laptop's 1.4 kg is not one.
-  reading(String.raw`${NOT_CARRIED}\b(?:weigh(?:s|ed|ing)?|weight|body\s+weight)\b${READING_GAP}\d{2,3}(?:[.,]\d+)?\s*(?:kg|kgs|kilos?|kilograms?|lbs?|pounds?|st|stone)\b`),
+  reading(String.raw`${NOT_CARRIED}\b(?:weigh(?:s|ed|ing)?|weight|body\s+weight)\b${READING_GAP}\d{2,3}(?:[.,]\d+)?\s*(?:kg|kgs|kilos?|kilograms?|lbs?|pounds?|st|stone)\b(?!\s+${CARRIED}\b)`),
   reading(String.raw`${NOT_CARRIED}\b(?:body\s+)?weight\s*[:=]\s*${BARE_VALUE}`),
-  reading(String.raw`\b(?:slept|sleeps?|sleeping|asleep|(?:deep|rem|light|core)\s+sleep|sleep\s+duration)\b(?:${READING_GAP}|\s*\b(?:for|a|an|less\s+than|more\s+than)\b\s*)*${READING_NUMBER}\s*${DURATION}`),
+  // Body composition as get_health gives it: body mass and lean mass in kilograms, body fat as a percentage.
+  reading(String.raw`\b(?:body|lean(?:\s+body)?)\s+mass\b${READING_GAP}\d{2,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b))`),
+  reading(String.raw`\bbody\s+fat(?:\s+(?:percentage|percent))?\b${READING_GAP}\d{1,2}(?:[.,]\d+)?(?:\s*(?:%|percent\b))?|\b\d{1,2}(?:[.,]\d+)?\s*(?:%|percent)\s+body\s+fat\b`),
+  // Stand hours count only as the Watch's measure, never a stretch of standing ("stood in line for 2 hours").
+  reading(String.raw`\bstand\s+hours?\b${BARE_GAP}\d{1,2}\b|\b\d{1,2}\s+stand\s+hours?\b|\bstood\s+in\s+\d{1,2}\s+of\s+(?:the\s+)?\d{1,2}\s+hours\b`),
+  // Minutes in a heart-rate zone, as a workout session lists them; a zone that is a room or an area carries no duration.
+  reading(String.raw`\b${READING_NUMBER}\s*${DURATION}\s+in\s+(?:(?:hr|heart[\s-]+rate)\s+)?zone\s*[1-5]\b|\b(?:(?:hr|heart[\s-]+rate)\s+)?zone\s*[1-5]\s*[:=]\s*${READING_NUMBER}\s*${DURATION}`),
+  reading(String.raw`\b(?:slept|sleeps?|sleeping|asleep|(?:deep|rem|light|core)\s+sleep|sleep\s+duration)\b${SLEEP_GAP}(?:${STAGE_DURATION}|${READING_NUMBER}\s*${DURATION})`),
+  reading(String.raw`\b(?:slept|sleeps?|sleeping|asleep|(?:deep|rem|light|core)\s+sleep|sleep\s+duration)\b${SEPARATOR_GAP}\d{1,2}h[0-5]\d\b`),
   reading(String.raw`\b${READING_NUMBER}\s*${DURATION}\s+(?:of\s+)?(?:(?:deep|rem|light|core)\s+)?(?:sleep|asleep)\b`),
   // A bare stage word is ordinary ("rem: 5 min left", "Deep: 2h 30m focus block"), so deep, core and light count only beside
   // a sleep word, and REM only in capitals.
@@ -194,7 +267,7 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\b${READING_NUMBER}\s*(?:breaths?\s*(?:per|a|\/)\s*min(?:ute)?|brpm)\b`),
   reading(String.raw`\bbreathing\b${BARE_GAP}${READING_NUMBER}\s*(?:per|a|\/)\s*min(?:ute)?\b`),
   // A wrist temperature is read as a value or as its change from the owner's baseline, so a signed small number counts.
-  reading(String.raw`\bwrist\s+temp(?:erature)?\b(?:\s+(?:deviation|delta|change))?(?:${READING_GAP}|\s*\b(?:up|down|rose|fell|dropped|climbed|by)\b\s*)*[+\-−]?${READING_NUMBER}\b`),
+  reading(String.raw`\bwrist\s+temp(?:erature)?\b(?:\s+(?:deviation|delta|change))?${WRIST_GAP}[+\-−]?${READING_NUMBER}\b`),
   reading(String.raw`(?<![\w.])[+\-−]?${READING_NUMBER}\s*(?:°\s*[cf]?|degrees?|[cf]\b)\s+(?:(?:above|below)\s+baseline\s+)?(?:on\s+)?wrist\s+temp(?:erature)?\b`),
   // Recovery a minute after exercise can be a single digit, and HRR is its usual short form.
   reading(String.raw`\b(?:hrr|(?:hr|heart[\s-]+rate)\s+recovery)\b${BARE_GAP}\d{1,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|[-–]?\s*\d))`),
@@ -204,8 +277,17 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\bmove\b${BARE_GAP}${READING_NUMBER}\s*(?:kcal|cal(?:ories)?)\b`),
   reading(String.raw`\bburn(?:ed|t)?\b${READING_GAP}${READING_NUMBER}\s*(?:kcal|cal|calories)\b`),
   reading(String.raw`\b${READING_NUMBER}\s*(?:kcal|cal|calories)\s+(?:of\s+active\s+energy\b(?!\s+drinks?\b)|burned\b(?!\s+off\b))`),
+  // Food the owner's app logged: energy eaten, and protein, carbs or fat in grams, said of the owner (you, your, intake, logged)
+  // or of a day. Grams on a label, in a recipe or in someone else's meal are not a reading.
+  reading(String.raw`\b(?:food[\s_]+energy|(?:calorie|energy)\s+intake)\b${BARE_GAP}(?:\d{1,2},\d{3}|\d{2,5})\b(?!\s*(?::\d|[ap]\.?m\b|o'?clock\b))`),
+  reading(String.raw`(?:\b(?:food[\s_]+energy|(?:calorie|energy)\s+intake|intake)\b|${OWNER_ATE}|\byour\s+(?:breakfast|lunch|dinner|snacks?|meals?)\b|\bfood\s+(?:app|log|diary)\s+(?:had|has|logged|shows?|says?)\b)${READING_GAP}${READING_NUMBER}\s*(?:kcal|cal(?:ories)?)\b`),
+  reading(String.raw`\b${READING_NUMBER}\s*(?:kcal|cal(?:ories)?)\s+(?:eaten|consumed|logged|of\s+food)\b`),
+  reading(String.raw`(?:\b(?:protein|carbs?|carbohydrates?|fat)\s+intake\b|\byour\s+(?:protein|carbs?|carbohydrates?|fat)\b)${READING_GAP}${READING_NUMBER}\s*(?:g|grams?)\b`),
+  reading(String.raw`${OWNER_ATE}${READING_GAP}${READING_NUMBER}\s*(?:g|grams?)\s+(?:of\s+)?(?:protein|carbs?|carbohydrates?|fat)\b`),
+  reading(String.raw`\b(?:protein|carbs?|carbohydrates?|fat)\b${READING_GAP}${READING_NUMBER}\s*(?:g|grams?)\s+(?:today|yesterday|so\s+far|logged|eaten)\b|\b${READING_NUMBER}\s*(?:g|grams?)\s+(?:of\s+)?(?:protein|carbs?|carbohydrates?|fat)\s+(?:today|yesterday|so\s+far|logged|eaten|a\s+day|per\s+day|daily)\b`),
   reading(String.raw`\bcrs\b${BARE_GAP}\d`),
   reading(String.raw`\b(?:form|recovery|load|strain|readiness|sleep|hrv)\s+score\b${BARE_GAP}\d`),
+  ...LAB_READINGS,
 ];
 // Matched with only emphasis blanked. A word ordinary life shares (hr, pulse, steps, recovery), with no unit, names a
 // reading only when tied to its number as plain text would tie it: bold around "Steps:" keeps the tie, a table cell border
@@ -232,7 +314,15 @@ const MARKUP = new RegExp(String.raw`${EMPHASIS}|[|\u2013\u2014\u2082]|(?<= )-(?
 const unmarked = (text: string): string => text.replace(MARKUP, (mark) => (mark === '|' ? ':' : mark === '\u2082' ? '2' : ' '));
 const unemphasised = (text: string): string => text.replace(new RegExp(EMPHASIS, 'gu'), ' ');
 // A trend's second value ("from 48 to 35", "48 → 35") belongs to the reading.
-const TREND_TAIL = String.raw`\s*(?:to|→|->)\s*[+\-−]?\d+(?:[.,]\d+)?`;
+// Every further value is the reading's too, each with its unit: a trend's next step after an arrow or "down to", a value
+// restated after ", now", the next in a list, or the next cells of a table row, whose borders the prose view reads as colons.
+// A clock time ("10:30") is never one. After a bare comma a value is the reading's only with a unit, or as one of a list that
+// goes on or ends there ("HRV 42, 45, 48"): "HR 61, 2 meetings moved" counts the meetings.
+const TREND_UNIT = String.raw`\s*(?:ms|bpm|%|kg|lbs?|hrs?|hours?|h|mins?|minutes?|m)\b`;
+const TREND_VALUE = String.raw`[+\-−]?\d+(?:[.,]\d+)?(?![\d:])`;
+const TREND_STEP = String.raw`\s*(?:(?:down\s+|up\s+)?to|→|->|=>|↓|↑|⬇|⬆|↘|↗|,\s*now|:)\s*${TREND_VALUE}(?:${TREND_UNIT})?`;
+const LIST_STEP = String.raw`\s*,\s*${TREND_VALUE}(?:${TREND_UNIT}|(?=[^\S\n]*(?:,|\band\b|[.;!?)]|\n|$)))`;
+const TREND_TAIL = String.raw`(?:${TREND_STEP}|${LIST_STEP})+`;
 type Found = Readonly<{ index: number; text: string }>;
 const found = (pattern: RegExp, source: string): Found[] => {
   const tail = new RegExp(TREND_TAIL, 'iy');
@@ -246,11 +336,14 @@ const proseReadings = (text: string): Found[] => {
   const plain = unemphasised(text);
   return [...OWNER_HEALTH_READINGS.flatMap((pattern) => found(pattern, view)), ...PLAIN_READINGS.flatMap((pattern) => found(pattern, plain))];
 };
-// Each reading in text, as the words the floor matched.
-const numericHealthReadings = (text: string): string[] => [
-  ...proseReadings(text).map((reading) => reading.text),
-  ...RAW_SENSOR_PATTERNS.flatMap((pattern) => everyMatch(pattern, text)).filter((field) => SERIALIZED_FIELD.test(field)),
-];
+// Each reading in text, as the words the floor matched, in ASCII digits whatever digits the text was written in.
+const numericHealthReadings = (written: string): string[] => {
+  const text = asciiDigits(written);
+  return [
+    ...proseReadings(text).map((reading) => reading.text),
+    ...RAW_SENSOR_PATTERNS.flatMap((pattern) => everyMatch(pattern, text)).filter((field) => SERIALIZED_FIELD.test(field)),
+  ];
+};
 
 // The one numeric health floor for memory written from outside content and for stored summaries, where a match drops the
 // write. What the owner says goes into memory without it. Precision wins over recall here: a false match loses an ordinary
@@ -259,13 +352,26 @@ const numericHealthReadings = (text: string): string[] => [
 // carries lastIndex from one call into the next.
 export const numericHealthIn = (text: string): boolean => numericHealthReadings(text).length > 0;
 
+// The same floor over a stored value. Its JSON alone is not enough: inside JSON a quote or a tab before a reading is an
+// escape (\" or \t) the floor does not see past, so every string the value holds is also read as it was written.
+const stringsIn = (value: unknown): string[] =>
+  typeof value === 'string' ? [value] : Array.isArray(value) ? value.flatMap(stringsIn)
+    : value !== null && typeof value === 'object' ? Object.entries(value).flatMap(([key, inner]) => [key, ...stringsIn(inner)]) : [];
+export const numericHealthInValue = (value: unknown): boolean => numericHealthIn(JSON.stringify(value) ?? '') || stringsIn(value).some(numericHealthIn);
+// The same for JSON text (a tool call's arguments, a tool's output): parsed, its strings are read as written; text that is
+// not JSON is read as it is.
+export const numericHealthInJsonText = (text: string): boolean => {
+  if (numericHealthIn(text)) return true;
+  try { return stringsIn(JSON.parse(text)).some(numericHealthIn); } catch { return false; }
+};
+
 // Whether text carries a reading with a number not in `owner`, the owner's words that vouch for it: a reading that came
 // from shared content, Waldo's reply or a device. It keys on where a reading's numbers came from, never on its wording; a
 // date beside a reading is not part of it. With no owner words, every reading is one. The caller keeps `owner` narrow (a
 // claim's own quote, or the owner's own readings), since a number the owner typed about anything else vouches for nothing.
 const NUMBER = /\d+(?:[.,]\d+)*/g;
 export const readingBeyondOwner = (text: string, owner: string | undefined): boolean => {
-  const said = new Set(owner?.match(NUMBER) ?? []);
+  const said = new Set(owner === undefined ? [] : asciiDigits(owner).match(NUMBER) ?? []);
   return numericHealthReadings(text).some((reading) => (reading.match(NUMBER) ?? []).some((number) => !said.has(number)));
 };
 
@@ -277,7 +383,9 @@ export const ownerReadings = (owner: string | undefined): string | undefined => 
 const ENDS_IN_HOURS = new RegExp(String.raw`\d\s*h(?:rs?|ours?)?$`, 'i');
 const STARTS_IN_MINUTES = new RegExp(String.raw`^${STAGE_MINUTES}`, 'i');
 const HOURS_BEFORE = new RegExp(String.raw`${STAGE_HOURS}$`, 'i');
-export const redactNumericHealth = (text: string, marker: string): string => {
+// Text with a reading is returned in ASCII digits; text with none is returned as it was.
+export const redactNumericHealth = (written: string, marker: string): string => {
+  const text = asciiDigits(written);
   const spans: Array<[number, number]> = [];
   const minutesAfter = new RegExp(String.raw`\s*${STAGE_MINUTES}`, 'iy');
   const tail = (end: number): number => { minutesAfter.lastIndex = end; return minutesAfter.exec(text)?.[0].length ?? 0; };
@@ -288,7 +396,7 @@ export const redactNumericHealth = (text: string, marker: string): string => {
   };
   proseReadings(text).forEach(span);
   for (const pattern of RAW_SENSOR_PATTERNS) found(pattern, text).filter((field) => SERIALIZED_FIELD.test(field.text)).forEach(span);
-  if (spans.length === 0) return text;
+  if (spans.length === 0) return written;
   spans.sort((a, b) => a[0] - b[0]);
   let out = '', at = 0;
   for (const [start, end] of spans) {
@@ -301,7 +409,9 @@ export const redactNumericHealth = (text: string, marker: string): string => {
 
 const SECRET_PATTERNS: readonly RegExp[] = [
   /\bBearer\s+[A-Za-z0-9._~+\/-]{16,}\b/i,
-  /\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{8,}\b/,
+  // Starts at the beginning of a run of token characters and checks the rest of the token (two more segments) in one look
+  // ahead, so a long run of "eyJ-eyJ-" is read once, not once for every "eyJ" in it.
+  /(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{8,}\b)[A-Za-z0-9_-]*?eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{8,}\b/,
   /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i,
   /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/,
   /\bgh[pousr]_[A-Za-z0-9]{20,}\b/,
@@ -317,7 +427,7 @@ const ATTENDEE_KEY = /^(?:attendee|attendees|attendee_name|participant|participa
 const ADDRESS_KEY = /^(?:address|street_address|mailing_address|home_address|ip|ip_address)$/i;
 const PERSON_NAME = /^[\p{L}][\p{L}'-]+(?:\s+[\p{L}][\p{L}'-]+){1,3}$/u;
 const BASE64_TOKEN = /(?<![A-Za-z0-9+\/_-])(?:(?:[A-Za-z0-9+\/_-]{4})*(?:[A-Za-z0-9+\/_-]{2}==|[A-Za-z0-9+\/_-]{3}=)|(?:[A-Za-z0-9+\/_-]{4})+(?:[A-Za-z0-9+\/_-]{2,3})?)(?![A-Za-z0-9+\/_=-])/g;
-const PHONE_PATTERN = /\+?\b(?:1?[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/g;
+const PHONE_PATTERN = new RegExp(`${PHONE_OUTSIDE_US.source}|\\+?\\b(?:1?[\\s.-]?)?\\(?\\d{3}\\)?[\\s.-]?\\d{3}[\\s.-]?\\d{4}\\b`, 'g');
 const JSON_ESCAPE = /\\u[0-9a-fA-F]{4}/;
 const JSON_ESCAPES = /\\u[0-9a-fA-F]{4}/g;
 const PERCENT_ESCAPE = /%[0-9a-fA-F]{2}/;
@@ -338,6 +448,102 @@ function denyInvalid(diagnostic: SanitiseDenialDiagnostic): SanitiseResult {
 
 function cloneRegex(pattern: RegExp): RegExp {
   return new RegExp(pattern.source, pattern.flags.replaceAll('g', ''));
+}
+
+// A card candidate is not a card when it sits inside an identifier: a uuid (8-4-4-4-12 hex), whose groups hold sixteen digits
+// across its first three, or a long hex id (a run of 20 or more hex characters holding a letter, with or not with a 0x: a
+// 24-character object id, a 32-character id, a 40-character SHA, a 0x hash). The identifiers are masked before the
+// scan, so a real card next to one is still found, and the masked text keeps every index. A fifteen-digit candidate is an
+// Amex only when its check digit holds, and a candidate whose groups are written two ways ("20261106-1234-5678", a build
+// number) is a card only when its check digit holds, since a card is typed with one separator or none. Anything else
+// card-shaped is a card, whatever surrounds it.
+const UUID_SHAPE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+const HEX_ID = /(?<![0-9a-z])(?:0x)?(?=[0-9a-f]*[a-f])[0-9a-f]{20,}(?![0-9a-z])/gi;
+
+function luhnValid(digits: string): boolean {
+  let sum = 0;
+  for (let at = 0; at < digits.length; at += 1) {
+    let digit = Number(digits[digits.length - 1 - at]);
+    if (at % 2 === 1) { digit *= 2; if (digit > 9) digit -= 9; }
+    sum += digit;
+  }
+  return sum % 10 === 0;
+}
+
+// A hex run that holds a card number is not an id to leave unread: "deadbeef4111111111111111" redacts the card.
+const holdsCardNumber = (hex: string): boolean => (hex.match(/\d{13,19}/g) ?? []).some(luhnValid);
+
+// A card has one separator between its groups, or none; groups written two ways are not a card unless the check digit holds.
+const separatedAlike = (candidate: string): boolean => {
+  const separators = candidate.replace(/\d/g, '');
+  return separators.length === 0 || (separators.length === 3 && new Set(separators).size === 1);
+};
+
+function cardMatches(text: string): RegExpMatchArray[] {
+  const masked = text.replace(UUID_SHAPE, id => '#'.repeat(id.length))
+    .replace(HEX_ID, id => (holdsCardNumber(id) ? id : '#'.repeat(id.length)));
+  return [...masked.matchAll(new RegExp(PII_PATTERNS.cc.source, PII_PATTERNS.cc.flags))].filter(match => {
+    const digits = match[0].replace(/\D/g, '');
+    return luhnValid(digits) || (digits.length === 16 && separatedAlike(match[0]));
+  });
+}
+
+// A card written in other digits (fullwidth on a Japanese receipt, Arabic-Indic) is found in its ASCII reading. Text with
+// a card is returned in that reading; text with none is returned as it was.
+function redactCards(text: string, counts: Map<RedactionKind, number>): string {
+  const read = asciiDigits(text);
+  const found = cardMatches(read);
+  if (found.length === 0) return text;
+  let output = '';
+  let last = 0;
+  for (const match of found) {
+    const at = match.index!;
+    output += read.slice(last, at) + '[REDACTED_CREDIT_CARD]';
+    last = at + match[0].length;
+  }
+  increment(counts, 'credit_card', found.length);
+  return output + read.slice(last);
+}
+
+// A phone-shaped number the words before it or the numbers beside it say is something else:
+//  - a run of digits after a word that names a reference ("order", "PNR", "invoice #") is that reference;
+//  - a run of ten digits that starts with 0 or 1 is neither a US number (no area code starts so) nor an Indian mobile, and is
+//    most often a timestamp in seconds;
+//  - two groups of five after a currency or an amount word ("₹75000 80000", "salary 75000 80000") are a range, and next to
+//    a third group of five they are a list.
+// Only the twenty-four characters before a match and the seven after it are read, so the check costs the same for any text.
+const REFERENCE_BEFORE = /\b(?:order|ref|reference|id|invoice|inv|txn|transaction|pnr|booking|ticket|awb|tracking|utr|receipt|bill)\b\.?\s*(?:no\.?|number|#|:)?\s*#?\s*$/i;
+const AMOUNT_BEFORE = /(?:[₹$€£]|\b(?:rs|inr|usd|salary|price|budget|cost|amount|rent|fees?|ctc|between|from)\b\.?:?)\s*$/i;
+const FIVE_GROUP_BEFORE = /(?<!\d)\d{5}\s$/;
+const FIVE_GROUP_AFTER = /^\s\d{5}(?!\d)/;
+const CONTEXT_BEFORE = 24;
+const notAPhone = (number: string, before: string, after: string): boolean => {
+  const digits = number.replace(/^[\s.-]/, '');
+  if (/^\d+$/.test(digits) && (REFERENCE_BEFORE.test(before) || (digits.length === 10 && /^[01]/.test(digits)))) return true;
+  return /^0?[6-9]\d{4}\s\d{5}$/.test(digits) && (AMOUNT_BEFORE.test(before) || FIVE_GROUP_BEFORE.test(before) || FIVE_GROUP_AFTER.test(after));
+};
+
+function phoneMatches(text: string): RegExpMatchArray[] {
+  return [...text.matchAll(new RegExp(PHONE_PATTERN.source, PHONE_PATTERN.flags))].filter((match) => {
+    const end = match.index! + match[0].length;
+    return !notAPhone(match[0], text.slice(Math.max(0, match.index! - CONTEXT_BEFORE), match.index), text.slice(end, end + 7));
+  });
+}
+
+// A number written in other digits (fullwidth, Devanagari) is found in its ASCII reading. Text with a number is returned in that
+// reading; text with none is returned as it was.
+function redactPhones(text: string, counts: Map<RedactionKind, number>): string {
+  const read = asciiDigits(text);
+  const found = phoneMatches(read);
+  if (found.length === 0) return text;
+  let output = '';
+  let last = 0;
+  for (const match of found) {
+    output += read.slice(last, match.index) + '[REDACTED_PHONE]';
+    last = match.index! + match[0].length;
+  }
+  increment(counts, 'phone', found.length);
+  return output + read.slice(last);
 }
 
 function matches(pattern: RegExp, text: string): boolean {
@@ -448,13 +654,51 @@ function decodeJsonEscapes(text: string): string | undefined {
   );
 }
 
-function decodePercent(text: string): string | null | undefined {
-  if (!PERCENT_ESCAPE.test(text)) return undefined;
+// decodeURIComponent throws a URIError for bytes that are not UTF-8: that is its answer, "not a character".
+function utf8FromEscapes(escapes: string): string | undefined {
   try {
-    return decodeURIComponent(text);
+    return decodeURIComponent(escapes);
   } catch {
-    return null;
+    return undefined;
   }
+}
+
+// A run of %XX escapes decodes on its own. An escape that does not start a valid UTF-8 sequence of one to four bytes
+// stays literal, so a cut-off or stray byte does not hide the characters encoded after it.
+function decodePercentRun(run: string): string {
+  const whole = utf8FromEscapes(run);
+  if (whole !== undefined) return whole;
+  let output = '';
+  let at = 0;
+  while (at < run.length) {
+    let taken = 3;
+    let character = run.slice(at, at + 3);
+    for (let bytes = 1; bytes <= 4 && at + bytes * 3 <= run.length; bytes += 1) {
+      const decoded = utf8FromEscapes(run.slice(at, at + bytes * 3));
+      if (decoded !== undefined) {
+        taken = bytes * 3;
+        character = decoded;
+        break;
+      }
+    }
+    output += character;
+    at += taken;
+  }
+  return output;
+}
+
+// Every escape run decodes where it sits. A "%" that is not an escape ("50% off"), or an escape that is not UTF-8
+// ("20%DEALS"), is plain text: it neither turns decoding off for the rest of the string nor makes the string a pending
+// decode layer (#152). Undefined when nothing decodes.
+function decodePercent(text: string): string | undefined {
+  if (!PERCENT_ESCAPE.test(text)) return undefined;
+  let changed = false;
+  const decoded = text.replace(PERCENT_RUNS, (run) => {
+    const value = decodePercentRun(run);
+    if (value !== run) changed = true;
+    return value;
+  });
+  return changed ? decoded : undefined;
 }
 
 function printableUtf8FromBase64(token: string): string | undefined {
@@ -490,9 +734,7 @@ function decodeBase64Tokens(text: string): string | undefined {
 }
 
 function canDecodeAgain(text: string): boolean {
-  // Percent is only "decodable again" when the strict decoder actually accepts it - a malformed
-  // escape (issue #152) is plain text, not a pending decode layer.
-  if (JSON_ESCAPE.test(text) || (PERCENT_ESCAPE.test(text) && typeof decodePercent(text) === 'string')) return true;
+  if (JSON_ESCAPE.test(text) || decodePercent(text) !== undefined) return true;
   BASE64_TOKEN.lastIndex = 0;
   for (const match of text.matchAll(BASE64_TOKEN)) {
     if (printableUtf8FromBase64(match[0]) !== undefined) return true;
@@ -506,12 +748,10 @@ function encodedSpans(text: string): EncodedSpan[] {
     const decoded = String.fromCharCode(Number.parseInt(match[0].slice(2), 16));
     spans.push({ key: `json:${match[0]}`, start: match.index, end: match.index + match[0].length, decoded });
   }
-  if (typeof decodePercent(text) === 'string') {
-    for (const match of text.matchAll(PERCENT_RUNS)) {
-      const decoded = decodePercent(match[0]);
-      if (typeof decoded !== 'string') continue;
-      spans.push({ key: `percent:${match[0]}`, start: match.index, end: match.index + match[0].length, decoded });
-    }
+  for (const match of text.matchAll(PERCENT_RUNS)) {
+    const decoded = decodePercentRun(match[0]);
+    if (decoded === match[0]) continue;
+    spans.push({ key: `percent:${match[0]}`, start: match.index, end: match.index + match[0].length, decoded });
   }
   for (const match of text.matchAll(BASE64_TOKEN)) {
     const decoded = printableUtf8FromBase64(match[0]);
@@ -564,14 +804,10 @@ function decodedViews(text: string): DecodeBundle {
   for (let pass = 0; pass < MAX_DECODE_PASSES; pass += 1) {
     const next: DecodeNode[] = [];
     for (const node of frontier) {
-      // A percent sequence the strict decoder rejects is not an encoding - the model cannot
-      // decode it either, so no obfuscation channel exists. The raw string stays in views[0]
-      // and is scanned as-is; ordinary text like "20%DEALS" must not deny the payload (#152).
-      const percent = decodePercent(node.text) ?? undefined;
       const generated = [
         { value: decodeLayer(node), allSpans: true, kind: 'mixed' },
         { value: decodeJsonEscapes(node.text), allSpans: false, kind: 'json' },
-        { value: percent, allSpans: false, kind: 'percent' },
+        { value: decodePercent(node.text), allSpans: false, kind: 'percent' },
         { value: decodeBase64Tokens(node.text), allSpans: false, kind: 'base64' },
       ] as const;
       for (const { value, allSpans, kind } of generated) {
@@ -600,7 +836,7 @@ function decodedViews(text: string): DecodeBundle {
 // The encoding still decodable after the last pass, named in canDecodeAgain's order.
 function pendingKind(text: string): SanitiseDecodeFailure['kind'] {
   if (JSON_ESCAPE.test(text)) return 'json';
-  if (PERCENT_ESCAPE.test(text) && typeof decodePercent(text) === 'string') return 'percent';
+  if (decodePercent(text) !== undefined) return 'percent';
   return 'base64';
 }
 
@@ -669,6 +905,97 @@ export const carriesSecretOrCanary = (text: string, canaries: readonly string[] 
   const result = visitStrings(text, 'internal_context', (view) => { found = canaryOrSecretIn(view, tokens) !== null; return found; });
   return found || result.invalid !== undefined;
 };
+
+// Lowercase words with no '=', so no decoder reads it as an encoding.
+export const DEEP_ENCODING_MARKER = '[withheld: content encoded too deeply to check]';
+// Every character a base64, base64url, percent or JSON escape can be made of.
+const ENCODING_CHARACTER = /[A-Za-z0-9+/=_%\\-]/;
+
+// External content read into the model or the offload store: a value still decodable after MAX_DECODE_PASSES is
+// withheld in place, so one such value no longer refuses the whole read. The offending token goes first, then the whole
+// value if it still nests. A JSON document inside a string is walked, never withheld whole, and keys are never
+// rewritten, so a nested key still refuses through the scans after this. What the partial decode already shows is scanned first: a canary or a secret there refuses the read, as it would
+// in plain sight. A value inside an embedded document is also checked as it sits serialized, where an escape such as
+// \n runs into the next token, because the whole-text scans read it that way and the model may read it either way.
+function withholdDeepEncoding(input: PreparedInput): SanitiseResult | { payload: JsonValue; redactions: Redaction[] } {
+  if (input.source_taint !== 'external' || input.destination !== 'internal_context') return { payload: input.payload, redactions: [] };
+  const canaries = input.canary_tokens.map((token) => token.toLowerCase());
+  let tripwire: 'canary' | 'secret' | null = null;
+  let count = 0;
+  const failing = (text: string, serialized: boolean): boolean => {
+    let failed = false;
+    for (const form of new Set(serialized ? [text, JSON.stringify(text).slice(1, -1)] : [text])) {
+      const bundle = decodedViews(form);
+      failed ||= bundle.invalid;
+      if (!bundle.invalid && !serialized) continue;
+      for (const view of bundle.views) {
+        const hit = canaryOrSecretIn(view, canaries);
+        if (hit === 'canary' || (hit === 'secret' && tripwire === null)) tripwire = hit;
+      }
+    }
+    return failed;
+  };
+  const embedded = (text: string): JsonValue | undefined => {
+    const trimmed = text.trim();
+    if (!trimmed.startsWith('{') && !trimmed.startsWith('[') && !trimmed.startsWith('"')) return undefined;
+    let parsed: unknown;
+    try { parsed = JSON.parse(trimmed); } catch { return undefined; }
+    if (typeof parsed !== 'string' && (typeof parsed !== 'object' || parsed === null)) return undefined;
+    const prepared = prepareInput({ ...input, payload: parsed } as SanitiseInput);
+    return prepared === undefined || 'reason' in prepared ? undefined : prepared.payload;
+  };
+  const withholdText = (text: string, nest: number): string => {
+    // Embedded documents are walked as deep as the health scan parses them.
+    const document = nest < MAX_DECODE_PASSES ? embedded(text) : undefined;
+    if (document !== undefined) {
+      const walked = walk(document, nest + 1);
+      return walked === document ? text : JSON.stringify(walked);
+    }
+    const serialized = nest > 0;
+    if (!failing(text, serialized)) return text;
+    // A failing span is widened to the run of encoding characters around it: when the decoder wraps only part of a
+    // token, the rest of that token is still most of the encoded content, shifted out of alignment.
+    const runs: Array<{ start: number; end: number }> = [];
+    for (const span of encodedSpans(text)) {
+      if (!failing(text.slice(span.start, span.end), serialized)) continue;
+      let { start, end } = span;
+      while (start > 0 && ENCODING_CHARACTER.test(text[start - 1]!)) start -= 1;
+      while (end < text.length && ENCODING_CHARACTER.test(text[end]!)) end += 1;
+      const last = runs.at(-1);
+      if (last !== undefined && start <= last.end) last.end = Math.max(last.end, end);
+      else runs.push({ start, end });
+    }
+    let narrowed = text;
+    for (const { start, end } of [...runs].reverse()) narrowed = `${narrowed.slice(0, start)}${DEEP_ENCODING_MARKER}${narrowed.slice(end)}`;
+    const kept = runs.length > 0 && !failing(narrowed, serialized);
+    count += kept ? runs.length : 1;
+    return kept ? narrowed : DEEP_ENCODING_MARKER;
+  };
+  const walk = (value: JsonValue, nest: number): JsonValue => {
+    if (typeof value === 'string') return withholdText(value, nest);
+    if (typeof value !== 'object' || value === null) return value;
+    if (Array.isArray(value)) {
+      const items = value.map((item) => walk(item, nest));
+      return items.every((item, index) => item === value[index]) ? value : items;
+    }
+    const entries = Object.entries(value).map(([key, item]) => [key, walk(item, nest)] as const);
+    return entries.every(([key, item]) => item === value[key]) ? value : Object.fromEntries(entries);
+  };
+  const payload = walk(input.payload, 0);
+  if (tripwire === 'canary') return deny('canary_token', 'canary_leak');
+  if (tripwire === 'secret') return deny('canary_token', 'secret_leak');
+  return { payload, redactions: count === 0 ? [] : [{ kind: 'deep_encoding', count }] };
+}
+
+// The scans run as they always have; only a decode refusal of external content read into the model is run again, once,
+// with its deep values withheld, so an ordinary read pays nothing for this.
+function withDeepEncodingWithheld(input: PreparedInput, checks: (input: PreparedInput, withheld: Redaction[]) => SanitiseResult): SanitiseResult {
+  const result = checks(input, []);
+  if (result.ok || result.diagnostic?.stage !== 'decode') return result;
+  const deep = withholdDeepEncoding(input);
+  if ('ok' in deep) return deep;
+  return deep.redactions.length === 0 ? result : checks({ ...input, payload: deep.payload }, deep.redactions);
+}
 
 function containsCanaryOrSecret(
   payload: JsonValue,
@@ -925,11 +1252,12 @@ function containsForbiddenHealth(
     input.payload,
     input.destination,
     (text) => {
+      const read = freeTextScan ? asciiDigits(text) : text;
       if (
         freeTextScan &&
-        (RAW_SENSOR_PATTERNS.some((pattern) => matches(pattern, text)) ||
-          DERIVED_SCORE_PATTERNS.some((pattern) => healthMatchIn(pattern, text, plainWords)) ||
-          HEALTH_FREE_TEXT.some((pattern) => healthMatchIn(pattern, text, plainWords)))
+        (RAW_SENSOR_PATTERNS.some((pattern) => matches(pattern, read)) ||
+          DERIVED_SCORE_PATTERNS.some((pattern) => healthMatchIn(pattern, read, plainWords)) ||
+          HEALTH_FREE_TEXT.some((pattern) => healthMatchIn(pattern, read, plainWords)))
       ) {
         return true;
       }
@@ -986,8 +1314,10 @@ function redactExternalHealthSpans(
         const inner = transformJsonStrings(parsed as JsonValue, (value, field) => field === undefined ? value : redact(value));
         return inner.invalid ? text : JSON.stringify(inner.payload);
       }
-    } catch { /* Ordinary free text is scanned for spans. */ }
-    return patterns.reduce((output, pattern) => replaceAndCount(output, pattern, HEALTH_SPAN_MARKER, 'health_value', counts, plainWords ? plainWordSpan : undefined), text);
+    } catch { /* Ordinary free text is scanned for spans, in its ASCII reading; text with no span is returned as it was. */ }
+    const read = asciiDigits(text);
+    const output = patterns.reduce((out, pattern) => replaceAndCount(out, pattern, HEALTH_SPAN_MARKER, 'health_value', counts, plainWords ? plainWordSpan : undefined), read);
+    return output === read ? text : output;
   };
   const transformed = transformJsonStrings(payload, (text) => redact(text));
   if (transformed.invalid) return { invalid: true, payload, redactions };
@@ -1052,8 +1382,8 @@ function encodedPiiKind(text: string, destination: SanitiseDestination): Redacti
   if (decoded.invalid) return undefined;
   for (const view of decoded.views.slice(1)) {
     if (matches(PII_PATTERNS.email, view)) return 'email';
-    if (matches(PII_PATTERNS.cc, view)) return 'credit_card';
-    if (matches(PII_PATTERNS.phone, view)) return 'phone';
+    if (cardMatches(asciiDigits(view)).length > 0) return 'credit_card';
+    if (phoneMatches(asciiDigits(view)).length > 0) return 'phone';
     if (matches(PII_PATTERNS.ipv4, view)) return 'address';
     if (matches(PII_PATTERNS.ipv6, view)) return 'address';
   }
@@ -1142,25 +1472,18 @@ function redactPiiText(
 ): string {
   // Model/owner-bound workspace references keep their exact bytes for later calls, only under an
   // allowlisted key and in the exact shape the producer emits; a URL must also be clean outside
-  // its uuid slot. Taint is not checked (the provider pass taints a whole batch). Known residual:
-  // content under an allowlisted id key that is a valid uuid with a card-looking tail survives.
+  // its uuid slot. Taint is not checked (the provider pass taints a whole batch).
   // Everything else (free text, other keys, other URL shapes) is still redacted below.
   if (key !== undefined && MODEL_AND_OWNER_DESTINATIONS.has(destination)) {
     if (WORKSPACE_ID_KEYS.has(key) && validId(text)) return text;
     if (WORKSPACE_URL_KEYS.has(key) && isWorkspaceFileUrl(text) && urlOutsideIdIsClean(text, destination, taint)) return text;
   }
   let output = redactEncodedPii(text, destination, taint, counts);
-  output = replaceAndCount(
-    output,
-    PII_PATTERNS.cc,
-    '[REDACTED_CREDIT_CARD]',
-    'credit_card',
-    counts,
-  );
+  output = redactCards(output, counts);
   if (!ownerReadable(destination, taint, 'email'))
     output = replaceAndCount(output, PII_PATTERNS.email, '[REDACTED_EMAIL]', 'email', counts);
   if (!ownerReadable(destination, taint, 'phone'))
-    output = replaceAndCount(output, PHONE_PATTERN, '[REDACTED_PHONE]', 'phone', counts);
+    output = redactPhones(output, counts);
   if (!ownerReadable(destination, taint, 'address')) {
     output = replaceAndCount(output, PII_PATTERNS.ipv4, '[REDACTED_ADDRESS]', 'address', counts);
     output = replaceAndCount(output, PII_PATTERNS.ipv6, '[REDACTED_ADDRESS]', 'address', counts);
@@ -1395,7 +1718,10 @@ export function guardForOffload(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
   if (!input) return denyInvalid({ stage: 'prepare' });
   if ('reason' in input) return deny('size_cap', input.reason);
+  return withDeepEncodingWithheld(input, guardPrepared);
+}
 
+function guardPrepared(input: PreparedInput, withheld: Redaction[]): SanitiseResult {
   const secret = containsCanaryOrSecret(input.payload, input);
   if (secret !== undefined) return secret;
 
@@ -1406,6 +1732,7 @@ export function guardForOffload(raw: SanitiseInput): SanitiseResult {
   // The offload store persists, so it never gets the model/owner readable seam: redact as memory_block.
   const pii = redactPii(input.payload, 'memory_block', input.source_taint, input.canary_tokens);
   if (pii.invalid) return denyInvalid({ stage: 'pii' });
+  pii.redactions.unshift(...withheld);
 
   const instructions = inspectsInstructions(input) ? inspectInstructions(pii.payload, pii.redactions) : { payload: pii.payload, redactions: pii.redactions };
   if ('ok' in instructions) return instructions;
@@ -1455,7 +1782,10 @@ export function sanitise(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
   if (!input) return denyInvalid({ stage: 'prepare' });
   if ('reason' in input) return deny('size_cap', input.reason);
+  return withDeepEncodingWithheld(input, sanitisePrepared);
+}
 
+function sanitisePrepared(input: PreparedInput, deep: Redaction[]): SanitiseResult {
   const secret = containsCanaryOrSecret(input.payload, input);
   if (secret !== undefined) return secret;
 
@@ -1463,8 +1793,8 @@ export function sanitise(raw: SanitiseInput): SanitiseResult {
   // still denies structured health correlation.
   const withheld =
     input.source_taint === 'external' && input.destination === 'internal_context'
-      ? redactExternalHealthSpans(input.payload, [], sparesPlainWords(input))
-      : { invalid: false, payload: input.payload, redactions: [] as Redaction[] };
+      ? redactExternalHealthSpans(input.payload, deep, sparesPlainWords(input))
+      : { invalid: false, payload: input.payload, redactions: deep };
   if (withheld.invalid) return denyInvalid({ stage: 'external_health' });
   const scanned = { ...input, payload: withheld.payload };
 

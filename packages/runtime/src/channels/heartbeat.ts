@@ -1,9 +1,9 @@
 import type { ScheduleEntry } from '@waldo/contracts';
-import type { Scheduler, ScheduleExecutor } from '../scheduler/multiplexer';
+import { nextOccurrence, type Scheduler, type ScheduleExecutor } from '../scheduler/multiplexer';
 import type { MachineEnqueued } from '../tasks/machine';
 import type { DayPlanBook } from './day-cards';
-import { isQuiet, type Loop, type LoopBook } from './loops';
-import { localIso } from './reminders';
+import { isQuiet, type Loop, type LoopBook, type Proactivity } from './loops';
+import { localIso, localToEpoch } from './reminders';
 import type { FinalRecord, HeartbeatReceipt } from './telegram-final-outbox';
 
 // H1 of the heartbeat/cron plan: a periodic check-in tick that scans due work, stays silent when
@@ -26,10 +26,18 @@ import type { FinalRecord, HeartbeatReceipt } from './telegram-final-outbox';
 export const HEARTBEAT_ID = 'heartbeat-tick';
 export const HEARTBEAT_EVERY_MS = 30 * 60_000;
 const DUE_SCAN_LIMIT = 20;
+// The open loops heartbeatWake reads on every request and pass.
+const WAKE_SCAN_LIMIT = 200;
 // Cross-tick flood control: a loop is re-notified only after this cooldown, and only while it is
 // still past due. The notified-occurrence key is (loop_id, due), so editing the due time starts a
 // fresh occurrence that notifies again immediately. A check that found nothing to say holds it too.
 const RENOTIFY_COOLDOWN_MS = 4 * 60 * 60_000;
+// A lenient ceiling on Waldo starting conversations about open loops: at most this many check-back messages in any 24 hours,
+// counted from the outbox, whatever the number of loops. A due loop over it is not dropped; it waits for a later tick.
+const CHECK_BACKS_PER_DAY = 6;
+const DAY_MS = 24 * 60 * 60_000;
+const checkBacksSince = (records: readonly FinalRecord[], since: number) =>
+  records.filter(record => record.heartbeat && record.status !== 'blocked' && record.createdAt >= since).length;
 
 export const armHeartbeat = async (scheduler: Scheduler, now: number): Promise<void> => {
   if (scheduler.lookup(HEARTBEAT_ID).state !== 'absent') return;
@@ -41,6 +49,44 @@ export const armHeartbeat = async (scheduler: Scheduler, now: number): Promise<v
 };
 
 export type Sql = Pick<SqlStorage, 'exec'>;
+
+// The heartbeat's next tick worth running, on its own grid: the first slot at or after the earliest of a held card, a past-due
+// loop out of its cooldown (both now), a cooldown's end, or a future loop's due time; past quiet hours. It still ticks a day
+// after its last tick, so the alarm pass that tick runs keeps its daily upkeep. A loop's due is the owner's wall clock, so a
+// slot counts once the tick's own scan would see the loop due there. A time at or before now means the tick should run now.
+// Null when a due time cannot be read: the row keeps its slot. Reads only.
+export const heartbeatWake = (deps: Readonly<{ sql: Sql; proactivity: Proactivity; heldCards: (day: string) => readonly string[];
+  timezone: string; now: number; lastTick: number; every_ms: number; phase_ms: number }>): number | null => {
+  const { sql, timezone, now, every_ms, proactivity: settings } = deps;
+  const slotFrom = (at: number) => nextOccurrence({ type: 'interval', every_ms, phase_ms: deps.phase_ms }, at - 1);
+  const local = (at: number) => localIso(at, timezone).slice(0, 16);
+  const localNow = local(now), daily = deps.lastTick + DAY_MS;
+  if (daily <= now) return now;
+  let at = deps.heldCards(localNow.slice(0, 10)).length ? now : Infinity;
+  if (settings.volume !== 'low') {
+    // More open loops than the scan reads keeps the grid slot: the bound fails toward waking.
+    const open = sql.exec<{ due: string; told: number | null }>(
+      `SELECT l.due, (SELECT MAX(n.notified_at) FROM heartbeat_notified n WHERE n.loop_id = l.id AND n.due = l.due) AS told
+         FROM loops l WHERE l.status = 'open' AND l.due IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM loop_mail_sources s WHERE s.loop_id = l.id) LIMIT ?`, WAKE_SCAN_LIMIT + 1).toArray();
+    if (open.length > WAKE_SCAN_LIMIT) return null;
+    for (const { due, told } of open) {
+      if (!/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/.test(due)) return null;
+      const cooled = told === null ? -Infinity : told + RENOTIFY_COOLDOWN_MS + 1;
+      let seen = now;
+      if (due > localNow) {
+        seen = slotFrom(localToEpoch(due.length === 10 ? `${due}T00:00` : due, timezone));
+        for (let step = 0; step < 4 && local(seen) < due; step++) seen += every_ms;
+        for (let step = 0; step < 4 && local(seen - every_ms) >= due && seen - every_ms > now; step++) seen -= every_ms;
+      }
+      at = Math.min(at, Math.max(seen, cooled));
+    }
+  }
+  const backstop = slotFrom(daily);
+  let wake = at === Infinity ? backstop : at <= now ? now : slotFrom(at);
+  for (let step = 0; step < 2 * DAY_MS / every_ms && wake < backstop && isQuiet(settings, wake, timezone); step++) wake = slotFrom(wake + 1);
+  return Math.min(wake, backstop);
+};
 
 // The past-due loops a check-back may name: open, past due, not from a mail source (those have their own review), and not
 // told about within the cooldown. The cooldown filter lives in SQL BEFORE the LIMIT: paging the earliest-due loops and
@@ -71,7 +117,7 @@ const heldByOutbox = (records: readonly FinalRecord[], now: number) => records.f
 
 // What one tick did about past-due loops: why no job was written, or the job that holds them (written now, written by an
 // earlier fire of this occurrence, or still open from an earlier tick).
-export type HeartbeatCheck = 'held_quiet' | 'held_volume' | 'unchanged' | 'held_breaker' | MachineEnqueued['code'];
+export type HeartbeatCheck = 'held_quiet' | 'held_volume' | 'unchanged' | 'held_breaker' | 'held_daily_cap' | MachineEnqueued['code'];
 
 export type HeartbeatDeps = Readonly<{
   releaseHeldCards?: boolean;
@@ -135,8 +181,10 @@ export const heartbeatTick = (deps: HeartbeatDeps): ScheduleExecutor => {
       return;
     }
     const { code, count } = deps.transaction(() => {
-      const notify = dueLoops(deps.sql, firedAt, deps.timezone, undefined, heldByOutbox(deps.outbox(), firedAt));
+      const records = deps.outbox();
+      const notify = dueLoops(deps.sql, firedAt, deps.timezone, undefined, heldByOutbox(records, firedAt));
       if (notify.length === 0) return { code: 'unchanged' as const, count: 0 };
+      if (checkBacksSince(records, firedAt - DAY_MS) >= CHECK_BACKS_PER_DAY) return { code: 'held_daily_cap' as const, count: notify.length };
       if (deps.providerDown()) return { code: 'held_breaker' as const, count: notify.length };
       const made = deps.enqueue(notify, { entryId: entry.id, occurrence: entry.occurrence_at, runId, now: firedAt });
       // The decision commits with the job, so a crash in between leaves neither.

@@ -43,7 +43,7 @@ const store = async (doName: string, email: string, scopes: readonly string[], t
   return id ? reply({ id, email: email.toLowerCase(), scopes, ...(profile ? { profile } : {}) }) : fail(404, 'unknown owner');
 };
 
-type Body = Readonly<{ intent_id?: string; read_only?: boolean; do_name: string; op: 'exchange' | 'adopt' | 'call' | 'mcp_call' | 'calendar_watch' | 'channel_stop' | 'gmail_watch' | 'revoke'; topic?: string; channel_id?: string; token?: string; address?: string; resource_id?: string; server_url?: string; tool?: string; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[]; calendar_details?: boolean; calendar_owner_status?: boolean }>;
+type Body = Readonly<{ intent_id?: string; read_only?: boolean; do_name: string; op: 'exchange' | 'adopt' | 'call' | 'mcp_call' | 'calendar_watch' | 'events_watch' | 'channel_stop' | 'gmail_watch' | 'revoke'; topic?: string; channel_id?: string; calendar_id?: string; token?: string; address?: string; resource_id?: string; server_url?: string; tool?: string; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[]; calendar_details?: boolean; calendar_owner_status?: boolean }>;
 // Edge-owned, exact read authority from the shared catalogue. Never accept a request-supplied registry or a generic Google host match.
 const nonStoringRead = (body: Body): boolean => body.op === 'mcp_call' && body.read_only === true && /^mcpread:[0-9a-f]{64}$/.test(body.intent_id ?? '') && isGoogleMcpRead(body.server_url, body.tool);
 const READ_FAILURE_CODES = new Set(['intent_unavailable', 'insufficient scopes', 'google_refresh_failed', 'google_reauth_needed', 'google_scope_missing', 'mcp_read_rejected', 'mcp_read_unavailable', 'mcp_read_failed']);
@@ -99,12 +99,15 @@ const handle = async (body: Body): Promise<Response> => {
     // Calendar push channels for a Vault-backed grant. Starting one is not an owner-visible effect (a push
     // only wakes the owner's own update check), so there is no ledger row; a repeat start makes a channel
     // that simply expires.
-    if (body.op === 'calendar_watch' || body.op === 'channel_stop') {
+    if (body.op === 'calendar_watch' || body.op === 'events_watch' || body.op === 'channel_stop') {
       const channelId = body.channel_id ?? '';
       let address: URL | null = null;
-      try { address = body.op === 'calendar_watch' ? new URL(body.address ?? '') : null; } catch { address = null; }
+      const watching = body.op === 'calendar_watch' || body.op === 'events_watch';
+      // events_watch names one calendar the grant can read; calendar_watch is the primary calendar.
+      const calendarId = body.op === 'events_watch' ? body.calendar_id ?? '' : 'primary';
+      try { address = watching ? new URL(body.address ?? '') : null; } catch { address = null; }
       if (!body.connection || !/^[A-Za-z0-9_-]{1,64}$/.test(channelId)) return fail(404, 'unknown operation');
-      if (body.op === 'calendar_watch' && (!address || address.protocol !== 'https:' || address.pathname !== CALENDAR_PUSH_PATH || !body.token)) return fail(400, 'google_push_invalid_request');
+      if (watching && (!address || address.protocol !== 'https:' || address.pathname !== CALENDAR_PUSH_PATH || !body.token || !calendarId || calendarId.length > 1024 || /[\r\n\0]/.test(calendarId))) return fail(400, 'google_push_invalid_request');
       if (body.op === 'channel_stop' && !body.resource_id) return fail(400, 'google_push_invalid_request');
       const access = await db('proxy_access', { p_do_name: body.do_name, p_connection: body.connection }) as {secret:string;scopes:unknown}[];
       const grant = Array.isArray(access) ? access[0] : undefined;
@@ -113,7 +116,7 @@ const handle = async (body: Body): Promise<Response> => {
       try {
         const bearer = await googleAccessToken(app, { refresh_token: grant.secret }, fetch);
         if (body.op === 'channel_stop') { await stopChannel(fetch, bearer, { channelId, resourceId: body.resource_id! }); return reply({ data: null }); }
-        return reply({ data: await startCalendarWatch(fetch, bearer, { channelId, token: body.token!, address: address!.toString() }) });
+        return reply({ data: await startCalendarWatch(fetch, bearer, { channelId, token: body.token!, address: address!.toString() }, calendarId) });
       } catch (error) {
         if (error instanceof GooglePushError) return fail(error.status, error.message);
         if (error instanceof GoogleTokenError) return fail(error.status, 'google_refresh_failed');
@@ -212,17 +215,17 @@ const handle = async (body: Body): Promise<Response> => {
         return fail(refreshFailure ? refreshFailure.status : error instanceof DriveRestError ? error.status : 502, refreshFailure ? refreshFailure.kind === 'auth' ? 'drive_auth_failed' : 'google_refresh_failed' : error instanceof DriveRestError ? error.code : 'drive_read_failed');
       }
     }
-    if((body.method==='calendarPage'||body.method==='restBlocks')&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'calendar'))return fail(403,'insufficient scopes');
+    if((body.method==='calendarPage'||body.method==='restBlocks'||body.method==='calendarDelta')&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'calendar'))return fail(403,'insufficient scopes');
     if(body.method==='freeBusy'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'availability'))return fail(403,'insufficient scopes');
     if(body.method==='calendarListsPage'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'calendar_list'))return fail(403,'insufficient scopes');
     if(body.method==='searchContacts'&&!googleHas(Array.isArray(grant.scopes)?grant.scopes:undefined,'contacts'))return fail(403,'insufficient scopes');
-    const required = body.method==='sendRaw' ? 'gmail.send' : body.method==='draft' ? 'gmail.compose' : ['createTask','patchTask'].includes(body.method!) ? 'tasks' : ['createEvent','moveEvent','cancelEvent'].includes(body.method!) ? 'calendar.events' : null;
+    const required = body.method==='sendRaw' ? 'gmail.send' : body.method==='draft' ? 'gmail.compose' : ['createTask','patchTask'].includes(body.method!) ? 'tasks' : ['createEvent','moveEvent','cancelEvent','restoreEvent'].includes(body.method!) ? 'calendar.events' : null;
     if(required && (!Array.isArray(grant.scopes)||!grant.scopes.includes(`https://www.googleapis.com/auth/${required}`)))return fail(body.intent_id?503:403,body.intent_id?'intent_unavailable':'insufficient scopes');
     const token=grant.secret;
     const client = googleClient(app, { refresh_token: token }, fetch, undefined, {connection_id:body.connection,email:null}, proxyClientOptions(body));
     try {
       const dispatch=async()=> (await (client[body.method as Method] as (...args: unknown[]) => Promise<unknown>)(...(body.args ?? [])))??null;
-      const data = ['draft','sendRaw','createEvent','moveEvent','cancelEvent','createTask','patchTask'].includes(body.method!) ? await intentDispatch(body,dispatch) : await dispatch();
+      const data = ['draft','sendRaw','createEvent','moveEvent','cancelEvent','restoreEvent','createTask','patchTask'].includes(body.method!) ? await intentDispatch(body,dispatch) : await dispatch();
       await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: '' }).catch(()=>{console.log(JSON.stringify({hop:'connector_proxy_health',ok:false,code:'unavailable'}));});
       return reply({ data: data ?? null });
     } catch (error) {

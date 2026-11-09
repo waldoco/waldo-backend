@@ -62,20 +62,16 @@ it('node actions run as the console memory action on the node, against that node
   });
 });
 
-it('a correction is the owner\'s word, so it needs a recent sign-in; confirm and forget do not', async () => {
+it('a correction, like confirm and forget, needs no recent sign-in', async () => {
   await owner(async (storage) => {
     const acted: ConsoleAction[] = [];
     const old = host(storage, acted, new Date(Date.now() - 3 * 3_600_000).toISOString());
     const detail = await read(old, 'view=constellation&memory_view=detail&id=memory:node:1');
-    const refused = await act(old, { view: 'constellation', action: 'node.correct', id: 'memory:node:1', value: 'Mondays are for the team', revision: detail.revision, request_id: 'welcome-correct-01' });
-    expect([refused.status, refused.body]).toEqual([403, { error: 'step_up_required', code: 'step_up_required' }]);
-    expect(acted).toEqual([]);
+    const corrected = await act(old, { view: 'constellation', action: 'node.correct', id: 'memory:node:1', value: '  Mondays are for the team ', revision: detail.revision, request_id: 'welcome-correct-01' });
+    expect(corrected.status).toBe(200);
     const forgotten = await act(old, { view: 'constellation', action: 'node.forget', id: 'memory:node:1', revision: detail.revision, request_id: 'welcome-forget-02' });
     expect(forgotten.status).toBe(200);
-    const fresh = host(storage, acted);
-    const corrected = await act(fresh, { view: 'constellation', action: 'node.correct', id: 'memory:node:1', value: '  Mondays are for the team ', revision: detail.revision, request_id: 'welcome-correct-02' });
-    expect(corrected.status).toBe(200);
-    expect(acted).toEqual([{ action: 'node.forget', id: '1', value: '', made: 'app:node.forget' }, { action: 'node.correct', id: '1', value: 'Mondays are for the team', made: 'app:node.correct' }]);
+    expect(acted).toEqual([{ action: 'node.correct', id: '1', value: 'Mondays are for the team', made: 'app:node.correct' }, { action: 'node.forget', id: '1', value: '', made: 'app:node.forget' }]);
   });
 });
 
@@ -90,5 +86,23 @@ it('the setup stage reaches only a build that reads controls revision 5', async 
     };
     for (const older of [undefined, 'controls=2', 'controls=4']) expect(await stagesAt(older)).toEqual(building.stages);
     expect(await stagesAt('controls=5')).toEqual(withSetup.stages);
+  });
+});
+
+it('names web and setup node sources from controls revision 13, and leaves them out below it', async () => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`welcome-controls-${crypto.randomUUID()}`)), async (_instance, state) => {
+    const claims = claimStore(state.storage.sql), at = '2026-10-25T13:00:00Z';
+    claims.add({ kind: 'observation', text: 'A public talk on product design.', source: 'inferred', evidence: 'welcome build', origin: 'untrusted', source_ref: 'welcome:web:fnd_a' }, at);
+    claims.add({ kind: 'observation', text: 'Calls their mornings sacred.', source: 'inferred', evidence: 'welcome build', origin: 'agent', source_ref: 'welcome:setup:c9' }, at);
+    claims.add({ kind: 'observation', text: 'A weekly design review recurs.', source: 'inferred', evidence: 'welcome build', origin: 'untrusted', source_ref: 'welcome:calendar:evt_a' }, at);
+    claims.saveNode({ id: null, domain: 'work', label: 'Speaks about design', summary: 'Talks about product design in public.', strength: 0.5, status: 'active', supporting_spots: [1, 2, 3] }, at);
+    const h = host(state.storage, []);
+    const sourcesAt = async (revision: number) => {
+      const response = await appControlsRequest(new Request('https://app.fixture.invalid/app/v1/controls?view=constellation&memory_view=interpretations&limit=10', { headers: { 'x-waldo-app-contract': `controls=${revision}` } }), h);
+      const body = appControlProjectionV1Schema.parse(await response.json());
+      return body.view === 'constellation' && body.data.memory_view === 'interpretations' ? body.data.items[0]!.sources : null;
+    };
+    expect((await sourcesAt(13))?.slice().sort()).toEqual(['calendar', 'setup', 'web']);
+    expect(await sourcesAt(12)).toEqual(['calendar']);
   });
 });

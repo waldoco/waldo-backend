@@ -167,8 +167,9 @@ support, held-topic suppression, forget cascades and the app projection unchange
 - **One new table,** `welcome_builds (id INTEGER PRIMARY KEY CHECK (id = 1), version, started_at, stages_json, finished_at)`. It
   holds stage states and counts only, never text.
 - **Nightly pass:** `applyPromotion` admits only nodes with two owner-grounded supports, and saves only nodes it names, so it
-  cannot rewrite or drop a welcome node. A test pins this. Once the owner confirms a welcome node, its supports become
-  owner-grounded and the nightly pass can grow it, which is the nightly growth the ruling keeps.
+  cannot rewrite or drop a welcome node. A test pins this. Confirming a welcome node no longer grounds its supports (amended
+  30 Oct 2026, owner ruling O3): the owner's yes is a `node_statement` claim of the node's wording, which is never promotion
+  evidence, so the nightly pass grows a welcome node only from the owner's own words.
 - **Forget:** the node forget path stays `forgetNode`. Section 5's app `node.forget` adds what is missing today: a barrier on the
   label and on each support claim's text, and a purge of the support claims through `purge` → `settle`. A rebuild cannot
   relearn a forgotten node, and the cascade in `purge` (`constellation_refs`) already removes nodes whose supports go.
@@ -183,7 +184,9 @@ support, held-topic suppression, forget cascades and the app projection unchange
   27 Oct audit's security finding). A node whose supports include an `untrusted` one would otherwise put text that other
   people can write into every turn. The block carries a count-only line instead ("N more of Waldo's reads, drawn from the
   owner's mail or calendar, wait for the owner to confirm them in the app"), and the model reads those sources live when a
-  message needs them. Confirming a node owner-grounds its supports and it appears, labelled `confirmed`. Health nodes
+  message needs them. Confirming a node records the owner's yes to its wording as a `node_statement` claim, and it appears,
+  labelled `confirmed`, while its wording still matches that statement (amended 30 Oct 2026, O3). Confirming the notes under it
+  one by one does not bring it in. Health nodes
   (`agent` origin) and owner-corrected nodes are shown as before. The gift in the app is unchanged.
 - **Web:** findings are not listed. The block's header says how many unconfirmed look-up findings the gift showed, and that
   `list_owner_findings` reads them. That tool's results are marked `external`, so reading them taints the turn as it does today.
@@ -217,14 +220,14 @@ job's code, with no tool and no action. #1494's law needs no change, because no 
   The app polls `summary` every 3 s while `state === 'building'`, up to 3 minutes, then reads `interpretations`.
 - Each interpretation node gains an optional `sources` key: an array of `apple_health | health_connect | calendar | tasks | gmail`,
   taken from its supports' `source_ref`. It is empty for a nightly node backed by owner words.
-- Each interpretation node gains an optional `confirmation`: `'waldos_read' | 'confirmed'`. It is `confirmed` when every support
-  is owner-grounded. The app can replace its hardcoded "Unverified" badge with it.
+- Each interpretation node gains an optional `confirmation`: `'waldos_read' | 'confirmed'`. It is `confirmed` when the owner
+  confirmed the node's own wording, and only then, whoever wrote or confirmed the notes under it (amended 30 Oct 2026, O3). The app can replace its hardcoded "Unverified" badge with it.
 - An old build drops all three keys (tolerant reader). No existing field changes, and no value is added to an existing enum.
 
 **Act: `POST /app/v1/actions`, constellation view, beside M-8's claim actions.**
 
-- `node.confirm`, `id: memory:node:<n>`: owner-grounds each support claim (#1498's `ownerGround`, with `source_ref`
-  `owner, app:node.confirm`).
+- `node.confirm`, `id: memory:node:<n>`: records the owner's yes to the node's current wording as a `node_statement` claim with
+  `source_ref` `node:<n>:app:node.confirm`. It grounds no support claim (amended 30 Oct 2026, O3).
 - `node.correct`, `id`, `value` (1–140 characters): writes an owner-stated claim with the owner's text, replaces the node's
   label and summary with it, re-points the node's support to that claim, and purges the old supports.
 - `node.forget`, `id`: barriers the label and each support's text, purges the supports, and calls `forgetNode`.

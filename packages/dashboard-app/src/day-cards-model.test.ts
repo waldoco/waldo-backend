@@ -19,6 +19,15 @@ describe('what each of today\'s cards delivered, from the app\'s day view', () =
     expect(readAppDay(day([], null)).dailyBrief).toBeNull();
   });
 
+  it('marks a card Waldo revised with when, and its latest is the revision', () => {
+    const revised = { ...delivered, message_id: 'row-2', excerpt: 'Brief, updated: the review moved to two.' };
+    const { latest } = readAppDay(day([{ ...card('card:brief', revised), revision: 1, revised_at: 1_761_645_600_000 }, card('card:midday', delivered)]));
+    expect(latest.get('card:brief')).toEqual({ ...revised, revised_at: 1_761_645_600_000 });
+    expect(latest.get('card:midday')).toEqual(delivered);
+    for (const bad of [{ revision: 1 }, { revision: 0, revised_at: 1 }, { revision: 1, revised_at: -1 }])
+      expect(() => readAppDay(day([{ ...card('card:brief', delivered), ...bad }]))).toThrow();
+  });
+
   it('refuses an answer that is not the day view or a delivery out of shape', () => {
     expect(() => readAppDay({ ...day([]), view: 'connections' })).toThrow();
     expect(() => readAppDay({ version: 1 })).toThrow();

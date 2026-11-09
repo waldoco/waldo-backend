@@ -5,6 +5,7 @@ import { ensureSchema } from '../src/tracer/schema';
 import { OwnerDO } from '../src/channels/owner-do';
 import { rearmSharedAlarm } from '../src/scheduler/alarm-slot';
 import { presenceAuthority } from './helpers/directory-presence';
+import { MAIL_ONLY_GOOGLE } from './helpers/google-grant';
 
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
@@ -66,6 +67,7 @@ it('restoring canonical binding resumes retained scheduled dispatch and normal a
     ensureSchema(state.storage);
     const now = Date.now();
     state.storage.sql.exec("INSERT INTO schedule (id,kind,occurrence_at,due_at,payload_json,status,attempts,created_at,updated_at) VALUES ('retained-reminder','reminder',?,?, '{}','armed',0,?,?)", now, now, now, now);
+    await state.storage.put('google:accounts', MAIL_ONLY_GOOGLE);
     const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:fixture', OPENAI_API_KEY: 'fixture' });
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => String(input).endsWith('/rpc/common_owner_authority')
       ? presenceAuthority('6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e', init?.body) : Response.json([])));

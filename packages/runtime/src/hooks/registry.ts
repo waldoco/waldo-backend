@@ -18,6 +18,7 @@ import type {
 } from '@waldo/contracts';
 import {
   DEFAULT_HOOK_TIMEOUT_MS,
+  taskProfileSchema,
   toolError,
   POST_TOOL_USE_PRIORITIES,
   PRE_TOOL_USE_PRIORITIES,
@@ -31,6 +32,7 @@ import {
   draftDocumentArgsSchema,
   draftEmailArgsSchema,
   sendEmailArgsSchema,
+  sendAgentMailArgsSchema,
   executeActionArgsSchema,
   executeCodeArgsSchema,
   createArtifactArgsSchema,
@@ -45,12 +47,16 @@ import {
   workspaceReadArgsSchema,
   workspaceSearchArgsSchema,
   workspaceWriteArgsSchema,
-  workspaceRenderArgsSchema,
-  reviseArtifactArgsSchema, exportArtifactArgsSchema,
+  workspaceRenderArgsSchema, extractArchiveArgsSchema,
+  reviseArtifactArgsSchema, restoreArtifactArgsSchema, exportArtifactArgsSchema,
   getContextArgsSchema,
   queryAvailabilityArgsSchema,
   getCrsArgsSchema,
   getHealthArgsSchema,
+  getScreenTimeArgsSchema,
+  getDeviceContextArgsSchema,
+  queryPhoneCalendarArgsSchema,
+  getWeatherArgsSchema,
   getMasterMetricsArgsSchema,
   getTasksArgsSchema,
   readDriveArgsSchema,
@@ -63,7 +69,11 @@ import {
   sendConsoleLinkArgsSchema,
   connectAppArgsSchema,
   sendProgressNoteArgsSchema,
+  ownerMessageHeardArgsSchema,
   reactToMessageArgsSchema,
+  offerRepliesArgsSchema,
+  showChartArgsSchema,
+  showHealthChartArgsSchema,
   attachFileArgsSchema,
   queryCalendarArgsSchema,
   readDocumentArgsSchema,
@@ -73,31 +83,46 @@ import {
   sanitiseInputSchema,
   sanitiseResultSchema,
   searchEpisodesArgsSchema,
+  searchHistoryArgsSchema,
   searchToolsArgsSchema,
   sendMessageArgsSchema,
   useMacArgsSchema,
-  browseActArgsSchema, delegateTaskArgsSchema, startTaskArgsSchema, cancelTaskArgsSchema,
+  browseActArgsSchema, delegateTaskArgsSchema, startTaskArgsSchema, cancelTaskArgsSchema, checkTaskArgsSchema, steerTaskArgsSchema,
   browsePageArgsSchema,
   cancelReminderArgsSchema,
   cancelStandingOrderArgsSchema,
+  proposeStandingGrantArgsSchema,
+  revokeStandingGrantArgsSchema,
+  pauseAutonomyArgsSchema,
   closeLoopArgsSchema,
   raiseApprovalArgsSchema,
+  approveShownArgsSchema,
   closeResponsibilityArgsSchema,
   listResponsibilitiesArgsSchema,
   trackResponsibilityArgsSchema,
   updateTodoArgsSchema,
   listHealthLogsArgsSchema,
+  deleteHealthLogArgsSchema,
+  setSleepNeedArgsSchema,
+  trackMedicationArgsSchema,
+  logMedicationArgsSchema,
+  listMedicationsArgsSchema,
+  stopMedicationArgsSchema,
   listRemindersArgsSchema,
   listStandingOrdersArgsSchema,
   logMealArgsSchema,
   logWorkoutArgsSchema,
   openLoopArgsSchema,
   proposeCalendarChangeArgsSchema,
+  proposeCalendarPlanArgsSchema,
   proposeGoogleTaskChangeArgsSchema,
   setProactivityArgsSchema,
   setSchedulePreferenceArgsSchema,
   setReminderArgsSchema,
   setStandingOrderArgsSchema,
+  setQuestArgsSchema,
+  setExperimentArgsSchema,
+  reviewExperimentArgsSchema,
   sessionStateSchema,
   sessionToolAllowed,
   sourceTaintSchema,
@@ -114,10 +139,14 @@ import {
   writeTaskArgsSchema,
   archiveThreadArgsSchema,
   recordOwnerFindingArgsSchema,
+  readImportArgsSchema,
+  importMemoriesArgsSchema,
   listOwnerFindingsArgsSchema,
 } from '@waldo/contracts';
 import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, OPEN_PUBLIC_TOOLS, evaluateDeclaredEgress } from './egress-policy';
 import { TOOL_RECORDS, type ToolRecord } from '../tools/records';
+import { holdsPrivateAndEgress, TASK_PROFILE_SPECS } from '../tasks/profile-tools';
+import { ownerStatedMinutes, type MemoryOwnerTurn } from '../tools/owner-words';
 
 export type HookRegistry<Ctx> = readonly HookHandler<Ctx>[];
 
@@ -158,6 +187,8 @@ export type HookRuntimeContext = {
   proposalOnlyCall?: ToolName;
   // The owner's loop store: whether a loop is bound to an observed mail source. Unwired, every tainted close is the owner's.
   loopIsSourceBound?: (id: string) => MaybePromise<boolean>;
+  // Set by the host on a turn the owner's own message started, quotes and forwards included: its reply goes to the owner.
+  ownerInitiated?: boolean;
   egressAllowlist?: readonly string[];
   sanitise?: (input: SanitiseInput) => MaybePromise<SanitiseResult>;
   // Typed store provenance from the dispatcher/store boundary (owner review on #212): the
@@ -181,12 +212,20 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   use_mac: useMacArgsSchema,
   get_crs: getCrsArgsSchema,
   get_health: getHealthArgsSchema,
+  get_screen_time: getScreenTimeArgsSchema,
+  get_device_context: getDeviceContextArgsSchema,
+  query_phone_calendar: queryPhoneCalendarArgsSchema,
+  get_weather: getWeatherArgsSchema,
   connect_service: connectServiceArgsSchema,
   send_console_link: sendConsoleLinkArgsSchema,
   connect_app: connectAppArgsSchema,
   send_progress_note: sendProgressNoteArgsSchema,
+  owner_message_heard: ownerMessageHeardArgsSchema,
   attach_file: attachFileArgsSchema,
   react_to_message: reactToMessageArgsSchema,
+  offer_replies: offerRepliesArgsSchema,
+  show_chart: showChartArgsSchema,
+  show_health_chart: showHealthChartArgsSchema,
   query_calendar: queryCalendarArgsSchema,
   get_communication: getCommunicationArgsSchema,
   search_communication: searchCommunicationArgsSchema,
@@ -194,6 +233,7 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   read_thread: readThreadArgsSchema,
   create_artifact: createArtifactArgsSchema,
   revise_artifact: reviseArtifactArgsSchema,
+  restore_artifact: restoreArtifactArgsSchema,
   export_artifact: exportArtifactArgsSchema,
   list_artifacts: listArtifactsArgsSchema,
   read_artifact: readArtifactArgsSchema,
@@ -206,6 +246,7 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   workspace_search: workspaceSearchArgsSchema,
   workspace_write: workspaceWriteArgsSchema,
   workspace_render: workspaceRenderArgsSchema,
+  extract_archive: extractArchiveArgsSchema,
   get_tasks: getTasksArgsSchema,
   get_master_metrics: getMasterMetricsArgsSchema,
   get_context: getContextArgsSchema,
@@ -214,6 +255,7 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   remember: rememberArgsSchema,
   forget_memory: forgetMemoryArgsSchema,
   search_episodes: searchEpisodesArgsSchema,
+  search_history: searchHistoryArgsSchema,
   propose_action: proposeActionArgsSchema,
   execute_action: executeActionArgsSchema,
   send_message: sendMessageArgsSchema,
@@ -229,6 +271,7 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   draft_document: draftDocumentArgsSchema,
   draft_email: draftEmailArgsSchema,
   send_email: sendEmailArgsSchema,
+  send_agent_mail: sendAgentMailArgsSchema,
   propose_schedule: proposeScheduleArgsSchema,
   write_sheet_cell: writeSheetCellArgsSchema,
   execute_code: executeCodeArgsSchema,
@@ -246,14 +289,28 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   log_meal: logMealArgsSchema,
   log_workout: logWorkoutArgsSchema,
   list_health_logs: listHealthLogsArgsSchema,
+  delete_health_log: deleteHealthLogArgsSchema,
+  set_sleep_need: setSleepNeedArgsSchema,
+  track_medication: trackMedicationArgsSchema,
+  log_medication: logMedicationArgsSchema,
+  list_medications: listMedicationsArgsSchema,
+  stop_medication: stopMedicationArgsSchema,
   set_standing_order: setStandingOrderArgsSchema,
+  set_quest: setQuestArgsSchema,
+  set_experiment: setExperimentArgsSchema,
+  review_experiment: reviewExperimentArgsSchema,
   list_standing_orders: listStandingOrdersArgsSchema,
   cancel_standing_order: cancelStandingOrderArgsSchema,
+  propose_standing_grant: proposeStandingGrantArgsSchema,
+  revoke_standing_grant: revokeStandingGrantArgsSchema,
+  pause_autonomy: pauseAutonomyArgsSchema,
   propose_calendar_change: proposeCalendarChangeArgsSchema,
+  propose_calendar_plan: proposeCalendarPlanArgsSchema,
   propose_google_task_change: proposeGoogleTaskChangeArgsSchema,
   open_loop: openLoopArgsSchema,
   close_loop: closeLoopArgsSchema,
   raise_approval: raiseApprovalArgsSchema,
+  approve_shown: approveShownArgsSchema,
   track_responsibility: trackResponsibilityArgsSchema,
   update_todo: updateTodoArgsSchema,
   list_responsibilities: listResponsibilitiesArgsSchema,
@@ -265,7 +322,11 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   delegate_task: delegateTaskArgsSchema,
   start_task: startTaskArgsSchema,
   cancel_task: cancelTaskArgsSchema,
+  check_task: checkTaskArgsSchema,
+  steer_task: steerTaskArgsSchema,
   record_owner_finding: recordOwnerFindingArgsSchema,
+  read_import: readImportArgsSchema,
+  import_memories: importMemoriesArgsSchema,
   list_owner_findings: listOwnerFindingsArgsSchema,
 });
 
@@ -390,22 +451,32 @@ export const toolArgZodValidateHook: HookHandler<HookRuntimeContext> = {
 
     const parsed = schema.safeParse(payload.args);
     if (!parsed.success) {
-      // Model-authored args are safe to echo: the message is the model's recovery path, so name
-      // the failing fields and the format the schema expects instead of an opaque halt.
-      const rawIssues = (parsed as { success: false; error: { issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; message: string }> } }).error.issues;
-      const issues = rawIssues
-        .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
-        .join('; ');
-      // The datetime hint only when a datetime actually failed validation: appended blindly it
-      // misleads the model on non-datetime errors (e.g. get_crs range_days > 90 hunts for a
-      // UTC offset that was never the problem).
-      const datetimeFailed = rawIssues.some((issue) => /datetime|date|offset|ISO 8601/i.test(issue.message));
-      const hint = datetimeFailed ? ' - datetimes need ISO 8601 with seconds and a UTC offset' : '';
-      return halt(`invalid tool arguments: ${issues}; match the tool schema exactly${hint}`, 'invalid_args');
+      return halt(invalidArgumentsCause((parsed as { success: false; error: { issues: readonly ArgumentIssue[] } }).error.issues), 'invalid_args');
     }
 
     return ok();
   },
+};
+
+export type ArgumentIssue = Readonly<{ path: ReadonlyArray<PropertyKey>; message: string }>;
+export const MAX_ARGUMENT_ISSUES = 6;
+const MAX_ISSUE_PATH_CHARS = 80;
+const MAX_ISSUE_MESSAGE_CHARS = 200;
+const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
+
+// The model's recovery path when its arguments miss a schema: the failing fields and what the schema expected there.
+// Model-authored args are safe to echo, and zod's messages name types and bounds, not the values sent. A call with many
+// bad fields names the first few and counts the rest, so the cause stays well inside the tool error cap.
+export const invalidArgumentsCause = (issues: readonly ArgumentIssue[]): string => {
+  const named = issues.slice(0, MAX_ARGUMENT_ISSUES)
+    .map((issue) => `${clip(issue.path.map(String).join('.'), MAX_ISSUE_PATH_CHARS) || '(root)'}: ${clip(issue.message, MAX_ISSUE_MESSAGE_CHARS)}`);
+  const more = issues.length > MAX_ARGUMENT_ISSUES ? [`and ${issues.length - MAX_ARGUMENT_ISSUES} more`] : [];
+  // The datetime hint only when a datetime actually failed validation: appended blindly it
+  // misleads the model on non-datetime errors (e.g. get_crs range_days > 90 hunts for a
+  // UTC offset that was never the problem).
+  const datetimeFailed = issues.some((issue) => /datetime|date|offset|ISO 8601/i.test(issue.message));
+  const hint = datetimeFailed ? ' - datetimes need ISO 8601 with seconds and a UTC offset' : '';
+  return `invalid tool arguments: ${[...named, ...more].join('; ')}; match the tool schema exactly${hint}`;
 };
 
 export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
@@ -419,7 +490,7 @@ export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
     const sourceTaint = sourceTaintSchema.safeParse(ctx.toolArgSourceTaint);
     if (!sourceTaint.success) return halt('tool argument taint invalid', 'invalid_args');
     const destination = preToolUseDestination(tool.data);
-    // draft_email/send_email args are executable: the recipient addresses ARE the call.
+    // draft_email/send_email/send_agent_mail args are executable: the recipient addresses ARE the call.
     // Redaction would corrupt them (the 2026-09-25 halt - [REDACTED_EMAIL] fails zod), so they
     // are checked (hard denies still halt fail-closed) but never rewritten.
     if (destination === 'draft_email') return checkExecutableArgs(payload.args, ctx, destination, sourceTaint.data);
@@ -448,27 +519,63 @@ export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
 // tool outside its handler set, a handler bound to the live turn), so no dead card reaches the owner.
 export const TAINT_NEEDS_APPROVAL_REASON = 'external-tainted action needs owner approval; propose it for approval with propose_action';
 
+// A tool that takes only what the owner says directly is refused in a turn that has read outside text: it is neither run
+// nor carded, so its arguments never reach the owner's ledger. The model is told to ask the owner instead.
+export const TAINT_REFUSED_REASON = 'external-tainted call to an owner-statement tool';
+export const TAINT_REFUSED_CAUSE = 'This is taken only from what the owner tells you directly, and this turn read an email, web page or other outside content, so nothing was done and no card was made. Ask the owner to tell you it in a message of their own.';
+// With the call and its turn, a refusal that names unless_owner_stated lifts when the owner's own words in the message that
+// started the turn hold the figure; without them (a card, a replay) it never does.
+export const taintedCallRefused = (tool: ToolName, taint: SourceTaint, args?: unknown, ctx?: Pick<HookRuntimeContext, 'ownerInitiated' | 'authenticatedUserId'>): boolean => {
+  const tainted = TOOL_RECORDS[tool].tainted;
+  if (!isExternalSourceTaint(taint) || tainted === undefined || !('refused' in tainted)) return false;
+  return tainted.unless_owner_stated !== 'minutes' || !ownerStatedFigure(args, ctx);
+};
+const ownerStatedFigure = (args: unknown, ctx: Pick<HookRuntimeContext, 'ownerInitiated' | 'authenticatedUserId'> | undefined): boolean => {
+  const minutes = typeof args === 'object' && args !== null ? (args as { minutes?: unknown }).minutes : undefined;
+  const turn = (ctx as { memoryTurn?: { ownerId?: unknown; current?: MemoryOwnerTurn } } | undefined)?.memoryTurn;
+  return typeof minutes === 'number' && ctx?.ownerInitiated === true && turn?.current !== undefined && turn.ownerId === ctx.authenticatedUserId
+    && ownerStatedMinutes(minutes, turn.current);
+};
+
 // The owner's ruling for a turn that has read outside text: every tool that changes something sends its change to the
 // owner's card instead of running. A tool changes something when its receipt can back a claim, so the set is read from the
 // tool's record, and a record without an exemption is carded. Privileged actions are carded by their own law first.
 export const taintedCallNeedsOwnerApproval = async (
-  tool: ToolName, taint: SourceTaint, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound'>,
+  tool: ToolName, taint: SourceTaint, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound' | 'ownerInitiated'>,
 ): Promise<boolean> => taintGateBlocksDirectExecution(tool, taint)
   || (isExternalSourceTaint(taint) && await recordNeedsOwnerCard(tool, TOOL_RECORDS[tool], args, ctx));
 
 // One record's answer for a tainted call. own_card is not admitted here: the dispatcher admits it per call from the
 // handler's proposal_only declaration, so the exemption holds only while the handler actually only proposes.
 export const recordNeedsOwnerCard = async (
-  tool: ToolName, record: Pick<ToolRecord, 'claim' | 'tainted'>, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound'>,
+  tool: ToolName, record: Pick<ToolRecord, 'claim' | 'tainted'>, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound' | 'ownerInitiated'>,
 ): Promise<boolean> => {
-  if (record.claim === null) return false;
-  switch (record.tainted?.exempt) {
-    case 'draft': case 'honest_origin': return false;
+  const tainted = record.tainted;
+  if (record.claim === null || (tainted !== undefined && 'refused' in tainted)) return false;
+  switch (tainted?.exempt) {
+    case 'draft': case 'honest_origin': case 'instructions_only': return false;
+    case 'narrows': return clearsEverything(tool, args);
     case 'source_bound': return !(await boundToObservedSource(tool, args, ctx));
     case 'commits_on_card': return !typedBrowserStep(tool, args);
+    case 'owner_inward': return ctx.ownerInitiated !== true || combinedTask(tool, args);
     default: return true;
   }
 };
+
+// A background task whose worker would hold the owner's private reads and a way out together. Started after outside text, its
+// brief may carry instructions to read the inbox and fetch a URL with it, so only the owner's card starts it.
+const combinedTask = (tool: ToolName, args: unknown): boolean => {
+  if (tool !== 'start_task') return false;
+  const profile = taskProfileSchema.safeParse(typeof args === 'object' && args !== null ? (args as { profile?: unknown }).profile : undefined);
+  return !profile.success || holdsPrivateAndEgress(TASK_PROFILE_SPECS[profile.data].tools);
+};
+export const TAINT_COMBINED_TASK_REASON = 'external-tainted background task would read private data and the web together';
+export const TAINT_COMBINED_TASK_CAUSE = 'This task would read the owner\'s mail and the web together, after reading outside content in this conversation. Start it with profile web (public look-ups only) or private (the owner\'s data, no web) and it runs at once; for both, call propose_action with this exact call and the owner gets a card.';
+
+// A narrowing call that removes everything of its kind at once is carded: its receipt cannot name what it removed, so outside
+// text could wipe the owner's reminders with nothing to set them again from. One by one, each receipt quotes what went.
+const clearsEverything = (tool: ToolName, args: unknown): boolean =>
+  tool === 'cancel_reminder' && typeof args === 'object' && args !== null && (args as { all?: unknown }).all === true;
 
 // A loop bound to an observed mail source records that source, its title never enters a prompt as the owner's
 // (openLoopsPrompt leaves source loops out of the owner's open loops), and it only checks back: it is the owner-enabled mail
@@ -523,13 +630,16 @@ export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
       return halt('tool argument taint invalid', 'invalid_args');
     }
 
+    if (taintedCallRefused(tool.data, sourceTaint.data, payload.args, ctx)) return halt(TAINT_REFUSED_REASON, 'forbidden');
+
     // Two calls pass with tainted arguments: the owner-approved replay of a frozen call, and a call whose handler only
     // raises the owner's card. Neither executes anything the owner has not seen.
     if (ctx.approvedTaintedAction?.tool !== tool.data && ctx.proposalOnlyCall !== tool.data) {
       let needsOwner: boolean;
       try { needsOwner = await taintedCallNeedsOwnerApproval(tool.data, sourceTaint.data, payload.args, ctx); }
       catch { return halt('loop lookup failed', 'transient'); }
-      if (needsOwner) return halt(TAINT_NEEDS_APPROVAL_REASON, 'forbidden');
+      // Only the owner's own turn can start the narrower task at once, so only there is the model pointed at it.
+      if (needsOwner) return halt(ctx.ownerInitiated === true && combinedTask(tool.data, payload.args) ? TAINT_COMBINED_TASK_REASON : TAINT_NEEDS_APPROVAL_REASON, 'forbidden');
     }
 
     // A write that is not privileged runs past the taint law on the owner's own turn as any tool does.
@@ -651,6 +761,8 @@ export type RunHooksOptions<Ctx> = {
 // sanitiser or approval reason never reaches the model, only a code and a fix it can act on.
 const hookToolError = (hook: string, reason: string, code: ErrorCode): ToolError => {
   if (reason === TAINT_NEEDS_APPROVAL_REASON) return toolError('taint_needs_approval');
+  if (reason === TAINT_COMBINED_TASK_REASON) return toolError('taint_needs_approval', TAINT_COMBINED_TASK_CAUSE);
+  if (reason === TAINT_REFUSED_REASON) return toolError('hook_denied', TAINT_REFUSED_CAUSE);
   if (reason === 'privileged action lacks approval') return toolError('approval_denied');
   if (reason === 'approval check unavailable' || reason === 'approval check failed') return toolError('approval_check_unavailable');
   if (reason === 'unknown tool') return toolError('unknown_tool');
@@ -931,6 +1043,9 @@ async function checkExecutableArgs(
 ): Promise<HookResult> {
   const checked = await sanitiseCandidate(value, ctx, destination, sourceTaint);
   if (!checked.ok) return checked.result;
+  // A value encoded past the decode limit is withheld only in the scribe's copy, and these arguments go on as written,
+  // so it refuses here as the decode check did before anything was withheld.
+  if (checked.redactions.some(redaction => redaction.kind === 'deep_encoding')) return halt('scribe:invalid_payload', sanitiseFailureCode('invalid_payload'));
   if (allowedRedactions && checked.redactions.some(redaction => !allowedRedactions.has(redaction.kind))) return halt('exact edit requires a privacy-safe field', 'forbidden');
   return ok();
 }
@@ -1013,6 +1128,7 @@ function preToolUseDestination(tool: ToolName): SanitiseDestination {
       return 'draft_document';
     case 'draft_email':
     case 'send_email':
+    case 'send_agent_mail':
       return 'draft_email';
     case 'send_message':
       return 'send_message';

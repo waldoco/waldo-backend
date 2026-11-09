@@ -99,8 +99,13 @@ async function world() {
       `delivery-${guid}`, commandId, 'seeded-digest', JSON.stringify(command), '{}', '{}', JSON.stringify(result), Date.now(), ownerDoName, `reply:seeded-${guid}`);
     state.storage.sql.exec("INSERT INTO sent_messages(message_guid,command_id,state) VALUES(?,?,'local_recorded')", guid, commandId);
   });
+  // Resolves once the bridge has handed every event it holds to the owner, so none is still on its way when a turn runs on.
+  const untilHanded = async () => {
+    const pendingEvents = () => runInDurableObject(bridgeStub(), async (_i, state) => state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM events WHERE state = 'pending'").one().n);
+    for (let polls = 0; polls < 100 && await pendingEvents() > 0; polls++) await new Promise(resolve => setTimeout(resolve, 20));
+  };
   const firstRecord = () => runInDurableObject(ownerStub, async (_i, state) => new IMessageOwnerInbox(state.storage).records()[0]!);
-  return { ownerStub, bridgeStub, host, pump, activate, exchange, seed, firstRecord };
+  return { ownerStub, bridgeStub, host, pump, activate, exchange, seed, firstRecord, untilHanded };
 }
 
 // The owner's message the model read last, as the model saw it.
@@ -267,8 +272,14 @@ it('when the owner writes again before Waldo answers, the earlier answer threads
   await w.activate();
   expect((await w.host.capabilities(true, false, REPLIES)).status).toBe(200);
   const first = w.host.message('Is the dentist booked?'), second = w.host.message('Also, what time is my flight?');
+  // The first turn waits at its model call until the second message is in the owner's inbox, so the reply freezes with a newer message there.
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  proof.before.push(() => held);
   expect((await w.host.send(first)).status).toBe(200);
   expect((await w.host.send(second)).status).toBe(200);
+  await w.untilHanded();
+  release();
   await w.pump();
   const one = (await w.host.pull()).delivery!;
   expect(JSON.parse(one.body).target).toMatchObject({ messageGuid: first.messageGuid, partIndex: 0 });

@@ -1,8 +1,9 @@
 import { OUTBOX_CUSTODY, SEND_NOW_ONLY, routedDelivery, type OutboxRoute } from './delivery-routes';
 import { carriesTopic } from '../memory/forget-guard';
-import { rememberWhatsAppSubject, waitingForWhatsApp } from './proactive-surface';
+import { rememberWhatsAppSubject, unaskedRecord, waitingForWhatsApp } from './proactive-surface';
 import { retireSurfaceRecords, type DeliveryReceipt, type FinalRecord, type TelegramFinalOutbox } from './telegram-final-outbox';
 import { WHATSAPP_HELD, WhatsAppApiError, WhatsAppFileRefused, WhatsAppPartialSend, deliverWhatsAppFile, whatsappFileLinkText, whatsappHeld, whatsappLinkOutcome, whatsappOutboundKind, type WhatsAppFileLinkReason, type WhatsAppFileOutcome, type WhatsAppOutboundFile } from './whatsapp-api';
+import { clearWhatsAppContext } from './whatsapp-context';
 
 // WhatsApp's customer service window: a business may send free-form messages only within 24 hours
 // of the user's last message; outside it, only an approved template goes through
@@ -39,16 +40,30 @@ const whatsappRefused = (result: unknown): boolean => (result as { refused?: unk
 // Marks a send that must not overtake held messages: while anything is held it is held after them, even with the window
 // open. A symbol key, so it never reaches a provider's JSON body.
 export const SEND_BEHIND_HELD: unique symbol = Symbol('whatsapp.behind_held');
+// Marks a send of Waldo's own initiative: the owner did not ask for it, so a knock for it uses the proactive template. A
+// symbol key, so it never reaches a provider's JSON body.
+export const SEND_UNASKED: unique symbol = Symbol('whatsapp.unasked');
 const anyHeld = (kv: Kv): boolean => [...kv.list({ prefix: WA_HELD_PREFIX })].length > 0;
 export type WhatsAppTemplate = Readonly<{ name: string; language: string }>;
 type Log = (event: Readonly<Record<string, string | number | boolean>>) => void;
 
-// Template name and language are deploy config, set once the template is approved in WhatsApp Manager.
-export const whatsappTemplateConfig = (env: Readonly<{ WHATSAPP_REENGAGE_TEMPLATE?: string; WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string }>): WhatsAppTemplate | null => {
-  const name = env.WHATSAPP_REENGAGE_TEMPLATE?.trim() ?? '';
-  const language = env.WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?.trim() ?? '';
-  return /^[a-z0-9_]{1,512}$/.test(name) && /^[a-z]{2,3}(_[A-Z]{2})?$/.test(language) ? { name, language } : null;
+const templateOf = (name: string | undefined, language: string | undefined): WhatsAppTemplate | null => {
+  const n = name?.trim() ?? '', l = language?.trim() ?? '';
+  return /^[a-z0-9_]{1,512}$/.test(n) && /^[a-z]{2,3}(_[A-Z]{2})?$/.test(l) ? { name: n, language: l } : null;
 };
+// Template name and language are deploy config, set once the template is approved in WhatsApp Manager.
+export const whatsappTemplateConfig = (env: Readonly<{ WHATSAPP_REENGAGE_TEMPLATE?: string; WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string }>): WhatsAppTemplate | null =>
+  templateOf(env.WHATSAPP_REENGAGE_TEMPLATE, env.WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE);
+// The knock for a message the owner did not ask for (a day card, an update): its own approved template, whose words do not say
+// the owner asked for anything. The reply template is never borrowed for it.
+export const whatsappProactiveTemplateConfig = (env: Readonly<{ WHATSAPP_PROACTIVE_TEMPLATE?: string; WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE?: string }>): WhatsAppTemplate | null =>
+  templateOf(env.WHATSAPP_PROACTIVE_TEMPLATE, env.WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE);
+export type WhatsAppTemplates = Readonly<{ reply: WhatsAppTemplate | null; proactive: WhatsAppTemplate | null }>;
+// The template that fits what is waiting. A reply may knock with the proactive template when it is the only one approved,
+// since its words are true of anything; Waldo's own initiative never knocks with words that say the owner asked. With no
+// template for it, nothing is sent.
+export const templateFor = (templates: WhatsAppTemplates, unasked: boolean): WhatsAppTemplate | null =>
+  unasked ? templates.proactive : templates.reply ?? templates.proactive;
 
 // The window opens at the message's own send time, not when Waldo received it: Meta redelivers a webhook
 // for up to 7 days, and a late redelivery must not reopen a window that has closed. A missing or unreadable
@@ -105,14 +120,15 @@ const reengagement = (error: unknown): boolean => error instanceof WhatsAppApiEr
 // the window it answers nothing (not sent), and the owner still gets the knock, so a reply lets Waldo offer it afresh. A
 // SEND_BEHIND_HELD send is held after what is already held, even inside the window, and answers WHATSAPP_HELD. An
 // OUTBOX_CUSTODY send is never held either: refused, it answers WHATSAPP_REFUSED and the owner gets the knock.
-export const whatsappWindowCaller = (inner: Caller, options: Readonly<{ kv: Kv; template: WhatsAppTemplate | null; now?: () => number; log: Log }>): Caller => {
-  const { kv, template, log } = options;
+export const whatsappWindowCaller = (inner: Caller, options: Readonly<{ kv: Kv; template: WhatsAppTemplate | null; proactiveTemplate?: WhatsAppTemplate | null; now?: () => number; log: Log }>): Caller => {
+  const { kv, log } = options, templates = { reply: options.template, proactive: options.proactiveTemplate ?? null };
   const now = options.now ?? Date.now;
   return async (method, body) => {
     if (method !== 'sendMessage') return inner(method, body);
     const nowOnly = (body as { [SEND_NOW_ONLY]?: unknown })[SEND_NOW_ONLY] === true;
     const custody = (body as { [OUTBOX_CUSTODY]?: unknown })[OUTBOX_CUSTODY] === true;
-    const { [SEND_BEHIND_HELD]: behindFlag, ...plain } = body as { [SEND_BEHIND_HELD]?: unknown };
+    const template = templateFor(templates, (body as { [SEND_UNASKED]?: unknown })[SEND_UNASKED] === true);
+    const { [SEND_BEHIND_HELD]: behindFlag, [SEND_UNASKED]: _unasked, ...plain } = body as { [SEND_BEHIND_HELD]?: unknown; [SEND_UNASKED]?: unknown };
     const behind = behindFlag === true && anyHeld(kv);
     let held: readonly object[] = [plain];
     let receipt: unknown = WHATSAPP_HELD;
@@ -160,9 +176,9 @@ export const whatsappReceipt = (ack: unknown, subject: string, now: number = Dat
 // store, and a sent record settles only on Meta's report that it arrived (observeSurfaceStatuses). The knock waits for the
 // route's checks too: a record the route itself still holds or would refuse never knocks. A record still waiting after
 // Meta's 30-day retention ends as lapsed, blocked if nothing went out and quarantined if any part did. releaseWhatsAppOutbox sends what waited once the owner writes again.
-export const whatsappWindowRoute = (route: OutboxRoute, options: Readonly<{ kv: Kv; subject: string; template: WhatsAppTemplate | null;
+export const whatsappWindowRoute = (route: OutboxRoute, options: Readonly<{ kv: Kv; subject: string; template: WhatsAppTemplate | null; proactiveTemplate?: WhatsAppTemplate | null;
   knock: (template: WhatsAppTemplate) => Promise<unknown>; now?: () => number; log: Log }>): OutboxRoute => {
-  const { kv, subject, template, knock, log } = options;
+  const { kv, subject, knock, log } = options, templates = { reply: options.template, proactive: options.proactiveTemplate ?? null };
   const now = options.now ?? Date.now;
   const lapsed = (record: { createdAt: number }) => !whatsappWindowOpen(kv, now()) && now() - record.createdAt >= WHATSAPP_HELD_RETENTION_MS;
   return { ...route,
@@ -172,12 +188,12 @@ export const whatsappWindowRoute = (route: OutboxRoute, options: Readonly<{ kv: 
       const own = await route.defer(record);
       if (own !== null && own > now()) return own;
       if (!(await route.allowed(record))) return null;
-      await whatsappKnock(kv, knock, template, log);
+      await whatsappKnock(kv, knock, templateFor(templates, unaskedRecord(record)), log);
       return record.createdAt + WHATSAPP_HELD_RETENTION_MS;
     },
     lapsed: record => lapsed(record) || (route.lapsed?.(record) ?? false),
     allowed: async record => !lapsed(record) && route.allowed(record),
-    send: (payload, record) => route.send({ ...payload, [OUTBOX_CUSTODY]: true } as typeof payload, record),
+    send: (payload, record) => route.send({ ...payload, [OUTBOX_CUSTODY]: true, ...(unaskedRecord(record) ? { [SEND_UNASKED]: true } : {}) } as typeof payload, record),
     receipt: ack => whatsappReceipt(ack, subject, now()),
   };
 };
@@ -221,9 +237,9 @@ export const releaseWhatsAppOutbox = async (outbox: TelegramFinalOutbox, route: 
   for (let pass = 0; pass < Math.max(1, pending); pass += 1) await outbox.drain(delivery);
 };
 
-// The window, the held text and the refusal and knock markers belong to one WhatsApp number. When the owner's number
-// changes or is unlinked they all go: text held for one number must never reach another, and a new number's window opens
-// only when that number writes. The outbox's records for that chat are retired too, since Meta's reports about them no
+// The window, the held text, the refusal and knock markers and what reactions and replies can name belong to one WhatsApp
+// number. When the owner's number changes or is unlinked they all go: text held for one number must never reach another,
+// and a new number's window opens only when that number writes. The outbox's records for that chat are retired too, since Meta's reports about them no
 // longer reach this owner: an unsent one is blocked and a sent one ends unconfirmed, and neither goes to the next number.
 // An owner with the app (`appFallback`) keeps the scheduled messages nothing went out for: they go to the app instead
 // (waitingForWhatsApp), so the old number is remembered for that. Storage only, so callers run it in the same transaction
@@ -236,6 +252,7 @@ export const clearWhatsAppNumber = (kv: Kv, appFallback = false): readonly strin
   if (old && appFallback) rememberWhatsAppSubject(kv, old);
   for (const prefix of [WA_HELD_PREFIX, REHELD_PREFIX]) for (const [key] of [...kv.list<unknown>({ prefix })]) kv.delete(key);
   for (const key of [WA_LAST_INBOUND_KEY, KNOCKED_KEY, REFUSED_KEY]) kv.delete(key);
+  clearWhatsAppContext(kv);
   return retired;
 };
 

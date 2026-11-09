@@ -25,7 +25,7 @@ const answered: ProviderEvent = { text: 'Here is your day.' };
 // `anthropicKey: null` is today's deployment: no second-provider key.
 const owner = (gateway: LLMGatewayAdapter, options: Readonly<{ floorReply?: boolean; health?: InMemoryCircuitBreaker; log?: (entry: TurnLogEntry) => void; anthropicKey?: string | null }> = {}) => {
   const anthropicKey = options.anthropicKey === undefined ? 'fixture-anthropic' : options.anthropicKey;
-  const args: Parameters<typeof createOwnerResponder> = [{ openaiApiKey: 'fixture-openai', ...(anthropicKey === null ? {} : { anthropicApiKey: anthropicKey }), floorReply: options.floorReply ?? true, ...(options.health ? { health: options.health } : {}) }];
+  const args: Parameters<typeof createOwnerResponder> = [{ openaiApiKey: 'fixture-openai', primary: 'openai', ...(anthropicKey === null ? {} : { anthropicApiKey: anthropicKey }), floorReply: options.floorReply ?? true, ...(options.health ? { health: options.health } : {}) }];
   args[3] = options.log ?? (() => undefined);
   args[5] = [getContextHandler({ timezone: 'Asia/Kolkata', now: () => new Date('2026-10-20T08:20:00Z') })];
   args[10] = gateway;

@@ -1,13 +1,16 @@
 import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_AUXILIARY_MODEL, type ModelName, type ScheduleEntry } from '@waldo/contracts';
+import { appWhy, storedWhy } from '../tools/why-trail';
+import { whyCarries } from './approvals';
+import type { AppWhyV1 } from '../../../contracts/src/app/why';
 import { turnMemoryPrompt, type ClaimStore } from '../memory/claims';
 import { DAY_CARDS, dayCardPrompt, SKIP_CARD, type CardId, type DayCard } from '../prompt/day-cards';
 import { calendarPromptProjection, type CalendarItem, type GoogleClient } from '../connectors/google';
 import { QUARANTINE_AFTER_ATTEMPTS, type Scheduler } from '../scheduler/multiplexer';
 import { ModelUnavailableError } from '../llm/provider';
 import { localIso, localToEpoch } from './reminders';
-import { APP_CARD_EXCERPT_MAX_V1 } from '../../../contracts/src/app/controls';
+import { localDayWindow, shiftDay } from '../health/scores/time';
+import { APP_CARD_EXCERPT_MAX_V1, APP_SCHEDULE_RECEIPTS_V1, appScheduleTimeReceiptV1, type AppScheduleTimeTodayV1, type APP_SCHEDULE_TIME_IDS_V1 } from '../../../contracts/src/app/controls';
 
-const DAY_MS = 24 * 60 * 60_000;
 
 type Sql = Pick<SqlStorage, 'exec'>;
 export type CardPlan = Readonly<{ card: CardId; time: string | null; reason: string }>;
@@ -33,6 +36,16 @@ export const dayPlanBook = (sql: Sql) => {
   // from the chat as it is now, and a forgotten or deleted row takes them with it.
   if (!columns.has('delivered_message_id')) sql.exec('ALTER TABLE day_plan ADD COLUMN delivered_message_id TEXT');
   if (!columns.has('delivered_at')) sql.exec('ALTER TABLE day_plan ADD COLUMN delivered_at INTEGER');
+  // Revisions of a delivered card, when the owner's day changed after it: how many reached the owner, the latest one's time and
+  // outbox record, and the Main chat row a revision became when that was the app, with that revision's record. The original
+  // delivery stays as it was.
+  if (!columns.has('revision')) sql.exec('ALTER TABLE day_plan ADD COLUMN revision INTEGER');
+  if (!columns.has('revised_at')) sql.exec('ALTER TABLE day_plan ADD COLUMN revised_at INTEGER');
+  if (!columns.has('revised_message_id')) sql.exec('ALTER TABLE day_plan ADD COLUMN revised_message_id TEXT');
+  if (!columns.has('revised_record')) sql.exec('ALTER TABLE day_plan ADD COLUMN revised_record TEXT');
+  if (!columns.has('revised_row_record')) sql.exec('ALTER TABLE day_plan ADD COLUMN revised_row_record TEXT');
+  // The steps behind the changes the card's writing proposed ("Why this changed"), gone with the row.
+  if (!columns.has('why_json')) sql.exec('ALTER TABLE day_plan ADD COLUMN why_json TEXT');
   return {
     pins(): Readonly<Record<string, string>> {
       return Object.fromEntries(sql.exec<{ card: string; time: string }>('SELECT card, time FROM card_pins').toArray().map((row) => [row.card, row.time]));
@@ -62,6 +75,50 @@ export const dayPlanBook = (sql: Sql) => {
       return new Map(sql.exec<{ card: string; message_id: string; delivered_at: number }>(
         'SELECT card, delivered_message_id AS message_id, delivered_at FROM day_plan WHERE day = ? AND delivered_message_id IS NOT NULL', day,
       ).toArray().map(({ card, ...delivery }) => [card, delivery]));
+    },
+    // The owner's day for unasked messages, from the Brief to the Close: each at the time it went out, else its planned or
+    // pinned time, else its default. With day cards off the pinned or default times still bound the day.
+    window(day: string, timezone: string): Readonly<{ opens: number; closes: number }> {
+      const rows = this.read(day), went = this.deliveries(day), pins = this.pins();
+      const at = (card: CardId) => went.get(card)?.delivered_at
+        ?? localToEpoch(`${day}T${rows.find(row => row.card === card)?.time ?? pins[card] ?? cardFor(card)!.defaultTime}`, timezone);
+      return { opens: at('card:brief'), closes: at('card:close') };
+    },
+    // Whether the card reached the owner today, on any surface, so a change can revise it.
+    reached(day: string, card: string): boolean {
+      return this.read(day).some(row => row.card === card && row.sent && row.state !== 'skipped');
+    },
+    // A written card's steps, or null when its writing proposed nothing; a Try again's writing replaces them.
+    why(day: string, card: CardId, json: string | null): void {
+      if (json === null) sql.exec('UPDATE day_plan SET why_json = NULL WHERE day = ? AND card = ?', day, card);
+      else sql.exec(`INSERT INTO day_plan (day, card, time, reason, why_json) VALUES (?, ?, NULL, 'sent', ?)
+        ON CONFLICT (day, card) DO UPDATE SET why_json = excluded.why_json`, day, card, json);
+    },
+    whys(day: string): ReadonlyMap<string, string> {
+      return new Map(sql.exec<{ card: string; why_json: string }>('SELECT card, why_json FROM day_plan WHERE day = ? AND why_json IS NOT NULL', day).toArray().map(row => [row.card, row.why_json]));
+    },
+    // Owner forget: a day card's steps that name the forgotten text are cleared. Answers how many still name it.
+    forgetWhy(texts: readonly string[]): number {
+      const topics = [...new Set(texts.map(text => text.trim()).filter(Boolean))];
+      if (!topics.length) return 0;
+      const carrying = () => sql.exec<{ day: string; card: string; why_json: string }>('SELECT day, card, why_json FROM day_plan WHERE why_json IS NOT NULL').toArray().filter(row => whyCarries(row.why_json, topics));
+      for (const row of carrying()) sql.exec('UPDATE day_plan SET why_json = NULL WHERE day = ? AND card = ?', row.day, row.card);
+      return carrying().length;
+    },
+    revisedRow(day: string, card: CardId, messageId: string, record: string): void {
+      sql.exec('UPDATE day_plan SET revised_message_id = ?, revised_row_record = ? WHERE day = ? AND card = ?', messageId, record, day, card);
+    },
+    // Counted once per outbox record: a settle the outbox repeats after a restart does not count it again.
+    revised(day: string, card: CardId, at: number, record: string): void {
+      sql.exec(`UPDATE day_plan SET revision = COALESCE(revision, 0) + 1, revised_at = ?, revised_record = ?
+        WHERE day = ? AND card = ? AND revised_record IS NOT ?`, at, record, day, card, record);
+    },
+    // message_id: the newest revision's Main chat row, or null when it reached the owner outside the app.
+    revisions(day: string): ReadonlyMap<string, Readonly<{ revision: number; revised_at: number; message_id: string | null }>> {
+      return new Map(sql.exec<{ card: string; revision: number; revised_at: number; message_id: string | null }>(
+        `SELECT card, revision, revised_at, CASE WHEN revised_row_record = revised_record THEN revised_message_id END AS message_id
+         FROM day_plan WHERE day = ? AND revision IS NOT NULL AND revised_at IS NOT NULL`, day,
+      ).toArray().map(({ card, ...revision }) => [card, revision]));
     },
     pending(day: string): readonly DayCard[] {
       const sent = new Set(this.read(day).filter((row) => row.sent).map((row) => row.card));
@@ -118,27 +175,29 @@ export const dayPlanBook = (sql: Sql) => {
     waiting(day: string, card: CardId): void {
       sql.exec('UPDATE day_plan SET sent = 0 WHERE day = ? AND card = ? AND sent IN (2, 3)', day, card);
     },
-    heldToday(day: string): readonly CardId[] {
-      return sql.exec<{ card: CardId }>('SELECT card FROM day_plan WHERE day = ? AND sent = 2 ORDER BY card', day).toArray().map((row) => row.card);
-    },
+    heldToday: (day: string): readonly CardId[] => heldCardsOn(sql, day),
   };
 };
 export type DayPlanBook = ReturnType<typeof dayPlanBook>;
+// The cards held on `day` for quiet hours, read only.
+export const heldCardsOn = (sql: Sql, day: string): readonly CardId[] =>
+  sql.exec<{ card: CardId }>('SELECT card FROM day_plan WHERE day = ? AND sent = 2 ORDER BY card', day).toArray().map((row) => row.card);
 
 export const defaultPlan = (cards: readonly DayCard[]): readonly CardPlan[] =>
   cards.map((card) => ({ card: card.id, time: card.defaultTime, reason: 'default time' }));
 
-export const parseDayPlan = (raw: string, cards: readonly DayCard[]): readonly CardPlan[] => {
+// A card the reply leaves out or times badly falls back to its default; with `keep`, a re-plan's, it is left as it is.
+export const parseDayPlan = (raw: string, cards: readonly DayCard[], keep = false): readonly CardPlan[] => {
   const { cards: planned } = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as { cards?: unknown };
   if (!Array.isArray(planned)) throw new Error('day plan has no cards');
   const byId = new Map(planned.map((entry: { id?: unknown; time?: unknown; reason?: unknown }) => [entry?.id, entry]));
-  return cards.map((card) => {
+  return cards.flatMap((card): CardPlan[] => {
     const entry = byId.get(card.id);
     const time = typeof entry?.time === 'string' ? entry.time.trim() : '';
     const reason = typeof entry?.reason === 'string' && entry.reason ? entry.reason : 'no reason given';
-    if (time === 'skip') return { card: card.id, time: null, reason };
-    if (isClock(time)) return { card: card.id, time, reason };
-    return { card: card.id, time: card.defaultTime, reason: `default time (planned value "${time}" was not HH:MM)` };
+    if (time === 'skip') return [{ card: card.id, time: null, reason }];
+    if (isClock(time)) return [{ card: card.id, time, reason }];
+    return keep ? [] : [{ card: card.id, time: card.defaultTime, reason: `default time (planned value "${time}" was not HH:MM)` }];
   });
 };
 
@@ -165,6 +224,128 @@ export const applyDayPlan = async (
   return applied;
 };
 
+// The reason a card's time carries when the owner set it for today: a re-plan keeps it, as it keeps a pin.
+export const SET_FOR_TODAY = 'set by you for today';
+// What a re-plan after today's calendar changed may move: a card the planner timed (or skipped) that is still pending and not
+// yet due, with its current time. One the owner set for today or pinned keeps its time, as does a card held for quiet hours,
+// waiting on the model, or already sent; a card with no plan yet waits for the day's own plan.
+export type MovableCard = Readonly<{ card: DayCard; time: string | null }>;
+export const movableCards = (book: DayPlanBook, timezone: string, now: number): readonly MovableCard[] => {
+  const day = localIso(now, timezone).slice(0, 10);
+  const pins = book.pins();
+  const rows = new Map(book.read(day).map(row => [row.card, row]));
+  return DAY_CARDS.flatMap((card): MovableCard[] => {
+    const row = rows.get(card.id);
+    if (!row || row.state !== 'pending' || pins[card.id] || row.reason === SET_FOR_TODAY) return [];
+    const at = row.time === null ? null : localToEpoch(`${day}T${row.time}`, timezone);
+    return row.time === null || (at !== null && at > now) ? [{ card, time: row.time }] : [];
+  });
+};
+// A re-plan applies only to the cards it may move. A time already past keeps the card where it was: a re-plan moves a card or,
+// when the model says so, skips it; it never sends one early by accident or cancels it for being late.
+export const applyReplan = async (scheduler: Scheduler, book: DayPlanBook, timezone: string, now: number, plan: readonly CardPlan[],
+  movable: readonly MovableCard[], enabled = true): Promise<readonly CardPlan[]> => {
+  const day = localIso(now, timezone).slice(0, 10);
+  const ids = new Set(movable.map(entry => entry.card.id));
+  const ahead = plan.filter(entry => {
+    if (!ids.has(entry.card)) return false;
+    if (entry.time === null) return true;
+    const at = localToEpoch(`${day}T${entry.time}`, timezone);
+    return at !== null && at > now;
+  });
+  return applyDayPlan(scheduler, book, timezone, now, ahead, true, enabled);
+};
+
+// WAKE_BRIEF: the owner's wearable shows a night that just ended. A Brief still to come today may go now, at an earlier time
+// still to come, or at its planned time; it is never moved later, so an owner with no wearable, or whose health is not shared,
+// gets the Brief at its planned time. Whether this wake starts the day (a 03:00 waking, a nap) is the model's call; once
+// today's Brief has gone, a later wake has nothing to move.
+// The plan row says only that the Brief moved earlier: the wake is a health fact, and the row keeps no reason that names it.
+export const MOVED_EARLIER = 'moved earlier';
+// A Brief time the owner set every day is the latest it comes, so a wake may still bring it earlier; one set for today only stays.
+export const wakeTarget = (book: DayPlanBook, timezone: string, now: number): MovableCard | 'nothing_to_move' => {
+  const day = localIso(now, timezone).slice(0, 10);
+  const row = book.read(day).find(planned => planned.card === 'card:brief');
+  if (!row || row.state !== 'pending' || row.reason === SET_FOR_TODAY || row.time === null) return 'nothing_to_move';
+  return localToEpoch(`${day}T${row.time}`, timezone) > now ? { card: cardFor('card:brief')!, time: row.time } : 'nothing_to_move';
+};
+const WAKE_TURNS_KEY = 'wake_brief_turns_v1';
+// A cost backstop on how often one day asks the model, not a product rule; the deployment sets it.
+export const wakeTurnsPerDay = (raw: string | undefined): number => {
+  const parsed = Number(raw);
+  return raw !== undefined && raw.trim() !== '' && Number.isInteger(parsed) && parsed >= 0 ? parsed : 3;
+};
+export const takeWakeTurn = (kv: Kv, day: string, perDay: number): boolean => {
+  const turns = kv.get<{ day: string; count: number }>(WAKE_TURNS_KEY);
+  const count = turns?.day === day ? turns.count : 0;
+  if (count >= perDay) return false;
+  kv.put(WAKE_TURNS_KEY, { day, count: count + 1 });
+  return true;
+};
+// "now", or a time after now and before the planned time. Anything else, the planned time and an unreadable reply included,
+// keeps the Brief where it is.
+export const parseWakeReply = (raw: string, planned: string, nowClock: string): 'now' | string | null => {
+  let cards: unknown;
+  try { cards = (JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as { cards?: unknown }).cards; } catch { return null; }
+  const entry = Array.isArray(cards) ? cards.find((item: { id?: unknown } | null) => item?.id === 'card:brief') as { time?: unknown } | undefined : undefined;
+  const time = typeof entry?.time === 'string' ? entry.time.trim() : '';
+  return time === 'now' || (isClock(time) && time > nowClock && time < planned) ? time : null;
+};
+// The Brief's new time is recorded on its plan row as well as its schedule row, so the owner's day (window) opens with it on
+// every surface, not only once the app has it. The model chose its time against the clock before its turn; a time that
+// passed while it answered sends the Brief now, so the turn's length never cancels it.
+export const applyWake = async (scheduler: Scheduler, book: DayPlanBook, timezone: string, now: number, time: string): Promise<boolean> => {
+  const target = wakeTarget(book, timezone, now);
+  if (target === 'nothing_to_move' || scheduler.lookup('card:brief').state === 'unreadable') return false;
+  const local = localIso(now, timezone), day = local.slice(0, 10);
+  const at = time === 'now' ? now : Math.max(localToEpoch(`${day}T${time}`, timezone), now);
+  book.save(day, { card: 'card:brief', time: time === 'now' ? local.slice(11, 16) : time, reason: MOVED_EARLIER });
+  await scheduler.schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: at, dueAt: at, recurrence: null });
+  return true;
+};
+
+// The owner's time for the Brief or the Close: every day (pin, which every plan of the day keeps) or today only. Today's card
+// moves to it at once when it is still to come. A time already past sends today's card now, but only when it was still due
+// later today, so the change never drops it; a card already sent, being made, held, waiting or paused is left as it is.
+export type CardTimeToday = AppScheduleTimeTodayV1 | 'unreadable';
+// armable is false while this surface may not arm the day cards yet (an app owner who has not confirmed their zone).
+export const setCardTime = async (deps: CardDeps & Readonly<{ enabled: boolean; armable?: boolean; quiet: (at: number) => boolean }>, id: CardId, time: string, every: boolean): Promise<CardTimeToday> => {
+  if (deps.scheduler.lookup(id).state === 'unreadable') return 'unreadable';
+  const day = localIso(deps.now, deps.timezone).slice(0, 10);
+  const row = deps.book.read(day).find(planned => planned.card === id);
+  if (every && deps.book.pins()[id] === time) return 'unchanged';
+  if (every) deps.book.pin(id, time);
+  if (!deps.enabled) return 'off';
+  if (deps.armable === false) return 'zone';
+  if (row?.sent) return 'sent';
+  if (cardStatus(deps, cardFor(id)!).state !== 'pending' || deps.queued(day, id)) return 'busy';
+  const found = deps.scheduler.lookup(id);
+  const dueLater = found.state === 'entry' && found.entry.status === 'armed' && found.entry.due_at > deps.now;
+  const at = Math.max(localToEpoch(`${day}T${time}`, deps.timezone), deps.now);
+  if (at === deps.now && !dueLater) return 'passed';
+  deps.book.save(day, { card: id, time: localIso(at, deps.timezone).slice(11, 16), reason: every ? 'pinned by you' : SET_FOR_TODAY });
+  await deps.scheduler.schedule({ id, kind: 'brief', payloadRefs: { id }, occurrenceAt: at, dueAt: at, recurrence: null });
+  return deps.quiet(at) ? 'quiet' : at === deps.now ? 'now' : 'planned';
+};
+
+// The owner's every-day Brief or Close time from the app, the console or chat, with the fixed receipt that says what changed.
+// wake: WAKE_BRIEF is on, so the Brief time is the latest it comes.
+export const ownerCardTime = async (deps: Parameters<typeof setCardTime>[0], card: (typeof APP_SCHEDULE_TIME_IDS_V1)[number], time: string, wake: boolean) => {
+  const today = await setCardTime(deps, card, time, true);
+  return today === 'unreadable' ? APP_SCHEDULE_RECEIPTS_V1.unavailable : appScheduleTimeReceiptV1({ card, time, today, noLaterThan: card === 'card:brief' && wake });
+};
+
+// One re-plan waits at a time: requests while it waits share it, and a request while it runs queues one more, so the last
+// change is always planned on and a burst costs at most two model calls.
+export const coalesced = <A,>(enqueue: (job: () => Promise<void>) => void, work: (arg: A) => Promise<void>) => {
+  let queued = false;
+  return (arg: A): void => {
+    if (queued) return;
+    queued = true;
+    enqueue(() => { queued = false; return work(arg); });
+  };
+};
+
 export const armDayCards = async (scheduler: Scheduler, book: DayPlanBook, timezone: string, now: number): Promise<boolean> => {
   const day = localIso(now, timezone).slice(0, 10);
   if (book.read(day).length > 0) return false;
@@ -172,9 +353,10 @@ export const armDayCards = async (scheduler: Scheduler, book: DayPlanBook, timez
   return (await applyDayPlan(scheduler, book, timezone, now, defaultPlan(DAY_CARDS))).length > 0;
 };
 
+// The owner's local day, whole on a 23- or 25-hour day around a clock change.
 export const dayWindow = (now: number, timezone: string): Readonly<{ from: number; to: number }> => {
-  const midnight = localToEpoch(`${localIso(now, timezone).slice(0, 10)}T00:00`, timezone);
-  return { from: midnight, to: midnight + DAY_MS };
+  const day = localDayWindow(localIso(now, timezone).slice(0, 10), timezone);
+  return { from: day.start, to: day.end };
 };
 
 // A card waiting for the owner (WhatsApp outside its 24-hour window) is current until the owner's next card is due, which
@@ -302,22 +484,50 @@ export const cardStatus = (deps: CardDeps, card: DayCard): CardStatus => {
   return row === undefined || row.state === 'pending' ? { state: 'pending' } : {};
 };
 
+// Where today's cards stand, as one host fact for the owner's own turns, so a turn on any surface knows whether the Brief
+// reached them, and where, before it decides what to offer. States and times only: a card's words stay in the chat it went to.
+export const dayCardsLine = (deps: CardDeps): string => {
+  const day = localIso(deps.now, deps.timezone).slice(0, 10);
+  const rows = new Map(deps.book.read(day).map((row) => [row.card, row]));
+  const delivered = deps.book.deliveries(day);
+  const clockOf = (at: number) => localIso(at, deps.timezone).slice(11, 16);
+  const said = DAY_CARDS.flatMap((card) => {
+    const status = cardStatus(deps, card);
+    const found = deps.scheduler.lookup(card.id);
+    const due = rows.get(card.id)?.time ?? (found.state === 'entry' && localIso(found.entry.due_at, deps.timezone).startsWith(day) ? clockOf(found.entry.due_at) : null);
+    const app = delivered.get(card.id);
+    if (app) return [`${card.name} reached them in the app at ${clockOf(app.delivered_at)}`];
+    switch (rows.get(card.id)?.sent && status.state !== 'skipped' ? 'sent' : status.state) {
+      case 'sent': return [`${card.name} was sent`];
+      case 'skipped': return [status.reason ? `${card.name} was not sent (${status.reason})` : `${card.name} was skipped: nothing worth sending`];
+      case 'held': return [`${card.name} is held for quiet hours`];
+      case 'generating': return [`${card.name} is being written now`];
+      case 'failed': case 'paused': return [`${card.name} could not be written (${status.reason})`];
+      default: return deps.queued(day, card.id) ? [`${card.name} is on its way`] : due ? [`${card.name} is due at ${due}`] : [];
+    }
+  });
+  // A time the owner set keeps every day, so a turn can tell it from today's plan before it changes or names one.
+  const pins = deps.book.pins();
+  const kept = DAY_CARDS.filter(card => pins[card.id]).map(card => `${card.name} at ${pins[card.id]}`);
+  return [said.length ? `Today's cards: ${said.join('; ')}.` : '', kept.length ? `Every day, the owner keeps ${kept.join(' and ')}.` : ''].filter(Boolean).join(' ');
+};
+
+// Local days, so a 23- or 25-hour day around a clock change is read whole and no hour of the next day leaks in.
 export const cardWindow = (card: DayCard, now: number, timezone: string): Readonly<{ from: number; to: number }> => {
-  const { from: midnight } = dayWindow(now, timezone);
-  if (card.calendar === 'today') return { from: midnight, to: midnight + DAY_MS };
-  if (card.calendar === 'rest_of_today') return { from: now, to: midnight + DAY_MS };
-  return { from: midnight + DAY_MS, to: midnight + 2 * DAY_MS };
+  const today = localIso(now, timezone).slice(0, 10);
+  const day = localDayWindow(card.calendar === 'tomorrow' ? shiftDay(today, 1) : today, timezone);
+  return { from: card.calendar === 'rest_of_today' ? now : day.start, to: day.end };
 };
 
 const eventLine = (event: CalendarItem, timezone: string) =>
   JSON.stringify({ ...calendarPromptProjection(event), start: event.all_day ? event.start : localIso(Date.parse(event.start), timezone), end: event.all_day ? event.end : localIso(Date.parse(event.end), timezone) });
 
 export const readCalendar = async (
-  window: Readonly<{ from: number; to: number }>, timezone: string, google: GoogleClient | null, connectable: boolean,
+  window: Readonly<{ from: number; to: number }>, timezone: string, google: GoogleClient | null, connectable: boolean, max = 25,
 ): Promise<string> => {
   if (!google) return connectable ? 'Google is not connected, so there are no events to show. The owner can ask you to connect it; do not write a link.' : 'Google Calendar is not set up.';
   try {
-    const events = await google.events(new Date(window.from).toISOString(), new Date(window.to).toISOString(), 25, false);
+    const events = await google.events(new Date(window.from).toISOString(), new Date(window.to).toISOString(), max, false);
     return events.length ? events.map((event) => eventLine(event, timezone)).join('\n') : 'No events.';
   } catch (error) {
     return `Calendar could not be read right now (${error instanceof Error ? error.message : String(error)}). Say so briefly; do not guess the schedule.`;
@@ -347,13 +557,13 @@ const fitLines = (text: string, room: number, keep: 'head' | 'tail'): string => 
 // that a failed card never folds must not push the one message past the Scribe size cap and cost the owner the card.
 export const composeDayCard = async (
   card: DayCard, now: number, timezone: string,
-  sources: Readonly<{ google: GoogleClient | null; connectable: boolean; ledger: string; today: string; updates: string; waiting?: string }>,
+  sources: Readonly<{ google: GoogleClient | null; connectable: boolean; ledger: string; today: string; updates: string; waiting?: string; planning?: boolean; dayShape?: boolean; capacity?: boolean; tomorrow?: boolean; layout?: boolean; planCard?: boolean }>,
   model: ModelName = WALDO_AUXILIARY_MODEL,
 ): Promise<string> => {
   const cap = Math.floor(deriveContextBudgetChars(model, SANITISE_DESTINATION_POLICIES.internal_context.max_chars) / 2);
   const calendar = await readCalendar(cardWindow(card, now, timezone), timezone, sources.google, sources.connectable);
   const localNow = localIso(now, timezone);
-  const build = (sections: Readonly<{ ledger: string; today: string; updates: string }>) => dayCardPrompt(card, localNow, { calendar, ...sections, ...(sources.waiting ? { waiting: sources.waiting } : {}) });
+  const build = (sections: Readonly<{ ledger: string; today: string; updates: string }>) => dayCardPrompt(card, localNow, { calendar, ...sections, ...(sources.waiting ? { waiting: sources.waiting } : {}) }, sources.planning === true, sources.dayShape === true, sources.capacity === true, sources.tomorrow === true, sources.layout === true, sources.planCard === true);
   const whole = { ledger: sources.ledger, today: sources.today, updates: sources.updates };
   if (wireSize(build(whole)) <= cap) return build(whole);
   const wanted = [
@@ -388,6 +598,12 @@ type Kv = Pick<DurableObjectStorage['kv'], 'get' | 'put'>;
 type CardDelivery = Readonly<{ message_id: string; delivered_at: number }>;
 type LegacyCardDeliveries = Readonly<{ day: string; cards: Readonly<Record<string, CardDelivery>> }>;
 export type CardLatest = CardDelivery & Readonly<{ excerpt: string }>;
+
+// The app's "Why this changed" for each of a day's cards that has one.
+export const dayCardsWhy = (book: DayPlanBook, day: string): ReadonlyMap<string, AppWhyV1> => new Map([...book.whys(day)].flatMap(([card, json]) => {
+  const why = appWhy(storedWhy(json));
+  return why ? [[card, why] as const] : [];
+}));
 
 export const cardDeliveries = (book: DayPlanBook, kv: Kv, day: string): ReadonlyMap<string, CardDelivery> => {
   const legacy = kv.get<LegacyCardDeliveries>(LEGACY_CARD_DELIVERY_KEY);

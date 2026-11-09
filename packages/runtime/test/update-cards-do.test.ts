@@ -39,10 +39,10 @@ describe('update cards', () => {
       await expect(collectChanges(book, broken, t1 + 60_000)).rejects.toThrow('google 500');
       expect(book.since('calendar_since')).toBe(t1);
 
-      book.record('2026-09-23', t1, changes.slice(0, 1), 'Update\nDesign review added at 15:00.');
+      book.record('2026-09-23', t1, changes.slice(0, 1), 'Design review added at 15:00.');
       book.record('2026-09-23', t1 + 1, changes.slice(3), null);
       const unfolded = book.unfolded(tz);
-      expect(unfolded).toContain('sent as update: Update Design review added at 15:00.');
+      expect(unfolded).toContain('sent as update: Design review added at 15:00.');
       expect(unfolded).toContain('not sent\n- mail new:');
       book.fold(t1 + 1);
       expect(book.unfolded(tz)).toBe('');
@@ -106,7 +106,7 @@ it.each(['normal', 'low', 'quiet', 'off', 'closed'] as const)('updates without a
       await state.storage.put('origin', 'https://fixture.invalid');
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'fixture', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
       const owner = new UpdateOwner(state, { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:fixture', OPENAI_API_KEY: 'fixture', GOOGLE_CLIENT_ID: 'update-fixture', GOOGLE_CLIENT_SECRET: 'fixture' });
-      const runtime = (owner as unknown as { setup(): { updateCheck(trace: string): Promise<void> } }).setup();
+      const runtime = (owner as unknown as { setup(channel: string): { updateCheck(trace: string): Promise<void> } }).setup('telegram');
       const loops = updateLoops(state.storage.sql, { now: () => now, newId: () => 'fixture' });
       loops.setProactivity({ volume: mode === 'low' ? 'low' : 'normal', quiet_start: mode === 'quiet' ? '08:00' : null, quiet_end: mode === 'quiet' ? '10:00' : null, followups: mode !== 'off' });
       if (mode === 'closed') updatePlans(state.storage.sql).sent('2026-10-08', 'card:close');
@@ -140,7 +140,7 @@ it('a day card held for quiet hours still closes its trace, so the exporter flus
       state.storage.kv.put('telegram_subject', '7');
       await state.storage.put('origin', 'https://fixture.invalid');
       const owner = new UpdateOwner(state, { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:fixture', OPENAI_API_KEY: 'fixture' } as never);
-      const runtime = (owner as unknown as { setup(): { cards(entry: { id: string; occurrence_at: number; due_at: number; payload_refs: Record<string, string> }): Promise<void> } }).setup();
+      const runtime = (owner as unknown as { setup(channel: string): { cards(entry: { id: string; occurrence_at: number; due_at: number; payload_refs: Record<string, string> }): Promise<void> } }).setup('telegram');
       updateLoops(state.storage.sql, { now: () => now, newId: () => 'fixture' }).setProactivity({ volume: 'normal', quiet_start: '08:00', quiet_end: '10:00', followups: true });
       await runtime.cards({ id: 'card:brief', occurrence_at: now, due_at: now, payload_refs: {} });
       expect(closedTraces(state, `card:brief:${now}`)).toBe(1);

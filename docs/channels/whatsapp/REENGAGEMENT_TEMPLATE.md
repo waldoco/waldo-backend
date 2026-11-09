@@ -62,8 +62,7 @@ described on the same categorization page:
 3. **Wait for review**, which can take up to 24 hours.
    *Check:* status APPROVED, category UTILITY.
    *Falsifier:* category MARKETING. Do not configure it.
-4. **Configure.** In `packages/runtime/wrangler.jsonc`, staging `vars` (line 90, where both are empty
-   today), set:
+4. **Configure.** In `packages/runtime/wrangler.jsonc`, staging `vars` (set there since 6 Nov), set:
    - `WHATSAPP_REENGAGE_TEMPLATE` to `waldo_update_ready`;
    - `WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE` to `en`.
 
@@ -95,6 +94,35 @@ described on the same categorization page:
 
    The Worker reads only messages and statuses from a webhook (`whatsapp-webhook.ts:78-111`), so these
    changes reach the Messaging account's admins by email and in WhatsApp Manager, never Waldo.
+
+## A second template for what the owner did not ask for
+
+The reply template above says the owner asked for something ("a reply waiting ... on something you asked about"). That is
+untrue for a Brief, a clash card or any other message Waldo starts, so the runtime never uses it for one. Such a message
+(a day card, an update, meeting prep, a pause notice, a mail follow-up, a health note, a check-back on an open loop, an
+event notice, or the WhatsApp copy of an app message) knocks with its own template, configured separately. With none configured it sends no template at all and the
+message keeps waiting until the owner writes (or until its own expiry, a day for a copy). A reply may fall back to this
+template when the reply template is unset, since its words are true of any message.
+
+- **Name:** `waldo_proactive_update` (any name matching `^[a-z0-9_]{1,512}$`)
+- **Category:** submitted as UTILITY; Meta approved it as MARKETING (`previous_category` UTILITY). **Language:** `en`
+- **Body, no variables:** `Waldo has an update about your day or something you asked it to keep track of. Reply here to see it.`
+- **Footer:** `Unlink WhatsApp any time from your Waldo console.` No header, media or buttons.
+- **Marketing category, accepted by the owner on 8 Nov 2026:** it costs more per message than utility, and Meta's
+  per-user marketing limits can refuse or not deliver a knock. The held message still waits for the owner's next message.
+
+Once approved, set in `packages/runtime/wrangler.jsonc`, staging `vars`:
+
+- `WHATSAPP_PROACTIVE_TEMPLATE` to `waldo_proactive_update`;
+- `WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE` to `en`.
+
+At most one knock goes out per closed window, whichever template it uses. The window's closing log line for a held
+proactive message without this configuration is `{"hop":"whatsapp_window","ok":false,"held":true,"code":"template_unconfigured"}`.
+
+## Staging status
+
+`waldo_update_ready` (`en`) reads back APPROVED and UTILITY with a static body and footer, and staging's `vars` carry it.
+`waldo_proactive_update` (`en`) reads back APPROVED and MARKETING, and staging's `vars` carry it.
 
 ## Opt-in comes first
 

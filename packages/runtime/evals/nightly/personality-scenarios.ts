@@ -53,8 +53,8 @@ const PROMPT_LINES = {
   assistant: "You are Waldo, your owner's personal assistant.",
   onTheirBehalf: 'you act on their behalf when they allow it',
   software: "You are software and say so when it matters or anyone asks; never claim to have felt, seen or done what you haven't.",
-  speakUp: 'Reach out only with new information or a decision, when waiting would make things worse (a coming decision their changed state bears on counts), answerable yes or no.',
-  silence: 'Silence is the default',
+  speakUp: 'Write first when one falls due or moves, or with new information or a decision, when waiting would make things worse (a coming decision their changed state bears on counts): one line, yes or no.',
+  neverIdle: 'Never generic check-ins, empty cheer, congratulations on normal metrics or second nudges.',
   card: 'An approval card always shows the exact recipient, content, time and undo, however long; keep the words around it short.',
   locale: "Spelling follows the owner's locale.",
   emergency: 'If the owner may be in danger or describes an emergency, tell them to contact local emergency services (112 in India) now, and stay with them in the conversation.',
@@ -184,16 +184,6 @@ export const PERSONALITY_SCENARIOS: readonly PersonalityScenario[] = [
       effects('calendar.change.proposed', { min: 1, max: 1 }, 'one card, since waiting would make tomorrow worse'),
       repliesOmit(['27.3', '58.4', ...SYNTHETIC_RENDERINGS], 'no health reading appears in anything the owner sees'),
     ],
-  },
-  {
-    id: 'p11-changed-state-stays-quiet', title: 'A changed state with nothing at stake', pain: 'judgment', start: '2026-09-24T15:00:00+05:30', rules: [PROMPT_LINES.silence, PROMPT_LINES.speakUp],
-    world: { events: [event('fri-standup-only', 'Standup', '25', '10:00', '10:15')], health: LOW, health_before: GOOD },
-    steps: [{ health: 'shared' }, { health_change: true }],
-    rubric: {
-      outcome: "The owner's recovery drops, but the next day holds only a 15-minute standup, so waiting makes nothing worse: no card and no message.",
-      must_not: ['raise a card', 'send the owner a message about the change'],
-    },
-    receipts: [none(['calendar.change.proposed'], 'no card when nothing coming is at stake'), { why: 'no message reaches the owner', holds: (trial) => waldoTexts(trial).length === 0 }],
   },
   {
     id: 'p12-complete-card', title: 'An invite card with recipient, content and time', pain: 'follow_through', start: START, world: { events: CALENDAR }, rules: [PROMPT_LINES.card],

@@ -165,6 +165,36 @@ describe('calendar demand', () => {
     expect(calls.length).toBe(1);
   }));
 
+  it('leaves out a subscribed calendar that fails (a public holidays calendar), marks its days partial, and reads them again later', () => withDemand(async sql => {
+    for (const role of ['reader', 'freeBusyReader'] as const) {
+      const account: FakeAccount = { calendars: [calendar('work'), calendar(`holidays-${role}`, { access_role: role })], busy: [{ calendar: 'work', start: '2026-03-19T09:00:00Z', end: '2026-03-19T10:00:00Z' }], failing: [`holidays-${role}`] };
+      const { demand, calls, clock } = setup(sql, { [`${role}@example.com`]: account });
+      const read = await demand.read(range);
+      expect([byDay(read), partialDays(read), demandCode(read)]).toEqual([{ '2026-03-18': 0, '2026-03-19': 60, '2026-03-20': 0 }, ['2026-03-18', '2026-03-19', '2026-03-20'], 'calendar_left_out']);
+      // The error may pass, so even the days already over are read again after the half hour.
+      clock.now = NOW + 31 * MINUTE;
+      account.failing = [];
+      expect(partialDays(await demand.read(range))).toEqual([]);
+      expect(calls.at(-1)).toMatchObject({ from: '2026-03-18T00:00:00.000Z' });
+    }
+  }));
+
+  it('still treats a stretch as unknown when a calendar the owner owns or can write to fails, with or without event access', () => withDemand(async sql => {
+    for (const [role, scopes] of [['owner', undefined], ['writer', undefined], ['owner', CALENDAR_SCOPES.slice(1)]] as const) {
+      const { demand } = setup(sql, { [`${role}-${scopes ? 'fb' : 'all'}@example.com`]: { calendars: [calendar('work'), calendar('team', { access_role: role })], busy: [], failing: ['team'], ...(scopes ? { scopes } : {}) } });
+      expect(byDay(await demand.read(range))).toEqual({ '2026-03-18': null, '2026-03-19': null, '2026-03-20': null });
+    }
+  }));
+
+  it('says why a stretch went unknown, by a code that names no calendar', () => withDemand(async sql => {
+    const voided: string[] = [];
+    const account: FakeAccount = { calendars: [calendar('work@example.com')], busy: [], failing: ['work@example.com'] };
+    const demand = calendarDemand({ sql, now: () => NOW, voided: code => { voided.push(code); },
+      accounts: async () => [{ email: 'work@example.com', scopes: CALENDAR_SCOPES, error: null }], client: async () => fakeClient(account, []) });
+    await demand.read(range);
+    expect(voided).toEqual(['calendar_error:backendError']);
+  }));
+
   it('still treats a stretch as unknown when a gone calendar sits beside one that failed', () => withDemand(async sql => {
     const { demand } = setup(sql, { 'work@example.com': { calendars: [calendar('work'), calendar('old'), calendar('shared')], busy: [], gone: ['old'], failing: ['shared'] } });
     expect(byDay(await demand.read(range))).toEqual({ '2026-03-18': null, '2026-03-19': null, '2026-03-20': null });

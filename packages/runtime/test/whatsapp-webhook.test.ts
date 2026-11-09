@@ -41,7 +41,7 @@ describe('handleWhatsAppWebhook', () => {
     const { ns } = namespace();
     const redeem = vi.fn(async () => null);
     const directory: OwnerDirectory = { byPresence: async () => null, redeem };
-    const env: WhatsAppWebhookEnv = { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_ACCESS_TOKEN: 'fictional-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' };
+    const env: WhatsAppWebhookEnv = { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_ACCESS_TOKEN: 'fictional-token', WHATSAPP_PHONE_NUMBER_ID: 'pn1' };
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ messages: [{ id: 'wamid.out' }] })));
     const body = (context?: Record<string, unknown>) => JSON.stringify({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'pn1' },
       messages: [{ ...(context ? { context } : {}), from: '15550009999', id: 'wamid.code', timestamp: '1700000000', type: 'text', text: { body: 'waldo ABCDEFGH23' } }] } }] }] });
@@ -61,7 +61,7 @@ describe('handleWhatsAppWebhook', () => {
 
   it('bad or missing signature is a 403 and never routes', async () => {
     const { fetch, ns } = namespace();
-    const env: WhatsAppWebhookEnv = { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret' };
+    const env: WhatsAppWebhookEnv = { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_PHONE_NUMBER_ID: 'pn1' };
     const body = payload([{ from: '15550001111' }]);
     expect((await run(await post(null, body), env)).status).toBe(403);
     expect((await run(new Request('https://w.test/whatsapp/webhook', { method: 'POST', body, headers: { 'x-hub-signature-256': 'sha256=deadbeef' } }), env)).status).toBe(403);
@@ -77,7 +77,7 @@ describe('handleWhatsAppWebhook', () => {
       },
       redeem: async () => null,
     };
-    const env: WhatsAppWebhookEnv = { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret' };
+    const env: WhatsAppWebhookEnv = { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_PHONE_NUMBER_ID: 'pn1' };
     const body = payload([{ from: '15550001111' }], true);
     expect((await run(await post('x', body), env, directory)).status).toBe(200);
     expect(idFromName).toHaveBeenCalledWith('do-a');
@@ -94,7 +94,7 @@ describe('handleWhatsAppWebhook', () => {
   it('forwards the configured public origin, not the host the webhook reached', async () => {
     const { fetch, ns } = namespace();
     const directory: OwnerDirectory = { byPresence: async () => ({ doName: 'do-a', subject: '15550001111', timezone: null }), redeem: async () => null };
-    await run(await post('x', payload([{ from: '15550001111' }])), { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret', WALDO_PUBLIC_ORIGIN: 'https://staging.fixture.invalid' }, directory);
+    await run(await post('x', payload([{ from: '15550001111' }])), { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_PHONE_NUMBER_ID: 'pn1', WALDO_PUBLIC_ORIGIN: 'https://staging.fixture.invalid' }, directory);
     expect(new Headers(fetch.mock.calls[0]![1]!.headers).get('x-waldo-origin')).toBe('https://staging.fixture.invalid');
   });
 
@@ -111,7 +111,7 @@ describe('handleWhatsAppWebhook', () => {
       for (const [reply, expected] of replies) {
         const { fetch, ns } = namespace();
         fetch.mockImplementation(reply);
-        expect((await run(await post('x', payload([{ from: '15550001111' }])), { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret' }, directory)).status).toBe(expected);
+        expect((await run(await post('x', payload([{ from: '15550001111' }])), { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_PHONE_NUMBER_ID: 'pn1' }, directory)).status).toBe(expected);
       }
       expect(log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('"hop":"whatsapp_admit"'))).toHaveLength(7);
     } finally { log.mockRestore(); }
@@ -122,7 +122,7 @@ describe('handleWhatsAppWebhook', () => {
     // Only active presences route; unlink_presence retires the row, so the directory stops answering for that number.
     const active = new Map([['15550001111', 'do-a'], ['15550002222', 'do-b']]);
     const directory: OwnerDirectory = { byPresence: async (_provider, subject) => active.has(subject) ? { doName: active.get(subject)!, subject, timezone: null } : null, redeem: async () => null };
-    const env: WhatsAppWebhookEnv = { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret' };
+    const env: WhatsAppWebhookEnv = { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_PHONE_NUMBER_ID: 'pn1' };
     active.delete('15550001111');
     expect((await run(await post('x', payload([{ from: '15550001111', text: 'still me?' }, { from: '15550002222' }])), env, directory)).status).toBe(200);
     expect(idFromName.mock.calls).toEqual([['do-b']]);
@@ -134,7 +134,7 @@ describe('handleWhatsAppWebhook', () => {
       byPresence: async (_p, subject) => ({ '15550001111': { doName: 'do-a', subject, timezone: null }, '15550002222': { doName: 'do-b', subject, timezone: null } })[subject] ?? null,
       redeem: async () => null,
     };
-    const env: WhatsAppWebhookEnv = { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret' };
+    const env: WhatsAppWebhookEnv = { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_PHONE_NUMBER_ID: 'pn1' };
     await run(await post('x', payload([{ from: '15550001111', text: 'one' }, { from: '15550002222', text: 'two' }])), env, directory);
     expect(fetch).toHaveBeenCalledTimes(2);
     for (const call of fetch.mock.calls) {
@@ -143,6 +143,36 @@ describe('handleWhatsAppWebhook', () => {
       const only = value.messages[0]!;
       expect(['one', 'two']).toContain(only.text.body);
     }
+  });
+
+  it('only messages addressed to this deployment\'s number are handled; another number\'s are acknowledged unhandled, while its status reports still route', async () => {
+    const { fetch, ns } = namespace();
+    const redeem = vi.fn(async () => null);
+    const directory: OwnerDirectory = { byPresence: async (_p, subject) => subject === '15550001111' ? { doName: 'do-a', subject, timezone: null } : null, redeem };
+    const graph = vi.fn(async () => Response.json({ messages: [{ id: 'wamid.out' }] }));
+    vi.stubGlobal('fetch', graph);
+    const message = (from: string, id: string, text: string) => ({ from, id, timestamp: '1700000000', type: 'text', text: { body: text } });
+    const body = JSON.stringify({ entry: [{ changes: [
+      { value: { metadata: { phone_number_id: 'pn1' }, messages: [message('15550001111', 'wamid.ours', 'ours')] } },
+      { value: { metadata: { phone_number_id: 'pn-other' }, messages: [
+        message('15550001111', 'wamid.theirs', 'theirs'),
+        message('15550009999', 'wamid.code', 'waldo ABCDEFGH23'),
+        { from_user_id: 'fictional-bsuid', id: 'wamid.hidden', timestamp: '1700000000', type: 'text', text: { body: 'hi' } },
+      ], statuses: [{ id: 'wamid.sent-before', status: 'delivered', timestamp: '1700000001', recipient_id: '15550001111' }] } },
+    ] }] });
+    const env: WhatsAppWebhookEnv = { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_ACCESS_TOKEN: 'fictional-token', WHATSAPP_PHONE_NUMBER_ID: 'pn1' };
+    expect((await run(await post('x', body), env, directory)).status).toBe(200);
+    const admits = fetch.mock.calls.filter(([url]) => url === 'https://telegram-owner/whatsapp-admit');
+    expect(admits).toHaveLength(1);
+    expect(JSON.parse(String(admits[0]![1]!.body))).toEqual({ metadata: { phone_number_id: 'pn1' }, messages: [message('15550001111', 'wamid.ours', 'ours')] });
+    expect(fetch.mock.calls.filter(([url]) => url === 'https://telegram-owner/whatsapp-status')).toHaveLength(1);
+    expect(redeem).not.toHaveBeenCalled();
+    expect(graph).not.toHaveBeenCalled();
+
+    fetch.mockClear();
+    const unconfigured: WhatsAppWebhookEnv = { OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret' };
+    expect((await run(await post('x', payload([{ from: '15550001111' }])), unconfigured, directory)).status).toBe(200);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('an unknown sender wakes no DO; a valid link code redeems and replies, a bad one declines', async () => {
@@ -209,7 +239,9 @@ describe('handleWhatsAppWebhook', () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('network unreachable for 15550003333'); }));
     await run(await post('x', payload([{ from: '15550003333', text: 'waldo GOOD12' }])), env, directory);
     expect(logs.map(line => JSON.parse(line))).toEqual([
+      { hop: 'whatsapp_link_redeem', ok: false, outcome: 'rejected' },
       { hop: 'whatsapp_link_code', ok: false, error: 'Error', status: 400, code: 131030 },
+      { hop: 'whatsapp_link_redeem', ok: false, outcome: 'rejected' },
       { hop: 'whatsapp_link_code', ok: false, error: 'TypeError' },
     ]);
     for (const leak of ['15550003333', 'wamid.', 'FICTIONAL-DETAIL', 'allowed list', 'unreachable']) expect(logs.join('\n')).not.toContain(leak);
@@ -233,7 +265,7 @@ describe('handleWhatsAppWebhook: a send Meta refuses later for the 24-hour windo
   const statuses = (rows: object[]) => JSON.stringify({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'pn1' }, statuses: rows } }] }] });
   const refused = (id: string, recipient: string, timestamp: unknown = '1700000000') => ({ id, status: 'failed', timestamp, recipient_id: recipient, errors: [{ code: 131047, title: 'Re-engagement message' }] });
   const directory: OwnerDirectory = { byPresence: async (_p, subject) => subject === '15550001111' ? { doName: 'do-a', subject, timezone: null } : null, redeem: async () => null };
-  const env = (ns: DurableObjectNamespace): WhatsAppWebhookEnv => ({ OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret' });
+  const env = (ns: DurableObjectNamespace): WhatsAppWebhookEnv => ({ OWNER_DO: ns, WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_PHONE_NUMBER_ID: 'pn1' });
 
   it('goes to the recipient owner\'s Durable Object: window refusals, arrivals on the phone and other failures, by message id; strangers go nowhere', async () => {
     const { fetch, ns } = namespace();

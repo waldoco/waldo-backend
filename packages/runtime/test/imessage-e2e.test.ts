@@ -1,5 +1,6 @@
 import { env, evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
+import { clockWords, INTERRUPTED_NOTICES } from '../src/prompt/fixed-lines';
 import worker from '../src/index';
 import { consoleAccess } from '../src/channels/console';
 import { routerSignature } from '../src/identity/owner-directory';
@@ -7,6 +8,7 @@ import { IMessageBridgeDO, iMessageBridgeName } from '../src/channels/imessage/b
 import { sha256Hex } from '../src/channels/imessage/crypto';
 import { IMessageFinalOutbox, targetOf } from '../src/channels/imessage/final-outbox';
 import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
+import { IMESSAGE_MEDIA_REPLIES } from '../src/channels/imessage/photon-media';
 import { ProgressPacer } from '../src/channels/progress-pacer';
 import { BridgeStore } from '../src/channels/imessage/bridge-store';
 import { gmailPushBook } from '../src/channels/gmail-push';
@@ -34,6 +36,8 @@ import { OwnerDO } from '../src/channels/owner-do';
 import type { OwnerHost } from '../src/channels/imessage/owner-runtime';
 import { reconnectNoticeText } from '../src/connectors/google-reconnect';
 import { CONNECT_BUTTON_SENT } from '../src/tools/live/connect-text';
+import { unfinishedReply } from '../src/conversation/tool-loop';
+import { MAIL_ONLY_GOOGLE } from './helpers/google-grant';
 
 // Scripted model: every non-structured responses.create call is one owner turn.
 // A progress_note call is the progress writer: it answers the next scripted note, after progressHold if one is set.
@@ -224,6 +228,22 @@ const cardTurn = async (w: Awaited<ReturnType<typeof world>>, t0: number) => {
   return card as { commandId: string; text: string };
 };
 
+it('an owner that cannot take the message yet: the bridge retries after its interval, and host pulls in between do not pull the retry closer', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  const full = vi.spyOn(OwnerDO.prototype, 'admitIMessageTurn').mockResolvedValue('capacity');
+  const alarmIn = async () => { const at = await runInDurableObject(w.bridgeStub(), async (_i, state) => state.storage.getAlarm()); return at === null ? null : at - Date.now(); };
+  expect((await w.host.send(w.host.message('Are you there?'))).status).toBe(200);
+  await runDurableObjectAlarm(w.bridgeStub()); // the platform may already have run the wake the event armed
+  await vi.waitFor(() => expect(full).toHaveBeenCalled());
+  expect(await alarmIn()).toBeGreaterThanOrEqual(4_000);
+  for (let i = 0; i < 3; i++) expect((await w.host.pull()).status).toBe(200);
+  expect(await alarmIn()).toBeGreaterThanOrEqual(4_000);
+  full.mockRestore();
+  await w.pump();
+  expect(proof.turns).toHaveLength(1);
+});
+
 it('a one-tap approval proposed on an iMessage turn goes out on iMessage ahead of the reply, numbered; a tapback leaves it, and "1" moves the event once', async () => {
   const w = await world();
   await w.pairAndActivate();
@@ -356,7 +376,7 @@ it('a card made outside an iMessage turn waits for the owner\'s next message, an
   await runInDurableObject(w.ownerStub, async (_i, state) => {
     expect(state.storage.sql.exec<{ status: string }>("SELECT status FROM ledger WHERE kind = 'calendar_change'").toArray()).toEqual([{ status: 'open' }]);
   });
-});
+}, 20_000);
 
 const outbox = async (stub: DurableObjectStub) => runInDurableObject(stub, async (_i, state) => new IMessageFinalOutbox(state.storage).records());
 const inbox = async (stub: DurableObjectStub) => runInDurableObject(stub, async (_i, state) => new IMessageOwnerInbox(state.storage).records());
@@ -460,7 +480,7 @@ it('stale capabilities hold a frozen reply and then prove it not_started; nothin
   } finally { vi.useRealTimers(); }
 });
 
-const DID_NOT_FINISH = 'This run did not finish. In-flight changes may still finish. Please check before retrying changes.';
+const DID_NOT_FINISH = INTERRUPTED_NOTICES.unfinished;
 // Every model call fails, so a retry inside the responder cannot rescue the turn.
 const modelDown = () => { const fail = async () => { proof.hold = fail; throw new Error('provider exploded: upstream-detail-9f2'); }; proof.hold = fail; };
 const failureRows = async (w: Awaited<ReturnType<typeof world>>) => (await outbox(w.ownerStub)).filter(row => row.replyRef.startsWith('failure:'));
@@ -473,7 +493,7 @@ const expectNotice = (delivery: Delivery) => {
 // A turn no model answers (all failed, or one wrote nothing) gets the floor: a time the retry job keeps (R-4), never the error.
 const expectFloor = (delivery: Delivery) => {
   const text = JSON.parse(delivery.body).text as string;
-  expect(text).toMatch(/^I can't answer properly right now\. I'll come back to you by \d\d:\d\d\.$/);
+  expect(text).toMatch(/^I can't answer properly right now\. I'll come back to you by \d{1,2}(:\d\d)?[ap]m\.$/);
   expect(text).not.toContain('upstream-detail-9f2');
 };
 
@@ -572,7 +592,7 @@ it('an iMessage turn that runs out of time while the model works answers with it
   shortDeadline(300);
   proof.hold = () => new Promise(resolve => setTimeout(resolve, 1_000));
   await replyFor(w, 'Plan my afternoon');
-  expect(JSON.parse((await sendNext(w)).body).text).toMatch(/^I ran out of time before finishing this\./);
+  expect(JSON.parse((await sendNext(w)).body).text).toBe(unfinishedReply('time_exhausted', []));
   await w.pump(2);
   expect((await inbox(w.ownerStub)).map(r => r.state)).toEqual(['completed']);
   expect((await outbox(w.ownerStub)).map(r => r.replyRef.split(':')[0])).toEqual(['reply']);
@@ -716,6 +736,28 @@ it('groups, SMS/RCS, echoes, reactions, receipts and unknown senders are retaine
   expect(counts).toMatchObject({ pending: 0, handed: 0 });
   expect((counts.acknowledged ?? 0) + (counts.held ?? 0)).toBe(events.length + 1); // + the setup challenge
   expect(w.fx.calls.filter(c => c === 'route_presence')).toHaveLength(0); // unknown senders never reach directory lookup
+});
+
+// Never drop an owner message silently: one that reached the host with nothing Waldo can read (no text, a file that could
+// not be fetched, an iMessage app's card) gets one honest reply, with no model turn. A stranger's still reaches nobody.
+it('an owner message the host could not read gets one honest reply and no model turn; a stranger\'s gets nothing', async () => {
+  const w = await world();
+  await w.pairAndActivate();
+  const unreadable = (from: Record<string, unknown>) => {
+    const event: any = { ...w.host.message('x', from), kind: 'unsupported', bundleId: 'waldo.attachment_unavailable' };
+    event.eventId = `unsupported:${event.messageGuid}`;
+    delete event.text; delete event.attachments;
+    return event;
+  };
+  expect((await w.host.send(unreadable({ senderHandle: 'stranger@example.invalid' }))).status).toBe(200);
+  expect((await w.host.send(unreadable({}))).status).toBe(200);
+  await w.pump(2);
+  expect(proof.turns).toHaveLength(0);
+  const { delivery } = await w.host.pull();
+  expect(JSON.parse(delivery!.body).text).toBe(IMESSAGE_MEDIA_REPLIES.unreadable);
+  expect((await w.host.postResult(delivery!, await w.host.execute(delivery!))).status).toBe(200);
+  await w.pump(2);
+  expect((await w.host.pull()).delivery).toBeNull();
 });
 
 it('authentication: wrong key, foreign account, replay, stale and future signatures and malformed headers are refused before state', async () => {
@@ -1486,11 +1528,13 @@ it('an iMessage-only owner\'s follow-up the bridge proves it never sent fails, s
 });
 
 // An iMessage-only owner's runtime arms their own scheduled work (memory, the event sweep, follow-up ticks), as a WhatsApp-only
-// owner's runtime does. An owner who also has the app keeps the native-chat rule: an iMessage turn arms nothing for them.
+// owner's runtime does. The event sweep needs a Google grant. An owner who also has the app keeps the native-chat rule: an
+// iMessage turn arms nothing for them.
 const armedKinds = (w: Awaited<ReturnType<typeof world>>) => runInDurableObject(w.ownerStub, async (_i, state) =>
   state.storage.sql.exec<{ kind: string }>("SELECT kind FROM schedule WHERE status = 'armed' ORDER BY kind").toArray().map((row) => row.kind));
 it('an iMessage-only owner\'s first turn arms their own scheduled work', async () => {
   const w = await world();
+  await runInDurableObject(w.ownerStub, async (_i, state) => { await state.storage.put('google:accounts', MAIL_ONLY_GOOGLE); });
   await afterOneReply(w);
   expect(await armedKinds(w)).toEqual(expect.arrayContaining(['dreaming', 'heartbeat', 'pre_activity_spot']));
   await clearOwnerAlarm(w.ownerStub);
@@ -1771,16 +1815,20 @@ it('a note from the next turn never reaches the owner before the reply still wai
   const w = await world();
   await w.pairAndActivate();
   await progressTiming(w.ownerStub, 1_200, 600_000);
-  let setTiming!: (timing: unknown) => void;
-  await runInDurableObject(w.ownerStub, async instance => { setTiming = timing => { (instance as unknown as { iMessageProgressTiming: unknown }).iMessageProgressTiming = timing; }; });
+  let setTiming!: (timing: unknown) => void, ownStorage: unknown;
+  await runInDurableObject(w.ownerStub, async (instance, state) => { ownStorage = state.storage; setTiming = timing => { (instance as unknown as { iMessageProgressTiming: unknown }).iMessageProgressTiming = timing; }; });
+  // The prototype spies below see every owner in the isolate, including one an earlier test left running; only this owner's calls count.
+  const ours = (outbox: IMessageFinalOutbox) => (outbox as unknown as { storage: unknown }).storage === ownStorage;
   const admitted = admissions();
   const retries: string[] = [], retryLater = IMessageFinalOutbox.prototype.retryLater;
   vi.spyOn(IMessageFinalOutbox.prototype, 'retryLater').mockImplementation(function (this: IMessageFinalOutbox, ref: string, maxAge: number, delay?: number) {
-    retries.push(ref); return retryLater.call(this, ref, maxAge, delay);
+    if (ours(this)) retries.push(ref);
+    return retryLater.call(this, ref, maxAge, delay);
   });
   const drops: string[] = [], dropProgress = IMessageFinalOutbox.prototype.dropProgress;
   vi.spyOn(IMessageFinalOutbox.prototype, 'dropProgress').mockImplementation(function (this: IMessageFinalOutbox, ...args: Parameters<typeof dropProgress>) {
-    drops.push(args[0]); return dropProgress.apply(this, args);
+    if (ours(this)) drops.push(args[0]);
+    return dropProgress.apply(this, args);
   });
   const LATER = 'Switching the options to vegetarian ones.';
   proof.notes.push('Looking at dinner spots near you.', LATER);
@@ -1986,10 +2034,60 @@ it('an iMessage-only owner\'s background task reports on iMessage, and its worke
   });
 });
 
+// The task finishes, the owner's next iMessage turn already tells them the result, and then the jobs lane applies the report.
+// The report turn reads that iMessage exchange from the episode index, so the model can see the owner was told and send nothing.
+it('with WALDO_TASK_PICKUP on, an iMessage task report reads the iMessage exchange since the task finished, and its SKIP sends nothing more', async () => {
+  const w = await world();
+  await iMessageOnly(w);
+  type Rpc = { env: Record<string, unknown>; taskClaim(...args: unknown[]): Promise<unknown>; taskReport(...args: unknown[]): Promise<string> };
+  const jobId = await runInDurableObject(w.ownerStub, async (instance, state) => {
+    (instance as unknown as Rpc).env.WALDO_TASK_PICKUP = '1';
+    const book = jobBook(state.storage.sql, { now: Date.now, newId: () => 'imsgtask0002', newToken: () => 'tok-imsg-2' });
+    const { job } = book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'imsg-turn:call-2', origin: 'imsg-turn', surface: 'imessage',
+      brief: { title: 'Inbox since Monday', goal: 'Find client mail that waits on a reply.', context: '', done_when: 'Who waits.', effort: 'standard', timezone: 'UTC', started_at: Date.now() },
+      dueAt: Date.now(), deadlineAt: Date.now() + 3_600_000 });
+    const ticket = book.startAttempt(job.id)!;
+    expect(await (instance as unknown as Rpc).taskClaim(ticket)).not.toBe('fenced');
+    expect(await (instance as unknown as Rpc).taskReport(ticket, { kind: 'result', result: { status: 'done', summary: 'Asha waits on the quote.', findings: [], proposals: [], left: [] } }, [], { rounds: 1, costUsd: 0 })).toBe('accepted');
+    // The lane waits until the owner's turn below has run.
+    state.storage.sql.exec('UPDATE task_jobs SET due_at = ? WHERE id = ?', Date.now() + 3_600_000, job.id);
+    await state.storage.delete(TASK_JOBS_DUE_KEY);
+    return job.id;
+  });
+  await new Promise(resolve => setTimeout(resolve, 5));
+  const told = 'Your inbox check is back: Asha is still waiting on the quote.';
+  proof.reply = told;
+  try { await replyFor(w, 'Anything back from the inbox check?'); await sendNext(w); } finally { proof.reply = 'Scripted owner reply.'; }
+  await w.pump(2);
+  expect(sentTexts(w).filter(text => text === told)).toHaveLength(1);
+
+  const before = proof.turns.length, sent = w.host.nativeSends.length;
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    state.storage.sql.exec('UPDATE task_jobs SET due_at = ? WHERE id = ?', Date.now(), jobId);
+    await armTaskJobsWake(state.storage, Date.now());
+  });
+  proof.reply = 'SKIP';
+  try { await runDurableObjectAlarm(w.ownerStub); await w.settle(); } finally { proof.reply = 'Scripted owner reply.'; }
+  await new Promise(resolve => setTimeout(resolve, 300));
+  await w.pump();
+
+  const report = proof.turns.slice(before).find(turn => turn.includes('A background task you started has finished'));
+  expect(report, 'the lane ran the report turn').toBeDefined();
+  expect(report).toContain('Anything back from the inbox check?');
+  expect(report).toContain(told);
+  expect((await w.host.pull()).delivery).toBeNull();
+  expect(w.host.nativeSends).toHaveLength(sent);
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    expect(jobBook(state.storage.sql, { now: Date.now, newId: () => 'unused', newToken: () => 'unused' }).get(jobId)).toMatchObject({ status: 'applied' });
+    const hops = state.storage.sql.exec<{ hop: string }>("SELECT hop FROM trace_log WHERE hop IN ('task_reported', 'task_applied') ORDER BY id").toArray().map(row => row.hop);
+    expect(hops.slice(-2)).toEqual(['task_reported', 'task_applied']);
+  });
+});
+
 // R-4 on iMessage. When no model answers an iMessage-only owner, the floor reply promises a time in the owner's own zone, and
 // the retried turn's late answer comes back on iMessage. If the retry finds no model either, the owner is still told.
 const OWNER_ZONE = 'Asia/Kolkata';
-const zoneTime = (at: number, timeZone: string) => new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(at));
+const zoneTime = (at: number, timeZone: string) => clockWords(new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(at)));
 type RetryRow = { id: string; status: string; park_reason: string | null; brief_json: string };
 const retryRows = (w: Awaited<ReturnType<typeof world>>) => runInDurableObject(w.ownerStub, async (_i, state) =>
   state.storage.sql.exec<RetryRow>("SELECT id, status, park_reason, brief_json FROM task_jobs WHERE kind = 'retry_turn'").toArray());

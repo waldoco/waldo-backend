@@ -3,9 +3,12 @@ import type { LLMToolCall, LLMToolTurn } from '@waldo/contracts';
 import type { TelegramWebhookEnv } from '../channels/telegram-webhook';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import type { LoopToolResult } from '../conversation/tool-loop';
+import { modelProviderSetting } from '../llm/owner-routes';
 import { armAlarm } from '../scheduler/alarm-slot';
 import type { TaskTicket } from './jobs';
+import { lightChatEnabled } from '../channels/async-tools';
 import { runTaskAttempt, TaskBreaker, taskModel, type ProviderOutcome, type TaskBrainPort, type TaskClaim, type TaskOutcome, type TaskSpend } from './worker-loop';
+import { withSwitches } from '../switches';
 
 // A task worker: one object per job attempt, holding nothing but the ticket it was started with. It runs the attempt from
 // its own alarm and calls the owner's object for everything else. Its alarm never throws, so the platform's alarm retry
@@ -18,6 +21,7 @@ export type OwnerTaskRpc = Readonly<{
   taskCheckpoint(ticket: TaskTicket, seq: number, turns: readonly LLMToolTurn[], events: readonly TurnLogEntry[], spend: TaskSpend, outcomes?: readonly ProviderOutcome[]): Promise<'ok' | 'stale' | 'fenced'>;
   taskReport(ticket: TaskTicket, outcome: TaskOutcome, events: readonly TurnLogEntry[], spend: TaskSpend, outcomes?: readonly ProviderOutcome[]): Promise<'accepted' | 'duplicate' | 'fenced' | 'deferred' | 'parked'>;
   taskHeartbeat(ticket: TaskTicket): Promise<boolean>;
+  taskSpent(ticket: TaskTicket, events: readonly TurnLogEntry[]): Promise<void>;
 }>;
 type Held = Readonly<{ owner: string; ticket: TaskTicket }>;
 
@@ -28,6 +32,8 @@ export const TASK_ALARM_SLICE_MS = 10 * 60_000;
 export const taskWorkerName = (ownerDoId: string, ticket: TaskTicket): string => `job:${ownerDoId}:${ticket.jobId}:${ticket.attempt}`;
 
 export class TaskWorkerDO extends DurableObject<TelegramWebhookEnv> {
+  constructor(ctx: DurableObjectState, env: TelegramWebhookEnv) { super(ctx, withSwitches(env)); }
+
   // One provider breaker for the attempt's slices, seeded from the owner's breaker at each claim.
   private readonly health = new TaskBreaker();
 
@@ -49,9 +55,10 @@ export class TaskWorkerDO extends DurableObject<TelegramWebhookEnv> {
         checkpoint: (ticket, seq, turns, events, spend, outcomes) => owner.taskCheckpoint(ticket, seq, turns, events, spend, outcomes),
         report: (ticket, result, events, spend, outcomes) => owner.taskReport(ticket, result, events, spend, outcomes),
         heartbeat: (ticket) => owner.taskHeartbeat(ticket),
+        spent: (ticket, events) => owner.taskSpent(ticket, events),
       };
-      const access = { openaiApiKey: this.env.OPENAI_API_KEY ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), health: this.health };
-      outcome = await runTaskAttempt(held.ticket, { brain, model: taskModel(access), health: this.health, sliceEnd: Date.now() + TASK_ALARM_SLICE_MS });
+      const access = { openaiApiKey: this.env.OPENAI_API_KEY ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), primary: modelProviderSetting(this.env.WALDO_MODEL_PROVIDER), health: this.health };
+      outcome = await runTaskAttempt(held.ticket, { brain, model: taskModel(access, undefined, lightChatEnabled(this.env)), health: this.health, sliceEnd: Date.now() + TASK_ALARM_SLICE_MS });
     } catch {
       outcome = 'lost';
     }

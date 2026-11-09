@@ -31,7 +31,7 @@ export type ProposalState = (id: string) => Promise<Readonly<{ kind: string; sta
 
 // The tools whose output reports an approval on the desk, and the field that names it. No other tool's output links.
 const APPROVAL_FIELD: Readonly<Record<string, string>> = {
-  send_email: 'proposal_id', send_message: 'proposal_id', propose_calendar_change: 'proposal_id', call_mcp_tool: 'proposal_id',
+  send_email: 'proposal_id', send_agent_mail: 'proposal_id', send_message: 'proposal_id', propose_calendar_change: 'proposal_id', propose_calendar_plan: 'proposal_id', call_mcp_tool: 'proposal_id',
   browse_act: 'proposal_id', propose_google_task_change: 'approval_ref', raise_approval: 'approval_id',
 };
 
@@ -167,6 +167,24 @@ const shownRows = async (storage: KeyValueStorage, options: Readonly<{ proposalS
   });
 };
 
+// What a later turn may read of the kept rows. Provider text never carries across turns: an external result shows only as the
+// desk's state for an approval it proposed, and a failure that names no approval only as its tool and code.
+const carriedRows = async (storage: KeyValueStorage, options: Readonly<{ proposalState?: ProposalState }>, texts: readonly string[], kept: (row: ToolOutputEntry) => boolean) =>
+  (await shownRows(storage, options, texts, kept)).filter(({ entry, desk }) => desk || entry.taint === null)
+    .map(row => ({ ...row, text: row.desk || row.entry.ok ? row.text : failureOf(row.entry) }));
+
+const fragmentOf = ({ entry, seq, text }: Readonly<{ entry: ToolOutputEntry; seq: string; text: string }>): ContextFragment => ({
+  text,
+  source: {
+    // The row sequence keeps two same-tool calls in one millisecond distinct: the timestamp alone repeats.
+    source_key: `tool_output:${entry.tool}:${entry.at}:${seq}`,
+    source_kind: 'tool_result' as const,
+    scope: 'invocation' as const,
+    source_taint: 'external' as const,
+    produced_at: entry.at,
+  },
+});
+
 export const toolOutputLedger = (storage: KeyValueStorage, options: Readonly<{ proposalState?: ProposalState }> = {}) => ({
   forgetSourceBatchCurrent(topic: string) {
     const all = this.forgetSourcesCurrent(topic);
@@ -207,23 +225,17 @@ export const toolOutputLedger = (storage: KeyValueStorage, options: Readonly<{ p
     const rows = await storage.list<ToolOutputEntry>({ prefix: 'toolout:' });
     return [...rows.values()].filter(entry => redact(entry.summary) !== entry.summary).length;
   },
+  // Every kept row of the chat as stored, outside text included: what forget and verification read, never a later turn.
   async recent(texts: readonly string[] = [], thread?: string): Promise<readonly ContextFragment[]> {
-    return (await shownRows(storage, options, texts, row => row.thread === thread)).map(({ entry, seq, text }) => ({
-      text,
-      source: {
-        // The row sequence keeps two same-tool calls in one millisecond distinct: the timestamp alone repeats.
-        source_key: `tool_output:${entry.tool}:${entry.at}:${seq}`,
-        source_kind: 'tool_result' as const,
-        scope: 'invocation' as const,
-        source_taint: 'external' as const,
-        produced_at: entry.at,
-      },
-    }));
+    return (await shownRows(storage, options, texts, row => row.thread === thread)).map(fragmentOf);
   },
-  // What the owner's own earlier turns' tools returned. Provider text never carries across turns: an external result shows
-  // only as the desk's state for an approval it proposed, and a failure that names no approval only as its tool and code.
+  // What a later turn of the chat may read, a scheduled job's included.
+  async carried(texts: readonly string[] = [], thread?: string): Promise<readonly ContextFragment[]> {
+    return (await carriedRows(storage, options, texts, row => row.thread === thread)).map(fragmentOf);
+  },
+  // What the owner's own earlier turns' tools returned, as a later owner turn may read it.
   async ownerTurnResults(texts: readonly string[] = [], thread?: string): Promise<readonly string[]> {
-    return (await shownRows(storage, options, texts, row => ownersRow(row) && row.thread === thread)).filter(({ entry, desk }) => desk || entry.taint === null).map(({ entry, desk, text }) => desk || entry.ok ? text : failureOf(entry));
+    return (await carriedRows(storage, options, texts, row => ownersRow(row) && row.thread === thread)).map(({ text }) => text);
   },
 });
 
