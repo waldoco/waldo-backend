@@ -58,7 +58,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
     if (kv.get<number>(seen) !== undefined) return 'duplicate';
     const [, kind, action] = match as unknown as [string, 'sleep' | 'recovery' | 'workout', 'updated' | 'deleted'];
     let changed = 0;
-    const pass = { woke: false };
+    const pass = { woke: false, workout: false };
     try {
       const consent = await kit.consents();
       if (!consent) return 'failed';
@@ -73,13 +73,13 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
         const recovery: WhoopRecovery | null = sleep ? await kit.guard(() => api.cycleRecovery(sleep.cycle_id)) : null;
         changed = sleep ? await kit.ingest({ samples: whoopNightSamples({ sleep, recovery }), deletions: [] }, consent.epoch, pass) : 0;
       }
-      if (changed > 0) await kit.produce(pass.woke).catch(() => kit.log(false, 'produce_failed'));
+      if (changed > 0) await kit.produce(pass.woke, pass.workout).catch(() => kit.log(false, 'produce_failed'));
       for (const [key, at] of [...kv.list<number>({ prefix: kit.key('seen:') })]) if (kit.now() - at > SEEN_TTL_MS) kv.delete(key);
       kv.put(seen, kit.now());
       kit.log(true, 'hint_handled');
       return 'handled';
     } catch (error) {
-      if (changed > 0) await kit.produce(pass.woke).catch(() => undefined);
+      if (changed > 0) await kit.produce(pass.woke, pass.workout).catch(() => undefined);
       const result = kit.classify(error);
       kit.log(false, `hint_${result}`);
       // A rate limit or a failure is caught up by the next reconcile; nothing is guessed in the meantime.

@@ -174,6 +174,15 @@ describe('getHealthArgsSchema', () => {
     expect(getHealthArgsSchema.safeParse({ signals: ['body_weight'], from: '2026-10-01', to: '2026-10-07' }).success).toBe(false);
   });
 
+  it('asks for the food the owner\'s app logged, and types its energy in kcal and its macros in grams', () => {
+    expect(getHealthArgsSchema.safeParse({ signals: ['food_energy', 'protein', 'carbs', 'fat'], from: '2026-10-01', to: '2026-10-07' }).success).toBe(true);
+    expect(getHealthArgsSchema.safeParse({ signals: ['sodium'], from: '2026-10-01', to: '2026-10-07' }).success).toBe(false);
+    const available = { state: 'available', timezone: 'Asia/Kolkata', from: '2026-10-01', to: '2026-10-01', read_at: '2026-10-02T03:00:00.000Z', freshness: 'fresh', coverage: 1,
+      signals: [{ signal: 'protein', unit: 'g', source: 'apple', method: null, days: [{ day: '2026-10-01', value: 120 }] }] };
+    expect(getHealthResultSchema.safeParse(available).success).toBe(true);
+    expect(getHealthResultSchema.safeParse({ ...available, signals: [{ ...available.signals[0], unit: 'oz' }] }).success).toBe(false);
+  });
+
   it('lists workout sessions with what the watch measured, bounded, and refuses one that cannot be a session', () => {
     const base = { state: 'available', timezone: 'Asia/Kolkata', from: '2026-10-01', to: '2026-10-01', read_at: '2026-10-02T03:00:00.000Z', freshness: 'fresh', coverage: 1,
       signals: [{ signal: 'workouts', unit: 'minutes', source: 'apple', method: null, days: [{ day: '2026-10-01', value: 58 }] }] };
@@ -706,5 +715,29 @@ describe('get_weather', () => {
     ]) expect(getWeatherResultSchema.safeParse(bad).success).toBe(false);
     expect(getWeatherResultSchema.safeParse({ state: 'unavailable', reason: 'provider_unavailable' }).success).toBe(true);
     expect(getWeatherResultSchema.safeParse({ state: 'unavailable', reason: 'raining' }).success).toBe(false);
+  });
+});
+
+describe('query_phone_calendar', () => {
+  it('takes an optional range that advances and spans at most sixteen days', async () => {
+    const { queryPhoneCalendarArgsSchema } = await import('./reads');
+    expect(queryPhoneCalendarArgsSchema.safeParse({}).success).toBe(true);
+    expect(queryPhoneCalendarArgsSchema.safeParse({ date_range: { from: '2026-11-09T00:00:00+05:30', to: '2026-11-10T00:00:00+05:30' } }).success).toBe(true);
+    expect(queryPhoneCalendarArgsSchema.safeParse({ date_range: { from: '2026-11-09T00:00:00Z', to: '2026-11-09T00:00:00Z' } }).success).toBe(false);
+    expect(queryPhoneCalendarArgsSchema.safeParse({ date_range: { from: '2026-11-09T00:00:00Z', to: '2026-12-09T00:00:00Z' } }).success).toBe(false);
+    expect(queryPhoneCalendarArgsSchema.safeParse({ calendar_id: 'primary' }).success).toBe(false);
+  });
+
+  it('answers events with each phone\'s age, or why it cannot', async () => {
+    const { queryPhoneCalendarResultSchema } = await import('./reads');
+    const event = { phone: 1, calendar: 'Work', account_type: 'exchange', start: '2026-11-09T09:00:00Z', end: '2026-11-09T10:00:00Z', all_day: false, title: 'Sync', availability: 'busy', may_be_on_google: true };
+    const available = { state: 'available', from: '2026-11-09T00:00:00.000Z', to: '2026-11-10T00:00:00.000Z',
+      phones: [{ phone: 1, observed_at: '2026-11-09T06:00:00.000Z', age_minutes: 12, times_only: false, complete: true }], events: [event], more: 0, on_google: 1, google_compared: true };
+    expect(queryPhoneCalendarResultSchema.safeParse(available).success).toBe(true);
+    expect(queryPhoneCalendarResultSchema.safeParse({ state: 'unavailable', reason: 'consent_required' }).success).toBe(true);
+    expect(queryPhoneCalendarResultSchema.safeParse({ ...available, phones: [] }).success).toBe(false);
+    expect(queryPhoneCalendarResultSchema.safeParse({ ...available, events: [{ ...event, ical_uid: 'x@example.test' }] }).success).toBe(false);
+    expect(queryPhoneCalendarResultSchema.safeParse({ ...available, events: [{ ...event, account_type: 'outlook' }] }).success).toBe(false);
+    expect(queryPhoneCalendarResultSchema.safeParse({ state: 'unavailable', reason: 'consent_withdrawn' }).success).toBe(false);
   });
 });

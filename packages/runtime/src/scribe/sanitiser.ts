@@ -137,6 +137,8 @@ const WRIST_GAP = gapOf(String.raw`${READING_WORDS}|at|up|down|rose|fell|dropped
 const STEADY_GAP = plainGapOf(STEADY_WORDS);
 const SEPARATOR_GAP = String.raw`(?:\s*[:=~])*\s*`;
 const READING_NUMBER = String.raw`\d+(?:[.,]\d+)?`;
+// The owner eating or logging, as a relayed food reading says it. Someone else's meal is not the owner's reading.
+const OWNER_ATE = String.raw`\b(?:you|i)(?:'ve|\s+have)?\s+(?:ate|eaten|had|logged|consumed)\b`;
 // A bare two- or three-digit value that is not a clock time ("10:30", "7am", "10h30") or the first group of a phone number.
 const BARE_VALUE = String.raw`\d{2,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|[-–]?\s*\d))`;
 // A weight that follows a bag or a parcel is the luggage's.
@@ -275,6 +277,14 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\bmove\b${BARE_GAP}${READING_NUMBER}\s*(?:kcal|cal(?:ories)?)\b`),
   reading(String.raw`\bburn(?:ed|t)?\b${READING_GAP}${READING_NUMBER}\s*(?:kcal|cal|calories)\b`),
   reading(String.raw`\b${READING_NUMBER}\s*(?:kcal|cal|calories)\s+(?:of\s+active\s+energy\b(?!\s+drinks?\b)|burned\b(?!\s+off\b))`),
+  // Food the owner's app logged: energy eaten, and protein, carbs or fat in grams, said of the owner (you, your, intake, logged)
+  // or of a day. Grams on a label, in a recipe or in someone else's meal are not a reading.
+  reading(String.raw`\b(?:food[\s_]+energy|(?:calorie|energy)\s+intake)\b${BARE_GAP}(?:\d{1,2},\d{3}|\d{2,5})\b(?!\s*(?::\d|[ap]\.?m\b|o'?clock\b))`),
+  reading(String.raw`(?:\b(?:food[\s_]+energy|(?:calorie|energy)\s+intake|intake)\b|${OWNER_ATE}|\byour\s+(?:breakfast|lunch|dinner|snacks?|meals?)\b|\bfood\s+(?:app|log|diary)\s+(?:had|has|logged|shows?|says?)\b)${READING_GAP}${READING_NUMBER}\s*(?:kcal|cal(?:ories)?)\b`),
+  reading(String.raw`\b${READING_NUMBER}\s*(?:kcal|cal(?:ories)?)\s+(?:eaten|consumed|logged|of\s+food)\b`),
+  reading(String.raw`(?:\b(?:protein|carbs?|carbohydrates?|fat)\s+intake\b|\byour\s+(?:protein|carbs?|carbohydrates?|fat)\b)${READING_GAP}${READING_NUMBER}\s*(?:g|grams?)\b`),
+  reading(String.raw`${OWNER_ATE}${READING_GAP}${READING_NUMBER}\s*(?:g|grams?)\s+(?:of\s+)?(?:protein|carbs?|carbohydrates?|fat)\b`),
+  reading(String.raw`\b(?:protein|carbs?|carbohydrates?|fat)\b${READING_GAP}${READING_NUMBER}\s*(?:g|grams?)\s+(?:today|yesterday|so\s+far|logged|eaten)\b|\b${READING_NUMBER}\s*(?:g|grams?)\s+(?:of\s+)?(?:protein|carbs?|carbohydrates?|fat)\s+(?:today|yesterday|so\s+far|logged|eaten|a\s+day|per\s+day|daily)\b`),
   reading(String.raw`\bcrs\b${BARE_GAP}\d`),
   reading(String.raw`\b(?:form|recovery|load|strain|readiness|sleep|hrv)\s+score\b${BARE_GAP}\d`),
   ...LAB_READINGS,

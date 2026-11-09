@@ -43,9 +43,9 @@ What each step does while the agreements are held back:
 
 Once the switch is `"1"`, every step after the agreements waits for them again (`agreements_required`), as before.
 
-**WHOOP's express authorization** to store the owner's data and use it in AI processing adds no purpose. It is the health plane's (`whoop`, `storage_compute`) and (`whoop`, `model_processing`) grants, both live, shown on the same consent screen as the other sources with WHOOP's own notice, copy version 3 (below). A WHOOP grant carries `version: 3` and a device grant `version: 2`; WHOOP rows may read back as 2 or 3, which the first run's health step ignores because it decides on source, purpose and status only. The health step reads both: a device source (`apple`, `samsung`, `health_connect`) counts on its storage grant; any other source counts only with storage and model use both live, and a source the health plane learns later never makes the step unreadable.
+**WHOOP's express authorization** to store the owner's data and use it in AI processing adds no purpose. It is the health plane's (`whoop`, `storage_compute`) and (`whoop`, `model_processing`) grants, both live, shown on the same consent screen as the other sources with WHOOP's own notice, copy version 4 (below). A new WHOOP grant carries `version: 4` and a device grant `version: 2`; WHOOP rows may read back as 2, 3 or 4, which the first run's health step ignores because it decides on source, purpose and status only. The health step reads both: a device source (`apple`, `samsung`, `health_connect`) counts on its storage grant; any other source counts only with storage and model use both live, and a source the health plane learns later never makes the step unreadable.
 
-## WHOOP notice, copy version 3
+## WHOOP notice, copy version 4
 
 This is the wording the app shows on the WHOOP consent screen. The app reads it from here. Both grants (storage, then AI use) are asked on this one notice, and any change to the wording is a new version number, which asks the owner again.
 
@@ -56,6 +56,8 @@ This is the wording the app shows on the WHOOP consent screen. The app reads it 
 > **1. Store it.** Waldo stores your WHOOP data in its health store and works out your Form, Recovery and Load from it, so you can see them. Readings are kept for 90 days and daily summaries for 24 months.
 >
 > **2. Let Waldo's AI models use it.** To plan your day, Waldo sends a summary of your WHOOP data (zones such as "low" or "high", not your raw numbers) to the companies that provide its AI models, today OpenAI and Anthropic. They are third parties. This happens only if you give this second yes. Waldo never uses your WHOOP data to create, develop, test, train, fine-tune or improve any model, prompt or eval.
+>
+> **Your authorization.** These two yeses are your express authorization, as WHOOP's terms require, for Waldo to store your WHOOP data and to use it with the AI models named above to plan your days.
 >
 > **Who else sees it.** Your WHOOP data, and Waldo's replies drawn from it, are shown only to you, on the surfaces you choose, unless you ask Waldo to share a specific item. A reply on WhatsApp, Telegram or iMessage passes through that channel's provider (Meta, Telegram, Apple). Waldo's notes about your WHOOP data are not medical advice.
 >
@@ -72,8 +74,8 @@ What the wording is built to keep true:
 Set no WHOOP secret and enter no client for the edge until all of these hold, none of which the app can settle:
 1. **The providers' terms.** WHOOP's §4 also binds anyone acting for Waldo, so zero-retention and no-training terms with every model provider an owner turn can route to are a precondition for WHOOP, not optional wording.
 2. **Trace capture.** Staging trace capture (Langfuse) is a further recipient of WHOOP-derived turns; the owner accepted that on 22 October 2026, and the notice names it for as long as staging capture stays on.
-3. **The legal reading.** Whether a consent screen counts as the "express authorization" WHOOP's terms ask for is a legal reading, not a code one.
-4. **The notice shipped.** The app ships this notice (copy version 3) and the health plane's copy-version migration is applied. The runbook `WHOOP_AND_OURA_2026-10-21.md` holds the same conditions.
+3. **The legal reading: settled.** The owner ruled on 7 November 2026 (waldoco/waldo-backend#1980) that each user's own consent, given when they connect WHOOP, is the express authorization WHOOP's terms require. Copy 4 adds the "Your authorization" line above to say so in words; it is the only change from copy 3.
+4. **The notice shipped.** The app ships this notice (copy version 4) and the health plane's copy-version migrations (`20261021170000`, `20261107090000`) are applied. The runbook `WHOOP_AND_OURA_2026-10-21.md` holds the same conditions.
 
 ## The chat-channel step
 
@@ -99,6 +101,27 @@ Looking the owner up is an agent skill (`skills/owner-lookup`), not an onboardin
   - Expiry bars nothing, because the owner never said no, and it hides no copy: the quote stays in chat history, in stored tool output (the page read) and in episodes, each with its own retention.
   - A withdrawal after expiry does not reach those copies: the finding's row is gone, so the withdrawal erases 0 of it, hides nothing of it and bars nothing, and the same item can be recorded again after a new yes.
 - **Forget and withdrawal.** Forgetting one finding, or withdrawing the look-up (on the consent route or by unticking it in the agreements), first hides every retained copy of the finding's text and quote wherever the memory forget reaches them (chat history, stored tool output, episodes, thread titles, iMessage records, cards and job reports), then, in one commit, erases the findings still listed, purges any claim one became, and bars their text and quote from being recorded again. A finding that already expired is not among them (see Expiry). A failed hide changes nothing and the same request can be retried. A claim the owner had stated before a finding pointed at it stays.
+
+## Importing from other assistants
+
+The owner brings their past in by uploading another assistant's chat export to Waldo and asking it to use it. Today that covers ChatGPT and Claude (`conversations.json`, unpacked from the export zip with `extract_archive`). Gemini through Google Takeout, and Takeout's Maps saves and YouTube history, are later slices behind the same seam. The import is the owner's own act on their own file, so it needs no consent purpose of its own. It runs wherever `WALDO_FILE_TOOLS` is `"1"`, which is the switch that already gives the owner a workspace.
+
+- **What the model reads.** `read_import` returns only messages the owner wrote: user-role nodes in ChatGPT's tree, which include the custom instructions the owner wrote about themselves, and `human` messages in Claude's export. The other assistant's replies and system text are never returned. The result is outside text (`EXTERNAL_ORIGIN_TOOLS`), so it passes the Scribe sanitiser on its way to the model, and an export title, or anything the owner pasted into that chat, cannot speak for the owner. A message carrying a secret or a canary is withheld on its own, so the rest of the page still reads. An index lists the conversations first, so the model chooses which ones to read.
+- **Who decides what is kept.** The model judges which people, goals, preferences, routines, events and open threads matter. Code holds provenance only:
+  - The file must be the owner's upload, or unpacked from it (`owner_upload`), so a file Waldo wrote can never pose as an export.
+  - Every claim's quote must appear in a message the owner wrote, in the conversation the claim names, as the owner wrote it (whitespace aside) and on word edges, so the stored evidence is the owner's own words.
+  - A health reading is refused in any claim, as far as the Scribe health floor recognises one. A health condition the owner described about themselves is kept as kind `health`, so it stays behind health's fence from model calls built from outside content.
+  - A claim the owner forgot is refused (a forget barrier). So is one whose text the owner dismissed, retired or corrected: a later import never undoes the owner's decision.
+- **Storage.** Each kept item is one claim in the owner's Durable Object memory, held as Waldo's read (`source: inferred`, `origin: agent`), never as the owner's word, until the owner confirms or corrects it in What Waldo knows, where it shows as "Waldo thinks". Its evidence reads `the owner in their ChatGPT export: "<quote>"`, which is how the app shows that it was imported. Its `source_ref` is `import:<source>:<first 16 hex of the file's SHA-256>:<conversation id>`: ids only, never content. The same claim already held, or the same quote already brought in from that assistant, is not stored again, so importing the same export twice adds nothing. The export file itself stays in the workspace under the workspace's own retention, and the import keeps no other copy.
+- **Egress.** Imported text reaches the owner's model providers (OpenAI and Anthropic) when the model reads the export or recalls a claim, as with any memory.
+  - A `read_import` result reaches the model only in the turn that asked (`turn_only_output`), so the cross-turn tool ledger keeps a content-free line instead. Pages and the parts of a long message are sized by their JSON length, and titles are capped, so every page fits under the dispatcher's inline size and nothing goes to stored tool output.
+  - Waldo's replies that draw on it are chat history like any reply. During the beta, diagnostic recording captures that turn's text for testers who agreed, as it does any conversation.
+  - Nothing else: no log, no R2 copy, no third-party send.
+- **Forget.** `forget_memory` with `import_source` removes every claim that assistant's exports brought in, including ones the owner has since confirmed. It goes through the same purge, history hiding and barrier as any forget, and bars each claim's quote as well as its text. So importing the same export again brings none of them back with the same words or the same quote. A different passage that says the same thing can still be imported, and the owner can forget it too. It does not delete the uploaded file, which the owner removes from their files. One claim at a time is forgotten as any claim is.
+- **Not verified against a live export.** The parsers follow the export shapes as of November 2026 (ChatGPT: `mapping` nodes with `author.role` and `content.parts`; Claude: `chat_messages` with `sender`). Whether ChatGPT's export includes saved memories is unverified, so they are not read. A file over the workspace's 10 MB limit is refused with a request for a smaller one.
+
+**Importing from another assistant (draft passage)**
+> If you upload a chat export from another assistant, such as ChatGPT or Claude, and ask Waldo to use it, Waldo reads the messages you wrote there. It does not read the other assistant's replies. What it keeps from them, such as people in your life, goals and plans, is listed in What Waldo knows as Waldo's read until you confirm or correct it. Your messages go to the companies that provide Waldo's AI models (today OpenAI and Anthropic) while Waldo reads them, and what Waldo keeps goes to them when it is relevant to a reply. You can tell Waldo to forget everything from one assistant's export. Uploading the same export again will not bring back those items or the passages they were quoted from. The file you uploaded stays in your files until you delete it.
 
 ## Privacy notice, copy version 1 (draft: the owner approves the wording)
 

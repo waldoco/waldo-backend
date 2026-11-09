@@ -33,6 +33,15 @@ describe('welcome health stage', () => {
     expect(line('hrv')).toBe('hrv (apple_health, ms, rmssd): 2026-10-23 42; 2026-10-24 40');
   });
 
+  it('never reads food: it is read only by get_health in its own turn, never compiled into what Waldo knows', async () => {
+    const b = book(granted('apple'), series([{ source: 'apple', readings: [
+      { ...reading('nutrition', '2026-10-24', 612, null), nutrition: { protein_g: 38 } }, reading('overnight_hrv', '2026-10-24', 40, 'rmssd'),
+    ] }]));
+    const result = await health(b);
+    expect(b.asked.flatMap(asked => (asked as { signals: string[] }).signals)).not.toContain('nutrition');
+    expect(result.kind === 'input' ? result.text : '').not.toMatch(/food|protein|612/);
+  });
+
   it('skips without consent, says revoked after a withdrawal, unavailable on a failed read, and asks the plane nothing then', async () => {
     for (const [consent, state] of [[{ kind: 'consent_required' }, 'skipped'], [{ kind: 'not_linked' }, 'skipped'], [{ kind: 'consent_withdrawn' }, 'revoked'], [{ kind: 'read_failed' }, 'unavailable']] as const) {
       const b = book(consent);
