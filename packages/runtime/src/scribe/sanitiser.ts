@@ -603,7 +603,7 @@ function healthKeyIn(key: string, plainWords: boolean): boolean {
 function isNumeric(value: unknown): boolean {
   return (
     (typeof value === 'number' && Number.isFinite(value)) ||
-    (typeof value === 'string' && NUMERIC_VALUE.test(value))
+    (typeof value === 'string' && NUMERIC_VALUE.test(asciiDigits(value)))
   );
 }
 
