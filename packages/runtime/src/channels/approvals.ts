@@ -464,6 +464,8 @@ const describeBrowser = (p: BrowserSubmitProposal) => {
   return `${p.action.description} on ${maskedUrl(p.url)}${p.request ? ` via ${p.request.method} ${maskedUrl(p.request.url)}` : ''}${binding ? ` (${binding})` : ''}`;
 };
 const describeMcp = (p: McpCallProposal) => `Run ${p.tool} on the ${p.server} MCP server`;
+// A refusal's own text was written for the model and names Waldo's tools, so the owner reads a fixed line for its code.
+const MCP_NOT_RUN: Partial<Record<McpRefusal['code'], string>> = { auth_failed: 'Its sign-in needs reconnecting in Connections first.' };
 // The heading over what the proposal read from the owner's own stores when it was made.
 const PREVIEW_HEADING: Readonly<Record<string, string>> = { forget_memory: 'It forgets', close_loop: 'It closes' };
 const clipped = (text: string) => text.length > 120 ? `${text.slice(0, 117)}...` : text;
@@ -1903,15 +1905,16 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             const failure = toolFailed?.message ?? (isToolError(receipt.result) ? receipt.result.tool_error : undefined);
             if (failure !== undefined) {
               setStatus(id, 'failed');
-              return { toast: 'That failed', message: `${describeMcp(cp)} ran and failed. ${failure}` };
+              deps.log({ trace, hop: 'mcp_call_failed', ms: 0, ok: false, code: 'tool_error' });
+              return { toast: 'That failed', message: `That failed: ${sentence(describeMcp(cp))} The server reported an error.` };
             }
-            const outcome = String(receipt.result);
             setStatus(id, 'done');
-            out = { toast: 'Done', message: `Done: ${describeMcp(cp)}. ${outcome}` };
+            out = { toast: 'Done', message: `Done: ${sentence(describeMcp(cp))}` };
           } catch (error) {
             if (notRun && (error instanceof EffectNotAppliedError || error === notRun)) {
               setStatus(id, 'failed');
-              return { toast: 'Nothing ran', message: `Nothing ran: ${notRun.message}` };
+              deps.log({ trace, hop: 'mcp_call_not_run', ms: 0, ok: false, code: notRun.code });
+              return { toast: 'Nothing ran', message: `Nothing ran: ${sentence(describeMcp(cp))} ${MCP_NOT_RUN[notRun.code] ?? 'The server did not take it; ask me to try again.'}` };
             }
             const recorded = deps.effects?.get(`${operationRef}:apply`);
             if(recorded && recorded.state !== 'rejected') {setStatus(id,'uncertain');return {toast:'Outcome unknown',message:'The MCP outcome is unknown. Check the result before retrying; nothing was run again.'};}

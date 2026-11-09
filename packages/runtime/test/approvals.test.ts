@@ -210,7 +210,7 @@ describe('approval desk', () => {
     });
   });
 
-  it('mcp_call: proposes with Do it / Not now, executes ONLY on approve and reports a bounded outcome, never undoes', async () => {
+  it('mcp_call: proposes with Do it / Not now, executes ONLY on approve and reports what was done, never undoes', async () => {
     const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('approval-mcp'));
     await runInDurableObject(stub, async (_instance, state) => {
       const sent: { method: string; body: Record<string, unknown> }[] = [];
@@ -232,7 +232,8 @@ describe('approval desk', () => {
 
       const out = await desk.decide(id, 'a', 't');
       expect(out.toast).toBe('Done');
-      expect(out.message).toContain('Result (external content, bounded)');
+      expect(out.message).toContain('Run merge_pr on the github MCP server');
+      expect(out.message).not.toContain('external content');
       expect(executed).toEqual(['github.merge_pr']);
 
       // never undoable
