@@ -157,6 +157,19 @@ describe('Meta refusing a send later (a failed status with 131047)', () => {
     expect(whatsappWindowOpen(kv, T0 + 120_000)).toBe(true);
   });
 
+  it('a new owner message in the same second as the refused one reopens the window; a redelivery of a message it saw does not', () => {
+    const { kv } = fakeKv();
+    const second = String(T0 / 1000), log = vi.fn();
+    recordWhatsAppInbound(kv, [{ id: 'wamid.in-a', timestamp: second }, { id: 'wamid.in-b', timestamp: second }], T0);
+    expect(whatsappWindowRefused(kv, { providerMessageId: 'wamid.out', refusedAt: T0 + 500 }, true, T0 + 900, log)).toBe(true);
+    // Meta redelivers a webhook it already sent: the same message, so the window stays shut.
+    recordWhatsAppInbound(kv, [{ id: 'wamid.in-a', timestamp: second }], T0 + 950);
+    expect(whatsappWindowOpen(kv, T0 + 960)).toBe(false);
+    // The owner's real reply, stamped in the same whole second.
+    recordWhatsAppInbound(kv, [{ id: 'wamid.in-c', timestamp: second }], T0 + 990);
+    expect(whatsappWindowOpen(kv, T0 + 995)).toBe(true);
+  });
+
   it('a refusal from before the owner\'s latest message leaves the window open and asks for no knock', () => {
     const { kv, map } = fakeKv();
     recordWhatsAppInbound(kv, [{ timestamp: String((T0 + 120_000) / 1000) }], T0 + 120_000);

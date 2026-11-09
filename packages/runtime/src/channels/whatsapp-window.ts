@@ -22,9 +22,13 @@ export const WHATSAPP_HELD_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 export const WA_LAST_INBOUND_KEY = 'wa_last_inbound_ms';
 const KNOCKED_KEY = 'wa_knocked_for';
+// Meta stamps a message in whole seconds, so the owner's messages at the latest stamp are told apart by id.
+const LAST_INBOUND_IDS_KEY = 'wa_last_inbound_ids';
 // Meta can refuse a send for the window after accepting it (a failed status with 131047). The marker is the inbound time
-// the window was refused under, so the window counts as closed until the owner writes again.
+// the window was refused under, with the messages seen at it, so the window counts as closed until the owner writes again:
+// later, or in the same second with a message the refusal had not seen.
 const REFUSED_KEY = 'wa_window_refused_for';
+const REFUSED_IDS_KEY = 'wa_window_refused_ids';
 const REHELD_PREFIX = 'wa_reheld:';
 const HELD_SEQ_KEY = 'wa_held_seq';
 export const WA_HELD_PREFIX = 'wa_held:';
@@ -69,19 +73,33 @@ export const templateFor = (templates: WhatsAppTemplates, unasked: boolean): Wha
 // for up to 7 days, and a late redelivery must not reopen a window that has closed. A missing or unreadable
 // timestamp falls back to receipt time; a future one is clamped to now. The record only ever moves forward.
 export const recordWhatsAppInbound = (kv: Kv, messages: readonly object[], now: number): void => {
-  const previous = kv.get<number>(WA_LAST_INBOUND_KEY) ?? 0;
+  const previous = kv.get<number>(WA_LAST_INBOUND_KEY) ?? 0, before = kv.get<string[]>(LAST_INBOUND_IDS_KEY) ?? [];
   let latest = previous;
+  const ids = new Set(before);
   for (const message of messages) {
-    const { timestamp } = message as { timestamp?: unknown };
+    const { timestamp, id } = message as { timestamp?: unknown; id?: unknown };
     const seconds = typeof timestamp === 'string' && /^\d{1,12}$/.test(timestamp) ? Number(timestamp) : NaN;
-    latest = Math.max(latest, Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds * 1000, now) : now);
+    const at = Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds * 1000, now) : now;
+    if (at > latest) { latest = at; ids.clear(); }
+    if (at === latest && typeof id === 'string') ids.add(id);
   }
   if (latest > previous) kv.put(WA_LAST_INBOUND_KEY, latest);
+  if (ids.size !== before.length || latest > previous) kv.put(LAST_INBOUND_IDS_KEY, [...ids]);
+};
+// The window as Meta refused it: the latest inbound time and the messages seen at it.
+const refuseWindow = (kv: Kv, last: number): void => {
+  kv.put(REFUSED_KEY, last);
+  kv.put(REFUSED_IDS_KEY, kv.get<string[]>(LAST_INBOUND_IDS_KEY) ?? []);
+};
+const stillRefused = (kv: Kv, last: number): boolean => {
+  if (kv.get<number>(REFUSED_KEY) !== last) return false;
+  const seen = new Set(kv.get<string[]>(REFUSED_IDS_KEY) ?? []);
+  return (kv.get<string[]>(LAST_INBOUND_IDS_KEY) ?? []).every(id => seen.has(id));
 };
 
 export const whatsappWindowOpen = (kv: Kv, now: number): boolean => {
   const last = kv.get<number>(WA_LAST_INBOUND_KEY);
-  return last !== undefined && kv.get<number>(REFUSED_KEY) !== last && now - last < WHATSAPP_SERVICE_WINDOW_MS - WINDOW_MARGIN_MS;
+  return last !== undefined && !stillRefused(kv, last) && now - last < WHATSAPP_SERVICE_WINDOW_MS - WINDOW_MARGIN_MS;
 };
 
 // Holding also drops held messages past retention, so an owner who never replies does not keep them longer.
@@ -142,7 +160,7 @@ export const whatsappWindowCaller = (inner: Caller, options: Readonly<{ kv: Kv; 
           receipt = error.ack;
         } else if (!reengagement(error)) throw error;
         // Meta's clock closed the window before ours: it stays closed until the owner writes, so the next send waits.
-        kv.put(REFUSED_KEY, kv.get<number>(WA_LAST_INBOUND_KEY) ?? 0);
+        refuseWindow(kv, kv.get<number>(WA_LAST_INBOUND_KEY) ?? 0);
       }
     }
     if (nowOnly || custody) {
@@ -210,7 +228,7 @@ export const whatsappWindowRefused = (kv: Kv, refusal: Readonly<{ providerMessag
   for (const [key, at] of kv.list<number>({ prefix: REHELD_PREFIX })) if (now - at >= WHATSAPP_HELD_RETENTION_MS) kv.delete(key);
   kv.put(marker, now);
   const last = kv.get<number>(WA_LAST_INBOUND_KEY) ?? 0, closes = refusal.refusedAt > last;
-  if (closes) kv.put(REFUSED_KEY, last);
+  if (closes) refuseWindow(kv, last);
   log({ hop: 'whatsapp_status', ok: false, code: WHATSAPP_REENGAGEMENT_ERROR, closed: closes, detail: kept ? 'outbox_kept' : 'text_unavailable' });
   return closes;
 };
@@ -251,7 +269,7 @@ export const clearWhatsAppNumber = (kv: Kv, appFallback = false): readonly strin
   const retired = old ? retireSurfaceRecords(kv, record => record.ownerSubject === old && String(record.payload.chat_id) === old && !kept(record)) : [];
   if (old && appFallback) rememberWhatsAppSubject(kv, old);
   for (const prefix of [WA_HELD_PREFIX, REHELD_PREFIX]) for (const [key] of [...kv.list<unknown>({ prefix })]) kv.delete(key);
-  for (const key of [WA_LAST_INBOUND_KEY, KNOCKED_KEY, REFUSED_KEY]) kv.delete(key);
+  for (const key of [WA_LAST_INBOUND_KEY, LAST_INBOUND_IDS_KEY, KNOCKED_KEY, REFUSED_KEY, REFUSED_IDS_KEY]) kv.delete(key);
   clearWhatsAppContext(kv);
   return retired;
 };
