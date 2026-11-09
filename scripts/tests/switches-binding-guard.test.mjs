@@ -74,7 +74,8 @@ test('every handler of the Worker\'s default export flattens its env', () => {
 // which a later change set on purpose.
 const BEFORE_MOVE = '1808c6ed83c9d84be2b4ae36ad05e9d27343b772';
 const CHANGED_SINCE = {
-  staging: { OPEN_SIGNUP: '1', PHONE_SMS_VERIFY: '1', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en', MEDICATIONS: '1' },
+  staging: { OPEN_SIGNUP: '1', PHONE_SMS_VERIFY: '1', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en', MEDICATIONS: '1',
+    WHATSAPP_PROACTIVE_TEMPLATE: 'waldo_proactive_update', WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE: 'en' },
 };
 test('the move kept every var the Worker reads, by name and value, in both environments', (t) => {
   const old = spawnSync('git', ['show', `${BEFORE_MOVE}:packages/runtime/wrangler.jsonc`], { cwd: root, encoding: 'utf8' });

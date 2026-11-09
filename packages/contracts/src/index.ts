@@ -10,6 +10,7 @@ export * from './memory/trust';
 export * from './memory/sanitise';
 export * from './memory/hall';
 export * from './memory/area';
+export * from './memory/people';
 export * from './memory/episode';
 export * from './memory/recall';
 export * from './memory/skill';
@@ -43,6 +44,7 @@ export * from './tools/schemas/owner-message-heard';
 export * from './tools/schemas/reactions';
 export * from './tools/schemas/attach-file';
 export * from './tools/schemas/offer-replies';
+export * from './tools/schemas/show-chart';
 export * from './tools/schemas/writes';
 export * from './tools/schemas/delegate';
 export * from './tools/schemas/tasks';
@@ -102,5 +104,6 @@ export * from './tools/schemas/skills';
 
 export * from './tools/schemas/memory';
 export * from './tools/schemas/lookup';
+export * from './tools/schemas/imports';
 
 export * from './tools/use-mac';

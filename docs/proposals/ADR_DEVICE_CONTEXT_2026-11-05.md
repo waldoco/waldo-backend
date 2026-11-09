@@ -43,8 +43,8 @@ Each signal has one store and one writer. No signal is copied into a second stor
 
 - **Absent means unknown.** A missing, stale or withdrawn signal reads as unavailable, with its reason and age. It is never filled in: no default home city, no "fine weather", no zero minutes. This is ADR-0081's missingness rule applied to device context.
 - **Coarse is a schema rule, not a judgment.** The contract accepts a 5-character geohash and nothing finer. No latitude or longitude field exists. The stable rules allow this kind of schema validation.
-- **Finer precision only by opt-in, under an amendment.** v1 has no fine location, no geofences and no background ("Always") location.
-- **No new trigger.** A place or time-zone upload does not start a turn. The model decides what matters inside the triggers that already run (§4). Amended (§8): a move to another time zone or city brings Waldo's next look forward, inside the look that already runs.
+- **Finer precision only by opt-in, under an amendment.** v1 has no fine location, no geofences and no background ("Always") location. Amended (§9): the phone may watch places the owner names on it (home, the gym), on the phone only; the server still holds nothing finer than the cell.
+- **No new trigger.** A place or time-zone upload does not start a turn. The model decides what matters inside the triggers that already run (§4). Amended (§8): a move to another time zone or city brings Waldo's next look forward, inside the look that already runs. Amended (§9): so does arriving home or at the gym.
 
 ### 2. Consent: one place consent, separate withdrawals on the server
 
@@ -175,20 +175,68 @@ The owner ruled on §4's open decision: landing after travel, or coming home, ma
   - The look is told why it runs and that "a move is a reason to look, not a reason to speak". It reads `get_device_context`, calendar and mail.
   - It decides `none`, `say` or `act` as on any look.
   - Every limit of the look holds: the owner's consent to unasked messages, the heartbeat preference, quiet hours, the owner's day, the budget and the gap.
-  - A move pulls the look forward at most once per look cadence (`PROACTIVE_REVIEW_EVERY_MIN`, 3 hours by default). The time of the last pull is the only thing kept. A phone whose city keeps flipping, on a border or a train, costs no more looks than the cadence already allows. Looks also stay one per owner-local hour.
+  - A move adds at most one extra look per look cadence (`PROACTIVE_REVIEW_EVERY_MIN`, 3 hours by default). The time of the last pull is the only thing kept, written once the look is armed. A move inside the cadence does not bring the look sooner, but the look already armed is tagged `place_moved`, so it still knows a phone moved. A phone whose city keeps flipping, on a border or a train, costs no more than one extra look per cadence. Looks also stay one per owner-local hour.
   - A move that lands on an hour whose look already ran, or is still running, is looked at in the next owner-local hour.
   - Limits are kept in the owner's set time zone, which a trip can make wrong for a while. The look is told this and weighs the local hour where the phone is before speaking. Holding quiet hours in the device's zone is a later change.
 - **Rollout order:**
   - Deploy the Worker that strips `moved` before applying migration `20261106190000`. An older Worker reads the extra key as a malformed receipt and answers 503.
-  - To roll back, revert the migration first. Its receipts never stored the key, so a replay is safe either way.
+  - To roll back, revert the migration first, then the Worker (an older Worker answers 503 to a receipt carrying `moved`). No restoring migration ships with this amendment: rolling the database back means applying the previous `device_context_place_ingest` definition by hand. Its receipts never stored the key, so a replay is safe either way.
 - **The notice can be replayed.** Like the health notices, it is signed with a fixed time, so a captured one could be sent again. Its only effect is bringing a look forward, at most once per look cadence, and only the Worker can reach the route.
 - **Known follow-ups, not in this amendment:**
   - A move after the Close arms the next Brief's look with `cause_id: place_moved`. Withdrawing place consent overnight does not clear that cause.
   - The look's refs (`now`, `moved`) sit in the owner object's `task_jobs` as timestamps and a fixed phrase. "Nothing new is stored" holds for Supabase.
   - A move look held by quiet hours or the budget loses its cause; the next look runs without it.
+  - A move inside the cadence tags the armed look rather than pulling it (built after the gate's review).
 - **What it does not do:**
   - It adds no geofence, no arrival rule, no "home" or "gym" label and no fine location.
-  - Arriving at a named place (the gym, home) needs place history (§5) and stays with A3.
+  - Arriving at a named place (the gym, home) is §9.
+
+## 9. Amendment, 7 November 2026: arriving home or at the gym brings the next look forward (#1980 A3)
+
+The owner ruled that arriving at the gym or home only brings Waldo's existing look forward, by the same mechanism as §8: no new
+trigger type, no new interrupt channel, and the owner's limits unchanged.
+
+- **Where the places live.**
+  - The owner names home and the gym on the phone.
+  - The phone keeps those places and their positions, and notices arriving at one (OS region monitoring).
+  - The server never receives a position, a label it stores, or a history.
+- **What travels.**
+  - A place upload may carry `arrived: "home" | "gym"` beside its reading. The contract allows those two words and nothing else.
+  - The database answers it back only for a reading observed within the hour that is not superseded, while the owner lets
+    Waldo's model read place (`model_processing`). Supabase stores it nowhere: not in the place row and not in the receipt.
+  - The Worker strips it from the app's receipt, as it does `moved`. On an upload that was not a replay, with `ARRIVAL_LOOK` on,
+    it sends the owner's object a signed notice carrying the word alone. A failed notice costs the upload nothing.
+- **What it does.**
+  - The owner's object brings the look (PROACTIVE_INTERVENTIONS) to now, or to the owner's next Brief once their day is over.
+  - An arrival shares the move's limit: one pull of the look per look cadence (`MOVE_PULL_KEY`), so a move and an arrival in the
+    same cadence bring it forward once.
+  - The look is told why: "the owner's phone says they just arrived home" (or at the gym), and that "an arrival is a reason to
+    look, not a reason to speak; most arrivals need nothing".
+  - It reads place, calendar, health and memory as any look does. It decides `none`, `say` or `act`, under every limit of the
+    look: consent to unasked messages, the heartbeat preference, quiet hours, the owner's day, the budget, the gap, and one look
+    per owner-local hour.
+- **Where the cause word is kept.** On the owner's object only, the word `arrived_home` or `arrived_gym` (never a position, an
+  arrival time or a label the owner chose) is kept as the look's cause:
+  - in the look's one schedule row (`payload_refs.cause_id`), until the look runs or is armed again;
+  - in that look's job row (`CAUSES` in `channels/interventions.ts`), which leaves with the other settled machine jobs: only the
+    newest `MACHINE_SETTLED_KEPT` and any settled within `MACHINE_SETTLED_KEPT_MS` (48 hours) stay;
+  - in the owner's turn log when a pull is held within the cadence (trace `arrived_home:<ms>`, code
+    `held_arrival_within_cadence`), kept as the owner's other log lines are.
+  - A move uses the same three places with the word `place_moved`.
+- **Why "within the hour".** An arrival is "just now". One the phone delivers later has already happened, so it is kept as a
+  place and not told. This is a freshness fact, like a workout's three hours, not a judgment about what matters.
+- **Rollout:**
+  - deploy the Worker that strips `arrived`, then apply migration `20261107100000`;
+  - roll back in the reverse order;
+  - `ARRIVAL_LOOK` is `0` in production and `1` in staging, and `0` is the rollback.
+- **Before production:**
+  - a device test on both platforms;
+  - the OS permission each platform needs to watch a place, which is background location on iOS and Android;
+  - privacy notice and store disclosure lines saying the places stay on the phone and only the word "home" or "gym" is sent.
+- **What it does not do.**
+  - It does not read arrivals from the cell: a cell change inside a city is still not a move.
+  - It learns no routine and keeps no "home" row.
+  - It does not start any trigger other than the look.
 
 ## Considered options
 
@@ -206,6 +254,9 @@ The owner ruled on §4's open decision: landing after travel, or coming home, ma
 4. **Geofences or background location for "you arrived" moments.** Rejected for v1:
    - they need permissions beyond coarse, plus store review, on both platforms;
    - an arrival trigger is a fixed rule about what matters.
+
+   Amended by §9 (owner ruling, 7 November 2026): an arrival brings Waldo's existing look forward and decides nothing itself, so
+   it is not a rule about what matters. The places and their positions stay on the phone.
 5. **Coordinates rounded on the server.** Rejected: the finer value would reach the Worker. Rounding on the phone means the server never holds it.
 6. **A separate consent screen for weather lookup.** Rejected, because the owner asked not to over-restrict. The one place consent names the provider, and the server keeps a separate withdrawal.
 7. **iOS screen time on the server.** Not possible under Apple's terms. An on-device-only view inside the report extension is possible later; it never reaches the model.
@@ -241,6 +292,7 @@ The owner ruled on §4's open decision: landing after travel, or coming home, ma
   - each route spends its own per-owner budget;
   - no log line carries a cell, a place name or a time zone.
 - **Tool test:** output is turn-only, and unknown stays unknown.
+- **The arrival (§9):** pgTAP (`waldo_device_place_arrived.sql`): which uploads answer an arrival, refused words, no stored trace. Worker tests: the receipt is unchanged and the notice goes only with the switch on, once. Owner-object test: a signed arrival arms the look with its place; a forged notice or the switch off arms nothing.
 - **The move (§8):**
   - pgTAP (`waldo_device_place_moved.sql`): which readings are a move, with replays answered as recorded.
   - Worker tests: the receipt is unchanged, a replay or a non-move sends no notice, and a failed notice still answers the upload.

@@ -60,7 +60,7 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 const OWNER_ID = '7c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f';
 const SUBJECT = '15550003333';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
-const whatsapp = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en' };
+const whatsapp = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en', WHATSAPP_PROACTIVE_TEMPLATE: 'waldo_proactive_update', WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE: 'en' };
 const HOUR = 60 * 60_000;
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -274,7 +274,7 @@ describe('owner forget reaches a heartbeat check-back waiting for WhatsApp', { t
       await heartbeat();
       await alarms(3);
       expect(model.checkBacks).toBe(1);
-      expect(wire.events).toEqual(['template:waldo_update_ready']);
+      expect(wire.events).toEqual(['template:waldo_proactive_update']);
       expect(outbox()).toEqual([{ id: expect.stringMatching(/^heartbeat:job_/), status: 'pending', payload: { text: CHECK_BACK } }]);
 
       expect(await forget(kind, SECRET)).toBe(true);
@@ -283,14 +283,14 @@ describe('owner forget reaches a heartbeat check-back waiting for WhatsApp', { t
       await write('hi');
       // The cancelled record settles on the outbox's next pass, like every other record that ends.
       await alarms(1);
-      expect(wire.events).toEqual(['template:waldo_update_ready', 'turn']);
+      expect(wire.events).toEqual(['template:waldo_proactive_update', 'turn']);
       // The tick ran and its check-back was cancelled by the owner, which is neither a failure nor a failed delivery.
       expect(job('heartbeat')).toEqual({ run: [{ status: 'completed', summary: 'check-back handed to a reader job' }, { status: 'stopped', summary: STOPPED_HEARTBEAT }], scheduled: [{ outcome: 'ok', delivery: null }] });
       // Nothing writes that occurrence's check-back again.
       await alarms(3);
       expect(model.checkBacks).toBe(1);
       expect(outbox()).toHaveLength(1);
-      expect(wire.events).toEqual(['template:waldo_update_ready', 'turn']);
+      expect(wire.events).toEqual(['template:waldo_proactive_update', 'turn']);
     });
   });
 
