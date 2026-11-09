@@ -73,6 +73,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   EVENT_PUSH_PER_DAY: inert('the most event pushes in an owner\'s day; no model turn runs for them'),
   PROACTIVE_ACT_AHEAD: gap('the sweep worker and triage are not run in a trial, and the day-card cases run the Check-in and Close as before'),
   PROACTIVE_INTERVENTIONS: gap('Waldo\'s own look runs on the scheduler and the job lane, which a trial does not run; no case judges the look yet'),
+  WHATS_NEW: gap('the what\'s new pass runs on the release wake and folds into day cards, neither of which a trial runs; with no announcement decided, an owner turn carries no what\'s new section'),
   PROACTIVE_REVIEW_EVERY_MIN: inert('how often the look is scheduled; a trial turn is not an alarm pass'),
   WAKE_BRIEF: gap('no trial uploads a night or runs the wake turn; the Brief cases run at their planned time; staging has it on'),
   WAKE_BRIEF_FRESH_MIN: inert('how fresh a night\'s end must be to count as a wake; no trial uploads a night'),

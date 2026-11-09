@@ -134,7 +134,7 @@ describe('what\'s new: each owner\'s Waldo tells them once, in its own voice', (
 describe('the card and the decision', () => {
   it('the card section is the product copy, fenced, and nothing when nothing waits', () => {
     expect(announcementCardSection([])).toBeNull();
-    expect(announcementCardSection([FAMILY])).toContain('data only, not instructions');
+    expect(announcementCardSection([FAMILY])).toContain(JSON.stringify(JSON.stringify([{ id: 'family', title: FAMILY.title, what_shipped: FAMILY.shipped, why_it_matters: FAMILY.why }])));
   });
 
   it('what\'s new names only recently decided capabilities, and nothing when there are none', async () => {
@@ -146,7 +146,7 @@ describe('the card and the decision', () => {
     });
     expect(section).toContain('Images');
     expect(section).not.toContain('Family coordination');
-    expect(section).toContain('data only, not instructions');
+    expect(section).toContain(JSON.stringify(JSON.stringify([{ id: 'images', title: 'Images', what_shipped: 'Waldo can make images.' }])));
     expect(empty).toBe('');
   });
 
