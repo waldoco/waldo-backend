@@ -39,7 +39,7 @@ const writeKey = (intent: ProxyIntent, method: string, args: readonly unknown[])
   const marker = writeMarker(method, args);
   return typeof marker === 'string' && /^[0-9a-f]{64}$/.test(marker) ? `${intent.id}:${marker}` : intent.id;
 };
-const sha256 =async (text: string) => hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
+const sha256 = async (text: string) => hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
 
 export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()): GoogleProxy | null => {
   const { SUPABASE_PROJECT_URL: base, SUPABASE_PUBLISHABLE_KEY: key, WALDO_ROUTER_HMAC_SECRET: secret } = env;
