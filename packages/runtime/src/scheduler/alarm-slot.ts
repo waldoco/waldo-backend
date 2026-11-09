@@ -26,6 +26,9 @@ export const WHATSAPP_INBOX_DUE_KEY = 'whatsapp_owner_inbox_due_v1';
 // The jobs lane's next work: a task attempt to start or restart, a report to apply, a retried turn or a progress note.
 export const TASK_JOBS_DUE_KEY = 'task_jobs_due_v1';
 
+// Chats a drain made due a compaction, which runs in a later alarm pass than the one that ran the owner's turns.
+export const COMPACTION_DUE_KEY = 'compaction_due_v1';
+
 // The owner alarm handler's own retry after a failed pass; the pass that is that retry consumes it.
 export const ALARM_RETRY_DUE_KEY = 'owner_alarm_retry_due_v1';
 // The lane whose failure that retry is for. A retry recorded with no lane, as before lanes were kept, is the whole pass's.
@@ -38,7 +41,7 @@ export const WAKE_DUE_KEYS = [
   'imessage_owner_inbox_due_v1', 'imessage_final_outbox_due_v1', APP_INBOX_DUE_KEY, APP_UPLOADS_DUE_KEY,
   'telegram_final_outbox_due_v1', 'telegram_owner_inbox_due_v1', 'telegram_link_due_v1',
   'browser_owner_task_due_v1', 'common_browser_due_v1', 'common_browser_lease_due_v1', WHATSAPP_PENDING_DUE_KEY, WHATSAPP_INBOX_DUE_KEY,
-  'mac_results_due_v1', 'agent_mail_due_v1', 'agent_mail_rule_due_v1', TASK_JOBS_DUE_KEY, ALARM_RETRY_DUE_KEY,
+  'mac_results_due_v1', 'agent_mail_due_v1', 'agent_mail_rule_due_v1', TASK_JOBS_DUE_KEY, COMPACTION_DUE_KEY, ALARM_RETRY_DUE_KEY,
 ] as const;
 
 // The lanes of an owner alarm pass, each with the wakes of the work it runs; 'schedule' owns the schedule's next entry.
@@ -56,6 +59,7 @@ export const ALARM_LANES = {
   whatsapp: [WHATSAPP_PENDING_DUE_KEY],
   whatsapp_turns: [WHATSAPP_INBOX_DUE_KEY],
   jobs: [TASK_JOBS_DUE_KEY],
+  compaction: [COMPACTION_DUE_KEY],
 } as const satisfies Readonly<Record<string, readonly (typeof WAKE_DUE_KEYS)[number][]>>;
 export type AlarmLane = keyof typeof ALARM_LANES | 'pass';
 // Lanes no hold delays: their work catches its own failures and defers its own wake, so no failure is ever recorded against
@@ -110,6 +114,13 @@ export async function armTaskJobsWake(storage: DurableObjectStorage, due: number
   await storage.put(TASK_JOBS_DUE_KEY, next);
   const existing = await storage.getAlarm();
   await armAlarm(storage, Math.max(Date.now() + 250, existing === null ? next : Math.min(existing, next)));
+}
+
+export async function armCompactionWake(storage: DurableObjectStorage, due: number): Promise<void> {
+  const held = await storage.get<number | null>(COMPACTION_DUE_KEY);
+  await storage.put(COMPACTION_DUE_KEY, held === undefined || held === null ? due : Math.min(held, due));
+  const existing = await storage.getAlarm();
+  await armAlarm(storage, Math.max(Date.now() + 250, existing === null ? due : Math.min(existing, due)));
 }
 
 // How long a failed alarm pass waits before the next attempt: the platform's own retry curve (2 s, doubling) plus a fixed

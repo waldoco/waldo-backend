@@ -478,7 +478,7 @@ export const calendarPlanHandler = (google: GoogleAccess, desk: EffectDesk & Pic
 export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay, effects?: OwnerEffectLedger, ownerName: () => string | null = () => null, calendarEgress?: CalendarEgressScreen) => [
   {
     name: 'query_calendar',
-    description: "Read a bounded page of events, now through the next 24 hours by default. list_calendars lists each account's other calendars (id, name, access role, time zone; visible unless include_hidden); read one with its calendar_id and account. Continue next_page_token with that account and the same date_range, calendar_id, limit and include_declined. Each result holds only its current page, not a complete window. Legacy adapters report unknown account and incomplete coverage. Event enumeration, not availability.",
+    description: "Read a bounded page of events, now through the next 24 hours by default. list_calendars lists each account's other calendars (id, name, access role, time zone; visible unless include_hidden); read one with its calendar_id and account. Continue next_page_token with that account and the same date_range, calendar_id, limit and include_declined. Each result holds only its current page, not a complete window. Legacy adapters report unknown account and incomplete coverage.",
     schema: queryCalendarArgsSchema,
     trigger_allowlist: allowlist('query_calendar'),
     autonomy_gated: false,
@@ -505,8 +505,9 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
         }
       }
       if (!page && (page_token || calendar_id !== 'primary')) throw connectorLacks('page through events or read a calendar other than primary');
-      // The operation marker is for the desk's reconciliation of its own writes, not for the model.
-      const events = (page?.events ?? await client.events(from,to,limit,include_declined)).map(({ operation_marker: _marker, waldo_made: _made, ...event }) => event);
+      // The operation marker is for the desk's reconciliation of its own writes, and the iCal UID for matching phone events, not for
+      // the model.
+      const events = (page?.events ?? await client.events(from,to,limit,include_declined)).map(({ operation_marker: _marker, waldo_made: _made, ical_uid: _uid, ...event }) => event);
       // One content-free line per calendar read: which window and which kind of calendar were asked for, and how many
       // events came back. Never the calendar id or the account, either of which can be an address. The primary calendar's
       // id is the account address, so a read by that id counts as primary. The code stays within [a-z0-9_:]{1,64}, so a
@@ -568,7 +569,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<GetCommunicationArgs, unknown, ToolDispatcherContext>,
   {
     name: 'search_communication',
-    description: "Search the owner's Gmail by sender, subject or words, optionally in a date range; read_thread reads a match's thread in full. Space-separated terms must all match: use distinctive sender or topic terms, never the owner's whole ask. An empty match is not absence: follow its recovery note, then report the search limit. Never silently rewrite a quoted or operator query. For 'what is new' use get_communication. Continue with cursor and the same query, date range and account.",
+    description: "Search the owner's Gmail by sender, subject or words, optionally in a date range; read_thread reads a match in full. Space-separated terms must all match: use distinctive sender or topic terms, never the owner's whole ask. An empty match is not absence: follow its recovery note, then report the search limit. Never silently rewrite a quoted or operator query. For 'what is new' use get_communication. Continue with cursor and the same query, date range and account.",
     schema: searchCommunicationArgsSchema,
     trigger_allowlist: allowlist('search_communication'),
     autonomy_gated: false,
@@ -623,7 +624,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<SearchContactsArgs, unknown, ToolDispatcherContext>,
   {
     name: 'read_thread',
-    description: "Read one Gmail thread by thread_id - the messages with sender, recipients (to, cc, reply_to as plain addresses), subject, time and body. account.email is the owner's own address; send-as aliases are not marked. recipients_capped: a list was cut at 50 addresses, so reply-all would miss people: tell the owner. To reply to all, take the recipients from the message being replied to. Use after get_communication or search_communication lists the thread, with its account, before drafting a reply. Continue with cursor and the same thread/account; changed threads require restarting. body_next_offset means more body follows (body_total_chars in all): read it with body_message_id (the message's id) and body_offset set to body_next_offset, without a cursor. body_truncated: the message is longer than Waldo reads, so say the end is missing. attachments: name, type and size only, never read. body_source 'snippet': only Gmail's preview was readable; say so. body_withheld: not safe to show; tell the owner to open it in Gmail.",
+    description: "Read one Gmail thread by thread_id - the messages with sender, recipients (to, cc, reply_to as plain addresses), subject, time and body. account.email is the owner's own address; send-as aliases are not marked. recipients_capped: a list was cut at 50 addresses, so reply-all would miss people: tell the owner. To reply to all, take the recipients from the message being replied to. Use after get_communication or search_communication lists the thread, with its account, before drafting a reply. Continue with cursor and the same thread/account; changed threads require restarting. body_next_offset: more body follows (body_total_chars in all); read it with body_message_id and body_offset = body_next_offset, no cursor. body_truncated: the message is longer than Waldo reads, so say the end is missing. attachments: name, type and size only, never read. body_source 'snippet': only Gmail's preview was readable; say so. body_withheld: not safe to show; tell the owner to open it in Gmail.",
     schema: readThreadArgsSchema,
     spill: threadSpill,
     trigger_allowlist: allowlist('read_thread'),
@@ -743,7 +744,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<DraftEmailArgs, unknown, ToolDispatcherContext>,
   {
     name: 'send_email',
-    description: "Send an email from the owner's Gmail. The owner gets a review card showing the exact recipients, subject and body; nothing sends until they approve. to, cc and bcc are lists even for one address: [\"sam@example.com\"]. Write the body up to your closing word (\"Thanks,\"): Waldo's signature is added below it and shown on the card, so never sign with your name or role. Drafting an email to send once they approve is this tool: the card is that draft. Use draft_email only for a saved Gmail draft they will edit themselves. An earlier send of unknown outcome does not block a new one the owner asks for: the card says if an identical email may have gone out. To email the owner, read their address with connect_service rather than asking. To reply to all, address the replied-to message's reply_to (or its sender when there is none) and copy its to and cc, leaving out the owner's own address (account.email in read_thread); a plain reply goes to reply_to or the sender only.",
+    description: "Send an email from the owner's Gmail. The owner gets a review card showing the exact recipients, subject and body; nothing sends until they approve. to, cc and bcc are lists, even for one address. Write the body up to your closing word (\"Thanks,\"): Waldo's signature is added below it and shown on the card, so never sign with your name or role. A draft to send once they approve is this tool: the card is that draft. Use draft_email only for a saved Gmail draft they will edit themselves. An earlier send of unknown outcome does not block a new one the owner asks for: the card says if an identical email may have gone out. To email the owner, read their address with connect_service rather than asking. To reply to all, address the replied-to message's reply_to (or its sender when there is none) and copy its to and cc, leaving out the owner's own address (account.email in read_thread); a plain reply goes to reply_to or the sender only.",
     schema: sendEmailArgsSchema,
     trigger_allowlist: allowlist('send_email'),
     autonomy_gated: false,
@@ -797,7 +798,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     },
   } satisfies ToolHandler<SendEmailArgs, unknown, ToolDispatcherContext>,
   {
-    name:'query_availability',description:"Find free time: the windows of at least duration_minutes that are free across the given calendars and supplied work windows. Use it whenever the owner asks when they are free or for a slot, and offer only windows it returns: each is already computed, with start and end in the owner's time zone and its length in minutes, so never work out free time from query_calendar events. Set duration_minutes to the length the owner needs, and include every calendar that holds their commitments (list them with query_calendar list_calendars). Busy blocks are Google's own free/busy answer for those calendars. A calendar that cannot be read is never free: free_windows stays empty and windows_free_on_answered_calendars holds time free on the calendars that answered, to offer only as tentative. Without account, primary means every connected account's primary calendar. Read-only, no booking.",
+    name:'query_availability',description:"Free windows of at least duration_minutes across the given calendars and work windows. Use it whenever the owner asks when they are free or for a slot, and offer only windows it returns (start and end in the owner's time zone, length in minutes); never work out free time from query_calendar events. Set duration_minutes to the length the owner needs and include every calendar holding their commitments (list them with query_calendar list_calendars). A calendar that cannot be read is never free: free_windows stays empty and windows_free_on_answered_calendars holds time free on the calendars that answered, to offer only as tentative. Without account, primary means every connected account's primary calendar. Read-only, no booking.",
     schema:queryAvailabilityArgsSchema,trigger_allowlist:allowlist('query_availability'),autonomy_gated:false,requires_connector:true,
     // state() does not report the freebusy scope; calendar is its superset here, and a missing scope still returns a connect intent.
     eligible:granted(google,'calendar'),
@@ -841,7 +842,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
 // affordance (Telegram: a URL button minted at click time). No link ever enters model text.
 export const connectServiceHandler = (google: GoogleAccess): ToolHandler<ConnectServiceArgs, Readonly<{service:string;connected:boolean;message:string;accounts?:readonly Readonly<{id:string;email:string;calendar:boolean;mail:boolean;tasks:boolean;health:string;provenance:string}>[]}>, ToolDispatcherContext> => ({
   name: 'connect_service',
-  description: 'Read connected Google accounts with their granted features and health status, or connect Google; pass feature to offer one not yet granted. Use whenever the owner asks to connect, link or set up a service, asks why you cannot see their calendar or email, or mentions a connector. Host account metadata is not evidence that a message sender is the owner. The result says whether a connect button reached them or where else they connect; never write out a link.',
+  description: 'Read connected Google accounts (granted features, health status) or connect Google; pass feature to offer one not yet granted. Use whenever the owner asks to connect, link or set up a service, asks why you cannot see their calendar or email, or mentions a connector. Host account metadata is not evidence that a message sender is the owner. The result says whether a connect button reached them or where else they connect; never write out a link.',
   schema: connectServiceArgsSchema,
   trigger_allowlist: allowlist('connect_service'),
   autonomy_gated: false,
