@@ -3,7 +3,7 @@ import {
   healthProviderConnectResultV1Schema, healthProviderConnectV1Schema, healthProviderDisconnectResultV1Schema, healthProviderDisconnectV1Schema,
   healthProviderErrorV1Schema, healthProviderListV1Schema,
 } from '../../../../contracts/src/app/health-providers';
-import { HEALTH_PROVIDER_REVISION_V1 } from '../../../../contracts/src/app/health-ingest';
+import { HEALTH_GOOGLE_HEALTH_REVISION_V1, HEALTH_PROVIDER_REVISION_V1 } from '../../../../contracts/src/app/health-ingest';
 import { callOwnerProvider } from './provider-route';
 
 // The app's provider routes. The Worker checks the request against the app contract and the owner object does the work:
@@ -34,7 +34,11 @@ export const handleAppHealthProviders = async (input: Readonly<{ request: Reques
   const { request, url, doName, owners, secret } = input;
   const route = url.pathname.slice(APP_PROVIDERS_PATH.length);
   // A build that does not name health revision 2 has no providers to show or start.
-  if (appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'health') < HEALTH_PROVIDER_REVISION_V1) return refuse('invalid_request', 404);
+  const revision = appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'health');
+  if (revision < HEALTH_PROVIDER_REVISION_V1) return refuse('invalid_request', 404);
+  // A build below the Google Health revision parses the provider list strictly and cannot name Google Health: it is shown no
+  // Google Health row and asks nothing of it.
+  const knowsGoogleHealth = revision >= HEALTH_GOOGLE_HEALTH_REVISION_V1;
   if (!secret) return refuse('not_configured', 503);
   const settle = async (op: 'status' | 'connect' | 'disconnect', body: Record<string, unknown>, schema: ZodType): Promise<Response> => {
     const answer = await callOwnerProvider(owners, secret, doName, op, body);
@@ -48,7 +52,7 @@ export const handleAppHealthProviders = async (input: Readonly<{ request: Reques
       return code === 'not_configured' ? refuse('not_configured', 503) : refuse('unavailable', 503);
     }
     const parsed = schema.safeParse(answer.json);
-    if (parsed.success) return reply(parsed.data as object);
+    if (parsed.success) return reply(op === 'status' && !knowsGoogleHealth ? { providers: (parsed.data as { providers: { provider: string }[] }).providers.filter(row => row.provider !== 'google_health') } : parsed.data as object);
     console.error('app health provider response shape');
     return refuse('unavailable', 503);
   };
@@ -59,12 +63,12 @@ export const handleAppHealthProviders = async (input: Readonly<{ request: Reques
   const named = (provider: string) => (provider === 'whoop' ? {} : { provider });
   if (route === '/connect') {
     const asked = await readJson(request, healthProviderConnectV1Schema);
-    if (!asked) return refuse('invalid_request', 400);
+    if (!asked || (asked.provider === 'google_health' && !knowsGoogleHealth)) return refuse('invalid_request', 400);
     const allowed = await input.mayConnect().catch(() => null);
     if (allowed === null) return refuse('unavailable', 503);
     return allowed ? settle('connect', named(asked.provider), healthProviderConnectResultV1Schema) : refuse('step_up_required', 403);
   }
   const leaving = await readJson(request, healthProviderDisconnectV1Schema);
-  if (!leaving) return refuse('invalid_request', 400);
+  if (!leaving || (leaving.provider === 'google_health' && !knowsGoogleHealth)) return refuse('invalid_request', 400);
   return settle('disconnect', named(leaving.provider), healthProviderDisconnectResultV1Schema);
 };
