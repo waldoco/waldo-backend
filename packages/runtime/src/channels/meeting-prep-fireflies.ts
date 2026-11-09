@@ -1,7 +1,7 @@
 import type { CalendarItem } from '../connectors/google';
 import { McpRefusal } from '../connectors/mcp-connections';
 import type { McpToolDef } from '../connectors/mcp-tools';
-import { answerText, prepAttendees } from './meeting-prep-granola';
+import { answerText, inTime, prepAttendees } from './meeting-prep-granola';
 
 // Fireflies' record of earlier meetings with the same people, for a meeting the owner organized or accepted. The harness
 // makes this read, not the model: the tool and its arguments are fixed here, the people are the attendees' addresses alone,
@@ -38,15 +38,16 @@ export const prepFireflies = async (deps: PrepFirefliesDeps, event: CalendarItem
   const people = prepAttendees(event, owner);
   if (!people.length) return skipped('no_attendees');
   try {
-    const args = listArguments((await deps.describe(connection.name, FIREFLIES_PREP_TOOL)).def, people);
+    const args = listArguments((await inTime(deps.describe(connection.name, FIREFLIES_PREP_TOOL))).def, people);
     if (!args) return skipped('schema_unexpected');
-    const answer = await deps.invoke({ server: connection.name, tool: FIREFLIES_PREP_TOOL, args, mode: 'read' });
+    const answer = await inTime(deps.invoke({ server: connection.name, tool: FIREFLIES_PREP_TOOL, args, mode: 'read' }));
     if (!('result' in answer)) return skipped('read_failed');
     const text = answerText(answer.result);
     if (!text) return skipped('empty');
     return { status: 'read', text: text.length > FIREFLIES_ANSWER_CHARS ? `${text.slice(0, FIREFLIES_ANSWER_CHARS)}\n[Fireflies' list continues; prep read only this much of it.]` : text };
   } catch (error) {
-    // A read the owner has not allowed, or one that fails, leaves the brief to its other sources; the caller logs the code.
-    return skipped(error instanceof McpRefusal && error.code === 'forbidden' ? 'not_allowed' : 'read_failed');
+    // A read the owner has not allowed (refused before anything ran), or one that fails, leaves the brief to its other
+    // sources; the caller logs the code.
+    return skipped(error instanceof McpRefusal && error.code === 'forbidden' && error.notApplied ? 'not_allowed' : 'read_failed');
   }
 };

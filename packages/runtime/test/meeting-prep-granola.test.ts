@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { CalendarItem } from '../src/connectors/google';
 import { GRANOLA_AUTH_ORIGIN, GRANOLA_MCP_URL } from '../src/connectors/granola-mcp';
 import type { McpToolDef } from '../src/connectors/mcp-tools';
 import { calendarPrepPrompt, checkedNotes } from '../src/channels/event-briefs';
-import { GRANOLA_ANSWER_CHARS, GRANOLA_PREP_TOOL, granolaQuestion, prepGranola, type GranolaSkip, type PrepGranolaDeps } from '../src/channels/meeting-prep-granola';
+import { GRANOLA_ANSWER_CHARS, GRANOLA_PREP_TOOL, granolaQuestion, prepGranola, PREP_READ_MS, type GranolaSkip, type PrepGranolaDeps } from '../src/channels/meeting-prep-granola';
 
 // Granola's notes from earlier meetings with the same people, read by the harness for a meeting the owner accepted. The
 // question is built in code from the attendees' addresses alone: a hostile title or description steers neither the tool nor
@@ -54,6 +54,16 @@ describe('the Granola read for meeting prep', () => {
     const h = harness(over);
     expect(await prepGranola(h.deps, event, OWNER)).toEqual({ status: 'skipped', code });
     if (['not_connected', 'not_reviewed', 'reauth_needed', 'schema_unexpected'].includes(code)) expect(h.calls).toEqual([]);
+  });
+
+  it('a read that hangs is a read that failed, so prep still reaches the owner before the meeting', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({ invoke: () => new Promise(() => undefined) });
+      const read = prepGranola(h.deps, event, OWNER);
+      await vi.advanceTimersByTimeAsync(PREP_READ_MS);
+      expect(await read).toEqual({ status: 'skipped', code: 'read_failed' });
+    } finally { vi.useRealTimers(); }
   });
 
   it('reads nothing for a meeting with no other attendee address', async () => {
