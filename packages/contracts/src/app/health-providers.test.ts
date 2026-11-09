@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { HEALTH_GOOGLE_HEALTH_REVISION_V1, HEALTH_NUTRITION_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, healthConsentListAtRevisionV1, healthConsentGrantV1Schema, healthPurposeV1Schema, isHealthProviderSourceV1 } from './health-ingest';
+import { HEALTH_GOOGLE_HEALTH_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, healthConsentListAtRevisionV1, healthConsentGrantV1Schema, healthPurposeV1Schema, isHealthProviderSourceV1 } from './health-ingest';
 import {
   appHealthProviderRoutesV1, healthProviderConnectResultV1Schema, healthProviderConnectV1Schema, healthProviderDisconnectResultV1Schema,
   healthProviderDisconnectV1Schema, healthProviderErrorV1Schema, healthProviderListV1Schema, healthProviderStatusV1Schema,
@@ -74,7 +74,7 @@ describe('health providers: consent at revision 2', () => {
     const rows = [{ source: 'apple', purpose: 'storage_compute' }, { source: 'whoop', purpose: 'storage_compute' }, { source: 'google_health', purpose: 'storage_compute' }];
     expect(healthConsentListAtRevisionV1(rows, HEALTH_GOOGLE_HEALTH_REVISION_V1 - 1)).toEqual([rows[0], rows[1]]);
     expect(healthConsentListAtRevisionV1(rows, HEALTH_GOOGLE_HEALTH_REVISION_V1)).toEqual(rows);
-    expect(HEALTH_GOOGLE_HEALTH_REVISION_V1).toBeGreaterThan(HEALTH_NUTRITION_REVISION_V1);
+    expect(HEALTH_GOOGLE_HEALTH_REVISION_V1).toBe(8);
   });
 
   it('names Google Health as the second cloud provider, under that name and no other', () => {
