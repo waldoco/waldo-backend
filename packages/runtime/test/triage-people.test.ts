@@ -39,10 +39,24 @@ describe('the triage context the owner object builds', () => {
     const w = world(state);
     const saved = await w.data('remember', { kind: 'fact', text: 'Priya is the owner\'s sister', evidence_quote: 'My sister Priya', people: [{ name: 'Priya', role: 'subject', relation: 'sister' }] }, w.ctx('My sister Priya')) as { id: number };
     w.store.people.link(saved.id, [{ name: 'Priya', role: 'subject', addresses: ['priya@family.example'] }], '2026-11-07T09:00:00Z');
+    // Dana is known only from a mail, so an outside turn may not see her.
+    w.store.add({ kind: 'fact', text: 'Dana sends the weekly invoices', source: 'inferred', evidence: 'mail', origin: 'untrusted', source_ref: 'mail:1' }, '2026-11-07T08:00:00Z');
+    w.store.people.link(2, [{ name: 'Dana', role: 'subject', addresses: ['dana@vendor.example'] }], '2026-11-07T08:00:00Z');
+    w.store.people.heardFrom('dana@vendor.example', '2026-11-08T08:00:00Z');
     const people = async (peopleMap: boolean) => (await build(w, peopleMap) as { people?: string; shaping: string });
     expect((await people(true)).people).toMatch(/Priya/);
+    expect((await people(true)).people).not.toMatch(/Dana/);
     expect((await people(true)).shaping).toBe('shape the day');
     expect((await people(false)).people).toBeUndefined();
+  }));
+  it('while a forget settles, neither the conversation nor the people join', () => runInDurableObject(stub('triage-owner-context-settling'), async (_instance, state) => {
+    const w = world(state);
+    const saved = await w.data('remember', { kind: 'fact', text: 'Priya is the owner\'s sister', evidence_quote: 'My sister Priya', people: [{ name: 'Priya', role: 'subject', relation: 'sister' }] }, w.ctx('My sister Priya')) as { id: number };
+    w.store.people.link(saved.id, [{ name: 'Priya', role: 'subject', addresses: ['priya@family.example'] }], '2026-11-07T09:00:00Z');
+    const settling = { ...w.store, claims: w.store.claims.bind(w.store), people: w.store.people, pendingTopics: () => ['priya'] };
+    const context = await triageOwnerContext({ claims: settling as never, peopleMap: true, shaping: async () => '', exchange: () => 'Owner: hi', signals }, [mail]) as { people?: string; exchange?: string };
+    expect(context.people).toBeUndefined();
+    expect(context.exchange).toBeUndefined();
   }));
   it('without TRIAGE_CARES it gives the goals and the day shaping alone', () => runInDurableObject(stub('triage-owner-context-off'), async (_instance, state) => {
     const context = await build(world(state), true, false);
