@@ -77,12 +77,12 @@ describe('the default under PROACTIVE_BOTH_DEFAULT', () => {
 
 describe('which messages are Waldo\'s own initiative', () => {
   const record = (extra: Partial<FinalRecord>): FinalRecord => ({ id: 'r1', trace: 't', payload: { chat_id: 1, text: 'x' }, digest: 'd', ownerSubject: '1', doName: 'n', status: 'pending', dueAt: 0, createdAt: 0, attempts: 0, ...extra });
-  it('is a day card, an update, meeting prep, a pause notice, a mail follow-up, a health note or a copy of an app message', () => {
-    for (const kind of [{ dayCard: { day: '2026-11-05', card: 'card:brief', foldUpTo: 0 } }, { update: { recordId: 1 } }, { calendarPrep: {} }, { scheduleNotice: { scheduleId: 's', until: 0 } }, { mailFollowup: {} }, { healthNotice: { day: '2026-11-05' } }, { id: `${WHATSAPP_COPY_PREFIX}app-1` }])
+  it('is a day card, an update, meeting prep, a pause notice, a mail follow-up, a health note, a check-back or a copy of an app message', () => {
+    for (const kind of [{ dayCard: { day: '2026-11-05', card: 'card:brief', foldUpTo: 0 } }, { update: { recordId: 1 } }, { calendarPrep: {} }, { scheduleNotice: { scheduleId: 's', until: 0 } }, { mailFollowup: {} }, { healthNotice: { day: '2026-11-05' } }, { heartbeat: {} }, { id: `${WHATSAPP_COPY_PREFIX}app-1` }])
       expect(unaskedRecord(record(kind as Partial<FinalRecord>))).toBe(true);
   });
-  it('is not a reminder, a standing order\'s report or a check-back the owner set up, nor a reply', () => {
-    for (const kind of [{ reminder: { id: 'r', occurrence: 1, runId: 'x', schedulerRunId: null, once: true } }, { standingOrder: { runId: 'x', gate: 'act_and_report' } }, { heartbeat: {} }, {}])
+  it('is not a reminder or a standing order\'s report the owner set up, nor a reply', () => {
+    for (const kind of [{ reminder: { id: 'r', occurrence: 1, runId: 'x', schedulerRunId: null, once: true } }, { standingOrder: { runId: 'x', gate: 'act_and_report' } }, {}])
       expect(unaskedRecord(record(kind as Partial<FinalRecord>))).toBe(false);
   });
   it('news of a new capability is Waldo\'s own initiative: it knocks with the proactive template, never the reply one, and moves with the proactive work', () => {

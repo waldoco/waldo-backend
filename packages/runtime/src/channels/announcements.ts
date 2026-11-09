@@ -140,8 +140,21 @@ export const announcementCardSection = (rows: readonly Pick<Row, 'id' | 'title' 
 // For "what's new?": the ledger names what the team shipped for this owner in the last 30 days, so Waldo answers from what is
 // live for them and never from plans. Nothing at all when nothing is that recent.
 export const WHATS_NEW_WINDOW_MS = 30 * 24 * 60 * 60_000;
-export const whatsNewSection = (rows: readonly Pick<Row, 'id' | 'title' | 'shipped' | 'why'>[]): string => rows.length === 0 ? ''
-  : `What's new: capabilities the Waldo team shipped recently that are live for this owner, for when they ask what's new.${fenced('product copy from the Waldo team', copyOf(rows))}`;
+// Every owner turn carries this, so it is bounded: newest first with what shipped while that fits, then titles alone, then a
+// count of the rest. Why each matters is left to the card and the message, which are told once.
+export const WHATS_NEW_CHARS = 1_200;
+export const whatsNewSection = (rows: readonly Pick<Row, 'id' | 'title' | 'shipped'>[], capChars = WHATS_NEW_CHARS): string => {
+  if (rows.length === 0) return '';
+  const shown: Array<Readonly<{ id: string; title: string; what_shipped?: string }>> = [];
+  for (const { id, title, shipped } of rows) {
+    const fits = (item: (typeof shown)[number]) => JSON.stringify([...shown, item]).length <= capChars;
+    const item = [{ id, title, what_shipped: shipped }, { id, title }].find(fits);
+    if (!item) break;
+    shown.push(item);
+  }
+  const hidden = rows.length - shown.length;
+  return `What's new: capabilities the Waldo team shipped recently that are live for this owner, for when they ask what's new.${fenced('product copy from the Waldo team', JSON.stringify(shown))}${hidden ? `\n${hidden} more shipped in the last 30 days; they are not listed here.` : ''}`;
+};
 
 // What a pass did, as bounded codes for traces: never a word of the copy or the message.
 export type AnnouncementPassCode = 'checked' | 'fetch_failed' | 'nothing_new' | 'dry_run' | 'decided' | 'invalid_decision' | `held_${InterruptHold}`;

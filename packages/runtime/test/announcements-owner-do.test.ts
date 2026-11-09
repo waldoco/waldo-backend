@@ -104,7 +104,7 @@ describe('what\'s new in the owner object', () => {
       await dueBrief(state);
       await first.alarm();
       expect(model.requests).toHaveLength(2);
-      expect(model.requests[1]).toContain('new capabilities the owner has not heard about yet');
+      expect(model.requests[1]).toContain(FAMILY.why);
       expect(await appChat(first, 'announce-golden')).toContain(CARD_TEXT);
       expect(stateOf(state)).toEqual({ family: 'folded' });
       expect(wire.reports).toEqual(['family:folded']);
@@ -208,6 +208,70 @@ describe('what\'s new in the owner object', () => {
     });
   });
 
+  // Each of the owner's own limits holds a message the model chose: quiet hours, follow-ups off, volume low. It waits for the card.
+  for (const [why, settings] of [
+    ['quiet hours', () => ({ quiet_start: localIso(Date.now() - 3_600_000, 'UTC').slice(11, 16), quiet_end: localIso(Date.now() + 3_600_000, 'UTC').slice(11, 16), volume: 'normal' })],
+    ['follow-ups off', () => ({ quiet_start: null, quiet_end: null, volume: 'normal', followups: false })],
+    ['volume low', () => ({ quiet_start: null, quiet_end: null, volume: 'low' })],
+  ] as const) it(`${why} hold a message the model chose: nothing goes, no interruption is spent, the card carries it`, async () => {
+    model.decision = '{"items":[{"id":"family","decision":"say"}],"say":"Now!"}';
+    await withOwner(`announce-hold-${why.replace(/ /g, '-')}`, async (owner, state) => {
+      const runtime = owner({ gate: true });
+      await runtime.setup('app').ready;
+      dayPlanBook(state.storage.sql).save(localIso(Date.now(), 'UTC').slice(0, 10), { card: 'card:brief', time: '00:00', reason: 'planned' });
+      state.storage.sql.exec('INSERT INTO proactivity (id, settings) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET settings = excluded.settings', JSON.stringify(settings()));
+      await runtime.setup('app').announcementPass();
+      await new Promise(resolve => setTimeout(resolve, 400));
+      await runtime.alarm();
+      expect(stateOf(state)).toEqual({ family: 'card' });
+      expect(await appChat(runtime, `announce-hold-${why.replace(/ /g, '-')}`)).not.toContain('Now!');
+      expect(state.storage.kv.get<{ count: number }>('proactive_interrupts_v1')?.count ?? 0).toBe(0);
+    });
+  });
+
+  it('follow-ups turned off after a message was queued: it does not go and waits for the card again', async () => {
+    model.decision = '{"items":[{"id":"family","decision":"say"}],"say":"Now I can plan with your family\'s Waldo."}';
+    await withOwner('announce-send-time-consent', async (owner, state) => {
+      const runtime = owner({ gate: true });
+      await runtime.setup('app').ready;
+      dayPlanBook(state.storage.sql).save(localIso(Date.now(), 'UTC').slice(0, 10), { card: 'card:brief', time: '00:00', reason: 'planned' });
+      await runtime.setup('app').announcementPass();
+      expect(stateOf(state)).toEqual({ family: 'messaged' });
+      state.storage.sql.exec('INSERT INTO proactivity (id, settings) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET settings = excluded.settings',
+        JSON.stringify({ quiet_start: null, quiet_end: null, volume: 'normal', followups: false }));
+      await new Promise(resolve => setTimeout(resolve, 400));
+      await runtime.alarm();
+      expect(await appChat(runtime, 'announce-send-time-consent')).not.toContain('Now I can plan with your family\'s Waldo.');
+      expect([stateOf(state), wire.reports]).toEqual([{ family: 'card' }, []]);
+    });
+  });
+
+  it('quiet hours starting after a message was queued: it waits for them to end rather than going or being dropped', async () => {
+    model.decision = '{"items":[{"id":"family","decision":"say"}],"say":"Now I can plan with your family\'s Waldo."}';
+    await withOwner('announce-send-time-quiet', async (owner, state) => {
+      const runtime = owner({ gate: true });
+      await runtime.setup('app').ready;
+      dayPlanBook(state.storage.sql).save(localIso(Date.now(), 'UTC').slice(0, 10), { card: 'card:brief', time: '00:00', reason: 'planned' });
+      await runtime.setup('app').announcementPass();
+      state.storage.sql.exec('INSERT INTO proactivity (id, settings) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET settings = excluded.settings',
+        JSON.stringify({ quiet_start: localIso(Date.now() - 3_600_000, 'UTC').slice(11, 16), quiet_end: localIso(Date.now() + 3_600_000, 'UTC').slice(11, 16), volume: 'normal' }));
+      await new Promise(resolve => setTimeout(resolve, 400));
+      await runtime.alarm();
+      expect(await appChat(runtime, 'announce-send-time-quiet')).not.toContain('Now I can plan with your family\'s Waldo.');
+      expect([stateOf(state), wire.reports]).toEqual([{ family: 'messaged' }, []]);
+    });
+  });
+
+  it('two surfaces, told once: a pass from a second surface finds the decision already made and asks nothing', async () => {
+    await withOwner('announce-two-surfaces', async (owner, state) => {
+      const runtime = owner();
+      await runtime.setup('app').announcementPass();
+      state.storage.kv.delete(ANNOUNCEMENTS_CHECKED_KEY);
+      await runtime.setup('telegram').announcementPass();
+      expect([model.decisions, stateOf(state)]).toEqual([1, { family: 'card' }]);
+    });
+  });
+
   it('turning feature news off after the decision keeps it out of the next card, and it stays waiting', async () => {
     await withOwner('announce-late-opt-out', async (owner, state) => {
       const runtime = owner();
@@ -218,7 +282,6 @@ describe('what\'s new in the owner object', () => {
       await dueBrief(state);
       await runtime.alarm();
       expect(await appChat(runtime, 'announce-late-opt-out')).toContain(CARD_TEXT);
-      expect(model.requests.at(-1)).not.toContain('not heard about yet');
       expect([stateOf(state), wire.reports]).toEqual([{ family: 'card' }, []]);
     });
   });
@@ -240,7 +303,7 @@ describe('what\'s new in the owner object', () => {
       expect(stateOf(state)).toEqual({ family: 'card' });
       await dueBrief(state);
       await off.alarm();
-      expect(model.requests.at(-1)).not.toContain('not heard about yet');
+      expect([stateOf(state), wire.reports]).toEqual([{ family: 'card' }, []]);
     });
   });
 
