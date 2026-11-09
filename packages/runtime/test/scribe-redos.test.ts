@@ -145,6 +145,13 @@ describe('the patterns sanitise() runs stay linear on the near-miss and whitespa
     expectLinear('redactNumericHealth', 100_000, n => redactNumericHealth(`${word}${' '.repeat(n)}`, '[health]'));
   });
 
+  // A bare value is read only when no clock time or second number follows it, so the check after it reads the blanks that
+  // follow: once, not once for every way of splitting them.
+  it.each(['hrv 42', 'hr 61', 'resting hr 61', 'heart rate 61', 'spo2 97', 'blood pressure 120', 'weight: 72', '37.5', 'hrr 42', 'hr recovery 42', '0.3°'])('numericHealthIn and redactNumericHealth read %s, a run of blanks, then a letter', word => {
+    expectLinear('numericHealthIn', 100_000, n => numericHealthIn(`${word}${' '.repeat(n)}x`));
+    expectLinear('redactNumericHealth', 100_000, n => redactNumericHealth(`${word}${' '.repeat(n)}x`, '[health]'));
+  });
+
   it.each([['an arrow chain', (n: number) => `hrv 1${' → 1'.repeat(n / 4)}`], ['table cells', (n: number) => `| hrv | 1${' | 1'.repeat(n / 4)} |`], ['arrows with no value', (n: number) => `hrv ${'→ '.repeat(n / 2)}`]] as const)('a reading followed by %s stays linear', (_shape, make) => {
     expectLinear('numericHealthIn', 100_000, n => numericHealthIn(make(n)));
     expectLinear('redactNumericHealth', 100_000, n => redactNumericHealth(make(n), '[health]'));
