@@ -79,7 +79,8 @@ export const approveShownHandler = (desk: Pick<ApprovalDesk, 'approveShown'>) =>
   async handle(args: ApproveShownArgs, ctx?: ToolDispatcherContext) {
     // The host sets ownerMessage only on a turn started by the owner's own message with no one else's words; the tool loop
     // marks the turn the moment a result brings outside text in.
-    if (!ctx?.ownerMessage || ctx.runOrigin !== 'owner' || ctx.trigger !== 'user_message') return { ok: false as const, error: NOT_THEIR_WORDS, code: 'forbidden' as const };
+    // A message carrying a transcript of a file the owner sent, or a media note, may be someone else saying yes.
+    if (!ctx?.ownerMessage?.ownWordsOnly || ctx.runOrigin !== 'owner' || ctx.trigger !== 'user_message') return { ok: false as const, error: NOT_THEIR_WORDS, code: 'forbidden' as const };
     if (turnReadOutside(ctx)) return { ok: false as const, error: READ_OUTSIDE, code: 'forbidden' as const };
     const result = await desk.approveShown(args.approval_id, ctx.ownerMessage, ctx.turnId ?? args.approval_id);
     if (result.outcome === 'app_only' && result.link) return { ok: false as const, error: `${NOT_APPROVED.app_only} Point them to the card's own button, or to it in the Waldo app: ${result.link}`, code: 'rejected' as const };

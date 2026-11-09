@@ -276,10 +276,12 @@ export const ASKED_UNDO = 'The owner can undo it: if they ask, call raise_approv
 export const askedStatus = (outcome: Readonly<{ message: string; undo: boolean }>): string => `${outcome.message}${outcome.undo ? ` ${ASKED_UNDO}` : ''}`;
 // Whether the owner asked for a call in their own words: the turn was started by the owner's own message alone (the host sets
 // ownerMessage only then, never for quotes or forwards), every part of it is their own words (a transcript of a file they sent
-// may be someone else speaking, and a media note describes what someone else made), and the turn has read nothing from outside. Whether a call is what the owner
+// may be someone else speaking, and a media note describes what someone else made), the turn has read nothing from outside, and
+// nothing it carries from before (the conversation the model reads, recalled notes and messages) may be someone else's words:
+// an email read last turn can't steer an "ok, handle it" now into a send with no card. Whether a call is what the owner
 // asked for is the model's judgment; what code holds to is that nothing an email, page or tool answer said can reach here.
-export const ownerAsked = (ctx: Readonly<{ ownerMessage?: Readonly<{ ownWordsOnly?: boolean }>; runOrigin?: unknown; toolArgSourceTaint?: unknown }> | undefined): boolean =>
-  ctx?.ownerMessage?.ownWordsOnly === true && ctx.runOrigin === 'owner' && !turnReadOutside(ctx);
+export const ownerAsked = (ctx: Readonly<{ ownerMessage?: Readonly<{ ownWordsOnly?: boolean }>; runOrigin?: unknown; toolArgSourceTaint?: unknown; carriedOutside?: boolean }> | undefined): boolean =>
+  ctx?.ownerMessage?.ownWordsOnly === true && ctx.runOrigin === 'owner' && !turnReadOutside(ctx) && ctx.carriedOutside !== true;
 // The steps the host kept for the proposing call itself, never another call's.
 export const callWhy = (ctx: Readonly<{ whySteps?: readonly TrailStep[] }> | undefined): readonly TrailStep[] | undefined => ctx?.whySteps;
 // A card Waldo closes in a turn that read outside text gets these fixed words, never a reason the model wrote there.

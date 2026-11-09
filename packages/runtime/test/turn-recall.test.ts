@@ -25,6 +25,19 @@ const nothingHeld = () => false;
 const recordingSearch = (calls: string[], caller: string) => ({ name: 'search_episodes', description: 'search', schema: { parse: (value: unknown) => value }, trigger_allowlist: [], autonomy_gated: false, handle: async () => { calls.push(caller); return { ok: true, data: { hits: [] } }; } }) as never;
 const lines = (text: string) => text.split('\n').filter((line) => line.startsWith('- ['));
 
+describe('recall marks a line that may carry someone else\'s words', () => {
+  it('a note saved from outside content marks the recall; the owner\'s own notes do not', async () => {
+    await withMemory(async (store) => {
+      owned(store, 'Locker is near the pool', 'tg-1');
+      const own = await recallForTurn({ claims: store, question: 'where is my locker near the pool', room: RECALL_MAX_CHARS, holds: nothingHeld });
+      expect(own.text).toContain('Locker is near the pool');
+      expect(own.outside).toBeUndefined();
+      store.add({ kind: 'fact', text: 'Locker code changes at the pool desk', source: 'inferred', evidence: 'read in a mail', origin: 'agent', source_ref: 'mail-1' }, AT);
+      expect((await recallForTurn({ claims: store, question: 'where is my locker near the pool', room: RECALL_MAX_CHARS, holds: nothingHeld })).outside).toBe(true);
+    });
+  });
+});
+
 describe('recall terms', () => {
   it('come from the current text, and the previous owner message joins only when the current text has fewer than three', () => {
     expect(recallTerms('I am at the gym. What was my locker number again?')).toEqual(['i', 'am', 'at', 'the', 'gym', 'what', 'was', 'my', 'locker', 'number', 'again']);

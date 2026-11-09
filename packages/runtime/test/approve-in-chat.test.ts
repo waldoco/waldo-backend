@@ -308,7 +308,7 @@ const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 const context = (over: Partial<ToolDispatcherContext> = {}): ToolDispatcherContext => ({
   authenticatedUserId: 'owner-1', trigger: 'user_message', canaryTokens: CANARIES, sourceTaint: null, toolArgSourceTaint: null,
   sanitise, hasApproval: () => true, turnId: 'turn-1', toolCallId: 'call-1', egressAllowlist: ['example.com'], runOrigin: 'owner',
-  ownerMessage: said(), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }),
+  ownerMessage: { ...said(), ownWordsOnly: true }, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }),
   ...over,
 });
 // A desk that records every approval it is asked for, so a test sees whether the handler's guard let the call through.
@@ -322,7 +322,15 @@ describe('only the owner\'s own message, in a turn that read no outside text, re
   it('the owner\'s untainted turn reaches the desk with the host\'s message ref, never one from the arguments', async () => {
     const { desk, asked } = recordingDesk();
     expect(await approveShownHandler(desk).handle({ approval_id: 'pwhatsapp1' }, context())).toMatchObject({ ok: true });
-    expect(asked).toEqual([['pwhatsapp1', said(), 'turn-1']]);
+    expect(asked).toEqual([['pwhatsapp1', { ...said(), ownWordsOnly: true }, 'turn-1']]);
+  });
+
+  it('a message carrying a file transcript or a media note cannot approve, whatever its transcript says', async () => {
+    for (const ownerMessage of [{ ...said(), ownWordsOnly: false }, said()]) {
+      const { desk, asked } = recordingDesk();
+      expect(await approveShownHandler(desk).handle({ approval_id: 'pwhatsapp1' }, context({ ownerMessage }))).toMatchObject({ ok: false, code: 'forbidden' });
+      expect(asked).toEqual([]);
+    }
   });
 
   it('a machine turn, or one with no owner message, cannot approve', async () => {
