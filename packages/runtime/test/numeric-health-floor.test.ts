@@ -32,6 +32,13 @@ describe('the numeric health floor', () => {
     'Today: 15 kg bag to the airport',
     'Mon: 3 calls, Tue: 2 calls',
     'Yesterday: 2 hours on the train',
+    'Today: 500 ms latency',
+    'Sat: 60 ms ping',
+    'Mon: 10 kg flour order',
+    'Today: 5 kg laundry',
+    'Sun: 100 kcal per bar',
+    'Fat: 10 g butter',
+    'Carbs: 30 g sugar',
   ])('lets a label that is not the owner\'s reading through: %s', (text) => {
     expect(numericHealthIn(text)).toBe(false);
   });
