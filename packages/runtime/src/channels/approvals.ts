@@ -2006,8 +2006,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const runAsked = async (id: string, asked: boolean | undefined): Promise<boolean> => {
     const entry = row(id);
     if (!asked || !autonomous() || !entry || !ASKED_RUN_KINDS.includes(entry.kind)) return false;
-    const p = JSON.parse(entry.payload_json) as { action?: string };
-    if (entry.kind === 'calendar_change' && p.action === 'cancel' && !deps.undoCancels) return false;
+    const p = JSON.parse(entry.payload_json) as Stored;
+    // A cancel runs unasked only where it can be put back and nobody else hears of it: an event read before the change, with no
+    // guests, whom a cancel emails at once and no undo reaches.
+    if (entry.kind === 'calendar_change' && p.action === 'cancel' && (!deps.undoCancels || !p.seen_etag || (p.seen_guests ?? 0) > 0)) return false;
     if (earlierUnknown(entry)) return false;
     const digest = `sha256:${await sha256Hex(entry.payload_json)}`;
     // The card this revises closes in the commit that opens the run, as present() closes it when the new card is shown, so the

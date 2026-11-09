@@ -28,6 +28,15 @@ const episodeOf = ({ speaker, ...row }: StoredEpisode): Episode => speaker === O
 // ref is the index row's own id: unique per stored row, so a snippet traces to exactly its row
 // even if the same entry_id was indexed twice (entry_id is informational, not unique).
 // surface and links are set only with the recall chain on (history/recall-chain.ts).
+// Whether a past message may carry someone else's words, judged as the chat chain judges its rows: a Waldo reply only when
+// its turn read outside content; anything else unless it is the owner's own words, typed by them and not answering outside
+// content (a whole message with its quotes or media notes, a quote and a machine note all may).
+export const carriesOthersWords = (index: Pick<EpisodeIndex, 'readOutside'>, episode: Pick<Episode, 'entry_id' | 'speaker' | 'own' | 'answersOutside'>): boolean =>
+  episode.speaker === 'waldo' ? index.readOutside(episode.entry_id) : !(episode.speaker === 'owner' && episode.own === true && episode.answersOutside !== true);
+// Whether a hit's links may: a link to a message by that message's row (unreadable counts), a note learned from the hit's
+// own turn as the hit does, and a run, task or card summary always, since nothing records where its words came from.
+export const linksCarryOthersWords = (links: readonly RecallLink[] | undefined, hitCarries: boolean, rowCarries: (ref: string) => boolean): boolean =>
+  (links ?? []).some((link) => /^[1-9][0-9]*$/.test(link.ref) ? rowCarries(link.ref) : link.rel === 'learned' ? hitCarries : true);
 export type EpisodeHit = Readonly<{ ref: string; entry_id: string; speaker: Speaker; at: string | null; snippet: string; surface?: string | null; links?: readonly RecallLink[] }>;
 
 export type EpisodeIndex = Readonly<{

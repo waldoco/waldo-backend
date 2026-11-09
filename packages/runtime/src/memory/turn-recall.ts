@@ -1,6 +1,6 @@
 import type { ConversationEntry, ToolHandler } from '@waldo/contracts';
 import { claimTag, fence, type Claim, type ClaimStore } from './claims';
-import { ftsTerms, speakerOfEntry, type EpisodeHit } from '../channels/episodes';
+import { ftsTerms, linksCarryOthersWords, speakerOfEntry, type EpisodeHit } from '../channels/episodes';
 import { cutLine as cutLinkLine } from '../history/recall-chain';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 
@@ -18,7 +18,8 @@ const RECALL_EPISODES = 8;
 // A follow-up as short as "and that?" has too few words to match on, so the previous owner message's words join it.
 const RECALL_MIN_TERMS = 3;
 
-export type RecalledEpisode = Readonly<{ entry_id: string; speaker: string; text: string }>;
+// othersWords: whether the row may carry someone else's words (channels/episodes.ts carriesOthersWords); unknown counts as yes.
+export type RecalledEpisode = Readonly<{ entry_id: string; speaker: string; text: string; othersWords?: boolean }>;
 export type RecallEpisodes = Readonly<{
   search(query: string, limit: number): Promise<readonly EpisodeHit[]>;
   get(ref: string): Promise<RecalledEpisode | null>;
@@ -158,6 +159,7 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
   const sources = new Set(recalled.map(sourceEntry));
   let episodesFailed = false;
   let hits: readonly EpisodeHit[] = [];
+  const outsideRefs = new Set<string>();
   if (episodes) {
     try {
       // Machine-written rows (reminder and job prompts) are instructions to Waldo from another moment, not something said.
@@ -165,6 +167,18 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
       const rows = await Promise.all(found.map(async (hit) => {
         try { return await episodes.get(hit.ref); } catch { episodesFailed = true; return null; }
       }));
+      // A line may carry someone else's words through its row or through a link its longer form shows.
+      const carries = new Map(found.map((hit, index) => [hit.ref, rows[index]?.othersWords !== false] as const));
+      const linkedRows = [...new Set(found.flatMap((hit) => (hit.links ?? []).map((link) => link.ref)))].filter((ref) => /^[1-9][0-9]*$/.test(ref) && !carries.has(ref));
+      await Promise.all(linkedRows.map(async (ref) => {
+        let row: RecalledEpisode | null = null;
+        try { row = await episodes.get(ref); } catch { /* an unreadable row counts as carrying */ }
+        carries.set(ref, row?.othersWords !== false);
+      }));
+      for (const hit of found) {
+        const hitCarries = carries.get(hit.ref) !== false;
+        if (hitCarries || linksCarryOthersWords(hit.links, hitCarries, (ref) => carries.get(ref) !== false)) outsideRefs.add(hit.ref);
+      }
       // A link is judged by its own line, which the chain built from a row it already checked; one that holds is dropped alone.
       hits = found.filter((hit, index) => { const row = rows[index]; return row !== null && row !== undefined && !holds(row.text, row.entry_id, row.speaker, hit.snippet); })
         .map((hit, _index, kept) => {
@@ -179,10 +193,11 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
   if (episodesFailed) failed.push('episodes');
   // Each line with the stub that may stand in for it; a stub-only line is a match past the full lines. upgrades are a hit's
   // longer lines, longest first, which only take the room left once every line is placed, so they never cost a match its place.
-  const fromOutside = (claim: Readonly<{ origin?: string | null }>) => claim.origin === 'agent';
+  // Only a note the grounding gate stamped as the owner's is theirs; an agent or unrecorded origin may quote someone else.
+  const fromOutside = (claim: Readonly<{ origin?: string | null }>) => claim.origin !== 'owner';
   const lines: readonly Readonly<{ full?: string; stub?: string; upgrades?: readonly string[]; claim?: number; outside: boolean }>[] = [
     ...recalled.slice(0, RECALL_CLAIMS).map((claim) => ({ full: claimLine(claim), claim: claim.id, outside: fromOutside(claim), ...(stubs ? { stub: stubLine(claim) } : {}) })),
-    ...hits.map((hit) => ({ full: plainLine(hit), upgrades: upgradesOf(hit), outside: hit.speaker !== 'owner' })),
+    ...hits.map((hit) => ({ full: plainLine(hit), upgrades: upgradesOf(hit), outside: outsideRefs.has(hit.ref) })),
     ...past.map((claim) => ({ full: replacedLine(claim), outside: fromOutside(claim) })),
     ...recalled.slice(RECALL_CLAIMS).map((claim) => ({ stub: stubLine(claim), outside: fromOutside(claim) })),
   ];
