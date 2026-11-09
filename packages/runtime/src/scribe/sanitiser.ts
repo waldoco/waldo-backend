@@ -106,7 +106,7 @@ export const HEALTH_FREE_TEXT_NUMERIC: readonly RegExp[] = [
   // A wrist temperature is a deviation from the owner's baseline: a signed number, a decimal or a number with a degree sign, after
   // the few words a reading puts between ("wrist temp up 0.4°C"), so "wrist temperature feature in iOS 17" is not one. A whole
   // number with no unit counts only in the range a wrist reads in Celsius or Fahrenheit, and not as a count of days or times.
-  /\bwrist[\s_-]*temp(?:erature)?\b(?:\s+(?:deviation|delta|change|is|was|of|at|about|around|up|down|by|rose|fell|dropped|climbed|to|from|reads?|reading)\b)*\s*(?:[:=,]\s*)?["']?(?:[+\-−]\s?\d+(?:\.\d+)?|\d+\.\d+|\d+(?=\s*(?:°|degrees?\b|[cf]\b|celsius|fahrenheit))|(?:3\d|4[0-2]|8[6-9]|9\d|10[0-8])\b(?!\s*(?:hours?|hrs?|days?|nights?|weeks?|months?|times)\b))/i,
+  /\bwrist[\s_-]*temp(?:erature)?\b(?:\s+(?:deviation|delta|change|is|was|of|at|about|around|up|down|by|rose|fell|dropped|climbed|to|from|reads?|reading)\b)*\s*(?:[:=,]\s*)?["']?(?:[+\-−]\s?\d+(?:\.\d+)?|\d+\.\d+|\d+(?=\s*(?:°|degrees?\b|[cf]\b|celsius|fahrenheit))|(?:3\d|4[0-2]|8[6-9]|9\d|10[0-8])\b(?!\s*(?:hours?|hrs?|minutes?|mins?|seconds?|secs?|days?|nights?|weeks?|months?|times|percent)\b))/i,
   // Hours and minutes glued with no minute unit ("sleep 7h22"), right after the sleep word: with a word between it is as
   // often a clock time ("sleep at 10h30").
   /\b(?:sleep|slept|rem[\s_-]*sleep|deep[\s_-]*sleep|time[\s_-]*asleep)\b\s*(?:[:=,]\s*)?(?:~\s*)?\d{1,2}h[0-5]\d\b/i,

@@ -425,7 +425,7 @@ describe('a wrist temperature given as a whole number, with no unit', () => {
     expect(numericHealthIn(text)).toBe(true);
     expect(redactNumericHealth(text, '[H]')).not.toMatch(/\d/);
   });
-  it.each(['temp job 36 hours', 'wrist temp 3 times a day', 'wrist temp 90 days of data', 'wrist temperature feature in iOS 17'])('lets %s through', (text) => {
+  it.each(['temp job 36 hours', 'wrist temp 3 times a day', 'wrist temp 90 days of data', 'wrist temperature feature in iOS 17', 'wrist temp 40 minutes', 'wrist temp 90 seconds', 'wrist temp 100 percent accurate'])('lets %s through', (text) => {
     for (const destination of ['send_message', 'internal_context', 'memory_block'] as const) expect(passedUnchanged(text, destination), destination).toBe(true);
   });
 });
