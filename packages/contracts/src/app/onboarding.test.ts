@@ -5,7 +5,7 @@ import {
   appFindingV1Schema, appOnboardingActionV1Schema, appOnboardingErrorV1Schema, appOnboardingResultV1Schema, appOnboardingRoutesV1,
   appOnboardingV1Schema, appConsentPurposeV1Schema, appChannelLinkCodeV1Schema, appChannelLinkRequestV1Schema, appOnboardingChannelsV1Schema,
   appSetupAnswersRequestV1Schema, appSetupAnswersResultV1Schema, appSetupAnswersFitRevision, appSetupAnswersResultAtRevision, appSetupSpotV1Schema,
-  APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1, APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1, APP_ONBOARDING_CONSENT_VERSION_REVISION_V1, appConsentListAtRevision,
+  APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1, APP_ONBOARDING_SETUP_TRAINING_REVISION_V1, APP_SETUP_TRAINING_SPOTS_V1, APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1, APP_ONBOARDING_CONSENT_VERSION_REVISION_V1, appConsentListAtRevision,
 } from './onboarding';
 import { appJsonWireBytes } from './core';
 import { healthPurposeV1Schema, healthSourceV1Schema } from './health-ingest';
@@ -254,11 +254,12 @@ describe('setup answers, onboarding revision 2', () => {
     // bytes each, more than any script takes.
     const words = '\u0001'.repeat(280), longest = {
       request_id: 'x'.repeat(80), name: `a${'\u0001'.repeat(79)}`, day: { shape: 'varies', own_words: words }, slips: { picked: ['replies', 'overlaps', 'promises', 'breaks', 'evenings'], own_words: words },
-      wearable: 'garmin', matters: { picked: ['sleep', 'energy', 'stress', 'schedule', 'mail', 'promises'], own_words: words }, spots: appSetupSpotV1Schema.options,
+      wearable: 'garmin', matters: { picked: ['sleep', 'energy', 'stress', 'schedule', 'mail', 'promises'], own_words: words }, spots: appSetupSpotV1Schema.options.filter(spot => !spot.startsWith('training-')),
       protect: { picked: ['workouts', 'family', 'meals', 'mornings', 'focus'], own_words: words }, rope: 'suggest', season: { choice: 'none', own_words: words },
       low: { picked: ['focus', 'patience', 'sleep', 'push', 'cancel'], own_words: words },
     };
     accepted(appSetupAnswersRequestV1Schema, [longest]);
+    expect(appSetupAnswersFitRevision(appSetupAnswersRequestV1Schema.parse(longest), 2)).toBe(true);
     expect(appJsonWireBytes(longest)).toBeLessThanOrEqual(APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1);
     expect(appOnboardingRoutesV1.find(route => route.path === '/app/v1/onboarding/answers')?.max_request_bytes).toBe(APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1);
   });
@@ -273,6 +274,77 @@ describe('setup answers, onboarding revision 2', () => {
     for (const revision of [2, 3]) expect(appSetupAnswersResultAtRevision(result, revision)).toBe(result);
     // An answer recorded before the revision replays as it was, whichever revision reads it.
     expect(appSetupAnswersResultAtRevision(first, 2)).toBe(first);
+  });
+});
+
+describe('setup answers, onboarding revision 3', () => {
+  // The owner's training: as a matter, where it is hardest, and when they usually train.
+  const training = {
+    request_id: 'setup-answers-03',
+    matters: { picked: ['training', 'sleep'], own_words: '' },
+    spots: ['training-fitting', 'training-recovery', 'sleep-onset'],
+    train: { picked: ['early', 'weekend'], own_words: 'Club runs on Sundays' },
+  };
+  const REVISIONS_BELOW = [1, 2], REVISIONS_AT = [3, 4];
+  it('is the one onboarding revision that also lists the consent copy versions', () => {
+    expect([APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1, APP_ONBOARDING_SETUP_TRAINING_REVISION_V1, APP_ONBOARDING_CONSENT_VERSION_REVISION_V1]).toEqual([2, 3, 3]);
+  });
+  it('takes training as a matter, its spots and when they train, each set, cleared with null or an empty choice', () => {
+    accepted(appSetupAnswersRequestV1Schema, [
+      training, { request_id: 'setup-answers-03', train: null }, { request_id: 'setup-answers-03', train: { picked: [], own_words: '' } },
+      { ...training, train: { picked: ['early', 'lunch', 'evening', 'weekend', 'gap'], own_words: 'x'.repeat(280) } }, { ...training, train: { picked: [], own_words: 'Depends on the week' } },
+      { ...training, spots: APP_SETUP_TRAINING_SPOTS_V1 }, { ...training, spots: appSetupSpotV1Schema.options },
+    ]);
+    rejected(appSetupAnswersRequestV1Schema, [
+      { ...training, train: ['early'] }, { ...training, train: { picked: ['early'] } }, { ...training, train: { picked: ['early', 'early'], own_words: '' } },
+      { ...training, train: { picked: ['night'], own_words: '' } }, { ...training, train: { picked: ['gap'], own_words: 'x'.repeat(281) } }, { ...training, train: 'early' },
+      { ...training, spots: ['training-rest'] }, { ...training, matters: { picked: ['train'], own_words: '' } },
+    ]);
+  });
+  it('lets only a build that declares revision 3 name training: the matter, its spots, or when they train', () => {
+    const without = { request_id: 'setup-answers-03', matters: { picked: ['sleep'], own_words: '' }, spots: ['sleep-onset'], low: { picked: ['sleep'], own_words: '' } };
+    for (const revision of [2, 3, 4]) expect(appSetupAnswersFitRevision(appSetupAnswersRequestV1Schema.parse(without), revision)).toBe(true);
+    const naming = [
+      { request_id: 'setup-answers-03', matters: { picked: ['training'], own_words: '' } },
+      { request_id: 'setup-answers-03', matters: { picked: ['sleep', 'training'], own_words: '' } },
+      ...APP_SETUP_TRAINING_SPOTS_V1.map(spot => ({ request_id: 'setup-answers-03', spots: ['sleep-onset', spot] })),
+      { request_id: 'setup-answers-03', train: { picked: ['gap'], own_words: '' } },
+      { request_id: 'setup-answers-03', train: null },
+      { request_id: 'setup-answers-03', name: 'Asha', train: { picked: [], own_words: '' } },
+    ];
+    for (const request of naming) {
+      const parsed = appSetupAnswersRequestV1Schema.parse(request);
+      for (const revision of REVISIONS_BELOW) expect([request, revision, appSetupAnswersFitRevision(parsed, revision)]).toEqual([request, revision, false]);
+      for (const revision of REVISIONS_AT) expect([request, revision, appSetupAnswersFitRevision(parsed, revision)]).toEqual([request, revision, true]);
+    }
+  });
+  it('fits the longest answers in any script under the answers route cap', () => {
+    // Eight answers in the owner's own words at their limit, every choice picked, in characters JSON spells out as \uXXXX: six
+    // bytes each, more than any script takes.
+    const words = '\u0001'.repeat(280), longest = {
+      request_id: 'x'.repeat(80), name: `a${'\u0001'.repeat(79)}`, day: { shape: 'varies', own_words: words }, slips: { picked: ['replies', 'overlaps', 'promises', 'breaks', 'evenings'], own_words: words },
+      wearable: 'garmin', matters: { picked: ['sleep', 'energy', 'stress', 'schedule', 'mail', 'promises', 'training'], own_words: words }, spots: appSetupSpotV1Schema.options,
+      protect: { picked: ['workouts', 'family', 'meals', 'mornings', 'focus'], own_words: words }, rope: 'suggest', season: { choice: 'none', own_words: words },
+      low: { picked: ['focus', 'patience', 'sleep', 'push', 'cancel'], own_words: words }, train: { picked: ['early', 'lunch', 'evening', 'weekend', 'gap'], own_words: words },
+    };
+    accepted(appSetupAnswersRequestV1Schema, [longest]);
+    expect(appJsonWireBytes(longest)).toBeLessThanOrEqual(APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1);
+  });
+  it('holds train only for a build that reads revision 3, and the rest as before', () => {
+    const all = { name: true, day: false, slips: false, wearable: true, matters: true, spots: true, protect: false, rope: true, season: true, low: false, train: true };
+    const result = { request_id: 'setup-answers-03', held: all, replayed: false };
+    accepted(appSetupAnswersResultV1Schema, [result, { ...result, held: { ...all, train: false } }]);
+    rejected(appSetupAnswersResultV1Schema, [{ ...result, held: { ...all, train: 'yes' } }, { ...result, held: { ...all, train: null } }]);
+    const { train: _train, ...two } = all;
+    const first = { request_id: 'setup-answers-03', held: { name: true, day: false, slips: false, wearable: true }, replayed: false };
+    for (const revision of REVISIONS_BELOW) expect(Object.keys(appSetupAnswersResultAtRevision(result, revision).held)).not.toContain('train');
+    expect(appSetupAnswersResultAtRevision(result, 1)).toEqual(first);
+    expect(appSetupAnswersResultAtRevision(result, 2)).toEqual({ ...result, held: two });
+    for (const revision of REVISIONS_AT) expect(appSetupAnswersResultAtRevision(result, revision)).toBe(result);
+    // An answer recorded before the revision replays as it was, whichever revision reads it.
+    const earlier = { ...result, held: two };
+    for (const revision of [2, 3]) expect(appSetupAnswersResultAtRevision(earlier, revision)).toBe(earlier);
+    expect(appSetupAnswersResultAtRevision(earlier, 1)).toEqual(first);
   });
 });
 

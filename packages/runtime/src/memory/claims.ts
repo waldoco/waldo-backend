@@ -36,11 +36,12 @@ export const EDGE_RELATIONS = ['tends to precede', 'worsens', 'improves', 'co-oc
 export type Claim = Readonly<{ id: number; kind: string; text: string; source: string; evidence: string; origin: string | null; status: string; created_at: string; last_seen_at: string; seen_count: number; source_ref?: string | null; learned_at?: string | null; valid_from?: string | null; valid_to?: string | null; retired_at?: string | null; supersedes_id?: number | null; verification_status?: string | null; pinned?: string | null; pin_order?: number | null; area?: string | null; area_by?: string | null; bring_up_less_at?: string | null; on_date?: string | null }>;
 
 // The two blocks Waldo shows on every turn, curated by pinning claims, and the room for their lines. A pin is a view over the
-// claim row (a block name and an order), never a copy of its text, so a forget or a correction reaches it with the row.
+// claim row (a block name and an order), never a copy of its text, so a forget or a correction reaches it with the row. The
+// facts block holds the setup answers it is pinned with at their longest, five of them in the owner's own words.
 export const PIN_BLOCKS = ['profile', 'facts'] as const;
 export type PinBlock = (typeof PIN_BLOCKS)[number];
 export const PROFILE_BLOCK_MAX_CHARS = 1_500;
-export const FACTS_BLOCK_MAX_CHARS = 2_500;
+export const FACTS_BLOCK_MAX_CHARS = 3_000;
 // What the owner profile may show, and so what may be pinned: the owner's own stated or confirmed words, grounded at admission.
 // A claim Waldo inferred or confirmed waits for the owner's own confirm.
 export const PROFILE_KINDS: readonly string[] = ['fact', 'preference', 'routine', 'health', 'goal'];

@@ -26,7 +26,7 @@ keep an owner profile, and look the owner up on the public web.
     - kept look-up findings through `findings.decide()`;
     - the welcome build (inferred supports);
     - owner actions (`claim.edit`, `claim.pin`, `node.*`).
-- **Every turn reads `turnMemoryPrompt`**: `<owner_profile>` (1,500 characters) and `<owner_facts>` (2,500), then
+- **Every turn reads `turnMemoryPrompt`**: `<owner_profile>` (1,500 characters) and `<owner_facts>` (3,000), then
   `<owner_constellation>` (1,200).
   - Once any claim is pinned, only pinned claims show. #1547 pins the setup answers, so an owner who answers setup loses
     every unpinned fact from every turn. Recall still finds them. The #1547 gate flagged this.
