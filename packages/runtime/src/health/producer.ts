@@ -1,6 +1,7 @@
 import { fromRowZone, toRowZone } from '../../../contracts/src/health/zone-bridge';
 import { healthSleepNeedMinutesV1Schema } from '../../../contracts/src/app/health-ingest';
 import { ENERGY_WINDOWS_VERSION } from './scores/energy-windows';
+import { formCurve } from './scores/form-curve';
 import { shiftDay } from './scores/time';
 import { trainingLoad, type TrainingLoad, type WorkoutLoad } from './scores/training-load';
 import { formZone, heldZone, recoveryZone, weightZone } from './scores/zones';
@@ -29,6 +30,10 @@ export type ProducerDeps = Readonly<{
   backfillLimit?: number;
   // Off unless true. On, today's and yesterday's rows carry the candidate training load, which the row writer must admit.
   trainingLoad?: boolean;
+  // Off unless true. On, today's row carries today's measured Form curve, which the row writer must admit. It is computed from the
+  // same readings as the scores, changes none of them, and costs the owner only itself if it cannot be computed. Never on a
+  // backfilled row.
+  formCurve?: boolean;
   // The owner's health settings (waldo.health_settings_read), given only while the coaching switch is on. With it, every row
   // is computed on the sleep need the owner stated, and a read that fails writes nothing rather than a row on another need.
   readSettings?: () => Promise<unknown>;
@@ -400,6 +405,11 @@ const trainingLoadOf = (source: Source, yesterday: string): TrainingLoad => trai
   workouts: sessionsOf(source.readings.filter(r => r.signal === 'workout')).map(r => ({ day: r.day, minutes: r.value, zoneSeconds: r.workout?.zoneSeconds ?? null, zonesFromObservedPeak: r.workout?.zonesFromObservedPeak === true, effort: r.workout?.effort ?? null })),
 });
 
+// A computation that cannot be done costs the owner that one key, never the row. The tag holds no value.
+const orNothing = (tag: string, make: () => object | null): object => {
+  try { return make() ?? {}; } catch { console.error(`health ${tag} failed`); return {}; }
+};
+
 const rowOf = (day: string, scores: DailyScores, basis: RowSource, readAt: string, timezone: string, tags: readonly string[], forToday: boolean): object => {
   const { recovery, form, weight } = scores;
   const unavailable = (reason: string) => ({ reason });
@@ -538,7 +548,8 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     for (const targetDay of [shiftDay(today, -1), today]) {
       const chosen = chooseFor(targetDay);
       const { readingDays, travelled, days } = recordsOf(chosen);
-      const scores = deps.compute({ access: 'granted', targetDay, days, sleepNeedMinutes: stated.minutes, asOf: series.readAt });
+      const input: DailyScoresInput = { access: 'granted', targetDay, days, sleepNeedMinutes: stated.minutes, asOf: series.readAt };
+      const scores = deps.compute(input);
       provisional ||= scores.windows !== undefined;
       const nothingToShow = [scores.recovery, scores.form, scores.weight].every(p => p.state === 'unavailable');
       if (nothingToShow && !readingDays.some(d => d.day === targetDay)) continue;
@@ -559,6 +570,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       const row = {
         ...rowOf(targetDay, steadied(scores, before), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, targetDay === today),
         ...(deps.trainingLoad ? { training_load: trainingLoadOf(chosen, shiftDay(today, -1)) } : {}),
+        ...(targetDay === today && deps.formCurve ? orNothing('form curve', () => { const curve = formCurve(input, scores.form); return curve && { form_curve: curve }; }) : {}),
       };
       const answer = await deps.writeContext(JSON.stringify(row));
       outcomes.push(writeOutcome(answer));
