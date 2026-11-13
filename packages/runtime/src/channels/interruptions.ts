@@ -18,16 +18,19 @@ export type InterruptHold = 'consent' | 'quiet' | 'closed' | 'question' | 'budge
 export type InterruptSpend = 'counted' | 'urgent';
 export type InterruptState = Readonly<{ day: string; count: number; urgent: number; last: number | null }>;
 export type OpenQuestion = Readonly<{ ref: string; at: number; day: string }>;
-export type InterruptEnv = Readonly<{ PROACTIVE_INTERRUPTS_PER_DAY?: string; PROACTIVE_URGENT_PER_DAY?: string; PROACTIVE_GAP_MIN?: string }>;
+export type InterruptEnv = Readonly<{ PROACTIVE_URGENT_PER_DAY?: string; PROACTIVE_GAP_MIN?: string }>;
 
 const count = (raw: string | undefined, fallback: number): number => {
   const parsed = Number(raw);
   return raw !== undefined && raw.trim() !== '' && Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
 };
-// The deployment's defaults, which the owner's own number (set_proactivity) replaces. Their 0 means no unasked message at
-// all, so it leaves no urgent allowance either.
+// The day's count follows the owner's volume: high has none, normal is six, low two (low already holds everything but the
+// day cards). The owner's own number (set_proactivity) replaces it at every volume; their 0 means no unasked message at
+// all, so it leaves no urgent allowance either. The gap and the urgent allowance stay the deployment's. The deployment's
+// PROACTIVE_INTERRUPTS_PER_DAY is no longer read: the volume decides.
+const PER_DAY: Readonly<Record<Proactivity['volume'], number>> = { high: Number.POSITIVE_INFINITY, normal: 6, low: 2 };
 export const interruptLimits = (env: InterruptEnv, proactivity: Proactivity): InterruptLimits => ({
-  perDay: proactivity.interruptions_per_day ?? count(env.PROACTIVE_INTERRUPTS_PER_DAY, 2),
+  perDay: proactivity.interruptions_per_day ?? PER_DAY[proactivity.volume],
   urgentPerDay: proactivity.interruptions_per_day === 0 ? 0 : count(env.PROACTIVE_URGENT_PER_DAY, 1),
   gapMs: count(env.PROACTIVE_GAP_MIN, 60) * 60_000,
 });
@@ -101,7 +104,8 @@ export const interruptBook = (kv: Kv, deps: Readonly<{
     line(limits: InterruptLimits): string {
       const state = spent(), left = Math.max(0, limits.perDay - state.count), urgentLeft = Math.max(0, limits.urgentPerDay - state.urgent);
       return [
-        left ? `Waldo can reach the owner unasked ${left === 1 ? 'once more' : `${left} more times`} today.` : 'The owner\'s budget for unasked messages is spent for today.',
+        !Number.isFinite(limits.perDay) ? 'The owner\'s volume is high: there is no daily count, only the gap between two unasked messages.'
+          : left ? `Waldo can reach the owner unasked ${left === 1 ? 'once more' : `${left} more times`} today.` : 'The owner\'s budget for unasked messages is spent for today.',
         urgentLeft ? 'Only for something that truly cannot wait for the next day card, mark it urgent; that goes past the budget, never past quiet hours.' : 'Nothing more can be marked urgent today.',
         question() ? 'A question to the owner is still waiting for their answer: do not ask another.' : 'You may ask the owner at most one question.',
       ].join(' ');

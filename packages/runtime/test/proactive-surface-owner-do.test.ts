@@ -912,12 +912,13 @@ describe('the knock for proactive work outside the 24-hour window', { timeout: 2
 
   it('with the re-engage knock on, a copy\'s push is no interruption: it pushes with the owner\'s unasked budget spent, and spends none of it', async () => {
     await withOwner('knock-reengage-gate', async (owner, state, ctx) => {
+      loopBook(state.storage.sql, { newId: () => 'x', now: Date.now }).setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', interruptions_per_day: 0 });
       await dueReminder(state);
       await schedulePass(owner, state);
       for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
       expect(wire.pushes).toEqual(['event']);
       expect(state.storage.kv.get(INTERRUPTS_KEY)).toBeUndefined();
-    }, { surface: 'both', window: 'closed', env: { ...REENGAGE, PROACTIVE_GATE: '1', PROACTIVE_INTERRUPTS_PER_DAY: '0' } });
+    }, { surface: 'both', window: 'closed', env: { ...REENGAGE, PROACTIVE_GATE: '1' } });
   });
 
   it('with the re-engage knock on, a push on an earlier day of the same closed window does not stand for today\'s copy', async () => {
