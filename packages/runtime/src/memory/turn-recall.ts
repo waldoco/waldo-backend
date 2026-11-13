@@ -90,6 +90,7 @@ const cutLine = (count: number) => `(${count} more matches did not fit here; rea
 const oneLine = (text: string) => fence(text).replace(/\s+/g, ' ').trim();
 // An earlier version: it says when it stopped holding, so it is read as history, never as how things stand.
 const replacedLine = (claim: Claim) => `- [c${claim.id} · NO LONGER TRUE, held until ${claim.valid_to?.slice(0, 10) ?? 'an unknown date'}${claim.valid_from ? `, since ${claim.valid_from.slice(0, 10)}` : ''}] ${oneLine(claim.text)}`;
+const outsideWaitingLine = (count: number) => `(${count} more ${count === 1 ? 'note matches that was' : 'notes match that were'} learned from mail, calendar or other outside content, not the owner's words. read_memory, where it is offered, opens them with these words; a turn that reads them is treated as having read outside content.)`;
 // A note learned from outside content says so in its tag, where the owner's own notes say stated or inferred.
 const claimLine = (claim: Claim) => `- [${claimTag(claim)} · ${claim.kind}, ${claim.origin === 'untrusted' ? 'from outside content, not the owner\'s words' : claim.source}, ${claim.last_seen_at.slice(0, 10)}] ${oneLine(claim.text)}`;
 // Code points, so a cut never splits a character, and never inside a word, so a number is shown whole or not at all. One
@@ -120,7 +121,7 @@ const sourceEntry = (claim: Claim) => claim.source_ref?.startsWith(OWNER_REF) ? 
 // block, cut line included, stays within room and RECALL_MAX_CHARS; '' when nothing matched or nothing honest fits. With stubs,
 // recall reaches further: matches past the full lines, and a full line that does not fit, come as stubs the model can open.
 export const recallForTurn = async ({ claims, episodes, question, previous, room, holds, current, semantic, stubs = false, replaced = false }: Readonly<{
-  claims: Pick<ClaimStore, 'recall'> & Partial<Pick<ClaimStore, 'recallReplaced'>>;
+  claims: Pick<ClaimStore, 'recall'> & Partial<Pick<ClaimStore, 'recallReplaced' | 'builtFromOutside'>>;
   episodes?: RecallEpisodes;
   question: string;
   previous?: string;
@@ -193,11 +194,17 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
   // longer lines, longest first, which only take the room left once every line is placed, so they never cost a match its place.
   // Only a note the grounding gate stamped as the owner's is theirs; an agent or unrecorded origin may quote someone else.
   const fromOutside = (claim: Readonly<{ origin?: string | null }>) => claim.origin !== 'owner';
+  // A note learned from outside content is shown in full only to a turn already marked as built from outside content. A clean
+  // turn gets their number, where read_memory can open them: showing one would mark the turn, and recall matches on any shared word.
+  const learnedOutside = (claim: Claim) => claim.origin === 'untrusted';
+  const waiting = claims.builtFromOutside === true ? 0 : [...recalled, ...past].filter(learnedOutside).length;
+  if (waiting) { recalled = recalled.filter((claim) => !learnedOutside(claim)); past = past.filter((claim) => !learnedOutside(claim)); }
   const lines: readonly Readonly<{ full?: string; stub?: string; upgrades?: readonly string[]; claim?: number; outside: boolean }>[] = [
     ...recalled.slice(0, RECALL_CLAIMS).map((claim) => ({ full: claimLine(claim), claim: claim.id, outside: fromOutside(claim), ...(stubs ? { stub: stubLine(claim) } : {}) })),
     ...hits.map((hit) => ({ full: plainLine(hit), upgrades: upgradesOf(hit), outside: outsideRefs.has(hit.ref) })),
     ...past.map((claim) => ({ full: replacedLine(claim), outside: fromOutside(claim) })),
     ...recalled.slice(RECALL_CLAIMS).map((claim) => ({ stub: stubLine(claim), outside: fromOutside(claim) })),
+    ...(waiting ? [{ full: outsideWaitingLine(waiting), outside: false }] : []),
   ];
   const budget = Math.min(RECALL_MAX_CHARS, room);
   const reserve = cutLine(lines.length).length + 1;

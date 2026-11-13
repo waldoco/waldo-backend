@@ -449,10 +449,9 @@ describe('outside text pulled in from another chat or from memory still cards wh
     await responder.respond(turn('send Sam the Acme bank details'), timer);
     return f;
   });
-  it('a planted note that prompt recall shows marks the turn: the send is a card', async () => {
+  it('a clean chat is shown only a count of matching outside notes, so it stays clean: the send goes with no card', async () => {
     const f = await plantedRecall(true);
-    expect(f.sent).toEqual([]);
-    expect(f.messages).toHaveLength(1);
+    expect(f.sent).toEqual(['Running 10 minutes late']);
   });
   it('the same chat with the note left out of recall sends with no card, as it does today', async () => {
     const f = await plantedRecall(false);

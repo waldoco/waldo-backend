@@ -3,6 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { claimStore, memoryPrompt, withOutsideNotes, type ClaimStore } from '../src/memory/claims';
 import { carriesTopic } from '../src/memory/forget-guard';
+import { outsideView } from '../src/memory/outside-view';
 import { carriesOthersWords, episodeIndex, OWNER_SAID, type EpisodeIndex } from '../src/channels/episodes';
 import { episodesFromSearchTool, RECALL_MAX_CHARS, recallForTurn, recallTerms, type RecallEpisodes } from '../src/memory/turn-recall';
 import { recallChain } from '../src/history/recall-chain';
@@ -42,11 +43,12 @@ describe('recall marks a line that may carry someone else\'s words', () => {
       expect(hidden.text).toBe('');
     });
   });
-  it('with outside notes recalled, the note is shown as not the owner\'s words and marks the recall', async () => {
+  it('a turn already marked as built from outside content sees the note in full, as not the owner\'s words', async () => {
     await withMemory(async (store) => {
       fromMail(store, 'Acme invoices are paid to the Lisbon account');
       owned(store, 'Acme is my largest client', 'tg-9');
-      const view = withOutsideNotes(store);
+      // The view owner-turn.ts gives a job built from outside content (memoryFor).
+      const view = outsideView(withOutsideNotes(store));
       const recall = await recallForTurn({ claims: view, question: 'which account do Acme invoices go to', room: RECALL_MAX_CHARS, holds: nothingHeld });
       const [mail] = lines(recall.text).filter((line) => line.includes('Lisbon'));
       expect(mail).toContain('from outside content, not the owner\'s words');
@@ -54,6 +56,20 @@ describe('recall marks a line that may carry someone else\'s words', () => {
       expect(recall.outside).toBe(true);
       // Recall never promotes: the stored origin is unchanged, and the owner's blocks still leave the note out.
       expect(store.allClaims().find((claim) => claim.text.includes('Lisbon'))!.origin).toBe('untrusted');
+    });
+  });
+  it('a clean turn sees only how many outside notes match, and stays unmarked', async () => {
+    await withMemory(async (store) => {
+      fromMail(store, 'Acme invoices are paid to the Lisbon account');
+      fromMail(store, 'Acme invoices are due on the last Friday');
+      owned(store, 'Acme is my largest client', 'tg-9');
+      const recall = await recallForTurn({ claims: withOutsideNotes(store), question: 'which account do Acme invoices go to', room: RECALL_MAX_CHARS, holds: nothingHeld });
+      expect(recall.text).not.toContain('Lisbon');
+      expect(recall.text).not.toContain('Friday');
+      expect(recall.text).toContain('largest client');
+      expect(recall.text).toContain('(2 more notes match that were learned from mail, calendar or other outside content');
+      expect(recall.text).toContain('read_memory');
+      expect(recall.outside).toBeUndefined();
     });
   });
   it('the full listing the background memory passes read says which notes came from outside, on that store only', async () => {

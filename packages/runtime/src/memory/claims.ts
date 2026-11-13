@@ -1268,7 +1268,8 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
     },
   };
 };
-export type ClaimStore = ReturnType<typeof claimStore> & Readonly<{ outsideNotes?: true }>;
+// builtFromOutside: the view a turn built from outside content reads (outside-view.ts). Such a turn is marked already.
+export type ClaimStore = ReturnType<typeof claimStore> & Readonly<{ outsideNotes?: true; builtFromOutside?: true }>;
 
 // The same store, recalling notes learned from outside content too. Such a note is context with its source shown, never
 // the owner's word: it is not pinned, promoted or made an owner fact by being read, and whatever shows it marks its turn as

@@ -17,6 +17,7 @@ export const outsideView = (store: ClaimStore): ClaimStore => {
   };
   return {
     ...store,
+    builtFromOutside: true,
     claims: (status) => store.claims(status).filter(outsideSafe),
     recall: (query, limit, near) => store.recall(query, limit, near).filter(outsideSafe),
     recallReplaced: (query, limit) => store.recallReplaced(query, limit).filter(outsideSafe),
