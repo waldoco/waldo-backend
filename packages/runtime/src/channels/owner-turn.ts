@@ -32,7 +32,7 @@ import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
 import { localTrustedBriefContextComposer, localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, type LocalSystemSkillBinding } from '../llm/run-loop-adapters';
 import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath } from '../conversation/joined-path';
-import { COMPACTION, COMPACTION_INSTRUCTION, compactedHistory, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, seedBasePlan, ownerExchangeHistory, ownerRowsSince, planWithout, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
+import { COMPACTION, COMPACTION_INSTRUCTION, chainCarriesOutside, compactedHistory, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, seedBasePlan, ownerExchangeHistory, ownerRowsSince, planWithout, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
 import { ownerReadings, readingBeyondOwner, sanitise } from '../scribe/sanitiser';
 import { lightRoutePolicy, MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerModels, ownerRoutePolicy, strongRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { MODEL_CALL_TIMEOUT_MS, OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
@@ -471,7 +471,7 @@ export const createOwnerResponder = (
   // turn; a machine turn (a reminder or a job) and a background decision recall claims only. A job built from external data
   // recalls by words the owner did not write, so those words never select a health claim.
   const episodeSearch = tools.find((handler) => handler.name === 'search_episodes');
-  const recallFor = async (source: ClaimStore, text: string, room: number, ownerTurn?: string, stubs = false): Promise<string> => {
+  const recallFor = async (source: ClaimStore, text: string, room: number, ownerTurn?: string, stubs = false): Promise<Readonly<{ text: string; outside: boolean }>> => {
     const previous = ownerTurn === undefined ? undefined : previousOwnerMessage((id) => tree.get(id), ownerTurn);
     const searched = ownerTurn === undefined || !episodeSearch ? undefined : episodesFromSearchTool(episodeSearch, { ...safety, turnId: ownerTurn, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) });
     // A chat's recall stays in that chat; search_episodes, which the model calls on purpose, still reaches every chat.
@@ -484,8 +484,9 @@ export const createOwnerResponder = (
     // Recall fails open: the turn goes on with what the other leg found, and the trace names the failed leg without any text.
     for (const claim of recalled.used ?? []) usedClaims.add(claim);
     if (recalled.failed.length) log({ trace: traceId, hop: 'memory_recall', ms: 0, ok: false, code: 'recall_failed', detail: recalled.failed.join(',') });
-    if (recalled.text && privateOwner?.memoryUsed && ownerTurnActive) return `${recalled.text}\n${SAY_WHICH_MEMORY}`;
-    return recalled.text;
+    const outside = recalled.outside === true;
+    if (recalled.text && privateOwner?.memoryUsed && ownerTurnActive) return { text: `${recalled.text}\n${SAY_WHICH_MEMORY}`, outside };
+    return { text: recalled.text, outside };
   };
   const consumeRound = async () => {
     const added = await control.roundAsync();
@@ -651,7 +652,7 @@ export const createOwnerResponder = (
       let turnSuffix: FrozenSuffix | undefined;
       // The turn's reads, kept only while a proposing tool can take steps behind its card.
       const turnReads: TrailRead[] | undefined = turnHandlers.some(handler => handler.takes_why) ? [] : undefined;
-      const loopCtx = { ...safety, ...memoryContext(), ...ownerMessage(), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), runOrigin: runOrigin(), turnId: trace, openFile: openedFiles.open, ...(privateRunScope ? { runScope: privateRunScope } : {}), ...(turnReads ? { turnReads } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
+      const loopCtx = { ...safety, ...memoryContext(), ...ownerMessage(), ...(turnCarriedOutside ? { carriedOutside: true } : {}), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), runOrigin: runOrigin(), turnId: trace, openFile: openedFiles.open, ...(privateRunScope ? { runScope: privateRunScope } : {}), ...(turnReads ? { turnReads } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
       turnLoopCtx = loopCtx;
       let contextHealthCheck: Readonly<{ key: string; holds: Promise<boolean> }> | undefined;
       return runToolLoop({
@@ -713,7 +714,9 @@ export const createOwnerResponder = (
             };
             // What this message recalled changes with every message and can quote text someone else wrote, so it follows the
             // message's own words as fenced data, in the model's view only; the system prompt keeps the stable pinned blocks.
-            const recalled = memory ? await recallFor(promptMemory()!, ownerCurrentText, RECALL_MAX_CHARS, ownerTurnActive ? trace : undefined, turnHandlers.some((handler) => handler.name === 'read_memory')) : '';
+            const recall = memory ? await recallFor(promptMemory()!, ownerCurrentText, RECALL_MAX_CHARS, ownerTurnActive ? trace : undefined, turnHandlers.some((handler) => handler.name === 'read_memory')) : undefined;
+            const recalled = recall?.text ?? '';
+            if (recall?.outside) (loopCtx as { carriedOutside?: boolean }).carriedOutside = true;
             // The owner's earlier turns' tool results, newest kept whole within the gate's size, as they stood when this turn
             // context was built; this turn's own tool results reach the model through its tool turns.
             // A capture-mode probe returns its reply to the caller, so it never sees earlier live provider results.
@@ -882,6 +885,8 @@ export const createOwnerResponder = (
   // The owner's message is entirely their own words, as the transport marked its parts, and replies to no message. Its
   // conversation row is stamped so, and only such a turn takes a light step (WALDO_LIGHT_CHAT).
   let turnOwnWordsOnly = false;
+  // Whether the conversation the model reads before this owner message may carry someone else's words (chainCarriesOutside).
+  let turnCarriedOutside = false;
   // Whether this turn starts out having read text someone else wrote: a job over outside data, a reply to another
   // person's message, or a quote or forward the transport marked in the owner's own message (a forwarded recording's
   // transcript included). The owner's own voice note is not counted: it is how owners speak.
@@ -892,7 +897,7 @@ export const createOwnerResponder = (
   // The owner's own message that started this turn, for a tool that acts on their word: only a turn started by their message
   // alone, with no quote, forward or other person's words in it. Its ref is the surface's message id, else the host's trace.
   const ownerMessage = () => runOrigin() === 'owner' && activeOwnerTurn
-    ? { ownerMessage: { messageRef: activeOwnerTurn.messageRef?.id ?? activeOwnerTurn.traceId, receivedAt: ownerTurnStartedAt } } : {};
+    ? { ownerMessage: { messageRef: activeOwnerTurn.messageRef?.id ?? activeOwnerTurn.traceId, receivedAt: ownerTurnStartedAt, ownWordsOnly: activeOwnerTurn.parts.every((part) => part.authorship === 'owner') } } : {};
   const quoteContext = async (reply: ReplyContext | undefined): Promise<string> => {
     if (!reply) return '';
     const unavailable = '[Reply target quote unavailable after external-content safety check. Do not infer its contents or approval.]';
@@ -981,6 +986,8 @@ export const createOwnerResponder = (
     control.begin(fromOwner);
     try {
       const userEntry = tree.get(id) ?? { id, ownerId, chatId: conversationRef, parentId: conversationLeaves.get(conversationRef) ?? null, threadAnchorId: null, surface, modelPayload: said, appPayload: received, modelProjection: { mode: 'include' as const }, role:'user' as const, inputOrigin: fromOwner ? 'owner' as const : 'machine' as const, ...(fromOwner && turnOwnWordsOnly ? { ownerWordsOnly: true as const } : {}), createdAt: Date.now() };
+      // Read once from the chain as it stood before this message, the same rows the window is cut from.
+      turnCarriedOutside = fromOwner && userEntry.parentId !== null && chainCarriesOutside(tree, userEntry.parentId, compaction);
       // Once stored, the row is the input's record: a forget in this turn rewrites it and its witness in place, so the turn
       // publishes its reply alone, never its own copy of the input.
       const inputStored = fromOwner && context !== undefined && privateRunScope !== undefined && conversationStore?.persistOwnerInput !== undefined;
@@ -1021,7 +1028,8 @@ export const createOwnerResponder = (
       await conversationStore?.save(savedEntries, publication.leafId, privateRunScope);
       const view = compaction.steppedWindow ? lastWindow.get(conversationRef) : undefined;
       if (view?.head && (view.head !== turnWindow?.head || view.from !== windowFrom)) await conversationStore?.noteWindowStart?.(conversationRef, { head: view.head, ...(view.from ? { from: view.from } : {}) }, privateRunScope);
-      if (told !== answered) tree.replace(told);
+      // The chain in memory carries the same outside mark as the stored row, so the next turn reads it without a reload.
+      if (told !== answered || readOutside) tree.replace(readOutside ? { ...told, readOutside: true as const } : told);
       if (jobStub) tree.replace(jobStub);
       for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record({ ...entry, summary: redact(entry.summary) }, privateRunScope); }
       privateRunScope?.admit();
@@ -1181,6 +1189,7 @@ export const createOwnerResponder = (
         turnReplyContext = '';
         turnReplyOwnAuthored = false;
         turnOwnWordsOnly = false;
+        turnCarriedOutside = false;
       }
     },
     async remind(id, conversationRef, note, time, surface, timing) {
@@ -1223,7 +1232,7 @@ export const createOwnerResponder = (
           const blocks = view ? (privateOwner?.memorySelection ? selectedCore : turnMemoryPrompt)(view, said, room) : '';
           // No byte cliff: dropping ALL owner context past a size made a decision with more known about the owner worse than
           // one with less. The profile is short owner sentences; the owner-direction is full context.
-          const recalled = view ? await recallFor(view, said, room - blocks.length - 2) : '';
+          const recalled = view ? (await recallFor(view, said, room - blocks.length - 2)).text : '';
           const decisionContext = [TURN_CONTEXT_HEADER, clockLine, blocks].filter(Boolean).join('\n\n') + (recalled ? fenced('memory recalled for this message', recalled) : '');
           return await time('background_decision', () => ask(id, 'background_decision', system, `${said}\n\n${decisionContext}`, decision, undefined, undefined, undefined, backgroundOwnerModel ? undefined : auxiliaryModel));
         }

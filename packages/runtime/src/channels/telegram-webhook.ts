@@ -135,6 +135,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" lets the owner approve a card shown in full in the conversation by telling Waldo to go ahead (approve_shown). Off
   // unless "1".
   APPROVE_IN_CHAT?: string;
+  // "1" runs a send, calendar change or Google task change the owner asked for in their own message with no card, reporting
+  // it with an undo where one exists; the cards that remain are approved on the surface showing them. Off unless "1".
+  AUTONOMOUS_BY_DEFAULT?: string;
   // "1" offers track/log/list/stop_medication on owner turns and words medicine reminders in the harness from a health-plane
   // read. Off unless "1".
   MEDICATIONS?: string;
