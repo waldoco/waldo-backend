@@ -278,4 +278,3 @@ describe('use_tool is no second way in', () => {
     expect(provider.filter((offered) => offered.defer_loading).map((offered) => offered.name)).toEqual(['call_mcp_tool']);
   });
 });
-
