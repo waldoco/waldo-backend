@@ -1,5 +1,5 @@
 import type { ConversationEntry, ToolHandler } from '@waldo/contracts';
-import { claimTag, fence, type Claim, type ClaimStore } from './claims';
+import { claimTag, fence, OUTSIDE_REF, type Claim, type ClaimStore } from './claims';
 import { ftsTerms, linksCarryOthersWords, speakerOfEntry, type EpisodeHit } from '../channels/episodes';
 import { cutLine as cutLinkLine } from '../history/recall-chain';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
@@ -91,8 +91,10 @@ const oneLine = (text: string) => fence(text).replace(/\s+/g, ' ').trim();
 // An earlier version: it says when it stopped holding, so it is read as history, never as how things stand.
 const replacedLine = (claim: Claim) => `- [c${claim.id} · NO LONGER TRUE, held until ${claim.valid_to?.slice(0, 10) ?? 'an unknown date'}${claim.valid_from ? `, since ${claim.valid_from.slice(0, 10)}` : ''}] ${oneLine(claim.text)}`;
 const outsideWaitingLine = (count: number) => `(${count} more ${count === 1 ? 'note matches that was' : 'notes match that were'} learned from mail, calendar or other outside content, not the owner's words. read_memory, where it is offered, opens them with these words; a turn that reads them is treated as having read outside content.)`;
-// A note learned from outside content says so in its tag, where the owner's own notes say stated or inferred.
-const claimLine = (claim: Claim) => `- [${claimTag(claim)} · ${claim.kind}, ${claim.origin === 'untrusted' ? 'from outside content, not the owner\'s words' : claim.source}, ${claim.last_seen_at.slice(0, 10)}] ${oneLine(claim.text)}`;
+// A note learned from outside content says so in its tag, where the owner's own notes say stated or inferred, and names the
+// mail or calendar change it came from when the source pass stored one. The sender's name is outside text: it cannot close the tag.
+const outsideSource = (claim: Claim) => claim.source_ref?.startsWith(OUTSIDE_REF) ? `from a ${oneLine(claim.source_ref.slice(OUTSIDE_REF.length).replace(/[[\]]/g, ' '))}` : 'from outside content';
+const claimLine = (claim: Claim) => `- [${claimTag(claim)} · ${claim.kind}, ${claim.origin === 'untrusted' ? `${outsideSource(claim)}, not the owner's words` : claim.source}, ${claim.last_seen_at.slice(0, 10)}] ${oneLine(claim.text)}`;
 // Code points, so a cut never splits a character, and never inside a word, so a number is shown whole or not at all. One
 // word longer than the stub keeps what precedes its digits.
 const stubLine = (claim: Claim) => {

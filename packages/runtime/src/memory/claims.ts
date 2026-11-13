@@ -1615,7 +1615,16 @@ export const withoutHealthClaims = (raw: string): string => {
 // answersOutside marks an owner message that answers a reply from a turn that read outside content: the words are the owner's,
 // but what they agree to there ("ok") may be the outside content's, so evidence found only in such messages is Waldo's read
 // until the owner confirms it, as remember writes in a turn that read outside content.
-export type ClaimGrounding = Readonly<{ owner?: string; shared?: string; waldo?: string; ownerMessages?: readonly Readonly<{ ref: string; text: string; answersOutside?: true }>[]; outside?: boolean }>;
+// sharedParts are the pieces `shared` arrived as (one mail, one calendar change), each with the ref code built for it: a note
+// learned from outside content whose evidence sits in exactly one of them is stored with that ref. A ref carrying a health
+// reading is not stored.
+export type ClaimGrounding = Readonly<{ owner?: string; shared?: string; waldo?: string; ownerMessages?: readonly Readonly<{ ref: string; text: string; answersOutside?: true }>[]; outside?: boolean; sharedParts?: readonly Readonly<{ ref: string; text: string }>[] }>;
+export const OUTSIDE_REF = 'outside, ';
+const outsideSourceRef = (evidence: string, grounding: ClaimGrounding | undefined): string | undefined => {
+  const refs = new Set((grounding?.sharedParts ?? []).filter(part => ground(evidence, { shared: part.text }) === 'shared').map(part => part.ref));
+  const [ref] = refs;
+  return refs.size === 1 && ref !== undefined && !numericHealthIn(ref) ? ref : undefined;
+};
 const onlyAnswersOutside = (evidence: string, grounding: ClaimGrounding | undefined): boolean => {
   const messages = grounding?.ownerMessages ?? [];
   return messages.some(message => message.answersOutside) && ground(evidence, { owner: messages.filter(message => !message.answersOutside).map(message => message.text).join('\n') }) !== 'owner';
@@ -1768,7 +1777,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     }
     // An alias that is itself a forgotten topic is dropped, not stored.
     const aliases = claim.aliases_touch_forgotten ? [] : (claim.aliases ?? []).filter((alias) => typeof alias === 'string' && !aliasForms(alias).some((form) => barrierHashes.has(textFingerprint(form))));
-    const sourceRef = origin === 'owner' ? ownerSourceRef(claim.evidence, grounding) ?? ownerTurnRef(evidence) : answering ? ownerSourceRef(claim.evidence, grounding) : undefined;
+    const sourceRef = origin === 'owner' ? ownerSourceRef(claim.evidence, grounding) ?? ownerTurnRef(evidence) : answering ? ownerSourceRef(claim.evidence, grounding) : origin === 'untrusted' ? outsideSourceRef(claim.evidence, grounding) : undefined;
     store.add({ kind: claim.kind, text: claim.text.trim(), source, evidence: claim.evidence.trim(), aliases, origin: origin ?? undefined, source_ref: sourceRef, area: claim.area }, at);
     written += 1;
     // Who it is about, as the pass named them: a ref it was shown, or a new name no forget has barred. An address is kept only
