@@ -207,7 +207,7 @@ export const proposalStatus = (placement: CardPlacement | undefined, shownHere: 
   const chat = placement?.chatApprovable ? ` ${GO_AHEAD_STATUS}` : '';
   return placement?.hereInFull ? `${status}${chat} ${CARD_SHOWN_IN_FULL}` : `${status}${chat}`;
 };
-const GO_AHEAD_STATUS = 'The owner can also approve it here in words: when a later message of their own clearly tells you to go ahead with this card, call approve_shown with its id. If it is unclear whether they mean go ahead, or which card they mean, ask them.';
+const GO_AHEAD_STATUS = 'The owner can also approve it here in words: when a later message of their own clearly tells you to go ahead with this card, call approve_shown with its id before reading anything else in that turn. If it is unclear whether they mean go ahead, or which card they mean, ask them.';
 const placementStatus = (placement: CardPlacement | undefined, shownHere: string, nothingDone: string): string =>
   !placement || placement.hereApprovable ? placement?.numbered ? NUMBERED_STATUS : shownHere
     : placement.handsToApp && placement.chatApprovable ? `The full card is shown here; there is no button for it here. ${nothingDone}`
@@ -260,6 +260,7 @@ export type ProposeOptions = Readonly<{ replaces?: string; outside?: boolean; or
 export type OwnerSaid = Readonly<{ messageRef: string; receivedAt: number }>;
 // changed_since_shown: the stored card is not the one shown; shown_after_message: the card reached the owner after the
 // message, so the message cannot be about it; app_only: a kind approved only in the app or by a tap.
+export type ApprovableCard = Readonly<{ id: string; kind: string; shown_minutes_ago: number }>;
 export type ApproveShownOutcome = Readonly<{ outcome: 'decided'; decision: ApprovalDecision; receipt_sent: boolean }
   | { outcome: 'off' | 'not_shown_here' | 'changed_since_shown' | 'shown_after_message' }
   | { outcome: 'app_only'; link?: string }
@@ -304,6 +305,9 @@ export type ApprovalDesk = Readonly<{
   // The conversations where a card the owner can approve in words waits on this surface, as each card was shown (null where the
   // surface names no thread). A put-off card is not waiting on their next word.
   wordsAwaited(): readonly (string | null)[];
+  // The open cards approve_shown can act on in this conversation, oldest first: ids and kinds only, never a card's words, so a
+  // turn finds the card the owner means without reading text that may carry someone else's words and losing its approval.
+  approvableHere(): readonly ApprovableCard[];
   // Closes a card of Waldo's that is still waiting, with the owner-visible reason. It never approves; a card the owner
   // decided, that expired, or whose effect is on record is left as it is.
   withdraw(id: string, reason: string, options?: Readonly<{ outside?: boolean }>): Promise<WithdrawOutcome>;
@@ -1978,6 +1982,17 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         .flatMap(entry => sql.exec<{ conversation_ref: string | null }>(
           'SELECT conversation_ref FROM approval_presentations WHERE approval_id = ? AND surface = ? AND in_full = 1 AND retired_at IS NULL', entry.id, surface,
         ).toArray().map(presentation => presentation.conversation_ref));
+    },
+    approvableHere() {
+      expireDue();
+      return sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'open' ORDER BY created_at, id").toArray()
+        .filter(entry => PROPOSAL_KINDS.includes(entry.kind) && entry.id.startsWith('p'))
+        .flatMap(entry => {
+          const shown = shownInFullHere(entry);
+          if (!shown.length) return [];
+          const at = Math.max(...shown.map(presentation => presentation.presented_at));
+          return [{ id: entry.id, kind: entry.kind, shown_minutes_ago: Math.max(0, Math.round((deps.now() - at) / 60_000)) }];
+        });
     },
     waiting() {
       expireDue();
