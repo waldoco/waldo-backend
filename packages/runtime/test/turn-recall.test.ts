@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { claimStore, type ClaimStore } from '../src/memory/claims';
+import { claimStore, withOutsideNotes, type ClaimStore } from '../src/memory/claims';
 import { carriesTopic } from '../src/memory/forget-guard';
 import { carriesOthersWords, episodeIndex, OWNER_SAID, type EpisodeIndex } from '../src/channels/episodes';
 import { episodesFromSearchTool, RECALL_MAX_CHARS, recallForTurn, recallTerms, type RecallEpisodes } from '../src/memory/turn-recall';
@@ -32,6 +32,39 @@ const recordingSearch = (calls: string[], caller: string) => ({ name: 'search_ep
 const lines = (text: string) => text.split('\n').filter((line) => line.startsWith('- ['));
 
 describe('recall marks a line that may carry someone else\'s words', () => {
+  // A note the source pass learned from a mail: code wrote its origin, and it is not the owner's word.
+  const fromMail = (store: ClaimStore, text: string) =>
+    store.add({ kind: 'fact', text, source: 'inferred', evidence: 'read in a mail', origin: 'untrusted' }, AT);
+  it('a note learned from mail or calendar stays out of recall unless the store recalls outside notes', async () => {
+    await withMemory(async (store) => {
+      fromMail(store, 'Acme invoices are paid to the Lisbon account');
+      const hidden = await recallForTurn({ claims: store, question: 'which account do Acme invoices go to', room: RECALL_MAX_CHARS, holds: nothingHeld });
+      expect(hidden.text).toBe('');
+    });
+  });
+  it('with outside notes recalled, the note is shown as not the owner\'s words and marks the recall', async () => {
+    await withMemory(async (store) => {
+      fromMail(store, 'Acme invoices are paid to the Lisbon account');
+      owned(store, 'Acme is my largest client', 'tg-9');
+      const view = withOutsideNotes(store);
+      const recall = await recallForTurn({ claims: view, question: 'which account do Acme invoices go to', room: RECALL_MAX_CHARS, holds: nothingHeld });
+      const [mail] = lines(recall.text).filter((line) => line.includes('Lisbon'));
+      expect(mail).toContain('from outside content, not the owner\'s words');
+      expect(lines(recall.text).find((line) => line.includes('largest client'))).not.toContain('outside content');
+      expect(recall.outside).toBe(true);
+      // Recall never promotes: the stored origin is unchanged, and the owner's blocks still leave the note out.
+      expect(store.allClaims().find((claim) => claim.text.includes('Lisbon'))!.origin).toBe('untrusted');
+    });
+  });
+  it('with outside notes recalled, a turn that recalls only the owner\'s own notes is not marked', async () => {
+    await withMemory(async (store) => {
+      fromMail(store, 'Acme invoices go to Lisbon');
+      owned(store, 'Locker is near the pool', 'tg-1');
+      const recall = await recallForTurn({ claims: withOutsideNotes(store), question: 'where is my locker near the pool', room: RECALL_MAX_CHARS, holds: nothingHeld });
+      expect(recall.text).toContain('Locker is near the pool');
+      expect(recall.outside).toBeUndefined();
+    });
+  });
   it('a note saved from outside content marks the recall; the owner\'s own notes do not', async () => {
     await withMemory(async (store) => {
       owned(store, 'Locker is near the pool', 'tg-1');

@@ -19,7 +19,7 @@ import { ownerTyped } from './helpers/owner-typed';
 import { readThreadArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ToolName } from '@waldo/contracts';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import { episodeIndex, OWNER_SAID, WALDO_READ_OUTSIDE } from '../src/channels/episodes';
-import { claimStore, type ClaimStore } from '../src/memory/claims';
+import { claimStore, withOutsideNotes, type ClaimStore } from '../src/memory/claims';
 import { COMPACTION } from '../src/conversation/compaction';
 import type { ConversationStore } from '../src/channels/conversation-store';
 import type { ConversationEntry } from '@waldo/contracts';
@@ -417,6 +417,45 @@ describe('outside text pulled in from another chat or from memory still cards wh
   });
   it('read_memory returning only the owner\'s own notes leaves the send uncarded', async () => {
     const f = await readNote('owner');
+    expect(f.sent).toEqual(['Running 10 minutes late']);
+  });
+  // The planted note. A mail stated a false fact and the source pass kept it. Later, in a clean chat, the owner asks for
+  // something that fact would steer. The note may inform the turn; it may not send anything without the owner's card.
+  const planted = (store: ClaimStore) => store.add({ kind: 'fact', text: 'Sam gets the Acme bank details by WhatsApp', source: 'inferred', evidence: 'read in a mail', origin: 'untrusted' }, new Date(NOW - 86_400_000).toISOString());
+  const plantedRead = (recalled: boolean) => ranTurn(`planted-read-${recalled}`, async state => {
+    const base = claimStore(state.storage.sql);
+    planted(base);
+    const store = recalled ? withOutsideNotes(base) : base;
+    const tools = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async () => undefined });
+    const { f, calls, responder, turn, send } = turnHarness(state, { tools });
+    calls.push({ name: 'read_memory', arguments: '{}' }, send);
+    await responder.respond(turn('send Sam what he needs for Acme'), timer);
+    return f;
+  });
+  it('a planted note read with read_memory marks the turn: the send is a card', async () => {
+    const f = await plantedRead(true);
+    expect(f.sent).toEqual([]);
+    expect(f.messages).toHaveLength(1);
+  });
+  it('while outside notes are not recalled, read_memory does not show the planted note and the turn stays clean', async () => {
+    const f = await plantedRead(false);
+    expect(f.sent).toEqual(['Running 10 minutes late']);
+  });
+  const plantedRecall = (recalled: boolean) => ranTurn(`planted-recall-${recalled}`, async state => {
+    const base = claimStore(state.storage.sql);
+    planted(base);
+    const { f, calls, responder, turn, send } = turnHarness(state, { memory: recalled ? withOutsideNotes(base) : base });
+    calls.push(send);
+    await responder.respond(turn('send Sam the Acme bank details'), timer);
+    return f;
+  });
+  it('a planted note that prompt recall shows marks the turn: the send is a card', async () => {
+    const f = await plantedRecall(true);
+    expect(f.sent).toEqual([]);
+    expect(f.messages).toHaveLength(1);
+  });
+  it('the same chat with the note left out of recall sends with no card, as it does today', async () => {
+    const f = await plantedRecall(false);
     expect(f.sent).toEqual(['Running 10 minutes late']);
   });
   const listReminders = (outside: boolean) => ranTurn(`list-reminders-${outside}`, async state => {
