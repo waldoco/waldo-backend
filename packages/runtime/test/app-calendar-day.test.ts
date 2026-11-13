@@ -379,6 +379,39 @@ describe('GET /app/v1/calendar/day: Form across the day', () => {
     expect(lines.join('\n')).not.toMatch(/63\.25|\b71\b|form\.v9|"good"/);
   });
 
+  // Today's curve with its projection: measured to 08:00, projected on to 22:00, stored in the projection's version.
+  const PROJECTED = { version: 'form-curve.v1', points: [...CURVE.points, point('2026-10-03T08:15:00.000Z', 71, 'projected'), point('2026-10-03T12:00:00.000Z', 74, 'projected'), point('2026-10-03T22:00:00.000Z', 58, 'projected')] };
+
+  it('today: measured points, then the projected ones, in the projection\'s version and the row Form\'s activation', async () => {
+    const form = await formFor('owner-form-projected', rowOf({ form_curve: PROJECTED }));
+    expect(form).toEqual({ state: 'available', algorithm_version: 'form-curve.v1', activation: 'accepted', confidence: 0.8, points: PROJECTED.points });
+    const kinds = form.points.map((p: { kind: string }) => p.kind);
+    expect(kinds).toEqual(['measured', 'measured', 'measured', 'projected', 'projected', 'projected']);
+    form.points.slice(1).forEach((p: { at: string }, k: number) => expect(Date.parse(p.at)).toBeGreaterThan(Date.parse(form.points[k].at)));
+  });
+
+  it('a projected point before now is still projected, never shown as measured', async () => {
+    // Now is 09:00; the hour to 09:00 has not settled, so 08:15 is a projection of it.
+    const form = await formFor('owner-form-projected-past-now', rowOf({ form_curve: PROJECTED }));
+    expect(form.points.find((p: { at: string }) => p.at === '2026-10-03T08:15:00.000Z')).toEqual(point('2026-10-03T08:15:00.000Z', 71, 'projected'));
+  });
+
+  it('a day that is over shows what was measured, never what was projected, in the Form\'s own version', async () => {
+    const held = { version: 'form-curve.v1', points: [point('2026-10-02T07:00:00.000Z', 55.5), point('2026-10-02T20:00:00.000Z', 68), point('2026-10-02T20:15:00.000Z', 67, 'projected'), point('2026-10-02T22:00:00.000Z', 61, 'projected')] };
+    const form = await formFor('owner-form-past-projected', rowOf({ form_curve: held, form: { ...FORM, score: 66 } }, '2026-10-02'), '?day=2026-10-02');
+    expect(form).toEqual({ state: 'available', algorithm_version: 'form.v9', activation: 'accepted', confidence: 0.8, points: held.points.slice(0, 2) });
+  });
+
+  it('a curve of projected points alone, or with a measured point after a projected one, is not served', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const only = { version: 'form-curve.v1', points: [point('2026-10-03T08:15:00.000Z', 71, 'projected')] };
+    expect(await formFor('owner-form-projected-only', rowOf({ form_curve: only }))).toEqual({ state: 'unavailable', reason: 'intraday_inputs_unavailable' });
+    const mixed = { version: 'form-curve.v1', points: [point('2026-10-03T07:00:00.000Z', 63.25, 'projected'), point('2026-10-03T08:00:00.000Z', 71)] };
+    expect(await formFor('owner-form-projected-mixed', rowOf({ form_curve: mixed }))).toEqual({ state: 'unavailable', reason: 'intraday_inputs_unavailable' });
+    const unknown = { ...PROJECTED, version: 'form-curve.v2' };
+    expect(await formFor('owner-form-projected-version', rowOf({ form_curve: unknown }))).toEqual({ state: 'unavailable', reason: 'intraday_inputs_unavailable' });
+  });
+
   it('with the switch off or absent, a stored curve is not served', async () => {
     for (const curve of ['0', 'true', undefined]) {
       wire.curve = curve;

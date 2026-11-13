@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(27);
+select plan(37);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -91,6 +91,25 @@ select is(pg_temp.write('{}'::jsonb,1)->>'written','true','that day, now yesterd
 select is(pg_temp.stored(1),pg_temp.curve(),'and keeps the curve it held');
 select is(pg_temp.h('scores_read','curve-owner',jsonb_build_object('day',pg_temp.day(1)))->'scores'->'form_curve',pg_temp.curve(),'which the scores read returns for that day');
 select is(pg_temp.write(jsonb_build_object('form_curve',pg_temp.curve('{"version":"form.v9"}')),1)->>'written','true','a run that crossed midnight still writes its row, with its curve, on what is now yesterday');
+
+-- The projected part: after the measured points, in the projection's own version, and the latest measured point is still the row's Form.
+create function pg_temp.projected(extra jsonb default '{}') returns jsonb language sql as $$
+  select jsonb_build_object('version','form-curve.v1','points',jsonb_build_array(pg_temp.point(480,64.5),pg_temp.point(540,71),pg_temp.point(555,72,'projected'),pg_temp.point(1320,58,'projected'))) || extra $$;
+select is(pg_temp.write(jsonb_build_object('form_curve',pg_temp.projected()))->>'written','true','a curve of measured then projected points is written in the projection''s version');
+select is(pg_temp.h('scores_read','curve-owner',jsonb_build_object('day',pg_temp.day()))->'scores'->'form_curve',pg_temp.projected(),'and the scores read returns it');
+select ok(pg_temp.refused(pg_temp.projected('{"version":"form.v9"}')),'projected points under the Form''s own version are refused');
+select ok(pg_temp.refused(jsonb_build_object('version','form-curve.v1','points',jsonb_build_array(pg_temp.point(480,64.5),pg_temp.point(540,71)))),'measured points alone under the projection''s version are refused');
+select ok(pg_temp.refused(jsonb_build_object('version','form-curve.v1','points',jsonb_build_array(pg_temp.point(480,64.5),pg_temp.point(495,70,'projected'),pg_temp.point(540,71)))),'a measured point after a projected one is refused');
+select ok(pg_temp.refused(jsonb_build_object('version','form-curve.v1','points',jsonb_build_array(pg_temp.point(555,71,'projected')))),'a curve with no measured point is refused');
+select ok(pg_temp.refused(jsonb_build_object('version','form-curve.v1','points',jsonb_build_array(pg_temp.point(480,64.5),pg_temp.point(540,70),pg_temp.point(555,71,'projected')))),'a curve whose latest measured point is not the row''s Form score is refused');
+select ok(pg_temp.refused(jsonb_build_object('version','form-curve.v1','points',jsonb_build_array(pg_temp.point(540,71),pg_temp.point(555,72,'estimated')))),'a kind that is neither measured nor projected is refused');
+
+-- The producer's read of the stored curves, for the projection.
+select is(pg_temp.h('form_curves_read','curve-owner')->'curves',jsonb_build_array(
+  jsonb_build_object('day',pg_temp.day(1),'points',pg_temp.curve()->'points'),jsonb_build_object('day',pg_temp.day(),'points',pg_temp.projected()->'points')),
+  'the curves read returns each day''s points, oldest first');
+select ok(has_function_privilege('anon','waldo.health_form_curves_read(text,text,bigint,text)','execute') and not has_function_privilege('authenticated','waldo.health_form_curves_read(text,text,bigint,text)','execute'),
+  'only the signed runtime may call it');
 
 -- Withdrawing storage deletes the row, curve included.
 select pg_temp.h('consent_withdraw','curve-owner',jsonb_build_object('request_id','withdraw-curve-1','source','apple','purpose','storage_compute','expected_epoch',1));

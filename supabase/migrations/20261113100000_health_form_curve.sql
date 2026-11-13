@@ -1,12 +1,14 @@
--- Today's measured Form curve (ADR-0081, amendment of 27 Oct 2026 "Form through the day", sections 1 and 4), stored on the
+-- Today's Form curve, measured and projected (ADR-0081, amendment of 27 Oct 2026 "Form through the day", sections 1, 2 and 4), stored on the
 -- owner's derived row for the app's calendar day, dark behind HEALTH_FORM_CURVE. A derived value: it is kept on the derived
 -- row under that row's retention, withdrawal purge and account deletion, and no other store holds it.
 -- - public.health_context_daily gains form_curve (jsonb), nullable: a row written without it holds none. It is a column of
 --   its own, so the model's read (waldo.health_context_read) and the history read (waldo.health_scores_history), which name
 --   their columns, return nothing of it.
--- - waldo.health_form_curve_valid is the closed shape: a version name and one to ninety-six measured points, strictly forward
---   in time, each an instant and a score of 0 to 100, whose version and latest point must be the row's own Form's. It admits
---   no projected point.
+-- - waldo.health_form_curve_valid is the closed shape: a version name and one to ninety-six points, strictly forward in
+--   time, each an instant, a score of 0 to 100 and measured or projected, never a measured point after a projected one. Its
+--   latest measured point must be the row's own Form score; measured points alone name the row Form's version, and a curve
+--   with projected points names form-curve.v1.
+-- - waldo.health_form_curves_read is new: the curves the owner's last days hold, read by the producer alone for the projection.
 -- - waldo.health_context_write is re-created whole from its last definition (20261101020000) and admits form_curve through
 --   that function, only on a write for the owner's own today by the row's zone, or for yesterday (a run that crosses
 --   midnight must not lose its row), and never on a backfilled row. A write for today without it clears it. A write
@@ -17,15 +19,15 @@
 --   when it holds one. The Worker serves it only on GET /app/v1/calendar/day and leaves it out of /app/v1/health/scores.
 -- Signatures, security definer, search_path and grants of the two re-created functions are unchanged. Apply this before the
 -- Worker runs with HEALTH_FORM_CURVE on. To roll back: turn the switch off, re-create the two functions from the definitions
--- named above, then drop waldo.health_form_curve_valid and the column.
+-- named above, then drop waldo.health_form_curves_read, waldo.health_form_curve_valid and the column.
 alter table public.health_context_daily add column form_curve jsonb;
 
 create function waldo.health_form_curve_valid(p_curve jsonb, p_form jsonb) returns boolean
 language plpgsql immutable set search_path = '' as $$
-declare v_last jsonb;
+declare v_last jsonb; v_projected boolean;
 begin
-  -- A version name, and one to ninety-six measured points, strictly forward in time, each an
-  -- instant and a score of 0 to 100. A projected point is not admitted: no projection is computed.
+  -- A version name, and one to ninety-six points, strictly forward in time, each an instant, a score of 0 to 100 and whether
+  -- it was measured or is projected.
   if jsonb_typeof(p_curve) is distinct from 'object' or (select array_agg(k order by k) from jsonb_object_keys(p_curve) k) is distinct from array['points','version']
     or jsonb_typeof(p_curve->'version') is distinct from 'string' or (p_curve->>'version') !~ '^[a-z][a-z0-9-]*(\.[a-z0-9-]+)*\.v[0-9]+$' or char_length(p_curve->>'version') > 64
     or jsonb_typeof(p_curve->'points') is distinct from 'array' or jsonb_array_length(p_curve->'points') not between 1 and 96
@@ -33,12 +35,18 @@ begin
       or (select array_agg(k order by k) from jsonb_object_keys(pt) k) is distinct from array['at','kind','score']
       or jsonb_typeof(pt->'at') is distinct from 'string' or (pt->>'at') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,6})?Z$'
       or jsonb_typeof(pt->'score') is distinct from 'number' or (pt->>'score')::numeric not between 0 and 100
-      or pt->'kind' is distinct from '"measured"'::jsonb) then return false; end if;
-  if exists (select 1 from (select (pt.p->>'at')::timestamptz as at, lag((pt.p->>'at')::timestamptz) over (order by pt.n) as before_at
-      from jsonb_array_elements(p_curve->'points') with ordinality pt(p, n)) ordered where ordered.before_at >= ordered.at) then return false; end if;
-  -- The curve is the row's own Form: the version that scored the row, and the row's score as its latest point.
-  v_last := p_curve->'points'->(jsonb_array_length(p_curve->'points') - 1);
-  return coalesce(jsonb_typeof(p_form) = 'object' and not (p_form ? 'reason') and p_curve->'version' = p_form->'algorithm_version' and v_last->'score' = p_form->'score', false);
+      or jsonb_typeof(pt->'kind') is distinct from 'string' or (pt->>'kind') not in ('measured','projected')) then return false; end if;
+  -- Forward in time, and never a measured point after a projected one.
+  if exists (select 1 from (select (pt.p->>'at')::timestamptz as at, pt.p->>'kind' as kind, lag((pt.p->>'at')::timestamptz) over (order by pt.n) as before_at,
+        lag(pt.p->>'kind') over (order by pt.n) as before_kind
+      from jsonb_array_elements(p_curve->'points') with ordinality pt(p, n)) ordered
+      where ordered.before_at >= ordered.at or (ordered.before_kind = 'projected' and ordered.kind = 'measured')) then return false; end if;
+  -- The measured part is the row's own Form: its latest measured point is the row's score, so a curve holds at least one. A
+  -- curve of measured points alone names the version that scored the row; one with projected points names the projection's.
+  select pt.p into v_last from jsonb_array_elements(p_curve->'points') with ordinality pt(p, n) where pt.p->>'kind' = 'measured' order by pt.n desc limit 1;
+  v_projected := exists (select 1 from jsonb_array_elements(p_curve->'points') pt where pt->>'kind' = 'projected');
+  return coalesce(v_last is not null and jsonb_typeof(p_form) = 'object' and not (p_form ? 'reason') and v_last->'score' = p_form->'score'
+    and case when v_projected then p_curve->>'version' = 'form-curve.v1' else p_curve->'version' = p_form->'algorithm_version' end, false);
 end $$;
 revoke all on function waldo.health_form_curve_valid(jsonb, jsonb) from public, anon, authenticated, service_role;
 
@@ -274,3 +282,26 @@ begin
 exception
   when data_exception then return '{"error":"invalid_request"}';
 end $$;
+
+-- The measured curves the owner's days hold, for the projection: the producer adds to today's latest measured point the mean
+-- change between the same two slots on these days. Signed like every health read, and a row whose consent basis is not live
+-- gives nothing.
+create function waldo.health_form_curves_read(p_do_name text, p_payload text, p_at bigint, p_sig text) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare v_owner uuid; v_auth uuid;
+begin
+  if p_do_name is null or length(p_do_name) not between 1 and 240 or p_payload is null
+    or waldo.router_signed('health.form_curves_read.' || p_do_name || '.' || md5(p_payload), p_at, p_sig) is distinct from true then
+    raise exception 'unsigned router call' using errcode = '42501';
+  end if;
+  select o.id, o.auth_user_id into v_owner, v_auth from waldo.owners o join auth.users u on u.id = o.auth_user_id where o.do_name = p_do_name and o.state = 'active';
+  if v_owner is null then return '{"error":"not_linked"}'; end if;
+  if p_payload <> '{}' then return '{"error":"invalid_request"}'; end if;
+  return jsonb_build_object('curves', coalesce((
+    select jsonb_agg(jsonb_build_object('day', c.day, 'points', c.form_curve->'points') order by c.day)
+      from public.health_context_daily c join waldo.health_context_basis b on b.owner_id = v_owner and b.day = c.day
+      where c.user_id = v_auth and c.form_curve is not null and c.day >= (now() at time zone 'UTC')::date - 32
+        and waldo.health_basis_live(v_owner, b.consent_basis, false)), '[]'::jsonb));
+end $$;
+revoke all on function waldo.health_form_curves_read(text, text, bigint, text) from public, anon, authenticated, service_role;
+grant execute on function waldo.health_form_curves_read(text, text, bigint, text) to anon;

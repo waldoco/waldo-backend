@@ -86,11 +86,13 @@ const toEvent = async (connection: string, item: CalendarItem): Promise<Calendar
 const asRecord = (value: unknown): Record<string, unknown> | null => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null);
 const formSchema = calendarDayV1Schema.shape.form;
 
-// Form across the day is the measured curve the health store holds on the day's own row: the row's Form method as it read at
-// each quarter hour, computed by the health producer and never here. The health store's own reason comes first: health that is
-// not linked or not shared is said so, a day whose Form could not be scored says why, and a day that holds no curve, a curve of
-// another method than its row's Form, or an answer that cannot be read shares nothing. No point is projected.
-const formOf = (scores: unknown, day: string, now: number, served: boolean): CalendarDayV1['form'] => {
+// Form across the day is the curve the health store holds on the day's own row, computed by the health producer and never
+// here: the row's Form method as it read at each quarter hour, and, on the owner's today, the projected points that follow.
+// The health store's own reason comes first: health that is not linked or not shared is said so, a day whose Form could not
+// be scored says why, and a day that holds no curve, a curve that is neither its row Form's method nor the projection built on
+// it, or an answer that cannot be read shares nothing. A day that is over shows what was measured, never what was projected.
+const PROJECTION_VERSION = 'form-curve.v1';
+const formOf = (scores: unknown, day: string, now: number, dayEnd: number, served: boolean): CalendarDayV1['form'] => {
   const unavailable = (reason: unknown): CalendarDayV1['form'] => {
     const said = healthScoreUnavailableReasonV1Schema.safeParse(reason);
     return { state: 'unavailable', reason: said.success ? said.data : 'intraday_inputs_unavailable' };
@@ -102,12 +104,17 @@ const formOf = (scores: unknown, day: string, now: number, served: boolean): Cal
   const form = row?.day === day ? asRecord(row.form) : null;
   if (!form || 'reason' in form) return unavailable(form?.reason);
   const curve = served ? asRecord(row?.form_curve) : null;
-  if (!curve || curve.version !== form.algorithm_version || !Array.isArray(curve.points)) return unavailable(undefined);
-  // A point is measured only once its instant has passed.
-  const points = curve.points.filter(point => { const at = Date.parse(String(asRecord(point)?.at)); return Number.isFinite(at) && at <= now; });
-  const available = formSchema.safeParse({ state: 'available', algorithm_version: curve.version, activation: form.activation, confidence: typeof form.confidence === 'number' ? form.confidence : null, points });
+  if (!curve || (curve.version !== form.algorithm_version && curve.version !== PROJECTION_VERSION) || !Array.isArray(curve.points)) return unavailable(undefined);
+  // A point is measured only once its instant has passed, and projected only while the day is still running.
+  const points = curve.points.filter(point => {
+    const p = asRecord(point), at = Date.parse(String(p?.at));
+    return p?.kind === 'projected' ? now < dayEnd : Number.isFinite(at) && at <= now;
+  });
+  const projected = points.some(point => asRecord(point)?.kind === 'projected');
+  const available = formSchema.safeParse({ state: 'available', algorithm_version: projected ? PROJECTION_VERSION : form.algorithm_version, activation: form.activation,
+    confidence: typeof form.confidence === 'number' ? form.confidence : null, points });
   if (!available.success) console.error('app calendar day form curve shape');
-  return available.success && points.length > 0 ? available.data : unavailable(undefined);
+  return available.success && points.some(point => asRecord(point)?.kind === 'measured') ? available.data : unavailable(undefined);
 };
 
 export const appCalendarDayRequest = async (request: Request, host: CalendarDayHost): Promise<Response> => {
@@ -137,7 +144,7 @@ export const appCalendarDayRequest = async (request: Request, host: CalendarDayH
   const body = calendarDayV1Schema.safeParse({
     day, timezone, compiled_at: readAt, freshness: 'fresh',
     calendar: calendar.state === 'available' ? { state: 'available', read_at: readAt } : { state: calendar.state },
-    events: unique, form: formOf(scores, day, host.now(), host.formCurve),
+    events: unique, form: formOf(scores, day, host.now(), window.end, host.formCurve),
   });
   if (!body.success) { log(false, 'shape'); return refuse('unavailable', 503); }
   log(true, `calendar_${calendar.state}`, unique.length);

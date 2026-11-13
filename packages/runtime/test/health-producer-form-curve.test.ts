@@ -30,13 +30,14 @@ const series = (nights = 20) => ({
   sources: [{ source: 'apple', consent_epoch: 3, truncated: false, samples: Array.from({ length: nights }, (_, i) => dayOfReadings(addDays(TODAY, -i), i, i === 0 ? 15 : 24)).flat() }],
 });
 type Row = Record<string, any>;
-const written = async (formCurve: boolean | undefined, samples = series(), flag: string | undefined = '1'): Promise<Row[]> => {
+const written = async (formCurve: boolean | undefined, samples = series(), flag: string | undefined = '1', readCurves?: () => Promise<unknown>): Promise<Row[]> => {
   const rows: Row[] = [];
   await produceHealthScores({
     readSeries: async range => ({ ...samples, sources: samples.sources.map(x => ({ ...x, samples: x.samples.filter(e => range.signals.includes(String(e.signal))) })) }),
     writeContext: async payload => { rows.push(JSON.parse(payload) as Row); return { written: true }; },
     compute: dailyScoresFor(flag),
     ...(formCurve === undefined ? {} : { formCurve }),
+    ...(readCurves ? { readCurves } : {}),
   }, { now: NOW, timezone: 'UTC' });
   return rows;
 };
@@ -102,5 +103,59 @@ describe('the derived row: today\'s measured Form curve', () => {
     const today = payloads.find(payload => (JSON.parse(payload) as Row).day === TODAY)!;
     expect((JSON.parse(today) as Row).form_curve.points.length).toBeGreaterThan(60);
     expect(new TextEncoder().encode(today).length).toBeLessThan(16_384);
+  });
+});
+
+// The projected points: the earlier days' stored curves come from the health store's own read, and the measured part is untouched.
+describe('the derived row: today\'s projected Form curve', () => {
+  // Each earlier day woke at 07:00 and holds a measured point every quarter hour to 22:00, climbing a point an hour.
+  const heldCurves = (n: number) => ({ curves: Array.from({ length: n }, (_, k) => ({ day: addDays(TODAY, -(k + 1)),
+    points: Array.from({ length: 61 }, (_, slot) => ({ at: new Date(Date.parse(at(addDays(TODAY, -(k + 1)), 7)) + slot * 900_000).toISOString(), score: 50 + Math.floor(slot / 4), kind: 'measured' })) })) });
+  const todayOf = async (readCurves?: () => Promise<unknown>) => (await written(true, series(), '1', readCurves)).find(r => r.day === TODAY)!;
+
+  it('follows the measured points with projected ones, in the projection\'s version, and leaves the measured part as it was', async () => {
+    const plain = await todayOf(), projected = await todayOf(async () => heldCurves(10));
+    expect(projected.form_curve.version).toBe('form-curve.v1');
+    const points = projected.form_curve.points as { at: string; score: number; kind: string }[];
+    const measured = points.filter(point => point.kind === 'measured');
+    expect(measured).toEqual(plain.form_curve.points);
+    expect(measured.at(-1)).toEqual({ at: at(TODAY, 14), score: projected.form.score, kind: 'measured' });
+    const after = points.slice(measured.length);
+    expect(after.length).toBeGreaterThan(0);
+    expect(after.every(point => point.kind === 'projected')).toBe(true);
+    expect(after[0]!.at).toBe('2026-03-20T14:15:00.000Z');
+    // Fifteen hours after a 07:00 wake is where every earlier day's curve ends, and before the usual 23:00 sleep start.
+    expect(after.at(-1)!.at).toBe(at(TODAY, 22));
+    // An hour on, the earlier days had each climbed a point.
+    expect(after.find(point => point.at === at(TODAY, 15))!.score).toBe(projected.form.score + 1);
+    points.slice(1).forEach((point, k) => expect(Date.parse(point.at) - Date.parse(points[k]!.at)).toBe(900_000));
+    expect(points.length).toBeLessThanOrEqual(96);
+    const { form_curve: _a, ...restProjected } = projected, { form_curve: _b, ...restPlain } = plain;
+    expect(restProjected).toEqual(restPlain);
+  });
+  it('writes the measured curve alone, in the Form\'s own version, when fewer than seven earlier days hold a curve', async () => {
+    const plain = await todayOf();
+    for (const held of [heldCurves(6), { curves: [] }]) expect((await todayOf(async () => held)).form_curve).toEqual(plain.form_curve);
+  });
+  it('writes the measured curve alone when the stored curves cannot be read or do not read as curves', async () => {
+    const plain = await todayOf();
+    for (const answer of [null, { error: 'not_linked' }, { curves: 'synthetic' }, { curves: [{ day: 'yesterday', points: [] }, { day: addDays(TODAY, -1), points: 'none' }] }]) {
+      expect((await todayOf(async () => answer)).form_curve, JSON.stringify(answer)).toEqual(plain.form_curve);
+    }
+    expect((await todayOf(async () => { throw new Error('synthetic read failure'); })).form_curve).toEqual(plain.form_curve);
+  });
+  it('keeps the measured curve when the projection cannot be computed, and logs no value', async () => {
+    const plain = await todayOf();
+    vi.spyOn(curveModule, 'formProjection').mockImplementation(() => { throw new Error('synthetic projection failure 71.5'); });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    expect((await todayOf(async () => heldCurves(10))).form_curve).toEqual(plain.form_curve);
+    expect(errors.mock.calls).toEqual([['health form projection failed']]);
+  });
+  it('never asks for the stored curves with the switch off, or when today has no curve', async () => {
+    let asked = 0;
+    const read = async () => { asked += 1; return heldCurves(10); };
+    await written(false, series(), '1', read);
+    await written(true, series(1), '1', read);
+    expect(asked).toBe(0);
   });
 });

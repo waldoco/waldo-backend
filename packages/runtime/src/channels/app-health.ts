@@ -234,7 +234,7 @@ const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, not
     readHistory: days => invokeHealth(rpc, doName, 'scores_history', JSON.stringify({ days })),
     compute,
     ...(trainingLoad ? { trainingLoad } : {}),
-    ...(formCurve ? { formCurve } : {}),
+    ...(formCurve ? { formCurve, readCurves: () => invokeHealth(rpc, doName, 'form_curves_read', '{}') } : {}),
     ...(coaching ? { readSettings: () => invokeHealth(rpc, doName, 'settings_read', '{}') } : {}),
     ...(readDemand ? { readDemand } : {}),
     ...(notifyZoneChange ? { onZoneChange: notifyZoneChange } : {}),
