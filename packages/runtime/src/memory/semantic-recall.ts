@@ -83,7 +83,9 @@ export type SemanticLog = (event: SemanticEvent) => void;
 export const semanticTraceEntry = (event: SemanticEvent): TurnLogEntry => ({ trace: 'memory:semantic', ms: 0, ...event });
 
 // Precondition: the claims table exists (claimStore has run on this sql).
-export const semanticRecall = ({ sql, transaction, embedder, sweepEmbedder = embedder, kv, now = Date.now, defer, log }: Readonly<{
+export const semanticRecall = ({ sql, transaction, embedder, sweepEmbedder = embedder, kv, now = Date.now, defer, log, outside = false }: Readonly<{
+  // Also embed and rank notes learned from outside content. They only rank: the store's recall still decides who reads them.
+  outside?: boolean;
   sql: Pick<SqlStorage, 'exec'>;
   transaction: <T>(work: () => T) => T;
   // Queries use embedder; the background sweep uses sweepEmbedder, the same model with a longer wait.
@@ -118,7 +120,7 @@ export const semanticRecall = ({ sql, transaction, embedder, sweepEmbedder = emb
       throw error;
     }
   };
-  const RECALLABLE = `c.status IN ('active', 'promoted') AND COALESCE(c.origin, '') != 'untrusted' AND c.kind != '${NODE_STATEMENT}'`;
+  const RECALLABLE = `c.status IN ('active', 'promoted')${outside ? '' : " AND COALESCE(c.origin, '') != 'untrusted'"} AND c.kind != '${NODE_STATEMENT}'`;
 
   // One bounded pass: embed recallable claims with no vector for this model. It is the only writer of claim_vectors and the
   // only retry owner; a failed call leaves the rows missing, and the next kick picks them up. Lexical recall never waits on it.
@@ -211,5 +213,5 @@ export const semanticRecall = ({ sql, transaction, embedder, sweepEmbedder = emb
 export type SemanticRecall = ReturnType<typeof semanticRecall>;
 
 // Off unless the deploy sets MEMORY_SEMANTIC_RECALL=1 and binds Workers AI.
-export const semanticRecallFromEnv = (env: Readonly<{ MEMORY_SEMANTIC_RECALL?: string; AI?: EmbeddingRunner }>, deps: Omit<Parameters<typeof semanticRecall>[0], 'embedder' | 'sweepEmbedder'>): SemanticRecall | undefined =>
-  env.MEMORY_SEMANTIC_RECALL === '1' && env.AI ? semanticRecall({ ...deps, embedder: workersAiEmbedder(env.AI), sweepEmbedder: workersAiEmbedder(env.AI, SWEEP_TIMEOUT_MS) }) : undefined;
+export const semanticRecallFromEnv = (env: Readonly<{ MEMORY_SEMANTIC_RECALL?: string; MEMORY_OUTSIDE_NOTES?: string; AI?: EmbeddingRunner }>, deps: Omit<Parameters<typeof semanticRecall>[0], 'embedder' | 'sweepEmbedder' | 'outside'>): SemanticRecall | undefined =>
+  env.MEMORY_SEMANTIC_RECALL === '1' && env.AI ? semanticRecall({ ...deps, outside: env.MEMORY_OUTSIDE_NOTES === '1', embedder: workersAiEmbedder(env.AI), sweepEmbedder: workersAiEmbedder(env.AI, SWEEP_TIMEOUT_MS) }) : undefined;
