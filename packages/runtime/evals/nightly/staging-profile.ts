@@ -131,6 +131,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   MEMORY_NIGHTLY_SOURCE_UPDATES: gap('the nightly memory pass is not run in a trial'),
   MEMORY_CLAIM_CONTROLS: inert('the app\'s claim controls (confirm, forget, dismiss, bring up less) are an app read; the trial runs no app controls'),
   MEMORY_VALIDITY: gap('the trial turns on recall of replaced facts and read_memory include_replaced, as staging has them; the nightly pass that retires a contradicted claim is not run in a trial'),
+  MEMORY_OUTSIDE_NOTES: gap('recall of notes learned from mail and calendar is not turned on in a trial'),
   MEMORY_USED_SHOWN: inert('the app shows which notes a reply looked at; the trial reads no app history'),
   MEMORY_DAYTIME_CONSOLIDATOR: gap('the daytime memory pass is not run in a trial'),
   WALDO_IMESSAGE_PROGRESS: gap('iMessage progress notes; the trial runs the app surface; staging has them off'),
