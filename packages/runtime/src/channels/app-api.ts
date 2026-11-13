@@ -67,6 +67,27 @@ export const readBoundedBody = async (request:Request, max:number, timeoutMs=500
   const bytes=new Uint8Array(size);let at=0;for(const chunk of chunks){bytes.set(chunk,at);at+=chunk.byteLength;}return bytes;
 };
 
+// The Worker's half of a chat upload, for the app's bearer and the console's owner cookie alike. It spends its own per-owner
+// budget and is bounded at the attachment cap before it is read; a voice note or photo comes from a phone, so the read may take
+// up to a minute. Off, the route is not there. The owner object stays the authority on what it keeps.
+export const forwardAppUpload = async (request: Request, env: Readonly<{ owners: DurableObjectNamespace; limiter: RateLimit; on: boolean }>, doName: string, sessionHash: string): Promise<Response> => {
+  if (!env.on) return fail(404);
+  if (request.method !== 'POST') return fail(405);
+  try { if (!(await env.limiter.limit({ key: `app-upload:${doName}` })).success) return fail(429); } catch { return fail(503); }
+  const length = request.headers.get('content-length');
+  if (length && (!/^\d+$/.test(length) || Number(length) > APP_CHAT_UPLOAD_MAX_BYTES)) return fail(413);
+  const asked = appUploadHeaders(request.headers);
+  if ('refused' in asked) return Response.json({ error: asked.refused.error }, { status: asked.refused.status, headers: { 'cache-control': 'no-store' } });
+  const body = await readBoundedBody(request, APP_CHAT_UPLOAD_MAX_BYTES, UPLOAD_READ_MS);
+  if (!body) return fail(413);
+  const forwarded = new Request(`https://telegram-owner${APP_CHAT_UPLOAD_PATH}`, { method: 'POST', body, headers: {
+    'x-waldo-do-name': doName, 'x-waldo-app-session-hash': sessionHash,
+    'content-type': request.headers.get('content-type') ?? '', [APP_CHAT_UPLOAD_KIND_HEADER]: request.headers.get(APP_CHAT_UPLOAD_KIND_HEADER) ?? '',
+    ...(request.headers.has(APP_CHAT_UPLOAD_NAME_HEADER) ? { [APP_CHAT_UPLOAD_NAME_HEADER]: request.headers.get(APP_CHAT_UPLOAD_NAME_HEADER)! } : {}),
+  } });
+  try { return await env.owners.get(env.owners.idFromName(doName)).fetch(forwarded); } catch { return fail(503); }
+};
+
 const bearer = (request: Request): string | null => {
   const match = /^Bearer ([^\s]{20,512})$/.exec(request.headers.get('authorization') ?? '');
   return match ? match[1]! : null;
@@ -275,25 +296,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     const secret = env.WALDO_ROUTER_HMAC_SECRET;
     return handleAppDeviceContext({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody, ...(secret ? { moved: () => notifyOwnerPlaceMoved(owners, secret, who.doName) } : {}), ...(secret && env.ARRIVAL_LOOK === '1' ? { arrived: (place: ArrivalPlace) => notifyOwnerPlaceArrived(owners, secret, who.doName, place) } : {}), ...(defer ? { defer } : {}) });
   }
-  // A chat attachment spends its own per-owner budget and is bounded at the attachment cap before it is read; a voice note or
-  // photo comes from a phone, so the read may take up to a minute. Off, the route is not there.
-  if (url.pathname === APP_CHAT_UPLOAD_PATH) {
-    if (env.APP_CHAT_ATTACHMENTS !== '1') return fail(404);
-    if (request.method !== 'POST') return fail(405);
-    try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-upload:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
-    const length = request.headers.get('content-length');
-    if (length && (!/^\d+$/.test(length) || Number(length) > APP_CHAT_UPLOAD_MAX_BYTES)) return fail(413);
-    const asked = appUploadHeaders(request.headers);
-    if ('refused' in asked) return Response.json({ error: asked.refused.error }, { status: asked.refused.status, headers: { 'cache-control': 'no-store' } });
-    const body = await readBoundedBody(request, APP_CHAT_UPLOAD_MAX_BYTES, UPLOAD_READ_MS);
-    if (!body) return fail(413);
-    const forwarded = new Request(`https://telegram-owner${APP_CHAT_UPLOAD_PATH}`, { method: 'POST', body, headers: {
-      'x-waldo-do-name': who.doName, 'x-waldo-app-session-hash': await linkCodeHash(sessionIdOf(who.credential)!),
-      'content-type': request.headers.get('content-type') ?? '', [APP_CHAT_UPLOAD_KIND_HEADER]: request.headers.get(APP_CHAT_UPLOAD_KIND_HEADER) ?? '',
-      ...(request.headers.has(APP_CHAT_UPLOAD_NAME_HEADER) ? { [APP_CHAT_UPLOAD_NAME_HEADER]: request.headers.get(APP_CHAT_UPLOAD_NAME_HEADER)! } : {}),
-    } });
-    try { return await owners.get(owners.idFromName(who.doName)).fetch(forwarded); } catch { return fail(503); }
-  }
+  if (url.pathname === APP_CHAT_UPLOAD_PATH) return forwardAppUpload(request, { owners, limiter: env.RESPONSIBILITY_RATE_LIMITER, on: env.APP_CHAT_ATTACHMENTS === '1' }, who.doName, await linkCodeHash(sessionIdOf(who.credential)!));
   // The phone's calendar spends its own per-owner budget and is answered by the owner's object, which holds its consent and
   // events. Off, the routes are not there.
   if (url.pathname === APP_DEVICE_CALENDAR_PATH || url.pathname.startsWith(`${APP_DEVICE_CALENDAR_PATH}/`)) {
