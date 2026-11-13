@@ -3,8 +3,8 @@ import { LLM_ATTACHMENTS_MAX, opaqueIMessageIdSchema as id, type IMessageEvent, 
 import { normaliseHost } from '../../security/public-host';
 import type { InboundPart } from '../owner-inbound-turn';
 import { keptNote, type UploadKeeper } from '../upload-keeper';
-import { loadTelegramMedia, readableAs, toBase64, type Transcriber } from '../telegram-media';
-import { readableBytes, typeUndeclared } from '../readable-file';
+import { loadTelegramMedia, readableAs, type Transcriber } from '../telegram-media';
+import { modelFile, typeUndeclared } from '../readable-file';
 import { PHOTON_ID } from './photon';
 
 // Photos and files sent to Waldo on iMessage. A host forwards only Photon's metadata for each attachment; the owner's
@@ -146,9 +146,9 @@ export const IMESSAGE_MEDIA_REPLIES = {
 } as const;
 
 /** What the owner sent, as the model and the conversation read it beside the files. */
-export const iMessageMediaNotes = (files: readonly MediaFile[]): readonly InboundPart[] => files.map(file => ({ authorship: 'media_note',
+export const iMessageMediaNotes = (files: readonly MediaFile[], asText: readonly boolean[] = []): readonly InboundPart[] => files.map((file, index) => ({ authorship: 'media_note',
   text: isVoiceMessage(file) ? '[Owner sent a voice note.]' : isVoice(file) ? `[Owner sent an audio file "${file.name}".]` : readableAs({ kind: 'document', fileId: '', fileName: file.name, mimeType: file.mimeType, fileSize: file.size })?.kind === 'image'
-    ? '[Owner sent a photo, attached.]' : `[Owner sent a file "${file.name}", attached.]` }));
+    ? '[Owner sent a photo, attached.]' : `[Owner sent a file "${file.name}", attached${asText[index] ? ' as its text only' : ''}.]` }));
 
 export type OpenedIMessageMedia =
   | Readonly<{ kind: 'opened'; parts: readonly InboundPart[]; attachments: readonly LLMAttachment[] }>
@@ -206,7 +206,7 @@ export const openIMessageMedia = async (media: IMessageMedia, deps: OpenIMessage
     maxBytes: IMESSAGE_MEDIA_MAX_BYTES, signal: AbortSignal.any([deps.signal, AbortSignal.timeout(IMESSAGE_MEDIA_TIMEOUT_MS)]) });
   deps.admit();
   if (!fetched.ok || fetched.bytes.length !== files.length) return reply(IMESSAGE_MEDIA_REPLIES.unopened(files), fetched.ok ? 'unexpected_response' : fetched.code);
-  const readable = files.map((file, index) => readableBytes(fetched.bytes[index]!, file.mimeType, file.name));
+  const readable = await Promise.all(files.map((file, index) => modelFile(fetched.bytes[index]!, file.mimeType, file.name)));
   if (!deps.keep && readable.some(kind => kind === null)) return reply(IMESSAGE_MEDIA_REPLIES.format(files), 'unreadable_type');
   console.log(JSON.stringify({ hop: 'imessage_media', ok: true, files: files.length }));
   if (deps.keep) {
@@ -214,13 +214,13 @@ export const openIMessageMedia = async (media: IMessageMedia, deps: OpenIMessage
     for (const [index, file] of files.entries()) {
       const kept = await deps.keep({ bytes: fetched.bytes[index]!, filename: file.name, mime: file.mimeType, key: `imessage:${media.messageGuid}:${index}` });
       deps.admit();
-      parts.push({ authorship: 'media_note', text: keptNote(readable[index]?.kind === 'image' ? 'a photo' : `a file "${file.name}"`, kept, readable[index] !== null) });
+      parts.push({ authorship: 'media_note', text: keptNote(readable[index]?.file.kind === 'image' ? 'a photo' : `a file "${file.name}"`, kept, readable[index] !== null, readable[index]?.extracted) });
     }
-    return { kind: 'opened', parts, attachments: readable.flatMap((kind, index) => kind ? [{ ...kind, data_base64: toBase64(fetched.bytes[index]!) }] : []) };
+    return { kind: 'opened', parts, attachments: readable.flatMap(opened => opened ? [opened.attachment] : []) };
   }
   return {
     kind: 'opened',
-    parts: iMessageMediaNotes(files.map((file, index) => ({ ...file, mimeType: readable[index]!.mime_type }))),
-    attachments: readable.map((kind, index) => ({ ...kind!, data_base64: toBase64(fetched.bytes[index]!) })),
+    parts: iMessageMediaNotes(files.map((file, index) => ({ ...file, mimeType: readable[index]!.file.mime_type })), readable.map(opened => opened!.extracted)),
+    attachments: readable.map(opened => opened!.attachment),
   };
 };

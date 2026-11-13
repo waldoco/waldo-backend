@@ -124,6 +124,20 @@ describe('a voice note, photo or file sent in the app chat', { timeout: 30_000 }
     });
   });
 
+  it('a Word file goes to the model as its text, which either provider reads', async () => {
+    await fixture('attach-docx', ON, async ({ upload, send, settled }) => {
+      const { Document, Packer, Paragraph } = await import('docx');
+      const docx = new Uint8Array(await (await Packer.toBlob(new Document({ sections: [{ children: [new Paragraph('Notice period: two months, from the 1st.')] }] }))).arrayBuffer());
+      const doc = await uploaded(await upload('file', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', docx, 'lease.docx'));
+      model.requests = [];
+      await settled(await admitted(await send('docx-client-0001', { text: 'What is the notice period?', attachments: [{ upload_id: doc.upload_id }] })));
+      const sent = model.requests.join('\n');
+      expect(sent).toContain('Owner sent a file \\"lease.docx\\", attached as its text only.');
+      expect(sent).toContain('"mime_type":"text/plain","filename":"lease.docx.txt"');
+      expect(sent).toContain(base64(new TextEncoder().encode('Notice period: two months, from the 1st.')));
+    });
+  });
+
   it('a voice note that cannot be transcribed still runs the turn and says so, and its audio is still dropped', async () => {
     await fixture('attach-voice-stt-down', ON, async ({ upload, send, settled, staged }) => {
       stt.fail = true;

@@ -5,8 +5,8 @@ import { artifactMarker, extractArtifacts } from '../../security/artifact-hygien
 import { BodyWithheld, omitLongRuns, READ_BODY_BUDGET, scribedExternal } from '../../tools/live/google';
 import { checkBackReply, OUTSIDE_TEXT_JOB_TOOLS } from '../check-back';
 import { ClosedRunError } from '../run-effect-scope';
-import { readableBytes } from '../readable-file';
-import { TELEGRAM_DOWNLOAD_LIMIT_BYTES, toBase64 } from '../telegram-media';
+import { modelFile } from '../readable-file';
+import { TELEGRAM_DOWNLOAD_LIMIT_BYTES } from '../telegram-media';
 import type { KeptUpload, UploadKeeper } from '../upload-keeper';
 import type { AgentMailInbox, AgentMailRow } from './inbox';
 import { messageIds } from './ingress';
@@ -47,19 +47,19 @@ export const mailForModel = async (raw: Uint8Array, row: Pick<AgentMailRow, 'id'
   // Files listed as attachments come before parts the mail shows inline (a signature logo), so the files the sender
   // attached take the slots first.
   const files = [...mail.attachments].sort((a, b) => Number(a.disposition === 'inline') - Number(b.disposition === 'inline'));
-  const opened: { readable: Omit<LLMAttachment, 'data_base64'>; bytes: Uint8Array }[] = [];
+  const opened: LLMAttachment[] = [];
   const unopened: string[] = [];
   const keepable: { bytes: Uint8Array; filename: string; mime: string; key: string }[] = [];
   for (const [index, file] of files.entries()) {
     const filename = cleaned((file.filename ?? 'attachment').slice(0, 256)) || 'attachment';
     const bytes = new Uint8Array(file.content as ArrayBuffer);
-    const readable = readableBytes(bytes, file.mimeType, filename);
+    const readable = bytes.byteLength > TELEGRAM_DOWNLOAD_LIMIT_BYTES ? null : await modelFile(bytes, file.mimeType, filename);
     if (keep && bytes.byteLength > 0 && file.disposition !== 'inline') keepable.push({ bytes, filename, mime: file.mimeType, key: `mail:${row.id}:${index}` });
     if (!readable || opened.length >= LLM_ATTACHMENTS_MAX || bytes.byteLength === 0 || bytes.byteLength > TELEGRAM_DOWNLOAD_LIMIT_BYTES) {
-      unopened.push(`${filename} (${file.mimeType}${readable || keep ? '' : ', a type Waldo cannot read'})`);
+      unopened.push(`${filename} (${file.mimeType}${readable || keep || bytes.byteLength > TELEGRAM_DOWNLOAD_LIMIT_BYTES ? '' : ', a type Waldo cannot read'})`);
       continue;
     }
-    opened.push({ readable, bytes });
+    opened.push(readable.attachment);
   }
   let view: Readonly<{ from: string[]; to: string[]; cc: string[]; date: string | null; message_id: string | null; subject: string; body: string; attached_and_opened: string[]; attached_not_opened: string[]; saved_to_workspace?: string[] }>;
   try {
@@ -67,7 +67,7 @@ export const mailForModel = async (raw: Uint8Array, row: Pick<AgentMailRow, 'id'
       // Kept whole, so a reply can name it in in_reply_to.
       from: named(mail.from), to: named(mail.to), cc: named(mail.cc), date: mail.date ?? null, message_id: messageIds(mail.messageId ?? null).map(id => `<${id}>`)[0] ?? null,
       subject: cleaned(mail.subject ?? ''), body: cleaned(text),
-      attached_and_opened: opened.map(file => file.readable.filename), attached_not_opened: unopened,
+      attached_and_opened: opened.map(file => file.filename), attached_not_opened: unopened,
     }, canaries);
   } catch (error) {
     if (error instanceof BodyWithheld) return { text: WITHHELD_MAIL, attachments: [] };
@@ -93,7 +93,7 @@ export const mailForModel = async (raw: Uint8Array, row: Pick<AgentMailRow, 'id'
       `<mail>\n${JSON.stringify(shown)}\n</mail>`,
       'Tell the owner what matters in it, in your own words. If a change follows (a reply, a calendar change, a reminder), propose it with propose_action: the owner gets it as a card to approve. When send_agent_mail is among your tools, a reply from the Waldo address goes through it instead, with in_reply_to set to the message_id above; it raises its own card. If none of it is worth their attention now, reply with exactly SKIP.',
     ].join('\n\n'),
-    attachments: opened.map((file, index) => ({ ...file.readable, filename: view.attached_and_opened[index] ?? file.readable.filename, data_base64: toBase64(file.bytes) })),
+    attachments: opened.map((file, index) => ({ ...file, filename: view.attached_and_opened[index] ?? file.filename })),
   };
 };
 

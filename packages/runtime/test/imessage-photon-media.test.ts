@@ -164,6 +164,15 @@ describe('openIMessageMedia', () => {
     expect(await openIMessageMedia(media(scan), deps(opened([new Uint8Array([0x4d, 0x5a, 0, 1])])))).toEqual({ kind: 'reply', text: "I got your file but can't read that format here; send it in the app." });
   });
 
+  it('opens a Word file as its text', async () => {
+    const { Document, Packer, Paragraph } = await import('docx');
+    const bytes = new Uint8Array(await (await Packer.toBlob(new Document({ sections: [{ children: [new Paragraph('Agenda: budget, hiring.')] }] }))).arrayBuffer());
+    const docx = { id: 'att-docx', name: 'Agenda.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: bytes.length };
+    expect(await openIMessageMedia(media(docx), deps(opened([bytes])))).toEqual({ kind: 'opened',
+      parts: [{ authorship: 'media_note', text: '[Owner sent a file "Agenda.docx", attached as its text only.]' }],
+      attachments: [{ kind: 'file', mime_type: 'text/plain', filename: 'Agenda.docx.txt', data_base64: btoa('Agenda: budget, hiring.') }] });
+  });
+
   it('answers once and fetches nothing while IMESSAGE_MEDIA is off', async () => {
     const d = deps(opened([PNG]), false);
     expect(await openIMessageMedia(media(photo), d)).toEqual({ kind: 'reply', text: "I got your photo but couldn't open it here; send it in the app." });
