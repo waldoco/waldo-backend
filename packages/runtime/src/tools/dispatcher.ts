@@ -50,6 +50,7 @@ import {
 import { DEEP_ENCODING_MARKER, guardForOffload, sanitiseDenialLabel } from '../scribe/sanitiser';
 import { sha256Hex, stableJson } from '../context-composer/canonical';
 import type { StoredPut, ToolOutputStore } from '../conversation/tool-output-store';
+import type { OpenFile } from '../channels/opened-files';
 
 export type RuntimeToolCall = {
   id: string;
@@ -87,6 +88,8 @@ export type ToolDispatcherContext = HookRuntimeContext & {
   turnId?: string;
   toolCallId?: string;
   runScope?: RunEffectScope;
+  // Attaches a workspace file the model opened to the turn's next model step. Absent where no turn's model can take one.
+  openFile?: OpenFile;
   session: SessionState;
   // A host hold on one tool for now (the owner's spend ceiling): the call is refused before anything runs.
   heldTool?: (tool: ToolName) => ToolError | null;
