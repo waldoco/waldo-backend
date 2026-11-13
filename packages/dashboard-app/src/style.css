@@ -819,6 +819,36 @@ footer .refresh:disabled { opacity:1; }
 .composer-send:disabled { opacity:.2; }
 .composer-send .icon { width:15px; height:15px; }
 .composer-send.stop i { width:11px; height:11px; border-radius:3px; background:currentColor; }
+/* Attachments: a paperclip in the composer, a chip for the file being sent, and what was sent above the owner's bubble. */
+.composer-bar #chat-hint { flex:1; min-width:0; }
+.composer-attach { flex:none; width:34px; height:34px; min-height:34px; padding:0; margin-left:-8px; border-radius:50%; background:transparent; color:var(--t2); }
+.composer-attach:hover:not(:disabled) { background:var(--fill-2); color:var(--ink); }
+.composer-attach:disabled { opacity:.35; cursor:default; }
+.composer-attach .icon { width:18px; height:18px; }
+.composer-attachment { display:flex; align-items:center; gap:10px; align-self:flex-start; max-width:100%; margin:0 0 6px -6px; padding:6px 6px 6px 6px; border-radius:var(--r-inner); background:var(--fill); box-shadow:0 0 0 .5px var(--hair); animation:rise .3s var(--ease) backwards; }
+.composer-attachment.failed { background:var(--red-soft); box-shadow:0 0 0 .5px var(--red); }
+.composer-thumb { flex:none; width:40px; height:40px; border-radius:8px; object-fit:cover; background:var(--fill-2); }
+.composer-thumb.file { display:grid; place-items:center; color:var(--t2); }
+.composer-thumb.file .icon { width:16px; height:20px; }
+.composer-attachment-text { flex:1; display:flex; flex-direction:column; min-width:0; gap:1px; }
+.composer-attachment-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13.5px; font-weight:500; color:var(--ink); }
+.composer-attachment .meta { font-size:12px; }
+.composer-attachment-error { font-size:12px; color:var(--ink); }
+.composer-attachment .quiet-link { flex:none; min-height:28px; font-size:12.5px; }
+.composer-attachment-remove { flex:none; width:28px; height:28px; min-height:28px; padding:0; border-radius:50%; background:transparent; color:var(--t2); font-size:18px; line-height:1; }
+.composer-attachment-remove:hover:not(:disabled) { background:var(--fill-2); color:var(--ink); }
+.chat-attached-image { display:block; max-width:min(260px,100%); margin-bottom:6px; border-radius:16px; overflow:hidden; box-shadow:0 0 0 .5px var(--hair-strong); }
+.chat-attached-image img { display:block; width:100%; max-height:260px; object-fit:cover; }
+.chat-attached-image:focus-visible { outline:2px solid var(--action); outline-offset:2px; }
+.chat-attached-file { display:inline-flex; align-items:center; gap:8px; max-width:100%; margin-bottom:6px; padding:8px 12px; border-radius:14px; background:var(--tile); box-shadow:0 0 0 .5px var(--hair-strong); font-size:13.5px; color:var(--ink); }
+.chat-attached-file .icon { width:13px; height:16px; color:var(--t2); }
+.chat-attached-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
+.chat-attached-file .meta { flex:none; font-size:12px; }
+.chat-drop { position:fixed; inset:0; z-index:20; display:grid; place-items:center; padding:24px; pointer-events:none; background:color-mix(in srgb,var(--canvas) 82%,transparent); animation:rise .2s var(--ease) backwards; }
+.chat-drop>div { display:flex; flex-direction:column; align-items:center; gap:6px; padding:28px 36px; border-radius:var(--r-card); border:1.5px dashed var(--hair-strong); background:var(--tile); text-align:center; }
+.chat-drop .icon { width:26px; height:26px; color:var(--ink); }
+.chat-drop p { margin:0; color:var(--ink); font-weight:500; }
+.chat-drop p.meta { color:var(--t3); font-weight:400; }
 @media(max-width:640px) {
   .chat { min-height:calc(100dvh - 54px); }
   .chat-head { padding-top:18px; }
@@ -828,7 +858,10 @@ footer .refresh:disabled { opacity:1; }
   .chat-main { padding-bottom:calc(64px + env(safe-area-inset-bottom)); }
   #chat-hint { display:none; }
   .composer.over #chat-hint { display:block; }
-  .composer { flex-direction:row; align-items:flex-end; padding:8px 8px 8px 16px; }
+  .composer { flex-direction:row; flex-wrap:wrap; align-items:flex-end; padding:8px 8px 8px 16px; }
+  .composer textarea { flex:1 1 120px; min-width:0; width:auto; }
+  .composer-attachment { flex:0 0 100%; margin-left:0; }
+  .composer-bar { flex:none; }
   .composer textarea { padding:5px 0; }
 }
 
