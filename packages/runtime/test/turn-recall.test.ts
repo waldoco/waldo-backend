@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { claimStore, withOutsideNotes, type ClaimStore } from '../src/memory/claims';
+import { claimStore, memoryPrompt, withOutsideNotes, type ClaimStore } from '../src/memory/claims';
 import { carriesTopic } from '../src/memory/forget-guard';
 import { carriesOthersWords, episodeIndex, OWNER_SAID, type EpisodeIndex } from '../src/channels/episodes';
 import { episodesFromSearchTool, RECALL_MAX_CHARS, recallForTurn, recallTerms, type RecallEpisodes } from '../src/memory/turn-recall';
@@ -54,6 +54,20 @@ describe('recall marks a line that may carry someone else\'s words', () => {
       expect(recall.outside).toBe(true);
       // Recall never promotes: the stored origin is unchanged, and the owner's blocks still leave the note out.
       expect(store.allClaims().find((claim) => claim.text.includes('Lisbon'))!.origin).toBe('untrusted');
+    });
+  });
+  it('the full listing the background memory passes read says which notes came from outside, on that store only', async () => {
+    await withMemory(async (store) => {
+      fromMail(store, 'Acme invoices are paid to the Lisbon account');
+      owned(store, 'Acme is my largest client', 'tg-9');
+      const row = (listing: string, word: string) => listing.split('\n').find((line) => line.startsWith('<claim ') && line.includes(word))!;
+      const marked = memoryPrompt(withOutsideNotes(store));
+      expect(row(marked, 'Lisbon')).toContain('origin="outside"');
+      expect(row(marked, 'largest client')).not.toContain('origin=');
+      expect(marked).toContain('origin="outside" = learned from mail, calendar, the web or a connected tool');
+      const plain = memoryPrompt(store);
+      expect(plain).not.toContain('origin="outside"');
+      expect(row(plain, 'Lisbon')).toBeDefined();
     });
   });
   it('with outside notes recalled, a turn that recalls only the owner\'s own notes is not marked', async () => {
