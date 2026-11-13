@@ -5,8 +5,8 @@ import type { LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
-// MEMORY_OUTSIDE_NOTES through a real owner turn: a note learned from mail reaches the model, said to be not the owner's
-// words, only when the switch is on.
+// MEMORY_OUTSIDE_NOTES through a real owner turn: a clean chat is told that a note learned from mail matches, and how to
+// open it, only when the switch is on. The note's text stays out until the model reads it.
 const seen = vi.hoisted(() => ({ prompts: [] as string[] }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
@@ -53,14 +53,16 @@ const ask = (name: string, config: object = {}) =>
   });
 
 const sawNote = () => seen.prompts.some(prompt => prompt.includes('Acme invoices go to Lisbon'));
+const sawCount = () => seen.prompts.some(prompt => prompt.includes('1 more note matches that was learned from mail, calendar or other outside content'));
 
-it('shows the model a note learned from mail, said to be not the owner\'s words, when the switch is on', async () => {
+it('tells a clean chat that a note learned from mail matches, without showing it, when the switch is on', async () => {
   await ask('outside-notes-on', { MEMORY_OUTSIDE_NOTES: '1' });
-  expect(sawNote()).toBe(true);
-  expect(seen.prompts.some(prompt => prompt.includes('from outside content, not the owner\\\'s words') || prompt.includes("from outside content, not the owner's words"))).toBe(true);
+  expect(sawCount()).toBe(true);
+  expect(sawNote()).toBe(false);
 });
 
-it('keeps that note out of the turn when the switch is off', async () => {
+it('says nothing of that note when the switch is off', async () => {
   await ask('outside-notes-off');
+  expect(sawCount()).toBe(false);
   expect(sawNote()).toBe(false);
 });
