@@ -304,6 +304,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // question waiting, a daily budget the owner can change, the gap between two, and a small urgent allowance past the budget.
   // Anything else keeps each kind's own budget. The three numbers below are the deployment's defaults.
   PROACTIVE_GATE?: string;
+  // '1': each owner-facing schedule toggle gates only what its label says. Notes before events off stops meeting prep, not the
+  // sweep that carries the update cards, and follow-ups off no longer holds those cards. Anything else keeps the old coupling.
+  SEPARATE_TOGGLES?: string;
   PROACTIVE_INTERRUPTS_PER_DAY?: string;
   PROACTIVE_URGENT_PER_DAY?: string;
   PROACTIVE_GAP_MIN?: string;
