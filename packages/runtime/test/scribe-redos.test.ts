@@ -184,6 +184,8 @@ describe('the patterns sanitise() runs stay linear on the near-miss and whitespa
     const tokens = ['7e2aa0c8', '91b3', '4c2e', '8a11', 'f0e023af605', '-', '-', '.', ' ', '1', 'a', '@', '%', ':', '4111', 'ms', 'eyJ', 'hrv', 'slept'];
     const nearMiss = fc.array(fc.constantFrom(...tokens), { minLength: 2, maxLength: 8 }).chain(pool =>
       fc.array(fc.constantFrom(...pool), { minLength: 48_000, maxLength: 64_000 }).map(parts => parts.join('')));
-    fc.assert(fc.property(nearMiss, text => { expectLinear('a random near miss', text.length, n => scan(text.slice(0, n))); }), { numRuns: 25 });
+    // A fixed seed keeps the inputs repeatable, and a failure ends the run there: shrinking would re-time inputs of tens of
+    // thousands of tokens synchronously, which no test timeout can interrupt.
+    fc.assert(fc.property(nearMiss, text => { expectLinear('a random near miss', text.length, n => scan(text.slice(0, n))); }), { numRuns: 25, seed: 2037, endOnFailure: true });
   });
 });
