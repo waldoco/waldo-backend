@@ -41,14 +41,17 @@ describe('the prep push', () => {
     expect(h.sent.slice(PROACTIVE_PUSH_DAILY_LIMIT).map(message => message.data.trigger)).toEqual(['brief', 'approval']);
   });
 
-  it('with the owner\'s budget the ceiling follows it: two, their own 0, and at high only the backstop against a runaway sender', async () => {
-    const pushes = async (perDay: number, tries: number) => {
+  // The pushes in this bucket ride on messages the owner's limits already admitted and charged (an update, a prep note), or
+  // copy one (no interruption of its own), so the owner's budget never lowers it: it only raises the backstop, up to its cap.
+  it('with the owner\'s budget the ceiling rises with it, never below the fixed ceiling, and stops at the backstop', async () => {
+    const pushes = async (perDay: number, tries: number, kind: PushKind = 'prep') => {
       const h = harness(() => perDay);
-      for (let i = 0; i < tries; i++) await h.push('prep');
+      for (let i = 0; i < tries; i++) await h.push(kind);
       return h;
     };
-    expect((await pushes(2, 4)).sent).toHaveLength(2);
-    expect((await pushes(0, 2)).sent).toHaveLength(0);
+    expect((await pushes(10, 12)).sent).toHaveLength(10);
+    expect((await pushes(2, PROACTIVE_PUSH_DAILY_LIMIT + 1)).sent).toHaveLength(PROACTIVE_PUSH_DAILY_LIMIT);
+    expect((await pushes(0, 2, 'copy')).sent).toHaveLength(2);
     const high = await pushes(Number.POSITIVE_INFINITY, PROACTIVE_PUSH_BACKSTOP + 3);
     expect(high.sent).toHaveLength(PROACTIVE_PUSH_BACKSTOP);
     // The day cards keep their own fixed budget whatever the owner's number.
@@ -56,7 +59,7 @@ describe('the prep push', () => {
     expect(high.sent.slice(PROACTIVE_PUSH_BACKSTOP).map(message => message.data.trigger)).toEqual(['brief', 'approval']);
     const zero = await pushes(0, 1);
     await zero.push('brief');
-    expect(zero.sent.map(message => message.data.trigger)).toEqual(['brief']);
+    expect(zero.sent.map(message => message.data.trigger)).toEqual(['pre_activity_spot', 'brief']);
   });
 
   it('day cards keep their own budget whatever prep pushes went out', async () => {
