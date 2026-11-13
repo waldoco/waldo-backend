@@ -181,7 +181,11 @@ export const updateBook = (sql: Sql) => {
       for (const change of changes) if (change.source_ref) sql.exec('UPDATE observed_mail SET update_id = ? WHERE source_ref = ? AND message_id = ? AND update_id IS NULL', id, change.source_ref, change.source_message_id ?? change.source_ref);
       return id;
     },
-    pushed(id: number, text: string, at: number): void { sql.exec('UPDATE update_cards SET text = ?, pushed = 1, delivered_at = ? WHERE id = ?', text, at, id); },
+    // A raise's tell reached the owner: the held batches it carried are told, so the next day card does not carry them again.
+    pushed(id: number, text: string, at: number): void {
+      sql.exec('UPDATE update_cards SET text = ?, pushed = 1, delivered_at = ? WHERE id = ?', text, at, id);
+      sql.exec('UPDATE update_cards SET folded = 1 WHERE raise_record = ? AND held_at IS NULL', id);
+    },
     linked(id: number, appRow: string): void { sql.exec('UPDATE update_cards SET app_row = ? WHERE id = ?', appRow, id); },
     // The update cards delivered on one local day, newest first. A card delivered before delivery times were kept is not listed.
     delivered(day: string): readonly Readonly<{ app_row: string | null; delivered_at: number }>[] {
@@ -217,9 +221,10 @@ export const updateBook = (sql: Sql) => {
       return heldRows(sql.exec<HeldStored>('SELECT id, held_at, held_code, changes FROM update_cards WHERE raise_record = ? AND held_at IS NOT NULL AND folded = 0 ORDER BY at', recordId).toArray());
     },
     // The judgment ran: the batches it took wait no longer. fold: it reached the owner or was judged not worth it, so the next
-    // day card does not carry it either; otherwise it stays for that card, as any unsent change does.
+    // day card does not carry it either; otherwise it stays for that card, as any unsent change does. They keep the record that
+    // took them, so a tell from it folds them once delivered.
     release(recordId: number, fold: boolean): void {
-      sql.exec('UPDATE update_cards SET held_at = NULL, held_code = NULL, raise_record = NULL, folded = CASE WHEN ? THEN 1 ELSE folded END WHERE raise_record = ? AND held_at IS NOT NULL', fold ? 1 : 0, recordId);
+      sql.exec('UPDATE update_cards SET held_at = NULL, held_code = NULL, folded = CASE WHEN ? THEN 1 ELSE folded END WHERE raise_record = ? AND held_at IS NOT NULL', fold ? 1 : 0, recordId);
     },
     // The rows recorded after `at`, oldest first, read without folding them: the nightly source pass keeps its own mark.
     recordedAfter(at: number, limit: number): readonly Readonly<{ at: number; changes: readonly Change[] }>[] {

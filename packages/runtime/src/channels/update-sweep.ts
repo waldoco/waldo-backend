@@ -99,7 +99,8 @@ export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepCheck
       ...(recordId === null ? {} : { recorded: { id: recordId, sources: [...new Set(changes.map(change => change.source))] } }) };
     if (gate !== null) {
       const code = heldOf(gate);
-      if (deps.raise && code && recordId !== null) updates.hold(recordId, code, deps.now);
+      // What the owner did with a mail is context: it never starts a job, so it never waits for one either.
+      if (deps.raise && code && recordId !== null && changes.some(change => !CONTEXT_KINDS.includes(change.kind))) updates.hold(recordId, code, deps.now);
       return { code: gate, ...counts };
     }
     const held = deps.raise?.() ? updates.held(HELD_PER_RAISE) : [];
@@ -335,7 +336,10 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
         return { held: gate };
       }
       const changes = deps.updates.jobChanges(recordId!, refs);
+      // A held mail still pending comes back among the job's own changes too; the turn reads it once, as held.
       const held = deps.holds && deps.triage ? deps.updates.heldFor(recordId!) : [];
+      const heldRefs = new Set(held.flatMap(row => row.changes.flatMap(change => change.source_ref ? [change.source_ref] : [])));
+      const fresh = heldRefs.size ? changes.filter(change => !(change.source_ref && heldRefs.has(change.source_ref))) : changes;
       if (!changes.length && !held.length) { deps.transaction(io.settle); return { held: 'held_stale' }; }
       const sourceFollowups = deps.sourceFollowups();
       const commit = () => { deps.updates.judgedJob(recordId!, refs); io.settle(); };
@@ -347,7 +351,7 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
         await deps.deliver(`update:${row.id}`, io.trace, reply, recordId!, commit);
         return 'delivered';
       }
-      if (deps.triage) return triage(row, result, io, day, deps.triage, changes, held, recordId!, withheld, sourceFollowups, commit);
+      if (deps.triage) return triage(row, result, io, day, deps.triage, fresh, held, recordId!, withheld, sourceFollowups, commit);
       const quiet = day.quiet();
       const prompt = updateEffectsPrompt(localIso(deps.now(), deps.timezone), { changes: changeLines(changes), ...await deps.context(), sourceFollowups, cards: day.cards(), quiet, revisesCards: day.revisesCards });
       const chosen = parseUpdateEffects(await deps.turn(io.trace, `${prompt}\n\n${machineResultText(result, withheld)}`, io.current));
@@ -417,7 +421,8 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
     // A push goes only from a surface that raises one; elsewhere the message is the notification.
     const push = chosen.push && day.revisesCards ? updatePushLine(changes, chosen.push.event, { named: day.named(), timezone: deps.timezone, now: deps.now() }) : undefined;
     day.chose(io.trace, !interrupts ? 'revise' : interrupts && charge() === 'urgent' ? 'tell+urgent' : push ? 'tell+push' : 'tell');
-    const raise = raised('raise_told');
+    // A tell folds the held batches only once it reaches the owner (UpdateBook.pushed): one that never goes leaves them for the next card.
+    const raise = held.length ? { outcome: 'raise_told' as const, work: () => deps.updates.release(recordId, false) } : null;
     await deps.deliver(`update:${row.id}`, io.trace, chosen.say ?? chosen.revise!.text, recordId, () => { if (interrupts) spend(); raise?.work(); commit(); },
       { ...(chosen.revise ? { revision: chosen.revise.card, ...(!interrupts ? { inPlace: true as const } : {}) } : {}), ...(push ? { push } : {}) });
     if (raise) day.chose(io.trace, raise.outcome);
@@ -425,6 +430,11 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
   };
   return {
     apply: async (row, result, io) => { try { return await apply(row, result, io); } finally { deps.dayState?.settled(); } },
-    noNews: (row, settle) => { judged(row, settle); deps.dayState?.settled(); },
+    // The worker found nothing: no turn runs, and the held batches it took settle once, left for the next card.
+    noNews: (row, settle) => {
+      const recordId = taskBrief(row).machine!.record_id!;
+      judged(row, () => { if (deps.holds) deps.updates.release(recordId, false); settle(); });
+      deps.dayState?.settled();
+    },
   };
 };

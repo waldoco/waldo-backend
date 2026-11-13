@@ -934,6 +934,10 @@ describe('a held item is raised once, when Waldo may speak again', () => {
       expect(raise.chose).toEqual(['tell', 'raise_told']);
       expect(raise.effects).toEqual([expect.objectContaining({ text: 'Overnight your sync with Krati moved to 17:00.' })]);
       expect(heldRows(h)).toEqual([]);
+      // Queued is not delivered: until the tell reaches the owner the next day card still carries the change.
+      expect(unfolded(h)).toContain('Sync with Krati');
+      const raiseRecord = h.rows().at(-1)!.id;
+      h.storage.transactionSync(() => h.updates.pushed(raiseRecord, 'Overnight your sync with Krati moved to 17:00.', h.clock.at));
       expect(unfolded(h)).not.toContain('not sent');
       h.clock.at += 10 * 60_000;
       expect((await h.check({ raise: () => true })).code).toBe('unchanged');
@@ -949,6 +953,47 @@ describe('a held item is raised once, when Waldo may speak again', () => {
       expect([raise.effects, raise.chose]).toEqual([[], ['silent', 'raise_dropped:no_longer_true']]);
       expect([heldRows(h), unfolded(h)]).toEqual([[], '']);
       expect((await h.check({ raise: () => true })).code).toBe('unchanged');
+    });
+  });
+
+  it('a raise whose worker finds nothing still settles the held batch once, left for the next card: no job every tick', async () => {
+    await withSweep(async (h) => {
+      await heldOvernight(h);
+      await h.check({ raise: () => true });
+      reportLast(h, NOTHING);
+      const raise = applyingTriage(h, undefined, undefined, true);
+      await raise.lane();
+      expect(raise.turns).toEqual([]);
+      expect(heldRows(h)).toEqual([]);
+      expect(unfolded(h)).toContain('Sync with Krati');
+      h.clock.at += 10 * 60_000;
+      expect((await h.check({ raise: () => true })).code).toBe('unchanged');
+      expect(h.jobs()).toHaveLength(2);
+    });
+  });
+
+  it('held mail still pending is shown to the turn once, inside <held>', async () => {
+    await withSweep(async (h) => {
+      h.gate.code = 'held_window';
+      h.mail.push(MAIL);
+      await h.check({ raise: () => true });
+      h.gate.code = null;
+      h.mail.length = 0;
+      expect((await h.check({ raise: () => true })).code).toBe('enqueued');
+      const raise = await raising(h, TELL);
+      const text = raise.turns[0]!.text;
+      expect(text.split('Quote signed')).toHaveLength(2);
+      expect(text.slice(text.indexOf('<held>'), text.indexOf('</held>'))).toContain('Quote signed');
+      expect(text).toContain('Nothing new came in with this batch');
+    });
+  });
+
+  it('a batch of only what the owner did with mail (read, archived) is context, never held', async () => {
+    await withSweep(async (h) => {
+      h.gate.code = 'held_quiet';
+      const read = { source: 'mail' as const, kind: 'read' as const, detail: JSON.stringify({ from: 'Asha <asha@client.example>', subject: 'Quote signed' }), ref: 'message:m-1' };
+      await h.check({ raise: () => true, phone: { takeChanges: () => [read] } });
+      expect(heldRows(h)).toEqual([]);
     });
   });
 
