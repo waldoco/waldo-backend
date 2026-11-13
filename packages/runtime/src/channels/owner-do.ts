@@ -5101,7 +5101,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         ? interrupts.book.hold({ consent: reachesOut(), quiet: false, closed: interrupts.closed(), asks: false, urgent: false, limits: interrupts.limits() })
         : reachesOut() ? null : 'consent',
       spent: kind => { if (kind === 'event' && interrupts) interrupts.book.spend(interrupts.limits(), false, 'push:event'); },
-      ...(eventPerDay === null ? {} : { eventPerDay }) });
+      ...(eventPerDay === null ? {} : { eventPerDay }), ...(interrupts ? { proactivePerDay: () => interrupts.limits().perDay } : {}) });
     // Media reads are per-surface and feed the one transcriber/attachment pipeline: Telegram file ids go through getFile,
     // WhatsApp media ids through the Graph two-step, and an app attachment's id opens the upload staged in this object.
     const mediaReaders: Readonly<Record<ChannelKind, () => TelegramFileDownloader>> = {
@@ -5795,6 +5795,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             return made.code;
           },
           checked: (code, detail) => log({ trace, hop: 'machine_check', ms: Date.now() - started, ok: true, code, detail }),
+          ...(interrupts ? { checkBacksPerDay: () => interrupts.limits().perDay } : {}),
         })(entry);
         // An owner who never opens the app's approvals list still has a granted change of unknown outcome settled.
         await desk.settleUnknownGrants().catch(() => log({ trace, hop: 'grant_settle', ms: 0, ok: false, code: 'failed' }));

@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { ownerPush, PROACTIVE_PUSH_DAILY_LIMIT, PUSH_DAILY_LIMIT, PUSHES, type PushKind } from '../src/channels/expo-push';
+import { ownerPush, PROACTIVE_PUSH_BACKSTOP, PROACTIVE_PUSH_DAILY_LIMIT, PUSH_DAILY_LIMIT, PUSHES, type PushKind } from '../src/channels/expo-push';
 import { prepPushBody } from '../src/channels/event-briefs';
 
 // A prep note on the app raises its own push. It never spends the day cards' budget; non-card pushes have their own ceiling,
 // a backstop against a runaway sender, while whether to send at all stays the model's call.
 const INSTALLATION = '0f1e2d3c-4b5a-4968-8776-655443322110';
-const harness = () => {
+const harness = (proactivePerDay?: () => number) => {
   const kv = new Map<string, unknown>();
   const sent: { body: string; data: Record<string, unknown> }[] = [];
   const codes: string[] = [];
@@ -16,7 +16,7 @@ const harness = () => {
       for (const message of JSON.parse(String(init?.body)) as { body: string; data: Record<string, unknown> }[]) sent.push({ body: message.body, data: message.data });
       return Response.json({ data: [{ status: 'ok', id: 'ticket' }] });
     }) as typeof fetch,
-    today: () => '2026-10-03', quiet: () => false, log: code => { codes.push(code); },
+    today: () => '2026-10-03', quiet: () => false, log: code => { codes.push(code); }, ...(proactivePerDay ? { proactivePerDay } : {}),
   });
   return { push, sent, codes };
 };
@@ -39,6 +39,24 @@ describe('the prep push', () => {
     expect(h.codes.filter(code => code === 'daily_limit')).toHaveLength(2);
     for (const kind of ['brief', 'approval'] as PushKind[]) await h.push(kind, kind === 'approval' ? 'appr_0123456789abcdef0123456789abcdef' : undefined);
     expect(h.sent.slice(PROACTIVE_PUSH_DAILY_LIMIT).map(message => message.data.trigger)).toEqual(['brief', 'approval']);
+  });
+
+  it('with the owner\'s budget the ceiling follows it: two, their own 0, and at high only the backstop against a runaway sender', async () => {
+    const pushes = async (perDay: number, tries: number) => {
+      const h = harness(() => perDay);
+      for (let i = 0; i < tries; i++) await h.push('prep');
+      return h;
+    };
+    expect((await pushes(2, 4)).sent).toHaveLength(2);
+    expect((await pushes(0, 2)).sent).toHaveLength(0);
+    const high = await pushes(Number.POSITIVE_INFINITY, PROACTIVE_PUSH_BACKSTOP + 3);
+    expect(high.sent).toHaveLength(PROACTIVE_PUSH_BACKSTOP);
+    // The day cards keep their own fixed budget whatever the owner's number.
+    for (const kind of ['brief', 'approval'] as PushKind[]) await high.push(kind, kind === 'approval' ? 'appr_0123456789abcdef0123456789abcdef' : undefined);
+    expect(high.sent.slice(PROACTIVE_PUSH_BACKSTOP).map(message => message.data.trigger)).toEqual(['brief', 'approval']);
+    const zero = await pushes(0, 1);
+    await zero.push('brief');
+    expect(zero.sent.map(message => message.data.trigger)).toEqual(['brief']);
   });
 
   it('day cards keep their own budget whatever prep pushes went out', async () => {
