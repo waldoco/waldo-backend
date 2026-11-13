@@ -90,7 +90,8 @@ const cutLine = (count: number) => `(${count} more matches did not fit here; rea
 const oneLine = (text: string) => fence(text).replace(/\s+/g, ' ').trim();
 // An earlier version: it says when it stopped holding, so it is read as history, never as how things stand.
 const replacedLine = (claim: Claim) => `- [c${claim.id} · NO LONGER TRUE, held until ${claim.valid_to?.slice(0, 10) ?? 'an unknown date'}${claim.valid_from ? `, since ${claim.valid_from.slice(0, 10)}` : ''}] ${oneLine(claim.text)}`;
-const claimLine = (claim: Claim) => `- [${claimTag(claim)} · ${claim.kind}, ${claim.source}, ${claim.last_seen_at.slice(0, 10)}] ${oneLine(claim.text)}`;
+// A note learned from outside content says so in its tag, where the owner's own notes say stated or inferred.
+const claimLine = (claim: Claim) => `- [${claimTag(claim)} · ${claim.kind}, ${claim.origin === 'untrusted' ? 'from outside content, not the owner\'s words' : claim.source}, ${claim.last_seen_at.slice(0, 10)}] ${oneLine(claim.text)}`;
 // Code points, so a cut never splits a character, and never inside a word, so a number is shown whole or not at all. One
 // word longer than the stub keeps what precedes its digits.
 const stubLine = (claim: Claim) => {
