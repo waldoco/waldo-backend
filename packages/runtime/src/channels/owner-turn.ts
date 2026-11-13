@@ -60,6 +60,7 @@ import { reactionInstruction, reactionSchema } from './reactions';
 import { billedAttemptEntries } from './billed-attempts';
 import type { SystemSection, TurnLogEntry, TurnTimer } from './owner-turn-types';
 import { ownerTurnAttachments, REPLY_QUOTE_LIMIT, type OwnerResponder, type ReplyContext } from './owner-turn-envelope';
+import { openedFilesBook } from './opened-files';
 import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
 import type { LLMAttachment } from '@waldo/contracts';
 import { STOPPED_REPLY, turnControl } from './turn-control';
@@ -441,6 +442,7 @@ export const createOwnerResponder = (
   const control = turnControl();
   const tree = new ConversationTree();
   let pending: readonly LLMAttachment[] | undefined;
+  const openedFiles = openedFilesBook();
   // F1 receipt: the window observer fires only when history was actually dropped (content-free).
   const lastWindow = new Map<string, CompactedStats>();
   let windowingRef = '';
@@ -649,7 +651,7 @@ export const createOwnerResponder = (
       let turnSuffix: FrozenSuffix | undefined;
       // The turn's reads, kept only while a proposing tool can take steps behind its card.
       const turnReads: TrailRead[] | undefined = turnHandlers.some(handler => handler.takes_why) ? [] : undefined;
-      const loopCtx = { ...safety, ...memoryContext(), ...ownerMessage(), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), runOrigin: runOrigin(), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), ...(turnReads ? { turnReads } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
+      const loopCtx = { ...safety, ...memoryContext(), ...ownerMessage(), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), runOrigin: runOrigin(), turnId: trace, openFile: openedFiles.open, ...(privateRunScope ? { runScope: privateRunScope } : {}), ...(turnReads ? { turnReads } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
       turnLoopCtx = loopCtx;
       let contextHealthCheck: Readonly<{ key: string; holds: Promise<boolean> }> | undefined;
       return runToolLoop({
@@ -792,7 +794,7 @@ export const createOwnerResponder = (
           const ownTail = current.content + (cut.replyQuote ? '\n\n' + cut.replyQuote : '') + (cut.jobContext ? '\n\n' + cut.jobContext : '') + added;
           entries[entries.length - 1] = { ...current, content: ownTail + built.suffix.text };
           const browserImages = privateOwner?.skillHost?.browserAttachments?.(privateRunScope) ?? [];
-          const attachments = [...(pending ?? []), ...browserImages];
+          const attachments = openedFiles.with([...(pending ?? []), ...browserImages]);
           const system = { text: turnPrompt.system, sections: turnPrompt.sections, contextSections: built.suffix.sections };
           const files = attachments.length ? attachments : undefined;
           // WALDO_LIGHT_CHAT: the turn's first step runs on the light role. It reads the system prompt, the owner's own exchange
@@ -961,6 +963,7 @@ export const createOwnerResponder = (
   };
   // `said` is what the model reads; `received` is what the conversation stores and shows, the same text unless the turn labels parts of it.
   const converse = async (id: string, conversationRef: string, said: string, time: TurnTimer, fromOwner = false, surface = 'agent', toolNames?: readonly string[], received = said) => {
+    openedFiles.start(pending?.length ?? 0);
     conversationRef = context?.conversationRef ?? conversationRef;
     windowingRef = conversationRef;
     backgroundToolNames = fromOwner ? undefined : toolNames;

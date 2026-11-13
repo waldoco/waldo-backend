@@ -155,6 +155,15 @@ describe('openIMessageMedia', () => {
     expect(d.admit).toHaveBeenCalledTimes(2);
   });
 
+  it('opens a PDF sent with a generic type and no extension by its bytes, and refuses one whose bytes are no readable file', async () => {
+    const header = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37, 0x0a, 0xe2, 0xe3]);
+    const scan = { id: 'att-scan', name: 'Scan 12 Nov', mimeType: 'application/octet-stream', size: header.length };
+    expect(await openIMessageMedia(media(scan), deps(opened([header])))).toEqual({ kind: 'opened',
+      parts: [{ authorship: 'media_note', text: '[Owner sent a file "Scan 12 Nov", attached.]' }],
+      attachments: [{ kind: 'file', mime_type: 'application/pdf', filename: 'Scan 12 Nov.pdf', data_base64: btoa(String.fromCharCode(...header)) }] });
+    expect(await openIMessageMedia(media(scan), deps(opened([new Uint8Array([0x4d, 0x5a, 0, 1])])))).toEqual({ kind: 'reply', text: "I got your file but can't read that format here; send it in the app." });
+  });
+
   it('answers once and fetches nothing while IMESSAGE_MEDIA is off', async () => {
     const d = deps(opened([PNG]), false);
     expect(await openIMessageMedia(media(photo), d)).toEqual({ kind: 'reply', text: "I got your photo but couldn't open it here; send it in the app." });
@@ -184,7 +193,7 @@ describe('openIMessageMedia', () => {
     const d = { ...deps(opened([PNG, new Uint8Array([0x50, 0x4b, 3, 4])])), keep };
     const result = await openIMessageMedia(media(photo, zip), d);
     expect(result).toEqual({ kind: 'opened',
-      parts: [{ authorship: 'media_note', text: '[Owner sent a photo, attached. Saved in their workspace as uploads/f/IMG_0001.png (file_id id-1, revision 1).]' },
+      parts: [{ authorship: 'media_note', text: '[Owner sent a photo, attached. Saved in their workspace as uploads/f/IMG_0001.png (file_id id-1, revision 1). In a later message it is no longer attached; workspace_read opens it again.]' },
         { authorship: 'media_note', text: '[Owner sent a file "notes.zip". Saved in their workspace as uploads/f/notes.zip (file_id id-2, revision 1). It is not attached here; open it with the workspace tools.]' }],
       attachments: [{ kind: 'image', mime_type: 'image/png', filename: 'IMG_0001.png', data_base64: btoa(String.fromCharCode(...PNG)) }] });
     expect(kept.map(file => file.key)).toEqual(['imessage:msg-1:0', 'imessage:msg-1:1']);
