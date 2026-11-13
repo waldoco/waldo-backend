@@ -4989,8 +4989,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         declined: async approvalId => { if (this.jobs().resume(approvalId, 'declined')) await armTaskJobsWake(storage, Date.now()); },
       },
       replayTaintedAction: (proposal, approvalRef) => taintedActionReplay({ handlers: () => replayHandlers, context: () => approvalReplayContext({ authenticatedUserId: ownerRef(), hasApproval: ownerToolApproval, sanitise, egressAllowlist: parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST) }) })(proposal, approvalRef),
-      // Approved MCP calls run post-approval, outside any turn. The result is external content:
-      // the owner gets a bounded line, and it never re-enters model context.
+      // Approved MCP calls run post-approval, outside any turn. The result is external content: it stays in the
+      // effect receipt, the owner reads only what the card said was done, and it never re-enters model context.
       mcpCall: async (proposal,intent) => {
         if (proposal.connection) {
           if (!proposal.tool_digest) throw new McpRefusal('rejected', 'The approved call has no frozen tool definition, so nothing ran.', true);
