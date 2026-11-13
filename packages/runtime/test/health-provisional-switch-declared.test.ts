@@ -32,6 +32,13 @@ describe('HEALTH_SOLO_NOTICE in the Worker config', () => {
   });
 });
 
+describe('HEALTH_FORM_CURVE in the Worker config', () => {
+  it('is declared off for staging and production, until the privacy review ADR-0081 asks for has passed', () => {
+    expect(parsed.vars.HEALTH_FORM_CURVE).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_FORM_CURVE).toBe('0');
+  });
+});
+
 describe('HEALTH_TRAINING_LOAD in the Worker config', () => {
   it('is on for staging, which deploys with migration 20261031170000, and off for production', () => {
     expect(parsed.vars.HEALTH_TRAINING_LOAD).toBe('0');

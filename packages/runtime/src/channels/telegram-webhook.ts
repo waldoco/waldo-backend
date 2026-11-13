@@ -70,6 +70,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // it worth it; anything else keeps such a day silent.
   HEALTH_SOLO_NOTICE?: string;
   HEALTH_TRAINING_LOAD?: string;
+  // '1' has the health producer write today's Form curve, measured and then projected, on today's derived row, for the app's
+  // calendar day; anything else writes none.
+  HEALTH_FORM_CURVE?: string;
   // '1' has the health decision reason from the reviewed health protocols (skills/health-protocols), read through the
   // owner's next day, in the chat role. Anything else keeps the decision as it was.
   HEALTH_ACTIONS?: string;

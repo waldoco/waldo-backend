@@ -16,6 +16,8 @@ export type CalendarDayHost = Readonly<{
   google: GoogleAccess;
   // The owner's scores_read answer for the day, or null when the health store could not be asked.
   readScores: (day: string) => Promise<unknown>;
+  // Whether the day's stored Form curve may be served. Off, Form is unavailable for every day.
+  formCurve: boolean;
 }>;
 
 // The connector's page holds at most 50 events; a day with more than 200 is not served cut short.
@@ -81,12 +83,38 @@ const toEvent = async (connection: string, item: CalendarItem): Promise<Calendar
   };
 };
 
-// No intraday Form has been computed for any day yet, so Form is unavailable. The health store's own reason comes first:
-// health that is not linked or not shared is said so, and an answer that cannot be read shares nothing.
-const formOf = (scores: unknown): CalendarDayV1['form'] => {
-  const answer = scores && typeof scores === 'object' && !Array.isArray(scores) ? scores as Record<string, unknown> : null;
-  const said = healthScoreUnavailableReasonV1Schema.safeParse(typeof answer?.unavailable === 'string' ? answer.unavailable : answer?.error);
-  return { state: 'unavailable', reason: said.success ? said.data : 'intraday_inputs_unavailable' };
+const asRecord = (value: unknown): Record<string, unknown> | null => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null);
+const formSchema = calendarDayV1Schema.shape.form;
+
+// Form across the day is the curve the health store holds on the day's own row, computed by the health producer and never
+// here: the row's Form method as it read at each quarter hour, and, on the owner's today, the projected points that follow.
+// The health store's own reason comes first: health that is not linked or not shared is said so, a day whose Form could not
+// be scored says why, and a day that holds no curve, a curve that is neither its row Form's method nor the projection built on
+// it, or an answer that cannot be read shares nothing. A day that is over shows what was measured, never what was projected.
+const PROJECTION_VERSION = 'form-curve.v1';
+const formOf = (scores: unknown, day: string, now: number, dayEnd: number, served: boolean): CalendarDayV1['form'] => {
+  const unavailable = (reason: unknown): CalendarDayV1['form'] => {
+    const said = healthScoreUnavailableReasonV1Schema.safeParse(reason);
+    return { state: 'unavailable', reason: said.success ? said.data : 'intraday_inputs_unavailable' };
+  };
+  const answer = asRecord(scores);
+  const refused = typeof answer?.unavailable === 'string' ? answer.unavailable : answer?.error;
+  if (refused !== undefined) return unavailable(refused);
+  const row = asRecord(answer?.scores);
+  const form = row?.day === day ? asRecord(row.form) : null;
+  if (!form || 'reason' in form) return unavailable(form?.reason);
+  const curve = served ? asRecord(row?.form_curve) : null;
+  if (!curve || (curve.version !== form.algorithm_version && curve.version !== PROJECTION_VERSION) || !Array.isArray(curve.points)) return unavailable(undefined);
+  // A point is measured only once its instant has passed, and projected only while the day is still running.
+  const points = curve.points.filter(point => {
+    const p = asRecord(point), at = Date.parse(String(p?.at));
+    return p?.kind === 'projected' ? now < dayEnd : Number.isFinite(at) && at <= now;
+  });
+  const projected = points.some(point => asRecord(point)?.kind === 'projected');
+  const available = formSchema.safeParse({ state: 'available', algorithm_version: projected ? PROJECTION_VERSION : form.algorithm_version, activation: form.activation,
+    confidence: typeof form.confidence === 'number' ? form.confidence : null, points });
+  if (!available.success) console.error('app calendar day form curve shape');
+  return available.success && points.some(point => asRecord(point)?.kind === 'measured') ? available.data : unavailable(undefined);
 };
 
 export const appCalendarDayRequest = async (request: Request, host: CalendarDayHost): Promise<Response> => {
@@ -103,7 +131,7 @@ export const appCalendarDayRequest = async (request: Request, host: CalendarDayH
   try {
     [calendar, scores] = await Promise.all([
       readCalendar(host.google, new Date(window.start).toISOString(), new Date(window.end).toISOString()),
-      // The health store's client answers null when it could not be asked; either way Form is unavailable and the day still answers.
+      // The health store's client answers null when it could not be asked; then Form is unavailable and the day still answers.
       host.readScores(day).catch(() => null).then(answer => { if (answer === null) log(false, 'scores_read_failed'); return answer; }),
     ]);
   } catch { log(false, 'calendar_read_failed'); return refuse('unavailable', 503); }
@@ -116,7 +144,7 @@ export const appCalendarDayRequest = async (request: Request, host: CalendarDayH
   const body = calendarDayV1Schema.safeParse({
     day, timezone, compiled_at: readAt, freshness: 'fresh',
     calendar: calendar.state === 'available' ? { state: 'available', read_at: readAt } : { state: calendar.state },
-    events: unique, form: formOf(scores),
+    events: unique, form: formOf(scores, day, host.now(), window.end, host.formCurve),
   });
   if (!body.success) { log(false, 'shape'); return refuse('unavailable', 503); }
   log(true, `calendar_${calendar.state}`, unique.length);

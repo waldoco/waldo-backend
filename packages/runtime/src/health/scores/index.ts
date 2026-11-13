@@ -24,19 +24,27 @@ const withinLocalDay = (record: DayRecord): DayRecord => {
   return { ...record, hourly: record.hourly.filter(bucket => { const at = Date.parse(bucket.startAt); return at >= start && at < end; }) };
 };
 
+// The days a computation reads, each held to its own local day, or none when a day names no known zone or appears twice with
+// different readings. The Form curve reads the same days the scores do.
+export const byLocalDay = (days: readonly DayRecord[]): ReadonlyMap<string, DayRecord> | null => {
+  if (days.some(record => !isTimeZone(record.timezone))) return null;
+  const byDay = new Map<string, DayRecord>();
+  for (const raw of days) {
+    const record = withinLocalDay(raw);
+    const existing = byDay.get(record.day);
+    if (existing && JSON.stringify(existing) !== JSON.stringify(record)) return null;
+    byDay.set(record.day, record);
+  }
+  return byDay;
+};
+
 // One owner, one target day. Pure: no clock, no I/O, same input gives the same output.
 export const computeDailyScores = (input: DailyScoresInput): DailyScores => {
   if (input.access !== 'granted') return everywhere(input.access);
   if (input.days.length === 0) return everywhere('no_readings');
 
-  if (input.days.some(record => !isTimeZone(record.timezone))) return everywhere('conflicting_inputs');
-  const byDay = new Map<string, DayRecord>();
-  for (const raw of input.days) {
-    const record = withinLocalDay(raw);
-    const existing = byDay.get(record.day);
-    if (existing && JSON.stringify(existing) !== JSON.stringify(record)) return everywhere('conflicting_inputs');
-    byDay.set(record.day, record);
-  }
+  const byDay = byLocalDay(input.days);
+  if (byDay === null) return everywhere('conflicting_inputs');
   const target: DayRecord = byDay.get(input.targetDay)
     ?? { day: input.targetDay, timezone: input.days[0]?.timezone ?? 'UTC', sleep: null, overnightHrv: [], restingHeartRate: [], hourly: [], workouts: [], demand: null };
   const prior = priorDays(input.targetDay, byDay);
