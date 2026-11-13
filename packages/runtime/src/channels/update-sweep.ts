@@ -128,7 +128,7 @@ export const emitObserved = (subscribers: readonly ObservedSubscriber[], events:
   for (const event of events) for (const subscriber of subscribers) subscriber(event);
 };
 
-const updateSweepSpec = (analysis: readonly Change[], job: Readonly<{ key: string; recordId: number; surface: string; timezone: string; now: number; actAhead: boolean }>): MachineSpec => ({
+export const updateSweepSpec = (analysis: readonly Change[], job: Readonly<{ key: string; recordId: number; surface: string; timezone: string; now: number; actAhead: boolean }>): MachineSpec => ({
   job: 'update_sweep', scope: 'owner', key: job.key, surface: job.surface, text: job.actAhead ? UPDATE_SWEEP_ACT_AHEAD_TEXT : UPDATE_SWEEP_JOB_TEXT,
   // Mail with a source is named by its thread ref, which the apply turn's own prompt already carries; the rest by the event
   // or message a reader opens it by, and a change recorded before those were kept by position.
