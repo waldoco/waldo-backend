@@ -47,7 +47,7 @@ export const STEP_UP_ACTIONS: Readonly<Record<string, StepUpRule>> = {
   'proactivity.set': { gated: false, why: 'Sets how often Waldo reaches out; grants no access.' },
   'proactive_surface.set': { gated: false, why: 'Picks which already-linked chat Waldo reaches out on; links nothing new.' },
   'health_memory.set': { gated: false, why: 'Sets whether Waldo keeps health patterns in memory; grants no access.' },
-  'act_without_asking.set': { gated: false, why: 'Lets Waldo act on the owner\'s own requests without a card; payments, passwords, deletions and lasting access still ask.' },
+  'act_without_asking.set': { gated: false, why: 'Lets Waldo act on the owner\'s own requests without a card; payments, passwords, permanent deletion, web forms and what outside text asked for still ask.' },
   'schedule.set': { gated: false, why: 'Sets when the daily cards arrive; grants no access.' },
   'schedule.reset': { gated: false, why: 'Restores the default card times; grants no access.' },
   'timezone.set': { gated: false, why: 'Sets the owner\'s time zone; grants no access.' },

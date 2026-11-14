@@ -299,6 +299,7 @@ import type { TurnControl } from './turn-control';
 import { turnFailureCode } from './turn-failure-code';
 import { calendarPushBook, wakeBriefSweep } from './calendar-push';
 import { actWithoutAsking, actsWithoutAsking, setActWithoutAsking } from './act-without-asking';
+import { knownPartyLookup } from './known-parties';
 import { calendarSet, realtimeTriage } from './calendar-set';
 import { calendarChannelsBook } from './calendar-watches';
 import { gmailPushBook } from './gmail-push';
@@ -4950,6 +4951,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       approvesInChat: () => this.env.APPROVE_IN_CHAT === '1',
       // The deploy's master switch and the owner's "Just do it" choice: off, every consequential effect is a card as before.
       autonomous: () => actsWithoutAsking(storage.kv, this.env.AUTONOMOUS_BY_DEFAULT === '1'), ownerTurns: () => this.env.AUTONOMY_OWNER_TURNS === '1',
+      // The recipient guard's last look: the owner's Gmail sent folder and saved Google Contacts, with the grants they already hold.
+      knownParty: knownPartyLookup({ mail: account => google.client('mail', undefined, undefined, account), contacts: account => google.client('contacts', undefined, undefined, account) }),
       conversationRef: () => this.activeApp?.conversationRef,
       ownerMessageAt: () => this.activeApp?.admittedAt ?? this.activeWhatsApp?.admittedAt ?? this.activeIMessage?.admittedAt,
       surface: channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work), writesFirstNow, renames: this.env.HEALTH_EASE_WORKOUT === '1', undoCancels: this.env.CALENDAR_UNDO_CANCEL === '1',

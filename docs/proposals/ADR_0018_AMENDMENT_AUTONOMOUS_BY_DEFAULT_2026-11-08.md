@@ -2,7 +2,7 @@
 
 > **Status: Accepted by owner ruling, 8 Nov 2026** (waldoco/waldo-backend#2003, ruling comment 09:26Z; beta list #2076 P0-1). The owner pre-accepted this amendment. It amends the approval rule of ADR-0018 as extended by ADR-0086 (`AUTONOMY_OPT_IN_2026-10-27.md`) and the chat-to-app hand-off that followed it. Behind `AUTONOMOUS_BY_DEFAULT` (`WALDO_SWITCHES`): `1` in staging, `0` in production.
 
-> **Amendment proposed 14 Nov 2026 (needs owner ack):** [`ADR_0018_AMENDMENT_JUST_DO_IT_2026-11-14.md`](ADR_0018_AMENDMENT_JUST_DO_IT_2026-11-14.md) makes this a per-owner choice and, behind `AUTONOMY_OWNER_TURNS`, draws the line at who started the turn.
+> **Amended 14 Nov 2026 (accepted: owner OK relayed by Ashish):** [`ADR_0018_AMENDMENT_JUST_DO_IT_2026-11-14.md`](ADR_0018_AMENDMENT_JUST_DO_IT_2026-11-14.md) makes this a per-owner choice and, behind `AUTONOMY_OWNER_TURNS`, draws the line at who started the turn.
 
 ## Decision
 

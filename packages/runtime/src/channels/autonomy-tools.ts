@@ -4,7 +4,7 @@ import {
 } from '@waldo/contracts';
 import type { SurfaceNameV1 } from '../../../contracts/src/app/surfaces';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
-import { callWhy, proposalStatus, turnReadOutside, type ApprovalDesk } from './approvals';
+import { askedBy, askedStatus, callWhy, proposalStatus, turnReadOutside, type ApprovalDesk } from './approvals';
 import type { StandingGrants } from './standing-grants';
 
 const DAY_MS = 86_400_000;
@@ -13,7 +13,7 @@ const refused = (error: string) => ({ ok: false as const, code: 'rejected' as co
 
 // The chat's side of the owner's standing grants. Asking for one only raises a card: the grant exists once the owner approves
 // it. Ending one or pausing them all narrows authority, so each applies at once.
-export const autonomyHandlers = (grants: Pick<StandingGrants, 'enabled' | 'revokeClass' | 'pause'>, desk: Pick<ApprovalDesk, 'proposeStandingGrant' | 'placement'>, deps: Readonly<{
+export const autonomyHandlers = (grants: Pick<StandingGrants, 'enabled' | 'revokeClass' | 'pause'>, desk: Pick<ApprovalDesk, 'proposeStandingGrant' | 'placement'> & Partial<Pick<ApprovalDesk, 'askedOutcome'>>, deps: Readonly<{
   now(): number; timezone(): string; surface: SurfaceNameV1;
   // The Google account a calendar grant is for: the one the owner named, or the one connected.
   account(requested?: string): Promise<string | null>;
@@ -36,7 +36,10 @@ export const autonomyHandlers = (grants: Pick<StandingGrants, 'enabled' | 'revok
       const proposal_id = await desk.proposeStandingGrant({
         scope: { class: args.class, account, window: args.window, weekdays: args.weekdays, min_lead_minutes: args.min_lead_minutes },
         limits: { max_per_day: args.max_per_day, timezone: deps.timezone() }, valid_from: now, expires_at: now + args.days * DAY_MS,
-      }, { why: callWhy(ctx) });
+      }, { why: callWhy(ctx), ...askedBy(ctx) });
+      // With the owner's "Just do it" choice on, their own request makes the grant at once.
+      const asked = desk.askedOutcome?.(proposal_id);
+      if (asked) return { ok: true as const, data: { proposal_id, status: askedStatus(asked), granted: asked.state === 'done' }, source_taint: null };
       return { ok: true as const, data: { proposal_id, status: proposalStatus(desk.placement(proposal_id), 'sent to the owner with Allow / Not now buttons', 'No grant exists until they approve it.') }, source_taint: null };
     },
   } satisfies ToolHandler<ProposeStandingGrantArgs, unknown, ToolDispatcherContext>,

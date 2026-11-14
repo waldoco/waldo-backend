@@ -836,6 +836,8 @@ describe('"Just do it" on the day view, its own contract pair act_without_asking
   });
   it('names what Waldo still asks about in one line', () => {
     expect(APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1).not.toMatch(/\n/);
-    for (const kept of ['paying', 'password', 'deleting', 'lasting access', 'web form', 'email or message']) expect(APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1).toContain(kept);
+    for (const kept of ['paying', 'password', 'deleting', 'web form', 'email or message']) expect(APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1).toContain(kept);
+    // Lasting access and tools on a server added by address run with the setting on, so the line does not name them.
+    for (const gone of ['lasting access', 'by its address']) expect(APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1).not.toContain(gone);
   });
 });

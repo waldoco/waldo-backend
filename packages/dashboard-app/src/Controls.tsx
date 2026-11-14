@@ -89,7 +89,7 @@ function HealthMemorySetting({ on, busy, onAction }: { on: boolean } & ActionPro
 }
 
 // What Waldo still asks about with "Just do it" on: the contract's APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1, word for word.
-export const STILL_ASKS = 'Waldo still asks before paying or buying, entering a password, deleting something for good, giving lasting access, sending a web form, using a tool you connected by its address, or doing what an email or message asked it to.';
+export const STILL_ASKS = 'Waldo still asks before paying or buying, entering a password, deleting something for good, sending a web form, or doing what an email or message asked it to.';
 // One tap either way. Where this Waldo does not act on it the choice still saves, and the row says it is not active rather than on.
 function ActWithoutAskingSetting({ choice, busy, onAction }: { choice: { on: boolean; available: boolean } } & ActionProps) {
   const state = !choice.available ? 'Not active yet' : choice.on ? 'On' : 'Off';

@@ -139,8 +139,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // it with an undo where one exists; the cards that remain are approved on the surface showing them. Off unless "1".
   AUTONOMOUS_BY_DEFAULT?: string;
   // "1" widens AUTONOMOUS_BY_DEFAULT for an owner whose "Just do it" choice is on: a turn the owner started with their own message
-  // acts with no card even after it read outside text, an MCP call to a catalogue app and an undoable calendar cancel included;
-  // a party reached only through outside text, a payment, a password, permanent deletion and lasting access keep their cards.
+  // acts with no card even after it read outside text, an MCP call, a standing grant and an undoable calendar cancel included;
+  // a party reached only through outside text, a payment, a password, a browser submit and permanent deletion keep their cards.
   // Off unless "1"; it does nothing where AUTONOMOUS_BY_DEFAULT is not "1".
   AUTONOMY_OWNER_TURNS?: string;
   // "1" offers track/log/list/stop_medication on owner turns and words medicine reminders in the harness from a health-plane

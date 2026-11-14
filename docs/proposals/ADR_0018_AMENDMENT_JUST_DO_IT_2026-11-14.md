@@ -1,6 +1,6 @@
 # ADR-0018 amendment: "Just do it", a per-owner choice, with provenance as the line (14 November 2026)
 
-> **Status: Proposed by Ashish, needs owner ack.** This amends [`ADR_0018_AMENDMENT_AUTONOMOUS_BY_DEFAULT_2026-11-08.md`](ADR_0018_AMENDMENT_AUTONOMOUS_BY_DEFAULT_2026-11-08.md). It changes what the owner ruled on 8 and 9 November (waldoco/waldo-backend#2003): the wide "carries from before" taint rule no longer decides a turn that the owner started. Production stays off. `AUTONOMOUS_BY_DEFAULT` is still the master switch (`1` in staging, `0` in production). The widened rule is behind its own switch, `AUTONOMY_OWNER_TURNS` (`1` in staging, `0` in production).
+> **Status: Accepted: owner OK relayed by Ashish, 14 Nov 2026.** This amends [`ADR_0018_AMENDMENT_AUTONOMOUS_BY_DEFAULT_2026-11-08.md`](ADR_0018_AMENDMENT_AUTONOMOUS_BY_DEFAULT_2026-11-08.md). It changes what the owner ruled on 8 and 9 November (waldoco/waldo-backend#2003): the wide "carries from before" taint rule no longer decides a turn that the owner started. Production stays off. `AUTONOMOUS_BY_DEFAULT` is still the master switch (`1` in staging, `0` in production). The widened rule is behind its own switch, `AUTONOMY_OWNER_TURNS` (`1` in staging, `0` in production).
 
 ## Decision
 
@@ -8,22 +8,24 @@
    - **Off:** every consequential effect is a card, exactly as before autonomy by default. The desk's `autonomous()` is the master switch and the choice together, so off takes the same path as a switch at `0`. That includes the app hand-off and the owner's word being unable to undo.
    - **Where the master switch is `0`:** the choice is saved, reads `available: false`, and changes nothing. The settings say "not active on this Waldo yet" instead of showing it as on.
 2. **The line is provenance.** A turn that the owner started with their own message may act even after it read outside text: an email, a page, a tool's answer, or a summary or note that carries someone else's words. A turn that something else started still raises a card for its effects: inbound mail, a forward or quote, a proactive run, a Brief, a webhook, or a task job. The host already sets this once, at the start of the turn (`runOrigin === 'owner'` with `ownerMessage`). What the turn reads afterwards never changes it. No keyword, intent reading or threshold decides it. The model still judges what to do.
-3. **The recipient guard: one narrow, code-checked rule against injection inside an owner-started turn.** When a turn passes only under the owner rule (it read or carries outside text), an effect that reaches another party runs with no card only if every party meets one of two conditions:
+3. **The recipient guard: one narrow, code-checked rule against injection inside an owner-started turn.** When a turn passes only under the owner rule (it read or carries outside text), an effect that reaches another party runs with no card only if every party meets one of three conditions:
    - **in the owner's own words:** the address appears in the owner's own typed or spoken words in this message. A quote, a file transcript or a media note does not count.
    - **already reached:** Waldo has already reached the party: a recipient of a send that went out, or a guest of an event Waldo made. Each such party went out on the owner's tap or passed this same guard, so outside text cannot seed the list.
+   - **known in the owner's Google account:** someone the owner has mailed before (a Gmail search of the sent folder for the address in to, cc or bcc), or a saved Google Contact with that exact address. Google's automatic "other contacts" do not count, because a stranger's mail can create one. The lookup uses only the grants the owner already holds: Gmail read, and the Contacts scope where they connected it. No new scope is requested. Each read has a 3-second limit. One proposal looks up at most 10 parties, and past that it is a card. Answers are cached per turn, keyed by the owner's message. No grant, a failed read or a slow read all answer unknown, which means a card.
 
-   The parties are an email's to/cc/bcc, an email sent as Waldo, and a new event's guests. If code cannot list who an effect reaches, it goes to a card. That covers an MCP write that speaks as the owner, such as a Slack post. The guard compares addresses. It never reads what the owner meant. It catches the main exfiltration path: "handle my inbox" reads a mail asking for the figures to go to an address the owner never named.
+   The parties are an email's to/cc/bcc, an email sent as Waldo, and a new event's guests. If code cannot list who an effect reaches, it goes to a card. That covers an MCP write that speaks as the owner, such as a Slack post, and any tool on a server the owner added by its address, since code cannot tell whether that tool speaks as them. The guard compares addresses. It never reads what the owner meant. It catches the main exfiltration path: "handle my inbox" reads a mail asking for the figures to go to an address the owner never named.
 
    The people map is deliberately not a source of known contacts. A model write from a tainted turn can merge an address into a person the owner knows, so an address there carries no provenance.
 4. **With the choice on, these run with no card in an owner-started turn,** recorded, keyed and reported exactly as autonomy by default runs them (`decideOnce`, `<operation>:apply` effect keys, an undo where one exists, the "what Waldo did" line):
    - sends (Gmail, a message, mail as Waldo), calendar changes and day plans, and Google task changes, including work in a turn that has read email;
-   - **MCP tool calls on a catalogue app** (the console's tiles: Notion, Todoist, Linear, Slack, Fireflies, Wispr, Granola);
+   - **MCP tool calls**, on a catalogue app or on a server the owner added by its address (owner ruling, 14 Nov);
+   - **a standing grant** (lasting access) the owner asked for in a turn that read nothing outside (owner ruling, 14 Nov). The grant records the surface where the owner asked. It is still bounded, revocable and rechecked before each use;
    - **a calendar cancel that Waldo can put back** (`CALENDAR_UNDO_CANCEL` is on and the event was read before the change). Guests included: the owner asked to cancel, and the undo restores the event.
 5. **Cards remain, even with the choice on, for:**
-   - **payments and purchases, and entered passwords or credentials.** A browser submit is always a card (see 6). An MCP call on a server the owner added by its address is a card, because code cannot tell a purchase there.
-   - **permanent deletion:** a calendar cancel that Waldo cannot put back, and an MCP tool whose server marks it `destructiveHint: true`;
-   - **what outside content itself asked for:** every effect of a turn that outside content started (2), a `tainted_action`, and a party that only outside text named (3);
-   - **lasting access:** a standing grant. Only a tap on its card approves it. *This is Ashish's call to reverse*, since it is the closest thing to credentials;
+   - **payments and purchases, and entered passwords or credentials.** A browser submit is always a card (see 6). By owner ruling, an MCP call on a server the owner added by its address runs, even though code cannot tell whether one of its tools makes a purchase.
+   - **permanent deletion:** a calendar cancel that Waldo cannot put back, and an MCP tool whose server marks it `destructiveHint: true`, on any server (the standing "permanent deletion still asks" ruling);
+   - **what outside content itself asked for:** every effect of a turn that outside content started (2), a `tainted_action`, a party that only outside text named (3), and an MCP tool that may speak as the owner after the turn read outside text (3);
+   - **a standing grant asked for after an outside read**, or from a turn that outside content started. The tool already refuses to ask for one in those turns;
    - a send identical to an earlier one whose outcome is unknown.
 6. **Browser submits stay cards.** Code cannot reliably tell a payment, purchase or credential submit from an ordinary form submit:
    - a saved card pays with no card fields on the page;
@@ -40,5 +42,4 @@
 
 ## Not built here
 
-- Known contacts from the owner's Gmail sent history or Google Contacts. Each would widen the guard's known set, but needs a read the desk does not make before deciding.
 - A steering message that arrives mid-turn is not part of "the owner's own words" for the guard. A recipient named only there goes to a card.

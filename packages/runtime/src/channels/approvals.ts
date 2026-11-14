@@ -265,9 +265,13 @@ export type ProposeOptions = Readonly<{ replaces?: string; outside?: boolean; or
 // What a call's provenance lets it do without a card, as askedBy reads it off the turn.
 export type AskedOptions = Pick<ProposeOptions, 'asked' | 'ownerTurn'>;
 // What the MCP handler knows of the tool a call names, from the owner's connection and the server's definition: a catalogue
-// app (one the console offers, none of which takes payments), a tool its server marks destructive, and a write that speaks as
-// the owner to other people, whose recipients code cannot list.
+// app (one the console offers, whose writes that speak as the owner are named), a tool its server marks destructive, and a
+// write that speaks as the owner to other people, whose recipients code cannot list.
 export type McpReach = Readonly<{ catalogue: boolean; destructive: boolean; sendsAsOwner: boolean }>;
+// The recipient guard reads at most this many parties from the owner's Google account for one proposal; past it the proposal
+// is a card, so a send to many strangers never fans out into many reads. The desk keeps at most KNOWN_PARTY_CACHE answers, each for its own turn.
+export const KNOWN_PARTY_LOOKUPS_MAX = 10;
+const KNOWN_PARTY_CACHE = 200;
 // The owner's own message that told Waldo to go ahead, as the host admitted it at the start of the turn. It never comes from
 // the model's arguments.
 export type OwnerSaid = Readonly<{ messageRef: string; receivedAt: number }>;
@@ -296,9 +300,10 @@ export const ownerAsked = (ctx: Readonly<{ ownerMessage?: Readonly<{ ownWordsOnl
 // ownerMessage only then, never for a forward, a quote, inbound mail, a Brief, a proactive run or a job) may act even after it
 // read outside text. words are the owner's own typed or spoken words in that message, never a quote, a transcript of a file or
 // a media note; the recipient guard reads them. A turn something else started gets undefined, and its effects keep their cards.
-export type OwnerTurn = Readonly<{ words: string }>;
-export const ownerStartedTurn = (ctx: Readonly<{ ownerMessage?: Readonly<{ words?: string }>; runOrigin?: unknown }> | undefined): OwnerTurn | undefined =>
-  ctx?.runOrigin === 'owner' && ctx.ownerMessage ? { words: ctx.ownerMessage.words ?? '' } : undefined;
+// ref names the owner's message, so the guard's lookups are cached for that turn alone.
+export type OwnerTurn = Readonly<{ words: string; ref?: string }>;
+export const ownerStartedTurn = (ctx: Readonly<{ ownerMessage?: Readonly<{ words?: string; messageRef?: string }>; runOrigin?: unknown }> | undefined): OwnerTurn | undefined =>
+  ctx?.runOrigin === 'owner' && ctx.ownerMessage ? { words: ctx.ownerMessage.words ?? '', ...(ctx.ownerMessage.messageRef ? { ref: ctx.ownerMessage.messageRef } : {}) } : undefined;
 export const askedBy = (ctx: Parameters<typeof ownerAsked>[0] & Parameters<typeof ownerStartedTurn>[0]): AskedOptions => {
   const turn = ownerStartedTurn(ctx);
   return { asked: ownerAsked(ctx), ...(turn ? { ownerTurn: turn } : {}) };
@@ -324,7 +329,7 @@ export type ApprovalDesk = Readonly<{
   proposeTaintedAction(payload: TaintedActionProposal, options?: Pick<ProposeOptions, 'why'> & Readonly<{ runRef?: string }>): Promise<string>;
   // A card asking the owner to let Waldo do one class of thing without asking; approving it is the only way the chat creates
   // a grant. Raised only on the owner's own turn, by the caller's check.
-  proposeStandingGrant(terms: AppAutonomyGrantTermsV1, options?: Pick<ProposeOptions, 'why'>): Promise<string>;
+  proposeStandingGrant(terms: AppAutonomyGrantTermsV1, options?: Pick<ProposeOptions, 'why'> & AskedOptions): Promise<string>;
   // The unexpired tainted-action cards for this tool still waiting on the owner (put off included), with their frozen args.
   waitingTaintedActions(tool: string): readonly Readonly<{ approval_id: string; args: Readonly<Record<string, unknown>> }>[];
   record(kind: RecordedLedgerKind, summary: string, payload: unknown): void;
@@ -840,8 +845,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // it is shown on, never handed to the app.
   autonomous?: () => boolean;
   // AUTONOMY_OWNER_TURNS: with autonomous() on, a turn the owner started runs their work with no card even after it read outside
-  // text, an MCP call to a catalogue app and an undoable calendar cancel included (runAsked).
+  // text, an MCP call, a standing grant and an undoable calendar cancel included (runAsked).
   ownerTurns?: () => boolean;
+  // Whether the owner already knows a party from their own Google account (known-parties.ts): someone they mailed, or a saved
+  // contact. Absent, or false on any failure, the party is unknown.
+  knownParty?: (address: string, account?: string) => Promise<boolean>;
   // The app chat thread this turn is in, only on an app chat turn: a card is approved in words only in the thread it was shown in.
   conversationRef?: () => string | undefined;
   // When the owner's message this turn answers reached Waldo, from its inbox row. A card shown after that, such as one that
@@ -1545,8 +1553,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
               made = commit(() => {
                 const lost = claimOpen(id);
                 if (lost) return lost;
-                // A standing grant is never in ASKED_RUN_KINDS, so it is decided only on a surface the owner reads.
-                const grant = write(terms, via.surface as Exclude<ApprovalSurface, 'asked'>);
+                // Made on the owner's own request with no card, the grant was created where they asked: this desk's surface.
+                const grant = write(terms, (via.surface === 'asked' ? surface : via.surface) as Exclude<ApprovalSurface, 'asked'>);
                 setStatus(id, 'done');
                 return grant;
               });
@@ -2053,28 +2061,50 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // owner's own words in this message and never reached through Waldo before may have been steered by the email or page the
   // turn read, so it goes to a card. Where code cannot list the parties (an MCP write that speaks as the owner), it does too.
   // This compares addresses, never what the owner's words mean.
-  const partiesKnown = (entry: LedgerRow, turn: OwnerTurn, reach?: McpReach): boolean => {
-    if (entry.kind === 'mcp_call') return reach?.sendsAsOwner === false;
+  // The owner's Google account is asked last, for the parties neither of those knows, each answer kept for the rest of the turn.
+  const lookedUp = new Map<string, Promise<boolean>>();
+  const knownInGoogle = (turn: OwnerTurn, address: string, account?: string): Promise<boolean> => {
+    if (!deps.knownParty) return Promise.resolve(false);
+    const key = JSON.stringify([turn.ref ?? null, account?.toLowerCase() ?? null, address]);
+    const cached = turn.ref ? lookedUp.get(key) : undefined;
+    if (cached) return cached;
+    const answer = deps.knownParty(address, account).catch(() => false);
+    if (turn.ref) {
+      lookedUp.set(key, answer);
+      if (lookedUp.size > KNOWN_PARTY_CACHE) lookedUp.delete(lookedUp.keys().next().value!);
+    }
+    return answer;
+  };
+  const partiesKnown = async (entry: LedgerRow, turn: OwnerTurn, reach?: McpReach): Promise<boolean> => {
+    // A server the owner added by address may speak as them to anyone; code cannot tell, so after an outside read it asks.
+    if (entry.kind === 'mcp_call') return reach?.catalogue === true && reach.sendsAsOwner === false;
     // Whole addresses only, so a@b.co is not found inside a@b.com; a sentence's closing stop is not part of one.
     const named = new Set((turn.words.toLowerCase().match(/[^\s<>(),;:"'[\]]+@[^\s<>(),;:"'[\]]+/g) ?? []).map(token => token.replace(/[.!?]+$/, '')));
-    return partiesOf(entry).every(address => address !== '' && (named.has(address) || reachedBefore(address)));
+    const parties = partiesOf(entry);
+    if (parties.some(address => address === '')) return false;
+    const rest = parties.filter(address => !named.has(address) && !reachedBefore(address));
+    if (rest.length > KNOWN_PARTY_LOOKUPS_MAX) return false;
+    const account = (JSON.parse(entry.payload_json) as { account?: string }).account;
+    return (await Promise.all(rest.map(address => knownInGoogle(turn, address, account)))).every(Boolean);
   };
   // Which rule lets a proposal run with no card. asked (AUTONOMOUS_BY_DEFAULT): the owner's own words, nothing outside read or
   // carried. owner (AUTONOMY_OWNER_TURNS): a turn the owner started, whatever it read since, behind the recipient guard. Both
-  // need the owner's "Just do it" choice, which autonomous() carries. An MCP call runs only under AUTONOMY_OWNER_TURNS, only on a
-  // catalogue app (code cannot tell a purchase on a server the owner added by address) and never a tool its server marks
-  // destructive (a permanent deletion).
-  const askedRule = (entry: LedgerRow, how: AskedOptions, reach?: McpReach): 'asked' | 'owner' | null => {
+  // need the owner's "Just do it" choice, which autonomous() carries. An MCP call and a standing grant run only under
+  // AUTONOMY_OWNER_TURNS. A tool its server marks destructive keeps its card (a permanent deletion), and so does a standing
+  // grant asked for after an outside read.
+  const WIDE_KINDS: readonly string[] = ['mcp_call', 'standing_grant'];
+  const askedRule = async (entry: LedgerRow, how: AskedOptions, reach?: McpReach): Promise<'asked' | 'owner' | null> => {
     if (!autonomous()) return null;
     const wide = deps.ownerTurns?.() === true;
-    if (entry.kind === 'mcp_call' ? !wide || !reach?.catalogue || reach.destructive : !ASKED_RUN_KINDS.includes(entry.kind)) return null;
-    if (how.asked && entry.kind !== 'mcp_call') return 'asked';
-    if (wide && how.ownerTurn && partiesKnown(entry, how.ownerTurn, reach)) return 'owner';
+    if (WIDE_KINDS.includes(entry.kind) ? !wide : !ASKED_RUN_KINDS.includes(entry.kind)) return null;
+    if (entry.kind === 'mcp_call' && reach?.destructive !== false) return null;
+    if (how.asked) return 'asked';
+    if (wide && how.ownerTurn && entry.kind !== 'standing_grant' && await partiesKnown(entry, how.ownerTurn, reach)) return 'owner';
     return null;
   };
   const runAsked = async (id: string, how: AskedOptions, reach?: McpReach): Promise<boolean> => {
     const entry = row(id);
-    const rule = entry ? askedRule(entry, how, reach) : null;
+    const rule = entry ? await askedRule(entry, how, reach) : null;
     if (!entry || !rule) return false;
     const p = JSON.parse(entry.payload_json) as Stored;
     // A cancel runs unasked only where Waldo can put it back: an event read before the change. Under the asked rule it also has
@@ -2403,6 +2433,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         id, describeStandingGrant(parsed), JSON.stringify({ terms: parsed }), deps.now(), await sha256Hex(stableJson(parsed)));
       bindOrigin(id, originRunRef);
       bindWhy(id, options.why);
+      if (await runAsked(id, options)) return id;
       await present(id);
       return id;
     },

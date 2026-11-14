@@ -101,7 +101,7 @@ export const declaresActWithoutAsking = (header: string | null | undefined): boo
 export const appActWithoutAskingV1Schema = z.strictObject({ on: z.boolean(), available: z.boolean() });
 export type AppActWithoutAskingV1 = z.infer<typeof appActWithoutAskingV1Schema>;
 // What Waldo still asks about with the setting on, in the words the app and the website show under it.
-export const APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1 = 'Waldo still asks before paying or buying, entering a password, deleting something for good, giving lasting access, sending a web form, using a tool you connected by its address, or doing what an email or message asked it to.';
+export const APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1 = 'Waldo still asks before paying or buying, entering a password, deleting something for good, sending a web form, or doing what an email or message asked it to.';
 // The receipt for each act_without_asking.set outcome. The app tells them apart by these exact messages, so they are contract.
 // inactive_on and inactive_off: the choice is saved where available is false, and the receipt says it changes nothing yet.
 export const APP_ACT_WITHOUT_ASKING_RECEIPTS_V1 = {

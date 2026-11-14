@@ -15,6 +15,9 @@ import type { GoogleClient } from '../src/connectors/google';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 import { callMcpToolHandler, type McpOwnerServers } from '../src/tools/live/mcp';
 import { emailProposal } from './fixtures/email-send';
+import { standingGrants } from '../src/channels/standing-grants';
+import { knownPartyLookup } from '../src/channels/known-parties';
+import { KNOWN_PARTY_LOOKUPS_MAX } from '../src/channels/approvals';
 import { ownerTyped } from './helpers/owner-typed';
 import { sendMessageHandler } from '../src/tools/live/messaging';
 import { createOwnerResponder } from '../src/channels/owner-turn';
@@ -24,7 +27,7 @@ import { readThreadArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ToolNam
 const NOW = Date.UTC(2026, 10, 14, 9, 0, 0);
 const OWNER = 447700900123;
 type Surface = 'whatsapp' | 'imessage' | 'telegram' | 'app';
-type Options = Readonly<{ master?: boolean; ownerTurns?: boolean; choice?: 'on' | 'off'; undoCancels?: boolean; guests?: number; idPrefix?: string }>;
+type Options = Readonly<{ master?: boolean; ownerTurns?: boolean; choice?: 'on' | 'off'; undoCancels?: boolean; guests?: number; idPrefix?: string; knownParty?: (address: string, account?: string) => Promise<boolean> }>;
 
 const harness = (state: DurableObjectState, surface: Surface, options: Options = {}) => {
   const { sql, kv } = state.storage;
@@ -40,8 +43,10 @@ const harness = (state: DurableObjectState, surface: Surface, options: Options =
     sendRaw: async (raw: string) => { emails.push(raw); return { message_id: `g${emails.length}` }; },
     findSentByMessageId: async (messageId: string) => ({ message_id: `g${emails.length}`, thread_id: 't', rfc822_message_id: messageId, label_ids: ['SENT'] }),
   } as unknown as GoogleClient;
+  let g = 0;
+  const grants = standingGrants(state.storage, { now: () => NOW, newId: () => `g${++g}`, enabled: () => true, ownerRef: () => 'owner-1' });
   const desk = approvalDesk(sql, {
-    owner: OWNER, surface, appIdentity: () => true, appLink: appApprovalLink,
+    owner: OWNER, surface, appIdentity: () => true, appLink: appApprovalLink, grants, ownerRef: () => 'owner-1', ...(options.knownParty ? { knownParty: options.knownParty } : {}),
     // As the owner object wires it: the deploy's master switch and the owner's stored choice, read at each decision.
     autonomous: () => actsWithoutAsking(kv, master), ownerTurns: () => options.ownerTurns !== false,
     ownerMessageAt: () => NOW + 30_000, ...(options.undoCancels ? { undoCancels: true } : {}),
@@ -59,7 +64,7 @@ const harness = (state: DurableObjectState, surface: Surface, options: Options =
     mcpCall: async p => { mcp.push(p.tool); return { provider_id: `mcp-${mcp.length}`, result: 'created' }; },
   });
   const status = (id: string) => sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status;
-  return { desk, messages, sent, created, cancelled, emails, submitted, mcp, status, kv };
+  return { desk, messages, sent, created, cancelled, emails, submitted, mcp, status, kv, grants };
 };
 const owner = (name: string, work: (state: DurableObjectState) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`${name}-${crypto.randomUUID()}`)), (_instance, state) => work(state));
@@ -67,7 +72,7 @@ const owner = (name: string, work: (state: DurableObjectState) => Promise<void>)
 const message = () => ({ channel: 'whatsapp', content: 'Running 10 minutes late', idempotency_key: `key-${crypto.randomUUID()}` });
 const email = (to: readonly string[], body = 'Thursday works for me.') => emailProposal({ to: [...to], subject: 'Re: Thursday', body, message_id: `<${crypto.randomUUID()}@waldo-send>` });
 // A turn the owner started and that has read outside text since (an email): the 2078 rule (asked) no longer holds.
-const read = (words: string): AskedOptions => ({ asked: false, ownerTurn: { words } });
+const read = (words: string, ref?: string): AskedOptions => ({ asked: false, ownerTurn: { words, ...(ref ? { ref } : {}) } });
 // A turn outside content started (inbound mail, a forward, a Brief, a proactive run): the host sets no owner message.
 const outsideStarted: AskedOptions = { asked: false };
 const clean = (words: string): AskedOptions => ({ asked: true, ownerTurn: { words } });
@@ -188,10 +193,10 @@ describe('provenance: who started the turn', () => {
 
   it('reads provenance off the host\'s turn context, never off the model\'s arguments', () => {
     const turn = (over: Partial<ToolDispatcherContext>) => ({ runOrigin: 'owner', ownerMessage: { messageRef: 'm', receivedAt: NOW, ownWordsOnly: true, words: 'email sam@example.test' }, ...over }) as ToolDispatcherContext;
-    expect(askedBy(turn({}))).toEqual({ asked: true, ownerTurn: { words: 'email sam@example.test' } });
+    expect(askedBy(turn({}))).toEqual({ asked: true, ownerTurn: { words: 'email sam@example.test', ref: 'm' } });
     // Read outside text since: the narrow rule drops, the owner still started it.
-    expect(askedBy(turn({ toolArgSourceTaint: 'external' } as never))).toEqual({ asked: false, ownerTurn: { words: 'email sam@example.test' } });
-    expect(askedBy(turn({ carriedOutside: true }))).toEqual({ asked: false, ownerTurn: { words: 'email sam@example.test' } });
+    expect(askedBy(turn({ toolArgSourceTaint: 'external' } as never))).toEqual({ asked: false, ownerTurn: { words: 'email sam@example.test', ref: 'm' } });
+    expect(askedBy(turn({ carriedOutside: true }))).toEqual({ asked: false, ownerTurn: { words: 'email sam@example.test', ref: 'm' } });
     // A forward, inbound mail or a Brief: the host sets runOrigin external or waldo and no owner message.
     for (const runOrigin of ['external', 'waldo'] as const) expect(ownerStartedTurn(turn({ runOrigin, ownerMessage: undefined }))).toBeUndefined();
     expect(ownerStartedTurn(turn({ runOrigin: 'external' }))).toBeUndefined();
@@ -319,22 +324,129 @@ describe('what still cards with the choice on', () => {
     });
   });
 
-  it('a tool on a server the owner added by address: code cannot tell a purchase there', async () => {
-    await owner('still-unlisted', async state => {
+});
+
+describe('lasting access and servers added by address, with the choice on', () => {
+  it('a standing grant the owner asked for is made with no card, and reported', async () => {
+    await owner('grant-runs', async state => {
+      const f = harness(state, 'whatsapp');
+      const id = await f.desk.proposeStandingGrant(GRANT, clean('move my focus blocks yourself from now on'));
+      expect(f.status(id)).toBe('done');
+      expect(f.desk.askedOutcome(id)).toMatchObject({ state: 'done' });
+      expect(f.grants.list().map(grant => grant.created_via)).toEqual(['whatsapp']);
+    });
+  });
+
+  it('a standing grant cards with the choice off, without AUTONOMY_OWNER_TURNS, after an outside read, or from a turn outside content started', async () => {
+    for (const [name, options, how] of [['off', { choice: 'off' }, clean('handle my blocks')], ['narrow', { ownerTurns: false }, clean('handle my blocks')],
+      ['read', {}, read('handle my blocks')], ['outside', {}, outsideStarted]] as const) {
+      await owner(`grant-cards-${name}`, async state => {
+        const f = harness(state, 'whatsapp', options);
+        const id = await f.desk.proposeStandingGrant(GRANT, how);
+        expect([name, f.status(id)]).toEqual([name, 'open']);
+        expect(f.grants.list()).toEqual([]);
+      });
+    }
+  });
+
+  it('a tool on a server the owner added by address runs on their own request', async () => {
+    await owner('unlisted-runs', async state => {
       const f = harness(state, 'whatsapp');
       const id = await f.desk.proposeMcpCall({ ...mcpCall('place_order'), server: 'shop' }, { ...clean('order my usual'), reach: { ...CATALOGUE, catalogue: false } });
+      expect(f.mcp).toEqual(['place_order']);
+      expect(f.status(id)).toBe('done');
+    });
+  });
+
+  it('after the turn read outside text, a tool on a server added by address cards: code cannot tell whether it speaks as the owner', async () => {
+    await owner('unlisted-read', async state => {
+      const f = harness(state, 'whatsapp');
+      const id = await f.desk.proposeMcpCall({ ...mcpCall('post'), server: 'shop' }, { ...read('do what that email says on the shop'), reach: { ...CATALOGUE, catalogue: false } });
       expect(f.mcp).toEqual([]);
       expect(f.status(id)).toBe('open');
     });
   });
 
-  it('lasting access: a standing grant is a card, and only a tap approves it', async () => {
-    await owner('still-grant', async state => {
+  it('a destructive tool cards wherever it lives, catalogue or added by address', async () => {
+    await owner('destructive-cards', async state => {
       const f = harness(state, 'whatsapp');
-      const id = await f.desk.proposeStandingGrant(GRANT);
-      expect(f.status(id)).toBe('open');
-      expect(f.desk.askedOutcome(id)).toBeNull();
+      const ids = [await f.desk.proposeMcpCall(mcpCall('delete_page'), { ...clean('delete it'), reach: { ...CATALOGUE, destructive: true } }),
+        await f.desk.proposeMcpCall({ ...mcpCall('wipe'), server: 'shop' }, { ...clean('wipe it'), reach: { catalogue: false, destructive: true, sendsAsOwner: false } })];
+      expect(f.mcp).toEqual([]);
+      expect(ids.map(f.status)).toEqual(['open', 'open']);
     });
+  });
+});
+
+describe('known people from the owner\'s Google account', () => {
+  it('a recipient the owner mailed before, or a saved contact, is known, so the send runs', async () => {
+    await owner('google-known', async state => {
+      const asked: string[] = [];
+      const f = harness(state, 'whatsapp', { knownParty: async address => { asked.push(address); return address === 'old.friend@example.test'; } });
+      const ran = await f.desk.proposeSendEmail(await email(['old.friend@example.test']), read('reply to that thread', 'wamid.1'));
+      expect(f.status(ran)).toBe('done');
+      const carded = await f.desk.proposeSendEmail(await email(['figures@attacker.example']), read('reply to that thread', 'wamid.1'));
+      expect(f.status(carded)).toBe('open');
+      expect(asked).toEqual(['old.friend@example.test', 'figures@attacker.example']);
+    });
+  });
+
+  it('a failed or missing lookup is unknown: the send cards', async () => {
+    await owner('google-fails', async state => {
+      const f = harness(state, 'whatsapp', { knownParty: async () => { throw new Error('quota'); } });
+      const id = await f.desk.proposeSendEmail(await email(['old.friend@example.test']), read('reply to that thread', 'wamid.1'));
+      expect(f.status(id)).toBe('open');
+    });
+  });
+
+  it('caches each answer for the turn, and asks again in a new turn', async () => {
+    await owner('google-cache', async state => {
+      let reads = 0;
+      const f = harness(state, 'whatsapp', { knownParty: async () => { reads++; return false; } });
+      for (const subject of ['one', 'two']) await f.desk.proposeSendEmail(await email(['x@attacker.example'], subject), read('handle my inbox', 'wamid.turn-1'));
+      expect(reads).toBe(1);
+      await f.desk.proposeSendEmail(await email(['x@attacker.example'], 'three'), read('handle my inbox', 'wamid.turn-2'));
+      expect(reads).toBe(2);
+    });
+  });
+
+  it('past the lookup bound a send cards without reading anything', async () => {
+    await owner('google-bound', async state => {
+      let reads = 0;
+      const f = harness(state, 'whatsapp', { knownParty: async () => { reads++; return true; } });
+      const many = Array.from({ length: KNOWN_PARTY_LOOKUPS_MAX + 1 }, (_, n) => `p${n}@example.test`);
+      const id = await f.desk.proposeSendEmail(await email(many), read('send the invite list', 'wamid.1'));
+      expect(f.status(id)).toBe('open');
+      expect(reads).toBe(0);
+    });
+  });
+});
+
+describe('the Google lookup itself', () => {
+  type Mail = (query: string, limit: number) => Promise<readonly unknown[]>;
+  type Contacts = (query: string, limit: number) => Promise<readonly { name: string | null; emails: string[]; source: 'contacts' | 'other_contacts' }[]>;
+  const lookup = (mail: Mail | null, contacts: Contacts | null, timeoutMs = 50) => knownPartyLookup({
+    mail: async () => mail ? { searchMail: mail } as never : null, contacts: async () => contacts ? { searchContacts: contacts } as never : null, timeoutMs });
+  it('a hit in the sent folder is known, searched by the whole address in to, cc or bcc', async () => {
+    const queries: string[] = [];
+    expect(await lookup(async query => { queries.push(query); return [{ id: 'm1' }]; }, null)('sam@example.test')).toBe(true);
+    expect(queries).toEqual(['in:sent {to:sam@example.test cc:sam@example.test bcc:sam@example.test}']);
+  });
+  it('a saved contact with that exact address is known; an automatic other contact is not', async () => {
+    expect(await lookup(async () => [], async () => [{ name: 'Sam', emails: ['Sam@Example.test'], source: 'contacts' }])('sam@example.test')).toBe(true);
+    expect(await lookup(async () => [], async () => [{ name: 'Sam', emails: ['sam@example.test'], source: 'other_contacts' }])('sam@example.test')).toBe(false);
+    expect(await lookup(async () => [], async () => [{ name: 'Sam', emails: ['sam@example.test.evil'], source: 'contacts' }])('sam@example.test')).toBe(false);
+  });
+  it('no grant for the scope, a failed read or a slow one is unknown', async () => {
+    expect(await lookup(null, null)('sam@example.test')).toBe(false);
+    expect(await lookup(async () => { throw new Error('403'); }, async () => { throw new Error('403'); })('sam@example.test')).toBe(false);
+    const never = () => new Promise<never>(() => undefined);
+    expect(await lookup(never, never, 20)('sam@example.test')).toBe(false);
+  });
+  it('never puts anything but a plain address into a Gmail query', async () => {
+    let asked = false;
+    for (const odd of ['sam@example.test OR in:inbox', 'a}b@example.test', 'sam@example.test {to:x}']) expect(await lookup(async () => { asked = true; return [{}]; }, null)(odd)).toBe(false);
+    expect(asked).toBe(false);
   });
 });
 
@@ -359,12 +471,13 @@ describe('call_mcp_tool hands the desk what the connection knows', () => {
   });
   const ctx = { authenticatedUserId: 'owner', trigger: 'user_message', turnId: 't1', toolCallId: 'c1', runOrigin: 'owner', toolArgSourceTaint: 'external',
     ownerMessage: { messageRef: 'm', receivedAt: NOW, ownWordsOnly: true, words: 'make a page from that email' } } as unknown as ToolDispatcherContext;
-  for (const [catalogue, destructive, runs] of [[true, false, true], [true, true, false], [false, false, false]] as const) {
-    it(`catalogue ${catalogue}, destructive ${destructive}: ${runs ? 'runs' : 'cards'}`, async () => {
-      await owner(`mcp-handler-${catalogue}-${destructive}`, async state => {
+  const cleanCtx = { ...ctx, toolArgSourceTaint: null } as unknown as ToolDispatcherContext;
+  for (const [catalogue, destructive, outside, runs] of [[true, false, true, true], [true, true, true, false], [false, false, true, false], [false, false, false, true], [false, true, false, false]] as const) {
+    it(`catalogue ${catalogue}, destructive ${destructive}, read outside ${outside}: ${runs ? 'runs' : 'cards'}`, async () => {
+      await owner(`mcp-handler-${catalogue}-${destructive}-${outside}`, async state => {
         const f = harness(state, 'whatsapp');
         const handler = callMcpToolHandler(undefined, f.desk, undefined, servers(catalogue, destructive));
-        const result = await handler.handle({ server: 'notion', tool: 'create_page', args: { title: 'Plan' } } as never, ctx) as { ok: true; data: { applied: boolean } };
+        const result = await handler.handle({ server: 'notion', tool: 'create_page', args: { title: 'Plan' } } as never, outside ? ctx : cleanCtx) as { ok: true; data: { applied: boolean } };
         expect(result.data.applied).toBe(runs);
         expect(f.mcp).toEqual(runs ? ['create_page'] : []);
       });
@@ -399,7 +512,7 @@ describe('the real owner turn carries the provenance the desk decides on', () =>
     const { f, calls, seen, responder, turn, sendCall } = turnHarness(state);
     calls.push({ name: 'read_thread', arguments: '{"thread_id":"thread-1"}' }, sendCall);
     await responder.respond(turn('check the Acme thread and tell the team I am running late'), timer);
-    expect(seen).toEqual([{ asked: false, ownerTurn: { words: 'check the Acme thread and tell the team I am running late' } }]);
+    expect(seen).toEqual([{ asked: false, ownerTurn: { words: 'check the Acme thread and tell the team I am running late', ref: expect.stringMatching(/^wamid\./) } }]);
     expect(f.sent).toEqual(['Running 10 minutes late']);
     expect(f.messages).toEqual([]);
   }));
