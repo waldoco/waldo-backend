@@ -472,6 +472,10 @@ describe('call_mcp_tool hands the desk what the connection knows', () => {
   const ctx = { authenticatedUserId: 'owner', trigger: 'user_message', turnId: 't1', toolCallId: 'c1', runOrigin: 'owner', toolArgSourceTaint: 'external',
     ownerMessage: { messageRef: 'm', receivedAt: NOW, ownWordsOnly: true, words: 'make a page from that email' } } as unknown as ToolDispatcherContext;
   const cleanCtx = { ...ctx, toolArgSourceTaint: null } as unknown as ToolDispatcherContext;
+  // The provider refuses a tool whose description passes 1024 characters, which would take the tool out of every turn.
+  it('keeps the tool description within what the provider accepts', () => {
+    expect(callMcpToolHandler(undefined, undefined, undefined, servers(true, false)).description.length).toBeLessThanOrEqual(1024);
+  });
   for (const [catalogue, destructive, outside, runs] of [[true, false, true, true], [true, true, true, false], [false, false, true, false], [false, false, false, true], [false, true, false, false]] as const) {
     it(`catalogue ${catalogue}, destructive ${destructive}, read outside ${outside}: ${runs ? 'runs' : 'cards'}`, async () => {
       await owner(`mcp-handler-${catalogue}-${destructive}-${outside}`, async state => {

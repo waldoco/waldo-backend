@@ -1553,8 +1553,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
               made = commit(() => {
                 const lost = claimOpen(id);
                 if (lost) return lost;
-                // Made on the owner's own request with no card, the grant was created where they asked: this desk's surface.
-                const grant = write(terms, (via.surface === 'asked' ? surface : via.surface) as Exclude<ApprovalSurface, 'asked'>);
+                // Made on the owner's own request with no card (an asked presentation is no surface), the grant was created where
+                // they asked: this desk's surface.
+                const grant = write(terms, (NOT_SHOWN.has(via.surface) ? surface : via.surface) as Exclude<ApprovalSurface, 'asked'>);
                 setStatus(id, 'done');
                 return grant;
               });
