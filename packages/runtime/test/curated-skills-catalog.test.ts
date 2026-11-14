@@ -62,7 +62,7 @@ it('installing one skill never enables another, and a command for one name canno
   expect(book.load('meeting-prep',2,turn('go')).ok).toBe(false);
  });
 });
-it('allows one reviewed procedure per turn', async () => {
+it('allows a few reviewed procedures per turn while they fit together', async () => {
  const stub = env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('catalog-one-per-turn'));
  await runInDurableObject(stub, async (_,state) => {
   provisionDoSchema(state.storage);
@@ -71,7 +71,9 @@ it('allows one reviewed procedure per turn', async () => {
   for (const n of ['day-brief','meeting-prep']) expect(book.install(n,2,turn(`/skills install ${n}@2`)).ok).toBe(true);
   expect(book.load('day-brief',2,turn('go','t1')).ok).toBe(true);
   expect(book.load('day-brief',2,turn('go','t1')).ok).toBe(true);
-  expect(book.load('meeting-prep',2,turn('go','t1')).ok).toBe(false);
+  expect(book.load('meeting-prep',2,turn('go','t1')).ok).toBe(true);
+  const prompt = await book.prompt(turn('go','t1'),canaries);
+  for (const n of ['day-brief','meeting-prep']) expect(prompt).toContain(CURATED_SKILLS.find(s=>s.name===n)!.body_markdown);
  });
 });
 it('tampering with one skill row disables only that skill', async () => {

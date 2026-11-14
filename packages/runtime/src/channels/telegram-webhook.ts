@@ -46,6 +46,7 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_TOOL_RESULTS_CLEAR_AT_CHARS?: string;
   WALDO_TOOL_RESULTS_KEEP_LATEST?: string;
   WALDO_STANDING_ORDERS_CHARS?: string;
+  WALDO_WHATS_NEW_CHARS?: string;
   WALDO_QUESTS_CHARS?: string;
   WALDO_TIMEZONE_ASK?: string;
   WALDO_ENVIRONMENT?: string;
@@ -134,6 +135,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" lets the owner approve a card shown in full in the conversation by telling Waldo to go ahead (approve_shown). Off
   // unless "1".
   APPROVE_IN_CHAT?: string;
+  // "1" runs a send, calendar change or Google task change the owner asked for in their own message with no card, reporting
+  // it with an undo where one exists; the cards that remain are approved on the surface showing them. Off unless "1".
+  AUTONOMOUS_BY_DEFAULT?: string;
   // "1" offers track/log/list/stop_medication on owner turns and words medicine reminders in the harness from a health-plane
   // read. Off unless "1".
   MEDICATIONS?: string;
@@ -312,10 +316,16 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   EVENT_PUSH_PER_DAY?: string;
   // "1": Waldo's own sends follow the owner's choice among their other surfaces even while Telegram is linked.
   PROACTIVE_OVER_TELEGRAM?: string;
+  // '1': with no proactive template approved, Waldo's own work outside WhatsApp's window knocks with the re-engage template;
+  // and, whichever template knocks, a copy the window keeps raises one app push per closed window.
+  REENGAGE_PROACTIVE?: string;
   // '1' (with PROACTIVE_GATE) has Waldo look across the owner's plate on its own every PROACTIVE_REVIEW_EVERY_MIN minutes
   // (default 180, at least 30) and raise drift or an anomaly it judges worth one message or card, under the owner's limits.
   PROACTIVE_INTERVENTIONS?: string;
   PROACTIVE_REVIEW_EVERY_MIN?: string;
+  // '1': on the first wake of each release, the owner's Waldo reads the team's announcements and decides how and whether to
+  // tell its owner about each new capability that is live for them (announcements.ts). Off unless "1".
+  WHATS_NEW?: string;
   // '1' lets an update push say what changed (titles, times, names), checked at the send; anything else sends the fixed line.
   UPDATE_PUSH_NAMES?: string;
   WALDO_EGRESS_ALLOWLIST?: string;

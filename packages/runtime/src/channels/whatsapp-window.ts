@@ -29,6 +29,9 @@ const LAST_INBOUND_IDS_KEY = 'wa_last_inbound_ids';
 // later, or in the same second with a message the refusal had not seen.
 const REFUSED_KEY = 'wa_window_refused_for';
 const REFUSED_IDS_KEY = 'wa_window_refused_ids';
+// The closed window an app push already reached the owner in, named as the knock marker names it (its last inbound time, 0
+// with none), so the next reply re-arms it.
+const PUSHED_KEY = 'wa_window_pushed_for';
 const REHELD_PREFIX = 'wa_reheld:';
 const HELD_SEQ_KEY = 'wa_held_seq';
 export const WA_HELD_PREFIX = 'wa_held:';
@@ -59,10 +62,17 @@ const templateOf = (name: string | undefined, language: string | undefined): Wha
 export const whatsappTemplateConfig = (env: Readonly<{ WHATSAPP_REENGAGE_TEMPLATE?: string; WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string }>): WhatsAppTemplate | null =>
   templateOf(env.WHATSAPP_REENGAGE_TEMPLATE, env.WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE);
 // The knock for a message the owner did not ask for (a day card, an update): its own approved template, whose words do not say
-// the owner asked for anything. The reply template is never borrowed for it.
+// the owner asked for anything. The reply template stands in for it only under REENGAGE_PROACTIVE (whatsappTemplates).
 export const whatsappProactiveTemplateConfig = (env: Readonly<{ WHATSAPP_PROACTIVE_TEMPLATE?: string; WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE?: string }>): WhatsAppTemplate | null =>
   templateOf(env.WHATSAPP_PROACTIVE_TEMPLATE, env.WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE);
 export type WhatsAppTemplates = Readonly<{ reply: WhatsAppTemplate | null; proactive: WhatsAppTemplate | null }>;
+// This deploy's knocks. With REENGAGE_PROACTIVE on and no proactive template approved, Waldo's own work knocks with the
+// approved re-engage template, whose words the owner ruled fit a message they did not ask for.
+export const whatsappTemplates = (env: Readonly<{ WHATSAPP_REENGAGE_TEMPLATE?: string; WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string; WHATSAPP_PROACTIVE_TEMPLATE?: string;
+  WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE?: string; REENGAGE_PROACTIVE?: string }>): WhatsAppTemplates => {
+  const reply = whatsappTemplateConfig(env);
+  return { reply, proactive: whatsappProactiveTemplateConfig(env) ?? (env.REENGAGE_PROACTIVE === '1' ? reply : null) };
+};
 // The template that fits what is waiting. A reply may knock with the proactive template when it is the only one approved,
 // since its words are true of anything; Waldo's own initiative never knocks with words that say the owner asked. With no
 // template for it, nothing is sent.
@@ -97,6 +107,18 @@ const stillRefused = (kv: Kv, last: number): boolean => {
   if (kv.get<number>(REFUSED_KEY) !== last) return false;
   const seen = new Set(kv.get<string[]>(REFUSED_IDS_KEY) ?? []);
   return (kv.get<string[]>(LAST_INBOUND_IDS_KEY) ?? []).every(id => seen.has(id));
+};
+
+// An app push that reached the owner while their WhatsApp window is closed, by time or by Meta's refusal, reaches them for
+// that window on that day (the owner's local day); whatever else waits for it that day needs no push of its own. A window that
+// stays closed past the day gets one again, so a copy days later still reaches the owner.
+type WindowPush = Readonly<{ window: number; day: string }>;
+export const markWindowPushed = (kv: Kv, now: number, day: string): void => {
+  if (kv.get<string>('whatsapp_subject') && !whatsappWindowOpen(kv, now)) kv.put(PUSHED_KEY, { window: kv.get<number>(WA_LAST_INBOUND_KEY) ?? 0, day } satisfies WindowPush);
+};
+export const windowPushed = (kv: Kv, day: string): boolean => {
+  const pushed = kv.get<WindowPush>(PUSHED_KEY);
+  return pushed?.window === (kv.get<number>(WA_LAST_INBOUND_KEY) ?? 0) && pushed.day === day;
 };
 
 export const whatsappWindowOpen = (kv: Kv, now: number): boolean => {
@@ -197,8 +219,9 @@ export const whatsappReceipt = (ack: unknown, subject: string, now: number = Dat
 // store, and a sent record settles only on Meta's report that it arrived (observeSurfaceStatuses). The knock waits for the
 // route's checks too: a record the route itself still holds or would refuse never knocks. A record still waiting after
 // Meta's 30-day retention ends as lapsed, blocked if nothing went out and quarantined if any part did. releaseWhatsAppOutbox sends what waited once the owner writes again.
+// `held` hears of each record the closed window keeps that the route would otherwise send, before the knock.
 export const whatsappWindowRoute = (route: OutboxRoute, options: Readonly<{ kv: Kv; subject: string; template: WhatsAppTemplate | null; proactiveTemplate?: WhatsAppTemplate | null;
-  knock: (template: WhatsAppTemplate) => Promise<unknown>; now?: () => number; log: Log }>): OutboxRoute => {
+  knock: (template: WhatsAppTemplate) => Promise<unknown>; held?: (record: FinalRecord) => Promise<void>; now?: () => number; log: Log }>): OutboxRoute => {
   const { kv, subject, knock, log } = options, templates = { reply: options.template, proactive: options.proactiveTemplate ?? null };
   const now = options.now ?? Date.now;
   const lapsed = (record: { createdAt: number }) => !whatsappWindowOpen(kv, now()) && now() - record.createdAt >= WHATSAPP_HELD_RETENTION_MS;
@@ -209,6 +232,7 @@ export const whatsappWindowRoute = (route: OutboxRoute, options: Readonly<{ kv: 
       const own = await route.defer(record);
       if (own !== null && own > now()) return own;
       if (!(await route.allowed(record))) return null;
+      await options.held?.(record);
       await whatsappKnock(kv, knock, templateFor(templates, unaskedRecord(record)), log);
       return record.createdAt + WHATSAPP_HELD_RETENTION_MS;
     },
@@ -272,7 +296,7 @@ export const clearWhatsAppNumber = (kv: Kv, appFallback = false): readonly strin
   const retired = old ? retireSurfaceRecords(kv, record => record.ownerSubject === old && String(record.payload.chat_id) === old && !kept(record)) : [];
   if (old && appFallback) rememberWhatsAppSubject(kv, old);
   for (const prefix of [WA_HELD_PREFIX, REHELD_PREFIX]) for (const [key] of [...kv.list<unknown>({ prefix })]) kv.delete(key);
-  for (const key of [WA_LAST_INBOUND_KEY, LAST_INBOUND_IDS_KEY, KNOCKED_KEY, REFUSED_KEY, REFUSED_IDS_KEY]) kv.delete(key);
+  for (const key of [WA_LAST_INBOUND_KEY, LAST_INBOUND_IDS_KEY, KNOCKED_KEY, REFUSED_KEY, REFUSED_IDS_KEY, PUSHED_KEY]) kv.delete(key);
   clearWhatsAppContext(kv);
   return retired;
 };
