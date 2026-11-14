@@ -63,7 +63,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_STREAM_REPLIES: gap('the trial calls respond directly and shows no streamed draft; streaming changes delivery, not the words [inference]'),
   CALENDAR_GROUNDED_PREP: gap('proactive prep jobs are not run; the eval runs the day cards as scenario steps'),
   WALDO_DAY_STATE: gap('the update sweep and its apply turn are not run in a trial'),
-  GOOGLE_REALTIME_TRIAGE: gap('the sweep, its delta reads and watches are not run in a trial; the triage prompt runs as its own scenario step'),
+  GOOGLE_REALTIME_TRIAGE: gap('the sweep, its delta reads and watches are not run in a trial; the sweep\'s reader and the triage prompt run as their own scenario step'),
   PROACTIVE_GATE: gap('the owner\'s interruption limits act on the update sweep and health trigger, which a trial does not run'),
   PROACTIVE_INTERRUPTS_PER_DAY: gap('the default daily budget for unasked messages; no trial runs an unasked message'),
   PROACTIVE_URGENT_PER_DAY: gap('the default urgent allowance past that budget; no trial runs an unasked message'),

@@ -22,7 +22,11 @@ import { trialSkillBook } from './skills';
 import { ownerTurnTrace } from '../../src/channels/owner-turn-envelope';
 import { CHAT_REF, evalWorld, TIMEZONE, type Effect, type MemoryMode, type SeedMail, type SeedUpload, type WorldSeed } from './world';
 import { changeLines, type Change } from '../../src/channels/update-cards';
-import { parseTriage, triageTools, TRIAGE_INTERRUPTS_PER_DAY } from '../../src/channels/update-sweep';
+import { parseTriage, triageTools, TRIAGE_INTERRUPTS_PER_DAY, updateSweepSpec } from '../../src/channels/update-sweep';
+import { machineResultText } from '../../src/prompt/machine-jobs';
+import { enqueueMachine } from '../../src/tasks/machine';
+import { runTaskAttempt, taskModel, type TaskClaim, type TaskOutcome } from '../../src/tasks/worker-loop';
+import type { TaskResult } from '@waldo/contracts';
 import { triagePrompt } from '../../src/prompt/update-cards';
 // The cards a triage turn can raise: a send, a calendar change, or any other tool through propose_action.
 export const TRIAGE_CARDS: readonly string[] = ['mail.send.proposed', 'calendar.change.proposed', 'action.proposed'];
@@ -50,7 +54,10 @@ export type Step =
   | Readonly<{ outside_job: string }>
   // A batch of Google changes reaches the triage turn (GOOGLE_REALTIME_TRIAGE) through the production prompt, tainted
   // external, with its card tools offered; its decision is recorded as a 'triage.decision' effect.
-  | Readonly<{ triage: readonly Change[] }>
+  // reader: the update sweep's reader worker reads the batch first, as the owner object writes its job, through the production
+  // worker loop and model call with no tools but finish_task: it judges only the words the job carries. Its result rides
+  // with the triage prompt; a reader that finds nothing ends the batch there, recorded as silent, as the job ends without news.
+  | Readonly<{ triage: readonly Change[]; reader?: true }>
   // One stage of the second welcome build reads this source text, as the owner object asks it, over an empty constellation.
   | Readonly<{ welcome: Readonly<{ stage: WelcomeStage; sources: readonly string[]; text: string }> }>;
 // What one trial cost and how the model got there, as counts: never text. rounds are the owner-reply calls (a structured side
@@ -143,10 +150,32 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
   // The seeded memory is what the owner had before the trial, which a nightly has reviewed; what the trial writes is new.
   const seeded = new Set((scenario.world.memory ?? []).map((claim) => claim.id));
   const seededReviewed = (claim: Readonly<{ id: number }>) => seeded.has(claim.id);
+  const gateway = metered(shown, deps.budget, outage, meter);
   const responder = createTelegramResponder({ openaiApiKey: 'eval-key', floorReply, ...(deps.fallbackKey ? { anthropicApiKey: deps.fallbackKey } : {}), ...(deps.toolLoader ? { toolLoader: deps.toolLoader } : deps.toolSearch ? { toolSearch: true } : {}), ...(deps.promptV2 ? { promptV2: true } : {}) }, world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
-    world.handlers, model, false, undefined, async () => true, metered(shown, deps.budget, outage, meter), undefined, undefined, undefined, undefined,
+    world.handlers, model, false, undefined, async () => true, gateway, undefined, undefined, undefined, undefined,
     WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app', undefined, { forgetBarrier: deps.forgetBarrier ?? 'items', memoryValidity: true, skills: skills.capability, ...(scenario.light_chat ? { lightChat: true } : {}), ...(world.semantic ? { semanticRecall: world.semantic } : {}), ...(deps.memorySelection ? { memorySelection: { reviewed: () => seededReviewed } } : {}) });
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
+  // The update sweep's reader on one batch: its brief exactly as enqueueMachine writes it, one attempt of the production worker
+  // loop over a brain that offers no tools, and the production task model on the trial's metered gateway.
+  const readBatch = async (changes: readonly Change[], at: number): Promise<Readonly<{ news: boolean; result: TaskResult; withheld: readonly string[] }>> => {
+    const now = world.clock.now().getTime();
+    let written: TaskClaim['brief'] | undefined;
+    const book = { openMachine: () => null, create: (input: Readonly<{ brief: TaskClaim['brief'] }>) => { written = input.brief; return { job: {}, created: true }; } } as unknown as JobBook;
+    enqueueMachine(book, updateSweepSpec(changes, { key: `eval:${scenario.id}:${at}`, recordId: at, surface: 'app', timezone: TIMEZONE, now, actAhead: false }), []);
+    const brief = written!;
+    const ticket = { jobId: `${scenario.id}-reader-${at}`, attempt: 1, token: 'eval' };
+    // The worker loop keeps its deadline on the wall clock, not the trial's.
+    const claim: TaskClaim = { jobId: ticket.jobId, profile: 'reader', brief, tools: [], mutations: [], turns: [], seq: 0, deadlineAt: Date.now() + 3_600_000, roundsUsed: 0, ownerRef: 'eval-owner' };
+    let outcome: TaskOutcome | undefined;
+    await runTaskAttempt(ticket, { sliceEnd: Number.POSITIVE_INFINITY, model: taskModel({ openaiApiKey: 'eval-key', ...(deps.fallbackKey ? { anthropicApiKey: deps.fallbackKey } : {}) }, gateway), brain: {
+      claim: async () => claim, tool: async () => ({ ok: false, error: 'No tools in this job.', error_code: 'invalid_args', retryable: false, code: 'invalid_args' }) as never,
+      checkpoint: async () => 'ok', report: async (_t, reported) => { outcome = reported; return 'accepted'; }, heartbeat: async () => true, spent: async () => undefined,
+    } });
+    const result: TaskResult = outcome?.kind === 'result' ? outcome.result : { status: 'failed', summary: 'The reader returned nothing.', findings: [], proposals: [], left: [] };
+    const withheld = brief.machine?.withheld ?? [];
+    transcript.push({ role: 'world', text: `The reader worker returned ${result.findings.length} finding(s) and ${result.proposals.length} proposal(s).` });
+    return { news: result.findings.length > 0 || result.proposals.length > 0 || withheld.length > 0, result, withheld };
+  };
   const transcript: JudgeInput['transcript'][number][] = [];
   let status: TrialRecord['status'] = 'ran';
   let error: string | undefined;
@@ -197,11 +226,13 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         transcript.push({ role: 'world', text: `At ${world.localNow()} (${TIMEZONE}) these changes reach Waldo from the owner's calendars and inbox, and it triages them:\n${changes}` });
         skills.turn(`${scenario.id}-triage-${turn}`);
         const offered = new Set(world.handlers.map((handler) => handler.name));
+        const read = step.reader ? await readBatch(step.triage, turn) : null;
+        if (read && read.news === false) { world.note('triage.decision', { decision: 'silent', reader: 'no_news' }); continue; }
         const prompt = triagePrompt(world.localNow(), { changes, ledger: '', feedback: '', volume: 'normal', sourceFollowups: false, cards: '', revisesCards: true,
           goals: world.goals(), hold: null, left: TRIAGE_INTERRUPTS_PER_DAY });
         const carded = () => world.effects().filter((effect) => TRIAGE_CARDS.includes(effect.kind)).length;
         const before = carded();
-        const reply = await responder.prompt(`${scenario.id}-triage-${turn}`, 1, prompt, time, triageTools(false, true).filter((name) => offered.has(name)) as never, undefined, undefined, undefined, 'external');
+        const reply = await responder.prompt(`${scenario.id}-triage-${turn}`, 1, read ? `${prompt}\n\n${machineResultText(read.result, read.withheld)}` : prompt, time, triageTools(false, true).filter((name) => offered.has(name)) as never, undefined, undefined, undefined, 'external');
         // As the owner object does: a card the turn raised is the act; an unreadable reply is left for the next card.
         const chosen = parseTriage(reply);
         const raised = carded() > before;

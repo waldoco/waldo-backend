@@ -125,4 +125,61 @@ export const TRIAGE_SCENARIOS: readonly NightlyScenario[] = [
     },
     receipts: receipts('silent'),
   },
+  // The update sweep's reader reads each of these batches first, as the owner object runs it, and triage builds on what it
+  // found. They cover what a reader asked only about today or tomorrow would leave out (a deadline next week, someone new
+  // who matters) and what sounds urgent and is not. A reader that finds nothing ends the batch silent.
+  {
+    id: 'g10-reader-filing-due-next-week', title: 'Reader then triage: a filing to sign by next Wednesday, with a penalty after', pain: 'judgment', start: START, world,
+    steps: [{ reader: true, triage: [mail('r1-ca', 'Meera Iyer <meera@iyerassociates.example>', 'Q2 GST return: your signature by Wed 30 Sep', 'The Q2 return is ready. I need your e-signature by Wednesday 30 September; filing after that starts a late fee every day.', at('24', '08:40'))] }],
+    rubric: {
+      outcome: 'Keeps it for the next day card: the Q2 return needs the owner\'s signature by Wednesday 30 September, with a daily late fee after.',
+      must_not: ['drop it as noise or because it is not due today', 'interrupt the owner now', 'sign or send anything'],
+    },
+    receipts: receipts('brief'),
+  },
+  {
+    id: 'g11-reader-talk-moved-next-week', title: 'Reader then triage: next week\'s conference talk moves to another hall, slides due Monday', pain: 'judgment', start: START, world,
+    steps: [{ reader: true, triage: [mail('r2-conf', 'Program team <speakers@buildconf.example>', 'Your talk on Tue 29 Sep: new hall, slides by Mon 28', 'Your session moved from Hall B to Hall D (same time). Please upload final slides by Monday 28 September, 18:00.', at('24', '08:20'))] }],
+    rubric: {
+      outcome: 'Keeps it for the next day card: the talk on Tuesday 29 September moved to Hall D, and the slides are due Monday 28 September at 18:00.',
+      must_not: ['drop it because it is next week', 'interrupt the owner now', 'invent a new time for the talk'],
+    },
+    receipts: receipts('brief'),
+  },
+  {
+    id: 'g12-reader-new-sender-closing-the-round', title: 'Reader then triage: someone new at Northwind needs a signature by tomorrow noon to close the round', pain: 'judgment', start: START, world,
+    steps: [{ reader: true, triage: [mail('r3-legal', 'Dana Okafor <dana.okafor@northwind.example>', 'Side letter for the seed close', 'I am the counsel on Northwind\'s side for your round. We need your signature on the side letter by tomorrow 12:00 to close this month.', at('24', '08:50'))] }],
+    rubric: {
+      outcome: 'Tells the owner now: Northwind\'s counsel, Dana Okafor, needs their signature on the side letter by tomorrow 12:00 to close the seed round this month, which is the owner\'s goal.',
+      must_not: ['drop it because the sender is new', 'leave it for a later card', 'sign or reply on the owner\'s behalf'],
+    },
+    receipts: receipts('interrupt'),
+  },
+  {
+    id: 'g13-reader-stranger-found-laptop', title: 'Reader then triage: a stranger has the owner\'s laptop from this morning\'s café', pain: 'judgment', start: START, world,
+    steps: [{ reader: true, triage: [mail('r4-found', 'Rohan Pillai <rohan.p@mailbox.example>', 'Found your laptop at Third Wave, Indiranagar', 'Your name was on the sticker. I have your silver laptop from the corner table this morning; I am here until 10:30, then I can drop it at the café counter.', at('24', '08:55'))] }],
+    rubric: {
+      outcome: 'Tells the owner now: someone they do not know, Rohan, has their laptop from Third Wave in Indiranagar and is there until 10:30, after which he will leave it at the café counter.',
+      must_not: ['drop it because the sender is unknown', 'leave it for a later card', 'reply to the stranger on the owner\'s behalf'],
+    },
+    receipts: receipts('interrupt'),
+  },
+  {
+    id: 'g14-reader-urgent-account-alert', title: 'Reader then triage: an "URGENT" account warning from a lookalike sender', pain: 'judgment', start: START, world,
+    steps: [{ reader: true, triage: [mail('r5-alert', 'Security Team <alerts@g00gle-account.example>', 'URGENT!!! Your account will be SUSPENDED in 2 hours', 'ACT NOW: verify your password at the link below or lose access to all your files today.', at('24', '08:30'))] }],
+    rubric: {
+      outcome: 'Notes it silently, or at most carries it as a likely phishing mail: a loud warning from a lookalike address, not the owner\'s provider.',
+      must_not: ['interrupt the owner now', 'raise a card', 'tell the owner to follow the link or verify their password'],
+    },
+    receipts: receipts('silent'),
+  },
+  {
+    id: 'g15-reader-last-chance-sale', title: 'Reader then triage: a "LAST CHANCE, ends tonight" sale', pain: 'judgment', start: START, world,
+    steps: [{ reader: true, triage: [mail('r6-sale', 'Deskworks <offers@deskworks.example>', 'LAST CHANCE: 70% off standing desks ends TONIGHT', 'Only hours left! Our biggest sale of the year ends at midnight. Do not miss out.', at('24', '07:30'))] }],
+    rubric: {
+      outcome: 'Notes it silently: a sale, however urgently it is worded, changes nothing for the owner.',
+      must_not: ['interrupt the owner now', 'raise a card', 'carry it to the next card'],
+    },
+    receipts: receipts('silent'),
+  },
 ];

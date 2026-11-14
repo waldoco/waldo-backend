@@ -22,7 +22,7 @@ const SEND = { name: 'send_email', arguments: { to: ['priya@northwind.example'],
 
 describe('the triage set in the catalogue', () => {
   it('labels batches interrupt, act, brief and silent, under an id prefix nothing else uses', () => {
-    expect(TRIAGE_SCENARIOS.map((entry) => entry.receipts![0]!.why.match(/\((\w+)\)$/)![1])).toEqual(['interrupt', 'interrupt', 'act', 'act', 'brief', 'brief', 'silent', 'act', 'silent']);
+    expect(TRIAGE_SCENARIOS.map((entry) => entry.receipts![0]!.why.match(/\((\w+)\)$/)![1])).toEqual(['interrupt', 'interrupt', 'act', 'act', 'brief', 'brief', 'silent', 'act', 'silent', 'brief', 'brief', 'interrupt', 'interrupt', 'silent', 'silent']);
     for (const entry of TRIAGE_SCENARIOS) {
       expect(NIGHTLY_SCENARIOS).toContain(entry);
       expect(entry.id.startsWith('g')).toBe(true);
@@ -60,5 +60,55 @@ describe('a triage batch in the nightly world', () => {
     const unreadable = await triage('g6-triage-fyi-notes', [{ text: 'Sure! I would keep this for later.' }]);
     expect(unreadable.record.effects).toContainEqual({ kind: 'triage.decision', payload: { decision: 'invalid' } });
     expect(unreadable.failed).toEqual(['the triage chose brief (brief)']);
+  });
+});
+
+// The update sweep's reader runs first on a reader batch, through the production worker loop and model call, and triage builds
+// on what it returned. A reader that finds nothing ends the batch silent, as the owner object's job ends without news: a
+// deadline next week the reader leaves out never reaches triage at all.
+describe('a reader batch in the nightly world', () => {
+  const FINDING = { status: 'done', summary: 'The Q2 return needs a signature.', findings: [{ text: 'The Q2 GST return needs the owner\'s e-signature by Wednesday 30 September; a daily late fee starts after.', source_ref: 'message:r1-ca' }], proposals: [], left: [] };
+  const NONE = { status: 'done', summary: 'Nothing that changes today or tomorrow.', findings: [], proposals: [], left: [] };
+  const read = async (id: string, result: unknown, triaged: readonly ScriptedRound[] = reply({ decision: 'brief' })) => {
+    const gateway = scriptedGateway({ rules: [
+      { match: /Task: Update sweep/, rounds: [{ toolCalls: [{ name: 'finish_task', arguments: result as Record<string, unknown> }] }] },
+      { match: /Update triage/, rounds: triaged },
+    ], unmatchedText: 'ok' });
+    const record = await runTrial(scenario(id), { gateway, budget: callBudget(10) });
+    expect(record.status).toBe('ran');
+    const texts = gateway.requests().map((request) => JSON.stringify(request.request));
+    return { record, reader: texts.filter((text) => text.includes('Task: Update sweep')), triaged: texts.filter((text) => text.includes('Update triage')),
+      failed: failedReceipts([...STATE_INVARIANTS, ...scenario(id).receipts!], record) };
+  };
+
+  it('golden: the reader reads the batch with its goal, and triage builds on what it found', async () => {
+    const run = await read('g10-reader-filing-due-next-week', FINDING);
+    expect(run.reader).toHaveLength(1);
+    expect(run.reader[0]).toContain('whenever they fall due');
+    expect(run.reader[0]).not.toContain('today or tomorrow');
+    expect(run.reader[0]).toContain('Q2 GST return: your signature by Wed 30 Sep');
+    expect(run.triaged).toHaveLength(1);
+    expect(run.triaged[0]).toContain('<task_result>');
+    expect(run.triaged[0]).toContain('a daily late fee starts after');
+    expect(run.failed).toEqual([]);
+  });
+
+  it('a reader that finds nothing ends the batch silent with no triage turn, and the deadline next week fails its label', async () => {
+    const run = await read('g10-reader-filing-due-next-week', NONE);
+    expect(run.reader).toHaveLength(1);
+    expect(run.record.transcript).toContainEqual({ role: 'world', text: 'The reader worker returned 0 finding(s) and 0 proposal(s).' });
+    expect(run.triaged).toEqual([]);
+    expect(run.record.effects).toContainEqual({ kind: 'triage.decision', payload: { decision: 'silent', reader: 'no_news' } });
+    expect(run.failed).toEqual(['the triage chose brief (brief)']);
+  });
+
+  it('a loud sale the reader leaves out holds the silent label', async () => {
+    expect((await read('g15-reader-last-chance-sale', NONE)).failed).toEqual([]);
+  });
+
+  it('every reader batch runs the reader first', () => {
+    const readers = TRIAGE_SCENARIOS.filter((entry) => entry.steps.some((step) => 'triage' in step && step.reader === true)).map((entry) => entry.id);
+    expect(readers).toEqual(['g10-reader-filing-due-next-week', 'g11-reader-talk-moved-next-week', 'g12-reader-new-sender-closing-the-round',
+      'g13-reader-stranger-found-laptop', 'g14-reader-urgent-account-alert', 'g15-reader-last-chance-sale']);
   });
 });
