@@ -65,6 +65,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_DAY_STATE: gap('the update sweep and its apply turn are not run in a trial'),
   GOOGLE_REALTIME_TRIAGE: gap('the sweep, its delta reads and watches are not run in a trial; the triage prompt runs as its own scenario step'),
   HELD_RAISE: gap('a batch held while Waldo could not reach the owner is raised by the update sweep, which a trial does not run'),
+  SEPARATE_TOGGLES: gap('which scheduled work a schedule toggle stops; no trial changes a schedule preference or runs the sweep'),
   PROACTIVE_GATE: gap('the owner\'s interruption limits act on the update sweep and health trigger, which a trial does not run'),
   PROACTIVE_INTERRUPTS_PER_DAY: gap('the default daily budget for unasked messages; no trial runs an unasked message'),
   PROACTIVE_URGENT_PER_DAY: gap('the default urgent allowance past that budget; no trial runs an unasked message'),
