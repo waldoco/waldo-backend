@@ -18,6 +18,8 @@ export type LoopEventLike = Readonly<{
   delegated?: true;
   // When the tool call returned, epoch ms.
   at?: number;
+  // A proposing tool's request ran with no card (the owner asked for it, or a standing grant covered it) and was done.
+  applied?: true;
 }>;
 
 // The ref a tool's receipt carries, taken from typed args only. A tool not listed has no ref.
@@ -27,7 +29,7 @@ const REF_ARG: Partial<Record<ToolName, string>> = { workspace_write: 'path', wo
 // only a task that started is named.
 const REF_ONLY_ACCEPTED: ReadonlySet<ToolName> = new Set(['start_task']);
 
-const toolName = (name: unknown): ToolName | null => {
+export const toolName = (name: unknown): ToolName | null => {
   const parsed = toolNameSchema.safeParse(name);
   return parsed.success ? parsed.data : null;
 };

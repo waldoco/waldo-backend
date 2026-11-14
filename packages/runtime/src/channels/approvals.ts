@@ -467,14 +467,22 @@ const targetEvents = async (client: GoogleClient, p: Stored): Promise<string[]> 
   const events = await client.events(p.start!, p.end!, 50, false);
   return events.filter(event => event.id !== p.event_id && event.status !== 'cancelled' && !event.all_day && Date.parse(event.start) < to && Date.parse(event.end) > from).map(event => event.id);
 };
+// A calendar change closes when the time it is about begins: approving it after that would change something already under
+// way. A time already under way when the change is proposed closes it at that time's end instead, so a change the owner asks
+// for to an event in progress (renaming the block they are in) gets the rest of the event, and one about a time that has
+// ended closes as it is made. A day plan adds new blocks and still closes when its first block starts.
+const closesAt = (created: number, start: string, end: string | undefined) => {
+  const begins = Date.parse(start);
+  return begins > created || end === undefined ? begins : Date.parse(end);
+};
 // A browser expiry that isn't a safe integer closes the request when it was made.
 const expiresAt = (entry: LedgerRow) => {
   const p = JSON.parse(entry.payload_json) as Partial<Stored> & Partial<BrowserSubmitProposal>;
   if (entry.kind === 'browser_submit') return p.approvalExpiresAt !== undefined && !Number.isSafeInteger(p.approvalExpiresAt)
     ? entry.created_at : Math.min(entry.created_at + BROWSER_SUBMIT_TTL_MS, p.approvalExpiresAt ?? Infinity);
   if (entry.kind === 'calendar_plan') return Math.min(entry.created_at + PROPOSAL_TTL_MS, Date.parse((p as unknown as StoredPlan).blocks[0]!.start));
-  // A move also closes when the event it moves starts: approving it after that would move something already under way.
-  return entry.kind === 'calendar_change' && p.start ? Math.min(entry.created_at + PROPOSAL_TTL_MS, Date.parse(p.start), p.action === 'move' && p.seen_start ? Date.parse(p.seen_start) : Infinity)
+  // A move also closes by the time of the event it moves, not only by its new time.
+  return entry.kind === 'calendar_change' && p.start ? Math.min(entry.created_at + PROPOSAL_TTL_MS, closesAt(entry.created_at, p.start, p.end), p.action === 'move' && p.seen_start ? closesAt(entry.created_at, p.seen_start, p.seen_end) : Infinity)
     : entry.created_at + PROPOSAL_TTL_MS;
 };
 // A request closes at expires_at; one with no readable expiry is closed.
