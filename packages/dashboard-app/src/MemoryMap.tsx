@@ -59,6 +59,8 @@ function setScene(night: boolean) {
   const root = document.documentElement;
   if ((root.dataset.scene === 'night') === night) return;
   const apply = () => { if (night) root.dataset.scene = 'night'; else delete root.dataset.scene; };
+  // Already dark: night looks the same, so there is nothing to fade (and the light veil would flash).
+  if (root.dataset.theme === 'dark') { apply(); return; }
   const doc = document as Document & { startViewTransition?: (update: () => void) => unknown };
   if (typeof doc.startViewTransition === 'function') { doc.startViewTransition(apply); return; }
   root.dataset.dusk = night ? 'in' : 'out';

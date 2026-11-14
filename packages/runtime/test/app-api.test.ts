@@ -135,6 +135,21 @@ describe('app sign-in and main chat routes', () => {
     expect(forwards).toHaveLength(1);
     expect(keys).toEqual(['app-read:owner-1', 'app-chat-send:owner-1']);
   });
+  it('forwards a calendar proposal to the credential owner DO as a POST on its own budget, and refuses it without a credential or over the limit', async () => {
+    forwards.length = 0;
+    const keys: string[] = [];
+    const counted = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async ({ key }: { key: string }) => { keys.push(key); return { success: true }; } } } as never;
+    const auth = fakeAuth().auth, bearer = { authorization: `Bearer ${CREDENTIAL}` };
+    const body = { request_id: 'request-0001', change: { action: 'cancel', event_id: 'evt_0123456789abcdef', day: '2026-10-27' } };
+    expect(await (await handleApp(post('/app/v1/calendar/proposals', body, bearer), counted, auth))!.json()).toEqual({ forwarded: true });
+    expect([forwards[0]!.method, new URL(forwards[0]!.url).pathname, forwards[0]!.headers.get('x-waldo-do-name'), await forwards[0]!.json()]).toEqual(['POST', '/app/v1/calendar/proposals', 'owner-1', body]);
+    expect(keys).toEqual(['app-calendar-proposal:owner-1']);
+    expect((await handleApp(post('/app/v1/calendar/proposals', body), counted, auth))!.status).toBe(401);
+    const limited = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: false }) } } as never;
+    expect((await handleApp(post('/app/v1/calendar/proposals', body, bearer), limited, auth))!.status).toBe(429);
+    expect((await handleApp(new Request('https://w.test/app/v1/calendar/proposals', { headers: bearer }), counted, auth))!.status).toBe(405);
+    expect(forwards).toHaveLength(1);
+  });
   it('rate limits chat sends per owner and fails closed without the limiter', async () => {
     const auth = fakeAuth().auth;
     const limited = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: false }) } } as never;

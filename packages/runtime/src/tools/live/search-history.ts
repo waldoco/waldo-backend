@@ -15,8 +15,10 @@ export const searchHistoryHandler = (sql: Pick<SqlStorage, 'exec'>, approvalSumm
   autonomy_gated: false,
   async handle(args) {
     const found = searchHistory(sql, args, approvalSummary);
-    if (!chain) return { ok: true, data: found, source_taint: null };
+    // A summary records nothing of where its words came from, so an entry may carry someone else's words.
+    const taint = found.entries.length ? 'external' as const : null;
+    if (!chain) return { ok: true, data: found, source_taint: taint };
     const read = chain.open(), byRef = args.ref !== undefined;
-    return { ok: true, data: { ...found, entries: found.entries.map(entry => ({ ...entry, links: read.ofHistory(entry.ref, byRef ? REF_LINKS : INLINE_LINKS, byRef) })) }, source_taint: null };
+    return { ok: true, data: { ...found, entries: found.entries.map(entry => ({ ...entry, links: read.ofHistory(entry.ref, byRef ? REF_LINKS : INLINE_LINKS, byRef) })) }, source_taint: taint };
   },
 });

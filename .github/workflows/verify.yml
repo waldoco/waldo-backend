@@ -12,9 +12,17 @@ on:
 permissions:
   contents: read
 
+# A newer commit on the same PR or branch supersedes the run before it: only the newest head is ever merged or deployed,
+# and a superseded run would hold runners every other PR is queued behind.
+concurrency:
+  group: verify-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     runs-on: ubuntu-latest
+    # A run takes 12 to 17 minutes; past 45 something is hung, and failing then frees the runner instead of holding it for 6 hours.
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

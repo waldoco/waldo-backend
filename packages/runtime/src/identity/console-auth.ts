@@ -1,5 +1,6 @@
 import { withRequestTimeout } from './request-timeout';
 import { adminCostSummarySchema, type AdminCostSummary } from '../channels/admin-spend';
+import { announcementReportSchema, type AnnouncementDraft, type AnnouncementReport } from '../channels/announcements';
 import { OPEN_SIGNUP_EMAIL_DAILY_LIMIT, OPEN_SIGNUP_IP_DAILY_LIMIT, type OpenSignup } from './open-signup';
 import { hex, linkCodeHash, routerSignature, signedRpc, type OwnerDirectoryEnv } from './owner-directory';
 import { openValue, sealValue } from './sealed-value';
@@ -93,6 +94,12 @@ export type ConsoleAuth = Readonly<{
   adminOverview(doName: string): Promise<AdminOverview | null>;
   /** Spend across every owner for the last 30 days; null unless the database admits the caller as an admin. */
   adminCostSummary(doName: string): Promise<AdminCostSummary | null>;
+  /** Writes an announcement once; false when the caller is not an admin or the id is taken. */
+  announce?(doName: string, draft: AnnouncementDraft): Promise<boolean>;
+  /** Sends an announcement live in one environment; production needs its own call. */
+  announcementLive?(doName: string, id: string, environment: string): Promise<boolean>;
+  /** Counts per outcome for one announcement; null unless the caller is an admin and the announcement exists. */
+  announcementReport?(doName: string, id: string): Promise<AnnouncementReport | null>;
   invite(doName: string, email: string, code: string): Promise<boolean>;
   memberInvite(doName: string, email: string, code: string): Promise<boolean>;
   memberInvites(doName: string): Promise<readonly Readonly<{ email: string | null; created_at: string; expires_at: string | null; used_at: string | null; revoked_at: string | null }>[]>;
@@ -400,6 +407,19 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     adminCostSummary: async (doName) => {
       const summary = await rpc('admin_cost_summary', `admincost.${doName}`, { p_do_name: doName });
       return summary === null ? null : adminCostSummarySchema.parse(summary);
+    },
+    announce: async (doName, draft) => {
+      const requires = draft.requires.join(','), environments = draft.environments.join(',');
+      const fields = [draft.release, draft.title, draft.shipped, draft.why, draft.capability, requires, environments].join('\u001f');
+      const digest = hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(fields)));
+      return (await rpc('admin_announce', `announce.${doName}.${draft.id}.${digest}`, { p_do_name: doName, p_id: draft.id, p_release: draft.release, p_title: draft.title,
+        p_shipped: draft.shipped, p_why: draft.why, p_capability: draft.capability, p_requires: requires, p_environments: environments })) === true;
+    },
+    announcementLive: async (doName, id, environment) =>
+      (await rpc('admin_announcement_live', `announcelive.${doName}.${id}.${environment}`, { p_do_name: doName, p_id: id, p_environment: environment })) === true,
+    announcementReport: async (doName, id) => {
+      const report = await rpc('admin_announcement_report', `announcereport.${doName}.${id}`, { p_do_name: doName, p_id: id });
+      return report === null ? null : announcementReportSchema.parse(report);
     },
     invite: async (doName, email, code) => {
       const address = email.trim().toLowerCase();
