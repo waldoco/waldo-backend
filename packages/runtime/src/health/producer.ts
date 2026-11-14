@@ -57,7 +57,7 @@ const WINDOW_DAYS = 30;
 const HOUR_MS = 3_600_000;
 const MAX_BUSY_MINUTES = 1500;
 const DEMAND_GRACE_MS = 5_000;
-const SIGNALS = ['sleep_duration', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'active_energy_window', 'workout'];
+const SIGNALS = ['sleep_duration', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'active_energy_window', 'steps_window', 'workout'];
 // The night's vital signals feed only the drivers. They are read on their own, beside the scores' read: a point signal
 // such as breathing rate can be dense, and a read that reached its row cap would shorten the scores' baseline.
 const VITAL_SIGNALS = ['respiratory_rate', 'spo2', 'wrist_temperature', 'walking_heart_rate_average'];
@@ -186,13 +186,13 @@ const sleepOf = (readings: readonly Reading[]): DayRecord['sleep'] => {
   return asleep && midpoint && when ? { ...when, asleepMinutes: asleep.value, midpointMinute: midpoint.value } : null;
 };
 
-const SCORED_WINDOW_SIGNALS = ['heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'active_energy_window'];
+const SCORED_WINDOW_SIGNALS = ['heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'active_energy_window', 'steps_window'];
 
 const hourlyOf = (readings: readonly Reading[]): HourlyBucket[] => {
   const buckets = new Map<string, { -readonly [K in keyof HourlyBucket]: HourlyBucket[K] }>();
   for (const r of readings) {
     if (!r.startAt || !SCORED_WINDOW_SIGNALS.includes(r.signal)) continue;
-    const bucket = buckets.get(r.startAt) ?? { startAt: r.startAt, heartRate: null, hrvReadings: [], daylightMinutes: null, movementMinutes: null, activeEnergyKcal: null };
+    const bucket = buckets.get(r.startAt) ?? { startAt: r.startAt, heartRate: null, hrvReadings: [], daylightMinutes: null, movementMinutes: null, activeEnergyKcal: null, steps: null };
     if (r.signal === 'heart_rate_window') bucket.heartRate = r.value;
     else if (r.signal === 'hrv_window' && hrvMethod(r.method)) {
       const method = hrvMethod(r.method)!;
@@ -201,6 +201,7 @@ const hourlyOf = (readings: readonly Reading[]): HourlyBucket[] => {
     else if (r.signal === 'daylight_duration') bucket.daylightMinutes = r.value;
     else if (r.signal === 'movement_duration') bucket.movementMinutes = r.value;
     else if (r.signal === 'active_energy_window') bucket.activeEnergyKcal = r.value;
+    else if (r.signal === 'steps_window') bucket.steps = r.value;
     buckets.set(r.startAt, bucket);
   }
   return [...buckets.values()].sort((a, b) => a.startAt.localeCompare(b.startAt));

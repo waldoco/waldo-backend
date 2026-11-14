@@ -158,7 +158,7 @@ describe('provisional Form', () => {
     expect(on(full(1)).form).toEqual({ state: 'unavailable', reason: 'baseline_immature' });
     expect(on(full(7)).form).toEqual({ state: 'unavailable', reason: 'baseline_immature' });
     const seven = available(on(full(8)).form);
-    expect(seven.algorithm_version).toBe('form.v9');
+    expect(seven.algorithm_version).toBe('form.v10');
     expect(seven.activation).toBe('accepted');
     expect(seven.coverage).toBe(1);
     expect(seven.used.signals).toEqual(expect.arrayContaining(['sleep', 'sleep_midpoint', 'daylight', 'movement', 'stress']));
