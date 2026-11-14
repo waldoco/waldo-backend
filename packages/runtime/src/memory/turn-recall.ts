@@ -30,7 +30,8 @@ export type RecallNear = (text: string) => Promise<readonly number[]>;
 // used: the claims this recall showed in full, which is what the turn had in front of it for this message.
 // outside: a line shown may carry someone else's words: a note saved from outside content (origin agent), or a past message
 // that is not the owner's own (Waldo's reply, which may have read outside content, or a quote).
-export type TurnRecall = Readonly<{ text: string; failed: readonly RecallLeg[]; used?: readonly number[]; outside?: boolean }>;
+// waiting: how many notes learned from outside content matched and were shown to a clean turn only as a number.
+export type TurnRecall = Readonly<{ text: string; failed: readonly RecallLeg[]; used?: readonly number[]; outside?: boolean; waiting?: number }>;
 type Holds = (...values: readonly (string | null | undefined)[]) => boolean;
 
 export const recallTerms = (question: string, previous?: string): readonly string[] => {
@@ -122,7 +123,7 @@ const sourceEntry = (claim: Claim) => claim.source_ref?.startsWith(OWNER_REF) ? 
 // turn goes on with what the other leg found, and failed names the leg; a row that cannot be read back is left out. The
 // block, cut line included, stays within room and RECALL_MAX_CHARS; '' when nothing matched or nothing honest fits. With stubs,
 // recall reaches further: matches past the full lines, and a full line that does not fit, come as stubs the model can open.
-export const recallForTurn = async ({ claims, episodes, question, previous, room, holds, current, semantic, stubs = false, replaced = false }: Readonly<{
+export const recallForTurn = async ({ claims, episodes, question, previous, room, holds, current, semantic, stubs = false, replaced = false, marked = false }: Readonly<{
   claims: Pick<ClaimStore, 'recall'> & Partial<Pick<ClaimStore, 'recallReplaced' | 'builtFromOutside'>>;
   episodes?: RecallEpisodes;
   question: string;
@@ -136,6 +137,8 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
   stubs?: boolean;
   // MEMORY_VALIDITY: facts a later one replaced that match these words join, dated and marked as no longer true.
   replaced?: boolean;
+  // The turn has already read outside content some other way (an earlier message in its chat, a quote, a forward).
+  marked?: boolean;
 }>): Promise<TurnRecall> => {
   const followed = previous !== undefined && !holds(previous) ? previous : undefined;
   const terms = recallTerms(question, followed);
@@ -199,14 +202,15 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
   // A note learned from outside content is shown in full only to a turn already marked as built from outside content. A clean
   // turn gets their number, where read_memory can open them: showing one would mark the turn, and recall matches on any shared word.
   const learnedOutside = (claim: Claim) => claim.origin === 'untrusted';
-  const waiting = claims.builtFromOutside === true ? 0 : [...recalled, ...past].filter(learnedOutside).length;
+  const waiting = claims.builtFromOutside === true || marked ? 0 : [...recalled, ...past].filter(learnedOutside).length;
   if (waiting) { recalled = recalled.filter((claim) => !learnedOutside(claim)); past = past.filter((claim) => !learnedOutside(claim)); }
+  const waitingLine = waiting ? outsideWaitingLine(waiting) : undefined;
   const lines: readonly Readonly<{ full?: string; stub?: string; upgrades?: readonly string[]; claim?: number; outside: boolean }>[] = [
     ...recalled.slice(0, RECALL_CLAIMS).map((claim) => ({ full: claimLine(claim), claim: claim.id, outside: fromOutside(claim), ...(stubs ? { stub: stubLine(claim) } : {}) })),
     ...hits.map((hit) => ({ full: plainLine(hit), upgrades: upgradesOf(hit), outside: outsideRefs.has(hit.ref) })),
     ...past.map((claim) => ({ full: replacedLine(claim), outside: fromOutside(claim) })),
     ...recalled.slice(RECALL_CLAIMS).map((claim) => ({ stub: stubLine(claim), outside: fromOutside(claim) })),
-    ...(waiting ? [{ full: outsideWaitingLine(waiting), outside: false }] : []),
+    ...(waitingLine ? [{ full: waitingLine, outside: false }] : []),
   ];
   const budget = Math.min(RECALL_MAX_CHARS, room);
   const reserve = cutLine(lines.length).length + 1;
@@ -229,5 +233,5 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
     kept[index] = upgrade; used += upgrade.length - line.length;
   });
   const cut = lines.length - kept.length;
-  return { text: ['<recalled>', HEADER, ...kept, ...(cut > 0 ? [cutLine(cut)] : []), '</recalled>'].join('\n'), failed, used: shown, ...(outside ? { outside } : {}) };
+  return { text: ['<recalled>', HEADER, ...kept, ...(cut > 0 ? [cutLine(cut)] : []), '</recalled>'].join('\n'), failed, used: shown, ...(outside ? { outside } : {}), ...(waitingLine && kept.includes(waitingLine) ? { waiting } : {}) };
 };

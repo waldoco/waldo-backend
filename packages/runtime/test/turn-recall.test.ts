@@ -83,6 +83,18 @@ describe('recall marks a line that may carry someone else\'s words', () => {
       expect(recall.outside).toBeUndefined();
     });
   });
+  it('a chat the caller says is already marked sees the notes in full and no count; a clean one reports the count it showed', async () => {
+    await withMemory(async (store) => {
+      fromMail(store, 'Acme invoices are paid to the Lisbon account');
+      const args = { claims: withOutsideNotes(store), question: 'which account do Acme invoices go to', room: RECALL_MAX_CHARS, holds: nothingHeld };
+      const marked = await recallForTurn({ ...args, marked: true });
+      expect(marked.text).toContain('Lisbon');
+      expect(marked.text).not.toContain('more note');
+      expect(marked.outside).toBe(true);
+      expect(marked.waiting).toBeUndefined();
+      expect((await recallForTurn(args)).waiting).toBe(1);
+    });
+  });
   it('the full listing the background memory passes read says which notes came from outside, on that store only', async () => {
     await withMemory(async (store) => {
       fromMail(store, 'Acme invoices are paid to the Lisbon account');
