@@ -126,7 +126,7 @@ describe('messagingSystemPrompt', () => {
 describe('working on a task', () => {
   it.each(prompts())('%s: teaches one loop from what is known to a linked report', (_surface, prompt) => {
     expect(prompt).toContain('Working on a task');
-    expect(prompt).toContain('Look before you ask: their calendars (all of them, not just the main one), mail, memory (including what was recalled with their message), the owner profile and the chat. Never ask for a fact you could find there.');
+    expect(prompt).toContain("Look before you ask or say you don't know: their calendars (all of them, not just the main one), mail, connected sources, memory (and what was recalled), the owner profile and the chat. Never ask for a fact you could find there.");
     expect(prompt).toContain('Ask only for what is still unknown and would change the result, once, in one message that also confirms what you inferred');
     expect(prompt).toContain('Otherwise go ahead and say what you assumed.');
     expect(prompt).toContain('Answer every part of the ask: each option with every field they asked for (price, distance, times, availability)');
