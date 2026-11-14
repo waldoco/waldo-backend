@@ -8,7 +8,7 @@ import { localIso } from './reminders';
 
 type Sql = Pick<SqlStorage, 'exec'>;
 export type Loop = Readonly<{ id: string; title: string; due: string | null; status: string; created_at: number; closed_at: number | null; source_ref?: string | null; source_detail?: string | null; thread_id?: string | null; source_message_id?: string | null }>;
-export type Proactivity = Readonly<{ quiet_start: string | null; quiet_end: string | null; volume: 'low' | 'normal' | 'high'; followups?: boolean; interruptions_per_day?: number }>;
+export type Proactivity = Readonly<{ quiet_start: string | null; quiet_end: string | null; volume: 'low' | 'normal' | 'high'; followups?: boolean; feature_news?: boolean; interruptions_per_day?: number }>;
 
 export const DEFAULT_PROACTIVITY: Proactivity = { quiet_start: null, quiet_end: null, volume: 'normal' };
 
@@ -83,10 +83,13 @@ export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): numb
     proactivity: () => storedProactivity(sql),
     setProactivity(settings: SetProactivityArgs): Proactivity {
       const quiet: Proactivity = settings.quiet_start && settings.quiet_end ? settings : { ...settings, quiet_start: null, quiet_end: null };
-      const followups = settings.followups ?? this.proactivity().followups;
-      const interruptions = settings.interruptions_per_day ?? this.proactivity().interruptions_per_day;
-      const { followups: _omit, interruptions_per_day: _kept, ...rest } = quiet;
-      const next: Proactivity = { ...rest, ...(followups === undefined ? {} : { followups }), ...(interruptions === undefined ? {} : { interruptions_per_day: interruptions }) };
+      const current = this.proactivity();
+      const followups = settings.followups ?? current.followups;
+      const featureNews = settings.feature_news ?? current.feature_news;
+      const interruptions = settings.interruptions_per_day ?? current.interruptions_per_day;
+      const { followups: _omit, feature_news: _news, interruptions_per_day: _kept, ...rest } = quiet;
+      const next: Proactivity = { ...rest, ...(followups === undefined ? {} : { followups }), ...(featureNews === undefined ? {} : { feature_news: featureNews }),
+        ...(interruptions === undefined ? {} : { interruptions_per_day: interruptions }) };
       sql.exec('INSERT INTO proactivity (id, settings) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET settings = excluded.settings', JSON.stringify(next));
       return next;
     },
@@ -111,7 +114,7 @@ export const isQuiet = (settings: Proactivity, now: number, timezone: string): b
 // limits: the owner's daily number of unasked messages is in force (PROACTIVE_GATE); a number stored while it was is not
 // shown when it is not, so nothing promises a limit no code holds.
 export const proactivityLine = (settings: Proactivity, limits = false): string =>
-  `Proactivity: volume ${settings.volume}; ${settings.quiet_start ? `quiet hours ${settings.quiet_start}-${settings.quiet_end}` : 'no quiet hours'}${settings.followups === false ? '; follow-ups off' : ''}${limits && settings.interruptions_per_day !== undefined ? `; ${settings.interruptions_per_day} unasked messages a day` : ''}`;
+  `Proactivity: volume ${settings.volume}; ${settings.quiet_start ? `quiet hours ${settings.quiet_start}-${settings.quiet_end}` : 'no quiet hours'}${settings.followups === false ? '; follow-ups off' : ''}${settings.feature_news === false ? '; news of new capabilities off' : ''}${limits && settings.interruptions_per_day !== undefined ? `; ${settings.interruptions_per_day} unasked messages a day` : ''}`;
 
 export const loopsSection = (book: LoopBook, timezone: string): string => {
   const open = book.list();

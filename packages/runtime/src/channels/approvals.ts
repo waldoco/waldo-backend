@@ -209,7 +209,7 @@ export const proposalStatus = (placement: CardPlacement | undefined, shownHere: 
   const chat = placement?.chatApprovable ? ` ${GO_AHEAD_STATUS}` : '';
   return placement?.hereInFull ? `${status}${chat} ${CARD_SHOWN_IN_FULL}` : `${status}${chat}`;
 };
-const GO_AHEAD_STATUS = 'The owner can also approve it here in words: when a later message of their own clearly tells you to go ahead with this card, call approve_shown with its id. If it is unclear whether they mean go ahead, or which card they mean, ask them.';
+const GO_AHEAD_STATUS = 'The owner can also approve it here in words: when a later message of their own clearly tells you to go ahead with this card, call approve_shown with its id before reading anything else in that turn. If it is unclear whether they mean go ahead, or which card they mean, ask them.';
 const placementStatus = (placement: CardPlacement | undefined, shownHere: string, nothingDone: string): string =>
   !placement || placement.hereApprovable ? placement?.numbered ? NUMBERED_STATUS : shownHere
     : placement.handsToApp && placement.chatApprovable ? `The full card is shown here; there is no button for it here. ${nothingDone}`
@@ -264,6 +264,7 @@ export type ProposeOptions = Readonly<{ replaces?: string; outside?: boolean; or
 export type OwnerSaid = Readonly<{ messageRef: string; receivedAt: number }>;
 // changed_since_shown: the stored card is not the one shown; shown_after_message: the card reached the owner after the
 // message, so the message cannot be about it; app_only: a kind approved only in the app or by a tap.
+export type ApprovableCard = Readonly<{ id: string; kind: string; shown_minutes_ago: number }>;
 // kind and state: the approved card's kind and the ledger status its run ended in ('done' when it was carried out).
 export type ApproveShownOutcome = Readonly<{ outcome: 'decided'; decision: ApprovalDecision; receipt_sent: boolean; kind: string; state: string }
   | { outcome: 'off' | 'not_shown_here' | 'changed_since_shown' | 'shown_after_message' }
@@ -321,6 +322,9 @@ export type ApprovalDesk = Readonly<{
   // The conversations where a card the owner can approve in words waits on this surface, as each card was shown (null where the
   // surface names no thread). A put-off card is not waiting on their next word.
   wordsAwaited(): readonly (string | null)[];
+  // The open cards approve_shown can act on in this conversation, oldest first: ids and kinds only, never a card's words, so a
+  // turn finds the card the owner means without reading text that may carry someone else's words and losing its approval.
+  approvableHere(): readonly ApprovableCard[];
   // Closes a card of Waldo's that is still waiting, with the owner-visible reason. It never approves; a card the owner
   // decided, that expired, or whose effect is on record is left as it is.
   withdraw(id: string, reason: string, options?: Readonly<{ outside?: boolean }>): Promise<WithdrawOutcome>;
@@ -465,6 +469,8 @@ const describeBrowser = (p: BrowserSubmitProposal) => {
   return `${p.action.description} on ${maskedUrl(p.url)}${p.request ? ` via ${p.request.method} ${maskedUrl(p.request.url)}` : ''}${binding ? ` (${binding})` : ''}`;
 };
 const describeMcp = (p: McpCallProposal) => `Run ${p.tool} on the ${p.server} MCP server`;
+// A refusal's own text was written for the model and names Waldo's tools, so the owner reads a fixed line for its code.
+const MCP_NOT_RUN: Partial<Record<McpRefusal['code'], string>> = { auth_failed: 'Its sign-in needs reconnecting in Connections first.', not_found: 'That tool is no longer connected; reconnect it in Connections first.' };
 // The heading over what the proposal read from the owner's own stores when it was made.
 const PREVIEW_HEADING: Readonly<Record<string, string>> = { forget_memory: 'It forgets', close_loop: 'It closes' };
 const clipped = (text: string) => text.length > 120 ? `${text.slice(0, 117)}...` : text;
@@ -1904,15 +1910,16 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             const failure = toolFailed?.message ?? (isToolError(receipt.result) ? receipt.result.tool_error : undefined);
             if (failure !== undefined) {
               setStatus(id, 'failed');
-              return { toast: 'That failed', message: `${describeMcp(cp)} ran and failed. ${failure}` };
+              deps.log({ trace, hop: 'mcp_call_failed', ms: 0, ok: false, code: 'tool_error' });
+              return { toast: 'That failed', message: `That failed: ${sentence(describeMcp(cp))} The server reported an error.` };
             }
-            const outcome = String(receipt.result);
             setStatus(id, 'done');
-            out = { toast: 'Done', message: `Done: ${describeMcp(cp)}. ${outcome}` };
+            out = { toast: 'Done', message: `Done: ${sentence(describeMcp(cp))}` };
           } catch (error) {
             if (notRun && (error instanceof EffectNotAppliedError || error === notRun)) {
               setStatus(id, 'failed');
-              return { toast: 'Nothing ran', message: `Nothing ran: ${notRun.message}` };
+              deps.log({ trace, hop: 'mcp_call_not_run', ms: 0, ok: false, code: notRun.code });
+              return { toast: 'Nothing ran', message: `Nothing ran: ${sentence(describeMcp(cp))} ${MCP_NOT_RUN[notRun.code] ?? 'The server did not take it; ask me to try again.'}` };
             }
             const recorded = deps.effects?.get(`${operationRef}:apply`);
             if(recorded && recorded.state !== 'rejected') {setStatus(id,'uncertain');return {toast:'Outcome unknown',message:'The MCP outcome is unknown. Check the result before retrying; nothing was run again.'};}
@@ -2091,6 +2098,17 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         .flatMap(entry => sql.exec<{ conversation_ref: string | null }>(
           'SELECT conversation_ref FROM approval_presentations WHERE approval_id = ? AND surface = ? AND in_full = 1 AND retired_at IS NULL', entry.id, surface,
         ).toArray().map(presentation => presentation.conversation_ref));
+    },
+    approvableHere() {
+      expireDue();
+      return sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'open' ORDER BY created_at, id").toArray()
+        .filter(entry => PROPOSAL_KINDS.includes(entry.kind) && entry.id.startsWith('p'))
+        .flatMap(entry => {
+          const shown = shownInFullHere(entry);
+          if (!shown.length) return [];
+          const at = Math.max(...shown.map(presentation => presentation.presented_at));
+          return [{ id: entry.id, kind: entry.kind, shown_minutes_ago: Math.max(0, Math.round((deps.now() - at) / 60_000)) }];
+        });
     },
     waiting() {
       expireDue();

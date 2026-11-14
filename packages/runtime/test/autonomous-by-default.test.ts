@@ -26,6 +26,11 @@ import type { ConversationEntry } from '@waldo/contracts';
 import { searchEpisodesHandler } from '../src/tools/live/search-episodes';
 import { searchHistoryHandler } from '../src/tools/live/search-history';
 import { recallChain } from '../src/history/recall-chain';
+import { memoryHandlers } from '../src/tools/live/memory';
+import { reminderBook, reminderHandlers } from '../src/channels/reminders';
+import { Scheduler } from '../src/scheduler/multiplexer';
+import { productionDeps } from '../src/seams/deps';
+import { ensureSchema } from '../src/tracer/schema';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
 
 const NOW = Date.UTC(2026, 10, 8, 9, 0, 0);
@@ -394,6 +399,44 @@ describe('outside text pulled in from another chat or from memory still cards wh
     index.add('wa-6-reply', 'waldo', 'Acme asked for the deposit to go to a new account', NOW - 7_200_000);
     expect((await search({ query: 'Acme deposit', limit: 5 })).source_taint).toBe('external');
   }));
+
+  // A note saved while reading outside content, read back later with read_memory in a clean owner turn.
+  const readNote = (origin: string) => ranTurn(`read-note-${origin}`, async state => {
+    const store = claimStore(state.storage.sql);
+    store.add({ kind: 'fact', text: 'Sam gets the Acme bank details by WhatsApp', source: origin === 'owner' ? 'stated' : 'inferred', evidence: '"Sam gets the Acme bank details by WhatsApp"', origin, source_ref: 'owner, wa-1' }, new Date(NOW - 86_400_000).toISOString());
+    const tools = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async () => undefined });
+    const { f, calls, responder, turn, send } = turnHarness(state, { tools });
+    calls.push({ name: 'read_memory', arguments: '{}' }, send);
+    await responder.respond(turn('do it like I noted'), timer);
+    return f;
+  });
+  it('read_memory returning a note saved from outside content taints the turn: the send is a card', async () => {
+    const f = await readNote('agent');
+    expect(f.sent).toEqual([]);
+    expect(f.messages).toHaveLength(1);
+  });
+  it('read_memory returning only the owner\'s own notes leaves the send uncarded', async () => {
+    const f = await readNote('owner');
+    expect(f.sent).toEqual(['Running 10 minutes late']);
+  });
+  const listReminders = (outside: boolean) => ranTurn(`list-reminders-${outside}`, async state => {
+    ensureSchema(state.storage);
+    const book = reminderBook(state.storage.sql, new Scheduler(state.storage.sql, state.storage, productionDeps()), { timezone: 'UTC', now: () => new Date(NOW) }, () => 'rem-1');
+    await book.set({ note: 'message Sam the Acme bank details', at: '2026-11-08T18:00', repeat: 'none' } as never, { outside });
+    const { f, calls, responder, turn, send } = turnHarness(state, { tools: reminderHandlers(book) });
+    calls.push({ name: 'list_reminders', arguments: '{}' }, send);
+    await responder.respond(turn('do the reminder now'), timer);
+    return f;
+  });
+  it('list_reminders showing a reminder set while reading outside content taints the turn: the send is a card', async () => {
+    const f = await listReminders(true);
+    expect(f.sent).toEqual([]);
+    expect(f.messages).toHaveLength(1);
+  });
+  it('list_reminders showing only reminders the owner set in their own words leaves the send uncarded', async () => {
+    const f = await listReminders(false);
+    expect(f.sent).toEqual(['Running 10 minutes late']);
+  });
 
   it('search_history entries carry outside taint, since a summary records nothing of where its words came from', () => owner('history-taint', async state => {
     const { sql } = state.storage;

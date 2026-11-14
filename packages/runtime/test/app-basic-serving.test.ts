@@ -121,6 +121,8 @@ it('signed no-Telegram app signin, chat history, lost ACK restart readback, isol
       await vi.waitFor(()=>expect(proof.hold).toBeNull());
       const queuedId='queued-after-running-client',queued=await (await app('/chat/main/messages',{client_message_id:queuedId,text:'Queued durable turn'},credential)).json() as any;
       expect(state.storage.kv.get<any>(`app:inbox-record:${queued.message_id}`)?.state).toBe('admitted');expect(await state.storage.getAlarm()).not.toBeNull();
+      // The platform's own instance must not run that wake meanwhile: only the instance under test drains the queued turn.
+      await state.storage.deleteAlarm();
       const old=instance;instance=new OwnerDO(state,settings as never);
       await instance.alarm();release();
       const interrupted=await (await app(`/chat/main/messages/${blockedId}`,undefined,credential)).json() as any;expect(appMessageReceiptV1Schema.parse(interrupted)).toMatchObject({state:'interrupted',effects_unconfirmed:true});

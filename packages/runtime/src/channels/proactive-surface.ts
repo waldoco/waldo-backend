@@ -139,10 +139,10 @@ export const rememberWhatsAppSubject = (kv: Kv, subject: string): void => {
 export const whatsappSubjects = (kv: Pick<Kv, 'get'>): ReadonlySet<string> => new Set(kv.get<string[]>(WHATSAPP_SUBJECTS_KEY) ?? []);
 
 // Whether a message is Waldo's own initiative, which the owner did not ask for: a day card, an update, meeting prep, a pause
-// notice, a mail follow-up, a health note, a check-back on an open loop, or a copy of one of those the app already has. This is
-// where a message comes from, not what it says, and it picks the door-knock template (whatsapp-window.ts): the reply template
-// says the owner asked.
-const unaskedKind = (record: FinalRecord): boolean => !!(record.mailFollowup || record.update || record.calendarPrep || record.scheduleNotice || record.dayCard || record.healthNotice || record.heartbeat);
+// notice, a mail follow-up, a health note, a check-back on an open loop, news of a new capability, or a copy of one of those the
+// app already has. This is where a message comes from, not what it says, and it picks the door-knock template (whatsapp-window.ts):
+// the reply template says the owner asked.
+const unaskedKind = (record: FinalRecord): boolean => !!(record.mailFollowup || record.update || record.calendarPrep || record.scheduleNotice || record.dayCard || record.healthNotice || record.heartbeat || record.announcement);
 export const unaskedRecord = (record: FinalRecord): boolean => unaskedKind(record) || record.id.startsWith(WHATSAPP_COPY_PREFIX);
 
 // What a scheduled job queued for one of those numbers: a reminder, a loop's check-back, a mail follow-up, an update card,
@@ -157,7 +157,7 @@ export const answersOwnerIn = (subject: string) => (record: FinalRecord): boolea
 export const ANSWERS_WHERE_ASKED: ReadonlySet<string> = new Set(['whatsapp']);
 
 export const waitingForWhatsApp = (subjects: ReadonlySet<string>) => (record: FinalRecord): boolean =>
-  !!(record.reminder || record.heartbeat || record.mailFollowup || record.update || record.calendarPrep || record.scheduleNotice || record.dayCard || record.standingOrder)
+  !!(record.reminder || record.heartbeat || record.mailFollowup || record.update || record.calendarPrep || record.scheduleNotice || record.dayCard || record.standingOrder || record.announcement)
   && subjects.has(record.ownerSubject) && record.payload.chat_id === Number(record.ownerSubject) && !tookPart(record);
 
 // A day card, an update card or a card's revision that reaches the app through this route links the app message it became,
