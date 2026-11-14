@@ -258,7 +258,20 @@ export type Replacement = Readonly<{ approval_id: string; replaced: boolean; sta
 // why: the steps behind the card ("Why this changed"), kept beside its row and never in its payload.
 // asked: the owner asked for this in their own message, in a turn that has read nothing from outside (ownerAsked). With
 // AUTONOMOUS_BY_DEFAULT on, such a request runs at once with no card, and the owner hears what was done, with Undo where one exists.
-export type ProposeOptions = Readonly<{ replaces?: string; outside?: boolean; origin?: RunOrigin; why?: readonly TrailStep[]; asked?: boolean }>;
+// ownerTurn: the owner started this turn with their own message, whatever it read since (ownerStartedTurn). With the owner's
+// "Just do it" choice on and AUTONOMY_OWNER_TURNS, such a request runs with no card too, unless it reaches a party named only in
+// outside text (the recipient guard in runAsked).
+export type ProposeOptions = Readonly<{ replaces?: string; outside?: boolean; origin?: RunOrigin; why?: readonly TrailStep[]; asked?: boolean; ownerTurn?: OwnerTurn }>;
+// What a call's provenance lets it do without a card, as askedBy reads it off the turn.
+export type AskedOptions = Pick<ProposeOptions, 'asked' | 'ownerTurn'>;
+// What the MCP handler knows of the tool a call names, from the owner's connection and the server's definition: a catalogue
+// app (one the console offers, whose writes that speak as the owner are named), a tool its server marks destructive, and a
+// write that speaks as the owner to other people, whose recipients code cannot list.
+export type McpReach = Readonly<{ catalogue: boolean; destructive: boolean; sendsAsOwner: boolean }>;
+// The recipient guard reads at most this many parties from the owner's Google account for one proposal; past it the proposal
+// is a card, so a send to many strangers never fans out into many reads. The desk keeps at most KNOWN_PARTY_CACHE answers, each for its own turn.
+export const KNOWN_PARTY_LOOKUPS_MAX = 10;
+const KNOWN_PARTY_CACHE = 200;
 // The owner's own message that told Waldo to go ahead, as the host admitted it at the start of the turn. It never comes from
 // the model's arguments.
 export type OwnerSaid = Readonly<{ messageRef: string; receivedAt: number }>;
@@ -283,6 +296,18 @@ export const askedStatus = (outcome: Readonly<{ message: string; undo: boolean }
 // asked for is the model's judgment; what code holds to is that nothing an email, page or tool answer said can reach here.
 export const ownerAsked = (ctx: Readonly<{ ownerMessage?: Readonly<{ ownWordsOnly?: boolean }>; runOrigin?: unknown; toolArgSourceTaint?: unknown; carriedOutside?: boolean }> | undefined): boolean =>
   ctx?.ownerMessage?.ownWordsOnly === true && ctx.runOrigin === 'owner' && !turnReadOutside(ctx) && ctx.carriedOutside !== true;
+// The provenance line of the owner's "Just do it" choice: a turn the owner started with their own message (the host sets
+// ownerMessage only then, never for a forward, a quote, inbound mail, a Brief, a proactive run or a job) may act even after it
+// read outside text. words are the owner's own typed or spoken words in that message, never a quote, a transcript of a file or
+// a media note; the recipient guard reads them. A turn something else started gets undefined, and its effects keep their cards.
+// ref names the owner's message, so the guard's lookups are cached for that turn alone.
+export type OwnerTurn = Readonly<{ words: string; ref?: string }>;
+export const ownerStartedTurn = (ctx: Readonly<{ ownerMessage?: Readonly<{ words?: string; messageRef?: string }>; runOrigin?: unknown }> | undefined): OwnerTurn | undefined =>
+  ctx?.runOrigin === 'owner' && ctx.ownerMessage ? { words: ctx.ownerMessage.words ?? '', ...(ctx.ownerMessage.messageRef ? { ref: ctx.ownerMessage.messageRef } : {}) } : undefined;
+export const askedBy = (ctx: Parameters<typeof ownerAsked>[0] & Parameters<typeof ownerStartedTurn>[0]): AskedOptions => {
+  const turn = ownerStartedTurn(ctx);
+  return { asked: ownerAsked(ctx), ...(turn ? { ownerTurn: turn } : {}) };
+};
 // The steps the host kept for the proposing call itself, never another call's.
 export const callWhy = (ctx: Readonly<{ whySteps?: readonly TrailStep[] }> | undefined): readonly TrailStep[] | undefined => ctx?.whySteps;
 // A card Waldo closes in a turn that read outside text gets these fixed words, never a reason the model wrote there.
@@ -299,12 +324,12 @@ export type ApprovalDesk = Readonly<{
   proposeSendEmail(payload: EmailSendProposal, options?: ProposeOptions): Promise<string>;
   proposeSendMessage(payload: MessageSendProposal, options?: ProposeOptions): Promise<string>;
   proposeAgentMailSend(payload: AgentMailSendProposal, options?: ProposeOptions): Promise<string>;
-  proposeMcpCall(payload: McpCallProposal): Promise<string>;
+  proposeMcpCall(payload: McpCallProposal, options?: AskedOptions & Readonly<{ reach?: McpReach }>): Promise<string>;
   // runRef: the run the card belongs to when it is not the turn running now (a task worker's step: task:<job id>).
   proposeTaintedAction(payload: TaintedActionProposal, options?: Pick<ProposeOptions, 'why'> & Readonly<{ runRef?: string }>): Promise<string>;
   // A card asking the owner to let Waldo do one class of thing without asking; approving it is the only way the chat creates
   // a grant. Raised only on the owner's own turn, by the caller's check.
-  proposeStandingGrant(terms: AppAutonomyGrantTermsV1, options?: Pick<ProposeOptions, 'why'>): Promise<string>;
+  proposeStandingGrant(terms: AppAutonomyGrantTermsV1, options?: Pick<ProposeOptions, 'why'> & AskedOptions): Promise<string>;
   // The unexpired tainted-action cards for this tool still waiting on the owner (put off included), with their frozen args.
   waitingTaintedActions(tool: string): readonly Readonly<{ approval_id: string; args: Readonly<Record<string, unknown>> }>[];
   record(kind: RecordedLedgerKind, summary: string, payload: unknown): void;
@@ -819,6 +844,12 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // AUTONOMOUS_BY_DEFAULT: work the owner asked for runs with no card, and every card that remains is decided on the surface
   // it is shown on, never handed to the app.
   autonomous?: () => boolean;
+  // AUTONOMY_OWNER_TURNS: with autonomous() on, a turn the owner started runs their work with no card even after it read outside
+  // text, an MCP call, a standing grant and an undoable calendar cancel included (runAsked).
+  ownerTurns?: () => boolean;
+  // Whether the owner already knows a party from their own Google account (known-parties.ts): someone they mailed, or a saved
+  // contact. Absent, or false on any failure, the party is unknown.
+  knownParty?: (address: string, account?: string) => Promise<boolean>;
   // The app chat thread this turn is in, only on an app chat turn: a card is approved in words only in the thread it was shown in.
   conversationRef?: () => string | undefined;
   // When the owner's message this turn answers reached Waldo, from its inbox row. A card shown after that, such as one that
@@ -1522,8 +1553,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
               made = commit(() => {
                 const lost = claimOpen(id);
                 if (lost) return lost;
-                // A standing grant is never in ASKED_RUN_KINDS, so it is decided only on a surface the owner reads.
-                const grant = write(terms, via.surface as Exclude<ApprovalSurface, 'asked'>);
+                // Made on the owner's own request with no card (an asked presentation is no surface), the grant was created where
+                // they asked: this desk's surface.
+                const grant = write(terms, (NOT_SHOWN.has(via.surface) ? surface : via.surface) as Exclude<ApprovalSurface, 'asked'>);
                 setStatus(id, 'done');
                 return grant;
               });
@@ -2010,13 +2042,76 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (entry.kind === 'agent_mail_send') return sql.exec(`SELECT 1 FROM ledger WHERE kind = 'agent_mail_send' AND ${unknown} AND proposal_digest = ? LIMIT 1`, entry.id, entry.proposal_digest ?? null).toArray().length > 0;
     return false;
   };
-  const runAsked = async (id: string, asked: boolean | undefined): Promise<boolean> => {
+  // The parties a proposal reaches that its own fields name: an email's recipients, a new event's guests. The owner's own
+  // account is no one else. A message goes to one of the owner's named channels, and a task change reaches no one.
+  const addressOf = (value: string) => (/<([^<>]+)>\s*$/.exec(value)?.[1] ?? value).trim().toLowerCase();
+  const partiesOf = (entry: LedgerRow): string[] => {
+    const p = JSON.parse(entry.payload_json) as { to?: readonly string[]; cc?: readonly string[]; bcc?: readonly string[]; attendees?: readonly string[]; account?: string };
+    const own = p.account ? addressOf(p.account) : null;
+    return [...p.to ?? [], ...p.cc ?? [], ...p.bcc ?? [], ...p.attendees ?? []].map(addressOf).filter(address => address !== own);
+  };
+  // A party the owner already reached through Waldo: a recipient of a send that went out, or a guest of an event Waldo made.
+  // Each went out on the owner's tap or passed this same guard, so outside text can never seed this list.
+  const PARTY_FIELDS = ['to', 'cc', 'bcc', 'attendees'] as const;
+  const partyAddress = (value: string) => `lower(trim(CASE WHEN instr(${value}, '<') > 0 THEN substr(${value}, instr(${value}, '<') + 1, instr(${value}, '>') - instr(${value}, '<') - 1) ELSE ${value} END))`;
+  const reachedBefore = (address: string): boolean => sql.exec(
+    `SELECT 1 FROM ledger WHERE kind IN ('email_send', 'agent_mail_send', 'calendar_change') AND status = 'done'
+       AND (${PARTY_FIELDS.map(field => `EXISTS (SELECT 1 FROM json_each(ledger.payload_json, '$.${field}') AS party WHERE ${partyAddress('party.value')} = ?)`).join(' OR ')}) LIMIT 1`,
+    ...PARTY_FIELDS.map(() => address)).toArray().length > 0;
+  // The recipient guard (prompt injection inside a turn the owner started): an effect that reaches a party named nowhere in the
+  // owner's own words in this message and never reached through Waldo before may have been steered by the email or page the
+  // turn read, so it goes to a card. Where code cannot list the parties (an MCP write that speaks as the owner), it does too.
+  // This compares addresses, never what the owner's words mean.
+  // The owner's Google account is asked last, for the parties neither of those knows, each answer kept for the rest of the turn.
+  const lookedUp = new Map<string, Promise<boolean>>();
+  const knownInGoogle = (turn: OwnerTurn, address: string, account?: string): Promise<boolean> => {
+    if (!deps.knownParty) return Promise.resolve(false);
+    const key = JSON.stringify([turn.ref ?? null, account?.toLowerCase() ?? null, address]);
+    const cached = turn.ref ? lookedUp.get(key) : undefined;
+    if (cached) return cached;
+    const answer = deps.knownParty(address, account).catch(() => false);
+    if (turn.ref) {
+      lookedUp.set(key, answer);
+      if (lookedUp.size > KNOWN_PARTY_CACHE) lookedUp.delete(lookedUp.keys().next().value!);
+    }
+    return answer;
+  };
+  const partiesKnown = async (entry: LedgerRow, turn: OwnerTurn, reach?: McpReach): Promise<boolean> => {
+    // A server the owner added by address may speak as them to anyone; code cannot tell, so after an outside read it asks.
+    if (entry.kind === 'mcp_call') return reach?.catalogue === true && reach.sendsAsOwner === false;
+    // Whole addresses only, so a@b.co is not found inside a@b.com; a sentence's closing stop is not part of one.
+    const named = new Set((turn.words.toLowerCase().match(/[^\s<>(),;:"'[\]]+@[^\s<>(),;:"'[\]]+/g) ?? []).map(token => token.replace(/[.!?]+$/, '')));
+    const parties = partiesOf(entry);
+    if (parties.some(address => address === '')) return false;
+    const rest = parties.filter(address => !named.has(address) && !reachedBefore(address));
+    if (rest.length > KNOWN_PARTY_LOOKUPS_MAX) return false;
+    const account = (JSON.parse(entry.payload_json) as { account?: string }).account;
+    return (await Promise.all(rest.map(address => knownInGoogle(turn, address, account)))).every(Boolean);
+  };
+  // Which rule lets a proposal run with no card. asked (AUTONOMOUS_BY_DEFAULT): the owner's own words, nothing outside read or
+  // carried. owner (AUTONOMY_OWNER_TURNS): a turn the owner started, whatever it read since, behind the recipient guard. Both
+  // need the owner's "Just do it" choice, which autonomous() carries. An MCP call and a standing grant run only under
+  // AUTONOMY_OWNER_TURNS. A tool its server marks destructive keeps its card (a permanent deletion), and so does a standing
+  // grant asked for after an outside read.
+  const WIDE_KINDS: readonly string[] = ['mcp_call', 'standing_grant'];
+  const askedRule = async (entry: LedgerRow, how: AskedOptions, reach?: McpReach): Promise<'asked' | 'owner' | null> => {
+    if (!autonomous()) return null;
+    const wide = deps.ownerTurns?.() === true;
+    if (WIDE_KINDS.includes(entry.kind) ? !wide : !ASKED_RUN_KINDS.includes(entry.kind)) return null;
+    if (entry.kind === 'mcp_call' && reach?.destructive !== false) return null;
+    if (how.asked) return 'asked';
+    if (wide && how.ownerTurn && entry.kind !== 'standing_grant' && await partiesKnown(entry, how.ownerTurn, reach)) return 'owner';
+    return null;
+  };
+  const runAsked = async (id: string, how: AskedOptions, reach?: McpReach): Promise<boolean> => {
     const entry = row(id);
-    if (!asked || !autonomous() || !entry || !ASKED_RUN_KINDS.includes(entry.kind)) return false;
+    const rule = entry ? await askedRule(entry, how, reach) : null;
+    if (!entry || !rule) return false;
     const p = JSON.parse(entry.payload_json) as Stored;
-    // A cancel runs unasked only where it can be put back and nobody else hears of it: an event read before the change, with no
-    // guests, whom a cancel emails at once and no undo reaches.
-    if (entry.kind === 'calendar_change' && p.action === 'cancel' && (!deps.undoCancels || !p.seen_etag || (p.seen_guests ?? 0) > 0)) return false;
+    // A cancel runs unasked only where Waldo can put it back: an event read before the change. Under the asked rule it also has
+    // no guests, whom a cancel emails at once and no undo reaches; under the owner rule the owner's request to cancel covers
+    // that notice. One Waldo cannot put back is a permanent deletion and keeps its card.
+    if (entry.kind === 'calendar_change' && p.action === 'cancel' && (!deps.undoCancels || !p.seen_etag || (rule === 'asked' && (p.seen_guests ?? 0) > 0))) return false;
     if (earlierUnknown(entry)) return false;
     const digest = `sha256:${await sha256Hex(entry.payload_json)}`;
     // The card this revises closes in the commit that opens the run, as present() closes it when the new card is shown, so the
@@ -2030,7 +2125,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     });
     if (!opened) return false;
     if (opened.replaced) await afterWithdrawn(entry.replaces!, opened.replaced);
-    deps.log({ trace: id, hop: 'approval_asked_run', ms: 0, ok: true, code: entry.kind });
+    deps.log({ trace: id, hop: 'approval_asked_run', ms: 0, ok: true, code: entry.kind, detail: rule });
     const decision = await decideOnce(id, 'a', `asked:${id}`, { surface: 'asked' });
     // A run that ended before it acted (an account not connected, a channel not set up) leaves no card behind: the owner never
     // saw one, so it is settled as not done here rather than left open for another surface to approve.
@@ -2226,7 +2321,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       bindOrigin(id, originRunRef);
       bindWhy(id, callWhy(ctx));
       bindOptions(id, { outside: turnReadOutside(ctx) });
-      if (await runAsked(id, ownerAsked(ctx))) return id;
+      if (await runAsked(id, askedBy(ctx))) return id;
       await present(id);
       return id;
     },
@@ -2265,7 +2360,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       bindOrigin(id, originRunRef);
       bindWhy(id, options.why);
       bindOptions(id, options);
-      if (await runAsked(id, options.asked)) return id;
+      if (await runAsked(id, options)) return id;
       try {
         await present(id);
       } catch {
@@ -2283,7 +2378,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       bindOrigin(id, originRunRef);
       bindWhy(id, options.why);
       bindOptions(id, { outside: options.outside === true });
-      if (await runAsked(id, options.asked)) return id;
+      if (await runAsked(id, options)) return id;
       await present(id);
       return id;
     },
@@ -2304,17 +2399,18 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       bindOrigin(id, originRunRef);
       bindWhy(id, options.why);
       bindOptions(id, options);
-      if (await runAsked(id, options.asked)) return id;
+      if (await runAsked(id, options)) return id;
       try { await present(id); }
       catch { throw new EmailProposalError('card_unconfirmed'); }
       return id;
     },
-    async proposeMcpCall(payload) {
+    async proposeMcpCall(payload, options = {}) {
       const originRunRef = deps.currentRunRef?.();
       const id = `p${deps.newId()}`;
       const summary = describeMcp(payload);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at, proposal_digest) VALUES (?, 'mcp_call', 'card_unconfirmed', ?, ?, NULL, ?, NULL, ?)", id, summary, JSON.stringify(payload), deps.now(), await mcpDigest(payload));
       bindOrigin(id, originRunRef);
+      if (await runAsked(id, options, options.reach)) return id;
       await present(id);
       return id;
     },
@@ -2338,6 +2434,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         id, describeStandingGrant(parsed), JSON.stringify({ terms: parsed }), deps.now(), await sha256Hex(stableJson(parsed)));
       bindOrigin(id, originRunRef);
       bindWhy(id, options.why);
+      if (await runAsked(id, options)) return id;
       await present(id);
       return id;
     },
@@ -2379,7 +2476,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         bindOrigin(id, originRunRef);
         bindWhy(id, options.why);
         bindOptions(id, options);
-        if (await runAsked(id, options.asked)) return id;
+        if (await runAsked(id, options)) return id;
         if (client && await granted(id, stored, client, options.origin, before)) return id;
         await present(id);
         return id;
@@ -2399,7 +2496,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       bindOrigin(id, deps.currentRunRef?.());
       bindWhy(id, options.why);
       bindOptions(id, options);
-      if (await runAsked(id, options.asked)) return id;
+      if (await runAsked(id, options)) return id;
       await present(id);
       return id;
     },

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { appContractHeaderV1Schema } from './core';
 import { appProactiveSurfaceV1Schema } from './onboarding';
 import { messagingSurfaceV1Schema } from './surfaces';
 import { appWhyV1Schema } from './why';
@@ -82,6 +83,35 @@ const APP_CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
 // receive the field.
 export const APP_CONTROLS_QUESTS_REVISION = 18;
 export const APP_QUESTS_MAX_V1 = 20;
+// "Just do it", its own contract pair (`x-waldo-app-contract: act_without_asking=1`), independent of controls=N: a build that
+// names it, at any controls revision, reads act_without_asking on the day view and may send act_without_asking.set; one that
+// does not never receives the field (and its day revision does not cover it) and is refused the action as invalid_action.
+// on is the owner's choice: Waldo does what the owner asks it to without an approval card first. It is on until the owner turns
+// it off, so an owner who never chose reads on. available says whether this Waldo acts on the choice: where it is false the
+// choice is kept but changes nothing, Waldo asks before every action, and the app shows the setting as not active rather than
+// on. Even on, Waldo still asks first for what APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1 names.
+export const APP_ACT_WITHOUT_ASKING_CONTRACT = 'act_without_asking';
+export const APP_ACT_WITHOUT_ASKING_CONTRACT_REVISION = 1;
+// Whether a request's header names the pair. A pair left out reads revision 1 under appContractRevision, so this checks that the
+// pair is named rather than its revision.
+export const declaresActWithoutAsking = (header: string | null | undefined): boolean => {
+  const parsed = appContractHeaderV1Schema.safeParse(header);
+  return parsed.success && (parsed.data[APP_ACT_WITHOUT_ASKING_CONTRACT] ?? 0) >= APP_ACT_WITHOUT_ASKING_CONTRACT_REVISION;
+};
+export const appActWithoutAskingV1Schema = z.strictObject({ on: z.boolean(), available: z.boolean() });
+export type AppActWithoutAskingV1 = z.infer<typeof appActWithoutAskingV1Schema>;
+// What Waldo still asks about with the setting on, in the words the app and the website show under it.
+export const APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1 = 'Waldo still asks before paying or buying, entering a password, deleting something for good, sending a web form, or doing what an email or message asked it to.';
+// The receipt for each act_without_asking.set outcome. The app tells them apart by these exact messages, so they are contract.
+// inactive_on and inactive_off: the choice is saved where available is false, and the receipt says it changes nothing yet.
+export const APP_ACT_WITHOUT_ASKING_RECEIPTS_V1 = {
+  on: { state: 'recorded', message: 'On. Waldo does what you ask without asking first.' },
+  off: { state: 'recorded', message: 'Off. Waldo asks before it sends, books or changes anything for you.' },
+  already_on: { state: 'recorded', message: 'That is already on.' },
+  already_off: { state: 'recorded', message: 'That is already off.' },
+  inactive_on: { state: 'recorded', message: 'Saved as on. This is not active on this Waldo yet, so Waldo still asks before every action.' },
+  inactive_off: { state: 'recorded', message: 'Saved as off. This is not active on this Waldo yet, so Waldo asks before every action either way.' },
+} as const satisfies Readonly<Record<string, Readonly<{ state: 'recorded' | 'rejected'; message: string }>>>;
 export const APP_QUEST_CHECK_IN_DAYS_MAX_V1 = 28;
 const questText = text.min(1).max(500);
 export const appQuestV1Schema = z.strictObject({
@@ -95,7 +125,7 @@ const isScheduleTimeId = (id: unknown): boolean => (APP_SCHEDULE_TIME_IDS_V1 as 
 const scheduleSetValid = (id: string | undefined, value: string | undefined): boolean =>
   (isScheduleId(id) && (value === 'on' || value === 'off')) || (isScheduleTimeId(id) && APP_CLOCK.test(value ?? ''));
 export const appControlActionV1Schema = z.strictObject({
-  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'claim.confirm', 'claim.forget', 'claim.dismiss', 'claim.quiet', 'claim.unquiet', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'imessage.enroll', 'card.retry', 'google.disconnect', 'agent_mail.claim', 'agent_mail.release', 'proactive_surface.set', 'schedule.set', 'person.confirm', 'person.rename', 'person.ring', 'person.forget']),
+  view: appControlViewV1Schema, action: z.enum(['timezone.set', 'proactivity.set', 'channel.unlink', 'google.connect', 'granola.connect', 'granola.disconnect', 'account.delete', 'claim.pin', 'claim.unpin', 'claim.edit', 'claim.confirm', 'claim.forget', 'claim.dismiss', 'claim.quiet', 'claim.unquiet', 'node.confirm', 'node.correct', 'node.forget', 'session.revoke', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'imessage.enroll', 'card.retry', 'google.disconnect', 'agent_mail.claim', 'agent_mail.release', 'proactive_surface.set', 'schedule.set', 'act_without_asking.set', 'person.confirm', 'person.rename', 'person.ring', 'person.forget']),
   id: text.max(256).optional(), value: text.max(4096).optional(),
   quiet_start: text.max(5).optional(), quiet_end: text.max(5).optional(), volume: z.enum(['low', 'normal', 'high']).optional(),
   confirmation: z.literal('DELETE').optional(),
@@ -184,6 +214,9 @@ export const appControlActionV1Schema = z.strictObject({
   // Revision 16: one of the five schedules on or off, or the time the Brief or the Close comes each day, from the day view.
   if (action.action === 'schedule.set' && (action.view !== 'day' || !scheduleSetValid(action.id, action.value)
     || (action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation ?? action.code ?? action.notice ?? action.account) !== undefined)) ctx.addIssue({ code: 'custom', path: ['value'], message: 'schedule.set starts from the day view and names a schedule with on or off, or card:brief or card:close with an HH:MM time, nothing else' });
+  // act_without_asking=1: "Just do it" on or off, from the day view, and nothing else.
+  if (action.action === 'act_without_asking.set' && (action.view !== 'day' || (action.value !== 'on' && action.value !== 'off')
+    || (action.id ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation ?? action.code ?? action.notice ?? action.account) !== undefined)) ctx.addIssue({ code: 'custom', path: ['value'], message: 'act_without_asking.set starts from the day view and carries on or off in value, nothing else' });
   if (agentMail && ((action.action === 'agent_mail.claim' ? undefined : action.value) ?? action.id ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation ?? action.code) !== undefined) ctx.addIssue({ code: 'custom', message: 'agent_mail.claim carries only the handle and the notice version; agent_mail.release carries nothing' });
 });
 
@@ -277,6 +310,8 @@ export const appControlDayDataV1Schema = z.strictObject({
   proactive_surface: z.strictObject({ value: appProactiveSurfaceV1Schema, choices: z.array(appProactiveSurfaceV1Schema).min(1).max(appProactiveSurfaceV1Schema.options.length)
     .refine(choices => new Set(choices).size === choices.length, 'A choice is listed once') }).optional(),
   quests: z.array(appQuestV1Schema).max(APP_QUESTS_MAX_V1).optional(),
+  // act_without_asking=1: the owner's "Just do it" choice and whether this Waldo acts on it.
+  act_without_asking: appActWithoutAskingV1Schema.optional(),
 });
 // Controls revision 6 (`controls=6`) adds the days view: the owner's last 14 local days as the app Home showed them, and one of
 // them in detail with its update cards and the night before it. It is read-only. An older revision asking for it gets

@@ -765,15 +765,17 @@ export const mcpConnections = (deps: McpConnectionsDeps) => {
       };
     },
 
-    // The definition a card freezes: its digest, and whether the owner lets it run without asking.
-    async describe(server: string, tool: string): Promise<Readonly<{ connection: string; def: McpToolDef; digest: string; runs: 'without_asking' | 'asks_first' }>> {
+    // The definition a card freezes: its digest, and whether the owner lets it run without asking. catalogue: the server is one
+    // the console offers, at its pinned address and sign-in; sends_as_owner: the tool is a write that speaks as the owner.
+    async describe(server: string, tool: string): Promise<Readonly<{ connection: string; def: McpToolDef; digest: string; runs: 'without_asking' | 'asks_first'; catalogue: boolean; sends_as_owner: boolean }>> {
       const r = live(server);
       if (isGranolaHost(r.server_url) && !isGranolaRead(tool)) throw notGranolaRead(r.name, tool);
       await freshTools(r).catch(() => undefined);
       let found = toolOf(r, tool);
       if (!found) { await refreshTools(r).catch(() => undefined); found = toolOf(r, tool); }
       if (!found) throw new McpRefusal('not_found', `${r.name} has no tool named "${tool}". Use search_mcp_tools to find the right name.`, true);
-      return { connection: r.id, def: found.def, digest: found.digest, runs: runsWithoutAsking(r, found.def, found.digest, reads(r.id), true) ? 'without_asking' : 'asks_first' };
+      return { connection: r.id, def: found.def, digest: found.digest, runs: runsWithoutAsking(r, found.def, found.digest, reads(r.id), true) ? 'without_asking' : 'asks_first',
+        catalogue: catalogueEntry(r.server_url, r.issuer) !== undefined, sends_as_owner: sendsAsOwner(r, found.def) };
     },
 
     sendsNow,

@@ -298,6 +298,8 @@ import type { OwnerJobHost } from './owner-turn';
 import type { TurnControl } from './turn-control';
 import { turnFailureCode } from './turn-failure-code';
 import { calendarPushBook, wakeBriefSweep } from './calendar-push';
+import { actWithoutAsking, actsWithoutAsking, setActWithoutAsking } from './act-without-asking';
+import { knownPartyLookup } from './known-parties';
 import { calendarSet, realtimeTriage } from './calendar-set';
 import { calendarChannelsBook } from './calendar-watches';
 import { gmailPushBook } from './gmail-push';
@@ -4946,7 +4948,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       enabled: () => this.env.AUTONOMY_OWN_CALENDAR === '1', ownerRef });
     const desk = approvalDesk(storage.sql, {
       effects, googleTasks: () => googleTasks, currentRunRef, appReplyRef: () => this.activeApp?.id, ownerRef, ownerRefAliases, grants, freeWindowOffers: () => this.env.FREE_WINDOW_OFFERS === '1',
-      approvesInChat: () => this.env.APPROVE_IN_CHAT === '1', autonomous: () => this.env.AUTONOMOUS_BY_DEFAULT === '1', conversationRef: () => this.activeApp?.conversationRef,
+      approvesInChat: () => this.env.APPROVE_IN_CHAT === '1',
+      // The deploy's master switch and the owner's "Just do it" choice: off, every consequential effect is a card as before.
+      autonomous: () => actsWithoutAsking(storage.kv, this.env.AUTONOMOUS_BY_DEFAULT === '1'), ownerTurns: () => this.env.AUTONOMY_OWNER_TURNS === '1',
+      // The recipient guard's last look: the owner's Gmail sent folder and saved Google Contacts, with the grants they already hold.
+      knownParty: knownPartyLookup({ mail: account => google.client('mail', undefined, undefined, account), contacts: account => google.client('contacts', undefined, undefined, account) }),
+      conversationRef: () => this.activeApp?.conversationRef,
       ownerMessageAt: () => this.activeApp?.admittedAt ?? this.activeWhatsApp?.admittedAt ?? this.activeIMessage?.admittedAt,
       surface: channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work), writesFirstNow, renames: this.env.HEALTH_EASE_WORKOUT === '1', undoCancels: this.env.CALENDAR_UNDO_CANCEL === '1',
       // A card closed in a turn that read outside text: the desk's own words reach the owner's main chat once, through the outbox.
@@ -6865,7 +6872,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             return { id: card.id, name: card.name, defaultTime: card.defaultTime, time: row ? row.time : card.defaultTime, reason: row?.reason ?? 'not planned yet', sent: row?.sent ?? false, pin: pins[card.id] ?? null,
               ...(status.state ? { state: status.state } : {}), ...(status.reason ? { stateReason: status.reason } : {}), ...(status.retriesLeft === undefined ? {} : { retriesLeft: status.retriesLeft }) };
           }),
-          ledger: await ledger(), proactivity: loops.proactivity(), schedules: schedPrefs.all(), wakeBrief: this.env.WAKE_BRIEF === '1', pausedJobs: pausedJobs(this.ctx.storage.sql, Date.now(), clock.timezone), files: files.list(), steps: traces.steps(clock.timezone), lastRequest: traces.lastRequest(clock.timezone), trace: tracePage.rows,
+          ledger: await ledger(), proactivity: loops.proactivity(), schedules: schedPrefs.all(), wakeBrief: this.env.WAKE_BRIEF === '1', actWithoutAsking: actWithoutAsking(identity, this.env.AUTONOMOUS_BY_DEFAULT === '1'), pausedJobs: pausedJobs(this.ctx.storage.sql, Date.now(), clock.timezone), files: files.list(), steps: traces.steps(clock.timezone), lastRequest: traces.lastRequest(clock.timezone), trace: tracePage.rows,
           runs: runPage.rows.map((row) => ({ id: row.id, kind: row.kind, status: row.status, summary: (row.status === 'running' ? waitingNotes.get(row.id) : undefined) ?? row.summary, parent_id: row.parent_id, started: localIso(row.started_at, clock.timezone).slice(5, 16).replace('T', ' '), ended: row.ended_at === null ? null : localIso(row.ended_at, clock.timezone).slice(5, 16).replace('T', ' ') })),
           page: { trace_before: tracePage.next, runs_before: runPage.next, trace_applied: page?.traceBefore ?? null, runs_applied: page?.runsBefore ?? null },
         };
@@ -6883,6 +6890,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const spotId = Number(id);
         if (action === 'forget.retry') {
           if (!(await this.forgetPurgeJob().retry(id))) return false;
+        } else if (action === 'act_without_asking.set') {
+          const receipt = setActWithoutAsking(identity, value, this.env.AUTONOMOUS_BY_DEFAULT === '1');
+          if (receipt) log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: true, detail: consoleActionTraceDetail(action, id) });
+          return receipt;
         } else if (action === 'schedule.set' && APP_SCHEDULE_TIME_IDS_V1.some((card) => card === id)) {
           if (!isClock(value)) return false;
           const card = id as (typeof APP_SCHEDULE_TIME_IDS_V1)[number];

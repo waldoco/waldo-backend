@@ -98,6 +98,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   AUTONOMY_OWN_CALENDAR: gap('no trial holds a standing grant, and this build creates none; staging has it on'),
   APPROVE_IN_CHAT: gap('no trial has the owner approve a shown card in words; staging has it on'),
   AUTONOMOUS_BY_DEFAULT: gap('the trial\'s tools are synthetic and raise no desk card, so an owner-asked run with no card is not modelled; staging has it on'),
+  AUTONOMY_OWNER_TURNS: gap('the trial\'s tools are synthetic and raise no desk card, so an owner-started turn acting after an outside read is not modelled; staging has it on'),
   HEALTH_EASE_WORKOUT: gap('the world serves no workouts on the calendar; staging has it on'),
   HISTORY_ARCHIVE: gap('retention runs only past a hot table\'s cap, which a trial never reaches'),
   WALDO_PROMPT_V2: mapped("'1' sends the trials the behavior prompt's version 2"),
