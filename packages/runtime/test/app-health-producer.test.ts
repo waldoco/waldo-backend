@@ -127,7 +127,7 @@ describe('the Worker recomputes when the owner\'s object cannot take the notice'
     }
     expect(JSON.parse(rpcs[1]!.body.p_payload as string)).toMatchObject({ from: day(30), to: today });
     expect(JSON.parse(rpcs[1]!.body.p_payload as string).signals).toContain('sleep_duration');
-    expect(JSON.parse(rpcs[1]!.body.p_payload as string).signals).not.toContain('steps_window');
+    expect(JSON.parse(rpcs[1]!.body.p_payload as string).signals).toContain('steps_window');
   });
 
   it('with provisional scores, asks which days hold a row once, signed, as ninety days in a number', async () => {

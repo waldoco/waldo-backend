@@ -77,7 +77,8 @@ describe('produceHealthScores', () => {
       { from: addDays(TODAY, -30), to: TODAY, signals: expect.arrayContaining(['sleep_duration', 'overnight_hrv', 'workout', 'active_energy_window']) },
       { from: addDays(TODAY, -30), to: TODAY, signals: ['respiratory_rate', 'spo2', 'wrist_temperature', 'walking_heart_rate_average'] },
     ]);
-    expect(h.reads[0]!.signals).not.toContain('steps_window');
+    // Hourly steps are Form's on a day without movement minutes; thirty days of every hourly signal stay well under the read's row cap.
+    expect(h.reads[0]!.signals).toContain('steps_window');
     expect(h.writes.map(w => w.day).sort()).toEqual([addDays(TODAY, -1), TODAY]);
   });
 
