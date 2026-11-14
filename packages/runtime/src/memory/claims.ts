@@ -21,15 +21,29 @@ export const CLAIM_SOURCES = ['stated', 'confirmed', 'waldo_confirmed', 'inferre
 // A replaced row is history only while something still stands for its end: a newer version that points at it, or the owner's own
 // retirement of it. A replaced row nothing points to is what an earlier forget of its newer version left behind.
 const HISTORY_KEPT = "(claims.retired_at IS NOT NULL OR EXISTS (SELECT 1 FROM claims later WHERE later.supersedes_id = claims.id))";
+const marks = (ids: readonly number[]) => ids.map(() => '?').join(',');
 const lineageOf = (sql: Pick<SqlStorage, 'exec'>, from: readonly number[]): number[] => {
   const all = new Set(from);
   for (let frontier = [...from]; frontier.length;) {
-    frontier = sql.exec<{ id: number }>(`SELECT supersedes_id AS id FROM claims WHERE id IN (${frontier.map(() => '?').join(',')}) AND supersedes_id IS NOT NULL`, ...frontier).toArray()
+    frontier = sql.exec<{ id: number }>(`SELECT supersedes_id AS id FROM claims WHERE id IN (${marks(frontier)}) AND supersedes_id IS NOT NULL
+      UNION SELECT on_id AS id FROM claim_rests_on WHERE claim_id IN (${marks(frontier)})`, ...frontier, ...frontier).toArray()
       .map((row) => row.id).filter((id) => !all.has(id));
     for (const id of frontier) all.add(id);
   }
   return [...all];
 };
+// Every note written in place of one of these (a merge or a rewrite), and every note written in place of those.
+const restingOn = (sql: Pick<SqlStorage, 'exec'>, from: readonly number[]): number[] => {
+  const found = new Set<number>();
+  for (let frontier = [...from]; frontier.length;) {
+    frontier = sql.exec<{ id: number }>(`SELECT claim_id AS id FROM claim_rests_on WHERE on_id IN (${marks(frontier)})`, ...frontier).toArray()
+      .map((row) => row.id).filter((id) => !found.has(id));
+    for (const id of frontier) found.add(id);
+  }
+  return [...found];
+};
+// The source ref of a note written in place of others: notes:<their ids>.
+export const COMBINED_REF = 'notes:';
 export const awaitsOwnerConfirm = (claim: Pick<Claim, 'source'>): boolean => claim.source === 'inferred' || claim.source === 'waldo_confirmed';
 export const EDGE_RELATIONS = ['tends to precede', 'worsens', 'improves', 'co-occurs with'] as const;
 
@@ -483,6 +497,9 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
   // fingerprint - never the text. A held claim can quote forgotten or waldo-side text, so
   // persisting the words would re-create the leak the hold prevented.
   sql.exec('CREATE TABLE IF NOT EXISTS claim_holds (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, reason TEXT NOT NULL, fingerprint TEXT NOT NULL, created_at TEXT NOT NULL)');
+  // The notes a merged or rewritten note was written in place of. They end when it is written and stay, so deleting any of
+  // them finds the note that carries their words.
+  sql.exec('CREATE TABLE IF NOT EXISTS claim_rests_on (claim_id INTEGER NOT NULL, on_id INTEGER NOT NULL, PRIMARY KEY (claim_id, on_id))');
   // The per-exchange settle is gone; its marker table held only trace ids and times.
   sql.exec('DROP TABLE IF EXISTS settle_pending');
   // External-content FTS keeps no second copy of claim text. Triggers synchronize
@@ -597,6 +614,38 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
         const ended = sql.exec(`UPDATE claims SET status = 'superseded', valid_to = ?, retired_at = ? WHERE id = ? AND status = 'active' AND kind != '${NODE_STATEMENT}' AND id != ? RETURNING id`, at, at, id, replacedBy ?? 0).toArray().length === 1;
         if (ended && replacedBy !== undefined) sql.exec('UPDATE claims SET supersedes_id = ? WHERE id = ? AND status IN (\'active\', \'promoted\') AND supersedes_id IS NULL AND origin = \'owner\'', id, replacedBy);
         return ended;
+      });
+    },
+    // One note written in place of others: a merge of several, or a rewrite of one. Those notes end here and stay, linked from
+    // it. The wording is Waldo's, written by a pass that also reads outside content, so the note is never the owner's: it is
+    // outside content if any note it replaced was, Waldo's read otherwise, until the owner confirms it. No health note is
+    // merged or rewritten, and no reading is written this way. Returns the new note's id, or null when nothing was written.
+    combine(ids: readonly number[], claim: Readonly<{ kind: string; text: string }>, at: string): number | null {
+      const unique = [...new Set(ids)], text = claim.text.trim();
+      if (!transaction || !unique.length || !text || claim.kind === 'health' || numericHealthIn(text)) return null;
+      return transaction(() => {
+        const old = sql.exec<Claim>(`SELECT * FROM claims WHERE id IN (${marks(unique)}) AND status IN ('active', 'promoted') AND kind != '${NODE_STATEMENT}'`, ...unique).toArray();
+        if (old.length !== unique.length || old.some((note) => note.kind === 'health' || numericHealthIn(note.text))) return null;
+        const live = sql.exec<{ id: number; text: string }>(`SELECT id, text FROM claims WHERE status IN ('active', 'promoted') AND id NOT IN (${marks(unique)})`, ...unique).toArray();
+        if (live.some((note) => normalizeForGrounding(note.text) === normalizeForGrounding(text))) return null;
+        const outside = old.filter((note) => note.origin === 'untrusted');
+        // A note learned from one mail or calendar change keeps that source; anything else names the notes it replaced.
+        const shared = outside.length === old.length && new Set(old.map((note) => note.source_ref)).size === 1 ? old[0]!.source_ref : null;
+        const fenced = old.find((note) => FENCED_AREAS.includes(note.area)) ?? (new Set(old.map((note) => note.area ?? null)).size === 1 ? old[0] : undefined);
+        const id = sql.exec<{ id: number }>('INSERT INTO claims (kind, text, source, evidence, origin, status, created_at, last_seen_at, source_ref, learned_at, valid_from, verification_status, area, area_by, bring_up_less_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+          claim.kind, text, 'inferred', `written in place of ${unique.map((spot) => `c${spot}`).join(', ')}`, outside.length ? 'untrusted' : 'agent', 'active', at, at,
+          shared?.startsWith(OUTSIDE_REF) ? shared : `${COMBINED_REF}${unique.join(',')}`, at, at, 'provisional', fenced?.area ?? null, fenced?.area ? fenced.area_by ?? null : null,
+          old.find((note) => note.bring_up_less_at)?.bring_up_less_at ?? null).one().id;
+        for (const note of old) {
+          sql.exec('INSERT INTO claim_rests_on (claim_id, on_id) VALUES (?, ?)', id, note.id);
+          sql.exec("UPDATE claims SET status = 'superseded', valid_to = ? WHERE id = ?", at, note.id);
+          people.carryLinks(note.id, id);
+        }
+        for (const node of sql.exec<ConstellationNode>('SELECT * FROM constellation_nodes').toArray()) {
+          const spots = supportIds(node);
+          if (spots.some((spot) => unique.includes(spot))) sql.exec('UPDATE constellation_nodes SET supporting_spots = ? WHERE id = ?', JSON.stringify([...new Set(spots.map((spot) => unique.includes(spot) ? id : spot))]), node.id);
+        }
+        return id;
       });
     },
     barriers: () => sql.exec<ForgetBarrier>('SELECT * FROM forget_barriers ORDER BY id').toArray(),
@@ -831,7 +880,13 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
       // An earlier version of a forgotten claim goes with it: what it replaced would otherwise stay as history that says the
       // same thing in older words.
       // A person a topic names goes with it: every claim about them, so their name leaves memory whatever words the claims use.
-      ids = lineageOf(sql, [...ids, ...people.namedBy(topics.filter(forgettableTopic)).flatMap(row => people.claimIdsOf(row.id))]);
+      // A note written in place of a forgotten one goes with it: it carries that note's words. The other notes it replaced
+      // were only ended because it stood for them, so they stand again.
+      const asked = [...ids, ...people.namedBy(topics.filter(forgettableTopic)).flatMap(row => people.claimIdsOf(row.id))];
+      const written = restingOn(sql, asked);
+      ids = [...new Set([...lineageOf(sql, asked), ...written])];
+      if (written.length) sql.exec(`UPDATE claims SET status = 'active', valid_to = NULL WHERE status = 'superseded' AND retired_at IS NULL
+        AND id IN (SELECT on_id FROM claim_rests_on WHERE claim_id IN (${marks(written)})) AND id NOT IN (${marks(ids)})`, ...written, ...ids);
       const forgotten = ids.length
         ? sql.exec<Claim>(`SELECT * FROM claims WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).toArray()
         : [];
@@ -946,7 +1001,7 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
           for (const row of sql.exec<{ rid: number; text: string; evidence: string; aliases: string | null; source_ref: string | null }>(`SELECT id AS rid, text, evidence, aliases, source_ref FROM claims WHERE (text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\' OR aliases LIKE ? ESCAPE '\\' OR source_ref LIKE ? ESCAPE '\\') AND COALESCE(julianday(created_at) <= julianday(?), 1)${notPurging}`, like, like, like, like, forgottenAt(text), ...idList).toArray()) {
             if (removes && (carries(row.text) || carries(row.evidence) || carries(row.aliases))) {
               // The earlier versions it replaced go with it, read before the row is deleted: a deleted row no longer says what it replaced.
-              for (const id of lineageOf(sql, [row.rid])) if (sql.exec('DELETE FROM claims WHERE id = ? RETURNING id', id).toArray().length) { sql.exec('DELETE FROM purge_pending WHERE claim_id = ?', id); tally('deleted', 'claims'); deletedClaims.push(id); }
+              for (const id of new Set([...lineageOf(sql, [row.rid]), ...restingOn(sql, [row.rid])])) if (sql.exec('DELETE FROM claims WHERE id = ? RETURNING id', id).toArray().length) { sql.exec('DELETE FROM purge_pending WHERE claim_id = ?', id); sql.exec('DELETE FROM claim_rests_on WHERE claim_id = ? OR on_id = ?', id, id); tally('deleted', 'claims'); deletedClaims.push(id); }
               continue;
             }
             const redacted = [ci(row.text), ci(row.evidence), row.aliases === null ? null : ci(row.aliases), row.source_ref === null ? null : ci(row.source_ref)] as const;
@@ -1100,11 +1155,13 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
         const live = new Set(sql.exec<{ id: number }>('SELECT id FROM claims').toArray().map((row) => row.id));
         const welcomeReads = new Set(sql.exec<{ id: number }>("SELECT id FROM claims WHERE source_ref LIKE 'welcome:%' AND COALESCE(origin, '') != 'owner'").toArray().map((row) => row.id));
         const statements = new Set(sql.exec<{ id: number }>(`SELECT id FROM claims WHERE kind = '${NODE_STATEMENT}'`).toArray().map((row) => row.id));
+        // A removed note learned from outside content, or written in place of other notes: the node's words may be drawn from it.
+        const notOwners = new Set(forgotten.filter((claim) => claim.origin === 'untrusted' || claim.source_ref?.startsWith(COMBINED_REF)).map((claim) => claim.id));
         for (const node of sql.exec<ConstellationNode>('SELECT * FROM constellation_nodes').toArray()) {
           const spots = JSON.parse(node.supporting_spots) as number[];
           const kept = spots.filter((id) => !ids.includes(id) && live.has(id));
           if (kept.length === spots.length) continue;
-          if (kept.every((id) => statements.has(id)) || kept.some((id) => welcomeReads.has(id)) || spots.some((id) => ids.includes(id) && statements.has(id))) {
+          if (kept.every((id) => statements.has(id)) || kept.some((id) => welcomeReads.has(id)) || spots.some((id) => ids.includes(id) && (statements.has(id) || notOwners.has(id)))) {
             dropNode(node.id);
             tally('deleted', 'constellation_nodes');
           } else sql.exec('UPDATE constellation_nodes SET supporting_spots = ? WHERE id = ?', JSON.stringify(kept), node.id);
@@ -1263,6 +1320,7 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
       for (const id of ids) {
         sql.exec("DELETE FROM claims WHERE id = ? AND status = 'purging'", id);
         sql.exec('DELETE FROM purge_pending WHERE claim_id = ?', id);
+        sql.exec('DELETE FROM claim_rests_on WHERE claim_id = ? OR on_id = ?', id, id);
       }
       people.prune();
     },
@@ -1324,6 +1382,7 @@ export const memoryPrompt = (store: ClaimStore): string => {
 // the background passes do when the quote answers a reply that carried outside content.
 const evidenceLabel = (claim: Claim): string => claim.origin !== 'agent' ? ''
   : importSourceOf(claim.source_ref) ? ' (quoted from the owner\'s side of a chat export they imported, which may hold text they pasted and may be out of date, so Waldo\'s read until the owner confirms it)'
+  : claim.source_ref?.startsWith(COMBINED_REF) ? ' (Waldo\'s wording, written in place of the notes named, so Waldo\'s read until the owner confirms it)'
   : claim.source_ref ? ' (the owner\'s words, but saved in a turn that read outside content or said in answer to a reply that carried it, so Waldo\'s read until the owner confirms it)'
   : ' (writer-stated quote; at admission it matched neither the owner\'s nor the shared content checked then)';
 
@@ -1529,13 +1588,15 @@ export const MIGRATION_INSTRUCTION = [
 ].join('\n');
 
 export const CLAIM_OPS_SCHEMA = {
-  type: 'object', additionalProperties: false, required: ['add', 'corrections', 'retire', 'seen', 'confirm', 'dismiss', 'forget_claims', 'forget_nodes', 'forget_topic', 'pin', 'unpin', 'areas'],
+  type: 'object', additionalProperties: false, required: ['add', 'corrections', 'retire', 'merge', 'rewrite', 'seen', 'confirm', 'dismiss', 'forget_claims', 'forget_nodes', 'forget_topic', 'pin', 'unpin', 'areas'],
   properties: {
     add: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['kind', 'text', 'source', 'evidence', 'touches_forgotten', 'aliases', 'aliases_touch_forgotten', 'area'],
       properties: { kind: { type: 'string', enum: [...CLAIM_KINDS] }, text: { type: 'string' }, source: { type: 'string', enum: ['stated', 'inferred'] }, evidence: { type: 'string' }, touches_forgotten: { type: 'boolean' }, aliases_touch_forgotten: { type: 'boolean' }, aliases: { type: 'array', maxItems: MAX_ALIASES, items: { type: 'string' } }, area: { type: 'string', enum: [...LIFE_AREAS] } } } },
     areas: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['id', 'area'], properties: { id: { type: 'integer' }, area: { type: 'string', enum: [...LIFE_AREAS] } } } },
     corrections: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['old_id', 'kind', 'text', 'evidence'], properties: { old_id: { type: 'integer' }, kind: { type: 'string', enum: [...CLAIM_KINDS] }, text: { type: 'string' }, evidence: { type: 'string' } } } },
     retire: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['id', 'replaced_by_text', 'evidence'], properties: { id: { type: 'integer' }, replaced_by_text: { type: ['string', 'null'] }, evidence: { type: 'string' } } } },
+    merge: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['ids', 'kind', 'text'], properties: { ids: { type: 'array', items: { type: 'integer' } }, kind: { type: 'string', enum: [...CLAIM_KINDS] }, text: { type: 'string' } } } },
+    rewrite: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['id', 'kind', 'text'], properties: { id: { type: 'integer' }, kind: { type: 'string', enum: [...CLAIM_KINDS] }, text: { type: 'string' } } } },
     seen: { type: 'array', items: { type: 'integer' } },
     confirm: { type: 'array', items: { type: 'integer' } },
     dismiss: { type: 'array', items: { type: 'integer' } },
@@ -1587,8 +1648,10 @@ export type SourcePeopleScope = Readonly<{ refs: ReadonlySet<number>; addresses:
 // The owner's health notes setting, told to the model: which claims are about health is its judgment, whatever kind it would
 // file one under. The kind filter below backs it for claims filed as health.
 export const HEALTH_NOTES_OFF = 'The owner turned health notes off: save nothing about their health, body, sleep, energy, mood or symptoms, whatever kind you would file it under.';
+// Told only to a pass on a store that recalls outside notes, the one store merge and rewrite are applied on.
+const TIDY_RULE = 'You may tidy the claims. merge replaces claims that say one thing with a single claim (ids, kind, text); rewrite replaces one claim\'s wording (id, kind, text). The result is Waldo\'s wording, not the owner\'s: it leaves the pinned blocks and is Waldo\'s read until the owner confirms it, and it counts as outside content if any claim it replaced was marked origin="outside". So merge or rewrite only where claims are plainly one fact said twice or the wording misleads, and write nothing the replaced claims do not say. Never merge or rewrite a health claim, or write a reading. Leave both lists empty otherwise.';
 export const nightlyInput = (store: ClaimStore, day: string, health = true): string =>
-  [memoryPrompt(store), barrierPrompt(store), pinnedUsage(store), ...(health ? [] : [HEALTH_NOTES_OFF]), `The last day of conversation:\n<conversation>\n${fence(day)}\n</conversation>`].join('\n\n');
+  [memoryPrompt(store), barrierPrompt(store), pinnedUsage(store), ...(store.outsideNotes === true ? [TIDY_RULE] : []), ...(health ? [] : [HEALTH_NOTES_OFF]), `The last day of conversation:\n<conversation>\n${fence(day)}\n</conversation>`].join('\n\n');
 export const flushInput = (store: ClaimStore, span: string, health = true): string =>
   [memoryPrompt(store), barrierPrompt(store), ...(health ? [] : [HEALTH_NOTES_OFF]), `The conversation leaving Waldo's view:\n<conversation>\n${fence(span)}\n</conversation>`].join('\n\n');
 
@@ -1669,14 +1732,14 @@ export const ground = (evidence: string, sections: ClaimGrounding): GroundingVer
 };
 
 // pin and unpin are unknown[]: older replies and fixtures omit them, and each entry is checked before it is applied.
-type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean; aliases_touch_forgotten?: boolean; people?: unknown })[]; corrections?: readonly { old_id: number; kind: string; text: string; evidence: string }[]; retire?: readonly { id: number; replaced_by_text: string | null; evidence: string }[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null; pin?: readonly unknown[]; unpin?: readonly unknown[]; areas?: readonly unknown[] }>;
+type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean; aliases_touch_forgotten?: boolean; people?: unknown })[]; corrections?: readonly { old_id: number; kind: string; text: string; evidence: string }[]; retire?: readonly { id: number; replaced_by_text: string | null; evidence: string }[]; merge?: readonly unknown[]; rewrite?: readonly unknown[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null; pin?: readonly unknown[]; unpin?: readonly unknown[]; areas?: readonly unknown[] }>;
 const pinOp = (value: unknown): value is Readonly<{ id: number; block: PinBlock; order: number }> => {
   const op = value as { id?: unknown; block?: unknown; order?: unknown } | null;
   return typeof op === 'object' && op !== null && Number.isSafeInteger(op.id) && PIN_BLOCKS.includes(op.block as PinBlock) && Number.isSafeInteger(op.order);
 };
 
 // What this application of claim ops actually did, as counts the caller can report truthfully.
-export type ClaimOutcome = Readonly<{ retired?: number; written: number; held: number; holdReasons: readonly string[]; downgraded: number; corrected: number; confirmed: number; dismissed: number; forgetClaimsAttempted: number; forgetClaimsRemoved: number; forgetNodes: number; forgetAllowed: boolean; purgeIncomplete: readonly string[]; episodesRedacted?: number; pinned: number; unpinned: number }>;
+export type ClaimOutcome = Readonly<{ retired?: number; combined?: number; written: number; held: number; holdReasons: readonly string[]; downgraded: number; corrected: number; confirmed: number; dismissed: number; forgetClaimsAttempted: number; forgetClaimsRemoved: number; forgetNodes: number; forgetAllowed: boolean; purgeIncomplete: readonly string[]; episodesRedacted?: number; pinned: number; unpinned: number }>;
 export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[], ids: readonly number[], topics?: readonly string[]) => void, grounding?: ClaimGrounding, forgetAllowed?: boolean, onOutcome?: (outcome: ClaimOutcome) => void, pinsAllowed?: boolean, retireAllowed?: boolean, peopleScope?: SourcePeopleScope): string => {
   // Background extraction does not infer permission for destructive effects.
   const forgetsAllowed = forgetAllowed === true;
@@ -1816,6 +1879,25 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
       if (store.retire(op.id, at, next)) retired += 1;
     }
   }
+  // Merge and rewrite are Waldo's own tidying, so only the nightly pass that curates memory (the one that may pin) does
+  // them, and only on a store that recalls outside notes. A note is replaced at most once per reply, and never one this
+  // reply also corrects, ends or forgets.
+  let combined = 0;
+  if (pinsAllowed === true && store.outsideNotes === true) {
+    const taken = new Set<number>([...correctionIds, ...ops.forget_claims, ...(ops.retire ?? []).map((op) => op?.id)]);
+    const asked = [
+      ...(ops.merge ?? []).map((op) => op as { ids?: unknown; kind?: unknown; text?: unknown } | null).map((op) => ({ ids: Array.isArray(op?.ids) && op.ids.length > 1 ? op.ids as unknown[] : [], kind: op?.kind, text: op?.text })),
+      ...(ops.rewrite ?? []).map((op) => op as { id?: unknown; kind?: unknown; text?: unknown } | null).map((op) => ({ ids: [op?.id], kind: op?.kind, text: op?.text })),
+    ];
+    for (const op of asked) {
+      const ids = [...new Set(op.ids)].filter((id): id is number => Number.isSafeInteger(id) && known.has(id as number) && !taken.has(id as number));
+      if (!ids.length || ids.length !== new Set(op.ids).size || typeof op.kind !== 'string' || !CLAIM_KINDS.includes(op.kind as never) || typeof op.text !== 'string'
+        || barrierHashes.has(textFingerprint(op.text.trim()))) continue;
+      if (store.combine(ids, { kind: op.kind, text: op.text }, at) === null) continue;
+      for (const id of ids) taken.add(id);
+      combined += 1;
+    }
+  }
   for (const id of ops.seen.filter((id) => known.has(id))) store.seen(id, at);
   let filed = 0;
   for (const op of ops.areas ?? []) {
@@ -1844,7 +1926,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   const blockedPins = curates ? 0 : (ops.pin ?? []).length + (ops.unpin ?? []).length;
   const leftover = purge ? [...Object.keys(purge.remaining), ...purge.failed.map((store) => `${store}(failed)`), ...(purge.refused.length ? ['topic(too-short)'] : [])] : [];
   onOutcome?.({
-    written, held: held.length + heldCorrections, holdReasons: [...holdReasons], downgraded, corrected: corrected.size,
+    combined, written, held: held.length + heldCorrections, holdReasons: [...holdReasons], downgraded, corrected: corrected.size,
     confirmed: new Set(ops.confirm.filter((id) => known.has(id))).size,
     dismissed: new Set(ops.dismiss.filter((id) => known.has(id) && !correctionIds.has(id))).size,
     // Unique ids, so a repeated id counts once; removed only when every store verified clean.
@@ -1854,7 +1936,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   });
   const reasons = holdReasons.size ? `(${[...holdReasons].join(',')})` : '';
   const blockedForgets = forgetsAllowed ? 0 : ops.forget_claims.length + ops.forget_nodes.length + (ops.forget_topic?.trim() ? 1 : 0);
-  return `+${written} held${held.length + heldCorrections}${reasons} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${forgetIds.length + (forgetsAllowed ? ops.forget_nodes.length : 0)}${blockedForgets ? ` forget-blocked${blockedForgets}(no-intent)` : ''}${downgraded ? ` downgraded${downgraded}` : ''}${corrected.size ? ` corrected${corrected.size}` : ''}${pinned ? ` pinned${pinned}` : ''}${filed ? ` filed${filed}` : ''}${unpinned ? ` unpinned${unpinned}` : ''}${blockedPins ? ` pin-blocked${blockedPins}` : ''}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;
+  return `+${written} held${held.length + heldCorrections}${reasons} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${forgetIds.length + (forgetsAllowed ? ops.forget_nodes.length : 0)}${blockedForgets ? ` forget-blocked${blockedForgets}(no-intent)` : ''}${downgraded ? ` downgraded${downgraded}` : ''}${corrected.size ? ` corrected${corrected.size}` : ''}${combined ? ` combined${combined}` : ''}${pinned ? ` pinned${pinned}` : ''}${filed ? ` filed${filed}` : ''}${unpinned ? ` unpinned${unpinned}` : ''}${blockedPins ? ` pin-blocked${blockedPins}` : ''}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;
 };
 
 export const PROMOTION_INSTRUCTION = [
