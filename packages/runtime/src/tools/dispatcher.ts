@@ -50,6 +50,7 @@ import {
 import { DEEP_ENCODING_MARKER, guardForOffload, sanitiseDenialLabel } from '../scribe/sanitiser';
 import { sha256Hex, stableJson } from '../context-composer/canonical';
 import type { StoredPut, ToolOutputStore } from '../conversation/tool-output-store';
+import type { OpenFile } from '../channels/opened-files';
 
 export type RuntimeToolCall = {
   id: string;
@@ -74,14 +75,21 @@ export type ToolDispatcherContext = HookRuntimeContext & {
   // What started this run, set once at its start; a standing grant acts only for the origins its class allows.
   runOrigin?: RunOrigin;
   // Set by the host only on a turn the owner's own message started, with no one else's words in it: that message's ref and
-  // when the turn took it. A tool that acts on the owner's word reads it here, never from its arguments.
-  ownerMessage?: Readonly<{ messageRef: string; receivedAt: number }>;
+  // when the turn took it. A tool that acts on the owner's word reads it here, never from its arguments. ownWordsOnly: every
+  // part of the message is the owner's own typed or spoken words, with no transcript of a file they sent and no media note.
+  ownerMessage?: Readonly<{ messageRef: string; receivedAt: number; ownWordsOnly?: boolean }>;
+  // Set by the host when this turn's context carries text that may be someone else's from before the turn: a row on the
+  // conversation the model reads (a reply that read outside content, a Brief, a forward, a marked summary) or a recalled note
+  // or past message that is not the owner's own. Work the owner asks for then still goes to a card (ownerAsked).
+  carriedOutside?: boolean;
   // Where this turn's outside content came from, one entry per tainting result: the result's own taint_origin (for example
   // mcp:<server>), else '*'. The tool loop keeps it next to toolArgSourceTaint and never instead of it; absent means unknown.
   taintOrigins?: readonly string[];
   turnId?: string;
   toolCallId?: string;
   runScope?: RunEffectScope;
+  // Attaches a workspace file the model opened to the turn's next model step. Absent where no turn's model can take one.
+  openFile?: OpenFile;
   session: SessionState;
   // A host hold on one tool for now (the owner's spend ceiling): the call is refused before anything runs.
   heldTool?: (tool: ToolName) => ToolError | null;

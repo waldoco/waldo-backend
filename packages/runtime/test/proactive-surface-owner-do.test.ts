@@ -5,6 +5,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { INTERRUPTS_KEY } from '../src/channels/interruptions';
 import { APP_PROACTIVE_SURFACE_RECEIPTS_V1, appControlProjectionV1Schema } from '../../contracts/src/app/controls';
 import type { CalendarChange, CalendarItem } from '../src/connectors/google';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
@@ -76,11 +77,11 @@ const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', S
 const whatsapp = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en', WHATSAPP_PROACTIVE_TEMPLATE: 'waldo_proactive_update', WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE: 'en' };
 // presence: the directory's answer for the WhatsApp presence, or 'outage' when it cannot be reached.
 // hint: the directory's WhatsApp presence hint, which the surface choice reads.
-const wire = { presence: true as boolean | 'outage', hint: 'linked' as 'linked' | 'not_linked' | 'outage', whatsapp: [] as string[], to: [] as string[], telegram: [] as string[], wamid: 0 };
+const wire = { presence: true as boolean | 'outage', hint: 'linked' as 'linked' | 'not_linked' | 'outage', whatsapp: [] as string[], to: [] as string[], telegram: [] as string[], wamid: 0, pushes: [] as string[], expo: 'ok' as 'ok' | 'fails' | 'no_device' };
 
 beforeEach(() => {
   fixture.event = null; fixture.changes = []; fixture.reminderText = null;
-  wire.presence = true; wire.hint = 'linked'; wire.whatsapp = []; wire.to = []; wire.telegram = []; wire.wamid = 0;
+  wire.presence = true; wire.hint = 'linked'; wire.whatsapp = []; wire.to = []; wire.telegram = []; wire.wamid = 0; wire.pushes = []; wire.expo = 'ok';
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
@@ -101,6 +102,12 @@ beforeEach(() => {
       return Response.json(wire.hint === 'linked' ? '1111' : null);
     }
     if (fn === 'common_owner_authority') return presenceAuthority(OWNER_ID, init?.body);
+    if (fn === 'app_push_targets') return Response.json([{ installation_id: '2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e', device_epoch: 1, token: 'ExponentPushToken[synthetic-window]' }]);
+    if (url === 'https://exp.host/--/api/v2/push/send') {
+      for (const message of JSON.parse(String(init?.body)) as { data: { trigger: string } }[]) wire.pushes.push(message.data.trigger);
+      if (wire.expo === 'fails') return new Response('unavailable', { status: 503 });
+      return Response.json({ data: [wire.expo === 'no_device' ? { status: 'error', message: 'synthetic', details: { error: 'MessageRateExceeded' } } : { status: 'ok', id: 'ticket-1' }] });
+    }
     if (/^https:\/\/graph\.facebook\.com\/v[\d.]+\/fictional-phone-id\/messages$/.test(url)) {
       const body = JSON.parse(String(init?.body)) as { to: string; type: string; template?: { name: string }; text?: { body: string } };
       wire.whatsapp.push(body.type === 'template' ? `template:${body.template!.name}` : `text:${body.text!.body}`);
@@ -859,6 +866,168 @@ describe('the knock for proactive work outside the 24-hour window', { timeout: 2
       expect(copies(state).map(record => record.status)).toEqual(['pending']);
       expect((await said(owner, ctx)).map(message => message.text)).toEqual([CARD_TEXT]);
     }, { surface: 'both', window: 'closed', env: { WHATSAPP_PROACTIVE_TEMPLATE: '', WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE: '' } });
+  });
+
+  // REENGAGE_PROACTIVE: with no proactive template approved, Waldo's own work knocks with the approved re-engage template, and
+  // the app, which has the message, pushes once for the closed window unless it already pushed since the window closed.
+  const REENGAGE = { REENGAGE_PROACTIVE: '1', WHATSAPP_PROACTIVE_TEMPLATE: '', WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE: '', EXPO_ACCESS_TOKEN: 'synthetic-expo-access' };
+
+  it('with the re-engage knock on and no proactive template, a waiting reminder copy knocks with the re-engage template once, and the app pushes once', async () => {
+    await withOwner('knock-reengage-reminder', async (owner, state, ctx) => {
+      await dueReminder(state);
+      await schedulePass(owner, state);
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      expect(wire.whatsapp).toEqual(['template:waldo_update_ready']);
+      expect(copies(state).map(record => record.status)).toEqual(['pending']);
+      expect((await said(owner, ctx)).map(message => message.text)).toEqual([REMINDER_TEXT]);
+      expect(wire.pushes).toEqual(['event']);
+    }, { surface: 'both', window: 'closed', env: REENGAGE });
+  });
+
+  it('with the re-engage knock on, a waiting Brief copy knocks, and the Brief\'s own push is the only push', async () => {
+    await withOwner('knock-reengage-brief', async (owner, state, ctx) => {
+      await dueBrief(state);
+      await schedulePass(owner, state);
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      expect(wire.whatsapp).toEqual(['template:waldo_update_ready']);
+      expect(wire.pushes).toEqual(['brief']);
+    }, { surface: 'both', window: 'closed', env: REENGAGE });
+  });
+
+  it('with the re-engage knock on, a second copy waiting in the same closed window neither knocks nor pushes again', async () => {
+    await withOwner('knock-reengage-twice', async (owner, state, ctx) => {
+      await dueReminder(state);
+      await schedulePass(owner, state);
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      ctx.now += 2 * 3_600_000;
+      fixture.reminderText = 'Time to send the invoice.';
+      await reminderBook(state.storage.sql, scheduler(state), { timezone: 'UTC', now: () => new Date(Date.now() - 3_600_000) }, () => 'rem-2')
+        .set({ note: 'send the invoice', at: new Date(Date.now() - 30 * 60_000).toISOString().slice(0, 16), repeat: 'none' });
+      await schedulePass(owner, state);
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      expect(copies(state).map(record => record.status)).toEqual(['pending', 'pending']);
+      expect({ whatsapp: wire.whatsapp, pushes: wire.pushes }).toEqual({ whatsapp: ['template:waldo_update_ready'], pushes: ['event'] });
+    }, { surface: 'both', window: 'closed', env: REENGAGE });
+  });
+
+  it('with the re-engage knock on, a copy\'s push is no interruption: it pushes with the owner\'s unasked budget spent, and spends none of it', async () => {
+    await withOwner('knock-reengage-gate', async (owner, state, ctx) => {
+      await dueReminder(state);
+      await schedulePass(owner, state);
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      expect(wire.pushes).toEqual(['event']);
+      expect(state.storage.kv.get(INTERRUPTS_KEY)).toBeUndefined();
+    }, { surface: 'both', window: 'closed', env: { ...REENGAGE, PROACTIVE_GATE: '1', PROACTIVE_INTERRUPTS_PER_DAY: '0' } });
+  });
+
+  it('with the re-engage knock on, a push on an earlier day of the same closed window does not stand for today\'s copy', async () => {
+    await withOwner('knock-reengage-next-day', async (owner, state, ctx) => {
+      await dueReminder(state);
+      await schedulePass(owner, state);
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      ctx.now += 24 * 3_600_000;
+      fixture.reminderText = 'Time to send the invoice.';
+      await reminderBook(state.storage.sql, scheduler(state), { timezone: 'UTC', now: () => new Date(Date.now() - 3_600_000) }, () => 'rem-2')
+        .set({ note: 'send the invoice', at: new Date(Date.now() - 30 * 60_000).toISOString().slice(0, 16), repeat: 'none' });
+      await schedulePass(owner, state);
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      expect(wire.pushes).toEqual(['event', 'event']);
+    }, { surface: 'both', window: 'closed', env: REENGAGE });
+  });
+
+  it('with the re-engage knock on, a reminder waiting for WhatsApp alone knocks, and the app, which does not have it, does not push', async () => {
+    await withOwner('knock-reengage-whatsapp-only', async (owner, state, ctx) => {
+      await dueReminder(state);
+      await schedulePass(owner, state);
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      expect({ whatsapp: wire.whatsapp, pushes: wire.pushes }).toEqual({ whatsapp: ['template:waldo_update_ready'], pushes: [] });
+    }, { surface: 'whatsapp', window: 'closed', env: REENGAGE });
+  });
+
+  it('with the re-engage knock on, an owner who set Waldo\'s volume low gets the knock and the app row, and no push', async () => {
+    await withOwner('knock-reengage-low', async (owner, state, ctx) => {
+      loopBook(state.storage.sql, { newId: () => 'x', now: Date.now }).setProactivity({ quiet_start: null, quiet_end: null, volume: 'low' });
+      await dueReminder(state);
+      await schedulePass(owner, state);
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      expect({ whatsapp: wire.whatsapp, pushes: wire.pushes }).toEqual({ whatsapp: ['template:waldo_update_ready'], pushes: [] });
+      expect((await said(owner, ctx)).map(message => message.text)).toEqual([REMINDER_TEXT]);
+    }, { surface: 'both', window: 'closed', env: REENGAGE });
+  });
+
+  // A second copy waiting in the same window: the window is the one Meta closed by refusing a send two hours after the owner
+  // wrote, or one opened by no message at all.
+  const secondReminder = async (state: DurableObjectState, ctx: Ctx) => {
+    ctx.now += 2 * 3_600_000;
+    fixture.reminderText = 'Time to send the invoice.';
+    await reminderBook(state.storage.sql, scheduler(state), { timezone: 'UTC', now: () => new Date(Date.now() - 3_600_000) }, () => 'rem-2')
+      .set({ note: 'send the invoice', at: new Date(Date.now() - 30 * 60_000).toISOString().slice(0, 16), repeat: 'none' });
+  };
+  const passes = async (owner: Owner, state: DurableObjectState, ctx: Ctx) => { await schedulePass(owner, state); for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx); };
+
+  it('with the re-engage knock on, a window Meta closed early by refusing a send pushes once for two waiting copies', async () => {
+    await withOwner('knock-reengage-refused', async (owner, state, ctx) => {
+      state.storage.kv.put('wa_last_inbound_ms', AT - 2 * 3_600_000);
+      state.storage.kv.put('wa_window_refused_for', AT - 2 * 3_600_000);
+      await dueReminder(state);
+      await passes(owner, state, ctx);
+      await secondReminder(state, ctx);
+      await passes(owner, state, ctx);
+      expect(copies(state).map(record => record.status)).toEqual(['pending', 'pending']);
+      expect(wire.pushes).toEqual(['event']);
+    }, { surface: 'both', window: 'closed', env: REENGAGE });
+  });
+
+  it('with the re-engage knock on, a number the owner has not written from yet still pushes for its waiting copy', async () => {
+    await withOwner('knock-reengage-no-inbound', async (owner, state, ctx) => {
+      state.storage.kv.delete('wa_last_inbound_ms');
+      await dueReminder(state);
+      await passes(owner, state, ctx);
+      expect(wire.pushes).toEqual(['event']);
+    }, { surface: 'both', window: 'closed', env: REENGAGE });
+  });
+
+  it('with the re-engage knock on, a push while the window was still open does not stand for the closed window after it', async () => {
+    await withOwner('knock-reengage-pushed-open', async (owner, state, ctx) => {
+      await dueBrief(state);
+      await passes(owner, state, ctx);
+      expect(wire.pushes).toEqual(['brief']);
+      ctx.now += 26 * 3_600_000;
+      await dueReminder(state);
+      await passes(owner, state, ctx);
+      expect(wire.pushes).toEqual(['brief', 'event']);
+    }, { surface: 'both', window: 'open', env: REENGAGE });
+  });
+
+  it('with the re-engage knock on, a push in an earlier closed window does not stand for this one', async () => {
+    await withOwner('knock-reengage-earlier-window', async (owner, state, ctx) => {
+      state.storage.kv.put('wa_window_pushed_for', AT - 3 * 86_400_000);
+      await dueReminder(state);
+      await passes(owner, state, ctx);
+      expect(wire.pushes).toEqual(['event']);
+    }, { surface: 'both', window: 'closed', env: REENGAGE });
+  });
+
+  it.each(['fails', 'no_device'] as const)('with the re-engage knock on, a push that reached no device (%s) leaves the next waiting copy to push', async expo => {
+    await withOwner(`knock-reengage-expo-${expo}`, async (owner, state, ctx) => {
+      wire.expo = expo;
+      await dueReminder(state);
+      await passes(owner, state, ctx);
+      wire.expo = 'ok';
+      await secondReminder(state, ctx);
+      await passes(owner, state, ctx);
+      expect(wire.pushes).toEqual(['event', 'event']);
+    }, { surface: 'both', window: 'closed', env: REENGAGE });
+  });
+
+  it('with the re-engage knock off, a waiting reminder copy neither knocks nor pushes', async () => {
+    await withOwner('knock-reengage-off', async (owner, state, ctx) => {
+      await dueReminder(state);
+      await schedulePass(owner, state);
+      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
+      expect({ whatsapp: wire.whatsapp, pushes: wire.pushes }).toEqual({ whatsapp: [], pushes: [] });
+      expect((await said(owner, ctx)).map(message => message.text)).toEqual([REMINDER_TEXT]);
+    }, { surface: 'both', window: 'closed', env: { ...REENGAGE, REENGAGE_PROACTIVE: '0' } });
   });
 
   it('a reminder the owner asked for still knocks with the reply template', async () => {

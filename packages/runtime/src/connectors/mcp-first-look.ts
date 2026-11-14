@@ -1,5 +1,5 @@
 import { answerText, GRANOLA_PREP_TOOL, questionArgument } from '../channels/meeting-prep-granola';
-import { checkedGranola } from '../channels/event-briefs';
+import { checkedNotes } from '../channels/event-briefs';
 import { fenced } from '../prompt/turn-prompt';
 import type { McpConnectionView, McpToolCard } from './mcp-connections';
 
@@ -43,7 +43,7 @@ export const firstLookRead = async (deps: FirstLookDeps, view: Pick<McpConnectio
     if (!('result' in answer)) return skipped('read_failed');
     const text = answerText(answer.result);
     if (!text) return skipped('empty');
-    const checked = checkedGranola(text.length > FIRST_LOOK_CHARS ? `${text.slice(0, FIRST_LOOK_CHARS)}\n[The answer continues; Waldo read only this much of it.]` : text);
+    const checked = checkedNotes(text.length > FIRST_LOOK_CHARS ? `${text.slice(0, FIRST_LOOK_CHARS)}\n[The answer continues; Waldo read only this much of it.]` : text);
     return checked.status === 'checked' ? { status: 'read', tool: chosen.tool, text: checked.text } : skipped('unavailable');
   } catch {
     // The caller logs the code; the owner still hears the server is connected.

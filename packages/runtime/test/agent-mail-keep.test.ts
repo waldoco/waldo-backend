@@ -44,3 +44,17 @@ describe('mail attachments with WALDO_FILE_TOOLS on', () => {
     expect(mail.text).not.toContain('saved_to_workspace');
   });
 });
+
+describe('mail attachments a name alone would not open', () => {
+  it('opens a scan sent as a generic type with no extension, and a photo typed image/jpg, by what they are', async () => {
+    const mail = await mailForModel(new TextEncoder().encode([
+      'From: Sender <sender@fixture.invalid>', 'To: owner@agent.fixture.invalid', 'Subject: Scans', 'Message-ID: <m2@fixture.invalid>', 'MIME-Version: 1.0',
+      'Content-Type: multipart/mixed; boundary="b1"', '', '--b1', 'Content-Type: text/plain', '', 'Two scans.', '--b1',
+      'Content-Type: application/octet-stream; name="Scan 0042"', 'Content-Disposition: attachment; filename="Scan 0042"', 'Content-Transfer-Encoding: base64', '', btoa('%PDF-1.7\n%\xe2\xe3\xcf\xd3'),
+      '--b1', 'Content-Type: image/jpg; name="receipt.jpg"', 'Content-Disposition: attachment; filename="receipt.jpg"', 'Content-Transfer-Encoding: base64', '', btoa('\xff\xd8\xff\xe0\x00\x10JFIF'),
+      '--b1--', ''].join('\r\n')), { id: 'row-4', basis: 'owner_from' }, 'owner@agent.fixture.invalid', CANARIES);
+    expect(mail.attachments.map(({ kind, mime_type, filename }) => ({ kind, mime_type, filename }))).toEqual([
+      { kind: 'file', mime_type: 'application/pdf', filename: 'Scan 0042.pdf' }, { kind: 'image', mime_type: 'image/jpeg', filename: 'receipt.jpg' }]);
+    expect(mail.text).toContain('"attached_not_opened":[]');
+  });
+});
