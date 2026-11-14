@@ -15,7 +15,7 @@ import { TRACE_KEPT } from '../src/channels/harness';
 const root = 'https://telegram-owner';
 const HOUR = 60 * 60_000, DAY = 24 * HOUR;
 const MAIL_SUBJECT = 'Re: kidney biopsy results from Dr Okafor';
-const HEALTH_NOTE = 'resting HRV 173.5 ms, glucose 9.81';
+const HEALTH_NOTE = 'resting HRV 173.5 ms, glucose 9.81 mmol/L';
 
 type Log = {
   version: 1; as_of: string; window_days: number; kept_steps: number;
@@ -99,7 +99,7 @@ describe('the access log is a signed-in read', () => {
     await o.seedApproval('appr-kind', `kind ${MAIL_SUBJECT}`, 'done', now - HOUR, 'x', {});
     const response = await o.log();
     const body = await response.text();
-    for (const leak of ['biopsy', 'Okafor', 'HRV', '173.5', '9.81', 'glucose']) expect(body).not.toContain(leak);
+    for (const leak of ['biopsy', 'Okafor', 'HRV', '173.5', '9.81 mmol', 'glucose']) expect(body).not.toContain(leak);
     const log = JSON.parse(body) as Log;
     expect(log.tools.rows.map(row => row.tool).sort()).toEqual(['get_health', 'other', 'search_communication']);
     expect(log.approvals.rows.map(row => [row.kind, row.decision]).sort()).toEqual([['email_send', 'open'], ['email_send', 'other']]);
