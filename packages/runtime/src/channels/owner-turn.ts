@@ -47,7 +47,7 @@ import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
 import { fitPromptToBudget } from '../prompt/fit-prompt';
 import { ownerProfilePrompt } from '../memory/owner-profile';
-import { FORGOTTEN, QUIET_NOTE, QUIET_TAG, withoutBringUpLess, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, knownPeopleBlock, SOURCE_PEOPLE_CLAIMS_SCHEMA, SOURCE_PEOPLE_RULE, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, SOURCE_CLAIMS_SCHEMA, SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput, withoutHealthClaims, type ClaimStore, barrierPrompt, memoryPrompt, RETIRE_RULES } from '../memory/claims';
+import { FORGOTTEN, QUIET_NOTE, QUIET_TAG, withoutBringUpLess, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, knownPeopleBlock, SOURCE_PEOPLE_CLAIMS_SCHEMA, SOURCE_PEOPLE_RULE, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, promotionInstruction, PROMOTION_SCHEMA, promotionInput, SOURCE_CLAIMS_SCHEMA, SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput, withoutHealthClaims, type ClaimStore, barrierPrompt, memoryPrompt, RETIRE_RULES } from '../memory/claims';
 import { CAPACITY_INSTRUCTION, CAPACITY_SCHEMA } from '../prompt/capacity';
 import { sha256Hex } from '../context-composer/canonical';
 import { outsideView } from '../memory/outside-view';
@@ -1307,7 +1307,7 @@ export const createOwnerResponder = (
       const visible = promptMemory()!;
       const input = promotionInput(visible);
       if (gate && await sha256Hex(input) === gate.last) return 'unchanged';
-      const raw = await ask(trace, 'constellation', PROMOTION_INSTRUCTION, input, { name: 'promotion', schema: PROMOTION_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+      const raw = await ask(trace, 'constellation', promotionInstruction(visible), input, { name: 'promotion', schema: PROMOTION_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
       const detail = applyPromotion(visible, raw, new Date().toISOString(), (receipt) => log({
         trace, hop: 'constellation_evidence', ms: 0, ok: true,
