@@ -39,7 +39,7 @@ export const granolaQuestion = (people: readonly string[]): string =>
 
 // The tool's one string argument: its only required property, or, with none required, its only property, when that is a
 // string. Any other shape is one Waldo has not reviewed, so nothing is sent.
-const questionArgument = (def: McpToolDef): string | null => {
+export const questionArgument = (def: Pick<McpToolDef, 'inputSchema'>): string | null => {
   const schema = def.inputSchema as { type?: unknown; properties?: Record<string, { type?: unknown }>; required?: unknown };
   const required = Array.isArray(schema.required) ? schema.required : [];
   const candidates = required.length ? required : Object.keys(schema.properties ?? {});
