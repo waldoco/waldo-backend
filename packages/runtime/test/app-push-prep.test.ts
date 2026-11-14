@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { ownerPush, PROACTIVE_PUSH_DAILY_LIMIT, PUSH_DAILY_LIMIT, PUSHES, type PushKind } from '../src/channels/expo-push';
+import { ownerPush, PROACTIVE_PUSH_BACKSTOP, PROACTIVE_PUSH_DAILY_LIMIT, PUSH_DAILY_LIMIT, PUSHES, type PushKind } from '../src/channels/expo-push';
 import { prepPushBody } from '../src/channels/event-briefs';
 
 // A prep note on the app raises its own push. It never spends the day cards' budget; non-card pushes have their own ceiling,
 // a backstop against a runaway sender, while whether to send at all stays the model's call.
 const INSTALLATION = '0f1e2d3c-4b5a-4968-8776-655443322110';
-const harness = () => {
+const harness = (proactivePerDay?: () => number) => {
   const kv = new Map<string, unknown>();
   const sent: { body: string; data: Record<string, unknown> }[] = [];
   const codes: string[] = [];
@@ -16,7 +16,7 @@ const harness = () => {
       for (const message of JSON.parse(String(init?.body)) as { body: string; data: Record<string, unknown> }[]) sent.push({ body: message.body, data: message.data });
       return Response.json({ data: [{ status: 'ok', id: 'ticket' }] });
     }) as typeof fetch,
-    today: () => '2026-10-03', quiet: () => false, log: code => { codes.push(code); },
+    today: () => '2026-10-03', quiet: () => false, log: code => { codes.push(code); }, ...(proactivePerDay ? { proactivePerDay } : {}),
   });
   return { push, sent, codes };
 };
@@ -41,6 +41,27 @@ describe('the prep push', () => {
     expect(h.sent.slice(PROACTIVE_PUSH_DAILY_LIMIT).map(message => message.data.trigger)).toEqual(['brief', 'approval']);
   });
 
+  // The pushes in this bucket ride on messages the owner's limits already admitted and charged (an update, a prep note), or
+  // copy one (no interruption of its own), so the owner's budget never lowers it: it only raises the backstop, up to its cap.
+  it('with the owner\'s budget the ceiling rises with it, never below the fixed ceiling, and stops at the backstop', async () => {
+    const pushes = async (perDay: number, tries: number, kind: PushKind = 'prep') => {
+      const h = harness(() => perDay);
+      for (let i = 0; i < tries; i++) await h.push(kind);
+      return h;
+    };
+    expect((await pushes(10, 12)).sent).toHaveLength(10);
+    expect((await pushes(2, PROACTIVE_PUSH_DAILY_LIMIT + 1)).sent).toHaveLength(PROACTIVE_PUSH_DAILY_LIMIT);
+    expect((await pushes(0, 2, 'copy')).sent).toHaveLength(2);
+    const high = await pushes(Number.POSITIVE_INFINITY, PROACTIVE_PUSH_BACKSTOP + 3);
+    expect(high.sent).toHaveLength(PROACTIVE_PUSH_BACKSTOP);
+    // The day cards keep their own fixed budget whatever the owner's number.
+    for (const kind of ['brief', 'approval'] as PushKind[]) await high.push(kind, kind === 'approval' ? 'appr_0123456789abcdef0123456789abcdef' : undefined);
+    expect(high.sent.slice(PROACTIVE_PUSH_BACKSTOP).map(message => message.data.trigger)).toEqual(['brief', 'approval']);
+    const zero = await pushes(0, 1);
+    await zero.push('brief');
+    expect(zero.sent.map(message => message.data.trigger)).toEqual(['pre_activity_spot', 'brief']);
+  });
+
   it('day cards keep their own budget whatever prep pushes went out', async () => {
     const h = harness();
     for (let i = 0; i < PUSH_DAILY_LIMIT; i++) await h.push('brief');
@@ -62,7 +83,7 @@ describe('the prep push body', () => {
   });
 
   it('names the meeting and its local start when names are on', () => {
-    expect(prepPushBody({ title: 'Design review', start, timezone: 'Asia/Kolkata', named: true })).toBe('Prep: Design review at 10:30');
+    expect(prepPushBody({ title: 'Design review', start, timezone: 'Asia/Kolkata', named: true })).toBe('Prep: Design review at 10:30am');
   });
 
   it('never carries an email address, a link, a health value, or an empty or overlong title', () => {
@@ -73,6 +94,6 @@ describe('the prep push body', () => {
     expect(prepPushBody({ title: 'Recovery chat: HRV 42 ms', start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
     expect(prepPushBody({ title: 'asha@example.test', start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
     expect(prepPushBody({ title: undefined, start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
-    expect(prepPushBody({ title: 'x'.repeat(200), start, timezone: 'UTC', named: true }).length).toBeLessThanOrEqual('Prep:  at 05:00'.length + 60);
+    expect(prepPushBody({ title: 'x'.repeat(200), start, timezone: 'UTC', named: true }).length).toBeLessThanOrEqual('Prep:  at 5am'.length + 60);
   });
 });

@@ -125,8 +125,8 @@ it('a tainted report that asks the apply turn to close a loop and log a meal cha
     expect(toolOutput('meal')).not.toContain('"ok":true');
     expect(JSON.parse(toolOutput('card') ?? '{}')).toMatchObject({ ok: true });
     expect(cards()).toHaveLength(1);
-    expect(cards()[0]!.body.text).toContain('cancel_reminder');
-    expect(jobText()).toContain('propose it with propose_action');
+    expect(cards()[0]!.body.text).toMatch(/^Do this\? Cancel reminder: /);
+    expect(jobText()).toContain('any other change you propose with propose_action');
     expect(owned.reminders().map(r => r.id)).toEqual([owned.reminder]);
   });
 }, 30_000);
@@ -140,7 +140,7 @@ it('an untainted report keeps the owner\'s tools for its apply turn', async () =
   });
 }, 30_000);
 
-it('a retried turn holds the owner\'s tools, and the taint its message carried reaches the taint gate', async () => {
+it('a retried turn holds the owner\'s tools, and the taint its message carried reaches the taint gate, which lets a cancel through', async () => {
   const retry = (taint: 'external' | null) => (book: JobBook, now: number) => {
     promiseRetry(book, { traceId: 'tg-9', conversationRef: 'telegram:7', surface: 'telegram', text: 'Cancel my standup reminder, the mail says it moved', taint, receivedAt: now - 5 * 60_000 }, 'UTC', now - 5 * 60_000);
   };
@@ -148,8 +148,9 @@ it('a retried turn holds the owner\'s tools, and the taint its message carried r
     const tools = jobTools();
     expect(tools).toEqual(expect.arrayContaining(['close_loop', 'log_meal', 'cancel_reminder', 'propose_action']));
     for (const task of ['start_task', 'cancel_task']) expect(tools).not.toContain(task);
-    expect(owned.reminders().map(r => r.id)).toEqual([owned.reminder]);
-    expect(JSON.parse(toolOutput('cancel') ?? '{}')).toMatchObject({ ok: false, error_code: 'taint_needs_approval' });
+    // A cancel only narrows, so the owner's retried request runs it even with the mail's taint.
+    expect(owned.reminders()).toEqual([]);
+    expect(JSON.parse(toolOutput('cancel') ?? '{}')).toMatchObject({ ok: true });
   });
   await lanePass(RETRY, retry(null), ({ reminder }) => [[call('cancel', 'cancel_reminder', { id: reminder })]], (owned) => {
     expect(owned.reminders()).toEqual([]);

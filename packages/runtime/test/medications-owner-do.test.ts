@@ -200,6 +200,21 @@ describe('medications through the owner object', () => {
     });
   }, 60_000);
 
+  it('keeps no medicine tool output in the owner object: the tool ledger holds a content-free line for each call', async () => {
+    await withOwner('1', async (deliver, state) => {
+      const id = await tracked(deliver);
+      proof.outputs.push([call('taken-kept', 'log_medication', { medication_id: id, status: 'taken' })], []);
+      proof.replies.push('', 'Noted.');
+      await deliver(text(506, 'taken'));
+      expect(toolOutput('taken-kept')).toContain('Metformin');
+      await listed(deliver, 507);
+      const rows = [...state.storage.kv.list<{ tool: string; summary: string }>({ prefix: 'toolout:' })].map(([, row]) => row)
+        .filter(row => row.tool.endsWith('_medication') || row.tool === 'list_medications');
+      expect(rows.map(row => row.tool)).toEqual(['track_medication', 'log_medication', 'list_medications']);
+      for (const row of rows) expect(JSON.parse(row.summary)).toEqual({ retained: false, reason: 'turn_only_output' });
+    });
+  }, 30_000);
+
   it('stop_medication deletes it on the health plane and removes its reminders', async () => {
     await withOwner('1', async (deliver, state) => {
       const id = await tracked(deliver);

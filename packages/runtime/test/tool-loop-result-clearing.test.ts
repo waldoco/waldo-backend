@@ -5,6 +5,7 @@ import { runToolLoop, TOOL_OUTPUT_LIMIT, TOOL_RESULTS_KEEP_CHARS } from '../src/
 import { inMemoryToolOutputStore } from '../src/conversation/tool-output-store';
 import { readToolOutputHandler } from '../src/tools/read-tool-output';
 import { resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
+import { CONTEXT_BUDGET } from '../src/conversation/context-budget';
 
 // A long turn resends every earlier result each round. Old results are cleared first, before anything else gives way:
 // the newest round always reaches the model whole, the calls stay visible, what was cleared stays cleared, and a cleared
@@ -221,4 +222,34 @@ it('a cleared read that can repeat dispatches again when called again', async ()
   expect(isCleared(sent[24]![0]!.output)).toBe(true);
   expect(runs.get('topic 1')).toBe(2);
   expect(JSON.parse(sent.at(-1)!.at(-1)!.output.split('\n[')[0]!)).toMatchObject({ ok: true, data: { query: 'topic 1' } });
+});
+
+it('with context caps, results past the clear-at size are cleared down to the latest three in one step, then held until the next', async () => {
+  const sent: (readonly LLMToolTurn[])[] = [];
+  const rounds = 24;
+  let step = 0;
+  await runToolLoop({
+    handlers: [bigRead] as never, ctx: ctx(), maxSteps: rounds + 1, clearToLatest: { atChars: CONTEXT_BUDGET.clearAtChars, keep: CONTEXT_BUDGET.keepLatest },
+    step: async (_tools, turns) => {
+      sent.push(turns.map((turn) => ({ ...turn })));
+      step += 1;
+      return step <= rounds ? { text: '', tool_calls: [{ call_id: `c${step}`, name: 'read_memory', arguments: JSON.stringify({ query: `topic ${step}` }) }] } : { text: 'Done.' };
+    },
+  });
+  const kept = (turns: readonly LLMToolTurn[]) => turns.filter((turn) => !isCleared(turn.output));
+  let cuts = 0;
+  for (const [index, turns] of sent.entries()) {
+    expect(size(kept(turns))).toBeLessThanOrEqual(CONTEXT_BUDGET.clearAtChars + TOOL_OUTPUT_LIMIT);
+    if (index === 0) continue;
+    const before = sent[index - 1]!, cut = kept(turns).length < kept(before).length + 1;
+    if (!cut) continue;
+    cuts += 1;
+    // A cut leaves only the latest results, the newest whole, and every cleared one stays cleared.
+    expect(kept(turns).length).toBe(CONTEXT_BUDGET.keepLatest);
+    expect(kept(turns).at(-1)).toEqual(turns.at(-1));
+  }
+  // Between cuts, each request starts with exactly what the one before it sent.
+  for (const [index, turns] of sent.entries()) if (index > 0 && kept(turns).length === kept(sent[index - 1]!).length + 1) expect(turns.slice(0, sent[index - 1]!.length)).toEqual(sent[index - 1]);
+  expect(cuts).toBeGreaterThan(1);
+  expect(cuts).toBeLessThan(rounds / 3);
 });

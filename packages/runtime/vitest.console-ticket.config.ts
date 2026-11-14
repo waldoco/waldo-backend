@@ -4,6 +4,8 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: { include: ['test/console-member-ticket-routing.test.ts'], fileParallelism: false },
   plugins: [cloudflareTest({
+    // The full Worker, whose Durable Object instances these tests reach into; wrangler's main is the lazy deployed entry.
+    main: './src/index.ts',
     miniflare: { bindings: {
       WALDO_ENV: 'test', RUN_LOOP_PROVIDER_MODE: 'fake',
       WALDO_ROUTER_HMAC_SECRET: 'synthetic-console-routing-secret',

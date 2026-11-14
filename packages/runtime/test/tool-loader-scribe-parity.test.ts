@@ -50,25 +50,29 @@ describe('a use_tool turn at the scribe is the tool it ran', () => {
     });
   }
 
-  it('the owner\'s health readings beside an outside result are hidden whether that read ran direct or through use_tool', async () => {
+  // The owner's readings stay in view beside outside content (the tool loop fences egress); readings inside an outside result
+  // are withheld either way.
+  it('beside an outside result the owner\'s readings are kept and the outside one withheld, whether it ran direct or through use_tool', async () => {
     const direct = await send([{ call: directCall('query_calendar', {}, 'c2'), output: ownerReadings }, healthTurn]);
     const routed = await send([{ call: routedCall('query_calendar', {}, 'c2'), output: ownerReadings }, healthTurn]);
-    expect(JSON.stringify(direct.sent)).not.toMatch(/67\.4|431/);
-    expect(JSON.stringify(routed.sent)).not.toMatch(/67\.4|431/);
+    for (const sent of [direct.sent!, routed.sent!]) {
+      expect(JSON.stringify(sent[0])).not.toMatch(/67\.4|431/);
+      expect(sent[1]).toEqual(healthTurn);
+    }
     expect(outputs(routed.sent)).toEqual(outputs(direct.sent));
   });
 
   // A rebuilt copy drops the call's arguments but keeps the tool a use_tool call ran, so later reads of the turn still know it.
-  it('a withheld or hidden routed turn keeps the name of the tool it ran in its stripped arguments', async () => {
+  it('a withheld routed turn keeps the name of the tool it ran in its stripped arguments; an owner read beside outside text is sent whole', async () => {
     const withheld = await send([{ call: routedCall('query_calendar', { range: 'today' }), output: ownerReadings }]);
     expect(JSON.stringify(withheld.sent)).not.toMatch(/67\.4|431/);
     expect(withheld.sent![0]!.call).toEqual({ call_id: 'c1', name: 'use_tool', arguments: '{"name":"query_calendar","arguments":{}}' });
-    const hidden = await send([{ call: directCall('query_calendar', {}, 'c2'), output: outside }, { call: routedCall('get_health', { signals: ['hrv', 'sleep'] }, 'h1'), output: ownerReadings }]);
-    expect(JSON.stringify(hidden.sent)).not.toMatch(/67\.4|431/);
-    expect(hidden.sent![1]!.call).toEqual({ call_id: 'h1', name: 'use_tool', arguments: '{"name":"get_health","arguments":{}}' });
+    const health = { call: routedCall('get_health', { signals: ['hrv', 'sleep'] }, 'h1'), output: ownerReadings };
+    const kept = await send([{ call: directCall('query_calendar', {}, 'c2'), output: outside }, health]);
+    expect(kept.sent![1]).toEqual(health);
   });
 
-  it('a withheld routed outside read still taints the batch: the owner\'s health beside it is hidden', async () => {
+  it('a withheld routed outside read still taints the batch the same way it does direct', async () => {
     const owner: LLMToolTurn = { call: { call_id: 'h1', name: 'list_health_logs', arguments: '{}' }, output: JSON.stringify({ ok: true, data: { summary: 'Your HRV was 52 ms and resting heart rate 61 bpm last night.' } }) };
     const args = { query: 'hrv', limit: 52 };
     const direct = await send([{ call: directCall('search_communication', args), output: healthOutside }, owner]);

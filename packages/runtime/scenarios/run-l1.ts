@@ -98,13 +98,14 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
       return reminderRows.splice(0).length;
     },
     note: (id: string) => reminderRows.find((reminder) => reminder.id === id)?.note ?? null,
+    outside: () => false,
     fired: () => undefined,
     unreadable: () => 0,
   } satisfies ReminderBook;
 
   // The owner's health log and private workspace, in memory: a scenario counts what landed in each.
   let healthLogs = 0;
-  const healthLogBook: HealthLogBook = { linked: () => true, log: async () => ({ id: ++healthLogs, at: '2026-09-24T09:00' }), recent: async () => [] };
+  const healthLogBook: HealthLogBook = { linked: () => true, log: async () => ({ id: ++healthLogs, at: '2026-09-24T09:00' }), recent: async () => [], remove: async () => null };
   let workspace: WorkspaceState = { binding: null, files: [], bodies: [], operations: [] };
   const blobs = new Map<string, Uint8Array>();
   let blobSeq = 0;

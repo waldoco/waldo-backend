@@ -2,6 +2,7 @@ import type { Browser, BrowserContext, BrowserWorker, Page, Request, WorkersLaun
 import type { BrowsePageArgs, RungBlockedOutcome, ToolResult } from '@waldo/contracts';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, evaluateDeclaredEgress } from '../hooks/egress-policy';
+import { writesOnGet } from './public-web-policy';
 import { browserBoundedJson } from './browser-bounded-body';
 import { outlineText, pageOutline, pageWindow } from './page-reading';
 import { prepareGeneralPublicRead } from './general-browser-public-read';
@@ -57,7 +58,7 @@ const failure = (code: 'rejected' | 'transient' | 'not_found', error: string, bl
 // owns a fresh private session; no owner profile, credentials or fixture grants.
 export function cloudflarePublicRead(options: Readonly<{ binding: BrowserWorker; loadSdk: CloudflareBrowserSdkLoader; reserveAllocation?():Promise<PublicReadReservation | void> }>): CloudflarePageReader {
   return async (args, context) => {
-    const allowed = (url: string) => evaluateDeclaredEgress({ url }, EGRESS_TARGET_PATHS.browse_page!, context.egressAllowlist,
+    const allowed = (url: string) => !writesOnGet(url) && evaluateDeclaredEgress({ url }, EGRESS_TARGET_PATHS.browse_page!, context.egressAllowlist,
       { openPublic: context.egressAllowlist?.includes(OPEN_PUBLIC) === true }).ok;
     if (!context.authenticatedUserId || !context.assertTaskSourceCurrent || !allowed(args.url)) return failure('rejected', 'The public browser read is not currently authorized.');
     const workDeadline = Math.min(context.runScope?.deadline ?? Infinity, Date.now() + 30000);

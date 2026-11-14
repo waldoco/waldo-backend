@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { gmailPush, gmailWatchDue, GMAIL_WATCH_URL, parseGmailPush, startGmailWatch, verifyPushToken } from '../src/connectors/google-push';
 import config from '../wrangler.jsonc?raw';
 import { parseJsonc } from '../../../scripts/jsonc.mjs';
+import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
 
 const AUD = 'https://w.test/events/gmail';
 const SA = 'waldo-gmail-push@waldo-dev.iam.gserviceaccount.com';
@@ -92,7 +93,7 @@ describe('Gmail watch', () => {
   });
   it('staging names the dev project and production names none until the owner creates its own', () => {
     const vars = (block: { vars?: Record<string, string> } | undefined) => block?.vars ?? {};
-    const wrangler = parseJsonc(config) as { vars?: Record<string, string>; env?: Record<string, { vars?: Record<string, string> }> };
+    const wrangler = flatConfig(parseJsonc(config)) as { vars?: Record<string, string>; env?: Record<string, { vars?: Record<string, string> }> };
     expect(vars(wrangler.env?.staging).GMAIL_PUSH_PROJECT).toBe('waldo-dev-492217');
     expect(gmailPush(vars(wrangler.env?.staging).GMAIL_PUSH_PROJECT)).toEqual({ topic: 'projects/waldo-dev-492217/topics/waldo-gmail-push', serviceAccount: 'waldo-gmail-push@waldo-dev-492217.iam.gserviceaccount.com' });
     expect(vars(wrangler).GMAIL_PUSH_PROJECT).toBe('');

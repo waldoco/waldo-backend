@@ -44,6 +44,10 @@ export const SEND_NOW_ONLY: unique symbol = Symbol('send.now_only');
 export const OUTBOX_CUSTODY: unique symbol = Symbol('send.outbox_custody');
 // Names the app thread a send belongs in, from its record's appThread. Only the app reads it; a symbol key, like SEND_NOW_ONLY.
 export const APP_THREAD: unique symbol = Symbol('send.app_thread');
+// Answers the owner can tap under a card's row, from the planning Brief's offer_replies. Only the app reads it; a symbol key.
+export const APP_REPLIES: unique symbol = Symbol('send.app_replies');
+// A message whose copy for a chat surface goes stale at this time (epoch ms): a day card is no use to the chat once its day or the next card has passed.
+export const APP_COPY_UNTIL: unique symbol = Symbol('send.app_copy_until');
 
 export type Admission = 'admitted' | 'dormant' | 'retry';
 

@@ -159,6 +159,12 @@ describe('llmResponse metering', () => {
     expect(llmRequestSchema.safeParse({ ...baseRequest, tools, tool_turns: [{ call, output: '{"ok":true}' }] }).success).toBe(true);
   });
 
+  it('a replayed tool turn may carry the dispatcher\'s external stamp, and only that one', () => {
+    const call = { call_id: 'c1', name: 'raise_approval', arguments: '{}' };
+    expect(llmRequestSchema.safeParse({ ...baseRequest, tool_turns: [{ call, output: '{"ok":true}', source_taint: 'external' }] }).success).toBe(true);
+    for (const source_taint of [null, 'internal', true]) expect(llmRequestSchema.safeParse({ ...baseRequest, tool_turns: [{ call, output: '{"ok":true}', source_taint }] }).success, String(source_taint)).toBe(false);
+  });
+
   it('tool-call arguments use a wire ceiling, not a size policy (S4)', () => {
     // A legitimately long tool call (long email body, big doc) must clear the wire schema;
     // per-destination size policy is the scribe's job, not the wire's. The ceiling only
@@ -324,5 +330,21 @@ describe('toolParameters', () => {
   // Every definition rides every round's tool list; a dialect URI tells the model nothing.
   it('omits the $schema dialect marker', () => {
     expect(toolParameters(z.strictObject({ q: z.string() }))).not.toHaveProperty('$schema');
+  });
+
+  // The format names the shape; the zod schema still validates every call before it runs.
+  it('keeps a format but drops the regex zod writes beside it, at any depth, and keeps a pattern with no format', () => {
+    const schema = z.strictObject({
+      at: z.iso.datetime({ offset: true }),
+      to: z.array(z.email()),
+      range: z.strictObject({ from: z.iso.datetime({ offset: true }) }),
+      code: z.string().regex(/^[a-z]{3}$/),
+    });
+    const params = JSON.stringify(toolParameters(schema));
+    expect(params.match(/"format":"date-time"/g)).toHaveLength(2);
+    expect(params).toContain('"format":"email"');
+    expect(params.match(/"pattern"/g)).toHaveLength(1);
+    expect(params).toContain('"pattern":"^[a-z]{3}$"');
+    expect(schema.safeParse({ at: 'not a time', to: ['x@example.test'], range: { from: '2026-11-04T09:00:00Z' }, code: 'abc' }).success).toBe(false);
   });
 });

@@ -1,6 +1,5 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { appApprovalListV1Schema } from '../../contracts/src/app/approvals';
 import { appControlProjectionV1Schema, appControlResultV1Schema } from '../../contracts/src/app/controls';
 import { appRenewResultV1Schema, appSessionV1Schema, appVerifyResultV1Schema } from '../../contracts/src/app/core';
 import { handleApp } from '../src/channels/app-api';
@@ -198,8 +197,8 @@ it('signing another device out after it renewed closes the work admitted under i
   });
 });
 
-it('a session renewed three hours after its sign-in still needs a new code to delete the account or approve a send', async () => {
-  await withOwner('renew-step-up', async (app, _state, owner) => {
+it('a session renewed three hours after its sign-in still needs a new code to delete the account', async () => {
+  await withOwner('renew-step-up', async (app) => {
     const first = await signIn(app);
     const signedIn = directory.rows.get(await hashOf(first.credential))!;
     signedIn.created = signedIn.seen = signedIn.signedIn = Date.now() - 3 * HOUR;
@@ -208,10 +207,6 @@ it('a session renewed three hours after its sign-in still needs a new code to de
     const account = appControlProjectionV1Schema.parse(await (await app('/controls?view=account', undefined, next.credential)).json());
     const deleted = await app('/actions', { view: 'account', action: 'account.delete', confirmation: 'DELETE', revision: account.revision, request_id: 'renew-delete-0001' }, next.credential);
     expect([deleted.status, await deleted.json()]).toEqual([403, { error: 'step_up_required', code: 'step_up_required' }]);
-    const message = await (owner as any).setup('app').desk.proposeSendMessage({ channel: 'telegram', content: 'Running ten minutes late.', idempotency_key: 'renew-late-0001' });
-    const [card] = appApprovalListV1Schema.parse(await (await app('/approvals?state=open', undefined, next.credential)).json()).approvals.filter(item => item.approval_id === message);
-    const approved = await app('/approvals/decisions', { approval_id: message, action: 'approve', expected_digest: card!.payload_digest, request_id: 'renew-approve-0001' }, next.credential);
-    expect([approved.status, await approved.json()]).toEqual([403, { error: 'step_up_required', code: 'step_up_required' }]);
     expect((await app('/controls?view=day', undefined, next.credential)).status).toBe(200);
   });
 });

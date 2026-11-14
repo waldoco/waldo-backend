@@ -57,6 +57,28 @@ describe('forgetting a topic whose claim is already gone', () => {
   });
 });
 
+describe('a short topic in a script without word spacing', () => {
+  it.each([['北京', '我下周去北京出差'], ['민수', '민수 생일 파티']])('forgets the two-character topic %s', async (topic, said) => {
+    await run(`forget-topic-two-${topic}`, (sql, tx) => {
+      const store = claimStore(sql, tx);
+      episodeIndex(sql).add('tg-1', 'owner', said, 1);
+      const outcome = applyClaimOps(store, ops({ forget_topic: topic }), AT, 'owner, tg-3', undefined, { owner: `forget ${topic}` }, true);
+      expect(sql.exec<{ text: string }>('SELECT text FROM episodes').one().text).toBe(said.replace(topic, FORGOTTEN));
+      expect(outcome).toContain(' purged');
+    });
+  });
+
+  it.each(['李', 'go'])('refuses %s out loud instead of reporting it purged', async (topic) => {
+    await run(`forget-topic-refused-${topic}`, (sql, tx) => {
+      const store = claimStore(sql, tx);
+      episodeIndex(sql).add('tg-1', 'owner', `${topic} and the rest`, 1);
+      const outcome = applyClaimOps(store, ops({ forget_topic: topic }), AT, 'owner, tg-3', undefined, { owner: `forget ${topic}` }, true);
+      expect(sql.exec<{ text: string }>('SELECT text FROM episodes').one().text).toBe(`${topic} and the rest`);
+      expect(outcome).toContain('purge-incomplete:topic(too-short)');
+    });
+  });
+});
+
 describe('forgetting by the exact identifier the owner named', () => {
   it('tells the writer to keep an owner-named literal as forget_topic', () => {
     expect(NIGHTLY_MEMORY_INSTRUCTION).toContain('when the owner names an exact code, id or phrase to forget, forget_topic is that text exactly as the owner wrote it');

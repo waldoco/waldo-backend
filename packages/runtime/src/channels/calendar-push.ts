@@ -32,6 +32,13 @@ export const calendarPushBook = (kv: Kv) => {
     // A new grant may fix what failed, so the next sweep retries at once. A live channel is left alone: starting
     // another while it lives would deliver every change twice.
     clearFailure: () => { const stored = read(); if (stored && 'failedAt' in stored) kv.delete(KEY); },
+    // GOOGLE_REALTIME_TRIAGE takes the live channel over once (calendar-watches), leaving this book empty.
+    handOver: (): (CalendarWatch & Readonly<{ connection: string | null }>) | null => {
+      const stored = read();
+      if (!stored || 'failedAt' in stored) return null;
+      kv.delete(KEY);
+      return { channelId: stored.channelId, resourceId: stored.resourceId, expiration: stored.expiration, connection: stored.connection };
+    },
     // Message numbers only grow per channel: a repeat or an older number is a redelivery.
     admit: (channelId: string, state: 'sync' | 'exists' | 'not_exists', messageNumber: number): 'wake' | 'ignore' => {
       const stored = read();

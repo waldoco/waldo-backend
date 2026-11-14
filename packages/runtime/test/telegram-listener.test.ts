@@ -198,6 +198,13 @@ describe('host-selected compatibility surface traces', () => {
     expect(entries.some(entry => entry.hop === 'fixture_model')).toBe(true);
     expect(entries.some(entry => entry.hop === 'turn')).toBe(true);
   });
+  it('sends WhatsApp a plain-text reply: no Markdown link or bold markup', async () => {
+    const { calls, api } = recorder();
+    const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, surface: 'whatsapp', api, respond: async () => 'Block it **now** in the [Axis app](https://www.axisbank.com/app).', saveOffset: async () => undefined });
+    await expect(listener.handle(ownerTyped({ updateId: 9000000000004, messageId: null, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'lost my card' }))).resolves.toBe('answered');
+    const sends = calls.filter(([kind]) => kind === 'send').map(([, r]) => r as { text: string; parse_mode?: string });
+    expect(sends).toEqual([{ chat_id: OWNER, text: 'Block it *now* in the Axis app (https://www.axisbank.com/app).' }]);
+  });
   it('WhatsApp unsupported turn is attributed to WhatsApp without model calls', async () => {
     const { api } = recorder(); const respond = vi.fn(async () => 'never');
     const entries: Array<{ trace: string; hop: string }> = [];
@@ -224,10 +231,11 @@ it('failed WhatsApp model span and final failure retain WhatsApp trace', async (
 });
 
 it('renders WhatsApp final directly as guarded plain text, with no Telegram HTML on queued or direct delivery', async () => {
-  const text = '**Result** <literal> https://files.fixture.invalid/note?a=1&b=2';
+  const reply = '**Result** <literal> https://files.fixture.invalid/note?a=1&b=2';
+  const text = '*Result* <literal> https://files.fixture.invalid/note?a=1&b=2';
   for (const queued of [false,true]) {
     const {api,calls}=recorder(); const queueFinal=vi.fn(async(_turn: unknown,_payload: unknown,_reaction: string)=>undefined);
-    const listener=new TelegramOwnerListener({ownerTelegramId:OWNER,surface:'whatsapp',api,respond:async()=>text,saveOffset:async()=>undefined,...(queued?{queueFinal}:{})});
+    const listener=new TelegramOwnerListener({ownerTelegramId:OWNER,surface:'whatsapp',api,respond:async()=>reply,saveOffset:async()=>undefined,...(queued?{queueFinal}:{})});
     await listener.handle(ownerTyped({updateId:1,senderId:OWNER,chatId:OWNER,messageId:null,sentAt:null,text:'make note'}));
     const payload=queued?queueFinal.mock.calls[0]![1]:calls.find(([kind])=>kind==='send')![1];
     expect(payload).toEqual({chat_id:OWNER,text});

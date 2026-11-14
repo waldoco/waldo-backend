@@ -18,7 +18,7 @@ const search = { name: 'search_communication', description: 'Search mail.', para
 
 type Script = Array<{ call: string; args?: unknown } | { text: string } | 'unavailable' | 'hang'>;
 const fakeBrain = (initial: Partial<TaskClaim> = {}, fenceTools = false, held: () => boolean = () => true) => {
-  const log = { beats: 0, tools: [] as LLMToolCall[], checkpoints: [] as Array<{ seq: number; turns: readonly LLMToolTurn[]; events: readonly TurnLogEntry[]; outcomes?: readonly ProviderOutcome[] }>, spends: [] as TaskSpend[], reports: [] as TaskOutcome[], reportOutcomes: [] as Array<readonly ProviderOutcome[] | undefined>, events: [] as TurnLogEntry[] };
+  const log = { beats: 0, tools: [] as LLMToolCall[], checkpoints: [] as Array<{ seq: number; turns: readonly LLMToolTurn[]; events: readonly TurnLogEntry[]; outcomes?: readonly ProviderOutcome[] }>, spends: [] as TaskSpend[], reports: [] as TaskOutcome[], reportOutcomes: [] as Array<readonly ProviderOutcome[] | undefined>, events: [] as TurnLogEntry[], spent: [] as TurnLogEntry[][] };
   let saved: readonly LLMToolTurn[] = initial.turns ?? [];
   let seq = initial.seq ?? 0;
   const brain: TaskBrainPort = {
@@ -32,6 +32,7 @@ const fakeBrain = (initial: Partial<TaskClaim> = {}, fenceTools = false, held: (
     checkpoint: async (_ticket, next, sent, events, spend, outcomes) => { log.spends.push(spend); const turns = structuredClone(sent); log.checkpoints.push({ seq: next, turns, events, outcomes }); log.events.push(...events); if (next > seq) { seq = next; saved = turns; } return 'ok'; },
     report: async (_ticket, outcome, events, spend, outcomes) => { log.spends.push(spend); log.reports.push(outcome); log.reportOutcomes.push(outcomes); log.events.push(...events); return 'accepted'; },
     heartbeat: async () => { log.beats += 1; return held(); },
+    spent: async (_ticket, events) => { log.spent.push([...events]); },
   };
   return { brain, log };
 };
@@ -50,6 +51,16 @@ const scripted = (script: Script, seen: Array<{ turns: readonly LLMToolTurn[]; c
 };
 
 describe('a task worker attempt', () => {
+  it('stops at the job\'s own round cap, where its brief carries one', async () => {
+    const capped: TaskBrief = { ...brief, machine: { job: 'owner_lookup', input_digest: 'd', scope: 'owner', refs: ['name'], max_rounds: 2 } };
+    const { brain, log } = fakeBrain({ brief: capped });
+    await runTaskAttempt(ticket, { brain, model: scripted([{ call: 'search_communication', args: { query: 'again' } }]), sliceEnd: Date.now() + 60_000 });
+    expect(log.tools.length).toBeLessThanOrEqual(2);
+    const uncapped = fakeBrain();
+    await runTaskAttempt(ticket, { brain: uncapped.brain, model: scripted([...Array.from({ length: 4 }, (_, i) => ({ call: 'search_communication', args: { query: `q${i}` } })), { call: FINISH_TASK, args: result }]), sliceEnd: Date.now() + 60_000 });
+    expect(uncapped.log.tools.length).toBe(4);
+  });
+
   it('reads through the brain, checkpoints each round, and reports its structured result once', async () => {
     const { brain, log } = fakeBrain();
     const seen: Parameters<typeof scripted>[1] = [];
@@ -98,6 +109,26 @@ describe('a task worker attempt', () => {
       await vi.advanceTimersByTimeAsync(TASK_HEARTBEAT_MS * 4);
       expect(await fenced).toBe('fenced');
       expect(lost.log.reports).toEqual([]);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('a fenced attempt still sends the spend of the model calls it made since its last checkpoint, once', async () => {
+    const { brain, log } = fakeBrain({}, true);
+    expect(await runTaskAttempt(ticket, { brain, model: scripted([{ call: 'search_communication' }, { call: FINISH_TASK, args: result }]), sliceEnd: Date.now() + 60_000 })).toBe('fenced');
+    expect(log.checkpoints).toEqual([]);
+    expect(log.spent).toHaveLength(1);
+    expect(log.spent[0]!.map(event => [event.hop, event.cost_kind, event.usage?.input])).toEqual([['llm_task', 'worker', 10]]);
+  });
+
+  it('a heartbeat refused during a model call still sends that call\'s spend', async () => {
+    vi.useFakeTimers();
+    try {
+      const slow: TaskModel = async (input) => { await new Promise(resolve => setTimeout(resolve, TASK_HEARTBEAT_MS * 2)); return scripted([{ call: FINISH_TASK, args: result }])(input); };
+      const lost = fakeBrain({}, false, () => false);
+      const fenced = runTaskAttempt(ticket, { brain: lost.brain, model: slow, sliceEnd: Date.now() + 3_600_000 });
+      await vi.advanceTimersByTimeAsync(TASK_HEARTBEAT_MS * 2);
+      expect(await fenced).toBe('fenced');
+      expect(lost.log.spent.flat().map(event => event.hop)).toEqual(['llm_task']);
     } finally { vi.useRealTimers(); }
   });
 

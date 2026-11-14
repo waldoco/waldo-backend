@@ -30,6 +30,7 @@ import type { GatewaySecretBinding } from './llm/gateway';
 import { receiveAgentMail } from './channels/agent-mail/ingress';
 import { agentMailRouting, sweepAgentMailRules } from './channels/agent-mail/rules';
 import { agentMailHeldHandles } from './channels/agent-mail/handles';
+import type { AgentMailSenderBinding } from './channels/agent-mail/send';
 
 // The entry exports only Durable Object classes and the default handler. `wrangler dev --local`
 // rejects constants or arrays exported from the Worker entry, so helpers are imported from their
@@ -45,6 +46,7 @@ import { handleIMessageHost, isIMessageHostPath } from './channels/imessage/http
 import { photonCallback } from './channels/imessage/photon-routes';
 import { PHOTON_CALLBACK_PATH, photonConfig } from './channels/imessage/photon';
 import { photonKeepAlive } from './channels/imessage/enrollment';
+import { withSwitches } from './switches';
 
 // Augment the ambient worker env so both the DO base (typed on Cloudflare.Env)
 // and the test's `env` import (also Cloudflare.Env) see the DO bindings.
@@ -89,6 +91,9 @@ declare global {
       AGENT_MAIL_DOMAIN?: string;
       AGENT_MAIL_ZONE_ID?: string;
       CLOUDFLARE_EMAIL_ROUTING_TOKEN?: string;
+      AGENT_MAIL_SEND?: string;
+      // The Email Service send binding; sending as Waldo stays off without it.
+      AGENT_MAIL_SENDER?: AgentMailSenderBinding;
       LANGFUSE_PUBLIC_KEY?: string;
       LANGFUSE_SECRET_KEY?: string;
       LANGFUSE_BASE_URL?: string;
@@ -246,6 +251,7 @@ const worker = {
 } satisfies ExportedHandler<Env>;
 
 export default {
-  ...worker,
-  fetch: async (request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> => isolateConsolePage(request, await worker.fetch(request, env, ctx)),
+  fetch: async (request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> => isolateConsolePage(request, await worker.fetch(request, withSwitches(env), ctx)),
+  email: (message: ForwardableEmailMessage, env: Env): Promise<void> => worker.email(message, withSwitches(env)),
+  scheduled: (controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> => worker.scheduled(controller, withSwitches(env), ctx),
 } satisfies ExportedHandler<Env>;

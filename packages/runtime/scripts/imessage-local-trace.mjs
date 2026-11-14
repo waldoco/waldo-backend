@@ -13,7 +13,7 @@ import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Drops // line comments outside JSON strings only: wrangler.jsonc vars carry URLs ("https://...").
@@ -125,7 +125,7 @@ try {
   const start = async () => {
     mf = new Miniflare({ host: '127.0.0.1', port: 0, handleRuntimeStdio: (stdout, stderr) => { for (const s of [stdout, stderr]) s.on('data', c => { workerLog += c.toString(); }); },
       durableObjectsPersist: persist,
-      workers: [{ outboundService, modules: true, modulesRoot: out, scriptPath: resolve(out, 'index.js'), compatibilityDate: config.compatibility_date, compatibilityFlags: config.compatibility_flags ?? [],
+      workers: [{ outboundService, modules: true, modulesRoot: out, scriptPath: resolve(out, basename(config.main).replace(/\.ts$/, '.js')), compatibilityDate: config.compatibility_date, compatibilityFlags: config.compatibility_flags ?? [],
         bindings: { WALDO_RELEASE: 'imessage-local-trace', WALDO_ENVIRONMENT: 'test', WALDO_OWNER_DO_NAMESPACE: '', WALDO_OWNER_TELEGRAM_ID: '', WALDO_EGRESS_ALLOWLIST: '', LANGFUSE_CAPTURE_TEXT: 'false',
           COMMON_OWNER_TASKS: '0', WALDO_TOOL_OFFLOAD: '0', WALDO_OWNER_TIMEZONE: 'UTC', OPENAI_API_KEY: `fictional-${randomBytes(8).toString('hex')}`,
           SUPABASE_PROJECT_URL: restOrigin, SUPABASE_PUBLISHABLE_KEY: `fictional-${randomBytes(8).toString('hex')}`, WALDO_ROUTER_HMAC_SECRET: routerSecret,

@@ -468,7 +468,9 @@ describe('OpenAIResponsesAdapter hosted web search', () => {
     expect((bodies[0]!.tools as Array<{ type: string }>).map((tool) => tool.type)).toEqual(['function']);
   });
 
-  it('adds every cited link the reply text does not already show', async () => {
+  // A chat reply carries its answer, not its bibliography: the inline citations come out of the sentences and the first
+  // cited page is the one visible, clickable source at the end, without tracking parameters.
+  it('moves the citations out of the text and ends with one clean source link', async () => {
     const text = 'The Lalit is 1.2 km from the venue ([thelalit.com](https://www.thelalit.com/bangalore?utm_source=openai)).';
     const output = [
       { type: 'web_search_call', id: 'ws_1', status: 'completed', action: { type: 'search', query: 'hotels near the venue' } },
@@ -477,12 +479,21 @@ describe('OpenAIResponsesAdapter hosted web search', () => {
     const { adapter, request } = searching([{ id: 'r', status: 'completed', output_text: text, output, usage }]);
     const result = await adapter.complete(request({ country: 'IN' }));
     if (!result.ok) throw Error(result.error);
-    expect(result.data.text).toBe(`${text}\n\nSources:\n- Route map: https://maps.example/route?utm_source=openai`);
+    expect(result.data.text).toBe('The Lalit is 1.2 km from the venue.\n\nSource: https://www.thelalit.com/bangalore');
   });
 
-  it('leaves a reply whose citations are all shown unchanged', async () => {
-    const text = 'Rooms from ₹6,000 ([agoda.com](https://www.agoda.com/x?utm_source=openai)).';
-    const { adapter, request } = searching([{ id: 'r', status: 'completed', output_text: text, output: [message(text, [{ url: 'https://www.agoda.com/x?utm_source=openai', title: 'Agoda' }])], usage }]);
+  it('keeps a cited link the model wrote into a sentence as its words, and every link that is not a citation', async () => {
+    const cited = 'https://www.agoda.com/x?id=7&utm_source=openai#:~:text=Rooms';
+    const text = `Rooms at [the Agoda listing](${cited}) from ₹6,000. Connect Google here: [Connect](https://waldo.example/connect/abc).`;
+    const { adapter, request } = searching([{ id: 'r', status: 'completed', output_text: text, output: [message(text, [{ url: cited, title: 'Agoda' }])], usage }]);
+    const result = await adapter.complete(request({ country: 'IN' }));
+    if (!result.ok) throw Error(result.error);
+    expect(result.data.text).toBe('Rooms at the Agoda listing from ₹6,000. Connect Google here: [Connect](https://waldo.example/connect/abc).\n\nSource: https://www.agoda.com/x?id=7');
+  });
+
+  it('leaves a reply without citations unchanged', async () => {
+    const text = 'Rooms from ₹6,000 at [Agoda](https://www.agoda.com/x).';
+    const { adapter, request } = searching([{ id: 'r', status: 'completed', output_text: text, output: [message(text, [])], usage }]);
     const result = await adapter.complete(request({ country: 'IN' }));
     if (!result.ok) throw Error(result.error);
     expect(result.data.text).toBe(text);

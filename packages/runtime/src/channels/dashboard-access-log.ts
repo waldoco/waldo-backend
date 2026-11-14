@@ -62,8 +62,10 @@ export function readAccessLog(sql: Sql, now: number, query: AccessLogQuery) {
     since, query.toolsBefore ?? null, PAGE + 1).toArray() : [];
   const oldest = present.has('trace_log') ? sql.exec<{ at: number | null }>('SELECT MIN(at) AS at FROM trace_log').toArray()[0]?.at ?? null : null;
   const before = query.approvalsBefore;
+  // A change a standing grant made was never an owner's decision, so it is not listed as one.
+  const granted = present.has('ledger') && sql.exec("SELECT 1 FROM pragma_table_info('ledger') WHERE name = 'grant_json'").toArray().length > 0;
   const approvals = present.has('ledger') ? sql.exec<{ id: string; kind: string; status: string; created_at: number; decided_at: number | null }>(
-    `SELECT id, kind, status, created_at, decided_at FROM ledger WHERE kind IN (${APPROVAL_KINDS.map(() => '?').join(', ')}) AND created_at >= ?
+    `SELECT id, kind, status, created_at, decided_at FROM ledger WHERE kind IN (${APPROVAL_KINDS.map(() => '?').join(', ')}) AND created_at >= ?${granted ? ' AND grant_json IS NULL' : ''}
      AND (? IS NULL OR created_at < ? OR (created_at = ? AND id < ?)) ORDER BY created_at DESC, id DESC LIMIT ?`,
     ...APPROVAL_KINDS, since, before?.at ?? null, before?.at ?? null, before?.at ?? null, before?.id ?? null, PAGE + 1).toArray() : [];
   // Sends on connected servers whose writes speak as the owner, such as a Slack message: the tool, the workspace and channel

@@ -27,6 +27,31 @@ export const UPDATE_SWEEP_JOB_TEXT = {
   done_when: NOTHING_IS_NORMAL,
 } as const;
 
+// PROACTIVE_ACT_AHEAD: the worker also prepares what the owner would need, so the brain can offer it on one card. It drafts;
+// it sends and changes nothing, and the brain decides whether anything reaches the owner at all.
+export const UPDATE_SWEEP_ACT_AHEAD_TEXT = {
+  ...UPDATE_SWEEP_JOB_TEXT,
+  goal: [
+    UPDATE_SWEEP_JOB_TEXT.goal,
+    'Where a change needs the owner (an invite or a moved meeting that clashes with their plan, a reply they owe soon), prepare the outcome a thoughtful assistant would bring them.',
+    'Check the clash against their calendar with your tools, then draft the move in proposals: a reply in full with send_email (to, subject, body), or the change with propose_calendar_change, with why it is the right move for them in one line.',
+    'Prepare at most one move per clash. Nothing is sent or changed: the owner approves it on a card, and the brain may decide it is not worth their attention.',
+  ].join(' '),
+} as const;
+
+// PROACTIVE_INTERVENTIONS: Waldo's own look across the owner's plate, with nothing new arriving. What is worth raising is
+// the brain's judgment; the worker only finds what is drifting.
+export const INTERVENTION_JOB_TEXT = {
+  title: 'Look across the day',
+  goal: [
+    'Nothing new arrived: look across the owner\'s plate for what is drifting.',
+    'Read their calendar for today and the next two days, their tasks, the loops Waldo holds open for them, replies they owe, and recent mail threads they are part of.',
+    'Find what is slipping or at risk: something planned that has not happened, a commitment that now clashes, a task or reply going stale, a backlog building, a personal plan or hobby getting crowded out.',
+    'Put each in findings, with its ref and what it means for the owner; leave out what is on track.',
+  ].join(' '),
+  done_when: NOTHING_IS_NORMAL,
+} as const;
+
 export const MEETING_PREP_JOB_TEXT = {
   title: 'Meeting prep',
   goal: [

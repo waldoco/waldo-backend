@@ -90,8 +90,8 @@ type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown> }; fet
 type Card = Readonly<{ id: string; latest?: { excerpt: string } | null; revision?: number; revised_at?: number }>;
 
 it.each([
-  { case: 'names the moved meeting', title: SYNC.title, body: 'Sync with Krati moved to 15:00', mail: false, meal: false, never: [] as string[] },
-  { case: 'never carries the mail or the health log the turn read', title: SYNC.title, body: 'Sync with Krati moved to 15:00', mail: true, meal: true,
+  { case: 'names the moved meeting', title: SYNC.title, body: 'Sync with Krati moved to 3pm', mail: false, meal: false, never: [] as string[] },
+  { case: 'never carries the mail or the health log the turn read', title: SYNC.title, body: 'Sync with Krati moved to 3pm', mail: true, meal: true,
     never: ['lab results', 'cholesterol', 'Asha', 'oatmeal', 'blueberries'] },
   { case: 'is the fixed line for a stranger\'s title carrying a link and a health value', title: 'Recovery chat: HRV 42 ms, verify at evil.co/x', body: PUSHES.update.body,
     mail: false, meal: false, never: ['Recovery', 'HRV', 'evil'] },
@@ -163,7 +163,7 @@ it.each([
       await alarm();
       expect(fixture.prompts).toHaveLength(1);
       expect(fixture.prompts[0]).toContain('(before: {"start":"2026-10-20T10:00:00Z","end":"2026-10-20T10:30:00Z"');
-      expect(fixture.prompts[0]).toContain('The Brief reached them in the app');
+      expect(fixture.prompts[0]).toContain('The Daily Brief reached them in the app');
       // The turn sees the Brief it revises: the card's own turn is on the owner's chain.
       expect(fixture.requests[0]).toContain(BRIEF);
       if (mail) expect(fixture.prompts[0]).toContain('cholesterol');
@@ -370,7 +370,7 @@ it('across the night clocks fall back, a move revises the Brief delivered before
 it('after the owner moves to a zone where the Brief\'s day has not begun, the turn sees the new clock and revises nothing', async () => {
   const seen = await moveAfterBrief('day-state-zone-change', 'UTC', '2026-10-20T07:00:00Z', '2026-10-20T07:20:00Z', 'Pacific/Honolulu');
   expect(seen.prompt).toContain('[Update check, 2026-10-19T21:2');
-  expect(seen.prompt).not.toContain('The Brief reached them');
+  expect(seen.prompt).not.toContain('The Daily Brief reached them');
   expect(seen.revisions.size).toBe(0);
   expect(seen.effects).toContain('revise_undelivered');
 });

@@ -19,7 +19,7 @@ test('activated staging entrypoint registers the Cloudflare reader while the ful
   const entry = resolve(dir, 'configured.ts'), out = resolve(dir, 'bundle');
   let worker;
   try {
-    writeFileSync(entry, `import * as sdk from ${JSON.stringify(resolve(runtime, 'node_modules/@cloudflare/playwright/lib/index.js'))};\nimport worker from ${JSON.stringify(resolve(runtime, staging.main))};\nimport {browserPublicReadConfiguration} from ${JSON.stringify(resolve(runtime, 'src/channels/browser-public-read-configuration.ts'))};\nimport {commonBrowserSdk} from ${JSON.stringify(resolve(runtime, 'src/channels/common-staging-registration.ts'))};\nexport * from ${JSON.stringify(resolve(runtime, 'src/index.ts'))};\nexport default {async fetch(request, env, ctx) {if(new URL(request.url).pathname === '/do-probe') return env.OWNER_DO.get(env.OWNER_DO.idFromName('cf-registered-two-arg-probe')).fetch(new Request('https://owner.invalid/console/browser/trial')); if(new URL(request.url).pathname === '/loader-probe') return Response.json(Object.fromEntries(Object.entries(await commonBrowserSdk()()).map(([name, value]) => [name, typeof value]))); if(new URL(request.url).pathname === '/sdk-probe') return Response.json({acquire:typeof sdk.acquire,connect:typeof sdk.connect,sessions:typeof sdk.sessions,staging:typeof browserPublicReadConfiguration({WALDO_ENVIRONMENT:'staging',BROWSER:{}}).cloudflare,production:typeof browserPublicReadConfiguration({WALDO_ENVIRONMENT:'production',BROWSER:{}}).cloudflare}); return worker.fetch(request,env,ctx);}};`);
+    writeFileSync(entry, `import * as sdk from ${JSON.stringify(resolve(runtime, 'node_modules/@cloudflare/playwright/lib/index.js'))};\nimport worker from ${JSON.stringify(resolve(runtime, staging.main))};\nimport {browserPublicReadConfiguration} from ${JSON.stringify(resolve(runtime, 'src/channels/browser-public-read-configuration.ts'))};\nimport {commonBrowserSdk} from ${JSON.stringify(resolve(runtime, 'src/channels/common-staging-registration.ts'))};\nexport * from ${JSON.stringify(resolve(runtime, staging.main))};\nexport default {async fetch(request, env, ctx) {if(new URL(request.url).pathname === '/do-probe') return env.OWNER_DO.get(env.OWNER_DO.idFromName('cf-registered-two-arg-probe')).fetch(new Request('https://owner.invalid/console/browser/trial')); if(new URL(request.url).pathname === '/loader-probe') return Response.json(Object.fromEntries(Object.entries(await commonBrowserSdk()()).map(([name, value]) => [name, typeof value]))); if(new URL(request.url).pathname === '/sdk-probe') return Response.json({acquire:typeof sdk.acquire,connect:typeof sdk.connect,sessions:typeof sdk.sessions,staging:typeof browserPublicReadConfiguration({WALDO_ENVIRONMENT:'staging',BROWSER:{}}).cloudflare,production:typeof browserPublicReadConfiguration({WALDO_ENVIRONMENT:'production',BROWSER:{}}).cloudflare}); return worker.fetch(request,env,ctx);}};`);
     const config = resolve(dir, 'wrangler.json');
     writeFileSync(config, JSON.stringify({ name: 'waldo-cf-local-compatibility', main: entry, compatibility_date: source.compatibility_date,
       compatibility_flags: staging.compatibility_flags, durable_objects: source.durable_objects, migrations: source.migrations }));
@@ -28,6 +28,10 @@ test('activated staging entrypoint registers the Cloudflare reader while the ful
       compatibilityDate: source.compatibility_date, compatibilityFlags: staging.compatibility_flags, bindings: { WALDO_RELEASE: 'cf-bundle-probe', WALDO_ENVIRONMENT: 'staging' },
       durableObjects: Object.fromEntries(staging.durable_objects.bindings.map(binding => [binding.name, { className: binding.class_name, useSQLite: true }])),
     }] });
+    // The staging entry loads the staging Worker, which registers the reader and the SDK loader, on its first event.
+    const health = await worker.dispatchFetch('https://worker.invalid/healthz');
+    assert.equal(health.status, 200);
+    assert.deepEqual(await health.json(), { ok: true, release: 'cf-bundle-probe' });
     const sdk = await worker.dispatchFetch('https://worker.invalid/sdk-probe');
     assert.equal(sdk.status, 200);
     assert.deepEqual(await sdk.json(), { acquire: 'function', connect: 'function', sessions: 'function', staging: 'function', production: 'undefined' });
@@ -35,12 +39,9 @@ test('activated staging entrypoint registers the Cloudflare reader while the ful
     const loader = await worker.dispatchFetch('https://worker.invalid/loader-probe');
     assert.equal(loader.status, 200);
     assert.deepEqual(await loader.json(), { acquire: 'function', connect: 'function', endpointURLString: 'function', sessions: 'function' });
-    // An actual registered DO is constructed with only state and bindings; its
+    // An actual registered DO (the staging entry's forwarder, then the real object) is constructed with only state and bindings; its
     // optional fixture trial remains absent and performs no provider I/O.
     const owner = await worker.dispatchFetch('https://worker.invalid/do-probe');
     assert.equal(owner.status, 401); // existing console authentication runs before optional trial routing
-    const health = await worker.dispatchFetch('https://worker.invalid/healthz');
-    assert.equal(health.status, 200);
-    assert.deepEqual(await health.json(), { ok: true, release: 'cf-bundle-probe' });
   } finally { await worker?.dispose(); rmSync(dir, { recursive: true, force: true }); }
 });

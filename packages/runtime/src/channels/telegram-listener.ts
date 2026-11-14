@@ -1,4 +1,4 @@
-import {telegramRichReply} from './rich-format';
+import {plainChatText, telegramRichReply} from './rich-format';
 import { sendTelegramFinal, type TelegramFinalPayload } from './telegram-api';
 import { redactSecretUrls } from './egress-guard';
 import { ownerTurnTrace } from './owner-turn-envelope';
@@ -173,7 +173,7 @@ export class TelegramOwnerListener {
       const guardedText = redactSecretUrls(text).text;
       await settle(guardedText);
       // WhatsApp and iMessage render plain text; Telegram HTML would arrive escaped.
-      const rich = this.options.surface === 'whatsapp' || this.options.surface === 'imessage' ? {text: guardedText} : telegramRichReply(guardedText);
+      const rich = this.options.surface === 'whatsapp' || this.options.surface === 'imessage' ? {text: plainChatText(guardedText)} : telegramRichReply(guardedText);
       if (this.options.queueFinal) {
         const chosen = telegramReaction(readyChoice);
         const finalReaction = chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌';

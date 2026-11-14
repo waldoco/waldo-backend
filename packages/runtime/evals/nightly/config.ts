@@ -72,8 +72,15 @@ const baseConfig = (env: Env, stagingVars: () => StagingVars): NightlyRun => {
   // WALDO_EVAL_TOOL_SEARCH=on runs the brain's flag-on menu (core tools up front, the rest found by tool search), as
   // WALDO_TOOL_SEARCH=on does for an owner; the scorecard names it so the two menus' results are never mixed up.
   const toolSearch = profile ? profile.toolSearch === true : env.WALDO_EVAL_TOOL_SEARCH === 'on';
-  const menu = profile ? { ...(profile.toolSearch ? { toolSearch: true } : {}), ...(profile.toolLoader ? { toolLoader: profile.toolLoader } : {}), forgetBarrier: profile.forgetBarrier, profile: profile.label }
-    : toolSearch ? { toolSearch: true } : {};
+  // WALDO_EVAL_PROMPT_V2=on|off runs the trials on the behavior prompt's version 2 or 1, over the profile's own value, so a
+  // staging-shaped run can compare the two; the scorecard names version 2.
+  if (![undefined, 'on', 'off'].includes(env.WALDO_EVAL_PROMPT_V2)) throw new Error('WALDO_EVAL_PROMPT_V2 must be on or off');
+  const promptV2 = env.WALDO_EVAL_PROMPT_V2 === undefined ? profile?.promptV2 === true : env.WALDO_EVAL_PROMPT_V2 === 'on';
+  const menu = {
+    ...(profile ? { ...(profile.toolSearch ? { toolSearch: true } : {}), ...(profile.toolLoader ? { toolLoader: profile.toolLoader } : {}), forgetBarrier: profile.forgetBarrier, profile: profile.label }
+      : toolSearch ? { toolSearch: true } : {}),
+    ...(promptV2 ? { promptV2: true } : {}),
+  };
   // WALDO_EVAL_COMPACTION=on runs every trial's chat on the canonical store with compaction on, as WALDO_COMPACTION=on does
   // for the app; the scorecard names it so the two runs are never mixed up.
   const compaction: Readonly<{ compaction?: CompactionSettings }> = profile ? (profile.compaction.enabled ? { compaction: profile.compaction } : {})
@@ -93,7 +100,7 @@ const baseConfig = (env: Env, stagingVars: () => StagingVars): NightlyRun => {
   if (memorySelection && memory === 'raw_history') throw new Error('raw_history has no claim store to select from');
   // The raw-history baseline's card names its mode, so it is never read as the normal run's.
   const label = (name: string) => {
-    const menuNamed = (profile ? `${name}+${profile.label}` : `${name}${toolSearch ? '+tool_search' : ''}${compaction.compaction ? '+compaction' : ''}`) + (semantic ? '+semantic' : '') + (memorySelection ? '+selection' : '');
+    const menuNamed = (profile ? `${name}+${profile.label}` : `${name}${toolSearch ? '+tool_search' : ''}${compaction.compaction ? '+compaction' : ''}`) + (semantic ? '+semantic' : '') + (memorySelection ? '+selection' : '') + (promptV2 ? '+prompt_v2' : '');
     return memory === 'raw_history' ? `${menuNamed} (raw_history)` : menuNamed;
   };
   const memoryMode: Readonly<{ memory?: MemoryMode; memorySelection?: true }> = memory === 'raw_history' ? { memory } : memorySelection ? { memorySelection: true } : {};

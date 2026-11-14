@@ -11,11 +11,15 @@ export const fileBook = (sql: Sql) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS owner_files (
     id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, file_id TEXT NOT NULL, name TEXT NOT NULL,
     mime TEXT, size INTEGER, caption TEXT NOT NULL, at INTEGER NOT NULL)`);
+  sql.exec('CREATE INDEX IF NOT EXISTS owner_files_file ON owner_files (kind, file_id)');
   return {
     record(media: TelegramMedia, caption: string, at: number): void {
       const name = media.fileName ?? (media.kind === 'photo' ? 'photo.jpg' : media.kind === 'voice' ? 'voice-note.ogg' : 'file');
       const mime = media.mimeType ?? (media.kind === 'photo' ? 'image/jpeg' : null);
-      sql.exec('INSERT INTO owner_files (kind, file_id, name, mime, size, caption, at) VALUES (?, ?, ?, ?, ?, ?, ?)', media.kind, media.fileId, name, mime, media.fileSize, caption.slice(0, 300), at);
+      // A turn that runs again (a requeued burst) records its files again; one reference per file.
+      sql.exec(`INSERT INTO owner_files (kind, file_id, name, mime, size, caption, at)
+        SELECT ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM owner_files WHERE kind = ? AND file_id = ?)`,
+      media.kind, media.fileId, name, mime, media.fileSize, caption.slice(0, 300), at, media.kind, media.fileId);
     },
     list(): readonly StoredFile[] {
       return sql.exec<StoredFile>('SELECT * FROM owner_files ORDER BY at DESC LIMIT 200').toArray();

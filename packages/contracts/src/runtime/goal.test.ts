@@ -3,6 +3,7 @@ import {
   activeGoalRecords,
   canWriteGoalFromTrigger,
   goalRecordSchema,
+  goalState,
   goalWriteSourceSchema,
 } from './goal';
 
@@ -70,5 +71,32 @@ describe('goal write authority', () => {
     expect(activeGoalRecords([goal, { ...goal, id: 'goal-2', active: false }])).toEqual([
       { ...goal, active: true },
     ]);
+  });
+});
+
+describe('quest fields', () => {
+  const quest = { ...goal, description: 'Sub-4 marathon in March', plan: 'Three runs a week, long run on Sunday', state: 'active', check_in_days: 7, last_check_in_at: '2026-11-01T21:30:00Z' };
+
+  it('carries a plan, a state, a check-in pace and the last check-in', () => {
+    expect(goalRecordSchema.safeParse(quest).success).toBe(true);
+    expect(goalRecordSchema.safeParse({ ...quest, state: 'ambient', check_in_days: undefined }).success).toBe(true);
+    expect(goalRecordSchema.safeParse({ ...quest, state: 'completed', active: false }).success).toBe(true);
+  });
+
+  it('rejects an unknown state, a pace outside 1 to 28 days and a plan over 500 characters', () => {
+    expect(goalRecordSchema.safeParse({ ...quest, state: 'paused' }).success).toBe(false);
+    for (const days of [0, 29, 1.5]) expect(goalRecordSchema.safeParse({ ...quest, check_in_days: days }).success).toBe(false);
+    expect(goalRecordSchema.safeParse({ ...quest, plan: 'p'.repeat(501) }).success).toBe(false);
+  });
+
+  it('keeps active and state saying the same thing', () => {
+    expect(goalRecordSchema.safeParse({ ...quest, state: 'completed' }).success).toBe(false);
+    expect(goalRecordSchema.safeParse({ ...quest, state: 'ambient', active: false }).success).toBe(false);
+  });
+
+  it('reads a goal written before quests by its active flag', () => {
+    expect(goalState(goalRecordSchema.parse(goal))).toBe('active');
+    expect(goalState(goalRecordSchema.parse({ ...goal, active: false }))).toBe('completed');
+    expect(goalState(goalRecordSchema.parse({ ...quest, state: 'ambient' }))).toBe('ambient');
   });
 });

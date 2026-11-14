@@ -14,7 +14,13 @@ export type DayRecord = Base<'day', {
   proactive_surface?: ProactiveSurface;
   // Whether notes Waldo keeps on its own include health. Absent from a Worker that does not say.
   health_memory?: boolean;
+  // "Just do it": the owner's choice, and whether this Waldo acts on it. Absent from a Worker that does not say.
+  act_without_asking?: { on: boolean; available: boolean };
+  // What schedule.set changes: each schedule's switch, and the Brief and Close times. Absent from a Worker that does not say.
+  schedule_controls?: ScheduleControl[];
 }>;
+export const SCHEDULE_IDS = ['daily_brief', 'followups', 'event_briefs', 'nightly', 'heartbeat', 'card:brief', 'card:close'] as const;
+export type ScheduleControl = { id: (typeof SCHEDULE_IDS)[number]; on: boolean; accepts: 'on_off' | 'time'; time: string | null; no_later_than: boolean };
 export type ProactiveSurface = { value: 'app' | 'whatsapp' | 'both' | 'app_imessage'; app_linked: boolean; whatsapp_linked: boolean; imessage_linked?: boolean; telegram_linked: boolean };
 export type ConnectionsRecord = Base<'connections', {
   google: { connectAvailable: boolean; accounts: { id: string; email: string; calendar: boolean; mail: boolean; tasks: boolean; health: 'access_granted' | 'needs_reconnect' }[] };
@@ -29,8 +35,11 @@ export type ConnectionsRecord = Base<'connections', {
 export type McpCatalogueTile = { id: string; label: string; about: string; consent?: string | null; url: string; connected: boolean };
 // A remote MCP server the owner connected. Titles are the server's own text; read_only_hint is its claim.
 export type McpServerRecord = { id: string; name: string; host: string; server_url: string; auth: 'oauth' | 'none'; status: 'active' | 'reauth_needed'; scopes: string[]; wants_scopes: string[]; tools: number; hidden_tools: number; runs_without_asking: number; marked_read_only: number; tools_changed: boolean; tools_capped: boolean; read_only_digest: string; tool_list: { tool: string; runs: 'without_asking' | 'asks_first'; read_only_hint: boolean; title?: string; digest: string; allowed_on_connect?: true }[] };
+// The sends whose review is their exact draft, sent from the Waiting page with approval.send.
+export const DRAFT_SENDS: readonly string[] = ['email_send', 'message_send', 'agent_mail_send'];
 export type ProposalReview = { kind: 'email_send'; account?: string; to: string[]; cc: string[]; bcc: string[]; subject: string; body: string; earlier_unknown_at?: string }
   | { kind: 'message_send'; channel: string; content: string }
+  | { kind: 'agent_mail_send'; from: { name: string; address: string }; to: string[]; cc: string[]; subject: string; body: string }
   | { kind: 'mcp_call' | 'tainted_action' | 'browser_submit'; text: string }
   | { kind: 'calendar_change'; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string };
 export type WaitingRecord = Base<'waiting', { timezone: string | null; proposals: { id: string; kind: string; summary: string; state: 'open' | 'done' | 'unconfirmed' | 'review_only'; review: ProposalReview | null; actions: ('approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo')[] }[] }>;
@@ -73,7 +82,7 @@ export type AgentMailRecord = Base<'agent_mail', {
 }>;
 type Records = { day: DayRecord; connections: ConnectionsRecord; waiting: WaitingRecord; activity: ActivityRecord; profile: ProfileRecord; setup: SetupRecord; usage: UsageRecord; files: FilesRecord; imessage: IMessageRecord; devices: DevicesRecord; phone: PhoneRecord; agent_mail: AgentMailRecord };
 export type ControlRecord = Records[ControlsView];
-export type ControlAction = 'card.retry' | 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'spot.pin' | 'spot.unpin' | 'spot.edit' | 'spot.area' | 'node.forget' | 'node.confirm' | 'node.correct' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'health_memory.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
+export type ControlAction = 'card.retry' | 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'spot.pin' | 'spot.unpin' | 'spot.edit' | 'spot.area' | 'node.forget' | 'node.confirm' | 'node.correct' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'schedule.set' | 'health_memory.set' | 'act_without_asking.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
   | (typeof IMESSAGE_TOP)[number] | (typeof IMESSAGE_ROW)[number] | 'device.pair' | (typeof DEVICE_ROW)[number] | (typeof PHONE_ACTIONS)[number] | (typeof AGENT_MAIL_ACTIONS)[number];
 export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string; subject?: string; chat?: string; phone?: string; query_kind?: string; body?: string; severity?: string; code?: string; notice?: string };
 export type ActionReceipt = { state: 'recorded' | 'incomplete' | 'rejected' | 'unconfirmed'; message: string; navigation?: string; signed_out?: boolean };
@@ -103,6 +112,8 @@ function readProposalReview(value: unknown): ProposalReview | null {
   if (value.kind === 'email_send' && (value.account === undefined || string(value.account)) && strings(value.to) && strings(value.cc) && strings(value.bcc) && string(value.subject) && string(value.body) && (value.earlier_unknown_at === undefined || string(value.earlier_unknown_at)))
     return { kind: value.kind, ...(value.account === undefined ? {} : { account: value.account }), to: [...value.to], cc: [...value.cc], bcc: [...value.bcc], subject: value.subject, body: value.body, ...(value.earlier_unknown_at === undefined ? {} : { earlier_unknown_at: value.earlier_unknown_at }) };
   if (value.kind === 'message_send' && string(value.channel) && string(value.content)) return { kind: value.kind, channel: value.channel, content: value.content };
+  if (value.kind === 'agent_mail_send' && obj(value.from) && string(value.from.name) && string(value.from.address) && strings(value.to) && strings(value.cc) && string(value.subject) && string(value.body))
+    return { kind: value.kind, from: { name: value.from.name, address: value.from.address }, to: [...value.to], cc: [...value.cc], subject: value.subject, body: value.body };
   if ((value.kind === 'mcp_call' || value.kind === 'tainted_action' || value.kind === 'browser_submit') && string(value.text)) return { kind: value.kind, text: value.text };
   if (value.kind === 'calendar_change' && ['create', 'move', 'cancel'].includes(String(value.action)) && [value.title, value.event_id, value.start, value.end].every(optionalString) && string(value.reason)) return { kind: value.kind, action: value.action as 'create' | 'move' | 'cancel', title: value.title as string | null, event_id: value.event_id as string | null, start: value.start as string | null, end: value.end as string | null, reason: value.reason };
   throw shapeError();
@@ -120,6 +131,10 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
     const surface = data.proactive_surface;
     if (surface !== undefined && (!obj(surface) || !['app', 'whatsapp', 'both', 'app_imessage'].includes(String(surface.value)) || ![surface.app_linked, surface.whatsapp_linked, surface.telegram_linked].every(value => typeof value === 'boolean') || (surface.imessage_linked !== undefined && typeof surface.imessage_linked !== 'boolean'))) throw shapeError();
     if (data.health_memory !== undefined && typeof data.health_memory !== 'boolean') throw shapeError();
+    const choice = data.act_without_asking;
+    if (choice !== undefined && (!obj(choice) || typeof choice.on !== 'boolean' || typeof choice.available !== 'boolean')) throw shapeError();
+    const schedules = data.schedule_controls;
+    if (schedules !== undefined && (!Array.isArray(schedules) || !schedules.every(row => obj(row) && SCHEDULE_IDS.includes(row.id as ScheduleControl['id']) && typeof row.on === 'boolean' && ['on_off', 'time'].includes(String(row.accepts)) && optionalClock(row.time) && typeof row.no_later_than === 'boolean'))) throw shapeError();
     return { ...base, view: 'day', data: {
       timezone: data.timezone,
       date:data.date,
@@ -128,6 +143,8 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
       proactivity: { quiet_start: data.proactivity.quiet_start, quiet_end: data.proactivity.quiet_end, volume: data.proactivity.volume },
       ...(obj(surface) ? { proactive_surface: { value: surface.value, app_linked: surface.app_linked, whatsapp_linked: surface.whatsapp_linked, ...(surface.imessage_linked === undefined ? {} : { imessage_linked: surface.imessage_linked }), telegram_linked: surface.telegram_linked } } : {}),
       ...(typeof data.health_memory === 'boolean' ? { health_memory: data.health_memory } : {}),
+      ...(obj(choice) ? { act_without_asking: { on: choice.on as boolean, available: choice.available as boolean } } : {}),
+      ...(Array.isArray(schedules) ? { schedule_controls: schedules.map(row => ({ id: row.id, on: row.on, accepts: row.accepts, time: row.time, no_later_than: row.no_later_than })) } : {}),
     } } as Records[V];
   }
   if (expected === 'connections') {
@@ -152,7 +169,7 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
       if (!obj(item) || !string(item.id) || !string(item.kind) || !string(item.summary) || !['open', 'done', 'unconfirmed', 'review_only'].includes(String(item.state)) || !strings(item.actions) || !item.actions.every(action => ['approval.approve', 'approval.send', 'approval.edit', 'approval.skip', 'approval.undo'].includes(action))) throw shapeError();
       const review = readProposalReview(item.review);
       // Send and Change it need the open draft itself on the page; approving a calendar change needs its change.
-      const draft = item.state === 'open' && (item.kind === 'email_send' || item.kind === 'message_send') && review?.kind === item.kind;
+      const draft = item.state === 'open' && DRAFT_SENDS.includes(item.kind) && review?.kind === item.kind;
       if (review && review.kind !== item.kind || item.actions.includes('approval.approve') && (item.kind !== 'calendar_change' || item.state !== 'open' || review?.kind !== 'calendar_change')
         || (item.actions.includes('approval.send') || item.actions.includes('approval.edit')) && !draft || item.actions.includes('approval.undo') && (item.kind !== 'calendar_change' || item.state !== 'done')) throw shapeError();
       return { id: item.id, kind: item.kind, summary: item.summary, state: item.state, review, actions: [...item.actions] };

@@ -1,6 +1,6 @@
--- Health contract revision 7 (the night's RMSSD from Waldo's own watch app): the read's mark. Nothing is stored differently.
--- - waldo.health_series_read is re-created whole from its last definition (20261031120000). A Health Connect reading whose
---   stored origin names read_api wear_sensor and Waldo's package com.heywaldo.app, on an overnight RMSSD reading, is returned
+-- Health contract revision 11 (the night's RMSSD from Waldo's own watch app): the read's mark. Nothing is stored differently.
+-- - waldo.health_series_read is re-created whole from its last definition (20261108090000, nutrition). A Health Connect
+--   reading whose stored origin names read_api wear_sensor and Waldo's package com.heywaldo.app, on an overnight RMSSD reading, is returned
 --   with waldo_wear: true, beside samsung_writer, and nothing else of the origin, so no package name leaves the database. The
 --   producer decides what the mark is worth; the mark lands on no other source, signal, method, read API or package.
 -- Its signature, security definer, search_path, grants, 31-day window, row cap and truncated flag are unchanged.
@@ -10,7 +10,7 @@ declare
   v_owner uuid; v_body jsonb; v_from date; v_to date; v_signals text[];
   v_all constant text[] := array['sleep_duration','sleep_efficiency','sleep_midpoint','overnight_hrv','resting_heart_rate','daylight_duration','movement_duration','heart_rate_window','hrv_window','spo2','respiratory_rate','steps_window','active_energy_window','workout',
     'wrist_temperature','walking_heart_rate_average','vo2_max','heart_rate_recovery','mindful_duration',
-    'body_mass','body_fat_percentage','lean_body_mass','stand_hour'];
+    'body_mass','body_fat_percentage','lean_body_mass','stand_hour','nutrition'];
   v_cap constant integer := 8000;
 begin
   if p_do_name is null or length(p_do_name) not between 1 and 240 or p_payload is null
@@ -66,7 +66,9 @@ begin
               'workout', case when p.signal = 'workout' then nullif(jsonb_strip_nulls(jsonb_build_object(
                 'energy_kcal', p.payload->'energy_kcal', 'distance_m', p.payload->'distance_m', 'elevation_gain_m', p.payload->'elevation_gain_m',
                 'avg_hr_bpm', p.payload->'avg_hr_bpm', 'max_hr_bpm', p.payload->'max_hr_bpm', 'hr_zones', p.payload->'hr_zones', 'effort', p.payload->'effort',
-                'running', p.payload->'running', 'cycling', p.payload->'cycling', 'swimming', p.payload->'swimming')), '{}'::jsonb) end)) order by p.day, p.start_at, p.signal, p.sample_id)
+                'running', p.payload->'running', 'cycling', p.payload->'cycling', 'swimming', p.payload->'swimming')), '{}'::jsonb) end,
+              'nutrition', case when p.signal = 'nutrition' then nullif(jsonb_strip_nulls(jsonb_build_object(
+                'protein_g', p.payload->'protein_g', 'carbohydrate_g', p.payload->'carbohydrate_g', 'fat_g', p.payload->'fat_g', 'meal', p.payload->'meal')), '{}'::jsonb) end)) order by p.day, p.start_at, p.signal, p.sample_id)
             from picked p where p.source = l.source and p.n <= v_cap), '[]'::jsonb)) order by l.source) from live l), '[]'::jsonb))
   );
 exception

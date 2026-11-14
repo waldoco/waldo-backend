@@ -42,8 +42,8 @@ describe('the approval delivery each surface tells the model', () => {
     expect(delivery('app')).toEqual({ text: true, approval: 'native_buttons', reactions: false, attachments: false });
   });
 
-  it('leaves Telegram, WhatsApp and any other surface as they were', () => {
-    expect(delivery()).toEqual({ text: true, approval: 'native_buttons', reactions: true, attachments: false });
+  it('leaves Telegram (the one surface that steers), WhatsApp and any other surface as they were', () => {
+    expect(delivery()).toEqual({ text: true, approval: 'native_buttons', reactions: true, attachments: false, steer: true });
     expect(delivery('whatsapp')).toEqual({ text: true, approval: 'text_callback', reactions: false, attachments: false });
     expect(delivery('imessage')).toEqual({ text: true, approval: 'none', reactions: false, attachments: false });
   });

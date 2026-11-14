@@ -116,11 +116,13 @@ export const TOOL_ERRORS: Readonly<Record<ToolErrorCode, Readonly<Omit<ToolError
 });
 
 // `cause` may be overridden only with text the model is allowed to see: its own argument
-// detail, or a tool's own error text, which the dispatcher already bounds.
-export const toolError = (code: ToolErrorCode, cause?: string, blocked?: RungBlockedOutcome): ToolError => ({
+// detail, or a tool's own error text, which the dispatcher already bounds. `fix` likewise: a
+// tool's own recovery step, which only it knows (which offset, which account, which subject).
+// A blocked outcome's fix still wins, since it names the rung.
+export const toolError = (code: ToolErrorCode, cause?: string, blocked?: RungBlockedOutcome, fix?: string): ToolError => ({
   code,
   cause: cause ?? TOOL_ERRORS[code].cause,
-  fix: blocked === undefined ? TOOL_ERRORS[code].fix : RUNG_BLOCKED_FIX[blocked],
+  fix: blocked === undefined ? fix ?? TOOL_ERRORS[code].fix : RUNG_BLOCKED_FIX[blocked],
   retryable: blocked === undefined ? TOOL_ERRORS[code].retryable : false,
   ...(blocked === undefined ? {} : { blocked }),
 });

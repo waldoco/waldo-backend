@@ -42,6 +42,28 @@ describe('Google Tasks collection coverage', () => {
     expect(third.data.next_page_token).toBeNull();
     expect(urls.some(url => url.pathname.includes('@default'))).toBe(false);
   });
+  // A task names its list by id; the read across lists carries those lists' titles, so naming the list needs no second read.
+  it('an all-lists read names the lists its tasks are on, and a failed title read fails nothing', async () => {
+    const tasksIn = (url: URL) => url.pathname.endsWith('/home/tasks') ? { kind: 'tasks#tasks', items: [{ id: 'h1', title: 'Groceries', status: 'needsAction' }] } : { kind: 'tasks#tasks', items: [] };
+    const read = async (lists: (url: URL) => unknown) => {
+      const client = googleClient(app, { refresh_token: 'grant', email: account.email }, provider(url => url.pathname.endsWith('/users/@me/lists') ? lists(url) : tasksIn(url)), undefined, account);
+      return await googleHandlers({ client: async () => client }, desk, clock).find(h => h.name === 'get_tasks')!.handle(getTasksArgsSchema.parse({ limit: 5 })) as any;
+    };
+    // Lists answer page by page as the provider does, so the task walk and the title read each see what they asked for.
+    const lists = [{ id: 'home', title: 'Home' }, { id: 'unused', title: 'Unused' }];
+    const paged = (url: URL) => {
+      const max = Number(url.searchParams.get('maxResults')), from = url.searchParams.has('pageToken') ? 1 : 0;
+      return { kind: 'tasks#taskLists', items: lists.slice(from, from + max), ...(from + max < lists.length ? { nextPageToken: 'lists-next' } : {}) };
+    };
+    const named = await read(paged);
+    expect(named, JSON.stringify(named)).toMatchObject({ ok: true });
+    expect(named.data.tasks).toMatchObject([{ id: 'h1', task_list_id: 'home' }]);
+    expect(named.data.task_lists).toEqual([{ id: 'home', title: 'Home' }]);
+    // The task walk pages the lists itself; only the title read (one page of 100) answers garbage here.
+    const unnamed = await read((url) => (url.searchParams.get('maxResults') === '100' ? { unexpected: true } : paged(url)));
+    expect(unnamed).toMatchObject({ ok: true, data: { tasks: [{ id: 'h1' }] } });
+    expect(unnamed.data.task_lists).toBeUndefined();
+  });
   it('discovers list names and reads a selected list including completed, hidden and assigned tasks', async () => {
     const urls: URL[] = [];
     const client = googleClient(app, { refresh_token: 'grant' }, provider(url => url.pathname.endsWith('/users/@me/lists')

@@ -49,14 +49,14 @@ describe('claims', () => {
       ] }), AT, 'owner, tg-pune', undefined, { owner: 'I moved to Pune' });
       expect(first).toContain('+1 held0');
       const old = store.claims()[0]!;
-      expect(old).toMatchObject({ source_ref: 'owner, tg-pune', origin: 'owner', valid_from: null, learned_at: AT, verification_status: 'owner-grounded' });
+      expect(old).toMatchObject({ source_ref: 'owner, tg-pune', origin: 'owner', valid_from: AT, learned_at: AT, verification_status: 'owner-grounded' });
       const later = '2026-09-26T04:00:00Z';
       const corrected = applyClaimOps(store, ops({ corrections: [
         { old_id: old.id, kind: 'fact', text: 'Lives in Mumbai', evidence: '"actually I am back in Mumbai"' },
       ], add: [{ kind: 'fact', text: 'Lives in Mumbai', source: 'stated', evidence: '"actually I am back in Mumbai"', touches_forgotten: false }], dismiss: [old.id] }), later, 'owner, tg-mumbai', undefined, { owner: 'actually I am back in Mumbai' });
       expect(corrected).toContain('corrected1');
       expect(store.claims()).toHaveLength(1);
-      expect(store.claims()[0]).toMatchObject({ text: 'Lives in Mumbai', supersedes_id: old.id, source_ref: 'owner, tg-mumbai', origin: 'owner' });
+      expect(store.claims()[0]).toMatchObject({ text: 'Lives in Mumbai', supersedes_id: old.id, source_ref: 'owner, tg-mumbai', origin: 'owner', valid_from: later });
       expect(store.claims('superseded')[0]).toMatchObject({ id: old.id, valid_to: later });
       expect(memoryPrompt(store)).toContain('Lives in Mumbai');
       expect(memoryPrompt(store)).not.toContain('Lives in Pune');

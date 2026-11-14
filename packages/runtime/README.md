@@ -29,7 +29,8 @@ test in this package:
 - **WebSockets with Durable Objects are unsupported** under per-file storage isolation
   (workaround `--max-workers=1 --no-isolate`; not used here — no WebSockets).
 - `runInDurableObject` / `runDurableObjectAlarm` / `evictDurableObject` **only work with
-  stubs pointing to DOs defined in the main worker** (`src/index.ts`).
+  stubs pointing to DOs defined in the main worker** (`src/index.ts`; wrangler's `main` is the
+  lazy deployed entry `src/entry.ts`, which `vitest.lazy-entry.config.ts` runs).
 - `ctx.exports` may miss entries under complex/virtual-module builds; the
   `additionalExports` pool option is the workaround (not needed for one directly
   exported DO).

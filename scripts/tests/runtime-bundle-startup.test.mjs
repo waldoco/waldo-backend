@@ -7,6 +7,19 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { parseJsonc } from '../jsonc.mjs';
 
+// Cloudflare rejects a deploy whose script startup exceeds its CPU limit (error 10021), and the full Worker builds every
+// contract schema at module scope. The deployed entry therefore imports only what this set names, statically; the rest
+// loads on the first event (src/lazy-entry.ts). A dynamic import is not followed: it runs on first use, not at startup.
+const STARTUP_MODULES = ['src/lazy-entry.ts', 'src/retired-durable-objects.ts'];
+const staticClosure = (metafile, entry) => {
+  const { inputs } = JSON.parse(readFileSync(metafile, 'utf8'));
+  const seen = new Set([entry]), queue = [entry];
+  while (queue.length) for (const edge of inputs[queue.pop()]?.imports ?? []) {
+    if (edge.kind === 'import-statement' && !edge.external && !seen.has(edge.path)) { seen.add(edge.path); queue.push(edge.path); }
+  }
+  return [...seen].filter((path) => path !== entry).sort();
+};
+
 test('the default production Worker bundle starts without browser activation or Node compatibility', { timeout: 120000 }, async () => {
   const runtime = resolve('packages/runtime');
   const { Miniflare } = createRequire(resolve(realpathSync(resolve(runtime, 'node_modules/@cloudflare/vitest-pool-workers')), 'package.json'))('miniflare');
@@ -16,11 +29,12 @@ test('the default production Worker bundle starts without browser activation or 
   let worker;
   try {
     execFileSync('pnpm', ['--filter', '@waldo/dashboard-app', 'build'], { encoding: 'utf8', timeout: 60000 });
-    execFileSync('pnpm', ['exec', 'wrangler', 'versions', 'upload', '--env', '', '--dry-run', '--outdir', dir], { cwd: runtime, encoding: 'utf8', timeout: 60000 });
-    const bundle = readFileSync(resolve(dir, 'index.js'), 'utf8');
+    execFileSync('pnpm', ['exec', 'wrangler', 'deploy', '--env', '', '--dry-run', '--outdir', dir, '--metafile', resolve(dir, 'meta.json')], { cwd: runtime, encoding: 'utf8', timeout: 60000 });
+    assert.deepEqual(staticClosure(resolve(dir, 'meta.json'), ordinary.main), STARTUP_MODULES, 'the production entry statically imports only the startup modules');
+    const bundle = readFileSync(resolve(dir, 'entry.js'), 'utf8');
     assert.equal(bundle.includes('cf-brapi-client'), false, 'ordinary production graph must not bundle the browser SDK');
     worker = new Miniflare({ workers: [{
-      modules: true, modulesRoot: dir, scriptPath: resolve(dir, 'index.js'),
+      modules: true, modulesRoot: dir, scriptPath: resolve(dir, 'entry.js'),
       compatibilityDate: ordinary.compatibility_date ?? config.compatibility_date,
       compatibilityFlags: ordinary.compatibility_flags ?? config.compatibility_flags ?? [],
       bindings: { WALDO_RELEASE: 'bundle-regression' },
@@ -31,6 +45,18 @@ test('the default production Worker bundle starts without browser activation or 
     assert.deepEqual(await response.json(), { ok: true, release: 'bundle-regression' });
   } finally {
     await worker?.dispose();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the staging entry statically imports only the startup modules', { timeout: 120000 }, () => {
+  const runtime = resolve('packages/runtime');
+  const config = parseJsonc(readFileSync(resolve(runtime, 'wrangler.jsonc'), 'utf8'));
+  const dir = mkdtempSync(resolve(tmpdir(), 'waldo-bundle-startup-staging-'));
+  try {
+    execFileSync('pnpm', ['exec', 'wrangler', 'deploy', '--env', 'staging', '--dry-run', '--outdir', dir, '--metafile', resolve(dir, 'meta.json')], { cwd: runtime, encoding: 'utf8', timeout: 60000 });
+    assert.deepEqual(staticClosure(resolve(dir, 'meta.json'), config.env.staging.main), STARTUP_MODULES);
+  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -18,7 +18,7 @@ it('attachment capture never admits POST export or fetches a denied redirect des
 
 function route(method = 'GET', navigation = true) {
   const calls: any[] = [], page = {};
-  const request = { url: () => 'https://docs.example/start', method: () => method, isNavigationRequest: () => navigation,
+  const request = { url: () => 'https://docs.example/start', method: () => method, isNavigationRequest: () => navigation, headers: () => ({}), postData: () => null,
     frame: () => ({ parentFrame: () => null, page: () => page }), allHeaders: async () => ({ authorization: 'private-origin-auth', cookie: 'private-origin-cookie', accept: 'text/html' }) };
   const responses = [{ status: () => 302, headers: () => ({ location: 'https://assets.example/final' }) }, { status: () => 200, headers: () => ({}) }];
   return { calls, page, route: { request: () => request, fetch: async (options: any) => { calls.push(['fetch', options]); return responses.shift(); }, fulfill: async (options: any) => { calls.push(['fulfill', options]); }, abort: async () => { calls.push(['abort']); } }, responses };
@@ -134,4 +134,24 @@ it('a file capture never passes a challenge document through as its attachment',
   await guardGeneralBrowserRoute(f.route as never, { authorize: async () => {}, timeout: () => 1000, admit: async () => {}, redirect: () => {}, denied: (_, status) => { denied.push(status); },
     challenge: page => { challenged.push(page); }, attachment: async response => { captured.push(response); } });
   expect(denied).toEqual([403]); expect(challenged).toEqual([]); expect(captured).toEqual([]); expect(f.calls.map(call => call[0])).toEqual(['fetch', 'abort']);
+});
+
+it('hands the authorizer the first POST hop\'s body, and no body to a GET or to a redirect hop', async () => {
+  const f = route('POST'); const bodies: unknown[] = [];
+  (f.route.request() as any).headers = () => ({ 'content-type': 'application/x-www-form-urlencoded' });
+  (f.route.request() as any).postData = () => 'entry.1=Yes';
+  await guardGeneralBrowserRoute(f.route as never, { authorize: async (_url, method, body) => { bodies.push([method, body]); }, timeout: () => 1000, admit: async () => {}, redirect: () => {}, denied: () => {} });
+  expect(bodies).toEqual([['POST', { contentType: 'application/x-www-form-urlencoded', data: 'entry.1=Yes' }], ['GET', undefined]]);
+  const g = route(); const reads: unknown[] = [];
+  await guardGeneralBrowserRoute(g.route as never, { authorize: async (_url, _method, body) => { reads.push(body); }, timeout: () => 1000, admit: async () => {}, redirect: () => {}, denied: () => {} });
+  expect(reads).toEqual([undefined, undefined]);
+});
+it('never requests a Google Forms formResponse address with GET, first or after a redirect, since that records a response', async () => {
+  const f = route(); (f.route.request() as any).url = () => 'https://docs.google.com/forms/d/e/fictional-form/formResponse?entry.1=Yes&submit=Submit';
+  let authorized = 0;
+  await expect(guardGeneralBrowserRoute(f.route as never, { authorize: async () => { authorized++; }, timeout: () => 1000, admit: async () => {}, redirect: () => {}, denied: () => {} })).rejects.toMatchObject({ code: 'rejected' });
+  expect([authorized, f.calls]).toEqual([0, []]);
+  const g = route('GET', false); g.responses[0] = { status: () => 302, headers: () => ({ location: 'https://docs.google.com/forms/u/0/d/e/fictional-form/formResponse?entry.1=Yes' }) };
+  await expect(guardGeneralBrowserRoute(g.route as never, { authorize: async () => {}, timeout: () => 1000, admit: async () => {}, redirect: () => {}, denied: () => {} })).rejects.toMatchObject({ code: 'rejected' });
+  expect(g.calls.filter(call => call[0] === 'fetch')).toHaveLength(1);
 });

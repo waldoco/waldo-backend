@@ -104,7 +104,7 @@ it('golden: a call added before the Brief moves the Brief ahead of it; the cards
     await sweep();
     await vi.waitFor(() => expect(due('card:brief')).toBe(Date.parse('2026-10-20T07:15:00Z')));
     expect(fixture.replans).toHaveLength(1);
-    expect(fixture.replans[0]).toContain('- card:brief (The Brief), default 08:00, planned 08:00');
+    expect(fixture.replans[0]).toContain('- card:brief (The Daily Brief), default 08:00, planned 08:00');
     expect(fixture.replans[0]).toContain('Call with Asha');
     expect(due('card:midday')).toBe(Date.parse('2026-10-20T15:00:00Z'));
     expect(dayPlanBook(sql).read('2026-10-20').find(row => row.card === 'card:brief')).toMatchObject({ time: '07:15', reason: 'before the 07:30 call' });

@@ -39,12 +39,12 @@ describe('a later turn asking for an email again', () => {
   it('raises a new card that says an identical earlier send may already have gone out', async () => {
     const { firstId, secondId, card } = await repeat('send-repeat-identical', first => email(first.subject, 'turn-2', '<second@waldo-send>'), 'unknown');
     expect(secondId).not.toBe(firstId);
-    expect(card).toBe("Send this email? An identical email from Tue 13 Oct, 06:30 may already have gone out; check Gmail's Sent folder before sending it again.\nTo: owner@example.test\nSubject: QA\n\nQA");
+    expect(card).toBe("Send this email? An identical email from Tue 13 Oct, 06:30 may already have gone out; check Gmail's Sent folder before sending it again.\nTo: owner@example.test\nSubject: QA\n\nQA\n\nNothing has been sent.");
   });
 
   it.each([
-    ['another subject', () => email('QA again', 'turn-2', '<second@waldo-send>'), 'Send this email? To: owner@example.test\nSubject: QA again\n\nQA'],
-    ['the same subject and another body', () => email('QA', 'turn-2', '<second@waldo-send>', 'QA, take two'), 'Send this email? To: owner@example.test\nSubject: QA\n\nQA, take two'],
+    ['another subject', () => email('QA again', 'turn-2', '<second@waldo-send>'), 'Send this email? To: owner@example.test\nSubject: QA again\n\nQA\n\nNothing has been sent.'],
+    ['the same subject and another body', () => email('QA', 'turn-2', '<second@waldo-send>', 'QA, take two'), 'Send this email? To: owner@example.test\nSubject: QA\n\nQA, take two\n\nNothing has been sent.'],
   ])('raises a plain card for a different email, whatever an earlier send left unknown: %s', async (_shape, second, shown) => {
     const { secondId, firstId, card } = await repeat(`send-repeat-different-${shown.length}`, second, 'unknown');
     expect(secondId).not.toBe(firstId);
@@ -54,6 +54,6 @@ describe('a later turn asking for an email again', () => {
   it('raises a plain card when the identical earlier send is confirmed, not unknown', async () => {
     const { secondId, firstId, card } = await repeat('send-repeat-confirmed', first => email(first.subject, 'turn-2', '<second@waldo-send>'), 'sent');
     expect(secondId).not.toBe(firstId);
-    expect(card).toBe('Send this email? To: owner@example.test\nSubject: QA\n\nQA');
+    expect(card).toBe('Send this email? To: owner@example.test\nSubject: QA\n\nQA\n\nNothing has been sent.');
   });
 });

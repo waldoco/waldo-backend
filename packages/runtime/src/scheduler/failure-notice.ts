@@ -1,5 +1,6 @@
 import type { ScheduleKind } from '@waldo/contracts';
 import { localIso } from '../channels/reminders';
+import { ownerTime } from '../prompt/fixed-lines';
 import { QUARANTINE_AFTER_ATTEMPTS } from './multiplexer';
 import { openModelAuthIncidents } from '../llm/auth-incident';
 import { dayPlanBook, dayWindow } from '../channels/day-cards';
@@ -9,7 +10,7 @@ type Kv = Pick<DurableObjectStorage['kv'], 'get' | 'put'>;
 
 // How the owner knows each job the scheduler can pause. A kind with no name here pauses without a notice. The day cards
 // share one kind, so each is named by its card.
-const DAY_CARD_NAMES: Readonly<Record<string, string>> = { 'card:brief': 'Your Brief', 'card:midday': 'Your Check-in', 'card:close': 'Your Close' };
+const DAY_CARD_NAMES: Readonly<Record<string, string>> = { 'card:brief': 'Your Daily Brief', 'card:midday': 'Your Check-in', 'card:close': 'Your Close' };
 const JOB_NAMES: Partial<Record<ScheduleKind, string>> = {
   brief: 'One of your day cards',
   reminder: 'One of your reminders',
@@ -48,7 +49,10 @@ const pausedRows = (sql: Sql, now: number) => sql.exec<{ id: string; kind: Sched
     ORDER BY s.quarantined_until, s.id`,
   now,
 ).toArray();
-const retryAt = (timezone: string) => new Intl.DateTimeFormat('en-GB', { timeZone: timezone, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+const retryAt = (timezone: string) => {
+  const day = new Intl.DateTimeFormat('en-GB', { timeZone: timezone, weekday: 'short', day: 'numeric', month: 'short' });
+  return { format: (at: number) => `${day.format(at)} at ${ownerTime(at, timezone)}` };
+};
 
 // The pauses to tell the owner about: jobs the scheduler paused because their own runs failed QUARANTINE_AFTER_ATTEMPTS
 // times in a row. A pause that came from a failed hand-off to an executor, or from a failed delivery, isn't the job's

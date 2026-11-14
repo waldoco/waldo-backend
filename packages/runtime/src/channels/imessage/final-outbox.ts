@@ -18,6 +18,8 @@ export const IMESSAGE_BUSY_RETRY_MS = 1_000;
 // evicted turn is settled may_have_completed at the next drain.
 const PROGRESS = 'progress:';
 export const isProgressNote = (replyRef: string) => replyRef.startsWith(PROGRESS);
+// A typed /stop's one answer (freeze kind 'stop').
+export const STOP_ANSWER = 'stop:';
 const UNBOUND = { bridgeId: 'unbound', accountId: 'unbound', chatGuid: 'unbound' };
 const notStarted = (commandId: string, reason: string): IMessageResult => ({ version: 1, commandId, target: UNBOUND, state: 'rejected', disposition: 'not_started', reason });
 const mayHaveSent = (commandId: string, reason: string): IMessageResult => ({ version: 1, commandId, target: UNBOUND, state: 'unknown', disposition: 'may_have_completed', reason });
@@ -67,7 +69,7 @@ export class IMessageFinalOutbox {
    * carries the owner's message it answers as its thread target only where a thread helps (see threadHelps); nothing the model
    * chose names it.
    */
-  freeze(record: IMessageInboxRecord, text: string, kind: 'reply' | 'console' | 'connect' = 'reply'): IMessageOutboxRecord {
+  freeze(record: IMessageInboxRecord, text: string, kind: 'reply' | 'console' | 'connect' | 'stop' = 'reply'): IMessageOutboxRecord {
     const ref = kind === 'reply' && this.threadHelps(record) ? record.messageRef : undefined;
     return this.put(`${kind}:${record.id}`, { ...targetOf(record), commandId: record.commandId }, text,
       ref ? { replyTo: { chatGuid: record.binding.chatGuid, messageGuid: ref.messageGuid, partIndex: ref.partIndex } } : {});
@@ -113,6 +115,12 @@ export class IMessageFinalOutbox {
   private threadHelps(record: IMessageInboxRecord): boolean {
     return record.ownerThreaded === true
       || new IMessageOwnerInbox(this.storage).records().some((r) => r.updateId > record.updateId && r.conversationRef === record.conversationRef);
+  }
+  /** Whether a message frozen before `replyRef` still waits for the same bridge, so `replyRef` must go after it. */
+  waitingAhead(replyRef: string): boolean {
+    const row = this.get(replyRef);
+    return !!row && this.records().some((r) => r.replyRef !== replyRef && r.state === 'frozen' && !isProgressNote(r.replyRef) && !r.reaction
+      && r.bridgeDoName === row.bridgeDoName && (r.seq ?? 0) < (row.seq ?? 0));
   }
   /** Whether a message to this bridge, not a note, is frozen and still waiting to be handed over. A tapback waits for no note. */
   messageWaiting(bridgeDoName: string): boolean {

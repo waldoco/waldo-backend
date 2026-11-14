@@ -14,6 +14,8 @@ export default defineConfig({
     reporters: ['default', 'json'], outputFile: { json: process.env.WALDO_SMOKE_REPORT_PATH ?? '/tmp/waldo-live-smoke.json' },
   },
   plugins: [cloudflareTest({
+    // The full Worker, whose Durable Object instances these tests reach into; wrangler's main is the lazy deployed entry.
+    main: './src/index.ts',
     miniflare: { bindings: {
       WALDO_ENV: 'test', RUN_LOOP_PROVIDER_MODE: 'fake',
       RUN_LOOP_LOCAL_INGRESS_TOKEN: 'test-run-loop-local-token-000000000000',

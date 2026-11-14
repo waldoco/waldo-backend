@@ -1,6 +1,6 @@
 import {parseConsoleAction,NOTICES,consoleMayApprove,waitingMaySend,CONSOLE_GOOGLE_START_PATH,type ConsoleAction,type ConsoleView} from './console';
 import {HANDOFF_PARAM} from './connect-confirm';
-import type {ApprovalDecision} from './approvals';
+import {DRAFT_SEND_KINDS,type ApprovalDecision} from './approvals';
 import {DASHBOARD_OVERVIEW_HEADERS} from './dashboard-overview';
 import {whatsAppWaldoNumber} from './whatsapp-send-url';
 export const CONTROL_ACTION_PATH='/console/dashboard/api/v1/actions';
@@ -26,10 +26,12 @@ export async function loadReceiptBook(store:Store,sessions:()=>Promise<readonly 
 export const receiptCapacityReached=(book:Readonly<Record<string,StoredReceipt>>,session:string)=>Object.keys(book).filter(id=>id.startsWith(session+':')).length>=100||Object.keys(book).length>=1000;
 // view() is read only for views that do not list their own actions. book names the caller's receipt book (default: the shared one).
 export type ControlActionDeps=Readonly<{csrf:string;expires:number;sessions():Promise<readonly {csrf:string;expires:number}[]>;projection(view:string,id?:string):Promise<Projection|null>;view?():Promise<ConsoleView>;act(action:ConsoleAction,fields:Readonly<Record<string,string>>):Promise<boolean|string|ControlReceipt|RevealingReceipt>;store:Store;book?:string}>;
-export const CONTROL_VIEW_ACTIONS:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','spot.pin','spot.unpin','spot.edit','spot.area','node.forget','node.confirm','node.correct'],day:['timezone.set','proactivity.set','proactive_surface.set','health_memory.set','schedule.resume','card.retry','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','whatsapp.link','whatsapp.unlink','session.signout','session.signout.all','session.revoke','mcp.connect','mcp.disconnect','mcp.runs','granola.connect','granola.disconnect','app.connect','app.disconnect'],waiting:['approval.approve','approval.send','approval.edit','approval.skip','approval.undo'],files:['file.remove'],
+export const CONTROL_VIEW_ACTIONS:Readonly<Record<string,readonly string[]>>={memory:['spot.confirm','spot.dismiss','spot.forget','spot.pin','spot.unpin','spot.edit','spot.area','spot.quiet','spot.unquiet','node.forget','node.confirm','node.correct','person.confirm','person.rename','person.ring','person.forget'],day:['timezone.set','proactivity.set','proactive_surface.set','schedule.set','health_memory.set','act_without_asking.set','schedule.resume','card.retry','card.today','card.pin','card.unpin'],connections:['google.connect','google.disconnect','telegram.link','telegram.unlink','whatsapp.link','whatsapp.unlink','session.signout','session.signout.all','session.revoke','mcp.connect','mcp.disconnect','mcp.runs','granola.connect','granola.disconnect','app.connect','app.disconnect'],waiting:['approval.approve','approval.send','approval.edit','approval.skip','approval.undo'],files:['file.remove'],
  imessage:['imessage.enroll','imessage.link','imessage.unlink','imessage.pair','imessage.pair_shared','imessage.verify','imessage.activate','imessage.activate_shared','imessage.revoke'],devices:['device.pair','device.revoke','device.query','device.notify'],phone:['phone.sms_send','phone.sms_check','phone.set','imessage.enroll'],agent_mail:['agent_mail.claim','agent_mail.release']};
 // Fields a view's actions carry beyond the console action. They are fingerprinted with it.
-const viewFields:Readonly<Record<string,readonly string[]>>={imessage:['subject','chat','phone'],devices:['query_kind','body','severity'],phone:['code'],agent_mail:['notice']};
+const viewFields:Readonly<Record<string,readonly string[]>>={imessage:['subject','chat','phone'],devices:['query_kind','body','severity'],phone:['code'],agent_mail:['notice'],connections:['account']};
+// Views whose fields are all optional: an action that carries none keeps the fingerprint it had before the view had fields.
+const optionalFields:readonly string[]=['connections'];
 // One-time codes reach the action but not its fingerprint: a six-digit code is recoverable from a hash, and the book keeps none.
 const unfingerprinted:Readonly<Record<string,readonly string[]>>={phone:['code']};
 // These views list every action their read offers, at the top level (no id) or on the row it
@@ -128,7 +130,7 @@ function eligible(action:ConsoleAction,view:ConsoleView):boolean {
   if(action.action==='approval.approve')return consoleMayApprove(p);
   if(action.action==='approval.send'||action.action==='approval.edit')return waitingMaySend(p);
   if(action.action==='approval.undo')return p.state==='done'&&p.undoable&&p.kind==='calendar_change';
-  return consoleMayApprove(p)||(['email_send','message_send'].includes(p.kind)&&['open','review_only'].includes(p.state));
+  return consoleMayApprove(p)||(DRAFT_SEND_KINDS.includes(p.kind)&&['open','review_only'].includes(p.state));
  }
  return true;
 }
@@ -144,7 +146,7 @@ export async function controlAction(form:FormData,deps:ControlActionDeps):Promis
  if(!/^[A-Za-z0-9_-]{8,80}$/.test(requestId))return reply({error:'request_id_required'},400);
  const values:Record<string,string>=Object.fromEntries(extra.flatMap(k=>form.has(k)?[[k,String(form.get(k))]]:[]));
  const kept=Object.fromEntries(Object.entries(values).filter(([key])=>!unfingerprinted[view]?.includes(key)));
- const fingerprint=await controlRevision(extra.length?{view,action,revision:form.get('revision'),fields:kept}:{view,action,revision:form.get('revision')});
+ const fingerprint=await controlRevision(extra.length&&!(optionalFields.includes(view)&&!Object.keys(kept).length)?{view,action,revision:form.get('revision'),fields:kept}:{view,action,revision:form.get('revision')});
  const session=await controlRevision(deps.csrf),key=`${session}:${requestId}`,bookKey=deps.book??RECEIPT_BOOK_KEY;
  const book=await loadReceiptBook(deps.store,deps.sessions,bookKey);
  const prior=book[key];

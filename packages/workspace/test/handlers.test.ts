@@ -29,7 +29,7 @@ it('literal revision edits preserve unrelated recipient bytes and reject ambiguo
  expect(await bad([{before:'Subject: Demo at 14:00',after:'x'},{before:'Demo at 14:00',after:'y'}])).toMatchObject({ok:false,code:'conflict'});
  expect(await h.write({...write,operation_id:id(204),expected_revision:2,text:'To: [REDACTED_EMAIL]\nChanged body'})).toMatchObject({ok:false,code:'conflict'});
  expect(await h.write({...edit,operation_id:id(205),expected_revision:2,edits:[{before:'demo@example.test',after:'[REDACTED_EMAIL]'}]})).toMatchObject({ok:true,data:{revision:3}});
- const masked=(await store.read(file.file_id,3,0,8000)).text;expect(masked).toContain('[REDACTED_EMAIL]');
+ const masked=(await store.read(file.file_id,3,0,8000)).text!;expect(masked).toContain('[REDACTED_EMAIL]');
  expect(await h.write({...write,operation_id:id(206),expected_revision:3,text:masked.replace('Hi there!','Hi!')})).toMatchObject({ok:false,code:'conflict'});
  expect(await h.write({...write,operation_id:id(207),expected_revision:3,text:'Subject: Demo\nRecipient removed at owner request.'})).toMatchObject({ok:true,data:{revision:4}});
  expect((await store.read(file.file_id,4,0,8000)).text).not.toContain('demo@example.test');

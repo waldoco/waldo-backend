@@ -20,6 +20,18 @@ describe('owner files', () => {
     });
   });
 
+  it('keeps one reference for a file recorded again, as a requeued turn does', async () => {
+    const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('owner-files-again'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const book = fileBook(state.storage.sql);
+      const media = { kind: 'document', fileId: 'wa-media-1', fileName: 'plan.pdf', mimeType: 'application/pdf', fileSize: 5000 } as const;
+      book.record(media, 'first', 1);
+      book.record(media, 'first', 2);
+      book.record({ ...media, fileId: 'wa-media-2' }, '', 3);
+      expect(book.list().map(file => file.file_id).sort()).toEqual(['wa-media-1', 'wa-media-2']);
+    });
+  });
+
   it('serves images and PDFs inline and everything else as a download', () => {
     const file = SAMPLE_CONSOLE_VIEW.files[0]!;
     expect(fileResponse(file, new Uint8Array([1])).headers.get('content-disposition')).toBe('inline; filename="blood-panel-sept.pdf"');

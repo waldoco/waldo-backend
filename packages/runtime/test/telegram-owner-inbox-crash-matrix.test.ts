@@ -39,6 +39,19 @@ describe('owner inbox crash matrix (restart with no live attempt)', () => {
       expect(row.state).toBe(to); expect(row.reason).toBe(reason);
     });
   }
+  it('recovery returns each turn it cut off with the last state that turn persisted; a live, unclaimed or delivered turn is not one', async () => {
+    for (const [from, aborted] of [['claimed', [{ updateId: 1, phase: 'claimed' }]], ['consumed', [{ updateId: 1, phase: 'consumed' }]], ['admitted', []], ['awaiting_delivery', []], ['completed', []]] as const) {
+      const f = fixture(); await seed(f, from);
+      expect(await f.inbox.recover(new Set())).toEqual(aborted);
+    }
+    const live = fixture(); await seed(live, 'claimed');
+    expect(await live.inbox.recover(new Set(['a1']))).toEqual([]);
+  });
+  it('a claimed steer that returns to the queue is not reported as cut off: it runs again', async () => {
+    const f = fixture();
+    await f.inbox.admit(f.binding, 1, 'turn body', { kind: 'steer', targetRun: 'run0' }); await f.inbox.claim('7:telegram:1', 'a1', 'run1', 5000);
+    expect(await f.inbox.recover(new Set())).toEqual([]);
+  });
   it('a recovered-uncertain turn is never claimable again and its body is scrubbed', async () => {
     const f = fixture(); const id = await seed(f, 'claimed'); await f.inbox.recover(new Set());
     expect((await f.inbox.records())[0]?.body).toBe('');

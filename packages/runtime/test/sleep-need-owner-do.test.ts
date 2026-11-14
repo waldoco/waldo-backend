@@ -2,6 +2,7 @@ import { env, runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
 import { presenceAuthority } from './helpers/directory-presence';
+import { INWARD_RECEIPTS_HEADER } from '../src/conversation/inward-receipts';
 
 // The owner's stated sleep need through the whole owner object. It is offered only while the coaching switch is on; then the
 // owner's own words save it, and a forwarded mail that asks for it saves nothing, makes no card and leaves no figure in the
@@ -21,7 +22,7 @@ beforeEach(() => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1] ?? 'other';
     proof.rpc.push({ fn, body: String(init?.body ?? '') });
     if (fn === 'common_owner_authority') return presenceAuthority('5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d', init?.body);
-    if (fn === 'health_settings_write') return Response.json({ sleep_need_minutes: 480, updated_at: '2026-10-23T12:00:00.000Z' });
+    if (fn === 'health_settings_write') return Response.json({ ...JSON.parse(JSON.parse(String(init?.body)).p_payload), updated_at: '2026-10-23T12:00:00.000Z' });
     if (fn === 'health_context_read') return Response.json(null);
     return Response.json(true);
   });
@@ -83,6 +84,20 @@ describe('set_sleep_need through the owner object', () => {
       expect(JSON.parse(writes()[0]!.body).p_payload).toBe('{"sleep_need_minutes":480}');
       expect(toolOutput('need-owner')).toContain('"state":"set"');
       expect(state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM schedule WHERE id = 'health-recompute'").one().n).toBe(1);
+    });
+  }, 30_000);
+
+  // After a read of outside content, the figure the owner typed with its unit still saves, and the reply the owner gets lists it.
+  it('saves the figure the owner stated after an outside read, and the reply they get carries its receipt whole', async () => {
+    await withOwner('1', async deliver => {
+      proof.outputs.push([call('look', 'web_search', { query: 'how much sleep do adults need' })], [call('need-after', 'set_sleep_need', { minutes: 450 })], []);
+      proof.replies.push('', '', 'Saved.');
+      await deliver(text(403, 'Look up how much sleep adults need, then set my sleep need to 7 hours 30 minutes.'));
+      expect(toolOutput('look')).toContain('external data from web_search');
+      expect(toolOutput('need-after')).toContain('"state":"set"');
+      expect(writes()).toHaveLength(1);
+      const sent = proof.telegram.filter(entry => entry.method === 'sendMessage').map(entry => String(entry.body.text));
+      expect(sent.at(-1)).toContain(`Saved.\n\n${INWARD_RECEIPTS_HEADER}\n- Set your sleep need to 7 h 30 min (you can change it)`);
     });
   }, 30_000);
 

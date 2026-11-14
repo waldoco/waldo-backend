@@ -58,7 +58,7 @@ describe('WHOOP connect and callback', () => {
     expect([h.world.calls, h.edgeCalls, h.plane.vault.rows.length, h.kv.size, h.armed.length]).toEqual([[], [], 0, 0, 0]);
   });
 
-  it('has the edge trade the code and keep the tokens, pins what the edge may trust, and keeps only an id, an account and a token version in the object', async () => {
+  it('has the edge trade the code and keep the tokens, pins what the edge may trust, and keeps only an id, an account, a token version and when it connected in the object', async () => {
     const h = await connected();
     const [exchange] = h.edgeCalls;
     expect(exchange).toMatchObject({ op: 'exchange', provider: 'whoop', code: 'good-code', scope: 'offline read:profile read:sleep read:recovery read:workout' });
@@ -70,8 +70,9 @@ describe('WHOOP connect and callback', () => {
     expect(h.plane.vault.rows).toHaveLength(1);
     expect(h.plane.vault.rows[0]).toMatchObject({ provider: 'whoop', account: '70001', status: 'active' });
     expect(JSON.parse(h.plane.vault.rows[0]!.secret)).toMatchObject({ access_token: expect.stringMatching(/^access-/), refresh_token: expect.stringMatching(/^refresh-/) });
-    expect(Object.keys(h.kv.get('whoop:conn') as object).sort()).toEqual(['account', 'expires_at', 'id', 'version']);
-    expect(h.kv.get('whoop:conn')).toMatchObject({ id: h.plane.vault.rows[0]!.id, account: '70001', version: expect.stringMatching(/^[0-9a-f]{16}$/) });
+    expect(Object.keys(h.kv.get('whoop:conn') as object).sort()).toEqual(['account', 'expires_at', 'id', 'linked_at', 'version']);
+    expect(h.kv.get('whoop:conn')).toMatchObject({ id: h.plane.vault.rows[0]!.id, account: '70001', version: expect.stringMatching(/^[0-9a-f]{16}$/), linked_at: NOW });
+    expect(h.owner.connectedAt()).toBe(NOW);
     expect(JSON.stringify([...h.kv, h.edgeCalls])).not.toMatch(/access-|refresh-|client-secret-fixture/);
     expect(h.armed).toEqual([NOW]);
     expect(await h.owner.status()).toEqual({ provider: 'whoop', state: 'connected', last_sync_at: null });
@@ -287,6 +288,43 @@ describe('WHOOP webhooks as hints', () => {
     expect(await h.owner.hint(hint)).toBe('duplicate');
     expect(h.world.calls.length).toBe(calls);
     expect(h.produced.count).toBe(1);
+  });
+
+  it('says a night just ended, only the yes, when WAKE_BRIEF gives it a window and the hint committed a fresh night', async () => {
+    const wokes: (boolean | undefined)[] = [];
+    const produce = async (woke?: boolean) => { wokes.push(woke); };
+    const fresh = await connected({ produce, wakeFreshMs: 3 * 3_600_000 });
+    fresh.clock.now = Date.parse(String(addNight(fresh.world, 0).sleep.end)) + 20 * 60_000;
+    expect(await fresh.owner.hint({ type: 'sleep.updated', id: String(fresh.world.sleeps[0]!.id), trace: 'trace-wake-0001' })).toBe('handled');
+    const later = await connected({ produce });
+    later.clock.now = fresh.clock.now;
+    expect(await later.owner.hint({ type: 'sleep.updated', id: String(addNight(later.world, 0).sleep.id), trace: 'trace-wake-0002' })).toBe('handled');
+    const old = await connected({ produce, wakeFreshMs: 3 * 3_600_000 });
+    old.clock.now = Date.parse(String(addNight(old.world, 0).sleep.end)) + 5 * 3_600_000;
+    expect(await old.owner.hint({ type: 'sleep.updated', id: String(old.world.sleeps[0]!.id), trace: 'trace-wake-0003' })).toBe('handled');
+    expect(wokes).toEqual([true, false, false]);
+  });
+
+  it('says a workout just ended, only the yes, when WORKOUT_WAKE is on and a hint or a sync committed a fresh workout', async () => {
+    const workouts: (boolean | undefined)[] = [];
+    const produce = async (_woke?: boolean, workout?: boolean) => { workouts.push(workout); };
+    const ended = (h: Awaited<ReturnType<typeof connected>>, minutesAgo: number) => {
+      const end = h.clock.now - minutesAgo * 60_000;
+      const w = workoutRecord({ id: `9a1c0d4e-0000-4000-8000-${String(minutesAgo).padStart(12, '0')}`, start: new Date(end - 45 * 60_000).toISOString(), end: new Date(end).toISOString() });
+      h.world.workouts.push(w);
+      return String(w.id);
+    };
+    const fresh = await connected({ produce, workoutWake: true });
+    expect(await fresh.owner.hint({ type: 'workout.updated', id: ended(fresh, 20), trace: 'trace-work-0001' })).toBe('handled');
+    const off = await connected({ produce });
+    expect(await off.owner.hint({ type: 'workout.updated', id: ended(off, 20), trace: 'trace-work-0002' })).toBe('handled');
+    const old = await connected({ produce, workoutWake: true });
+    expect(await old.owner.hint({ type: 'workout.updated', id: ended(old, 4 * 60), trace: 'trace-work-0003' })).toBe('handled');
+    const synced = await connected({ produce, workoutWake: true });
+    ended(synced, 30);
+    expect(await synced.owner.sync()).toBe('synced');
+    expect(workouts).toEqual([true, false, false, true]);
+    expect(synced.logs.map(line => JSON.stringify(line)).join('\n')).not.toMatch(/Running|11:|T\d\d:/);
   });
 
   it('takes a recovery webhook\'s id as its sleep\'s id, and a redelivery under a new trace as a harmless replay', async () => {

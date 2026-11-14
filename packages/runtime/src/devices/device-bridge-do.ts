@@ -12,10 +12,11 @@ import { deviceDiagnostic, genericReject } from './generic-reject';
 import { httpSigningFields } from './redeem-route';
 import { frameSignatureBase, httpSignatureBase, sha256Hex, verifyEd25519 } from './signing';
 import { sessionEventFrame, ackFrame, resultFrame, connectDeclaration, heartbeatFrame, identifier, record } from './wire';
+import { withSwitches } from '../switches';
 type Binding = DeviceAuth & { device_id: string; declared_capabilities: string[]; last_heartbeat_at: number | null; generation: string; outbox_depth?: number | null; frames?: FrameWindow; principal_checked_at?: number };
 export class DeviceBridgeDO extends DurableObject<DeviceBridgeEnv> {
   constructor(ctx: DurableObjectState, env: DeviceBridgeEnv) {
-    super(ctx, env);
+    super(ctx, withSwitches(env));
     ctx.blockConcurrencyWhile(async () => {
       ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS nonces(nonce TEXT PRIMARY KEY, expires_at INTEGER NOT NULL)');
       ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)');
@@ -193,11 +194,16 @@ export class DeviceBridgeDO extends DurableObject<DeviceBridgeEnv> {
   private async flushDeliveries(): Promise<void> {
     if(!this.env.OWNER_DO || this.revoked())return;
     const commands=new DeviceCommandStore(this.ctx.storage);
+    // This bridge serves one device, so one custody read per pass answers for every row.
+    const custody=new Map<string,Promise<DeviceAuth|null>>();
     for(const row of commands.deliveries()) {
       const delivery=JSON.parse(row.body) as MacDelivery;
       try {
-        const auth=await deviceDirectory(this.env).deviceForAuth(delivery.device_id);
-        if(!auth || auth.owner_id!==delivery.owner_id || this.revoked())continue;
+        let lookup=custody.get(delivery.device_id);
+        if(!lookup)custody.set(delivery.device_id,lookup=deviceDirectory(this.env).deviceForAuth(delivery.device_id));
+        const auth=await lookup;
+        if(this.revoked())return;
+        if(!auth || auth.owner_id!==delivery.owner_id){commands.setAside(row.id);continue;}
         // Keep fetch-only namespace interfaces stable; type RPC at the owner binding seam.
         const owner=this.env.OWNER_DO.get(this.env.OWNER_DO.idFromName(auth.do_name)) as unknown as DurableObjectStub<OwnerDO>;
         if(await owner.admitMacDelivery(delivery))commands.delivered(row.id);

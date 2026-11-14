@@ -32,6 +32,8 @@ export type NightlyRun = Readonly<{
   toolSearch?: boolean;
   // The harness's own loader (WALDO_TOOL_LOADER=harness): core tools up front, the rest through find_tools and use_tool.
   toolLoader?: 'harness';
+  // The behavior prompt's version 2 (WALDO_PROMPT_V2=1).
+  promptV2?: boolean;
   // Opens the route's second-provider step; the gateway must serve Anthropic requests for it to be taken.
   fallbackKey?: string;
   forgetBarrier?: ForgetBarrierMode;
@@ -62,6 +64,7 @@ const sumMetrics = (trials: readonly TrialMetrics[]): TrialMetrics & Readonly<{ 
   const sum = (key: Exclude<keyof TrialMetrics, 'peak_result_chars'>) => trials.reduce((total, metrics) => total + metrics[key], 0);
   return {
     trials: trials.length, calls: sum('calls'), rounds: sum('rounds'), failed_calls: sum('failed_calls'), fallback_calls: sum('fallback_calls'),
+    light_steps: sum('light_steps'), light_handovers: sum('light_handovers'),
     find_tools: sum('find_tools'), use_tool: sum('use_tool'), groups_loaded: sum('groups_loaded'), peak_result_chars: Math.max(...trials.map((metrics) => metrics.peak_result_chars)),
     input_tokens: sum('input_tokens'), cached_tokens: sum('cached_tokens'), cache_write_tokens: sum('cache_write_tokens'), output_tokens: sum('output_tokens'),
     usd: sum('usd'), unpriced_calls: sum('unpriced_calls'),
@@ -87,7 +90,7 @@ export const runNightly = async (scenarios: readonly NightlyScenario[], run: Nig
       if (scenario.blocked) { outcomes.push('blocked'); continue; }
       if (run.budget.exhausted()) { outcomes.push('budget_exhausted'); continue; }
       const missed = run.ablationMisses?.() ?? 0;
-      const record = await runTrial(run.compaction ? { ...scenario, world: { ...scenario.world, compaction: run.compaction } } : scenario, { gateway: run.gateway(), budget: run.budget, ...(run.model ? { model: run.model } : {}), ...(run.toolSearch ? { toolSearch: true } : {}), ...(run.toolLoader ? { toolLoader: run.toolLoader } : {}), ...(run.fallbackKey ? { fallbackKey: run.fallbackKey } : {}), ...(run.forgetBarrier ? { forgetBarrier: run.forgetBarrier } : {}), ...(run.memory ? { memory: run.memory } : {}), ...(run.embeddings ? { embeddings: run.embeddings() } : {}), ...(run.memorySelection ? { memorySelection: true } : {}) });
+      const record = await runTrial(run.compaction ? { ...scenario, world: { ...scenario.world, compaction: run.compaction } } : scenario, { gateway: run.gateway(), budget: run.budget, ...(run.model ? { model: run.model } : {}), ...(run.toolSearch ? { toolSearch: true } : {}), ...(run.toolLoader ? { toolLoader: run.toolLoader } : {}), ...(run.promptV2 ? { promptV2: true } : {}), ...(run.fallbackKey ? { fallbackKey: run.fallbackKey } : {}), ...(run.forgetBarrier ? { forgetBarrier: run.forgetBarrier } : {}), ...(run.memory ? { memory: run.memory } : {}), ...(run.embeddings ? { embeddings: run.embeddings() } : {}), ...(run.memorySelection ? { memorySelection: true } : {}) });
       metrics.push(record.metrics);
       if (record.status !== 'ran') { outcomes.push(record.status); if (record.error) errors.push(record.error); continue; }
       // A trial whose rules were not all dropped measured nothing about them.

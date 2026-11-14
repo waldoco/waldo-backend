@@ -2,7 +2,9 @@ import { googleHas } from '../connectors/google';
 import { RETRY_AFTER_FAILURE_MS } from '../connectors/google-push';
 import type { Scheduler } from '../scheduler/multiplexer';
 import { ensureCalendarWatch, type CalendarPushBook, type CalendarWatchMiss } from './calendar-push';
+import { ensureCalendarWatches } from './calendar-watches';
 import { ensureGmailWatch, type GmailPushBook, type GmailWatchMiss } from './gmail-push';
+import { ensureGmailWatches } from './gmail-watches';
 import { localIso } from './reminders';
 
 // Keeps the owner's Gmail watch and Calendar channel started and renewed. This is infrastructure: it sends the owner
@@ -43,7 +45,11 @@ export type WatchUpkeepDeps = Readonly<{
   accounts(): Promise<readonly Scoped[]>;
   cancel(): Promise<void>;
   calendar: Omit<Parameters<typeof ensureCalendarWatch>[0], 'now'>;
+  // GOOGLE_REALTIME_TRIAGE: every calendar the owner reads on each account gets its own channel, in place of the primary-only
+  // one, and each mail account its own watch, in place of the first one's.
+  calendars?: Omit<Parameters<typeof ensureCalendarWatches>[0], 'now'>;
   gmail: Omit<Parameters<typeof ensureGmailWatch>[0], 'now'>;
+  gmails?: Omit<Parameters<typeof ensureGmailWatches>[0], 'now'>;
   log(line: Readonly<{ hop: WatchHop; ok: boolean; code: string; ms: number }>): void;
 }>;
 
@@ -65,11 +71,24 @@ export const watchUpkeep = async (deps: WatchUpkeepDeps): Promise<void> => {
     }
     if (outcome) deps.log({ hop, ...outcome, ms: Date.now() - now });
   };
-  await step('calendar_watch', grants.calendar, deps.calendar.book, async now => {
+  const calendars = deps.calendars;
+  // Each calendar keeps its own backoff, so a throw here (the grant lookup) is simply tried again at the next upkeep.
+  if (calendars) await step('calendar_watch', grants.calendar, { fail: () => undefined }, async now => {
+    const watch = await ensureCalendarWatches({ ...calendars, now });
+    return watch === 'skipped' || (!watch.started && !watch.failed && !watch.stopped) ? null
+      : { ok: watch.failed === 0, code: `calendar_watches:accounts=${calendars.accounts.length}:started=${watch.started}:failed=${watch.failed}:stopped=${watch.stopped}` };
+  });
+  else await step('calendar_watch', grants.calendar, deps.calendar.book, async now => {
     const watch = await ensureCalendarWatch({ ...deps.calendar, now });
     return watch === 'started' || watch === 'failed' ? { ok: watch === 'started', code: `calendar_watch_${watch}` } : null;
   });
-  await step('gmail_watch', grants.mail, deps.gmail.book, async now => {
+  const gmails = deps.gmails;
+  if (gmails) await step('gmail_watch', grants.mail, { fail: () => undefined }, async now => {
+    const watch = await ensureGmailWatches({ ...gmails, now });
+    return watch === 'skipped' ? { ok: false, code: 'gmail_watch_skipped:unconfigured' } : !watch.started && !watch.failed && !watch.skipped ? null
+      : { ok: watch.failed === 0, code: `gmail_watches:accounts=${gmails.accounts.length}:started=${watch.started}:failed=${watch.failed}:skipped=${watch.skipped}` };
+  });
+  else await step('gmail_watch', grants.mail, deps.gmail.book, async now => {
     const watch = await ensureGmailWatch({ ...deps.gmail, now });
     return watch === 'fresh' ? null : { ok: watch === 'started', code: typeof watch === 'string' ? `gmail_watch_${watch}` : `gmail_watch_skipped:${watch.skipped}` };
   });
@@ -81,9 +100,12 @@ export const watchUpkeep = async (deps: WatchUpkeepDeps): Promise<void> => {
 // does a Calendar start this server could not route, which nothing the owner does would fix. Mail is watched through the
 // first connected mail account, so an account connected the older way names itself: reconnecting a different account
 // would not move the watch.
+// With GOOGLE_REALTIME_TRIAGE each account is watched on its own, so each one not watched is named.
+type AccountMiss = Readonly<{ account: string; at: number }>;
 export const watchStatusLine = (input: Readonly<{
-  accounts: readonly (Scoped & Readonly<{ email: string; refresh_token?: string }>)[];
+  accounts: readonly (Scoped & Readonly<{ id?: string; email: string; refresh_token?: string }>)[];
   gmail: ReturnType<GmailPushBook['miss']>; calendar: ReturnType<CalendarPushBook['miss']>; timezone: string;
+  perAccount?: Readonly<{ gmail: readonly (AccountMiss & Readonly<{ reason: GmailWatchMiss }>)[]; calendar: readonly AccountMiss[] }>;
 }>): string => {
   const grants = watchGrants(input.accounts);
   const at = (ms: number) => localIso(ms, input.timezone).replace('T', ' ');
@@ -101,9 +123,24 @@ export const watchStatusLine = (input: Readonly<{
     failed: miss => failed('Calendar changes', miss),
     skipped: null,
   };
-  const lines = [
+  const named = <M extends AccountMiss>(misses: readonly M[], feature: 'mail' | 'calendar') => misses.flatMap(miss => {
+    const account = input.accounts.find(known => known.id === miss.account && googleHas(known.scopes, feature));
+    return account ? [{ ...miss, email: JSON.stringify(account.email) }] : [];
+  });
+  const listed = (misses: readonly Readonly<{ email: string }>[]) => misses.map(miss => miss.email).join(' and ');
+  const each = (what: string, misses: readonly (AccountMiss & Readonly<{ email: string }>)[]) => misses.length
+    ? `Waldo is not getting ${what} pushed from ${listed(misses)} right now: starting that failed at ${at(Math.min(...misses.map(miss => miss.at)))}. Waldo tries again by itself after ${at(Math.max(...misses.map(miss => miss.at)) + RETRY_AFTER_FAILURE_MS)}; reconnecting ${misses.length > 1 ? 'those accounts' : 'that account'} can fix it sooner. Other accounts are pushed as usual.` : null;
+  const perAccount = input.perAccount;
+  const mail = perAccount ? named(perAccount.gmail, 'mail') : [];
+  const local = mail.filter(miss => miss.reason === 'local_rail');
+  const accountLines = perAccount ? [
+    each('new email', mail.filter(miss => miss.reason !== 'local_rail')),
+    local.length ? `Waldo is not getting new email pushed from ${listed(local)}: ${local.length > 1 ? 'those accounts are' : 'that account is'} connected the older way, which cannot be watched. Reconnecting ${local.length > 1 ? 'them' : 'it'}, or disconnecting ${local.length > 1 ? 'them' : 'it'} if no longer used, fixes it.` : null,
+    each('calendar changes', named(perAccount.calendar, 'calendar')),
+  ] : null;
+  const lines = (accountLines ?? [
     grants.mail && input.gmail ? gmail[input.gmail.reason](input.gmail) : null,
     grants.calendar && input.calendar ? calendar[input.calendar.reason]?.(input.calendar) ?? null : null,
-  ].filter((line): line is string => line !== null);
+  ]).filter((line): line is string => line !== null);
   return lines.length ? `Google push status, from the host: ${lines.join(' ')} Mail and calendar still work whenever the owner asks. The owner manages Google in the connections of the app or the console; send_console_link sends a console sign-in link where this chat supports it. Mention this only when it bears on what the owner asks.` : '';
 };

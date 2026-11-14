@@ -21,7 +21,7 @@ const handlers = [
   handler('read_thread', z.object({ thread_id: z.string() }), () => ({ ok: true, data: { subject: 'Synthetic thread' }, source_taint: 'external' })),
   handler('browse_page', z.object({ url: z.string() }), () => ({ ok: false, code: 'auth_failed', error: 'Browsing is not set up.', source_taint: null })),
   handler('propose_action', z.object({ tool: z.string() }), () => ({ ok: true, data: {}, source_taint: null })),
-  handler('list_reminders', z.object({}), () => ({ ok: true, data: { reminders: [] }, source_taint: null })),
+  handler('close_loop', z.object({}), () => ({ ok: true, data: { closed: true }, source_taint: null })),
 ];
 
 type Round = readonly Record<string, unknown>[];
@@ -87,7 +87,7 @@ describe('tool search keeps the tools array byte-identical across rounds and tur
       [
         { type: 'tool_search_call', id: 'ts_1', call_id: null, execution: 'server', status: 'completed', arguments: { query: 'reminders' } },
         { type: 'tool_search_output', id: 'tso_1', call_id: null, execution: 'server', status: 'completed', tools: [{ type: 'namespace', name: 'reminders' }] },
-        call('c3', 'list_reminders', {}, 'reminders'),
+        call('c3', 'close_loop', {}, 'reminders'),
       ],
       done,
     ], [[call('c4', 'get_context', {})], done]);
@@ -121,8 +121,8 @@ describe('tool search keeps the tools array byte-identical across rounds and tur
       [use('c2', 'browse_page', { url: 'https://example.test' })],
       [
         { type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_bm25', input: { query: 'reminders' } },
-        { type: 'tool_search_tool_result', tool_use_id: 'srvtoolu_1', content: { type: 'tool_search_tool_search_result', tool_references: [{ type: 'tool_reference', tool_name: 'list_reminders' }] } },
-        use('c3', 'list_reminders', {}),
+        { type: 'tool_search_tool_result', tool_use_id: 'srvtoolu_1', content: { type: 'tool_search_tool_search_result', tool_references: [{ type: 'tool_reference', tool_name: 'close_loop' }] } },
+        use('c3', 'close_loop', {}),
       ],
       done,
     ], [[use('c4', 'get_context', {})], done]);
@@ -132,7 +132,7 @@ describe('tool search keeps the tools array byte-identical across rounds and tur
     const tools = bodies.map((body) => JSON.stringify(body.tools));
     expect(new Set(tools).size).toBe(1);
     expect(tools[0]).toContain('"name":"tool_search_tool_bm25"');
-    expect(JSON.parse(tools[0]!).find((tool: { name: string }) => tool.name === 'list_reminders').defer_loading).toBe(true);
+    expect(JSON.parse(tools[0]!).find((tool: { name: string }) => tool.name === 'close_loop').defer_loading).toBe(true);
     expect(bodies.every((body) => body.model === ANTHROPIC_CLAUDE_OPUS_5_5_MODEL)).toBe(true);
   });
 });

@@ -11,7 +11,7 @@ import type { CalendarPrepReceipt } from '../src/channels/telegram-final-outbox'
 import type { TaskHost } from '../src/tasks/brain';
 import { jobBook, taskBrief, type JobBook, type JobRow } from '../src/tasks/jobs';
 import { runJobsLane } from '../src/tasks/lane';
-import { enqueueMachine } from '../src/tasks/machine';
+import { enqueueMachine, HEALTH_DETAIL_DROPPED } from '../src/tasks/machine';
 
 // Meeting prep as a machine job. A meeting the owner organized or accepted gets a reader job that may read their mail for
 // it; the brain's existing prep decision then runs on what the worker found, with the delivery admission in its commit. An
@@ -81,6 +81,20 @@ describe('the prep sweep writes a machine job for an accepted meeting', () => {
       expect(brief.context).toContain('file_q4_plan_0001');
       expect(brief.context).not.toContain('Untracked link\\",\\"file_id');
       expect(taskBrief(h.jobs()[0]!).machine!.refs).toEqual(['e1', 'mail_query', 'attachments']);
+    });
+  });
+
+  // The event and its attachments reach the brief as JSON, where a quote or a tab before a reading is an escape (\" or \t).
+  it.each([['a quoted reading', 'Why HRV "47 ms" dropped', '47 ms'], ['a tab before a reading', 'recovery\t34% this week', '34%']])('an attachment title with %s keeps the refs and drops the details that carry it', async (_name, title, reading) => {
+    await withPrep(event => ({ ...event, attachments: [{ title, file_id: 'file_recovery_0001' }] }), async (h) => {
+      await h.sweep();
+      const [job] = h.jobs();
+      const brief = taskBrief(job!);
+      expect(brief.context).toContain(`[e1] ${HEALTH_DETAIL_DROPPED}`);
+      expect(brief.context).toContain(`[attachments] ${HEALTH_DETAIL_DROPPED}`);
+      expect(brief.context).toContain('from:asha@example.test');
+      expect(job!.brief_json).not.toContain(reading);
+      expect(brief.machine!.refs).toEqual(['e1', 'mail_query', 'attachments']);
     });
   });
 
@@ -449,54 +463,68 @@ describe('the model judges the prep, and every outcome has a code', () => {
   });
 });
 
-describe('Granola in an accepted meeting\'s prep', () => {
-  it('the apply hands Granola\'s guarded notes to the decision, after the mail, with the trace of its own turn', async () => {
+describe('meeting notetakers (Granola, Fireflies) in an accepted meeting\'s prep', () => {
+  it('the apply hands each notetaker\'s guarded notes to the decision, after the mail, with the trace of its own turn', async () => {
     await withPrep(event => event, async (h) => {
       await h.sweep();
       const job = report(h, FOUND);
       const asked: [string, string | null, string][] = [];
-      const a = applyingWith(h, { granola: async (event, owner, trace) => { asked.push([event.id, owner, trace]); return { status: 'checked', text: 'Budget approved last week.' }; } });
+      const a = applyingWith(h, { notes: async (event, owner, trace) => { asked.push([event.id, owner, trace]); return [
+        { notetaker: 'Granola', notes: { status: 'checked', text: 'Budget approved last week.' } },
+        { notetaker: 'Fireflies', notes: { status: 'checked', text: 'Pricing sync: Ben owes the deck.' } },
+      ]; } });
       await a.lane();
       expect(asked).toEqual([['e1', OWNER, `task:${job.id}:apply`]]);
-      expect(a.decided[0]).toMatch(/Asha sent the agenda[\s\S]*<granola_notes>[\s\S]*Budget approved last week/);
+      expect(a.decided[0]).toMatch(/Asha sent the agenda[\s\S]*Granola[\s\S]*Budget approved last week[\s\S]*Fireflies[\s\S]*Ben owes the deck/);
       expect(a.delivered).toHaveLength(1);
     });
   });
 
-  it('a meeting the owner declined after the job was written reads no Granola, decides nothing and sends no note', async () => {
+  it('a notetaker that could not be read is named, so the decision does not say there are no earlier notes', async () => {
+    await withPrep(event => event, async (h) => {
+      await h.sweep();
+      report(h, FOUND);
+      const a = applyingWith(h, { notes: async () => [{ notetaker: 'Fireflies', notes: { status: 'unavailable' } }] });
+      await a.lane();
+      expect(a.decided[0]).toContain('Fireflies');
+      expect(a.decided[0]).not.toContain('Ben owes');
+    });
+  });
+
+  it('a meeting the owner declined after the job was written reads no notetaker, decides nothing and sends no note', async () => {
     await withPrep(event => event, async (h) => {
       await h.sweep();
       report(h, FOUND);
       const { owner_status: _accepted, ...declined } = h.event;
       h.latest.event = { ...declined, attendee_emails: [...(h.event.attendee_emails ?? []), 'added.later@example.test'] };
       const asked: string[][] = [];
-      const a = applyingWith(h, { granola: async (event) => { asked.push([...(event.attendee_emails ?? [])]); return { status: 'checked', text: 'notes' }; } });
+      const a = applyingWith(h, { notes: async (event) => { asked.push([...(event.attendee_emails ?? [])]); return [{ notetaker: 'Granola', notes: { status: 'checked', text: 'notes' } }]; } });
       await a.lane();
       expect({ asked, decided: a.decided.length, delivered: a.delivered.length }).toEqual({ asked: [], decided: 0, delivered: 0 });
       expect(a.log.find(entry => entry.hop === 'machine_held')).toMatchObject({ code: 'held_stale' });
     });
   });
 
-  it('a meeting the owner declines while Granola answers gets no decision and no note', async () => {
+  it('a meeting the owner declines while a notetaker answers gets no decision and no note', async () => {
     await withPrep(event => event, async (h) => {
       await h.sweep();
       report(h, FOUND);
       const { owner_status: _accepted, ...declined } = h.event;
-      const a = applyingWith(h, { granola: async () => { h.latest.event = declined; return { status: 'checked', text: 'notes' }; } });
+      const a = applyingWith(h, { notes: async () => { h.latest.event = declined; return [{ notetaker: 'Granola', notes: { status: 'checked', text: 'notes' } }]; } });
       await a.lane();
       expect({ decided: a.decided.length, delivered: a.delivered.length }).toEqual({ decided: 0, delivered: 0 });
       expect(h.briefed()).toEqual([]);
     });
   });
 
-  it('a job cancelled after its apply began sends nothing to Granola', async () => {
+  it('a job cancelled after its apply began asks no notetaker', async () => {
     await withPrep(event => event, async (h) => {
       await h.sweep();
       const job = report(h, FOUND);
       const asked: string[] = [];
       const a = applyingWith(h, {
         client: async () => { h.book.cancel(job.id, 'owner'); return h.client; },
-        granola: async (event) => { asked.push(event.id); return undefined; },
+        notes: async (event) => { asked.push(event.id); return []; },
       });
       await a.lane();
       expect(asked).toEqual([]);

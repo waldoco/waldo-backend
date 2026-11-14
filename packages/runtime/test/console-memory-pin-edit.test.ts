@@ -7,7 +7,7 @@ import { CONTROL_ACTION_PATH } from '../src/channels/dashboard-control-actions';
 import { MEMORY_CONTROL_PATH } from '../src/channels/dashboard-memory-actions';
 
 // The owner pins, unpins and edits a memory claim from the console. Pin and edit change what Waldo holds as the owner's
-// own word on every turn, so they need a fresh email code; unpin only takes a line out.
+// own word on every turn; by owner ruling (beta) none of them needs a fresh email code.
 const root = 'https://telegram-owner';
 const HOUR = 60 * 60_000;
 type Read = { csrf: string; revision: string; data: { actions?: string[] } };
@@ -100,18 +100,13 @@ describe('console pin and unpin', () => {
     expect((await o.row(claim))!.pinned).toBeNull();
   });
 
-  it('refuses a pin without an email code from the last two hours, and unpins without one', async () => {
+  it('pins and unpins without an email code from the last two hours', async () => {
     const o = await owner('console-pin-step-up-owner');
     const claim = await o.seed('fact', 'Has two cats', 'owner', 'stated', 'owner-grounded');
     const id = await o.scoped(claim);
     await o.codeAge(3 * HOUR);
-    const refused = await o.act(id, 'spot.pin', 'profile');
-    expect(refused.status).toBe(403);
-    expect(await refused.json()).toMatchObject({ error: 'step_up_required' });
-    expect((await o.row(claim))!.pinned).toBeNull();
-    await o.codeAge(60_000);
     expect((await o.act(id, 'spot.pin', 'profile')).status).toBe(200);
-    await o.codeAge(3 * HOUR);
+    expect((await o.row(claim))!.pinned).toBe('profile');
     expect((await o.act(id, 'spot.unpin')).status).toBe(200);
     expect((await o.row(claim))!.pinned).toBeNull();
   });
@@ -152,14 +147,14 @@ describe('console edit', () => {
     expect((await o.rows()).filter((row) => row.status === 'active').map((row) => row.text)).toEqual(['Works at Acme']);
   });
 
-  it('refuses an edit without an email code from the last two hours', async () => {
+  it('edits without an email code from the last two hours', async () => {
     const o = await owner('console-edit-step-up-owner');
     const claim = await o.seed('fact', 'Drives a blue car', 'owner', 'stated', 'owner-grounded');
     await o.codeAge(3 * HOUR);
-    const refused = await o.act(await o.scoped(claim), 'spot.edit', 'Drives a red car');
-    expect(refused.status).toBe(403);
-    expect(await refused.json()).toMatchObject({ error: 'step_up_required' });
-    expect((await o.row(claim))!.status).toBe('active');
+    const edited = await o.act(await o.scoped(claim), 'spot.edit', 'Drives a red car');
+    expect(edited.status).toBe(200);
+    expect((await o.row(claim))!.status).toBe('superseded');
+    expect((await o.rows()).at(-1)).toMatchObject({ text: 'Drives a red car', status: 'active', origin: 'owner' });
   });
 
   it('keeps another owner\'s session out', async () => {

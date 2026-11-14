@@ -15,6 +15,7 @@ import { AnthropicMessagesAdapter } from './anthropic';
 import { validModelCredential } from './credential-shape';
 import { OpenAIResponsesAdapter, type OpenAIResponseMetadata } from './openai';
 import { routedGateway, type CircuitBreaker, type LLMAttempt, type LLMGatewayAdapter } from './provider';
+import type { ContextBudget } from '../conversation/context-budget';
 
 // What the owner responder needs to reach the model providers: the OpenAI key alone (callers that predate the second
 // provider), or every provider's key. Credentials stay here and in the adapters; they never reach a prompt, a trace or a store.
@@ -33,8 +34,17 @@ export type FloorPromise = Readonly<{ promise(turn: FloorTurn): string }>;
 // toolLoader 'harness': the reply loads core tools up front and the rest through the harness's own find_tools and use_tool
 // (tools/loader.ts), on any provider. It wins over toolSearch.
 // onAttempts: told every model call's attempts, so a provider that refused the key is noticed whichever call met it.
+// held: true while the owner may not spend on models (an open owner before their agreements); each owner-path model call asks
+// it first. A task worker builds its own access, so its owner fences the claim instead.
 export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?: string; primary?: ModelProvider; floorReply?: boolean | FloorPromise; health?: CircuitBreaker; toolSearch?: boolean; toolLoader?: 'harness';
-  onAttempts?: (attempts: readonly LLMAttempt[]) => void }>;
+  // WALDO_PROMPT_V2: the owner path's behavior prompt version 2 (prompt/messaging-behavior.ts).
+  promptV2?: boolean;
+  // WALDO_CONTEXT_CAPS: an owner turn clears its tool results down to the latest few once they pass a size.
+  contextCaps?: Pick<ContextBudget, 'clearAtChars' | 'keepLatest'>;
+  // WALDO_CALL_CEILINGS: each call is measured against its class's ceiling, and an owner turn clears earlier tool results
+  // once they would carry the call past the hard ceiling.
+  callCeilings?: Pick<ContextBudget, 'chatCeilingTokens' | 'jobCeilingTokens' | 'hardCeilingTokens'>;
+  onAttempts?: (attempts: readonly LLMAttempt[]) => void; held?: () => Promise<boolean> }>;
 
 export const ownerModelAccess = (access: string | OwnerModelAccess): OwnerModelAccess =>
   typeof access === 'string' ? { openaiApiKey: access } : access;
@@ -90,6 +100,27 @@ export const ownerRoutePolicy = (primary: ModelName, chatModel: ModelName, acces
       fallback: validModelCredential(keyOf(access, second)) ? [ownerStep(chat ? OWNER_MODELS[second].chat : OWNER_MODELS[second].auxiliary, chat)] : [],
       floor: 'template',
     }],
+    escalation: [],
+    template_fallback: true,
+  });
+};
+
+// The light model's first step of the owner's reply (WALDO_LIGHT_CHAT): one attempt, with the reply's cache, output capped at
+// maxTokens (thinking included), and no fallback of its own. A light step that fails hands the turn to the chat route, whose fallback is the other
+// provider's chat model, so an outage never answers the owner on a second light model.
+export const lightRoutePolicy = (light: ModelName, maxTokens: number): RoutingPolicy => routingPolicySchema.parse({
+  routes: [{ trigger: 'user_message', primary: { ...ownerStep(light, true), max_tokens: maxTokens }, fallback: [], floor: 'template' }],
+  escalation: [],
+  template_fallback: true,
+});
+
+// The strong role's route on a light-chat turn: its model, then its fallback (by default the other provider's chat model)
+// when that provider's key is deployed, then the floor. With neither set it is the chat route ownerRoutePolicy builds.
+export const strongRoutePolicy = (strong: ModelName, fallback: ModelName | undefined, access: OwnerModelAccess): RoutingPolicy => {
+  const second = fallback ?? OWNER_MODELS[otherProvider(PROVIDER_OF[strong] === ANTHROPIC_PROVIDER ? ANTHROPIC_PROVIDER : OPENAI_PROVIDER)].chat;
+  const provider = PROVIDER_OF[second] === ANTHROPIC_PROVIDER ? ANTHROPIC_PROVIDER : OPENAI_PROVIDER;
+  return routingPolicySchema.parse({
+    routes: [{ trigger: 'user_message', primary: ownerStep(strong, true), fallback: second !== strong && validModelCredential(keyOf(access, provider)) ? [ownerStep(second, true)] : [], floor: 'template' }],
     escalation: [],
     template_fallback: true,
   });

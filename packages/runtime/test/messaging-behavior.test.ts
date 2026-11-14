@@ -212,18 +212,19 @@ describe('the rules that pulled against each other are gone', () => {
   // to the greeting rule, to about 19,470. The sleep-need memory rule adds about 90 bytes to Remembering, to about 19,560:
   // remember's description is at its cap, and every owner turn must read that memory keeps no figure for the stated need.
   // The tracked-medicine memory rule adds about 100 bytes beside it, to about 19,655, for the same reason.
+  // The test-site line (a staging copy can carry dummy details) adds about 140 bytes to Looking things up, to about 19,820.
   // Rule pruning against the eval gate is where the next cuts come from.
-  it('keeps every delivered behaviour text under 19,700 bytes', () => {
-    expect(Math.max(...prompts().map(([, prompt]) => bytes(prompt)))).toBeLessThanOrEqual(19_700);
+  it('keeps every delivered behaviour text under 19,850 bytes', () => {
+    expect(Math.max(...prompts().map(([, prompt]) => bytes(prompt)))).toBeLessThanOrEqual(19_850);
   });
 
   // With tool search on, one line names what the deferred namespaces hold; it replaces about 40 KB of tool definitions
   // sent every round, and is the only text on-mode adds.
   it('adds only the tool-search line with tool search on', () => {
     for (const [surface, prompt] of prompts()) {
-      const on = messagingSystemPrompt(HOTEL_TURN_TOOLS, SURFACES.find((item) => item.surface === surface), true);
+      const on = messagingSystemPrompt(HOTEL_TURN_TOOLS, SURFACES.find((item) => item.surface === surface), { toolSearch: true });
       expect(bytes(on) - bytes(prompt), surface).toBe(bytes(TOOL_SEARCH_LINE) + 2);
-      expect(bytes(on), surface).toBeLessThanOrEqual(19_700 + bytes(TOOL_SEARCH_LINE) + 2);
+      expect(bytes(on), surface).toBeLessThanOrEqual(19_850 + bytes(TOOL_SEARCH_LINE) + 2);
     }
     expect(bytes(TOOL_SEARCH_LINE)).toBeLessThanOrEqual(400);
   });
@@ -235,9 +236,65 @@ describe('the rules that pulled against each other are gone', () => {
   });
 });
 
+// Version 2 (WALDO_PROMPT_V2) is judged by the nightly scenarios its rules map to (evals/nightly/rules.ts), not by its words;
+// these hold only what a prompt must be on every surface: unchanged by the sanitiser, no rule said twice, inside its budget.
+describe('messagingSystemPrompt, version 2', () => {
+  const v2Prompts = (): readonly (readonly [string, string])[] => [
+    ['no surface', messagingSystemPrompt(HOTEL_TURN_TOOLS, undefined, { v2: true })],
+    ...SURFACES.map((surface) => [surface.surface, messagingSystemPrompt(HOTEL_TURN_TOOLS, surface, { v2: true })] as const),
+  ];
+
+  it('leaves version 1 as it was while the switch is off', () => {
+    for (const [surface, prompt] of prompts()) expect(messagingSystemPrompt(HOTEL_TURN_TOOLS, SURFACES.find((item) => item.surface === surface))).toBe(prompt);
+  });
+
+  it.each(v2Prompts())('%s: passes the system-prompt sanitiser unchanged', (_surface, prompt) => {
+    const canary_tokens = ['1111111111111111', '2222222222222222', '3333333333333333'];
+    expect(sanitise({ payload: prompt, destination: 'system_prompt', canary_tokens, source_taint: null })).toMatchObject({ ok: true, payload: prompt });
+  });
+
+  it.each(v2Prompts())('%s: says no rule twice', (_surface, prompt) => {
+    const rules = prompt.split('\n').filter((line) => line.startsWith('- '));
+    expect(rules.length - new Set(rules).size).toBe(0);
+  });
+
+  // Version 2 carries the brand voice guide: its character, four tones, words and names, the health gate and loop, and its
+  // evidence proposals (one true reason, no wit near health, the quiet Brief, a weekly sense of interruptions, standing
+  // preferences beside undo, the health pull path). The cap sits just above the longest delivered text.
+  it('keeps every delivered version 2 text under 25,900 bytes', () => {
+    expect(Math.max(...v2Prompts().map(([, prompt]) => bytes(prompt)))).toBeLessThanOrEqual(25_900);
+  });
+
+  // The version and the background switch are separate options: neither may stand in for the other.
+  it.each([[true, false], [false, true], [true, true]])('v2 %s with background %s: each option changes only its own part', (v2, background) => {
+    const tools = ['get_context', 'web_search', 'start_task', 'cancel_task'];
+    const lines = (prompt: string) => new Set(prompt.split('\n'));
+    const plain = lines(messagingSystemPrompt(tools));
+    const backgroundOnly = [...lines(messagingSystemPrompt(tools, undefined, { background: true }))].filter((line) => !plain.has(line));
+    const prompt = messagingSystemPrompt(tools, undefined, { v2, background });
+    expect(backgroundOnly.length).toBeGreaterThan(0);
+    expect(prompt.includes('\nBeing ahead of them\n')).toBe(v2);
+    for (const line of backgroundOnly) expect(lines(prompt).has(line), line).toBe(background);
+  });
+
+  // The line saying a mid-turn message reaches the running turn is given only where the host delivers that.
+  it('tells only a surface that delivers mid-turn messages that the owner can steer', () => {
+    const rules = (prompt: string) => new Set(prompt.split('\n').filter((line) => line.startsWith('- ')));
+    const telegram = SURFACES.find((item) => item.surface === 'telegram')!;
+    const withSteer = rules(messagingSystemPrompt(HOTEL_TURN_TOOLS, { ...telegram, delivery: { ...telegram.delivery, steer: true } }, { v2: true }));
+    const without = rules(messagingSystemPrompt(HOTEL_TURN_TOOLS, telegram, { v2: true }));
+    const added = [...withSteer].filter((line) => !without.has(line));
+    expect(added).toHaveLength(1);
+    expect(rules(messagingSystemPrompt(HOTEL_TURN_TOOLS, undefined, { v2: true })).has(added[0]!)).toBe(true);
+    for (const surface of SURFACES) expect(rules(messagingSystemPrompt(HOTEL_TURN_TOOLS, surface, { v2: true })).has(added[0]!), surface.surface).toBe(false);
+  });
+});
+
 // The voice is a contract: a change to it is deliberate, versioned and in the changelog, never drift between releases.
 const VOICE_DIGESTS: Readonly<Record<number, string>> = {
   2: '0f3a1ee9e2745665380501f1b8ad1263f5cbb8a0a43cfe4590005325847c1c3a',
+  3: '02f4223ef59fee1bcc85e1e510fe49a10d3f54d474b11d0ed4c73db6163908f8',
+  4: '99646fccf15fc50e89dac3ea4eb7ab55cfb30e2c56729a1c8685a75ff29573f0',
 };
 const sha256 = async (text: string) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))), (byte) => byte.toString(16).padStart(2, '0')).join('');
 

@@ -71,6 +71,14 @@ describe('receiptLine', () => {
     expect(receiptLine([ev(1, 'propose_calendar_change', true), ev(2, 'workspace_write', true, {}, { path: 'notes.md' })]))
       .toBe('Done: workspace file written notes.md. Needs your yes: calendar change');
   });
+  // The model passed to as a string: the argument check refused the call before the handler, so nothing was proposed.
+  it('leaves off a call the argument check refused, and keeps a handler refusal and a transient failure', () => {
+    const refused = { code: 'invalid_args', reason: 'invalid_args' };
+    expect(receiptLine([ev(1, 'send_email', false, refused, { to: 'sam@example.com' }), ev(2, 'send_email', true)])).toBe('Needs your yes: email send');
+    expect(receiptLine([ev(1, 'send_email', false, refused)])).toBeNull();
+    expect(receiptLine([ev(1, 'remember', false, { code: 'invalid_args', reason: 'tool_result_error' })])).toBe('Receipts: memory stored (failed)');
+    expect(receiptLine([ev(1, 'send_email', false, { code: 'transient', reason: 'invalid_args' })])).toBe('Receipts: email send proposed (failed)');
+  });
   it('keeps a proposal labelled as one once any entry is not accepted', () => {
     expect(receiptLine([ev(1, 'propose_calendar_change', false, { code: 'rejected' })])).toBe('Receipts: calendar change proposed (failed)');
   });
@@ -130,5 +138,21 @@ describe('turnReceipt', () => {
     const long = await turnReceipt([ev(1, 'workspace_write', true, { at: 1_790_000_000_000 }, { path: `${'a'.repeat(201)}.md` })]);
     expect(long!.items[0]!.target).toBeNull();
     expect(long!.line).toContain('a'.repeat(201));
+  });
+});
+
+// A task's title is the model's words. start_task refuses a brief that carries health values, so only a task that started is
+// named: a refused title never reaches the line or the typed receipt the transcript keeps.
+describe('a started task in the receipt', () => {
+  const started = (seq: number, title: string, ok: boolean): LoopEventLike => ({ seq, call: { name: 'start_task', args: { profile: 'reader', title, goal: 'g', context: '', done_when: 'd' } }, ok, ...(ok ? {} : { code: 'invalid_args', reason: 'tool_result_error' }) });
+  it('names an accepted task by its title and a refused one by nothing it was asked to carry', async () => {
+    const events = [started(1, 'Why HRV dropped to 38 ms', false), started(2, 'Why recovery dipped', true)];
+    const line = receiptLine(events)!;
+    expect(line).toContain('task started Why recovery dipped');
+    expect(line).not.toContain('38');
+    expect(line).not.toContain('HRV');
+    const receipt = await turnReceipt(events);
+    expect(JSON.stringify(receipt)).not.toContain('38 ms');
+    expect(receipt!.items.map(item => item.target)).toEqual([null, 'Why recovery dipped']);
   });
 });

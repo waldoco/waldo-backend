@@ -12,9 +12,11 @@ import { cardIdSchema } from './card';
 // An approval push says only that something waits and which approval opens: the id, never why.
 // An update push says the owner's day changed and, when Waldo revised a day card for it, which card opens. Its data never
 // carries a zone word; the change itself is in the push's text, which the sender checks (no health value, no mail body).
+// An event push says an event notice reached the app chat and carries its trigger alone; its text is a fixed line, never the
+// event's own title. An app that does not know the trigger still shows the text and opens the main chat.
 export const pushNotificationSchema = z
   .strictObject({
-    trigger: triggerTypeSchema.or(z.literal('approval')).or(z.literal('update')),
+    trigger: triggerTypeSchema.or(z.literal('approval')).or(z.literal('update')).or(z.literal('event')),
     variant: briefVariantSchema.optional(),
     card_ref: cardIdSchema.optional(),
     approval_id: approvalIdV1Schema.optional(),
@@ -37,6 +39,10 @@ export const pushNotificationSchema = z
   .refine(
     (payload) => payload.trigger !== 'update' || [payload.form_zone, payload.recovery_zone, payload.load_zone].every((key) => key === undefined),
     { error: 'an update push carries no zone word', path: ['trigger'] },
+  )
+  .refine(
+    (payload) => payload.trigger !== 'event' || [payload.card_ref, payload.form_zone, payload.recovery_zone, payload.load_zone].every((key) => key === undefined),
+    { error: 'an event push carries its trigger alone', path: ['trigger'] },
   );
 export type PushNotification = z.infer<typeof pushNotificationSchema>;
 

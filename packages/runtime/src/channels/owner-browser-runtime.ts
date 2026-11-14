@@ -3,7 +3,9 @@ import { browsePageArgsSchema, browseActArgsSchema, OPENAI_GPT_6_LUNA_MODEL, typ
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
-import { commonBrowserHost, maintainCommonBrowsers, revokeCommonBrowsers,fenceLostNativeHandoffs } from './common-browser-host';
+import { commonBrowserHost, maintainCommonBrowsers, revokeCommonBrowsers,fenceLostNativeHandoffs,type CommonBrowserFormSubmit } from './common-browser-host';
+import type { BrowserSubmitProposal } from './approvals';
+import type { BrowserSubmitOutcome } from '../tools/live/browser';
 import { commonPublicBrowserConfiguration, commonPublicBrowserConfigured } from './common-public-browser-configuration';
 import { COMMON_TEST_CEILING_MICROUSD, commonBrowserSdk, commonStagingRegistration } from './common-staging-registration';
 import { OpenAIResponsesAdapter } from '../llm/openai';
@@ -49,6 +51,9 @@ export const COMMON_BROWSER_LEASE_DUE='common_browser_lease_due_v1';
 export function ownerBrowserRuntime(options: Readonly<{
   env: TelegramWebhookEnv; storage: DurableObjectStorage; actualDoId: string;
   activeScope(): RunEffectScope | undefined;
+  // The run on the owner's serial chain, which the owner's model calls belong to. A browser step can run apart from that
+  // chain (a task's, with WALDO_ASYNC_TOOLS on), so model calls check this one; absent, the active scope.
+  chainScope?(): RunEffectScope | undefined;
   typedHost?(): boolean;
 }>) {
   fenceLostNativeHandoffs(options.storage,Date.now());
@@ -61,6 +66,10 @@ export function ownerBrowserRuntime(options: Readonly<{
     return pointer&&row&&!row.cleanup&&row.session.state==='active'&&row.session.id===pointer.sessionHandle&&row.session.expiresAt>Date.now()?pointer:undefined;
   };
   let maintenance:Promise<void>|undefined;
+  // The approval desk's proposer, offered by the turn that registers browse_act while form sends are switched on.
+  let formProposer:CommonBrowserFormSubmit|undefined;
+  // An approved form send owns the browser until it settles; no turn may take the session meanwhile.
+  let sending=false;
   const automatic = commonOwnerBrowserRegistration({ ...options, loadSdk: commonBrowserSdk() });
   const configuration = (cleanupOnly = false, normalRead = false) => {
     const registered = commonStagingRegistration(options.env, cleanupOnly || normalRead ? 'retained_read' : 'admission');
@@ -84,6 +93,7 @@ export function ownerBrowserRuntime(options: Readonly<{
       const owner = await verifyOwnerBinding(options.env, held, options.actualDoId, options.env.OWNER_DO);
       if (!bound(held) || !owner) throw new ClosedRunError(); return { directoryOwnerId: owner.directoryOwnerId, custodyDigest: owner.custodyDigest };
     };
+  const chainScope = () => (options.chainScope ?? options.activeScope)();
   const current = (ctx: ToolDispatcherContext) => {
     const scope = options.activeScope(), supplied = ctx.runScope, held = binding();
     // Hooks copy the context object, but retain these host-created functions.
@@ -103,6 +113,7 @@ export function ownerBrowserRuntime(options: Readonly<{
   };
   const bindHost=async(ctx:ToolDispatcherContext,sessionHandle?:string,retainSession=false,freshTaskId?:string)=>{
     const assertCurrent=current(ctx);await assertCurrent();
+    if(sending)throw new BrowserSessionRefusal('The browser is sending a form the owner just approved. Try again in a moment.');
     const scope=options.activeScope()!,pointerBefore=retainedTask();
     const ordinary=!!options.storage.kv.get(`ordinary-public-browser-grant:${freshTaskId??(sessionHandle?pointerBefore?.taskId??active?.taskId:active?.taskId??scope.runId)}`);
     let config;
@@ -137,7 +148,7 @@ export function ownerBrowserRuntime(options: Readonly<{
       const taskId=freshTaskId??(sessionHandle?pointer!.taskId:scope.runId),initialAttempt=scope.attempt;
       active={scope,taskId,ownerId:config.ownerId,host:commonBrowserHost({storage:options.storage,config:{...config,retainInteractions:true},ownerId:config.ownerId,egressAllowlist:ctx.egressAllowlist,
         source:()=>({taskId,revision:1,sources:['browser'],ready:true,startRef:initialAttempt}),
-        files:commonFiles,
+        files:commonFiles,formSubmit:()=>formProposer,
         assertCurrent:async()=>{const admitted=lease;if(!admitted)throw new ClosedRunError();await admitted.assertCurrent();if(lease!==admitted)throw new ClosedRunError();},
         deadline:()=>lease?.deadline??0,now:Date.now})};
     }
@@ -224,9 +235,12 @@ export function ownerBrowserRuntime(options: Readonly<{
         } catch(cause) { traceBrowserFailure('read',cause);return { ok: false, code: 'rejected', error: cause instanceof BrowserSessionRefusal?cause.message:`The browser owner or retained session is unavailable (${browserFailureClass(cause)}). No replacement was allocated.`, source_taint: 'external' }; }
       } };
     },
-    act(fallback:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>):ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>{
-      // An action runs on the live turn's own browser session, which has ended by the time an approval card is tapped.
-      return {...fallback,turn_bound:true,eligible:eligibleWith(true),schema:browseActArgsSchema,description:'Use the selected Cloudflare owner browser through observed refs. Read with browse_page retain_session:true first, then use its session_handle. Native actions: type, click, select, set_checked, scroll, goto, back, open_tab, switch_tab, close_tab, read, inspect, screenshot, download, owner_login, resume_owner_login, cancel. download uses an observed link for an authenticated GET attachment, stores and verifies bytes in your private workspace, and returns an exact-revision owner download link. Blob/data and POST exports are unsupported. owner_login pauses this turn for human sign-in in the authenticated console; end the turn and ask the owner to reply after Done. Resume only on that later owner reply, then verify the intended signed-in account from fresh evidence. session_handle explicitly continues an existing owner session. File selection and page sends are unsupported; uncertain effects cannot repeat.'+PAGE_SIGNALS,async handle(args,ctx){
+    act(fallback:ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>,formSubmit?:CommonBrowserFormSubmit):ToolHandler<BrowseActArgs,unknown,ToolDispatcherContext>{
+      formProposer=formSubmit;
+      const sends=formSubmit?' To send a form (its Submit, or Next between sections), click that control with intent "send": the owner gets an approval card with the answers, nothing is sent until they approve, and each send needs its own card. File selection is unsupported; uncertain effects cannot repeat.':' File selection and page sends are unsupported; uncertain effects cannot repeat.';
+      // An action runs on the live turn's own browser session. An approved form send is the one exception: it runs on
+      // that session's live page after the turn, through the approval desk.
+      return {...fallback,turn_bound:true,eligible:eligibleWith(true),schema:browseActArgsSchema,description:'Use the selected Cloudflare owner browser through observed refs. Read with browse_page retain_session:true first, then use its session_handle. Native actions: type, click, select, set_checked, scroll, goto, back, open_tab, switch_tab, close_tab, read, inspect, screenshot, download, owner_login, resume_owner_login, cancel. download uses an observed link for an authenticated GET attachment, stores and verifies bytes in your private workspace, and returns an exact-revision owner download link. Blob/data and POST exports are unsupported. owner_login pauses this turn for human sign-in in the authenticated console; end the turn and ask the owner to reply after Done. Resume only on that later owner reply, then verify the intended signed-in account from fresh evidence. session_handle explicitly continues an existing owner session.'+sends+PAGE_SIGNALS,async handle(args,ctx){
         try{
           const assertCurrent=current(ctx);await assertCurrent();
           // The owner's Cloudflare host acts only through a typed command; a plain action has no browser to run on.
@@ -246,7 +260,7 @@ export function ownerBrowserRuntime(options: Readonly<{
         const gateway = new OpenAIResponsesAdapter({ apiKey: options.env.OPENAI_API_KEY! });
         let metered: Promise<LLMGatewayAdapter> | undefined;
         return { async complete(request) {
-          const scope = options.activeScope(), supplied = request.runScope;
+          const scope = chainScope(), supplied = request.runScope;
           if (!scope || !supplied || scope.runId !== supplied.runId || scope.attempt !== supplied.attempt
             || scope.admit !== supplied.admit || scope.commit !== supplied.commit || scope.deadline !== supplied.deadline) throw new ClosedRunError();
           scope.admit();
@@ -255,15 +269,15 @@ export function ownerBrowserRuntime(options: Readonly<{
           const holdsFunding = () => funded(scope);
           if (!holdsFunding()) {
             await assertOwner(); scope.admit();
-            if (options.activeScope() !== scope) throw new ClosedRunError();
+            if (chainScope() !== scope) throw new ClosedRunError();
             // Allocation may have appeared while directory authority was pending.
             if (!holdsFunding()) return gateway.complete(request);
           }
           const config = await automatic.configuration().catch(cause=>{traceBrowserFailure('trial_configuration',cause);if(!(cause instanceof CommonBrowserRegistrationUnavailable))throw cause;return undefined;});
           scope.admit();
-          if (options.activeScope() !== scope) throw new ClosedRunError();
+          if (chainScope() !== scope) throw new ClosedRunError();
           if(!config?.meterGateway||config.expiresAt<=Date.now()){
-            const owner=await assertOwner();scope.admit();if(options.activeScope()!==scope)throw new ClosedRunError();
+            const owner=await assertOwner();scope.admit();if(chainScope()!==scope)throw new ClosedRunError();
             const pinned=options.storage.kv.get<any>('common_owner_browser_registration_v1');
             if(pinned&&(pinned.custodyDigest!==owner.custodyDigest||pinned.registration?.policy?.directoryOwnerId!==owner.directoryOwnerId))throw Error('automatic browser policy requires reconciliation');
             return gateway.complete(request);
@@ -302,6 +316,18 @@ export function ownerBrowserRuntime(options: Readonly<{
       // Keep the disposable context/CDP connection under the original paid
       // session deadline. Idle requests fail admission until explicit continuation.
     },
+    async submitApprovedForm(payload:BrowserSubmitProposal):Promise<BrowserSubmitOutcome>{
+      if(options.env.BROWSER_FORM_SUBMIT!=='1')return {status:'rejected',message:'Sending forms from Waldo\'s browser is switched off. Nothing was sent.'};
+      const held=active;
+      if(!held||held.taskId!==payload.form?.taskId)return {status:'rejected',message:'The browser session that filled this form has ended. Ask Waldo to fill it again. Nothing was sent.'};
+      if(held.scope||sending)return {status:'rejected',message:'Waldo was using the browser when you approved. Ask Waldo to send the form again. Nothing was sent.'};
+      sending=true;
+      try{return await held.host.submitApprovedForm(payload);}
+      catch(cause){traceBrowserFailure('form_send',cause);return {status:'uncertain',message:'The form send failed in a way that leaves its outcome unknown. Do not send it again before checking the page.'};}
+      finally{sending=false;}
+    },
+    formReceiptVerified(payload:BrowserSubmitProposal,receipt:Extract<BrowserSubmitOutcome,{status:'verified_with_receipt'}>['receipt']){const held=active;return !!held&&held.taskId===payload.form?.taskId&&held.host.formReceiptVerified(payload,receipt);},
+    withdrawApprovedForm(payload:BrowserSubmitProposal){if(active&&active.taskId===payload.form?.taskId)active.host.withdrawForm(payload);},
     stop() { revokeCommonBrowsers(options.storage, Date.now()); },
     maintain() {
       return maintenance??=(async()=>{

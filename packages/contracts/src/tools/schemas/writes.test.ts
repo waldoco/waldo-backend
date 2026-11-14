@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { channelNameSchema } from '../../adapters/channel';
 import { docProviderSchema } from '../../adapters/doc';
 import {
+  sendAgentMailArgsSchema,
   draftDocumentArgsSchema,
   draftEmailArgsSchema,
   executeCodeArgsSchema,
@@ -354,5 +355,33 @@ describe('executeCodeArgs', () => {
 
   it('rejects empty code', () => {
     expect(executeCodeArgsSchema.safeParse({ ...base, code: '' }).success).toBe(false);
+  });
+});
+
+describe('sendAgentMailArgs', () => {
+  const base = { to: ['lee@example.com'], subject: 'Friday', body_markdown: 'See you at **4**.' };
+
+  it('accepts a new mail and a reply in a thread, with copies', () => {
+    expect(sendAgentMailArgsSchema.safeParse(base).success).toBe(true);
+    expect(sendAgentMailArgsSchema.safeParse({ ...base, cc: ['sam@example.com'], in_reply_to: '<abc.123@mail.example.com>' }).success).toBe(true);
+    const fifty = Array.from({ length: 50 }, (_, i) => `p${i}@example.com`);
+    expect(sendAgentMailArgsSchema.safeParse({ ...base, to: fifty.slice(0, 25), cc: fifty.slice(25) }).success).toBe(true);
+  });
+
+  it.each([
+    ['no recipients', { ...base, to: [] }],
+    ['a recipient that is not an address', { ...base, to: ['Lee'] }],
+    ['more than 50 recipients in all', { ...base, to: Array.from({ length: 30 }, (_, i) => `t${i}@example.com`), cc: Array.from({ length: 21 }, (_, i) => `c${i}@example.com`) }],
+    ['a subject that breaks its header line', { ...base, subject: 'Friday\r\nBcc: x@example.com' }],
+    ['an empty subject', { ...base, subject: '' }],
+    ['a subject over 200 characters', { ...base, subject: 'x'.repeat(201) }],
+    ['an empty body', { ...base, body_markdown: '' }],
+    ['a body over 10,000 characters', { ...base, body_markdown: 'x'.repeat(10_001) }],
+    ['a reply id without angle brackets', { ...base, in_reply_to: 'abc@mail.example.com' }],
+    ['a reply id that is not a Message-ID', { ...base, in_reply_to: '<abc>' }],
+    ['a bcc', { ...base, bcc: ['x@example.com'] }],
+    ['a sender the model chose', { ...base, from: 'someone@example.com' }],
+  ] as const)('rejects %s', (_shape, args) => {
+    expect(sendAgentMailArgsSchema.safeParse(args).success).toBe(false);
   });
 });

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { compactionSummaryOpen, forgetMemoryArgsSchema, type AdapterResult, type LLMResponse } from '@waldo/contracts';
 import config from '../wrangler.jsonc?raw';
 import { parseJsonc } from '../../../scripts/jsonc.mjs';
+import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { ClosedRunError, type RunEffectScope } from '../src/channels/run-effect-scope';
 import { createOwnerResponder, type OwnerContextHost } from '../src/channels/owner-turn';
@@ -74,7 +75,7 @@ describe('the deploy switch', () => {
 
   // On in staging, where the app chat compacts after a reply; off in production. Off is the rollback, one line each.
   it('is off in production and on in staging', () => {
-    const parsed = parseJsonc(config) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
+    const parsed = flatConfig(parseJsonc(config)) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
     expect(parsed.vars.WALDO_COMPACTION).toBe('off');
     expect(parsed.env.staging.vars.WALDO_COMPACTION).toBe('on');
   });

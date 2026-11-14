@@ -5,6 +5,8 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: { include: ['test/owner-do-ingress-isolation.test.ts', 'test/run-fence-owner-do.test.ts', 'test/memory-forget-do-provider.test.ts', 'test/task-worker-owner-do.test.ts', 'test/machine-heartbeat-owner-do.test.ts'] },
   plugins: [cloudflareTest({
+    // The full Worker, whose Durable Object instances these tests reach into; wrangler's main is the lazy deployed entry.
+    main: './src/index.ts',
     miniflare: { bindings: {
       WALDO_ENV: 'test', RUN_LOOP_PROVIDER_MODE: 'fake',
       // The verified owner email follows the text-capture switch (trace-privacy-owner-email.test.ts); this config models the staging vars in wrangler.jsonc (WALDO_ENVIRONMENT staging, capture true); the wrangler default is production, capture off.

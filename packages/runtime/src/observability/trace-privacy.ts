@@ -100,3 +100,6 @@ const gateWithoutCapture = (entry: TurnLogEntry): TurnLogEntry => {
 // says, so a misconfigured prod deploy fails safe (types/counts only), never open.
 export const resolveCaptureText = (env: Readonly<{ LANGFUSE_CAPTURE_TEXT?: string; WALDO_ENVIRONMENT?: string }>): boolean =>
   env.LANGFUSE_CAPTURE_TEXT === 'true' && (env.WALDO_ENVIRONMENT ?? 'development') !== 'production';
+
+// A failure as its class only, for logs, traces and replies: its text can carry provider or internal detail.
+export const errorClass = (error: unknown): string => error instanceof Error ? error.name : 'unknown';

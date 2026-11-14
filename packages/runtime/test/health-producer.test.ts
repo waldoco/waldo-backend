@@ -117,6 +117,13 @@ describe('produceHealthScores', () => {
     expect(weight.activation).toBe('candidate_unaccepted');
   });
 
+  it('scores Weight on a day read without a calendar it had to leave out (partial)', async () => {
+    const busy = Array.from({ length: 31 }, (_, i) => ({ day: addDays(TODAY, -i), busy_minutes: Math.round(240 + wobble(i, 40)), partial: true }));
+    const h = harness(seriesOf(history(25)), undefined, undefined, { readDemand: async () => ({ state: 'available', days: busy }) });
+    await run(h);
+    expect(typeof (h.writes.find(w => w.day === TODAY)!.weight as Record<string, unknown>).score).toBe('number');
+  });
+
   it('leaves Weight unavailable, and still writes Recovery and Form, when the calendar cannot be read', async () => {
     const cases: [string, ProducerDeps['readDemand'], string[]][] = [
       ['failed', async () => { throw new Error('do down'); }, ['demand_failed']],
@@ -172,6 +179,20 @@ describe('produceHealthScores', () => {
     const today = h.inputs.find(input => input.targetDay === TODAY)!.days.find(d => d.day === TODAY)!;
     // 8 hours x 12 movement minutes, plus the 06:00 workout; the 09:00 one falls in an hour movement already counts.
     expect(today.demand?.physicalLoad).toBe(96 + 60);
+  });
+
+  it('counts each workout minute once toward physical load, however many copies or sessions cover it', async () => {
+    const workout = (start: string, end: string, activity = 'run') => sample('workout', TODAY, { start_at: `${TODAY}T${start}:00.000Z`, end_at: `${TODAY}T${end}:00.000Z`, value: 60, activity });
+    const loadWith = async (workouts: Record<string, unknown>[]) => {
+      const h = harness(seriesOf([...history(25), ...workouts]), undefined, undefined, { readDemand: async () => ({ state: 'available', days: [] }) });
+      await run(h);
+      return h.inputs.find(input => input.targetDay === TODAY)!.days.find(d => d.day === TODAY)!.demand?.physicalLoad;
+    };
+    // Movement hours start at 08:00, so every minute below is workout time: 8 hours x 12 movement minutes, plus the union.
+    expect(await loadWith([workout('06:00', '07:00'), workout('06:01', '07:01')]), 'another app\'s copy').toBe(96 + 61);
+    expect(await loadWith([workout('06:00', '07:00'), workout('06:00', '07:00')]), 'one app recording twice').toBe(96 + 60);
+    expect(await loadWith([workout('06:00', '07:00'), workout('06:30', '07:30', 'cycling')]), 'two sports overlapping').toBe(96 + 90);
+    expect(await loadWith([workout('06:00', '07:00'), workout('07:00', '07:45')]), 'back to back').toBe(96 + 105);
   });
 
   it('takes the calendar baseline from every day the calendar reports, not only days with health readings', async () => {

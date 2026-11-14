@@ -145,6 +145,14 @@ export const ownerName = (claims: ClaimStore): string | null => {
   const name = claim.evidence.split(' | ')[0]!.trim();
   return name.length > 0 && name.length <= 80 && claim.text === calledText(name) ? name : null;
 };
+// Why ownerName serves no name, as a code that carries none of it: no name was ever given, the one given is no longer active,
+// its text was edited away from the name as typed, or the name as typed is empty or too long.
+export const ownerNameGap = (claims: ClaimStore): 'no_claim' | 'retired' | 'edited' | 'length' | null => {
+  const claim = claims.claims().find(candidate => candidate.source_ref === NAME_REF && candidate.status === 'active');
+  if (!claim) return claims.allClaims().some(candidate => candidate.source_ref === NAME_REF) ? 'retired' : 'no_claim';
+  const name = claim.evidence.split(' | ')[0]!.trim();
+  return name.length === 0 || name.length > 80 ? 'length' : claim.text === calledText(name) ? null : 'edited';
+};
 
 // The name the owner gave at sign-up, kept as the name step keeps it, so the first run does not ask again. The first answer
 // stands: a later change goes through name.set, which corrects this same claim.

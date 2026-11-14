@@ -4,7 +4,9 @@ import {
   approvalActionV1Schema, approvalIdV1Schema, approvalKindV1Schema, approvalLabelsV1Schema, approvalQuestionV1Schema, approvalReviewV1Schema,
   epochMsV1Schema, labelsOfferedActions, payloadDigestV1Schema, REPLY_TEXT_MAX_CHARS, type ApprovalActionV1, type ApprovalKindV1,
 } from './parts';
+import { appAutonomyGrantTermsV1Schema } from './autonomy';
 import { surfaceNameV1Schema } from './surfaces';
+import { appWhyV1Schema } from './why';
 
 // One state per desk ledger status. Approval is not an outcome: an approved effect reads done,
 // not_done or outcome_unknown, and an approval claimed before its effect resolves reads outcome_unknown.
@@ -43,6 +45,17 @@ const CALENDAR_DETAILS = ['guests', 'emails_guests', 'location', 'calendar', 'ac
 export const appApprovalMessageV1Schema = z.strictObject({
   subject: z.string().min(1).max(998).regex(/^[^\r\n]*$/).nullable(), body: z.string().min(1).max(REPLY_TEXT_MAX_CHARS),
 });
+// A day plan is approvals revision 9: new blocks on the owner's own primary calendar, all added by one approval. It only ever
+// creates events and invites no one, so nobody is emailed. The blocks run in order without overlapping, on one local day:
+// every start falls on `day` in its own offset, so a 23- or 25-hour day around a clock change holds a whole day's plan.
+// Done means every block was added. A block added before another failed is removed again before the card reads not_done,
+// and the card reads outcome_unknown when that cannot be confirmed. Undo removes every block the plan added.
+const planBlock = z.strictObject({ title: z.string().min(1).max(200), start: instant, end: instant, block: z.enum(['rest', 'deep_work']).optional() });
+export const appApprovalPlanV1Schema = z.strictObject({
+  day: z.iso.date(), blocks: z.array(planBlock).min(2).max(12), time_zone: z.string().min(1).max(64), account: z.email().optional(),
+}).refine(({ blocks }) => blocks.every(({ start, end }) => Date.parse(start) < Date.parse(end)), { error: 'each block ends after it starts', path: ['blocks'] })
+  .refine(({ blocks }) => blocks.every((block, index) => index === 0 || Date.parse(blocks[index - 1]!.end) <= Date.parse(block.start)), { error: 'blocks run in order without overlapping', path: ['blocks'] })
+  .refine(({ day, blocks }) => blocks.every(({ start }) => start.slice(0, 10) === day), { error: 'every block starts on the plan\'s day', path: ['blocks'] });
 export const appApprovalExactV1Schema = z.strictObject({
   recipients: z.strictObject({ to: addresses.min(1), cc: addresses, bcc: addresses }).optional(),
   message: appApprovalMessageV1Schema.optional(),
@@ -55,16 +68,24 @@ export const appApprovalExactV1Schema = z.strictObject({
   }).optional(),
   scope: z.string().min(1).max(2048).optional(),
   task: appApprovalTaskExactV1Schema.optional(),
+  // Who a send as Waldo comes from: the display name and Waldo's own address, as the recipients' clients show them.
+  sender: z.strictObject({ name: z.string().min(1).max(200).regex(/^[^\r\n]*$/), address: z.email() }).optional(),
+  plan: appApprovalPlanV1Schema.optional(),
+  // The standing grant approving creates, approvals revision 7: the same terms the autonomy settings confirm.
+  grant: appAutonomyGrantTermsV1Schema.optional(),
 });
 // What each kind must show before it can be decided: who receives a send, what a calendar change
 // does, where a browser or MCP action lands, and which task fields change.
 const EXACT_BY_KIND = {
-  email_send: 'recipients', message_send: 'recipients', calendar_change: 'changes', browser_submit: 'scope', mcp_call: 'scope', google_task_change: 'task', tainted_action: 'scope',
+  email_send: 'recipients', message_send: 'recipients', calendar_change: 'changes', browser_submit: 'scope', mcp_call: 'scope', google_task_change: 'task', tainted_action: 'scope', agent_mail_send: 'recipients', standing_grant: 'grant', calendar_plan: 'plan',
 } as const satisfies Readonly<Record<ApprovalKindV1, keyof z.infer<typeof appApprovalExactV1Schema>>>;
 
 // An approval the health trigger raised carries the model's one-line reason for it, approvals revision 4. Only the
 // reason is in it, never a reading or a zone of its own: the bound is the longest a proposal's reason can be.
 export const appApprovalHealthV1Schema = z.strictObject({ reason: z.string().min(1).max(300) });
+// A card Waldo withdrew while it still waited on the owner, approvals revision 6: its state is superseded, the reason is the one
+// line the owner reads on the closed card, and replaced_by names the newer card that closed it, when one did.
+export const appApprovalWithdrawalV1Schema = z.strictObject({ reason: z.string().min(1).max(200).regex(/^[^\r\n]*$/), replaced_by: approvalIdV1Schema.optional() });
 
 export const appApprovalV1Schema = z.strictObject({
   approval_id: approvalIdV1Schema, kind: approvalKindV1Schema, state: appApprovalStateV1Schema,
@@ -75,21 +96,50 @@ export const appApprovalV1Schema = z.strictObject({
     .refine(surfaces => new Set(surfaces).size === surfaces.length, 'surfaces repeat').optional(),
   // undo_until is when the undo on offer closes, so the app can count it down; it comes only while undo is offered.
   question: approvalQuestionV1Schema.optional(), labels: approvalLabelsV1Schema.optional(), undo_until: epochMsV1Schema.optional(),
-  health: appApprovalHealthV1Schema.optional(),
+  health: appApprovalHealthV1Schema.optional(), withdrawal: appApprovalWithdrawalV1Schema.optional(),
+  // "Why this changed", approvals revision 8: the steps behind the card, present only when Waldo kept any (./why).
+  why: appWhyV1Schema.optional(),
 }).refine(approval => approval.exact[EXACT_BY_KIND[approval.kind]] !== undefined, { error: 'exact must name what this kind changes', path: ['exact'] })
-  .refine(({ kind, exact: { message } }) => message === undefined || (kind === 'email_send' ? message.subject !== null : kind === 'message_send' && message.subject === null),
+  .refine(({ kind, exact: { message } }) => message === undefined || (kind === 'email_send' || kind === 'agent_mail_send' ? message.subject !== null : kind === 'message_send' && message.subject === null),
     { error: 'a draft belongs to a send: an email with its subject, a message without one', path: ['exact', 'message'] })
+  .refine(({ kind, exact: { sender } }) => (kind === 'agent_mail_send') === (sender !== undefined), { error: 'a send as Waldo names its sender, and nothing else does', path: ['exact', 'sender'] })
+  .refine(({ kind, exact }) => kind !== 'standing_grant' || Object.keys(exact).every(key => key === 'grant'), { error: 'a standing grant card shows only the grant', path: ['exact'] })
+  .refine(({ kind, exact: { grant } }) => kind === 'standing_grant' || grant === undefined, { error: 'only a standing grant card carries grant terms', path: ['exact', 'grant'] })
+  .refine(({ kind, exact }) => kind !== 'calendar_plan' || Object.keys(exact).every(key => key === 'plan'), { error: 'a day plan shows its blocks and nothing else', path: ['exact'] })
+  .refine(({ kind, exact: { plan } }) => kind === 'calendar_plan' || plan === undefined, { error: 'only a day plan carries blocks', path: ['exact', 'plan'] })
+  .refine(({ state, withdrawal }) => withdrawal === undefined || state === 'superseded', { error: 'only a superseded card says why it was withdrawn', path: ['withdrawal'] })
   .refine(labelsOfferedActions, { error: 'labels name only actions offered', path: ['labels'] })
   .refine(approval => approval.undo_until === undefined || approval.actions.includes('undo'), { error: 'undo_until needs undo offered', path: ['undo_until'] })
   .refine(approval => new Set(approval.actions).size === approval.actions.length
     && approval.actions.every(action => DECISIONS_BY_STATE[approval.state]?.includes(action)), { error: 'actions must be decisions the desk accepts in this state', path: ['actions'] });
-export const APP_APPROVALS_CONTRACT_REVISION = 4;
-// An approval as a build reading `revision` parses it: revision 3 is the shape before the health origin, revision 2 the
-// shape before the draft of a send, and revision 1 the shape before the calendar details too. An approval a revision
-// leaves whole is returned as it is.
+// A send as Waldo from the owner's Waldo address, with its sender, is approvals revision 5; an older build is never shown one.
+export const APP_APPROVALS_AGENT_MAIL_REVISION = 5;
+// A build that predates revision 6 reads a withdrawn card as superseded alone.
+export const APP_APPROVALS_WITHDRAWAL_REVISION = 6;
+// A card that asks the owner to create a standing grant is approvals revision 7; an older build is never shown one on the
+// list, and its chat history carries the card's text instead of the card. A build that declares revision 8 reads it too.
+export const APP_APPROVALS_STANDING_GRANT_REVISION = 7;
+// A build that predates revision 8 is never sent the steps behind a card.
+export const APP_APPROVALS_WHY_REVISION = 8;
+// A day plan added in one tap is revision 9.
+export const APP_APPROVALS_CALENDAR_PLAN_REVISION = 9;
+export const APP_APPROVALS_CONTRACT_REVISION = 9;
+// A kind with no shape an older build can parse is never shown to that build as a card: it is left out of the list, and
+// the chat carries its words instead (appApprovalParts), never a card hidden without a word.
+const KIND_SINCE_REVISION: Readonly<Partial<Record<ApprovalKindV1, number>>> = {
+  agent_mail_send: APP_APPROVALS_AGENT_MAIL_REVISION, standing_grant: APP_APPROVALS_STANDING_GRANT_REVISION, calendar_plan: APP_APPROVALS_CALENDAR_PLAN_REVISION,
+};
+export const appApprovalKindShownAt = (kind: ApprovalKindV1, revision: number): boolean => revision >= (KIND_SINCE_REVISION[kind] ?? 1);
+// An approval as a build reading `revision` parses it: revision 7 and below is the shape before the steps behind it, revision 5 the shape before the withdrawal, revision 3 the shape
+// before the health origin, revision 2 the shape before the draft of a send, and revision 1 the shape before the calendar
+// details too. An approval a revision leaves whole is returned as it is.
 export const appApprovalAtRevision = (approval: AppApprovalV1, revision: number): AppApprovalV1 => {
-  const { health, ...withoutHealth } = approval;
-  const whole = revision < 4 && health !== undefined ? withoutHealth : approval;
+  const { why, ...withoutWhy } = approval;
+  const explained = revision < APP_APPROVALS_WHY_REVISION && why !== undefined ? withoutWhy : approval;
+  const { withdrawal, ...withoutWithdrawal } = explained;
+  const current = revision < APP_APPROVALS_WITHDRAWAL_REVISION && withdrawal !== undefined ? withoutWithdrawal : explained;
+  const { health, ...withoutHealth } = current;
+  const whole = revision < 4 && health !== undefined ? withoutHealth : current;
   const { message, ...withoutMessage } = whole.exact;
   const exact = revision < 3 && message !== undefined ? withoutMessage : whole.exact;
   const changes = exact.changes;

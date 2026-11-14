@@ -37,7 +37,7 @@ export const parseHarnessCommand = (text: string | undefined): HarnessCommand | 
 // Each E2E step names the log hops that prove it ran. A 'request' step happens inside one chat turn's
 // trace; a 'job' step comes from a scheduled or background run and never shares a trace with a chat turn.
 export const E2E_STEPS: readonly Readonly<{ step: string; hops: readonly string[]; scope: 'request' | 'job' }>[] = [
-  { step: 'Chat reply', hops: ['llm_reply'], scope: 'request' },
+  { step: 'Chat reply', hops: ['llm_reply', 'llm_reply_light'], scope: 'request' },
   { step: 'Memory update', hops: ['memory'], scope: 'request' },
   { step: 'Memory migration', hops: ['memory_backup', 'memory_migration'], scope: 'job' },
   { step: 'Reminder fired', hops: ['reminder'], scope: 'job' },

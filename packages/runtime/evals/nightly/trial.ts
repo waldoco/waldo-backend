@@ -5,6 +5,8 @@ import { OPENAI_PROVIDER, PROVIDER_OF, WALDO_AUXILIARY_MODEL, WALDO_CHAT_MODEL, 
 import { createTelegramResponder } from '../../src/channels/telegram-turn';
 import { isSkip } from '../../src/channels/day-cards';
 import type { CardId } from '../../src/prompt/day-cards';
+import { capacityContext } from '../../src/prompt/capacity';
+import { OUTSIDE_TEXT_JOB_TOOLS } from '../../src/channels/check-back';
 import { inboundTurn, ownerWords } from '../../src/channels/owner-inbound-turn';
 import type { TurnLogEntry } from '../../src/channels/telegram-listener';
 import type { ForgetBarrierMode } from '../../src/context-composer/forget-barrier';
@@ -18,11 +20,19 @@ import type { CallBudget } from './budget';
 import type { JudgeInput } from './judge';
 import { trialSkillBook } from './skills';
 import { ownerTurnTrace } from '../../src/channels/owner-turn-envelope';
-import { CHAT_REF, evalWorld, TIMEZONE, type Effect, type MemoryMode, type SeedMail, type WorldSeed } from './world';
+import { CHAT_REF, evalWorld, TIMEZONE, type Effect, type MemoryMode, type SeedMail, type SeedUpload, type WorldSeed } from './world';
+import { changeLines, type Change } from '../../src/channels/update-cards';
+import { parseTriage, triageTools, TRIAGE_INTERRUPTS_PER_DAY } from '../../src/channels/update-sweep';
+import { triagePrompt } from '../../src/prompt/update-cards';
+// The cards a triage turn can raise: a send, a calendar change, or any other tool through propose_action.
+export const TRIAGE_CARDS: readonly string[] = ['mail.send.proposed', 'calendar.change.proposed', 'action.proposed'];
 import type { EmbeddingRunner } from '../../src/memory/semantic-recall';
+import { constellationSoFar, welcomeStageText, type WelcomeStage } from '../../src/onboarding/welcome';
 
 export type Step =
   | Readonly<{ say: string }>
+  // The owner sends a file with these words (world.files): the turn carries the keeper's note beside them.
+  | Readonly<{ say: string; upload: SeedUpload }>
   | Readonly<{ advance_to: string }>
   | Readonly<{ fire_due: true }>
   // The owner says this while no model is reachable: they get the floor reply's promise, and the retry answers it later.
@@ -31,19 +41,29 @@ export type Step =
   // The owner's derived health moves zone and the health trigger runs, with one structured model call.
   | Readonly<{ health_change: true }>
   // One of the day's cards runs now, as the owner object writes it: the production prompt over the world's calendar.
-  | Readonly<{ card: CardId }>
+  // capacity: CAPACITY_PLAN's note, handed to the card as the job's context, as the owner object does.
+  // tomorrow: TOMORROW_TODAY's Close, offered its card tools as the owner object offers them.
+  // budget: CAPACITY_BUDGET's planning Brief, which also reads the rest of the week and is offered its card tools.
+  | Readonly<{ card: CardId; capacity?: string; tomorrow?: true; budget?: true }>
   | Readonly<{ mail_arrives: SeedMail }>
   // A background job reads outside words (a mail's text) and answers with its sourceTaint 'external', as a mail follow-up does.
-  | Readonly<{ outside_job: string }>;
+  | Readonly<{ outside_job: string }>
+  // A batch of Google changes reaches the triage turn (GOOGLE_REALTIME_TRIAGE) through the production prompt, tainted
+  // external, with its card tools offered; its decision is recorded as a 'triage.decision' effect.
+  | Readonly<{ triage: readonly Change[] }>
+  // One stage of the second welcome build reads this source text, as the owner object asks it, over an empty constellation.
+  | Readonly<{ welcome: Readonly<{ stage: WelcomeStage; sources: readonly string[]; text: string }> }>;
 // What one trial cost and how the model got there, as counts: never text. rounds are the owner-reply calls (a structured side
-// call, the memory writer's among them, is not one); fallback_calls the answers a second provider gave.
+// call, the memory writer's among them, is not one); fallback_calls the answers a second provider gave. light_steps are the
+// owner turns that took a light step (WALDO_LIGHT_CHAT), light_handovers those the light model handed to the chat model.
 export type TrialMetrics = Readonly<{
-  calls: number; rounds: number; failed_calls: number; fallback_calls: number;
+  calls: number; rounds: number; failed_calls: number; fallback_calls: number; light_steps: number; light_handovers: number;
   find_tools: number; use_tool: number; groups_loaded: number; peak_result_chars: number;
   input_tokens: number; cached_tokens: number; cache_write_tokens: number; output_tokens: number;
   usd: number; unpriced_calls: number;
 }>;
-export type TrialScenario = Readonly<{ id: string; start: string; steps: readonly Step[]; world: WorldSeed }>;
+// light_chat: the owner's turns run with WALDO_LIGHT_CHAT on.
+export type TrialScenario = Readonly<{ id: string; start: string; steps: readonly Step[]; world: WorldSeed; light_chat?: true }>;
 export type TrialRecord = Readonly<{
   status: 'ran' | 'harness_error' | 'budget_exhausted';
   // The class of the error that stopped a harness_error trial, never its message, so a failed night is diagnosable.
@@ -58,6 +78,8 @@ export type TrialRecord = Readonly<{
   effects: readonly Effect[];
   final_state: unknown;
   metrics: TrialMetrics;
+  // How each light step ended, in turn order ('answered', 'escalated', 'tool', 'truncated', 'failed').
+  light_routes: readonly string[];
 }>;
 
 const groupsOf = (call: Readonly<{ arguments: string }>): readonly string[] => {
@@ -97,12 +119,13 @@ type Meter = { calls: number; rounds: number; failed_calls: number; fallback_cal
   input_tokens: number; cached_tokens: number; cache_write_tokens: number; output_tokens: number; usd: number; unpriced_calls: number };
 const newMeter = (): Meter => ({ calls: 0, rounds: 0, failed_calls: 0, fallback_calls: 0, find_tools: 0, use_tool: 0, groups: new Set(), peak_result_chars: 0,
   input_tokens: 0, cached_tokens: 0, cache_write_tokens: 0, output_tokens: 0, usd: 0, unpriced_calls: 0 });
-const metricsOf = ({ groups, ...meter }: Meter): TrialMetrics => ({ ...meter, groups_loaded: groups.size });
+const metricsOf = ({ groups, ...meter }: Meter, lightRoutes: readonly string[]): TrialMetrics => ({ ...meter, groups_loaded: groups.size,
+  light_steps: lightRoutes.length, light_handovers: lightRoutes.filter((route) => route !== 'answered').length });
 
 // The forget barrier runs as staging runs it ('items') unless a trial asks for the earlier rule. toolLoader 'harness' is the
 // staging loader; fallbackKey opens the route's second-provider step, which the gateway must then be able to serve.
 // embeddings turns semantic recall on.
-export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName; toolSearch?: boolean; toolLoader?: 'harness'; fallbackKey?: string; memory?: MemoryMode; forgetBarrier?: ForgetBarrierMode; embeddings?: EmbeddingRunner; memorySelection?: boolean }>): Promise<TrialRecord> => {
+export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName; toolSearch?: boolean; toolLoader?: 'harness'; fallbackKey?: string; memory?: MemoryMode; forgetBarrier?: ForgetBarrierMode; embeddings?: EmbeddingRunner; memorySelection?: boolean; promptV2?: boolean }>): Promise<TrialRecord> => {
   const world = evalWorld(scenario.world, scenario.start, deps.memory, deps.embeddings);
   await world.ready;
   const entries: TurnLogEntry[] = [];
@@ -120,9 +143,9 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
   // The seeded memory is what the owner had before the trial, which a nightly has reviewed; what the trial writes is new.
   const seeded = new Set((scenario.world.memory ?? []).map((claim) => claim.id));
   const seededReviewed = (claim: Readonly<{ id: number }>) => seeded.has(claim.id);
-  const responder = createTelegramResponder({ openaiApiKey: 'eval-key', floorReply, ...(deps.fallbackKey ? { anthropicApiKey: deps.fallbackKey } : {}), ...(deps.toolLoader ? { toolLoader: deps.toolLoader } : deps.toolSearch ? { toolSearch: true } : {}) }, world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
+  const responder = createTelegramResponder({ openaiApiKey: 'eval-key', floorReply, ...(deps.fallbackKey ? { anthropicApiKey: deps.fallbackKey } : {}), ...(deps.toolLoader ? { toolLoader: deps.toolLoader } : deps.toolSearch ? { toolSearch: true } : {}), ...(deps.promptV2 ? { promptV2: true } : {}) }, world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
     world.handlers, model, false, undefined, async () => true, metered(shown, deps.budget, outage, meter), undefined, undefined, undefined, undefined,
-    WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app', undefined, { forgetBarrier: deps.forgetBarrier ?? 'items', skills: skills.capability, ...(world.semantic ? { semanticRecall: world.semantic } : {}), ...(deps.memorySelection ? { memorySelection: { reviewed: () => seededReviewed } } : {}) });
+    WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app', undefined, { forgetBarrier: deps.forgetBarrier ?? 'items', memoryValidity: true, skills: skills.capability, ...(scenario.light_chat ? { lightChat: true } : {}), ...(world.semantic ? { semanticRecall: world.semantic } : {}), ...(deps.memorySelection ? { memorySelection: { reviewed: () => seededReviewed } } : {}) });
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
   const transcript: JudgeInput['transcript'][number][] = [];
   let status: TrialRecord['status'] = 'ran';
@@ -133,7 +156,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         turn += 1;
         skills.turn(ownerTurnTrace('app', turn));
         transcript.push({ role: 'owner', text: step.say });
-        transcript.push({ role: 'waldo', surface: 'chat', text: await responder.respond(inboundTurn({ updateId: turn, messageId: null, senderId: 1, chatId: 1, sentAt: null, parts: ownerWords(step.say) }), time) });
+        transcript.push({ role: 'waldo', surface: 'chat', text: await responder.respond(inboundTurn({ updateId: turn, messageId: null, senderId: 1, chatId: 1, sentAt: null, parts: 'upload' in step ? [...ownerWords(step.say), { authorship: 'media_note', text: await world.upload(step.upload, `trial:${turn}`) }] : ownerWords(step.say) }), time) });
         // The post-reply compaction hook; a store built with compaction off makes it a no-op.
         await responder.compactIfDue?.(CHAT_REF);
       } else if ('advance_to' in step) {
@@ -168,18 +191,43 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         transcript.push({ role: 'world', text: `A background job reads this outside text: ${step.outside_job}` });
         const said = await responder.prompt(`${scenario.id}-outside-${turn}`, 1, step.outside_job, time, undefined, undefined, undefined, undefined, 'external');
         transcript.push({ role: 'waldo', surface: 'notification', text: said });
+      } else if ('triage' in step) {
+        turn += 1;
+        const changes = changeLines(step.triage);
+        transcript.push({ role: 'world', text: `At ${world.localNow()} (${TIMEZONE}) these changes reach Waldo from the owner's calendars and inbox, and it triages them:\n${changes}` });
+        skills.turn(`${scenario.id}-triage-${turn}`);
+        const offered = new Set(world.handlers.map((handler) => handler.name));
+        const prompt = triagePrompt(world.localNow(), { changes, ledger: '', feedback: '', volume: 'normal', sourceFollowups: false, cards: '', revisesCards: true,
+          goals: world.goals(), hold: null, left: TRIAGE_INTERRUPTS_PER_DAY });
+        const carded = () => world.effects().filter((effect) => TRIAGE_CARDS.includes(effect.kind)).length;
+        const before = carded();
+        const reply = await responder.prompt(`${scenario.id}-triage-${turn}`, 1, prompt, time, triageTools(false, true).filter((name) => offered.has(name)) as never, undefined, undefined, undefined, 'external');
+        // As the owner object does: a card the turn raised is the act; an unreadable reply is left for the next card.
+        const chosen = parseTriage(reply);
+        const raised = carded() > before;
+        world.note('triage.decision', { decision: raised ? 'act' : chosen === 'invalid' ? 'invalid' : chosen.decision === 'act' ? 'act_without_card' : chosen.decision });
+        if (!raised && chosen !== 'invalid' && chosen.decision === 'tell') transcript.push({ role: 'waldo', surface: chosen.push ? 'notification' : 'chat', text: chosen.say ?? chosen.revise!.text });
+      } else if ('welcome' in step) {
+        const { stage, sources, text } = step.welcome;
+        transcript.push({ role: 'world', text: `The welcome build reads the owner's ${stage} source and writes constellation nodes, which the owner reads.` });
+        const raw = await responder.welcome!(`${scenario.id}-welcome-${stage}`, stage, welcomeStageText(stage, sources, constellationSoFar({ allClaims: () => [], nodes: () => [] }), text), 2);
+        // An answer that is not a node list writes nothing, as the build settles that stage unavailable.
+        const nodes = (() => { try { return (JSON.parse(raw) as { nodes?: readonly Readonly<{ label?: string; summary?: string }>[] }).nodes; } catch { return undefined; } })();
+        transcript.push({ role: 'waldo', text: !Array.isArray(nodes) ? '(the answer was not a node list; nothing written)' : nodes.length ? nodes.map((node) => `${node.label}: ${node.summary}`).join('\n') : '(no nodes)' });
       } else if ('mail_arrives' in step) {
         world.deliver(step.mail_arrives);
         transcript.push({ role: 'world', text: `New mail arrives from ${step.mail_arrives.from}: "${step.mail_arrives.subject}".` });
       } else if ('health_change' in step) {
         const { outcome, proposal, notice } = await world.healthChange((id, prompt, format) => responder.prompt(id, 1, prompt, time, [], async () => undefined, format));
-        transcript.push({ role: 'world', text: `The owner's health moves zone and the health trigger runs (${outcome}).` });
+        transcript.push({ role: 'world', text: `${scenario.world.health_wake && scenario.world.health_wake !== 'zone_change' ? 'A health signal moves outside the owner\'s usual' : 'The owner\'s health moves zone'} and the health trigger runs (${outcome}).` });
         if (proposal) transcript.push({ role: 'waldo', surface: 'notification', text: proposal.reason });
         if (notice) transcript.push({ role: 'waldo', surface: 'notification', text: notice });
       } else if ('card' in step) {
         transcript.push({ role: 'world', text: `The time is ${world.localNow()} (${TIMEZONE}) and the scheduled card ${step.card} runs.` });
         skills.turn(`${scenario.id}-${step.card}`);
-        const said = await responder.prompt(`${scenario.id}-${step.card}`, 1, await world.dayCard(step.card), time, undefined, undefined, undefined, undefined, 'external');
+        const context = step.capacity === undefined ? undefined : [capacityContext(step.capacity, ''), ...(step.budget ? [await world.weekAhead()] : [])].join('\n\n');
+        const said = await responder.prompt(`${scenario.id}-${step.card}`, 1, await world.dayCard(step.card, step.capacity !== undefined, step.tomorrow === true, step.budget === true), time,
+          step.tomorrow || step.budget ? [...OUTSIDE_TEXT_JOB_TOOLS, 'propose_calendar_change', 'propose_action'] : undefined, undefined, undefined, context, 'external');
         if (!isSkip(said)) transcript.push({ role: 'waldo', surface: 'notification', text: said });
       } else {
         world.shareHealth(step.health === 'shared');
@@ -193,6 +241,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
   }
   const names = new Set([...world.handlers, ...skills.capability.handlers].map((handler) => `tool_${handler.name}`));
   const tools = entries.filter((entry) => names.has(entry.hop));
+  const lightRoutes = entries.filter((entry) => entry.hop === 'light_route').map((entry) => entry.detail ?? '');
   return {
     status, ...(error ? { error } : {}), transcript,
     tools: tools.map((entry) => ({ name: entry.hop.slice(5), ok: entry.ok })),
@@ -200,6 +249,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
     model_inputs: modelInputs,
     effects: world.effects(),
     final_state: world.finalState(),
-    metrics: metricsOf(meter),
+    metrics: metricsOf(meter, lightRoutes),
+    light_routes: lightRoutes,
   };
 };

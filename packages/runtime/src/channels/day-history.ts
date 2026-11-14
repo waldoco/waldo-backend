@@ -16,8 +16,8 @@ export const startDayHistory = (kv: Kv, now: number): void => {
 
 export type DayHistoryDeps = Readonly<{
   book: DayPlanBook; updates: Pick<UpdateBook, 'delivered'>; runs: Pick<RunBook, 'between'>; kv: Kv; timezone: string; now: number;
-  // The text the Main chat shows now for each row that still exists, or null when the chat could not be read.
-  shown(): Promise<ReadonlyMap<string, string> | null>;
+  // The text the Main chat shows now for each of these rows that still exists, or null when the chat could not be read.
+  shown(ids: ReadonlySet<string>): Promise<ReadonlyMap<string, string> | null>;
 }>;
 type HistoryState = 'sent' | 'skipped' | 'pending' | 'not_sent' | 'unknown';
 type HistoryCard = Readonly<{ id: CardId; name: string; state: HistoryState; latest?: CardLatest | null }>;
@@ -59,8 +59,9 @@ const cardsOf = (deps: DayHistoryDeps, day: string, today: string, shown: Readon
 
 // The chat is read once, and only when some card or update on the days read reached it.
 const chatFor = async (deps: DayHistoryDeps, days: readonly string[]): Promise<ReadonlyMap<string, string> | null> => {
-  const linked = days.some(day => cardDeliveries(deps.book, deps.kv, day).size > 0 || deps.updates.delivered(day).some(row => row.app_row !== null));
-  return linked ? deps.shown() : new Map();
+  const ids = new Set(days.flatMap(day => [...[...cardDeliveries(deps.book, deps.kv, day).values()].map(delivery => delivery.message_id),
+    ...deps.updates.delivered(day).flatMap(row => row.app_row === null ? [] : [row.app_row])]));
+  return ids.size ? deps.shown(ids) : new Map();
 };
 
 export const dayHistoryList = async (deps: DayHistoryDeps): Promise<DaysList> => {

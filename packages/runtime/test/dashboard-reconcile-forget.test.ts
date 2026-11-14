@@ -15,7 +15,7 @@ it.each([false,true])('node forget cleans source-final stores at once, and the p
   const original=state.storage.kv.put.bind(state.storage.kv);let failed=false;
   const spy=vi.spyOn(state.storage.kv,'put').mockImplementation((key,value)=>{if(fail&&!failed&&key===FINAL_OUTBOX_KEY){failed=true;throw new Error('synthetic KV failure');}return original(key,value);});
   try{
-   const runtime=(instance as unknown as {setup():{act(input:{action:'node.forget',id:string,value:string}):Promise<boolean|string>}}).setup();
+   const runtime=(instance as unknown as {setup(channel: string):{act(input:{action:'node.forget',id:string,value:string}):Promise<boolean|string>}}).setup('telegram');
    expect(await runtime.act({action:'node.forget',id:String(node.id),value:''})).toBe(true);
    const job=(instance as unknown as {forgetPurgeJob():{run():Promise<{settled:number;pending:number}>}}).forgetPurgeJob();
    // The forget's own pass cleaned every store unless the write failed; the job settles what it left.
@@ -28,7 +28,7 @@ it.each([false,true])('node forget cleans source-final stores at once, and the p
 });
 const consoleOwner=(instance:unknown,state:DurableObjectState,name:string)=>{
  Object.assign((instance as {env:Record<string,unknown>}).env,{TELEGRAM_BOT_TOKEN:'123:synthetic',OPENAI_API_KEY:'synthetic-key'});state.storage.kv.put('do_name',name);
- const runtime=(instance as {setup():{act(input:{action:string,id:string,value:string}):Promise<boolean|string>;view(session:{token:string;csrf:string;expires:number},notice:null):Promise<{nodes:readonly {label:string}[];edges:readonly {relation:string}[]}>}}).setup();
+ const runtime=(instance as {setup(channel: string):{act(input:{action:string,id:string,value:string}):Promise<boolean|string>;view(session:{token:string;csrf:string;expires:number},notice:null):Promise<{nodes:readonly {label:string}[];edges:readonly {relation:string}[]}>}}).setup('telegram');
  const job=(instance as {forgetPurgeJob():{run():Promise<{settled:number;pending:number}>}}).forgetPurgeJob();
  return {runtime,job,memory:claimStore(state.storage.sql,work=>state.storage.transactionSync(work))};
 };

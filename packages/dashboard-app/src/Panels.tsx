@@ -5,7 +5,7 @@ import {Icon,Logo,type IconName} from './icons';
 import {Pipeline,PulseStrip} from './Infographics';
 import {Terminal} from '@lucasmarkes/hairline/react';
 import {ProfileCards} from './Profile';
-import type { ActivityCursors, ActivityRecord, ControlAction, ControlFields, FilesRecord, ProfileRecord, ProposalReview, SetupRecord, UsageRecord, WaitingRecord } from './controls-model';
+import { DRAFT_SENDS, type ActivityCursors, type ActivityRecord, type ControlAction, type ControlFields, type FilesRecord, type ProfileRecord, type ProposalReview, type SetupRecord, type UsageRecord, type WaitingRecord } from './controls-model';
 
 type Actions = { busy: boolean; onAction: (action: ControlAction, fields?: ControlFields) => void };
 const parseTime = (value: string | null) => { if (!value) return null; const normalized=value.includes('T')?value:value.replace(' ','T');const timePart=normalized.split('T')[1]??'';if(!timePart.endsWith('Z')&&!timePart.includes('+')&&!timePart.includes('-'))return null;const t = Date.parse(normalized); return Number.isNaN(t) ? null : new Date(t); };
@@ -38,11 +38,13 @@ function CalendarReview({ review, timezone }: { review: Extract<ProposalReview, 
   </div>;
 }
 
+const people = (label: string, list: string[]) => list.length > 0 && <div className="letter-row"><span className="label">{label}</span>{list.map(address => <span className="person" key={address}><i aria-hidden="true">{address.charAt(0).toUpperCase()}</i>{address}</span>)}</div>;
+
 function Review({ review, timezone }: { review: ProposalReview; timezone: string | null }) {
   if (review.kind === 'email_send') {
-    const people = (label: string, list: string[]) => list.length > 0 && <div className="letter-row"><span className="label">{label}</span>{list.map(address => <span className="person" key={address}><i aria-hidden="true">{address.charAt(0).toUpperCase()}</i>{address}</span>)}</div>;
     return <div className="proposal-full-review letter">{review.account && <div className="letter-row"><span className="label">From</span><span className="person">{review.account}</span></div>}{people('To', review.to)}{people('Cc', review.cc)}{people('Bcc', review.bcc)}<p className="letter-subject">{review.subject}</p><pre className="owner-record-text letter-body">{review.body}</pre><CopyText text={review.body}/></div>;
   }
+  if (review.kind === 'agent_mail_send') return <div className="proposal-full-review letter"><div className="letter-row"><span className="label">From</span><span className="person">{`${review.from.name} <${review.from.address}>`}</span></div>{people('To', review.to)}{people('Cc', review.cc)}<p className="letter-subject">{review.subject}</p><pre className="owner-record-text letter-body">{review.body}</pre><CopyText text={review.body}/></div>;
   if (review.kind === 'message_send') return <div className="proposal-full-review chat-preview"><span className="channel">{review.channel.toLowerCase() === 'telegram' ? <Logo name="telegram"/> : <Icon name="paperplane"/>}To your {review.channel} chat</span><p className="bubble">{review.content}</p><CopyText text={review.content}/></div>;
   if ('text' in review) return <div className="proposal-full-review"><pre className="owner-record-text">{review.text}</pre></div>;
   return <CalendarReview review={review} timezone={timezone}/>;
@@ -50,13 +52,13 @@ function Review({ review, timezone }: { review: ProposalReview; timezone: string
 
 const KindMark = ({ item }: { item: WaitingRecord['data']['proposals'][number] }) =>
   item.review?.kind === 'message_send' && item.review.channel.toLowerCase() === 'telegram' ? <Logo name="telegram"/>
-    : <Icon name={item.kind === 'calendar_change' ? 'calendar' : item.kind === 'email_send' ? 'envelope' : item.kind === 'message_send' ? 'paperplane' : 'entry'}/>;
+    : <Icon name={item.kind === 'calendar_change' ? 'calendar' : item.kind === 'email_send' || item.kind === 'agent_mail_send' ? 'envelope' : item.kind === 'message_send' ? 'paperplane' : 'entry'}/>;
 
 export function WaitingControls({ record, busy, onAction }: { record: WaitingRecord } & Actions) {
   const first = Math.max(0, record.data.proposals.findIndex(item => item.state === 'open'));
   return <>
     <div className="proposal-list">{record.data.proposals.map((item, index) => {
-      const send = item.kind === 'email_send' || item.kind === 'message_send';
+      const send = DRAFT_SENDS.includes(item.kind);
       const calendarApprove = item.kind === 'calendar_change' && item.state === 'open' && item.review?.kind === 'calendar_change' && item.actions.includes('approval.approve') && (!item.review.start || approvable(item.review.start)) && (!item.review.end || approvable(item.review.end));
       const calendarUndo = item.kind === 'calendar_change' && item.state === 'done' && item.actions.includes('approval.undo');
       const draft = send && item.state === 'open' && item.review?.kind === item.kind;
@@ -76,7 +78,7 @@ export function WaitingControls({ record, busy, onAction }: { record: WaitingRec
           {earlier && <p role="alert">{`An identical email from ${earlier} may already have gone out. Check Gmail’s Sent folder before you send it again.`}</p>}
           <div className="control-actions">
             {calendarApprove && <button className="primary" disabled={busy} onClick={() => onAction('approval.approve', { id: item.id })}>Approve this calendar change</button>}
-            {sendApprove && <button className="primary" disabled={busy} onClick={() => onAction('approval.send', { id: item.id })}>{item.kind === 'email_send' ? 'Send this email' : 'Send this message'}</button>}
+            {sendApprove && <button className="primary" disabled={busy} onClick={() => onAction('approval.send', { id: item.id })}>{item.kind === 'message_send' ? 'Send this message' : item.kind === 'agent_mail_send' ? 'Send this email as Waldo' : 'Send this email'}</button>}
             {sendChange && <button disabled={busy} onClick={() => onAction('approval.edit', { id: item.id })}>Change it</button>}
             {item.actions.includes('approval.skip') && <button disabled={busy} onClick={() => onAction('approval.skip', { id: item.id })}>{send ? 'Dismiss proposal' : 'Not now'}</button>}
             {calendarUndo && <button disabled={busy} onClick={() => { if (window.confirm('Undo this calendar change?')) onAction('approval.undo', { id: item.id }); }}>Undo calendar change</button>}

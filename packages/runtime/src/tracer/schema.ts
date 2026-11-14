@@ -1,3 +1,5 @@
+import { SCHEDULE_RUNS_RUNNING_INDEX } from '../do-schema';
+
 // Idempotent DDL for the tracer's DO-local tables, applied from the DO constructor so an
 // eviction-rebuild is safe. Every table is keyed by user_id for tenant scoping. The two outbox
 // UNIQUE constraints are the durable exactly-once boundary: UNIQUE(idempotency_key) and an
@@ -221,6 +223,7 @@ export function ensureSchema(storage: DurableObjectStorage): void {
     );
   `);
   sql.exec('CREATE INDEX IF NOT EXISTS schedule_runs_by_schedule ON schedule_runs (schedule_id, fired_at DESC);');
+  sql.exec(SCHEDULE_RUNS_RUNNING_INDEX);
 
   // Heartbeat flood control: one row per notified (loop, due) occurrence.
   sql.exec(`

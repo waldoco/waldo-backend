@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_PROACTIVE_SURFACE_RECEIPTS_V1, APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1, APP_AGENT_MAIL_RECEIPTS_V1, APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema, APP_WELCOME_STAGES_V1, APP_WELCOME_STAGES_V5, appWelcomeBuildV1Schema } from './controls';
+import { appContractRevision } from './core';
+import { APP_ACT_WITHOUT_ASKING_RECEIPTS_V1, APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1, APP_ACT_WITHOUT_ASKING_CONTRACT, APP_ACT_WITHOUT_ASKING_CONTRACT_REVISION, declaresActWithoutAsking, APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, appNodeSourceV13Schema, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_PROACTIVE_SURFACE_RECEIPTS_V1, APP_CONTROLS_SCHEDULE_REVISION, APP_CONTROLS_QUESTS_REVISION, APP_QUESTS_MAX_V1, APP_SCHEDULE_RECEIPTS_V1, appClock12V1, appScheduleTimeReceiptV1, APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1, APP_AGENT_MAIL_RECEIPTS_V1, APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema, APP_WELCOME_STAGES_V1, APP_WELCOME_STAGES_V5, appWelcomeBuildV1Schema } from './controls';
 
 const revision = 'f'.repeat(64);
 const connections = {
@@ -56,6 +57,22 @@ describe('Google connect from the app', () => {
     expect(appControlReceiptV1Schema.safeParse({ state: 'recorded', message: 'Google connect is ready to begin.', navigation: '/c/AAAAAAAAAAAAAAAAAAAAAA' }).success).toBe(true);
     expect(appControlReceiptV1Schema.safeParse({ state: 'recorded', message: 'Google connect is ready to begin.', navigation: '/c/AAAAAAAAAAAAAAAAAAAAAA?handoff=BBBBBBBBBBBBBBBBBBBBBB' }).success).toBe(true);
     expect(appControlReceiptV1Schema.safeParse({ state: 'recorded', message: 'Google connect is ready to begin.', navigation: '/c/AAAAAAAAAAAAAAAAAAAAAA', handoff: 'BBBBBBBBBBBBBBBBBBBBBB' }).success).toBe(false);
+  });
+
+  it('takes account signin on google.connect alone', () => {
+    expect(appControlActionV1Schema.safeParse({ ...connect, account: 'signin' }).success).toBe(true);
+    for (const account of ['', 'other', 'owner@example.test', 'SIGNIN']) expect(appControlActionV1Schema.safeParse({ ...connect, account }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ view: 'connections', action: 'granola.connect', account: 'signin', revision, request_id: 'connect-0002' }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ view: 'connections', action: 'google.disconnect', id: 'acct-1', account: 'signin', revision, request_id: 'connect-0003' }).success).toBe(false);
+    expect(appControlActionV1Schema.safeParse({ view: 'day', action: 'timezone.set', value: 'UTC', account: 'signin', revision, request_id: 'connect-0004' }).success).toBe(false);
+  });
+
+  it('the connections view may name the sign-in account, an address and nothing else', () => {
+    expect(appControlProjectionV1Schema.safeParse(projection(connections)).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, google: { ...connections.google, signin: { email: 'owner@example.test' } } })).success).toBe(true);
+    for (const signin of [{}, { email: 'not an address' }, { email: 'owner@example.test', subject: '1234' }, null]) {
+      expect(appControlProjectionV1Schema.safeParse(projection({ ...connections, google: { ...connections.google, signin } })).success).toBe(false);
+    }
   });
 });
 
@@ -257,13 +274,14 @@ describe('constellation view', () => {
       { ...valid[2], items: [{ ...node, sources: ['apple_health', 'calendar'], confirmation: 'waldos_read' }] },
       { ...valid[2], items: [{ ...node, sources: [], confirmation: 'confirmed' }] },
       { ...valid[4], item: { ...node, sources: ['gmail'], confirmation: 'waldos_read' } },
+      { ...valid[2], items: [{ ...node, sources: ['web', 'setup', 'calendar'] }] },
     ]) expect(appControlProjectionV1Schema.safeParse(view(data)).success).toBe(true);
     for (const data of [
       { ...valid[0], welcome: { ...welcome, state: 'failed' } }, { ...valid[0], welcome: { ...welcome, stages: { ...stages, web: 'failed' } } },
       { ...valid[0], welcome: { ...welcome, stages: { health: 'done', calendar: 'done', mail: 'done' } } }, { ...valid[0], welcome: { ...welcome, nodes: -1 } },
       { ...valid[0], welcome: { ...welcome, state: 'done', finished_at: null } }, { ...valid[0], welcome: { ...welcome, finished_at: 1 } },
       { ...valid[0], welcome: { ...welcome, state: 'not_started' } },
-      { ...valid[2], items: [{ ...node, sources: ['web'] }] }, { ...valid[2], items: [{ ...node, confirmation: 'unverified' }] },
+      { ...valid[2], items: [{ ...node, sources: ['lookup'] }] }, { ...valid[2], items: [{ ...node, confirmation: 'unverified' }] },
       { ...valid[1], welcome },
     ]) expect(appControlProjectionV1Schema.safeParse(view(data)).success).toBe(false);
   });
@@ -294,8 +312,30 @@ describe('constellation view', () => {
       { action: 'claim.unpin', id: 'memory:claim:12', value: 'profile' }, { action: 'claim.unpin', id: 'memory:claim:12', volume: 'low' },
       { action: 'claim.edit', id: 'memory:claim:12' }, { action: 'claim.edit', id: 'memory:claim:12', value: '   ' },
       { action: 'claim.edit', id: 'memory:claim:12', value: 'x'.repeat(APP_CLAIM_TEXT_MAX_V1 + 1) },
-      { action: 'claim.edit', id: 'memory:claim:12', value: 'Runs', confirmation: 'DELETE' }, { action: 'claim.forget', id: 'memory:claim:12' },
+      { action: 'claim.edit', id: 'memory:claim:12', value: 'Runs', confirmation: 'DELETE' },
     ]) expect(act(invalid), JSON.stringify(invalid)).toBe(false);
+  });
+
+  const memoryClaimFixture = { id: 'memory:claim:1', kind: 'fact', text: 'Lives in Leeds', source: 'stated', origin: 'owner', status: 'active', evidence: { kind: 'writer_note', text: 'n' },
+    source_reference: { state: 'unavailable', link: null, visibility: 'withheld_unverified_pointer', retrievable: false }, recorded_at: '2026-10-01', writer_seen_count: 1 };
+  it('shows, for controls revision 15, who said a claim, how Waldo is told to treat it, its web source and what can be sent', () => {
+    const shown = { ...memoryClaimFixture, held_as: 'waldo_thinks', bring_up: 'less', source_url: 'https://samrivera.dev/about', actions: ['claim.confirm', 'claim.forget', 'claim.quiet'] };
+    expect(appControlProjectionV1Schema.safeParse(view({ ...valid[3], item: shown })).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse(view({ ...valid[3], item: { ...shown, source_url: null } })).success).toBe(true);
+    for (const bad of [{ held_as: 'guess' }, { bring_up: 'never' }, { source_url: 5 }, { actions: ['claim.delete'] }, { source_url: 'x'.repeat(2049) }]) expect(appControlProjectionV1Schema.safeParse(view({ ...valid[3], item: { ...memoryClaimFixture, ...bad } })).success, JSON.stringify(bad)).toBe(false);
+  });
+});
+
+describe('claim controls, controls revision 15', () => {
+  const act = (fields: object) => appControlActionV1Schema.safeParse({ view: 'constellation', revision, request_id: 'claim-0002', ...fields }).success;
+  it('is revision 15', () => expect(APP_CONTROLS_CLAIM_CONTROLS_REVISION).toBe(15));
+  it('confirms, forgets, dismisses, quiets and unquiets one claim, each carrying no value', () => {
+    for (const action of ['claim.confirm', 'claim.forget', 'claim.dismiss', 'claim.quiet', 'claim.unquiet']) expect(act({ action, id: 'memory:claim:12' }), action).toBe(true);
+  });
+  it('refuses them on a node or bad id, another view, with a value or an extra field', () => {
+    for (const action of ['claim.confirm', 'claim.forget', 'claim.dismiss', 'claim.quiet', 'claim.unquiet']) {
+      for (const bad of [{ id: 'memory:node:12' }, { id: 'memory:claim:0' }, { id: '' }, {}, { id: 'memory:claim:12', value: 'x' }, { id: 'memory:claim:12', confirmation: 'DELETE' }, { id: 'memory:claim:12', view: 'day' }]) expect(act({ action, ...bad }), `${action} ${JSON.stringify(bad)}`).toBe(false);
+    }
   });
 });
 
@@ -556,9 +596,17 @@ describe('the phone view', () => {
     const phone = (extra: Record<string, unknown>) => appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'phone', data: { ...data, ...extra } }).success;
     for (const proof of [[], ['sms'], ['imessage'], ['sms', 'imessage']]) expect(phone({ proof })).toBe(true);
     for (const from of ['none', 'number', 'email', 'other_number']) expect(phone({ proof: ['imessage'], imessage_from: from })).toBe(true);
-    for (const bad of [{ proof: ['whatsapp'] }, { proof: 'sms' }, { proof: [null] }, { imessage_from: 'woof@heywaldo.in' }, { imessage_from: '0001' }, { imessage_from: null }]) {
+    for (const bad of [{ proof: ['signal'] }, { proof: 'sms' }, { proof: [null] }, { imessage_from: 'woof@heywaldo.in' }, { imessage_from: '0001' }, { imessage_from: null }]) {
       expect(phone(bad), JSON.stringify(bad)).toBe(false);
     }
+  });
+
+  it('is revision 12, which adds WhatsApp as a way to prove a number and says how the linked WhatsApp relates to it', () => {
+    const phone = (extra: Record<string, unknown>) => appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'phone', data: { ...data, ...extra } }).success;
+    expect(APP_CONTROLS_WHATSAPP_PROOF_REVISION).toBe(12);
+    for (const proof of [['whatsapp'], ['sms', 'whatsapp'], ['sms', 'imessage', 'whatsapp']]) expect(phone({ proof })).toBe(true);
+    for (const from of ['none', 'number', 'other_number']) expect(phone({ proof: ['whatsapp'], whatsapp_from: from })).toBe(true);
+    for (const bad of [{ whatsapp_from: 'email' }, { whatsapp_from: '+919800000001' }, { whatsapp_from: '0001' }, { whatsapp_from: null }]) expect(phone(bad), JSON.stringify(bad)).toBe(false);
   });
 
   it('refuses a phone.set without a number, with a malformed one, with anything else, or elsewhere', () => {
@@ -661,6 +709,11 @@ describe('where Waldo writes first, from the day view', () => {
     data: { timezone: 'Europe/London', date: '2026-10-11', cards: [], proactivity: { quiet_start: null, quiet_end: null, volume: 'normal' }, schedules: { daily_brief: true, followups: true, event_briefs: true, nightly: true, heartbeat: true }, ...extra },
   });
   it('is revision 11', () => expect(APP_CONTROLS_PROACTIVE_SURFACE_REVISION).toBe(11));
+  it('names web and setup node sources from revision 13, beside the five of revision 1', () => {
+    expect(APP_CONTROLS_WELCOME_WEB_REVISION).toBe(13);
+    expect(appNodeSourceV13Schema.options).toEqual([...appNodeSourceV1Schema.options, 'web', 'setup']);
+    expect(appNodeSourceV1Schema.safeParse('web').success).toBe(false);
+  });
   it('names one of the first run\'s surfaces in value, from the day view, and nothing else', () => {
     for (const value of ['app', 'whatsapp', 'both', 'app_imessage']) expect(appControlActionV1Schema.safeParse(set({ value })).success).toBe(true);
     for (const bad of [set({ value: undefined }), set({ value: 'telegram' }), set({ value: 'WhatsApp' }), set({ value: '' }), set({ view: 'connections' }), set({ view: 'account' }),
@@ -678,5 +731,113 @@ describe('where Waldo writes first, from the day view', () => {
     const messages = Object.values(APP_PROACTIVE_SURFACE_RECEIPTS_V1).map(receipt => receipt.message);
     expect(new Set(messages).size).toBe(messages.length);
     expect([APP_PROACTIVE_SURFACE_RECEIPTS_V1.saved.state, APP_PROACTIVE_SURFACE_RECEIPTS_V1.whatsapp_not_linked.state]).toEqual(['recorded', 'rejected']);
+  });
+});
+
+describe('schedule.set, controls revision 16', () => {
+  const set = (extra: object = {}) => ({ view: 'day', action: 'schedule.set', id: 'daily_brief', value: 'off', revision, request_id: 'schedule-0001', ...extra });
+  const day = (extra: object) => ({
+    version: 1, state: 'available', revision, view: 'day',
+    data: { timezone: 'Europe/London', date: '2026-11-06', cards: [], proactivity: { quiet_start: null, quiet_end: null, volume: 'normal' }, schedules: { daily_brief: true, followups: true, event_briefs: true, nightly: true, heartbeat: true }, ...extra },
+  });
+  const row = (id: string, extra: object = {}) => ({ id, on: true, accepts: 'on_off', time: null, no_later_than: false, ...extra });
+  const timed = (id: string, time: string, extra: object = {}) => row(id, { accepts: 'time', time, ...extra });
+  it('is revision 16', () => expect(APP_CONTROLS_SCHEDULE_REVISION).toBe(16));
+  it('turns one of the five schedules on or off, or sets the Brief or the Close time, from the day view and nothing else', () => {
+    for (const id of ['daily_brief', 'followups', 'event_briefs', 'nightly', 'heartbeat']) for (const value of ['on', 'off']) expect(appControlActionV1Schema.safeParse(set({ id, value })).success).toBe(true);
+    for (const [id, value] of [['card:brief', '07:10'], ['card:close', '21:30'], ['card:brief', '00:00'], ['card:close', '23:59']]) expect(appControlActionV1Schema.safeParse(set({ id, value })).success).toBe(true);
+    for (const bad of [set({ id: undefined }), set({ value: undefined }), set({ id: 'health_proposals' }), set({ id: 'card:midday', value: '14:00' }), set({ id: 'nightly', value: '03:00' }),
+      set({ id: 'heartbeat', value: '10:00' }), set({ id: 'card:brief', value: 'on' }), set({ id: 'card:brief', value: '7:10' }), set({ id: 'card:brief', value: '24:00' }), set({ id: 'card:close', value: '21:30pm' }),
+      set({ value: 'ON' }), set({ view: 'connections' }), set({ view: 'account' }), set({ volume: 'low' }), set({ quiet_start: '22:00' }), set({ confirmation: 'DELETE' }), set({ code: '123456' }), set({ notice: '1' })])
+      expect(appControlActionV1Schema.safeParse(bad).success).toBe(false);
+  });
+  it('the day view lists each schedule with what it takes, and stays optional for a build below 16', () => {
+    const all = [row('daily_brief'), row('followups'), row('event_briefs', { on: false }), row('nightly'), row('heartbeat'), timed('card:brief', '07:10', { no_later_than: true }), timed('card:close', '21:30', { on: false })];
+    for (const valid of [{}, { schedule_controls: all }, { schedule_controls: [] }]) expect(appControlProjectionV1Schema.safeParse(day(valid)).success).toBe(true);
+    for (const invalid of [[row('daily_brief'), row('daily_brief')], [row('card:brief')], [timed('daily_brief', '07:10')], [row('nightly', { time: '03:00' })], [timed('card:brief', '7:10')],
+      [timed('card:close', '21:30', { no_later_than: true })], [row('heartbeat', { no_later_than: true })], [row('card:midday')], [row('daily_brief', { actions: ['on'] })], [timed('card:brief', null as never)]])
+      expect(appControlProjectionV1Schema.safeParse(day({ schedule_controls: invalid })).success).toBe(false);
+  });
+  it('says a time as 7:10am and 9:30pm', () => {
+    expect(['07:10', '21:30', '00:05', '12:00', '12:45', '23:59', '09:00'].map(appClock12V1)).toEqual(['7:10am', '9:30pm', '12:05am', '12:00pm', '12:45pm', '11:59pm', '9:00am']);
+  });
+  it('has fixed on and off receipts, each one the app can parse, with distinct messages', () => {
+    for (const receipt of Object.values(APP_SCHEDULE_RECEIPTS_V1)) expect(appControlReceiptV1Schema.safeParse(receipt).success).toBe(true);
+    const messages = Object.values(APP_SCHEDULE_RECEIPTS_V1).map(receipt => receipt.message);
+    expect(new Set(messages).size).toBe(messages.length);
+    expect(APP_SCHEDULE_RECEIPTS_V1.unavailable.state).toBe('rejected');
+  });
+  it('a time receipt names the new time and what happens today, and says "by" when the Brief can come earlier on waking', () => {
+    expect(appScheduleTimeReceiptV1({ card: 'card:brief', time: '07:10', today: 'planned', noLaterThan: false })).toEqual({ state: 'recorded', message: 'Saved. Your Brief comes at 7:10am.' });
+    expect(appScheduleTimeReceiptV1({ card: 'card:brief', time: '07:10', today: 'planned', noLaterThan: true }).message).toBe('Saved. Your Brief comes by 7:10am, earlier when you wake before then.');
+    expect(appScheduleTimeReceiptV1({ card: 'card:close', time: '21:30', today: 'now', noLaterThan: false }).message).toBe("Saved. Your Close comes at 9:30pm. Today's is on its way now.");
+    expect(appScheduleTimeReceiptV1({ card: 'card:close', time: '21:30', today: 'unchanged', noLaterThan: false }).message).toBe('Your Close already comes at 9:30pm.');
+    const todays = ['planned', 'now', 'sent', 'busy', 'passed', 'quiet', 'off', 'zone', 'unchanged'] as const;
+    const messages = todays.map(today => appScheduleTimeReceiptV1({ card: 'card:brief', time: '07:10', today, noLaterThan: false }));
+    for (const receipt of messages) { expect(appControlReceiptV1Schema.safeParse(receipt).success).toBe(true); expect(receipt.message).toContain('7:10am'); }
+    expect(new Set(messages.map(receipt => receipt.message)).size).toBe(todays.length);
+  });
+});
+
+describe('quests on the day view, controls revision 18', () => {
+  const day = (extra: object) => ({
+    version: 1, state: 'available', revision, view: 'day',
+    data: { timezone: 'Europe/London', date: '2026-11-06', cards: [], proactivity: { quiet_start: null, quiet_end: null, volume: 'normal' }, schedules: { daily_brief: true, followups: true, event_briefs: true, nightly: true, heartbeat: true }, ...extra },
+  });
+  const quest = (extra: object = {}) => ({
+    id: 'quest:a1b2c3', title: 'Sleep by 11 on weeknights', state: 'active', plan: 'Screens off at 10:30', usual: 'Usually past midnight', target: null,
+    progress: null, deadline: null, check_in_days: 7, next_check_in: '2026-11-13', ...extra,
+  });
+  it('is revision 18', () => expect(APP_CONTROLS_QUESTS_REVISION).toBe(18));
+  it('lists the owner\'s quests, and stays optional for a build below 17', () => {
+    for (const valid of [{}, { quests: [] }, { quests: [quest(), quest({ id: 'quest:z9', state: 'ambient', check_in_days: null, next_check_in: null }), quest({ id: 'quest:y8', state: 'completed', next_check_in: null, deadline: '2026-12-01' })] }])
+      expect(appControlProjectionV1Schema.safeParse(day(valid)).success).toBe(true);
+    for (const invalid of [quest({ id: 'goal-1' }), quest({ state: 'paused' }), quest({ state: 'ambient' }), quest({ check_in_days: null }), quest({ check_in_days: 29, next_check_in: null }),
+      quest({ title: '' }), quest({ deadline: '13 Nov' }), quest({ plan: undefined }), quest({ hrv_ms: 52 })])
+      expect(appControlProjectionV1Schema.safeParse(day({ quests: [invalid] })).success).toBe(false);
+    expect(appControlProjectionV1Schema.safeParse(day({ quests: Array.from({ length: APP_QUESTS_MAX_V1 + 1 }, (_, n) => quest({ id: `quest:q${n}` })) })).success).toBe(false);
+  });
+});
+
+describe('"Just do it" on the day view, its own contract pair act_without_asking=1', () => {
+  const set = (extra: object = {}) => ({ view: 'day', action: 'act_without_asking.set', value: 'off', revision, request_id: 'just-do-it-0001', ...extra });
+  const day = (extra: object) => ({
+    version: 1, state: 'available', revision, view: 'day',
+    data: { timezone: 'Europe/London', date: '2026-11-14', cards: [], proactivity: { quiet_start: null, quiet_end: null, volume: 'normal' }, schedules: { daily_brief: true, followups: true, event_briefs: true, nightly: true, heartbeat: true }, ...extra },
+  });
+  it('is its own pair, act_without_asking=1, which the header takes beside controls=13', () => {
+    expect([APP_ACT_WITHOUT_ASKING_CONTRACT, APP_ACT_WITHOUT_ASKING_CONTRACT_REVISION]).toEqual(['act_without_asking', 1]);
+    const header = `approvals=5,health=5,chat=6,onboarding=2,controls=13,${APP_ACT_WITHOUT_ASKING_CONTRACT}=${APP_ACT_WITHOUT_ASKING_CONTRACT_REVISION}`;
+    expect(declaresActWithoutAsking(header)).toBe(true);
+    expect(appContractRevision(header, 'controls')).toBe(13);
+    // Left out, or a header that does not parse, is not named: a pair left out would otherwise read revision 1.
+    for (const other of ['approvals=5,controls=13', 'controls=23', 'act_without_asking=0', 'act_without_asking=1,act_without_asking=1', '', null, undefined]) expect(declaresActWithoutAsking(other)).toBe(false);
+    expect(declaresActWithoutAsking('act_without_asking=2')).toBe(true);
+  });
+  it('turns it on or off from the day view, carrying on or off and nothing else', () => {
+    for (const value of ['on', 'off']) expect(appControlActionV1Schema.safeParse(set({ value })).success).toBe(true);
+    for (const bad of [set({ value: undefined }), set({ value: 'ON' }), set({ value: 'true' }), set({ value: '' }), set({ view: 'connections' }), set({ view: 'account' }),
+      set({ id: 'act_without_asking' }), set({ volume: 'low' }), set({ quiet_start: '22:00' }), set({ confirmation: 'DELETE' }), set({ code: '123456' }), set({ notice: '1' }), set({ account: 'signin' })])
+      expect(appControlActionV1Schema.safeParse(bad).success).toBe(false);
+  });
+  it('the day view says the owner\'s choice and whether this Waldo acts on it, and stays optional for a build that does not name the pair', () => {
+    for (const valid of [{}, { act_without_asking: { on: true, available: true } }, { act_without_asking: { on: false, available: true } }, { act_without_asking: { on: true, available: false } }])
+      expect(appControlProjectionV1Schema.safeParse(day(valid)).success).toBe(true);
+    for (const invalid of [{ act_without_asking: { on: true } }, { act_without_asking: { available: true } }, { act_without_asking: true }, { act_without_asking: { on: 'on', available: true } },
+      { act_without_asking: { on: true, available: true, still_asks: [] } }]) expect(appControlProjectionV1Schema.safeParse(day(invalid)).success).toBe(false);
+  });
+  it('has one fixed receipt per outcome, each one the app can parse, with distinct messages', () => {
+    for (const receipt of Object.values(APP_ACT_WITHOUT_ASKING_RECEIPTS_V1)) expect(appControlReceiptV1Schema.safeParse(receipt).success).toBe(true);
+    const messages = Object.values(APP_ACT_WITHOUT_ASKING_RECEIPTS_V1).map(receipt => receipt.message);
+    expect(new Set(messages).size).toBe(messages.length);
+    // Where this Waldo does not act on it, the receipt says so instead of reading as on.
+    expect(APP_ACT_WITHOUT_ASKING_RECEIPTS_V1.inactive_on.message).toContain('not active');
+    expect(APP_ACT_WITHOUT_ASKING_RECEIPTS_V1.inactive_off.message).toContain('not active');
+  });
+  it('names what Waldo still asks about in one line', () => {
+    expect(APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1).not.toMatch(/\n/);
+    for (const kept of ['paying', 'password', 'deleting', 'web form', 'email or message']) expect(APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1).toContain(kept);
+    // Lasting access and tools on a server added by address run with the setting on, so the line does not name them.
+    for (const gone of ['lasting access', 'by its address']) expect(APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1).not.toContain(gone);
   });
 });

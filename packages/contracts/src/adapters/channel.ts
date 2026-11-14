@@ -235,7 +235,7 @@ export const telegramMessageUpdateSchema = z.strictObject({
     caption_entities: z.array(telegramTextEntitySchema).max(100).optional(),
     photo: z.array(telegramFileSchema).min(1).max(10).optional(),
     document: telegramFileSchema.extend({ file_name: z.string().min(1).max(256).optional(), mime_type: z.string().min(1).max(128).optional() }).optional(),
-    voice: telegramFileSchema.extend({ mime_type: z.string().min(1).max(128).optional() }).optional(),
+    voice: telegramFileSchema.extend({ file_name: z.string().min(1).max(256).optional(), mime_type: z.string().min(1).max(128).optional() }).optional(),
     audio: telegramFileSchema.extend({ file_name: z.string().min(1).max(256).optional(), mime_type: z.string().min(1).max(128).optional() }).optional(),
     reply_to_message: z.looseObject({
       message_id: z.int().positive(),

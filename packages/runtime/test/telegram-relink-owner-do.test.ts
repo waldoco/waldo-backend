@@ -101,7 +101,7 @@ it.each(['console-first','telegram-first','preexisting','eviction'])('ADV regist
  const subject=85001+['console-first','telegram-first','preexisting','eviction'].indexOf(mode),name=`adv-${mode}`;
  if(mode!=='telegram-first'&&mode!=='preexisting')await boot(name);
  await link(name,subject,subject);
- if(mode==='preexisting')await runInDurableObject(stub(name),async(instance,state)=>{state.storage.kv.put('telegram_subject',String(subject));state.storage.kv.put('do_name',name);await (instance as any).setup().ready;await state.storage.deleteAlarm();});
+ if(mode==='preexisting')await runInDurableObject(stub(name),async(instance,state)=>{state.storage.kv.put('telegram_subject',String(subject));state.storage.kv.put('do_name',name);await (instance as any).setup('telegram').ready;await state.storage.deleteAlarm();});
  if(mode==='eviction')await evictDurableObject(stub(name));
  expect((await webhook(subject,subject+100,'Test ordinary turn')).status).toBe(200);
  expect((await drain(name,subject+100))?.reason).toBe('delivery_ack');
@@ -117,7 +117,7 @@ it.each([false,true])('ADV unlink then relink changed=%s',async(changed)=>{
 it('ADV runtime switch is atomic and old subject turn is fenced after rebind',async()=>{
  const name='adv-concurrent';directoryState.linked.set('87001',name);await webhook(87001,87001,'Old owner turn');
  let old:any;
- seen.onReply=async()=>{await runInDurableObject(stub(name),async(instance,state)=>{old=(instance as any).setup();state.storage.kv.put('telegram_subject','87002');directoryState.linked.delete('87001');directoryState.linked.set('87002',name);const next=(instance as any).setup();expect(next).not.toBe(old);expect(old.owner).toBe(87001);expect(next.owner).toBe(87002);await next.ready;});return [];};
+ seen.onReply=async()=>{await runInDurableObject(stub(name),async(instance,state)=>{old=(instance as any).setup('telegram');state.storage.kv.put('telegram_subject','87002');directoryState.linked.delete('87001');directoryState.linked.set('87002',name);const next=(instance as any).setup('telegram');expect(next).not.toBe(old);expect(old.owner).toBe(87001);expect(next.owner).toBe(87002);await next.ready;});return [];};
  const row=await drain(name,87001);expect(row?.state).toBe('quarantined');expect(directoryState.sends.filter(r=>r.m==='sendMessage'&&r.p.text==='Recorded fixture response.')).toEqual([]);
  seen.onReply=undefined;await webhook(87002,87002,'New owner turn');expect((await drain(name,87002))?.reason).toBe('delivery_ack');
 });

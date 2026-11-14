@@ -4,9 +4,18 @@ import type { JobRow, ParkReason, RetryBrief, TaskBrief } from '../tasks/jobs';
 // because no model could be reached or none is needed. They follow the voice in messaging-behavior.ts (plain, short, no
 // apology padding, no numbers beyond a time) and belong to it.
 
+// A 24-hour "HH:MM" as people say it: 9am, 2pm, 10:30am. A fixed line has no context around it, so a time with minutes keeps
+// its am or pm too.
+export const clockWords = (clock: string): string => {
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(clock);
+  if (!match) throw new Error('not a 24-hour clock time');
+  const hour = Number(match[1]);
+  return `${hour % 12 === 0 ? 12 : hour % 12}${match[2] === '00' ? '' : `:${match[2]}`}${hour < 12 ? 'am' : 'pm'}`;
+};
+
 // The owner's local wall-clock time, as these lines say it.
 export const ownerTime = (at: number, timezone: string): string =>
-  new Intl.DateTimeFormat('en-GB', { timeZone: timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(at));
+  clockWords(new Intl.DateTimeFormat('en-GB', { timeZone: timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(at)));
 
 // The floor reply when every provider failed on the owner's message: a time the retry keeps.
 export const floorReplyText = (promised: number, timezone: string): string =>
@@ -26,6 +35,10 @@ export const retryParkedNotice = (brief: RetryBrief, timezone: string, reason: P
 // An owner turn that stopped before it finished, said as retryParkedNotice says its own uncertain stop, naming what to look
 // at. Each keeps what is known: a change may still go through, may already have gone through, or a result was saved unsent.
 const CHANGING = 'anything I was changing for you, such as your calendar, sent mail or reminders';
+// A typed /stop with nothing running, on every chat surface.
+export const NOTHING_RUNNING = 'Nothing is running right now.';
+// A typed /stop that only cancelled messages still waiting: nothing of theirs had started.
+export const STOPPED_BEFORE_START = "Stopped. I hadn't started on it yet.";
 export const INTERRUPTED_NOTICES = {
   unfinished: `I was interrupted partway through your message, so I can't tell what I'd already done about it, and a change I'd started may still go through. Check ${CHANGING} before you send it again.`,
   stopped: `Stopped. A change I'd already started may still go through, so check ${CHANGING}.`,
@@ -41,6 +54,7 @@ export const PARK_WORDS: Readonly<Record<ParkReason, string>> = {
   uncertain_effect: 'it was interrupted in the middle of a step that cannot safely be repeated',
   deadline: 'it ran out of time',
   brief_changed: 'its instructions changed after it started',
+  no_progress: "it wasn't getting anywhere",
 };
 
 // How these lines name a task. A title written in a turn that read someone else's words could say anything in Waldo's voice,
@@ -58,6 +72,17 @@ export const fixedReport = (row: Pick<JobRow, 'brief_json' | 'park_reason'>, tim
   return row.park_reason
     ? `${name} stopped before it finished, because ${PARK_WORDS[row.park_reason]}. Start it again if you still need it.`
     : `${name} finished, but I couldn't write it up and haven't kept what it found. Start it again when you need it.`;
+};
+
+// A task whose worker returned an early ending (partial, blocked or failed), when the apply turn chose to say nothing: an early
+// ending is always told, in the place the owner asked.
+const ENDED_WORDS: Readonly<Record<'partial' | 'blocked' | 'failed', string>> = {
+  partial: 'got part of the way and stopped', blocked: 'was blocked before it could finish', failed: 'failed before it finished',
+};
+export const earlyEndingReport = (row: Pick<JobRow, 'brief_json'>, status: 'partial' | 'blocked' | 'failed', timezone: string): string => {
+  const { title, started } = taskName(row, timezone);
+  const name = title === null ? `The background task you started at ${started}` : `Your background task "${title}"`;
+  return `${name} ${ENDED_WORDS[status]}. Tell me to try again and I'll start it again.`;
 };
 
 // A report whose apply turn was lost partway: that turn holds the owner's tools and may have acted, so it is not run again.

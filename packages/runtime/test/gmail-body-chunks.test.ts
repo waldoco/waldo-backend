@@ -206,9 +206,14 @@ describe('read_thread through the dispatcher', () => {
     const store = inMemoryToolOutputStore();
     const first = await dispatchTool({ id: 'c1', name: 'read_thread', args: { thread_id: 't' } }, ctx, { handlers: [read], offload: store });
     expect(first).toMatchObject({ ok: true });
-    const receipt = (first as { data: { stored_output: string; truncated: boolean; head: string } }).data;
+    const receipt = (first as { data: { stored_output: string; truncated: boolean; head?: string; inline: { messages: { id: string; body_next_offset?: number; opening: string }[]; next: string } } }).data;
     expect(receipt.truncated).toBe(false);
-    expect(receipt.head).toMatch(/"body_next_offset":12000.*"body":/s);
+    // Inline & Spill: every message is named with its opening and next offset; the raw head is not shown beside it.
+    expect(receipt.head).toBeUndefined();
+    expect(receipt.inline.messages.map(m => m.id)).toEqual(['ma', 'mb', 'mc', 'md', 'me', 'mf']);
+    expect(receipt.inline.messages[0]).toMatchObject({ body_next_offset: 12_000, opening: expect.stringMatching(/^a lorem ipsum/) });
+    expect(receipt.inline.next).toContain('body_message_id');
+    expect(JSON.stringify(receipt.inline).length).toBeLessThan(8_000);
     const stored = JSON.parse(store.read(receipt.stored_output, 0, 65_536)!.text) as { messages: Shown[] };
     expect(stored.messages.map(m => m.body_next_offset)).toEqual([12_000, 12_000, 12_000, 4_000, 0, 0]);
     const next = await dispatchTool({ id: 'c2', name: 'read_thread', args: { thread_id: 't', body_message_id: 'mf', body_offset: 0 } }, ctx, { handlers: [read], offload: store });

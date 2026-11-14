@@ -215,7 +215,7 @@ describe('the closed window knocks only for a record the outbox would send', () 
       { kv, subject: SUBJECT, template, knock, log: vi.fn() });
     return { route, knock };
   };
-  const record = () => ({ createdAt: Date.now() }) as never;
+  const record = () => ({ id: 'record-1', createdAt: Date.now() }) as never;
 
   it('a record the route holds (quiet hours, low volume) waits for that hold and does not knock', async () => {
     const until = Date.now() + 10 * 60_000;
@@ -252,10 +252,10 @@ describe('owner forget reaches held WhatsApp text', () => {
 });
 
 describe('an unlink retires the bound chat', () => {
-  it('discards held and re-held text and the window, refusal and knock markers, and nothing else', () => {
+  it('discards held and re-held text and the window, refusal, knock and push markers, and nothing else', () => {
     const { kv, map } = fakeKv();
     for (const [key, value] of Object.entries({ 'wa_held:000000000001': { heldAt: T0, body: { chat_id: 1, text: 'Held.' } }, 'wa_held:000000000002': { heldAt: T0, body: { chat_id: 1, text: 'Also held.' } },
-      'wa_reheld:wamid.out.1': true, 'wa_last_inbound_ms': T0, 'wa_knocked_for': T0, 'wa_window_refused_for': T0, 'wa_held_seq': 2, 'wa_seq': 7, 'whatsapp_subject': SUBJECT })) kv.put(key, value);
+      'wa_reheld:wamid.out.1': true, 'wa_last_inbound_ms': T0, 'wa_knocked_for': T0, 'wa_window_refused_for': T0, 'wa_window_pushed_for': T0, 'wa_held_seq': 2, 'wa_seq': 7, 'whatsapp_subject': SUBJECT })) kv.put(key, value);
     clearWhatsAppNumber(kv);
     expect([...map.keys()].sort()).toEqual(['wa_held_seq', 'wa_seq', 'whatsapp_subject']);
   });

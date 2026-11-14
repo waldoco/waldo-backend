@@ -11,8 +11,8 @@ import { consoleMayApprove, consoleMayDismiss } from './console';
 export const DASHBOARD_WAITING_PATH = '/console/dashboard/api/v1/waiting';
 
 const LABELS: Readonly<Record<string, string>> = {
-  calendar_change: 'Calendar adjustment', email_send: 'Email send', message_send: 'Message send',
-  browser_submit: 'Browser action', mcp_call: 'MCP tool call',
+  calendar_change: 'Calendar adjustment', email_send: 'Email send', message_send: 'Message send', agent_mail_send: 'Email as Waldo',
+  browser_submit: 'Browser action', mcp_call: 'MCP tool call', standing_grant: 'Standing grant',
 };
 const label = (kind: string) => LABELS[kind] ?? 'Proposed action';
 const safeReview = (item: ApprovalItem) => (item.review?.kind === item.kind ? item.review : null);

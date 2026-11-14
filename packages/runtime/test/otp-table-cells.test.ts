@@ -111,7 +111,6 @@ describe('the extractor', () => {
     ['Dress code 1920s', '1920'],
     ['Promo code 2024SALE', '2024'],
     ['Area code 020 7946', '0207946'],
-    ['Postcode12345 area', '12345'],
     ['Your code 4829 13\n10 minutes', '48291310'],
     // Digits joined only by invisible characters read as one run up to eight digits, so a short code is relayed
     // with the digits beside it.
@@ -121,7 +120,7 @@ describe('the extractor', () => {
     expect(extractArtifacts(text).artifacts).toEqual([{ kind: 'otp', value: relayed }]);
   });
 
-  it.each(['see codes 1234 below', 'room 4 8 2 9 is free', 'code 1 2 3 is too short', 'error code 404', 'Room 4021'])('leaves ordinary text alone: %s', (text) => {
+  it.each(['see codes 1234 below', 'room 4 8 2 9 is free', 'code 1 2 3 is too short', 'error code 404', 'Room 4021', 'Postcode12345 area'])('leaves ordinary text alone: %s', (text) => {
     expect(extractArtifacts(text).artifacts).toEqual([]);
   });
 });

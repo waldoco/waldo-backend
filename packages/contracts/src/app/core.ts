@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import {
   replyApprovalPartV1Schema, replyChartSeriesPartV1Schema, replyFilePartV1Schema, replyQuickRepliesPartV1Schema,
-  replyReceiptPartV1Schema, replyVisibilityV1Schema, replyVoicePartV1Schema, REPLY_TEXT_MAX_CHARS,
+  replyFreeWindowPartV1Schema, replyReceiptPartV1Schema, replyVisibilityV1Schema, replyVoicePartV1Schema, REPLY_TEXT_MAX_CHARS,
 } from './parts';
 
 export const APP_AGENT_VERSION = 'app.v1' as const;
@@ -84,9 +84,45 @@ export const appSignoutResultV1Schema = z.strictObject({ result: z.enum(['revoke
 // minutes, then stops; it renews once, so a second renewal of it is refused.
 export const appRenewResultV1Schema = appSessionV1Schema.extend({ credential: z.string().min(20).max(512), renew_after: z.int().nonnegative() });
 export const appClientMessageIdV1Schema = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/);
-export const appSendRequestV1Schema = z.strictObject({
-  client_message_id: appClientMessageIdV1Schema, text: z.string().trim().min(1).max(4000),
+// Chat attachments: one voice note, photo or file per message, uploaded first (raw bytes, its type in content-type, its
+// kind and its name, percent-encoded UTF-8, in the upload headers) and named by the send. A send naming an upload that is
+// not there to take (unknown, expired, already sent, or attachments off) is refused 409 upload_unavailable. A backend that takes none answers 404 at
+// APP_CHAT_UPLOAD_PATH, so a build attaches only after an upload there succeeds. An upload not sent within
+// APP_CHAT_UPLOAD_TTL_MS is dropped. A sent one is kept only until its message's turn ends: a voice note is read for its
+// transcript and not kept; a photo or file is copied into the owner's workspace files where file keeping is on, as on every
+// chat surface, and is otherwise not kept.
+// Upload failures: 400 (no or unknown kind, empty body, a file without a plain name), 404 (attachments off), 413 (over
+// the cap), 415 (a type its kind does not take), 429 (APP_CHAT_UPLOADS_WAITING_MAX unsent uploads, or the rate budget).
+export const APP_CHAT_UPLOAD_PATH = '/app/v1/chat/uploads' as const;
+export const APP_CHAT_UPLOAD_KIND_HEADER = 'x-waldo-upload-kind' as const;
+export const APP_CHAT_UPLOAD_NAME_HEADER = 'x-waldo-upload-name' as const;
+export const APP_CHAT_UPLOAD_KINDS = ['voice', 'photo', 'file'] as const;
+export type AppChatUploadKind = typeof APP_CHAT_UPLOAD_KINDS[number];
+export const APP_CHAT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+export const APP_CHAT_UPLOAD_TTL_MS = 60 * 60_000;
+export const APP_CHAT_UPLOADS_WAITING_MAX = 4;
+// The types a voice note or photo may have, with the extension each is read under. A file may have any type: it is read when
+// Waldo can read it and kept either way.
+export const APP_CHAT_VOICE_TYPES: Readonly<Record<string, string>> = {
+  'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/aac': 'aac', 'audio/mpeg': 'mp3', 'audio/ogg': 'ogg', 'audio/wav': 'wav', 'audio/webm': 'webm',
+};
+export const APP_CHAT_PHOTO_TYPES: Readonly<Record<string, string>> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
+export const appChatUploadIdV1Schema = z.string().regex(/^up_[A-Za-z0-9_-]{22}$/);
+export const appChatUploadResultV1Schema = z.strictObject({
+  upload_id: appChatUploadIdV1Schema, kind: z.enum(APP_CHAT_UPLOAD_KINDS), bytes: z.int().positive().max(APP_CHAT_UPLOAD_MAX_BYTES), expires_at: z.int().positive(),
 });
+// With an attachment, `text` is its caption: it may be empty and holds at most APP_CHAT_CAPTION_MAX_CHARS. Without one it is
+// the message, as it always was.
+export const APP_CHAT_CAPTION_MAX_CHARS = 1024;
+export const appSendFieldsV1Schema = z.strictObject({
+  client_message_id: appClientMessageIdV1Schema, text: z.string().trim().max(4000),
+  attachments: z.array(z.strictObject({ upload_id: appChatUploadIdV1Schema })).length(1).optional(),
+});
+export const refineAppSendV1 = (send: Readonly<{ text: string; attachments?: readonly unknown[] | undefined }>, ctx: z.RefinementCtx): void => {
+  if (!send.attachments && send.text.length === 0) ctx.addIssue({ code: 'custom', path: ['text'], message: 'a message without an attachment needs text' });
+  if (send.attachments && send.text.length > APP_CHAT_CAPTION_MAX_CHARS) ctx.addIssue({ code: 'custom', path: ['text'], message: `a caption holds at most ${APP_CHAT_CAPTION_MAX_CHARS} characters` });
+};
+export const appSendRequestV1Schema = appSendFieldsV1Schema.superRefine(refineAppSendV1);
 export const appSendResultV1Schema = z.strictObject({
   accepted: z.literal(true), message_id: z.string().min(1),
   state: z.enum(['admitted', 'running', 'completed', 'interrupted', 'revoked']).optional(),
@@ -108,11 +144,31 @@ export const appMessagePartV1Schema = z.union([
   z.strictObject({ type: z.literal('operation'), operation_id: z.string(), state: z.enum(['admitted', 'running', 'completed', 'interrupted', 'revoked']), message: z.string() }),
   z.strictObject({ type: z.literal('artifact'), artifact_id: z.string(), revision: z.int().positive(), title: z.string(), download_path: z.string() }),
   replyApprovalPartV1Schema, replyQuickRepliesPartV1Schema, replyChartSeriesPartV1Schema, replyFilePartV1Schema, replyVoicePartV1Schema,
-  replyReceiptPartV1Schema,
+  replyReceiptPartV1Schema, replyFreeWindowPartV1Schema,
 ]);
 // Chat revision 6 (`chat=6`): a main-chat reply the owner rated carries `rating`, so a rating survives a relaunch. An unrated
 // reply, a user row and every thread row leave the key out, and revisions below 6 never receive it.
 export const APP_CHAT_RATING_REVISION = 6;
+// Chat revision 7 (`chat=7`): a main-chat reply carries `memory_used`, the notes Waldo had in front of it for that message:
+// the claims its recall matched to the message and the ones it opened with read_memory. It is what the turn looked up, not
+// proof it relied on each one, so the app shows it as "memory looked at: X, Y". Each is a claim as it reads now (a claim the
+// owner has since forgotten or retired is left out), at most APP_CHAT_MEMORY_USED_MAX_V1, newest-shown last, text as plain
+// text. A reply that looked up nothing, a user row, a thread row and revisions below 7 leave the key out.
+export const APP_CHAT_MEMORY_USED_REVISION = 7;
+export const APP_CHAT_MEMORY_USED_MAX_V1 = 8;
+// Chat revision 10 (`chat=10`): a reply that carries a free-window offer's approval part also carries a free_window part naming
+// it (parts.ts). Revisions below 9 receive the approval part alone, which shows the same offer as a full card.
+export const APP_CHAT_FREE_WINDOW_REVISION = 10;
+// Chat revision 8 (`chat=8`): a reply Waldo drew a chart in carries it as a `chart_series` part, after its text and before
+// its receipt. Its `fallback_text` is the chart's `alt_text`. Below 8 no chart part is sent: the reply's `text` carries each
+// chart's alt text instead, after the reply's own words and before its receipt line, so an older build shows what the chart says.
+export const APP_CHAT_CHART_REVISION = 8;
+// Chat revision 11 (`chat=11`): a chart of the owner's own readings is a `chart_series` part too, but the reply keeps only its
+// query. Each read of the chat re-reads the health plane for it, so the points exist only in that response. A build below 11,
+// a read with sharing off or nothing to draw, and a page past its live-read budget get the chart's alt text in `text`, in the
+// same place as below 8.
+export const APP_CHAT_HEALTH_CHART_REVISION = 11;
+export const appMemoryUsedV1Schema = z.strictObject({ id: z.string().regex(/^memory:claim:[1-9][0-9]{0,15}$/), text: z.string().min(1).max(300) });
 // `text` is never empty when `parts` holds anything other than a text part, so a reader that draws only `text`
 // always shows the message. `created_at` is epoch ms when the row was stored; rows stored before the time
 // was kept have none, and no time is ever invented for them.
@@ -121,6 +177,7 @@ export const appMessageV1Schema = z.strictObject({
   channel: z.string(), parent_id: z.string().nullable(), visibility: replyVisibilityV1Schema.optional(),
   created_at: z.int().nonnegative().optional(),
   rating: z.enum(['up', 'down']).optional(),
+  memory_used: z.array(appMemoryUsedV1Schema).min(1).max(APP_CHAT_MEMORY_USED_MAX_V1).optional(),
 });
 // The history row `id`, URL-encoded in a path.
 export const appMessageIdV1Schema = z.string().min(1).max(256);
@@ -142,7 +199,11 @@ export const appIMessageLinkCodeV1Schema = z.strictObject({
   code: z.string().regex(/^[A-HJ-NP-Z2-9]{10}$/), text: z.string().regex(/^waldo [A-HJ-NP-Z2-9]{10}$/),
   address: z.string().min(3).max(320), send_url: z.string().startsWith('sms:').max(512), expires_in_seconds: z.literal(600),
 });
+// Before sign-in: whether this server admits a new account with no invite. Open, sign-up asks for no invite code; closed, it
+// does. A Worker without the route answers 404, which reads as closed.
+export const appAuthOptionsV1Schema = z.strictObject({ open_signup: z.boolean() });
 export const appCoreRoutesV1 = [
+  { method: 'GET', path: '/app/v1/auth/options', response: appAuthOptionsV1Schema, authenticated: false, success_status: 200 },
   { method: 'POST', path: '/app/v1/auth/code', request: appCodeRequestSchema, response: appCodeResultSchema, authenticated: false, success_status: 200 },
   { method: 'POST', path: '/app/v1/auth/verify', request: appVerifyRequestV1Schema, response: appVerifyResultV1Schema, authenticated: false, success_status: 200 },
   // A Worker without this route answers 404; the app then offers the email code only.

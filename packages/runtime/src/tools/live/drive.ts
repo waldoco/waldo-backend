@@ -34,7 +34,7 @@ export const readDriveHandler = (google: GoogleAccess, enabled = false, contentE
     const pageSize = args.page_size;
     try {
       const account = client.account ?? {connection_id:null,email:null};
-      if (args.account && account.email?.toLowerCase() !== args.account.toLowerCase()) throw new Error('Selected Google account is unavailable; no other account was used');
+      if (args.account && account.email?.toLowerCase() !== args.account.toLowerCase()) return { ok: false, code: 'not_found', error: `${args.account} is not a connected Google account that can read Drive; no other account was used.`, fix: 'Pass account as one of the addresses connect_service lists, or leave account out to read the default account.', source_taint: 'external' };
       if (args.action === 'content') {
         if (!account?.connection_id || account.connection_id !== args.connection_id || !client.driveReadFileContent) return { ok: false, code: 'rejected', error: 'The selected Google account is no longer available. Read current metadata again.', source_taint: 'external' };
         const content = await client.driveReadFileContent({ fileId: args.file_id!, expectedModifiedTime: args.expected_modified_time! });

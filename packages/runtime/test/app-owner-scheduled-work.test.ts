@@ -16,6 +16,7 @@ import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
+import { MAIL_ONLY_GOOGLE } from './helpers/google-grant';
 
 const REMINDER_TEXT = 'Time to call Sam.';
 const model = vi.hoisted(() => ({ calls: 0, requests: [] as string[] }));
@@ -82,6 +83,7 @@ const driveAlarm = async (name: string, identity: Identity) => {
     if (identity.heartbeatDue) await armHeartbeat(new Scheduler(state.storage.sql, state.storage, productionDeps()), Date.now() - 60 * 60_000);
     // The interval's phase sits on the due occurrence, so no later occurrence has come due yet whatever the wall clock reads.
     const sweepAt = Date.now() - 60_000;
+    if (identity.sweepDue) await state.storage.put('google:accounts', MAIL_ONLY_GOOGLE);
     if (identity.sweepDue) await new Scheduler(state.storage.sql, state.storage, productionDeps()).schedule({ id: BRIEF_SWEEP_ID, kind: 'pre_activity_spot', payloadRefs: { id: BRIEF_SWEEP_ID }, occurrenceAt: sweepAt, dueAt: sweepAt, recurrence: { type: 'interval', every_ms: 10 * 60_000, phase_ms: sweepAt % (10 * 60_000) } });
     if (identity.telegram) state.storage.kv.put('telegram_subject', '7');
     if (identity.telegramUnlinked) state.storage.kv.put('telegram_unlinked', true);

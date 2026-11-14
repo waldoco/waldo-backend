@@ -212,6 +212,15 @@ describe('agent mail inbound', () => {
     });
   });
 
+  it('a mail turn is offered send_agent_mail while sending as Waldo is on', async () => {
+    await withOwner(async ({ passes }) => {
+      proof.replies.push('Noted.');
+      expect(await deliver({ messageId: 'root3@owner.test.invalid', body: 'Please reply to Sam for me.' })).toBe('admitted');
+      await passes();
+      expect(offeredTools()).toContain('send_agent_mail');
+    }, { AGENT_MAIL_INBOUND: '1', AGENT_MAIL_SEND: '1', AGENT_MAIL_SENDER: { send: async () => ({ messageId: '<never@x.test>' }) } as never });
+  });
+
   it('a code or a health reading in the subject or a file name never reaches the model or storage', async () => {
     await withOwner(async ({ state, passes }) => {
       proof.replies.push('A mail with a code arrived.');
@@ -258,6 +267,10 @@ describe('agent mail inbound', () => {
       expect(await deliver({ from: 'Sam <sam@else.test.invalid>', inReplyTo: '<root@owner.test.invalid>', references: '<root@owner.test.invalid>', messageId: 'reply@else.test.invalid', body: '1pm works for me.' })).toBe('admitted');
       await passes();
       expect(proof.requests.some(request => request.includes('1pm works for me.') && request.includes('It replies in a mail thread Waldo was copied on.'))).toBe(true);
+      // The mail's own Message-ID reaches the model whole, so a reply can name it in in_reply_to.
+      expect(proof.requests.some(request => request.includes('1pm works for me.') && request.includes('message_id') && request.includes('<reply@else.test.invalid>'))).toBe(true);
+      // Sending as Waldo is off here, so the reply tool is not offered.
+      expect(offeredTools()).not.toContain('send_agent_mail');
       expect(sends().some(entry => entry.body.text === 'Sam says 1pm works for them.')).toBe(true);
       // The thread map holds ids, direction, time and thread only.
       expect(state.storage.sql.exec('SELECT * FROM agent_mail_threads ORDER BY at').toArray().map(({ at, ...row }) => ({ ...row, timed: typeof at === 'number' }))).toEqual([
@@ -457,6 +470,21 @@ describe('agent mail routing rule lane', () => {
       expect(logs.filter(line => line.includes('agent_mail_rule'))).toEqual([JSON.stringify({ hop: 'agent_mail_rule', code: 'live' })]);
       expect(state.storage.kv.get(AGENT_MAIL_RULE_DUE_KEY)).toBeUndefined();
       expect(JSON.stringify(logs) + await everythingStored(state)).not.toContain(TOKEN);
+    }, ruleEnv('1'));
+  });
+
+  it('a rule deferred while routing was unconfigured is created on the first pass after it is configured', async () => {
+    await withOwner(async ({ state, passes }) => {
+      const world = rulesWorld();
+      world.state = 'pending';
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      // What an older pass left before the token was set: the work put off a day, unmarked, with no attempt counted.
+      intendAgentMailRule(state.storage.kv, 'priya', Date.now());
+      state.storage.kv.put(AGENT_MAIL_RULE_DUE_KEY, Date.now() + 24 * 60 * 60_000);
+      await passes(1);
+      expect(world.rules.map(rule => rule.name)).toEqual(['waldo-staging-mail:priya']);
+      expect(world.state).toBe('live');
+      expect(state.storage.kv.get(AGENT_MAIL_RULE_DUE_KEY)).toBeUndefined();
     }, ruleEnv('1'));
   });
 

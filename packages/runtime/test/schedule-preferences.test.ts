@@ -4,7 +4,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { SCHEDULE_KINDS } from '@waldo/contracts';
 import { applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, schedulePreferenceHandlers, schedulePreferences, schedulePreferencesLine } from '../src/channels/schedule-preferences';
-import { dayPlanBook } from '../src/channels/day-cards';
+import { armDayCards, dayPlanBook, ownerCardTime } from '../src/channels/day-cards';
 import { loopBook } from '../src/channels/loops';
 import { HEARTBEAT_ID } from '../src/channels/heartbeat';
 import { NIGHTLY_CATCH_UP_ID, NIGHTLY_ID } from '../src/channels/episodes';
@@ -32,10 +32,12 @@ const build = (state: DurableObjectState) => {
   const prefs = schedulePreferences(sql, loops);
   const plans = dayPlanBook(sql);
   const ctx = { scheduler, plans, timezone: TZ, now: NOW };
-  const [tool] = schedulePreferenceHandlers(prefs, () => ctx);
+  const cardTime = (card: 'card:brief' | 'card:close', time: string) => ownerCardTime({ scheduler, book: plans, kv: state.storage.kv, timezone: TZ, now: NOW, queued: () => false,
+    enabled: prefs.enabled('daily_brief'), quiet: () => false }, card, time, false);
+  const [tool] = schedulePreferenceHandlers(prefs, () => ctx, cardTime);
   const call = (args: unknown) => (tool!.handle as (input: unknown) => Promise<unknown>)(tool!.schema.parse(args));
   const ids = () => [NIGHTLY_ID, HEARTBEAT_ID, BRIEF_SWEEP_ID, ...DAY_CARDS.map((card) => card.id)].filter((id) => scheduler.read(id) !== null);
-  return { scheduler, loops, prefs, ctx, call, ids };
+  return { scheduler, loops, prefs, plans, ctx, call, ids };
 };
 
 describe('schedule preferences', () => {
@@ -181,6 +183,44 @@ describe('schedule preferences survive an interrupt between the save and the can
       expect(prefs.all().nightly).toBe(false);
       await reconcileSchedulePreferences(prefs.all(), ctx);
       expect(ctx.scheduler.read(NIGHTLY_ID)).toBeNull();
+    });
+  });
+});
+
+describe('the owner sets the Brief or the Close time in chat', () => {
+  // 02:00 UTC is 07:30 in Kolkata: the Brief is still due at 08:00 and the Close at 21:30.
+  const local = (clock: string) => Date.parse(`2026-10-07T${clock}:00+05:30`);
+  it('keeps the time every day, moves today\'s card at once and hands the model the receipt to say', async () => {
+    await withOwner(async ({ scheduler, plans, call }) => {
+      await armDayCards(scheduler, plans, TZ, NOW);
+      expect(await call({ action: 'time', card: 'close', time: '22:15' })).toMatchObject({ ok: true, data: { said: 'Saved. Your Close comes at 10:15pm.' } });
+      expect([plans.pins(), scheduler.read('card:close')?.due_at]).toEqual([{ 'card:close': '22:15' }, local('22:15')]);
+      // Past now while today's Brief is still due at 08:00: it goes now, once, and the time holds from tomorrow.
+      expect(await call({ action: 'time', card: 'brief', time: '07:10' })).toMatchObject({ ok: true, data: { said: "Saved. Your Brief comes at 7:10am. Today's is on its way now." } });
+      expect(scheduler.read('card:brief')?.due_at).toBe(NOW);
+      expect(await call({ action: 'time', card: 'brief', time: '07:10' })).toMatchObject({ ok: true, data: { said: 'Your Brief already comes at 7:10am.' } });
+    });
+  });
+
+  it('with the day cards off, keeps the time and says they are off', async () => {
+    await withOwner(async ({ plans, call }) => {
+      await call({ action: 'off', kind: 'daily_brief' });
+      expect(await call({ action: 'time', card: 'brief', time: '06:45' })).toMatchObject({ ok: true, data: { said: 'Saved. Your Brief comes at 6:45am. Your day cards are off; it comes at this time once you turn them on.' } });
+      expect(plans.pins()).toEqual({ 'card:brief': '06:45' });
+    });
+  });
+
+  it('refuses honestly, changing nothing, where the card row cannot be read or no time writer is wired', async () => {
+    await withOwner(async ({ scheduler, plans, call }) => {
+      scheduler.lookup = () => ({ state: 'unreadable' });
+      expect(await call({ action: 'time', card: 'brief', time: '07:10' })).toMatchObject({ ok: false, code: 'rejected', error: 'That cannot be changed right now. Try again later.' });
+      expect(plans.pins()).toEqual({});
+    });
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`sched-prefs-${sequence++}`)), async (_i, state) => {
+      ensureSchema(state.storage);
+      const prefs = schedulePreferences(state.storage.sql, loopBook(state.storage.sql, { newId: () => 'l1', now: () => NOW }));
+      const [tool] = schedulePreferenceHandlers(prefs, () => ({ scheduler: new Scheduler(state.storage.sql, manualAlarmStorage(state.storage), deps()), plans: dayPlanBook(state.storage.sql), timezone: TZ, now: NOW }));
+      expect(await (tool!.handle as (input: unknown) => Promise<unknown>)(tool!.schema.parse({ action: 'time', card: 'brief', time: '07:10' }))).toMatchObject({ ok: false, code: 'rejected' });
     });
   });
 });

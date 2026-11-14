@@ -29,7 +29,8 @@ const harness = async (name: string, work: (instance: OwnerDO, state: DurableObj
 const postMany = async (instance: OwnerDO, ids: string[]) => {
   const response = await instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
     method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550001111' },
-    body: JSON.stringify({ messages: ids.map(id => ({ from: '15550001111', id, type: 'text', text: { body: 'PRIVATE_WA_TEXT' } })) }),
+    // Plain texts in a row join into one turn; a forward after the first keeps each message its own turn here.
+    body: JSON.stringify({ messages: ids.map((id, index) => ({ from: '15550001111', id, type: 'text', text: { body: 'PRIVATE_WA_TEXT' }, ...(index > 0 ? { context: { forwarded: true } } : {}) })) }),
   }));
   await drainWhatsAppTurns(instance);
   return response;

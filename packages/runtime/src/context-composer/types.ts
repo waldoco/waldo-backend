@@ -92,6 +92,9 @@ export type RuntimeContextMaterials = Readonly<{
   workspace: readonly ContextFragment[];
   // Recent tool outputs, staged as tool_result sources. Each fragment carries its own taint.
   tool_outputs: readonly ContextFragment[];
+  // Count of tool_outputs fragments omitted by the fragment budget (0 = nothing omitted).
+  // Loaders always set 0; prepareMaterials computes the actual count during preparation.
+  tool_outputs_omitted: number;
 }>;
 
 export type StagedInputResolver = Readonly<{

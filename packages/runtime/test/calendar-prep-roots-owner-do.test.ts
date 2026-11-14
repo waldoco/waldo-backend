@@ -6,6 +6,7 @@ import type { LLMGatewayAdapter } from '../src/llm/provider';
 import { BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
 import { loopBook } from '../src/channels/loops';
+import { MAIL_ONLY_GOOGLE } from './helpers/google-grant';
 
 // The prep sweep as the scheduler runs it: every pass and every decision closes its trace with a machine_turn root whose
 // code says why, so a send or a skip reaches the exporter. Text capture is off here, so only the codes survive the gate.
@@ -56,7 +57,8 @@ it.each([
     const owner = new OwnerDO(state, { ...env, CALENDAR_GROUNDED_PREP: '1', LANGFUSE_CAPTURE_TEXT: undefined, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' });
     state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');
-    await state.storage.put('google:accounts', mode === 'no calendar' ? [] : [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
+    // With no calendar grant the sweep still runs on a mail grant, and finds no calendar to prep from.
+    await state.storage.put('google:accounts', mode === 'no calendar' ? MAIL_ONLY_GOOGLE : [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
     if (mode === 'low volume') loopBook(state.storage.sql, { newId: () => 'fixture', now: () => now }).setProactivity({ quiet_start: '20:00', quiet_end: '08:00', volume: 'low' });
     try {
       // The runtime arms the sweep on its first pass; the scheduler then runs it when it falls due.

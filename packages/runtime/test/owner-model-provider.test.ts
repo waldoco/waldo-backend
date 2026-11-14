@@ -6,8 +6,10 @@ import {
   OPENAI_GPT_6_1_TERRA_MODEL,
   OPENAI_GPT_6_LUNA_MODEL,
   OPENAI_PROVIDER,
+  OWNER_MODELS,
 } from '@waldo/contracts';
-import { modelProviderSetting, ownerModels, ownerRoutePolicy } from '../src/llm/owner-routes';
+import { LIGHT_ROLE_MAX_TOKENS } from '../src/channels/async-tools';
+import { lightRoutePolicy, modelProviderSetting, ownerModels, ownerRoutePolicy, strongRoutePolicy } from '../src/llm/owner-routes';
 
 // Which provider runs the owner path is one deploy setting, Claude unless it says openai. A provider whose key is not
 // deployed cannot run it, so the other one does; with both keys, each route falls to the other provider.
@@ -74,5 +76,25 @@ it('logs each unrecognised value once, so a mistyped rollback is seen without a 
     expect(JSON.parse(String(warn.mock.calls[0]![0]))).toEqual({ hop: 'model_provider_unrecognised', ok: false, detail: 'WALDO_MODEL_PROVIDER is not anthropic or openai; the owner path runs on anthropic' });
   } finally {
     warn.mockRestore();
+  }
+});
+
+it('builds the strong role\'s route as the chat route when no fallback is set, and with a set fallback in its place', () => {
+  for (const primary of ['anthropic', 'openai'] as const) {
+    const { chat } = ownerModels({ ...both, primary });
+    expect(strongRoutePolicy(chat, undefined, both)).toEqual(ownerRoutePolicy(chat, chat, both));
+  }
+  // A strong role on one provider with the other provider's strong model as its set fallback.
+  const strong = OWNER_MODELS[OPENAI_PROVIDER].chat, fallback = OWNER_MODELS[ANTHROPIC_PROVIDER].chat;
+  expect(strongRoutePolicy(strong, fallback, both).routes[0]!.fallback.map((step) => step.model)).toEqual([fallback]);
+  expect(strongRoutePolicy(strong, fallback, { openaiApiKey: 'fixture-openai' }).routes[0]!.fallback).toEqual([]);
+});
+
+it('routes the light role\'s step as a chat call with no fallback: the provider cache and the role\'s output cap, alone', () => {
+  const light = ownerModels({ ...both, primary: 'anthropic' }).auxiliary;
+  for (const cap of [LIGHT_ROLE_MAX_TOKENS, 512]) {
+    const [route] = lightRoutePolicy(light, cap).routes;
+    expect(route!.primary).toEqual({ provider: ANTHROPIC_PROVIDER, model: light, cache: 'anthropic_native', max_tokens: cap });
+    expect(route!.fallback).toEqual([]);
   }
 });

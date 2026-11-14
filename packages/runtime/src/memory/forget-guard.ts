@@ -41,6 +41,16 @@ export const carriesTopic = (value: string, topic: string): boolean => literalTe
 // unless the prefix is the whole topic.
 export const startsTopic = (value: string, prefix: string, topic: string): boolean => literalTextIndex(value, prefix, prefix.length < topic.length) !== -1;
 
+// A topic is redacted wherever it stands as a word, so a stray short one would rewrite ordinary text ("go", "Al", a digit
+// pair inside every number). A word of two characters is whole in a script written without spaces between words (北京, a
+// Korean given name), so a topic in Han, kana or Hangul needs two characters and any other needs three. A shorter topic is
+// refused and the refusal is reported, never skipped as if it were forgotten.
+const UNSPACED_SCRIPT = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+export const forgettableTopic = (topic: string): boolean => {
+  const trimmed = topic.trim();
+  return [...trimmed].length >= (UNSPACED_SCRIPT.test(trimmed) ? 2 : 3);
+};
+
 // What an unfinished forget still holds: the words of claims mid-purge and the topics whose purge has not settled. Recall,
 // the nightly pass and promotion withhold whatever carries one of them, and nothing else.
 export const heldTopicsOf = (store: Pick<ClaimStore, 'claims' | 'pendingTopics'>): string[] =>

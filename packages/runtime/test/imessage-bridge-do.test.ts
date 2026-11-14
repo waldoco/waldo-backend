@@ -1,6 +1,8 @@
-import { env } from 'cloudflare:test';
-import { expect, it } from 'vitest';
-import { iMessageComposition } from '../src/channels/imessage/bridge-do';
+import { env, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
+import { expect, it, vi } from 'vitest';
+import { iMessageBridgeName, iMessageComposition } from '../src/channels/imessage/bridge-do';
+import { BridgeStore } from '../src/channels/imessage/bridge-store';
+import { SimulatedHost } from './helpers/imessage-sim-host';
 import { handleIMessageHost } from '../src/channels/imessage/http';
 import { PROPOSED_LOCAL_TEST_POLICY, parseIMessageConnectorPolicy } from '../src/channels/imessage/policy';
 
@@ -27,4 +29,33 @@ it('every missing composition piece disables the connector; disabled routes do n
   }
   expect(iMessageComposition({ ...base, IMESSAGE_CONNECTOR_ENABLED: '0' } as never)).toBeNull();
   expect(iMessageComposition({ ...base, IMESSAGE_CREDENTIAL_WRAPPING_KEY: 'short' } as never)).toBeNull();
+});
+
+it('a failed drain waits the retry interval: a directory outage is not a 250 ms loop', async () => {
+  const host = new SimulatedHost(async () => new Response(null, { status: 500 }));
+  host.bridgeId = `bridge-${crypto.randomUUID()}`; host.accountId = `account-${crypto.randomUUID()}`;
+  const stub = env.IMESSAGE_BRIDGE_DO!.get(env.IMESSAGE_BRIDGE_DO!.idFromName(iMessageBridgeName('test', host.bridgeId, host.accountId)));
+  await runInDurableObject(stub, async (_i, state) => {
+    const store = new BridgeStore(state.storage, PROPOSED_LOCAL_TEST_POLICY);
+    state.storage.sql.exec("INSERT INTO meta(key,value) VALUES('environment','test'),('bridge_id',?),('account_id',?)", host.bridgeId, host.accountId);
+    const event = host.message('hello');
+    store.admitEvent({ version: 1, bridgeId: host.bridgeId, accountId: host.accountId, atMs: Date.now(), nonce: `nonce-${crypto.randomUUID()}`, signature: '' }, JSON.stringify(event), 'digest', event as never);
+  });
+  const directoryCalls = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('directory unreachable'));
+  try {
+    await runInDurableObject(stub, async (instance) => { await (instance as unknown as { alarm(): Promise<void> }).alarm(); });
+    const wakes: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const at = await runInDurableObject(stub, async (_i, state) => state.storage.getAlarm());
+      expect(at, `wake ${i} re-armed`).not.toBeNull();
+      wakes.push(at! - Date.now());
+      expect(await runDurableObjectAlarm(stub)).toBe(true);
+    }
+    for (const delay of wakes) expect(delay).toBeGreaterThanOrEqual(4_000);
+    expect(directoryCalls.mock.calls.length).toBeLessThanOrEqual(4);
+    await runInDurableObject(stub, async (_i, state) => { expect(new BridgeStore(state.storage, PROPOSED_LOCAL_TEST_POLICY).nextPendingEvent()).not.toBeNull(); });
+  } finally {
+    directoryCalls.mockRestore();
+    await runInDurableObject(stub, async (_i, state) => { await state.storage.deleteAlarm(); });
+  }
 });

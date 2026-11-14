@@ -28,6 +28,19 @@ const setup = (sql: SqlStorage, tx: <R>(work: () => R) => R, stores: readonly Fo
 };
 
 describe('forget purge job', () => {
+  it('sweeps a pending purge row whose claim is gone and leaves one whose claim still exists', async () => {
+    await run('forget-purge-orphan', async (sql, tx) => {
+      const { store, purge } = setup(sql, tx, []);
+      store.add({ kind: 'fact', text: 'Keeps bees on an allotment', source: 'stated', evidence: 'synthetic', origin: 'owner', source_ref: 'owner, seed' }, '2026-10-01T00:00:00.000Z');
+      const row = (claimId: number) => sql.exec('INSERT INTO purge_pending (claim_id, fingerprint, created_at) VALUES (?, ?, ?)', claimId, `fp-${claimId}`, '2026-10-01T00:00:00.000Z');
+      row(999); row(1);
+      expect(store.orphanPurgeRows()).toBe(1);
+      await purge.track([]);
+      expect(sql.exec<{ claim_id: number }>('SELECT claim_id FROM purge_pending ORDER BY claim_id').toArray().map((entry) => entry.claim_id)).toEqual([1]);
+      expect(store.orphanPurgeRows()).toBe(0);
+    });
+  });
+
   it('keeps custody of what a forget must clean, cleans it at once, and wakes the job only for what remains', async () => {
     await run('forget-purge-track', async (sql, tx) => {
       const chat = fakeStore('conversation', ['the tea order'], 1);

@@ -7,7 +7,7 @@ type LogState = { kind: 'loading' } | { kind: 'error'; message: string; signedOu
 
 const CATEGORY_LABEL: Record<string, string> = { core: 'Everyday', calendar: 'Calendar', mail: 'Mail', web: 'Web and connected tools', memory: 'Memory', health: 'Health', reminders: 'Follow-ups', settings: 'Settings', skills: 'Skills', workspace: 'Workspace', artifacts: 'Documents', actions: 'Actions beyond chat', catalog: 'Tool catalog', other: 'Unrecognised tool' };
 const DECISION_LABEL: Record<string, string> = { open: 'Waiting for you', review_only: 'Waiting for review', unconfirmed: 'Card not yet shown', edit_requested: 'You asked for changes', skipped: 'You said no', expired: 'Expired', outcome_unknown: 'Outcome unknown', done: 'Approved and done', not_done: 'Not done', undone: 'Undone', other: 'Unrecognised state' };
-const APPROVAL_LABEL: Record<string, string> = { calendar_change: 'Calendar change', email_send: 'Email', message_send: 'Message', mcp_call: 'Connected tool call', tainted_action: 'Action after outside content', browser_submit: 'Web form submit', google_task_change: 'Google Tasks change' };
+const APPROVAL_LABEL: Record<string, string> = { calendar_change: 'Calendar change', email_send: 'Email', message_send: 'Message', agent_mail_send: 'Email as Waldo', mcp_call: 'Connected tool call', tainted_action: 'Action after outside content', browser_submit: 'Web form submit', google_task_change: 'Google Tasks change' };
 
 export function AccessLogView({ log, onPage, onNewest }: { log: AccessLogRecord; onPage: (cursors: AccessLogCursors) => void; onNewest?: () => void }) {
   return <section className="panel access-log" aria-labelledby="access-log-title">

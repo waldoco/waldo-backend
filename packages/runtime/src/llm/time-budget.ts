@@ -28,10 +28,11 @@ export const runClaimDeadline = (windowMs: number, alarmEnd: number | undefined,
   const deadline = Math.min(now + windowMs, alarmEnd ?? Infinity);
   return deadline - now >= ALARM_TURN_MIN_MS ? deadline : null;
 };
-// The turn's time when no run bounds it, counted from the tool loop's start.
+// The turn's time when nothing else bounds it, counted from the tool loop's start.
 export const TURN_TIME_BUDGET_MS = 120_000;
-// A scheduled job's turn has no run, so it gets TURN_TIME_BUDGET_MS from its loop's start. An alarm starts one only with
-// that much of its budget left, plus the close margin; otherwise the job stays due for a fresh alarm.
+// A scheduled job's turn has no run. Inside an alarm it runs to the alarm's end less the close margin, and gives way at its
+// next round to a waiting owner message (owner-do machineTime); outside one it gets TURN_TIME_BUDGET_MS. An alarm starts one
+// only with this much of its budget left; otherwise the job stays due for a fresh alarm.
 export const ALARM_JOB_MIN_MS = TURN_TIME_BUDGET_MS + RUN_CLOSE_MARGIN_MS;
 // Tool rounds follow the time a turn has: 25 for two minutes, never fewer, and never past a ceiling that stops a model
 // stuck in a loop from spending a long run's whole deadline one tool call at a time.

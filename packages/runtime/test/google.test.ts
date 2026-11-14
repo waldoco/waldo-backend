@@ -535,11 +535,21 @@ describe('the kind of a protected block on the owner\'s calendar', () => {
       [{ block: 'rest', operationMarker: marker }, { waldoOperation: marker, waldoBlock: 'rest' }],
       [{ block: 'deep_work' }, { waldoBlock: 'deep_work' }],
       [{ operationMarker: marker }, { waldoOperation: marker }],
+      [{ operationMarker: marker, made: true }, { waldoOperation: marker, waldoMade: '1' }],
+      [{ block: 'rest', made: true }, { waldoBlock: 'rest', waldoMade: '1' }],
+      [{ made: false }, undefined],
       [{}, undefined],
     ] as const) {
       const { calls, client } = recording(created);
       await client.createEvent({ title: 'Recharge', start, end, ...input });
       expect(privateOf(calls[0]!.init)).toEqual(expected);
+    }
+  });
+
+  it('reads back the mark Waldo writes on what it creates, and nothing else as that mark', async () => {
+    for (const [marks, made] of [[{ waldoMade: '1' }, true], [{ waldoMade: 'true' }, undefined], [{ waldoBlock: 'rest' }, undefined], [undefined, undefined]] as const) {
+      const { client } = recording(() => ({ ...created(), ...(marks ? { extendedProperties: { private: marks } } : {}) }));
+      expect((await client.event('blk-1')).waldo_made).toBe(made);
     }
   });
 

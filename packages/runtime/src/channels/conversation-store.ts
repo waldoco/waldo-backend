@@ -1,10 +1,11 @@
 import type { RunEffectScope } from './run-effect-scope';
-import { literalTextRedactor, redactConversationEntry, type ConversationEntry, type ConversationTree } from '@waldo/contracts';
+import { conversationChartTexts, literalTextRedactor, redactConversationEntry, type ConversationEntry, type ConversationTree } from '@waldo/contracts';
 import { redactSecretUrls } from './egress-guard';
 import { carriesTopic, hidesTopic } from '../memory/forget-guard';
 import { forgetSourceBatch, type ForgetSource, type ForgetBatch } from '../memory/selective-forget';
 import { supersededCompaction, type CompactionFence, type CompactionSettings } from '../conversation/compaction';
 import { shapeFault, turnLinkedEntries } from '../conversation/canonical-owner-store';
+import { TIMELINE_CARRIED_ROWS_KEY, type CarriedRows } from '../conversation/one-timeline';
 
 export type ConversationStore = Readonly<{
   load(): Promise<Readonly<{ entries: readonly ConversationEntry[]; leafId: string | null }>>;
@@ -27,15 +28,23 @@ export type ConversationStore = Readonly<{
   // When this chain last tried to compact, success or failure; one bounded value with no content.
   compactionAttempt?(chainRef: string): Promise<number | null>;
   noteCompactionAttempt?(chainRef: string, at: number, scope?: RunEffectScope): Promise<void>;
+  // Where the stepped window of this chain stood at its last turn: row ids only, no content.
+  windowStart?(chainRef: string): Promise<WindowStart | null>;
+  noteWindowStart?(chainRef: string, start: WindowStart, scope?: RunEffectScope): Promise<void>;
   // The compaction settings this chain is read under; a turn's view and its compaction follow them. Absent means off.
   compaction?: CompactionSettings;
 }>;
+
+// head: the row the model's view of the chain started with (a live summary's when one led); from: the first row the last cut
+// kept, absent while nothing has been cut.
+export type WindowStart = Readonly<{ head: string; from?: string }>;
 
 type KeyValueStorage = Pick<DurableObjectStorage, 'get' | 'list' | 'put'> & { kv?: Pick<DurableObjectStorage['kv'], 'put'> & Partial<Pick<DurableObjectStorage['kv'], 'list'>> };
 
 const entryKey = (seq: number) => `conv:${String(seq).padStart(10, '0')}`;
 
-export const durableConversationStore = (storage: KeyValueStorage): ConversationStore => ({
+export const durableConversationStore = (storage: KeyValueStorage, compaction?: CompactionSettings): ConversationStore => ({
+  ...(compaction ? { compaction } : {}),
   async forgetSourceBatch(topic) {
     const all = await this.forgetSources!(topic);
     const batch = forgetSourceBatch(topic, all.sources);
@@ -67,6 +76,11 @@ export const durableConversationStore = (storage: KeyValueStorage): Conversation
     };
     if (scope) { if (!storage.kv) throw new Error('fenced synchronous history store unavailable'); scope.commit(() => { for (const [key, value] of Object.entries(writes)) storage.kv!.put(key, value); }); }
     else await storage.put<unknown>(writes);
+  },
+  windowStart: async (chainRef) => (await storage.get<WindowStart>(`window-start:${chainRef}`)) ?? null,
+  async noteWindowStart(chainRef, start, scope) {
+    if (scope) { if (!storage.kv) throw new Error('fenced synchronous history store unavailable'); scope.commit(() => storage.kv!.put(`window-start:${chainRef}`, start)); }
+    else await storage.put(`window-start:${chainRef}`, start);
   },
 });
 
@@ -154,7 +168,7 @@ const conversationSourcesFromRows = (legacy: Map<string, ConversationEntry>, can
   }
   return { sources, incomplete };
 };
-const entryTexts = (entry: ConversationEntry): readonly string[] => [entry.modelPayload, entry.appPayload, ...(entry.modelProjection.mode === 'replace' ? [entry.modelProjection.payload] : [])];
+const entryTexts = (entry: ConversationEntry): readonly string[] => [entry.modelPayload, entry.appPayload, ...(entry.modelProjection.mode === 'replace' ? [entry.modelProjection.payload] : []), ...(entry.quickReplies ?? []), ...(entry.charts ?? []).flatMap(conversationChartTexts)];
 
 // The original rows a compaction row covers: the chain from to_id back to from_id, inclusive, by the parent links a turn
 // reads, which are the links the span was cut from. A walk that never reaches from_id has not seen the whole span: null.
@@ -209,6 +223,10 @@ export const redactConversationEntries = async (
     }
   }
   const hit = (entry: ConversationEntry): boolean => needles.some((needle) => entryTexts(entry).some(text => carriesTopic(text, needle) || conversationHides(text, needle)));
+  // Legacy rows a chain's summary carried in from another surface count as rows of its span.
+  const carried = (await storage.get<CarriedRows>(TIMELINE_CARRIED_ROWS_KEY)) ?? {};
+  const legacyRows = new Map(legacy);
+  const carriedHit = (chain: string): boolean => (carried[chain] ?? []).some((key) => { const row = legacyRows.get(key); return row !== undefined && hit(row); });
   // A compaction row paraphrases its span, which a literal rewrite cannot reach. When the topic sits in any original row of
   // the span, or in the summary itself, or the span cannot be walked to its first row, the row is superseded to the marker
   // and omitted, with its witness in the same unit and its covers kept; the hit test reads the rows as stored before this
@@ -223,7 +241,7 @@ export const redactConversationEntries = async (
     for (const { key, entry } of rows) {
       if (entry.role !== 'compaction' || !entry.covers || entry.modelProjection.mode === 'omit') continue;
       const span = coveredRows(linked, entry.covers);
-      if (!hit(entry) && span !== null && !span.some(hit)) continue;
+      if (!hit(entry) && span !== null && !span.some(hit) && !carriedHit(entry.chatId)) continue;
       const next = supersededCompaction(entry);
       writes[key] = next; rewritten += 1;
       const witnessKey = `${chain}witness:${entry.id}`;

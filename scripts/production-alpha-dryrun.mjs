@@ -7,6 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parseJsonc } from './jsonc.mjs';
+import { flatVars } from './wrangler-vars.mjs';
 import { localManifest } from './staging-migration-preflight.mjs';
 import { pendingDigest } from './staging-migration-apply.mjs';
 
@@ -17,7 +18,7 @@ const decide = (id, detail, step) => ({ id, status: 'decide', detail, step });
 export function configChecks(cfg) {
   const prod = cfg ?? {};
   const staging = prod.env?.staging ?? {};
-  const vars = prod.vars ?? {};
+  const vars = flatVars(prod.vars);
   const out = [];
   out.push(prod.name === 'waldo-runtime' && vars.WALDO_ENVIRONMENT === 'production'
     ? ok('identity', 'waldo-runtime, WALDO_ENVIRONMENT=production')
@@ -49,7 +50,8 @@ export function configChecks(cfg) {
     ? ok('domain', 'routes declared')
     : decide('domain', 'no route or custom domain; production would answer on workers.dev', 'S6'));
   const flags = ['CALENDAR_GROUNDED_PREP', 'DRIVE_READS', 'MAIL_SOURCE_FOLLOWUPS', 'MCP_READ_INTENTS'];
-  const differ = flags.filter((name) => vars[name] !== (staging.vars ?? {})[name]);
+  const stagingVars = flatVars(staging.vars);
+  const differ = flags.filter((name) => vars[name] !== stagingVars[name]);
   out.push(differ.length
     ? decide('feature-parity', `${differ.join(', ')} differ from staging, where the 22 Oct E2E ran`, 'D6')
     : ok('feature-parity', 'feature flags match staging'));

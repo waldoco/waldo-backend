@@ -22,6 +22,17 @@ const lineFor = (state: DurableObjectState, queued: (day: string, card: string) 
   dayCardsLine({ scheduler: new Scheduler(state.storage.sql, state.storage, productionDeps()), book: dayPlanBook(state.storage.sql), kv: state.storage.kv,
     timezone: ZONE, now: NOW, queued });
 
+it('says the time the owner keeps every day beside today\'s plan, so a turn can tell them apart, and says nothing of a default', async () => {
+  await inObject('day-fact-kept', state => {
+    const plans = dayPlanBook(state.storage.sql);
+    plans.save(DAY, { card: 'card:close', time: '21:30', reason: 'planned' });
+    expect(lineFor(state)).toBe("Today's cards: The Close is due at 21:30.");
+    plans.pin('card:brief', '07:10');
+    plans.pin('card:close', '22:15');
+    expect(lineFor(state)).toBe("Today's cards: The Close is due at 21:30. Every day, the owner keeps The Daily Brief at 07:10 and The Close at 22:15.");
+  });
+});
+
 it('names each planned card by where it stands: reached the app at a time, still due, held, skipped, failed or on its way', async () => {
   await inObject('day-fact-states', state => {
     const plans = dayPlanBook(state.storage.sql);
@@ -30,11 +41,11 @@ it('names each planned card by where it stands: reached the app at a time, still
     plans.save(DAY, { card: 'card:close', time: '21:30', reason: 'planned' });
     plans.delivered(DAY, 'card:brief', 'row-1', Date.parse('2026-10-31T02:32:00Z'));
     plans.sent(DAY, 'card:brief');
-    expect(lineFor(state)).toBe("Today's cards: The Brief reached them in the app at 08:02; Check-in is due at 14:00; The Close is due at 21:30.");
+    expect(lineFor(state)).toBe("Today's cards: The Daily Brief reached them in the app at 08:02; Check-in is due at 14:00; The Close is due at 21:30.");
 
     plans.held(DAY, 'card:midday');
     plans.skipped(DAY, 'card:close');
-    expect(lineFor(state)).toBe("Today's cards: The Brief reached them in the app at 08:02; Check-in is held for quiet hours; The Close was skipped: nothing worth sending.");
+    expect(lineFor(state)).toBe("Today's cards: The Daily Brief reached them in the app at 08:02; Check-in is held for quiet hours; The Close was skipped: nothing worth sending.");
   });
   await inObject('day-fact-elsewhere', state => {
     const plans = dayPlanBook(state.storage.sql);
@@ -42,11 +53,11 @@ it('names each planned card by where it stands: reached the app at a time, still
     plans.save(DAY, { card: 'card:midday', time: '14:00', reason: 'planned' });
     plans.sent(DAY, 'card:brief');
     // Sent through a surface that keeps no app row: said as sent, never as reaching the app.
-    expect(lineFor(state)).toBe("Today's cards: The Brief was sent; Check-in is due at 14:00.");
+    expect(lineFor(state)).toBe("Today's cards: The Daily Brief was sent; Check-in is due at 14:00.");
     // A card released to the outbox is on its way, so the turn does not offer a second copy.
-    expect(lineFor(state, (_day, card) => card === 'card:midday')).toBe("Today's cards: The Brief was sent; Check-in is on its way.");
+    expect(lineFor(state, (_day, card) => card === 'card:midday')).toBe("Today's cards: The Daily Brief was sent; Check-in is on its way.");
     plans.waitingOnModel(DAY, 'card:midday');
-    expect(lineFor(state)).toBe("Today's cards: The Brief was sent; Check-in could not be written (Waldo couldn't reach its model this afternoon).");
+    expect(lineFor(state)).toBe("Today's cards: The Daily Brief was sent; Check-in could not be written (Waldo couldn't reach its model this afternoon).");
   });
 });
 
@@ -105,7 +116,7 @@ it('a hello on WhatsApp carries where the Brief went today, in the turn context 
       const turn = model.requests.filter(request => !request.text?.format && request.tools?.length).at(-1)!;
       const input = turn.input;
       const message = JSON.stringify(Array.isArray(input) ? input.at(-1) : input);
-      expect(message).toContain(`Today's cards: The Brief reached them in the app at ${localIso(deliveredAt, ZONE).slice(11, 16)}.`);
+      expect(message).toContain(`Today's cards: The Daily Brief reached them in the app at ${localIso(deliveredAt, ZONE).slice(11, 16)}.`);
     } finally { network.mockRestore(); await state.storage.deleteAlarm(); }
   });
 });

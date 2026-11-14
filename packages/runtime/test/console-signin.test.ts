@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { APP_PRIVACY_NOTICE_URL_V1, APP_TERMS_URL_V1 } from '../../contracts/src/app/onboarding';
 import { handleConsole, downloadReturnTarget, consoleReturnTarget } from '../src/channels/console-signin';
 import type { ConsoleAuth } from '../src/identity/console-auth';
+import { OPEN_OWNER_PATH, verifiedOpenOwnerMark } from '../src/identity/open-owner-hold';
 
 const downloadTarget = '/console/workspace/file?id=def993c9-db4d-49c4-8998-8465bed3606e&revision=1';
 it('returns expired DO download sessions to sign-in while preserving the exact file intent', async () => {
@@ -595,5 +596,52 @@ describe('the published terms and privacy policy', () => {
     const html = await (await handleConsole(new Request('https://w.test/console/signin'), { OWNER_DO: owners().ns }, auth()))!.text();
     expect(html).toContain(`<a href="${APP_TERMS_URL_V1}">Terms of Use</a>`);
     expect(html).toContain(`<a href="${APP_PRIVACY_NOTICE_URL_V1}">Privacy Policy</a>`);
+  });
+});
+
+describe('console sign-in for an owner who joined openly', () => {
+  const SECRET = 'fictional-console-mark-secret';
+  // Owner objects that record what reaches them: the Worker's mark (verified against the router secret) and the grant.
+  const objects = (markStatus = 204) => {
+    const reached: string[] = [];
+    const ns = { idFromName: (name: string) => name, get: (name: string) => ({ fetch: async (input: RequestInfo, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (new URL(request.url).pathname === OPEN_OWNER_PATH) {
+        expect(await verifiedOpenOwnerMark(request, SECRET, value => value === name)).toBe(true);
+        reached.push('mark');
+        return new Response(null, { status: markStatus });
+      }
+      reached.push(new URL(request.url).pathname);
+      return new Response('session-token');
+    } }) } as unknown as DurableObjectNamespace;
+    return { reached, ns };
+  };
+  const signIn = (ns: DurableObjectNamespace, state: string | null, openSignup = '1') => handleConsole(form('/console/verify', { email: 'owner@example.com', code: '123456' }),
+    { OWNER_DO: ns, OPEN_SIGNUP: openSignup, WALDO_ROUTER_HMAC_SECRET: SECRET, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as unknown as RateLimit } as never,
+    auth({ verify: async () => 'do-a', openOwnerState: async () => state as never }));
+
+  it('marks the owner object before the console session is granted', async () => {
+    const { reached, ns } = objects();
+    const response = (await signIn(ns, 'held'))!;
+    expect(response.headers.get('set-cookie')).toContain('HttpOnly');
+    expect(reached).toEqual(['mark', '/grant-console']);
+  });
+
+  it('grants no session when the mark cannot be set', async () => {
+    const { reached, ns } = objects(503);
+    const response = (await signIn(ns, 'held'))!;
+    expect(response.headers.get('set-cookie') ?? '').not.toContain('waldo_owner=');
+    expect(reached).toEqual(['mark']);
+  });
+
+  it('marks no member, and asks nothing with open sign-up off', async () => {
+    const member = objects(), off = objects(), state = vi.fn(async () => 'held' as const);
+    await signIn(member.ns, 'member');
+    expect(member.reached).toEqual(['/grant-console']);
+    await handleConsole(form('/console/verify', { email: 'owner@example.com', code: '123456' }),
+      { OWNER_DO: off.ns, OPEN_SIGNUP: '0', WALDO_ROUTER_HMAC_SECRET: SECRET, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } as unknown as RateLimit } as never,
+      auth({ verify: async () => 'do-a', openOwnerState: state }));
+    expect(off.reached).toEqual(['/grant-console']);
+    expect(state).not.toHaveBeenCalled();
   });
 });

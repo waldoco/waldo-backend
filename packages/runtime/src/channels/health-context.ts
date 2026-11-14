@@ -279,9 +279,17 @@ export const toContextHealthMaterial = (
   }
 };
 
+// The zone words a rendered health block shows the model (renderHealth), for checks that keep them out of what leaves.
+export const healthZoneWords = (material: ContextHealthMaterial | null): readonly string[] => material === null ? [] : [
+  'form_zone' in material.view ? material.view.form_zone : material.view.recovery_zone,
+  material.narrative.recovery_descriptor, ...(material.narrative.load_descriptor ? [material.narrative.load_descriptor] : []),
+];
+
 export type HealthContextBook = Readonly<{
   linked(): boolean;
   latest(trace?: string): Promise<ContextHealthMaterial | null>;
+  // As latest, but a read that failed is 'unknown' rather than none shared, for a caller that must not take an outage for a revoke.
+  read(trace?: string): Promise<ContextHealthMaterial | null | 'unknown'>;
 }>;
 
 export const healthContextBook = (
@@ -290,21 +298,25 @@ export const healthContextBook = (
   clock: OwnerClock,
   onReadError?: (error: unknown, trace?: string) => void,
   onReadSuccess?: (present: boolean, trace?: string) => void,
-): HealthContextBook => ({
-  linked: () => call !== null && doName !== null,
-  async latest(trace) {
+): HealthContextBook => {
+  const read: HealthContextBook['read'] = async (trace) => {
     if (!call || !doName) return null;
     let row: unknown;
     try {
       row = await call('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName });
     } catch (error) {
       onReadError?.(error, trace);
-      return null;
+      return 'unknown';
     }
     if (row === null || typeof row !== 'object') { onReadSuccess?.(false, trace); return null; }
     let invalid = false;
     const material = toContextHealthMaterial(row as HealthContextRow, clock, (error) => { invalid = true; onReadError?.(error, trace); });
     if (!invalid) onReadSuccess?.(material !== null, trace);
-    return material;
-  },
-});
+    return invalid ? 'unknown' : material;
+  };
+  return {
+    linked: () => call !== null && doName !== null,
+    latest: async (trace) => { const found = await read(trace); return found === 'unknown' ? null : found; },
+    read,
+  };
+};

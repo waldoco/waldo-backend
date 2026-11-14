@@ -1,5 +1,6 @@
 import { env, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
+import { approvalDesk } from '../src/channels/approvals';
 import { HEARTBEAT_ID } from '../src/channels/heartbeat';
 import { LOOP_CHECK_BACK_TOOLS } from '../src/channels/check-back';
 import { loopBook } from '../src/channels/loops';
@@ -145,4 +146,19 @@ it('the apply turn is tainted: its recall leaves out health claims and keeps the
   expect(seen.apply).toHaveLength(1);
   expect(seen.apply[0]).toContain('Asha leads the launch call');
   expect(seen.apply[0]).not.toContain('migraine');
+}, 30_000);
+
+it('the heartbeat settles a granted change of unknown outcome, so an owner who never opens the approvals list is told', async () => {
+  const owner = await ready('machine-heartbeat-granted-settle', false);
+  // A change a grant claimed with no effect intent on record never reached Google.
+  await runInDurableObject(owner, async (_instance, state) => {
+    approvalDesk(state.storage.sql, { call: async () => ({ message_id: 1 }), owner: 42, google: async () => null, newId: () => 'g1', now: Date.now, timezone: 'UTC', log: () => undefined });
+    state.storage.sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at, grant_json) VALUES ('pg1', 'calendar_change', 'uncertain', 'Add Focus', ?, NULL, ?, ?, ?)",
+      JSON.stringify({ action: 'create', title: 'Focus', start: '2026-11-03T09:00:00Z', end: '2026-11-03T10:00:00Z', reason: 'plan the day', operation_ref: 'tool:heartbeat-1' }), Date.now(), Date.now(),
+      JSON.stringify({ class: 'calendar.move_own_block', grant_id: 'g1', revision: 1 }));
+  });
+  await runDurableObjectAlarm(owner);
+  await runInDurableObject(owner, async (_instance, state) => {
+    expect(state.storage.sql.exec<{ status: string }>("SELECT status FROM ledger WHERE id = 'pg1'").one().status).toBe('failed');
+  });
 }, 30_000);

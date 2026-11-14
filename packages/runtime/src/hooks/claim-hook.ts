@@ -12,6 +12,8 @@ export type LoopEventLike = Readonly<{
   // Only a tool result that itself says its receipt is unavailable is unresolved.
   receiptStatus?: 'unavailable';
   code?: string;
+  // The stage that refused it: invalid_args with this code means the argument check refused it before the handler ran.
+  reason?: string;
   // The effect was done by a child task; the parent receipts it like its own so the reply can claim only receipted effects.
   delegated?: true;
   // When the tool call returned, epoch ms.
@@ -19,7 +21,11 @@ export type LoopEventLike = Readonly<{
 }>;
 
 // The ref a tool's receipt carries, taken from typed args only. A tool not listed has no ref.
-const REF_ARG: Partial<Record<ToolName, string>> = { workspace_write: 'path', workspace_render: 'path' };
+// A started task is named by its title, so the reply's receipt line says what was started.
+const REF_ARG: Partial<Record<ToolName, string>> = { workspace_write: 'path', workspace_render: 'path', start_task: 'title' };
+// A task's title is the model's words, which start_task may have refused to store (a brief that names health values), so
+// only a task that started is named.
+const REF_ONLY_ACCEPTED: ReadonlySet<ToolName> = new Set(['start_task']);
 
 const toolName = (name: unknown): ToolName | null => {
   const parsed = toolNameSchema.safeParse(name);
@@ -37,7 +43,7 @@ export const receiptsFromLoopEvents = (events: readonly LoopEventLike[]): readon
   const effect = name ? TOOL_CLAIM_EFFECT[name] : null;
   if (!name || !effect) return [];
   const state: ReceiptState = event.ok ? 'accepted' : event.receiptStatus === 'unavailable' ? 'unresolved' : 'failed';
-  const ref = refOf(name, event.call.args);
+  const ref = state === 'accepted' || !REF_ONLY_ACCEPTED.has(name) ? refOf(name, event.call.args) : undefined;
   return [{ seq: event.seq, tool: name, effect, ok: event.ok, state, ...(event.delegated ? { delegated: true } : {}), ...(ref !== undefined ? { ref } : {}) }];
 });
 

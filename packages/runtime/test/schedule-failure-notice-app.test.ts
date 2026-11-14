@@ -24,7 +24,7 @@ vi.mock('openai', () => {
 
 const OWNER_ID = '5c4d3e2f-1a0b-4c9d-8e7f-6a5b4c3d2e1f';
 const PRINCIPAL = `prn_${OWNER_ID.replaceAll('-', '')}`;
-const LINE = 'One of your reminders failed 3 times in a row, so I\'ve paused it. I\'ll try again around Sat 2 Nov, 23:01.';
+const LINE = 'One of your reminders failed 3 times in a row, so I\'ve paused it. I\'ll try again around Sat 2 Nov at 11:01pm.';
 
 beforeEach(() => {
   sent.length = 0;

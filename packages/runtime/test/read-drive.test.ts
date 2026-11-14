@@ -44,6 +44,12 @@ describe('read_drive (Drive v3 metadata over the proxy client)', () => {
     expect(await call(make(null), { action: 'recent' })).toMatchObject({ ok: false, code: 'auth_failed', error: 'Google (drive) is not connected.', connect: { reason: 'not_connected' } });
     expect(await call(make({}), { action: 'recent' })).toMatchObject({ ok: false, code: 'rejected' });
   });
+  it('a named account that is not the connected one is not found with a fix, and nothing is read', async () => {
+    const listed = vi.fn();
+    const result = await call(make({ account: { connection_id: 'c', email: 'owner@example.test' }, driveListFiles: listed } as Partial<GoogleClient>), { action: 'recent', account: 'someone@example.test' });
+    expect(result).toMatchObject({ ok: false, code: 'not_found', fix: expect.stringContaining('connect_service') });
+    expect(listed).not.toHaveBeenCalled();
+  });
   it('schema: search needs name_contains, get needs a closed id, size capped at 50', () => {
     expect(readDriveArgsSchema.safeParse({ action: 'search' }).success).toBe(false);
     expect(readDriveArgsSchema.safeParse({ action: 'get', file_id: 'a b' }).success).toBe(false);

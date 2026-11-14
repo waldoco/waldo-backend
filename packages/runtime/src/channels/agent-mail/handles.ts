@@ -98,8 +98,10 @@ export async function agentMailHandleView(kv: Kv, directory: AgentMailHandleDire
 }
 
 // The name mail from Waldo carries: "Waldo, <first name>'s assistant", or "Waldo" with no name to use. Built when it is
-// shown or sent, from the name the owner gave, never stored. Header-breaking characters are dropped.
+// shown or sent, from the name the owner gave, never stored apart from a send's frozen draft. Header-breaking characters are dropped.
+export const agentMailFirstName = (ownerName: string | null | undefined): string | null =>
+  (ownerName ?? '').replace(/[\u0000-\u001f\u007f"\\<>]/g, ' ').trim().split(/\s+/)[0]?.slice(0, 40) || null;
 export const agentMailDisplayName = (ownerName: string | null | undefined): string => {
-  const first = (ownerName ?? '').replace(/[\u0000-\u001f\u007f"\\<>]/g, ' ').trim().split(/\s+/)[0]?.slice(0, 40) ?? '';
+  const first = agentMailFirstName(ownerName);
   return first ? `Waldo, ${first}'s assistant` : 'Waldo';
 };

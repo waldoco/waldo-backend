@@ -14,12 +14,20 @@ const offsetMinutes = (instantMs: number, timeZone: string): number => {
   const asUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
   return Math.round((asUtc - Math.floor(instantMs / 1000) * 1000) / 60_000);
 };
-// The instant a local day starts. Two passes settle the offset around a transition.
+// The first instant of a local day. Midnight is read under the offsets either side of any transition near it; where the
+// clock skips midnight (Santiago, Havana), neither reads back as 00:00 and the day starts at the jump itself.
 const localMidnight = (day: string, timeZone: string): number => {
   const wall = Date.parse(`${day}T00:00:00Z`);
-  let guess = wall - offsetMinutes(wall, timeZone) * 60_000;
-  guess = wall - offsetMinutes(guess, timeZone) * 60_000;
-  return guess;
+  const before = offsetMinutes(wall - DAY_MS, timeZone), after = offsetMinutes(wall + DAY_MS, timeZone);
+  const midnights = [...new Set([before, after])].map(offset => wall - offset * 60_000)
+    .filter(instant => instant + offsetMinutes(instant, timeZone) * 60_000 === wall);
+  if (midnights.length) return Math.min(...midnights);
+  let lo = wall - after * 60_000, hi = wall - before * 60_000;
+  while (hi - lo > 1000) {
+    const mid = lo + Math.floor((hi - lo) / 2000) * 1000;
+    if (offsetMinutes(mid, timeZone) === after) hi = mid; else lo = mid;
+  }
+  return hi;
 };
 export const localDayWindow = (day: string, timeZone: string): Readonly<{ start: number; end: number }> =>
   ({ start: localMidnight(day, timeZone), end: localMidnight(shiftDay(day, 1), timeZone) });

@@ -5,7 +5,7 @@
 import type { TrialRecord } from './trial';
 import type { MemoryMode } from './world';
 
-export type TrialEvidence = Pick<TrialRecord, 'transcript' | 'effects' | 'final_state' | 'tools' | 'toolOutputs'> & Partial<Pick<TrialRecord, 'model_inputs'>>;
+export type TrialEvidence = Pick<TrialRecord, 'transcript' | 'effects' | 'final_state' | 'tools' | 'toolOutputs'> & Partial<Pick<TrialRecord, 'model_inputs' | 'light_routes'>>;
 // memory_store: the check reads the claim store, so the raw-history baseline, which has none, skips it.
 export type Receipt = Readonly<{ why: string; holds: (trial: TrialEvidence) => boolean; memory_store?: true }>;
 
@@ -100,6 +100,8 @@ export const noClaimOfKind = (kind: string, why: string): Receipt => ({
 
 // At least `min` calls of these tools succeeded: the answer rests on a look, not a guess.
 export const toolWorked = (names: readonly string[], why: string, min = 1): Receipt => ({ why, holds: (trial) => trial.tools.filter((tool) => names.includes(tool.name) && tool.ok).length >= min });
+// At most max tool calls in the whole trial: a result that already carries what the answer needs saves the extra rounds.
+export const toolCallsAtMost = (max: number, why: string): Receipt => ({ why, holds: (trial) => trial.tools.length <= max });
 
 // No Waldo message, in chat or on a notification, carries any of these renderings of a seeded value.
 export const repliesOmit = (renderings: readonly string[], why: string): Receipt => ({
