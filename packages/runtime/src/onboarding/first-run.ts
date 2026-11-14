@@ -48,18 +48,20 @@ type SetupAnswer = Exclude<keyof AppSetupAnswersRequestV1, 'request_id'>;
 const SETUP_REFS: Readonly<Record<SetupAnswer, string>> = {
   name: NAME_REF, day: 'owner, first run: day', slips: 'owner, first run: slips', wearable: 'owner, first run: wearable',
   matters: 'owner, first run: matters', spots: 'owner, first run: spots', protect: 'owner, first run: protect', rope: 'owner, first run: rope',
-  season: 'owner, first run: season', low: 'owner, first run: low',
+  season: 'owner, first run: season', low: 'owner, first run: low', train: 'owner, first run: train',
 };
 const SETUP_PINS: Readonly<Record<SetupAnswer, Readonly<{ block: 'profile' | 'facts'; order: number }>>> = {
   name: { block: 'profile', order: 0 }, day: { block: 'profile', order: 1 }, slips: { block: 'profile', order: 2 }, wearable: { block: 'profile', order: 3 },
   rope: { block: 'profile', order: 4 }, matters: { block: 'facts', order: 0 }, spots: { block: 'facts', order: 1 }, protect: { block: 'facts', order: 2 },
-  season: { block: 'facts', order: 3 }, low: { block: 'facts', order: 4 },
+  season: { block: 'facts', order: 3 }, low: { block: 'facts', order: 4 }, train: { block: 'facts', order: 5 },
 };
-// The picks about the owner's body (sleep, energy, stress) are the health part of an answer: a claim of kind health under its own
-// ref, so every path that leaves health out (the background decision, a job built from external data) leaves them out too. These
-// are the app's closed choices, not a reading of text; the owner's own words stay with the rest of the answer.
+// The picks about the owner's body (sleep, energy, stress, training: the sessions and the recovery around them, read from the
+// health plane) are the health part of an answer: a claim of kind health under its own ref, so every path that leaves health out
+// (the background decision, a job built from external data) leaves them out too. These are the app's closed choices, not a
+// reading of text; the owner's own words stay with the rest of the answer. When they train is a routine, not a reading: it stays
+// in the facts every turn reads, so Waldo can find and guard the room for it.
 const HEALTH_PART = ', health';
-const BODY_MATTERS: readonly string[] = ['sleep', 'energy', 'stress'];
+const BODY_MATTERS: readonly string[] = ['sleep', 'energy', 'stress', 'training'];
 const HEALTH_PICKS: ReadonlySet<string> = new Set([...BODY_MATTERS, ...appSetupSpotV1Schema.options.filter(spot => BODY_MATTERS.includes(spot.slice(0, spot.indexOf('-'))))]);
 
 const setupParts = (answer: SetupAnswer) => [SETUP_REFS[answer], `${SETUP_REFS[answer]}${HEALTH_PART}`];
@@ -71,7 +73,7 @@ const DAY_TEXT = {
 } as const;
 const SLIP_TEXT = { replies: 'replies and follow-ups', overlaps: 'meetings running into each other', promises: "things they said they'd do", breaks: 'breaks and meals', evenings: 'work running into the evening' } as const;
 const WEARABLE_TEXT = { apple: 'an Apple Watch', samsung: 'a Samsung Galaxy Watch', oura: 'an Oura Ring', whoop: 'a WHOOP', garmin: 'a Garmin watch' } as const;
-const MATTER_TEXT = { sleep: 'their sleep', energy: 'their energy', stress: 'stress', schedule: 'their schedule', mail: 'mail and follow-ups', promises: "the things they said they'd do" } as const;
+const MATTER_TEXT = { sleep: 'their sleep', energy: 'their energy', stress: 'stress', schedule: 'their schedule', mail: 'mail and follow-ups', promises: "the things they said they'd do", training: 'their training' } as const;
 const SPOT_TEXT = {
   'sleep-onset': 'getting to sleep', 'sleep-waking': 'waking in the night', 'sleep-hours': 'not getting enough hours of sleep',
   'energy-mornings': 'energy dips in the mornings', 'energy-lunch': 'energy dips after lunch', 'energy-afternoon': 'energy dips in the late afternoon', 'energy-varies': 'energy dips at different times',
@@ -80,6 +82,7 @@ const SPOT_TEXT = {
   'mail-replying': 'replying to mail', 'mail-chasing': 'chasing others on mail', 'mail-finding': 'finding things in mail',
   'promises-work': 'promises at work slipping', 'promises-home': 'promises at home slipping', 'promises-people': 'promises to friends and family slipping',
   'promises-favours': 'small favours slipping', 'promises-replies': 'replies they owe', 'promises-lookinto': 'things they said they would look into',
+  'training-fitting': 'fitting training in', 'training-keeping': 'keeping training up', 'training-recovery': 'recovering between training sessions', 'training-progress': 'training that is not getting anywhere',
 } as const;
 const PROTECT_TEXT = { workouts: 'their workouts', family: 'family time', meals: 'meals', mornings: 'their mornings before work', focus: 'their focus time' } as const;
 const ROPE_TEXT = {
@@ -89,6 +92,7 @@ const ROPE_TEXT = {
 } as const;
 const SEASON_TEXT = { busy: 'a busy stretch at work', travel: 'travelling soon', none: 'nothing unusual coming up' } as const;
 const LOW_TEXT = { focus: 'focus goes first', patience: 'patience with people goes first', sleep: 'sleep goes first', push: 'they push through anyway', cancel: 'they start cancelling things' } as const;
+const TRAIN_TEXT = { early: 'before work', lunch: 'around lunch', evening: 'in the evenings', weekend: 'at weekends', gap: 'whenever there is a gap' } as const;
 const quoted = (words: string) => `"${words}"`;
 type SetupFact = Readonly<{ kind: string; text: string; evidence: string }>;
 // A list of choices with the owner's words after it, dated; an empty choice with no words of the owner's own says nothing to
@@ -121,6 +125,7 @@ const SETUP_FACTS: { readonly [Answer in SetupAnswer]: (value: NonNullable<AppSe
     text: choice ? `At setup on ${day}: ${SEASON_TEXT[choice]}.${own ? ` In their own words: ${quoted(own)}` : ''}` : `At setup on ${day}, about the stretch they are in, in their own words: ${quoted(own)}`,
   },
   low: pickedFact('fact', 'When running low', 'What happens when they run low', LOW_TEXT),
+  train: pickedFact('routine', 'Usually trains', 'When they train', TRAIN_TEXT),
 };
 const setupFact = <Answer extends SetupAnswer>(answer: Answer, value: NonNullable<AppSetupAnswersRequestV1[Answer]>, day: string): SetupFact | null =>
   (SETUP_FACTS[answer] as (value: NonNullable<AppSetupAnswersRequestV1[Answer]>, day: string) => SetupFact | null)(value, day);
