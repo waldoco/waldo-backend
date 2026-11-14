@@ -1,6 +1,8 @@
 // Open sign-up: joining Waldo without an invite. OPEN_SIGNUP "1" turns it on, and only while the agreements are offered
 // (APP_AGREEMENTS "1") and the month's model spend is counted (WALDO_COST_LEDGER_SYNC "on"): an open owner is held until they
-// accept the agreements, and their lower spend ceiling counts only while the ledger does. Otherwise joining takes an invite.
+// accept the agreements, and their own spend ceiling counts only while the ledger does. Otherwise joining takes an invite.
+
+import { positiveUsd } from '../llm/cost-ledger';
 
 export type OpenSignupEnv = Readonly<{
   OPEN_SIGNUP?: string; OPEN_SIGNUP_DAILY_CAP?: string; OPEN_SIGNUP_TOTAL_CAP?: string; OPEN_SIGNUP_SPEND_CEILING_USD?: string;
@@ -35,7 +37,5 @@ export const openSignupFor = (env: OpenSignupEnv, request: Request): OpenSignup 
   return caps ? { ...caps, ip: request.headers.get('cf-connecting-ip') ?? 'unknown' } : undefined;
 };
 
-export const openOwnerCeilingUsd = (env: OpenSignupEnv): number => {
-  const value = Number(env.OPEN_SIGNUP_SPEND_CEILING_USD);
-  return /^[0-9]+(\.[0-9]+)?$/.test(env.OPEN_SIGNUP_SPEND_CEILING_USD ?? '') && value > 0 ? value : OPEN_SIGNUP_FALLBACK_CEILING_USD;
-};
+export const openOwnerCeilingUsd = (env: OpenSignupEnv): number =>
+  positiveUsd(env.OPEN_SIGNUP_SPEND_CEILING_USD) ?? OPEN_SIGNUP_FALLBACK_CEILING_USD;

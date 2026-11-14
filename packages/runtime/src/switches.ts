@@ -24,3 +24,12 @@ export const withSwitches = <E extends object>(env: E): E => {
   const switches = switchesOf((env as { WALDO_SWITCHES?: unknown }).WALDO_SWITCHES);
   return (switches ? { ...switches, ...env } : env) as E;
 };
+
+// A switch named by data (an announcement's capability) is read only when WALDO_SWITCHES declares it, so such a name never
+// reads a secret or any other var. A value set on env itself still wins, as above.
+export const declaredSwitch = (env: object, name: string): string | undefined => {
+  const switches = switchesOf((env as { WALDO_SWITCHES?: unknown }).WALDO_SWITCHES);
+  if (!switches || !Object.hasOwn(switches, name)) return undefined;
+  const value = (env as Readonly<Record<string, unknown>>)[name];
+  return typeof value === 'string' ? value : switches[name];
+};

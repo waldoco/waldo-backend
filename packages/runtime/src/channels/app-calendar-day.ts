@@ -40,20 +40,20 @@ const readPages = async (client: GoogleClient, from: string, to: string): Promis
   throw new Error('calendar day exceeds the page cap');
 };
 
-type CalendarRead = Readonly<{ state: 'not_connected' | 'needs_reconnect' }> | Readonly<{ state: 'available'; items: readonly Readonly<{ connection: string; item: CalendarItem }>[] }>;
+export type CalendarRead = Readonly<{ state: 'not_connected' | 'needs_reconnect' }> | Readonly<{ state: 'available'; items: readonly Readonly<{ connection: string; account: string; item: CalendarItem }>[] }>;
 
 // An account that could not be read leaves the day unknown, never shown as free, so one dead grant asks for a reconnect and
 // a failed read fails the answer.
-const readCalendar = async (google: GoogleAccess, from: string, to: string): Promise<CalendarRead> => {
+export const readCalendar = async (google: GoogleAccess, from: string, to: string): Promise<CalendarRead> => {
   const known = google.state ? await google.state() : [];
   if (!known.length) return { state: 'not_connected' };
   const calendars = known.filter(account => account.calendar);
   if (!calendars.length || calendars.some(account => account.error !== null)) return { state: 'needs_reconnect' };
-  const items: { connection: string; item: CalendarItem }[] = [];
+  const items: { connection: string; account: string; item: CalendarItem }[] = [];
   for (const account of calendars) {
     const client = await google.client('calendar', undefined, undefined, account.email);
     if (!client) throw new Error('calendar client unavailable');
-    try { items.push(...(await readPages(client, from, to)).map(item => ({ connection: account.id, item }))); }
+    try { items.push(...(await readPages(client, from, to)).map(item => ({ connection: account.id, account: account.email, item }))); }
     catch (error) { if (revoked(error)) return { state: 'needs_reconnect' }; throw error; }
   }
   return { state: 'available', items };
@@ -61,14 +61,18 @@ const readCalendar = async (google: GoogleAccess, from: string, to: string): Pro
 
 // What the calendar itself says about an event, and nothing judged: a meeting is an event with guests. Deep work and
 // meals need a judgement this read does not make, so they stay 'other'. No pill has a source yet, so none is shown.
-const toEvent = async (connection: string, item: CalendarItem): Promise<CalendarEventV1 | null> => {
+// The connector lists guests other than the owner who have not declined, up to 20; past 20 the full attendee count, less
+// the owner, is the better bound.
+export const calendarGuestCount = (item: CalendarItem): number => {
+  const listed = item.attendee_emails?.length ?? 0;
+  return listed >= 20 ? Math.max(listed, (item.attendees ?? 0) - 1) : listed;
+};
+// Null for an event the day does not show: all-day, cancelled, or without a readable span.
+export const toEvent = async (connection: string, item: CalendarItem): Promise<CalendarEventV1 | null> => {
   if (item.all_day || item.status === 'cancelled') return null;
   const start = Date.parse(item.start), end = Date.parse(item.end);
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
-  // The connector lists guests other than the owner who have not declined, up to 20; past 20 the full attendee count, less
-  // the owner, is the better bound.
-  const listed = item.attendee_emails?.length ?? 0;
-  const guests = listed >= 20 ? Math.max(listed, (item.attendees ?? 0) - 1) : listed;
+  const guests = calendarGuestCount(item);
   const names = (item.attendee_names ?? []).map(name => clip(name, 80)).filter(Boolean).slice(0, Math.min(3, guests));
   return {
     id: `evt_${(await sha256Hex(`${connection}\n${item.id}`)).slice(0, 32)}`,

@@ -17,7 +17,7 @@ vi.mock('openai', () => ({ default: class { responses = { create: async (body: u
   return { id: 'r2', output_text: 'done', output: [], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } };
 } }; } }));
 const { createOwnerResponder } = await import('../src/channels/owner-turn');
-const { episodeIndex } = await import('../src/channels/episodes');
+const { episodeIndex, OWNER_SAID } = await import('../src/channels/episodes');
 const { searchEpisodesHandler } = await import('../src/tools/live/search-episodes');
 
 const memory = { pendingTopics: () => [], claims: () => [], allClaims: () => [], recall: () => [], nodes: () => [], edges: () => [], statements: () => [], barriers: () => [], forgetGeneration: () => 0, settle: () => {} };
@@ -25,10 +25,10 @@ const FULL = `latest options test arrive ${'so '.repeat(30)}A leaves 16:30 for 2
 
 // Model-call layer: the scripted model calls search_episodes through the real owner turn,
 // dispatcher and hooks, and the next model input must carry what the tool returned.
-const run = (name: string, args: Record<string, unknown>, body = FULL) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_i, state) => {
+const run = (name: string, args: Record<string, unknown>, body = FULL, speaker: Parameters<ReturnType<typeof episodeIndex>['add']>[1] = OWNER_SAID) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_i, state) => {
   calls.inputs = []; calls.args = args; calls.readSlice = name.startsWith('se-big');
   const index = episodeIndex(state.storage.sql);
-  index.add('tg-9', 'owner', body, Date.parse('2026-10-01T02:31:18Z'));
+  index.add('tg-9', speaker, body, Date.parse('2026-10-01T02:31:18Z'));
   const ref = '1'; // first row in a fresh DO
   calls.args = JSON.parse(JSON.stringify(args).replace('REF', ref));
   const store = { load: async () => ({ entries: [], leafId: null }), save: async () => {} };
@@ -48,6 +48,10 @@ it('the model reads the full stored turn by ref, stamped with null taint (own re
 it('search hits and a missing ref are also stamped with null taint (own read)', async () => {
   expect(await run('se-search', { query: 'latest options test' })).not.toContain('\\"source_taint\\":\\"external\\"');
   expect(await run('se-missing2', { ref: '4040404' })).not.toContain('\\"source_taint\\":\\"external\\"');
+});
+it('a whole stored message, which may quote someone else, is stamped external, read by ref or found by a search', async () => {
+  expect(await run('se-whole-ref', { ref: 'REF' }, FULL, 'owner')).toContain('\\"source_taint\\":\\"external\\"');
+  expect(await run('se-whole-search', { query: 'latest options test' }, FULL, 'owner')).toContain('\\"source_taint\\":\\"external\\"');
 });
 it('an unknown entry_id returns a truthful null episode, not a guess', async () => {
   const second = await run('se-missing', { ref: '4040404' });

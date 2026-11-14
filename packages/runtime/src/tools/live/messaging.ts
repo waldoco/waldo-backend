@@ -3,12 +3,13 @@ import {
   sendMessageArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type SendMessageArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
-import { proposalStatus, turnReadOutside, callWhy, type CardPlacement, type MessageSendProposal, type ProposeOptions } from '../../channels/approvals';
+import { askedStatus, ownerAsked, proposalStatus, turnReadOutside, callWhy, type ApprovalDesk, type CardPlacement, type MessageSendProposal, type ProposeOptions } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 
 export type MessageDesk = Readonly<{
   proposeSendMessage(proposal: MessageSendProposal, options?: ProposeOptions): Promise<string>;
   placement?(id: string): CardPlacement;
+  askedOutcome?(id: string): ReturnType<ApprovalDesk['askedOutcome']>;
 }>;
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
@@ -30,7 +31,9 @@ export const sendMessageHandler = (desk: MessageDesk): ToolHandler<SendMessageAr
       channel: args.channel,
       content: args.content,
       idempotency_key: args.idempotency_key,
-    }, { outside: turnReadOutside(ctx), why: callWhy(ctx) });
+    }, { outside: turnReadOutside(ctx), why: callWhy(ctx), asked: ownerAsked(ctx) });
+    const asked = desk.askedOutcome?.(proposal_id);
+    if (asked) return { ok: true, data: { proposal_id, status: askedStatus(asked), sent: asked.state === 'done' }, source_taint: null };
     return { ok: true, data: { proposal_id, status: proposalStatus(desk.placement?.(proposal_id), 'sent to the owner with Send it / Modify / Not now buttons', 'Nothing was sent.'), sent: false }, source_taint: null };
   },
 });

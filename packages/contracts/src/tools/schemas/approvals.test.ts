@@ -11,6 +11,7 @@ describe('raise_approval args', () => {
     [{ operation: 'list' }],
     [{ operation: 'raise', approval_id: ID }],
     [{ operation: 'withdraw', approval_id: ID, reason: 'Replaced by the version with Jay in cc.' }],
+    [{ operation: 'undo', approval_id: ID }],
   ])('accepts %j', args => {
     expect(raiseApprovalArgsSchema.safeParse(args).success).toBe(true);
   });
@@ -18,6 +19,8 @@ describe('raise_approval args', () => {
   it.each([
     [{}],
     [{ operation: 'raise' }],
+    [{ operation: 'undo' }],
+    [{ operation: 'undo', approval_id: ID, reason: 'changed my mind' }],
     [{ operation: 'list', approval_id: 'p1' }],
     [{ operation: 'raise', approval_id: 'r1' }],
     [{ operation: 'raise', approval_id: `p${'a'.repeat(64)}` }],

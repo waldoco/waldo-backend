@@ -81,6 +81,7 @@ const BY_CODE: Record<string, string> = {
   thread_not_found: 'This chat doesn’t exist.',
   thread_revision_conflict: CHANGED, title_revision_conflict: CHANGED, operation_conflict: CHANGED,
   thread_capacity: 'You’ve reached the most chats Waldo keeps. Delete one you no longer need first.',
+  upload_unavailable: 'That attachment is no longer available to send. Attach it again.',
 };
 
 const failure = async (response: Response): Promise<ChatRequestError> => {
@@ -122,9 +123,10 @@ export const fetchThreadPage = async (thread: string, cursor: string | null, lim
   if (!obj(value)) throw new ChatRequestError(200, 'Waldo sent a chat this console cannot read.');
   return { thread: readThread(value.thread), page: readChatPage(value.history) };
 };
-// A thread message names the thread revision it was written against, so archiving or deleting the thread stops it.
-export const sendChatMessage = async (clientId: string, text: string, thread: string | null = null, revision?: number): Promise<ChatReceipt> => {
-  const value = await request(`${base(thread)}/messages`, json({ client_message_id: clientId, text, ...(thread === null ? {} : { expected_revision: revision }) }));
+// A thread message names the thread revision it was written against, so archiving or deleting the thread stops it. A message with an
+// attachment names its upload, and its text is the attachment's caption, which may be empty.
+export const sendChatMessage = async (clientId: string, text: string, thread: string | null = null, revision?: number, uploadId?: string): Promise<ChatReceipt> => {
+  const value = await request(`${base(thread)}/messages`, json({ client_message_id: clientId, text, ...(uploadId ? { attachments: [{ upload_id: uploadId }] } : {}), ...(thread === null ? {} : { expected_revision: revision }) }));
   if (!obj(value) || value.accepted !== true || !str(value.message_id)) throw new ChatRequestError(202, 'Waldo took the message but its receipt was unreadable.');
   return { message_id: value.message_id, state: runState(value.state) ? value.state : 'admitted', closed_reason: null, effects_unconfirmed: false };
 };

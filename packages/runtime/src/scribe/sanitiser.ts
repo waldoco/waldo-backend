@@ -140,7 +140,7 @@ const READING_NUMBER = String.raw`\d+(?:[.,]\d+)?`;
 // The owner eating or logging, as a relayed food reading says it. Someone else's meal is not the owner's reading.
 const OWNER_ATE = String.raw`\b(?:you|i)(?:'ve|\s+have)?\s+(?:ate|eaten|had|logged|consumed)\b`;
 // A bare two- or three-digit value that is not a clock time ("10:30", "7am", "10h30") or the first group of a phone number.
-const BARE_VALUE = String.raw`\d{2,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|[-–]?\s*\d))`;
+const BARE_VALUE = String.raw`\d{2,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|\d|[-–]\s*\d))`;
 // A weight that follows a bag or a parcel is the luggage's.
 const CARRIED = String.raw`(?:bags?|baggage|luggage|suitcases?|parcel|package|box|cargo|carry-on)`;
 const NOT_CARRIED = String.raw`(?<!\b${CARRIED}\s+)`;
@@ -260,7 +260,7 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   // A plain "temperature" is as often the weather or an oven, so only a fever or a body temperature, or a value in the
   // range a body has, is a reading.
   reading(String.raw`\b(?:fever|body\s+temp(?:erature)?)\b${READING_GAP}${READING_NUMBER}\s*(?:°\s*[cf]?|degrees?|[cf]\b|celsius|fahrenheit)`),
-  reading(String.raw`\b(?:3[5-9]|4[0-2])[.,]\d\s*°?\s*c\b|\b(?:9[5-9]|10[0-8])[.,]\d\s*°?\s*f\b`),
+  reading(String.raw`\b(?:3[5-9]|4[0-2])[.,]\d\s*(?:°\s*)?c\b|\b(?:9[5-9]|10[0-8])[.,]\d\s*(?:°\s*)?f\b`),
   reading(String.raw`\b(?:glucose|blood\s+sugar|fasting\s+sugar|a1c|hba1c|cholesterol|ldl|hdl|triglycerides?)\b${BARE_GAP}\d+(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b))`),
   reading(String.raw`\b(?:respiratory|breathing|resp\.?|respiration)\s+rate\b${BARE_GAP}${BARE_VALUE}`),
   reading(String.raw`\brespiration\b${BARE_GAP}${READING_NUMBER}\s*(?:\/\s*min(?:ute)?\b|breaths?\b)`),
@@ -268,9 +268,9 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\bbreathing\b${BARE_GAP}${READING_NUMBER}\s*(?:per|a|\/)\s*min(?:ute)?\b`),
   // A wrist temperature is read as a value or as its change from the owner's baseline, so a signed small number counts.
   reading(String.raw`\bwrist\s+temp(?:erature)?\b(?:\s+(?:deviation|delta|change))?${WRIST_GAP}[+\-−]?${READING_NUMBER}\b`),
-  reading(String.raw`(?<![\w.])[+\-−]?${READING_NUMBER}\s*(?:°\s*[cf]?|degrees?|[cf]\b)\s+(?:(?:above|below)\s+baseline\s+)?(?:on\s+)?wrist\s+temp(?:erature)?\b`),
+  reading(String.raw`(?<![\w.])[+\-−]?${READING_NUMBER}\s*(?:°(?:\s*[cf]\b)?|degrees?|[cf]\b)\s+(?:(?:above|below)\s+baseline\s+)?(?:on\s+)?wrist\s+temp(?:erature)?\b`),
   // Recovery a minute after exercise can be a single digit, and HRR is its usual short form.
-  reading(String.raw`\b(?:hrr|(?:hr|heart[\s-]+rate)\s+recovery)\b${BARE_GAP}\d{1,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|[-–]?\s*\d))`),
+  reading(String.raw`\b(?:hrr|(?:hr|heart[\s-]+rate)\s+recovery)\b${BARE_GAP}\d{1,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|\d|[-–]\s*\d))`),
   reading(String.raw`\b(?:calories\s+burned|calorie\s+burn|active\s+(?:energy|kcal|cal(?:ories)?))\b${BARE_GAP}\d`),
   reading(String.raw`\b${READING_NUMBER}\s*(?:active\s+(?:kcal|cal(?:ories)?)|(?:kcal|cal(?:ories)?)\s+active)\b`),
   // Apple's Move ring counts active energy.

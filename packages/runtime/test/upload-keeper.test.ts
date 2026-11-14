@@ -47,7 +47,7 @@ describe('every owner upload is kept (WALDO_FILE_TOOLS on)', () => {
     const w = await setup();
     const loaded = await loadTelegramMedia({ kind: 'document', fileId: 'tg-pdf', fileName: 'Plan.pdf', mimeType: 'application/pdf', fileSize: 2 }, { download: async () => new Uint8Array([104, 105]), keep: w.keep });
     expect(loaded.attachment).toMatchObject({ kind: 'file', mime_type: 'application/pdf' });
-    expect(loaded.parts[0]!.text).toMatch(/^\[Owner sent a file "Plan\.pdf", attached\. Saved in their workspace as uploads\/[0-9a-f]{8}\/Plan\.pdf \(file_id .+, revision 1\)\.\]$/);
+    expect(loaded.parts[0]!.text).toMatch(/^\[Owner sent a file "Plan\.pdf", attached\. Saved in their workspace as uploads\/[0-9a-f]{8}\/Plan\.pdf \(file_id .+, revision 1\)\. In a later message it is no longer attached; workspace_read opens it again\.\]$/);
   });
 
   it('keeps files from one batch of messages loaded together, one save at a time', async () => {
