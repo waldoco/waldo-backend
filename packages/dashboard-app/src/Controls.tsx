@@ -88,6 +88,19 @@ function HealthMemorySetting({ on, busy, onAction }: { on: boolean } & ActionPro
   </div></details>;
 }
 
+// What Waldo still asks about with "Just do it" on: the contract's APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1, word for word.
+export const STILL_ASKS = 'Waldo still asks before paying or buying, entering a password, deleting something for good, giving lasting access, sending a web form, using a tool you connected by its address, or doing what an email or message asked it to.';
+// One tap either way. Where this Waldo does not act on it the choice still saves, and the row says it is not active rather than on.
+function ActWithoutAskingSetting({ choice, busy, onAction }: { choice: { on: boolean; available: boolean } } & ActionProps) {
+  const state = !choice.available ? 'Not active yet' : choice.on ? 'On' : 'Off';
+  return <details name="day-settings" className="disclosure"><summary><Icon name="check"/><span className="label key">Just do it</span><span className="value">{state}</span></summary><div className="disclosure-body">
+    <p><b>Just do it — Waldo won’t ask before acting.</b></p>
+    <p>{choice.available ? 'With this on, Waldo does what you ask without asking first, on WhatsApp, iMessage, the app and here. It tells you what it did, with undo where there is one. Off, Waldo asks before it sends, books or changes anything for you.' : 'This is not active on this Waldo yet, so Waldo asks before every action whatever you choose. Your choice is saved for when it is.'}</p>
+    <p className="meta">{STILL_ASKS}</p>
+    <button className="primary" disabled={busy} onClick={() => onAction('act_without_asking.set', { value: choice.on ? 'off' : 'on' })}>{choice.on ? 'Turn off Just do it' : 'Turn on Just do it'}</button>
+  </div></details>;
+}
+
 export function DayControls({ record, busy, onAction }: { record: DayRecord } & ActionProps) {
   const [timezone, setTimezone] = useState(record.data.timezone);
   const [quietStart, setQuietStart] = useState(record.data.proactivity.quiet_start ?? '');
@@ -122,6 +135,7 @@ export function DayControls({ record, busy, onAction }: { record: DayRecord } & 
     </div></details>
     {record.data.schedule_controls && <ScheduleSetting key={record.revision} rows={record.data.schedule_controls} busy={busy} onAction={onAction}/>}
     {record.data.proactive_surface && <ProactiveSurfaceSetting surface={record.data.proactive_surface} busy={busy} onAction={onAction}/>}
+    {record.data.act_without_asking && <ActWithoutAskingSetting choice={record.data.act_without_asking} busy={busy} onAction={onAction}/>}
     {record.data.health_memory !== undefined && <HealthMemorySetting on={record.data.health_memory} busy={busy} onAction={onAction}/>}
     </div>
     <p className="caption">These cards run in chat. Their content and verified Close results aren’t shown here.</p>
