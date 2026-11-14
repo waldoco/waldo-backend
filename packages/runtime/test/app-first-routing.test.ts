@@ -30,13 +30,16 @@ const ORDER_TEXT = 'Inbox triage done: two threads need you.';
 const CHECK_BACK_TEXT = 'I looked for the invoice in your sent mail and found nothing yet. Want me to draft it?';
 const NUDGE_TEXT = 'A nudge queued for the app.';
 const REPLY_TEXT = 'Here is your answer.';
-const fixture = vi.hoisted(() => ({ event: null as CalendarItem | null, changes: [] as CalendarChange[], requests: [] as string[] }));
+const fixture = vi.hoisted(() => ({ event: null as CalendarItem | null, changes: [] as CalendarChange[], requests: [] as string[], deadGrant: false }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
-  return { ...original, googleClient: (_app: unknown, _tokens: unknown, _fetch: unknown, _health: unknown, account: unknown) => ({
-    account, events: async () => fixture.event ? [fixture.event] : [], newMail: async () => [], changedEvents: async () => fixture.changes, event: async () => fixture.event,
-    calendarPage: async () => ({ events: fixture.event ? [fixture.event] : [], next_page_token: null, fetched_count: 1, account, observed_at: new Date().toISOString() }),
-  }) };
+  // A dead grant reports itself through the health callback and fails the read, as the real client does on invalid_grant.
+  const dead = (health: unknown) => { (health as ((error: string) => void) | undefined)?.('google token failed: invalid_grant'); throw new Error('google token failed: invalid_grant'); };
+  return { ...original, googleClient: (_app: unknown, _tokens: unknown, _fetch: unknown, health: unknown, account: unknown) => {
+    const reads = { events: async () => fixture.event ? [fixture.event] : [], newMail: async () => [], changedEvents: async () => fixture.changes, event: async () => fixture.event,
+      calendarPage: async () => ({ events: fixture.event ? [fixture.event] : [], next_page_token: null, fetched_count: 1, account, observed_at: new Date().toISOString() }) };
+    return { account, ...Object.fromEntries(Object.entries(reads).map(([name, read]) => [name, async () => fixture.deadGrant ? dead(health) : read()])) };
+  } };
 });
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
@@ -68,7 +71,7 @@ type Sent = { chat_id: number; text: string; reply_markup?: unknown };
 const wire = { authority: 'current' as Authority, authorityAfter: 0, asked: 0, presence: true, telegram: 'ok' as 'ok' | 'fails', telegramSent: [] as Sent[], previews: [] as unknown[] };
 
 beforeEach(() => {
-  fixture.event = null; fixture.changes = []; fixture.requests = [];
+  fixture.event = null; fixture.changes = []; fixture.requests = []; fixture.deadGrant = false;
   wire.authority = 'current'; wire.authorityAfter = 0; wire.asked = 0; wire.presence = true; wire.telegram = 'ok'; wire.telegramSent = []; wire.previews = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
@@ -101,7 +104,8 @@ afterEach(() => { vi.unstubAllGlobals(); });
 
 type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown> }; fetch(request: Request): Promise<Response>; alarm(): Promise<void> }>;
 type Ctx = { now: number; name: string; appSubject: number };
-type Binding = Readonly<{ app?: boolean }>;
+// over: PROACTIVE_OVER_TELEGRAM with OWNER_SURFACE_DEFAULT, the owner's choice ahead of their Telegram link.
+type Binding = Readonly<{ app?: boolean; over?: boolean }>;
 
 // An owner bound to Telegram (subject 7) who has also used the app, with Google connected, the clock pinned, and no time
 // zone confirmed in the app. The jobs each runtime arms on its first build are cleared, so each test schedules exactly the
@@ -121,7 +125,8 @@ const withOwner = async (name: string, run: (owner: Owner, state: DurableObjectS
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only',
         scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/gmail.readonly'] }]);
       const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC',
-        WALDO_OWNER_TELEGRAM_ID: undefined, GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', MAIL_SOURCE_FOLLOWUPS: '1', CALENDAR_GROUNDED_PREP: '1' }) as unknown as Owner;
+        WALDO_OWNER_TELEGRAM_ID: undefined, GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', WALDO_OAUTH_STATE_SECRET: 'synthetic-state-secret', MAIL_SOURCE_FOLLOWUPS: '1', CALENDAR_GROUNDED_PREP: '1',
+        ...(binding.over ? { OWNER_SURFACE_DEFAULT: '1', PROACTIVE_OVER_TELEGRAM: '1' } : {}) }) as unknown as Owner;
       await owner.setup('telegram').ready;
       await owner.setup('app').ready;
       state.storage.sql.exec('DELETE FROM schedule');
@@ -414,5 +419,32 @@ describe('link previews on Telegram', () => {
       expect(wire.telegramSent).toEqual([{ chat_id: 7, text: REPLY_TEXT }, { chat_id: 7, text: NUDGE_TEXT }]);
       expect(wire.previews).toEqual([noPreview, noPreview]);
     });
+  });
+});
+
+describe('a Google grant that dies during a read on Telegram, with PROACTIVE_OVER_TELEGRAM on', () => {
+  const deadRead = async (owner: Owner) => {
+    fixture.deadGrant = true;
+    const client = await (owner.setup('telegram') as unknown as { google: { client(feature: string): Promise<{ events(): Promise<unknown> } | null> } }).google.client('calendar');
+    await expect(client!.events()).rejects.toThrow();
+  };
+
+  it('sends its reconnect notice to the app the directory admits the owner on, and no button to Telegram', async () => {
+    await withOwner('over-reconnect-telegram', async (owner, state, ctx) => {
+      await deadRead(owner);
+      const reauth = () => outbox(state).filter(record => record.id.startsWith('google-reauth:'));
+      await vi.waitFor(() => expect(reauth().map(record => record.notice)).toEqual([true]), { timeout: 5_000, interval: 20 });
+      await vi.waitFor(async () => { await outboxPass(owner, state, ctx); expect(reauth().map(record => record.status)).toEqual(['delivered']); }, { timeout: 5_000, interval: 20 });
+      expect(await appChat(owner, ctx)).toEqual([{ role: 'assistant', text: expect.stringContaining('owner@example.test'), channel: 'app' }]);
+      expect(wire.telegramSent).toEqual([]);
+    }, { app: true, over: true });
+  });
+
+  it('keeps its button on Telegram for an owner with no app to take the notice', async () => {
+    await withOwner('over-reconnect-no-app', async (owner, state) => {
+      await deadRead(owner);
+      await vi.waitFor(() => expect(wire.telegramSent).toEqual([{ chat_id: 7, text: expect.stringContaining('owner@example.test'), reply_markup: expect.anything() }]), { timeout: 5_000, interval: 20 });
+      expect(outbox(state).filter(record => record.id.startsWith('google-reauth:'))).toEqual([]);
+    }, { app: false, over: true });
   });
 });

@@ -35,6 +35,11 @@ export type FinalRecord = {
   // An answer to work the owner asked for (a task's report), addressed to the chat they asked in: it goes there whichever surface
   // takes Waldo's own proactive messages.
   answersOwner?: true;
+  // A notice of Waldo's own (a dead grant's reconnect notice, the approvals desk's notice), not an answer to what the owner
+  // wrote, though a turn may have queued it: it goes where the owner's proactive messages go.
+  notice?: true;
+  // Under the owner's choice "both", WhatsApp gets a copy once the app has it (a task or job report, agent mail, a reconnect notice).
+  copied?: true;
   // accepted: every part was accepted by a surface that confirms arrival later (WhatsApp); not yet delivered, not settled.
   receiptUrls?: string[]; ownerSubject: string; doName: string; status: 'pending' | 'attempting' | 'accepted' | 'delivered' | 'quarantined' | 'blocked';
   dueAt: number; createdAt: number; attempts: number; settled?: boolean; messageId?: number; deliveredAt?: number; reason?: string;

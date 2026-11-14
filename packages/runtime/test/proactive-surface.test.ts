@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { SEND_NOW_ONLY } from '../src/channels/delivery-routes';
 import { APP_PROACTIVE_SURFACE_RECEIPTS_V1 } from '../../contracts/src/app/controls';
 import { chooseProactiveSurface, PROACTIVE_SURFACE_KEY, PROACTIVE_SURFACES, proactiveReads, proactiveSurfaceChoices, proactiveSurfaceReceipt, WHATSAPP_COPY_PREFIX, WHATSAPP_SUBJECTS_KEY, proactiveSurface, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, setProactiveSurface, UNREACHABLE_CHECK_BACK, wantedTargets,
-  unaskedRecord, waitingForWhatsApp, whatsappSubjects, withCopy, type ProactiveSurface } from '../src/channels/proactive-surface';
+  unaskedRecord, waldoFirstWaitingFor, whatsappSubjects, withCopy, type ProactiveSurface } from '../src/channels/proactive-surface';
 import { appCaller } from '../src/channels/surfaces/app';
 import { templateFor } from '../src/channels/whatsapp-window';
 import type { FinalRecord } from '../src/channels/telegram-final-outbox';
@@ -90,7 +90,7 @@ describe('which messages are Waldo\'s own initiative', () => {
     expect(unaskedRecord(news)).toBe(true);
     expect(templateFor({ reply: { name: 'waldo_update_ready', language: 'en' }, proactive: { name: 'waldo_proactive_update', language: 'en' } }, unaskedRecord(news))).toEqual({ name: 'waldo_proactive_update', language: 'en' });
     expect(templateFor({ reply: { name: 'waldo_update_ready', language: 'en' }, proactive: null }, unaskedRecord(news))).toBeNull();
-    expect(waitingForWhatsApp(new Set(['1']))(news)).toBe(true);
+    expect(waldoFirstWaitingFor(new Set(['1']))(news)).toBe(true);
   });
 });
 
@@ -245,7 +245,7 @@ describe('messages still waiting for WhatsApp', () => {
     ownerSubject: '15550001111', doName: 'owner', status: 'pending', dueAt: 0, createdAt: 0, attempts: 0, reminder, ...changed });
 
   it('are what a scheduled job queued for a WhatsApp number this owner used; a copy of an app message and a reply are not', () => {
-    const waiting = waitingForWhatsApp(new Set(['15550001111', '15550002222']));
+    const waiting = waldoFirstWaitingFor(new Set(['15550001111', '15550002222']));
     expect(waiting(record())).toBe(true);
     expect(waiting(record({ ownerSubject: '15550002222', payload: { chat_id: 15550002222, text: 'Old number.' } }))).toBe(true);
     expect(waiting(record({ id: 'heartbeat:hb:1', reminder: undefined, heartbeat: { id: 'hb', occurrence: 1, schedulerRunId: 'r', loops: [] } }))).toBe(true);
@@ -257,11 +257,11 @@ describe('messages still waiting for WhatsApp', () => {
     // Another surface's record, and one whose chat and owner disagree, are never taken for WhatsApp's.
     expect(waiting(record({ ownerSubject: '7', payload: { chat_id: 7, text: 'Telegram.' } }))).toBe(false);
     expect(waiting(record({ payload: { chat_id: 7, text: 'Mismatched.' } }))).toBe(false);
-    expect(waitingForWhatsApp(new Set())(record())).toBe(false);
+    expect(waldoFirstWaitingFor(new Set())(record())).toBe(false);
   });
 
   it('never include a message WhatsApp took any part of: it is on the owner\'s phone in part, so the app must not get the rest alone', () => {
-    const waiting = waitingForWhatsApp(new Set(['15550001111']));
+    const waiting = waldoFirstWaitingFor(new Set(['15550001111']));
     expect(waiting(record({ providerMessageIds: [null, 'wamid.2'], deliveredParts: 1 }))).toBe(false);
     expect(waiting(record({ providerMessageIds: ['wamid.1', null], deliveredParts: 1 }))).toBe(false);
     expect(waiting(record({ providerMessageIds: [null, null] }))).toBe(true);

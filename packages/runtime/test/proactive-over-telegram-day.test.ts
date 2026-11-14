@@ -212,9 +212,9 @@ const KINDS: Readonly<Record<Kind, Readonly<{ text: string; run(owner: Owner, st
   } },
 };
 const ALL = Object.keys(KINDS) as Kind[];
-// Choice "both" copies to WhatsApp what the scheduled pass delivers and the outbox records it marks as copied (a check-back,
-// an update card); a task report and a reconnect notice are not copied, so with "both" they reach the app alone.
-const COPIED: ReadonlySet<Kind> = new Set(['brief', 'reminder', 'checkBack', 'update']);
+// Choice "both" copies to WhatsApp what the scheduled pass delivers and the outbox records it marks as copied: a check-back,
+// an update card, a task report and a reconnect notice. Meeting prep and pause notices stay in the app.
+const COPIED: ReadonlySet<Kind> = new Set(['brief', 'reminder', 'checkBack', 'update', 'taskReport', 'reconnect']);
 const inApp = (state: DurableObjectState, text: string) => appRows(state).includes(JSON.stringify(text).slice(1, -1));
 const onWhatsApp = (text: string) => world.texts.some(sent => sent.includes(text));
 
@@ -269,6 +269,18 @@ describe('the same day with the switch off', { timeout: 60_000 }, () => {
       await KINDS[kind].run(owner, state);
       expect(telegram.sends).toContain('sendMessage');
       expect(telegram.texts.some(text => text.includes(KINDS[kind].text))).toBe(true);
+    });
+  });
+});
+
+describe('an owner with no Telegram, the switch off', { timeout: 60_000 }, () => {
+  it.each(['taskReport', 'reconnect'] as const)('%s reaches the app and is not copied to WhatsApp, as before the switch existed', async kind => {
+    const name = `day-off-app-${kind}`;
+    const { telegram_subject: _none, ...appOnly } = linked(name, { ...withWhatsApp, [PROACTIVE_SURFACE_KEY]: 'both' });
+    await ownerOn(name, appOnly, OFF, async (owner, state) => {
+      await KINDS[kind].run(owner, state);
+      expect(inApp(state, KINDS[kind].text)).toBe(true);
+      expect(onWhatsApp(KINDS[kind].text)).toBe(false);
     });
   });
 });
