@@ -2,6 +2,8 @@
 
 > **Status: Accepted by owner ruling, 8 Nov 2026** (waldoco/waldo-backend#2003, ruling comment 09:26Z; beta list #2076 P0-1). The owner pre-accepted this amendment. It amends the approval rule of ADR-0018 as extended by ADR-0086 (`AUTONOMY_OPT_IN_2026-10-27.md`) and the chat-to-app hand-off that followed it. Behind `AUTONOMOUS_BY_DEFAULT` (`WALDO_SWITCHES`): `1` in staging, `0` in production.
 
+> **Amendment proposed 14 Nov 2026 (needs owner ack):** [`ADR_0018_AMENDMENT_JUST_DO_IT_2026-11-14.md`](ADR_0018_AMENDMENT_JUST_DO_IT_2026-11-14.md) makes this a per-owner choice and, behind `AUTONOMY_OWNER_TURNS`, draws the line at who started the turn.
+
 ## Decision
 
 1. **Work the owner asked for runs with no card.** A send (Gmail, a message, mail as Waldo), a change to the owner's calendar (including a day plan) and a Google task change run at once when the turn was started by the owner's own message, every part of that message is the owner's own words (a transcript of a file they sent, or a note on a photo, is not), the turn has read no outside text, and nothing it carries from before may be someone else's words (`ownerAsked` in `channels/approvals.ts`). Whether the owner asked is the turn's provenance, never a reading of their words: no keyword or threshold decides it, and the model still judges what to do.

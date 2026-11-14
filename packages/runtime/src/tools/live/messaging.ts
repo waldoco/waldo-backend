@@ -3,7 +3,7 @@ import {
   sendMessageArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type SendMessageArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
-import { askedStatus, ownerAsked, proposalStatus, turnReadOutside, callWhy, type ApprovalDesk, type CardPlacement, type MessageSendProposal, type ProposeOptions } from '../../channels/approvals';
+import { askedStatus, askedBy, proposalStatus, turnReadOutside, callWhy, type ApprovalDesk, type CardPlacement, type MessageSendProposal, type ProposeOptions } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 
 export type MessageDesk = Readonly<{
@@ -31,7 +31,7 @@ export const sendMessageHandler = (desk: MessageDesk): ToolHandler<SendMessageAr
       channel: args.channel,
       content: args.content,
       idempotency_key: args.idempotency_key,
-    }, { outside: turnReadOutside(ctx), why: callWhy(ctx), asked: ownerAsked(ctx) });
+    }, { outside: turnReadOutside(ctx), why: callWhy(ctx), ...askedBy(ctx) });
     const asked = desk.askedOutcome?.(proposal_id);
     if (asked) return { ok: true, data: { proposal_id, status: askedStatus(asked), sent: asked.state === 'done' }, source_taint: null };
     return { ok: true, data: { proposal_id, status: proposalStatus(desk.placement?.(proposal_id), 'sent to the owner with Send it / Modify / Not now buttons', 'Nothing was sent.'), sent: false }, source_taint: null };
