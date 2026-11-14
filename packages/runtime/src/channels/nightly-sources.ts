@@ -1,9 +1,9 @@
 import { fromAddress } from '../memory/people';
-import { applyClaimOps, knownPeople, sourceClaimOps, withoutHealthClaims, type ClaimStore } from '../memory/claims';
+import { applyClaimOps, knownPeople, OUTSIDE_REF, sourceClaimOps, withoutHealthClaims, type ClaimStore } from '../memory/claims';
 import { heldTopicsOf, holdsIn } from '../memory/forget-guard';
 import type { TurnLogEntry } from './owner-turn-types';
 import { localIso } from './reminders';
-import { changeLines, type UpdateBook } from './update-cards';
+import { changeLines, type Change, type UpdateBook } from './update-cards';
 
 // The nightly pass's read of the calendar and mail changes the update sweep recorded, behind MEMORY_NIGHTLY_SOURCE_UPDATES.
 // It keeps its own mark and never folds a row, so the day cards still read every change they would have. A change carrying a
@@ -20,6 +20,23 @@ export const NIGHTLY_SOURCES_CHUNK_CHARS = 40_000;
 export const NIGHTLY_SOURCES_CALLS = 3;
 const ROWS_PER_READ = 200;
 const DAY_MS = 24 * 60 * 60_000;
+
+// A new mail's sender as its From header says, and when it was sent: the mail's own time when it reads as one and is not after
+// the sweep saw it, otherwise when the sweep saw it.
+const newMail = (change: Change, seenAt: number): { from: string; at: number } | null => {
+  if (change.source !== 'mail' || change.kind !== 'new') return null;
+  let mail: { from?: unknown; at?: unknown };
+  try { mail = JSON.parse(change.detail) as typeof mail; } catch { return null; }
+  const sent = typeof mail.at === 'string' ? Date.parse(mail.at) : Number.NaN;
+  return typeof mail.from === 'string' ? { from: mail.from, at: Number.isFinite(sent) && sent <= seenAt ? sent : seenAt } : null;
+};
+// What a note is stored as having come from: the sender and day of a new mail, the day the sweep saw anything else. The
+// sender's name is outside text shown in a bracketed tag, so it keeps no bracket or control character.
+const changeRef = (change: Change, seenAt: number, timezone: string): string => {
+  const mail = newMail(change, seenAt);
+  const from = mail?.from.replace(/[[\]\p{Cc}]+/gu, ' ').replace(/ +/g, ' ').trim().slice(0, 120);
+  return `${OUTSIDE_REF}${change.source === 'calendar' ? 'calendar change' : from ? `mail from ${from}` : 'mail'}, ${localIso(mail?.at ?? seenAt, timezone).slice(0, 10)}`;
+};
 
 export type SourcesDeps = Readonly<{
   kv: Pick<SyncKvStorage, 'get' | 'put'>;
@@ -52,13 +69,15 @@ export const consolidateSources = async (deps: SourcesDeps, trace: string, calls
     if (!rows.length) return call ? 'consolidated' : 'empty';
     const held = holdsIn(heldTopicsOf(deps.claims));
     const lines: string[] = [];
+    const parts: { ref: string; text: string }[] = [];
     let size = 0, last = through;
     for (const row of rows) {
-      const kept = changeLines(row.changes.filter((change) => !held(change.detail))).trim();
+      const changes = row.changes.filter((change) => !held(change.detail));
+      const kept = changeLines(changes).trim();
       const text = kept ? `[${localIso(row.at, deps.timezone)}]\n${kept}` : '';
       // Whole rows only; a first row over the budget still goes alone, so the mark always moves.
       if (lines.length && size + text.length + 1 > NIGHTLY_SOURCES_CHUNK_CHARS) break;
-      if (text) { lines.push(text); size += text.length + 1; }
+      if (text) { lines.push(text); size += text.length + 1; parts.push(...changes.map((change) => ({ ref: changeRef(change, row.at, deps.timezone), text: changeLines([change]) }))); }
       last = row.at;
     }
     if (!lines.length) { if (!settle(last)) return raced(); through = last; continue; }
@@ -71,16 +90,13 @@ export const consolidateSources = async (deps: SourcesDeps, trace: string, calls
         if (!settle(last)) return null;
         const at = new Date(deps.now()).toISOString();
         // The new mail this batch read, not held by a forget: whom each came from, and when.
-        const heard = deps.people ? rows.filter((row) => row.at <= last).flatMap((row) => row.changes.filter((change) => change.source === 'mail' && change.kind === 'new' && !held(change.detail)).flatMap((change) => {
-          let mail: { from?: unknown; date?: unknown };
-          try { mail = JSON.parse(change.detail) as typeof mail; } catch { return []; }
-          const address = typeof mail.from === 'string' ? fromAddress(mail.from) : null;
-          // The mail's own time when it reads as one and is not after the sweep saw it; otherwise when the sweep saw it.
-          const sent = typeof mail.date === 'string' ? Date.parse(mail.date) : Number.NaN;
-          return address ? [{ address, at: new Date(Number.isFinite(sent) && sent <= row.at ? sent : row.at).toISOString() }] : [];
+        const heard = deps.people ? rows.filter((row) => row.at <= last).flatMap((row) => row.changes.filter((change) => !held(change.detail)).flatMap((change) => {
+          const mail = newMail(change, row.at);
+          const address = mail ? fromAddress(mail.from) : null;
+          return mail && address ? [{ address, at: new Date(mail.at).toISOString() }] : [];
         })) : [];
         const scope = deps.people ? { refs: new Set(knownPeople(deps.claims).map((row) => row.id)), addresses: new Set(heard.map((mail) => mail.address)) } : undefined;
-        const detail = applyClaimOps(deps.claims, ops, at, `outside content, ${trace}`, undefined, { shared: updates, outside: true }, false, undefined, undefined, undefined, scope);
+        const detail = applyClaimOps(deps.claims, ops, at, `outside content, ${trace}`, undefined, { shared: updates, outside: true, sharedParts: parts }, false, undefined, undefined, undefined, scope);
         for (const mail of heard) deps.claims.people.heardFrom(mail.address, mail.at);
         return detail;
       });
