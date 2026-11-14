@@ -74,7 +74,8 @@ describe('the owner approves a card shown here by telling Waldo to go ahead', ()
       const id = await f.desk.proposeSendMessage(message());
       expect(f.desk.placement(id)).toMatchObject({ handsToApp: true, hereInFull: true, chatApprovable: true });
       const out = await f.desk.approveShown(id, said(), 'trace');
-      expect(out).toMatchObject({ outcome: 'decided', receipt_sent: true });
+      // The card's kind and the state its run ended in, which the claim check reads to back "sent".
+      expect(out).toMatchObject({ outcome: 'decided', receipt_sent: true, kind: 'message_send', state: 'done' });
       expect(f.sent).toEqual(['On my way']);
       expect(f.status(id)).toBe('done');
       expect(JSON.parse(f.evidence(id)!)).toEqual({ surface: 'whatsapp', message_ref: 'wamid.owner-go-ahead', at: SHOWN_AT });
@@ -89,7 +90,7 @@ describe('the owner approves a card shown here by telling Waldo to go ahead', ()
     await owner('in-words-calendar', async state => {
       const f = harness(state, 'whatsapp');
       const id = await f.desk.propose(HOLD);
-      expect(await f.desk.approveShown(id, said(), 'trace')).toMatchObject({ outcome: 'decided', receipt_sent: true });
+      expect(await f.desk.approveShown(id, said(), 'trace')).toMatchObject({ outcome: 'decided', receipt_sent: true, kind: 'calendar_change', state: 'done' });
       expect(f.created).toHaveLength(1);
       expect(f.status(id)).toBe('done');
       const inWords = f.messages.at(-1)!;
@@ -315,7 +316,7 @@ const context = (over: Partial<ToolDispatcherContext> = {}): ToolDispatcherConte
 // A desk that records every approval it is asked for, so a test sees whether the handler's guard let the call through.
 const recordingDesk = () => {
   const asked: unknown[] = [];
-  const desk: Pick<ApprovalDesk, 'approveShown'> = { approveShown: async (...args) => { asked.push(args); return { outcome: 'decided', decision: { toast: 'Done', message: 'Sent.' }, receipt_sent: true }; } };
+  const desk: Pick<ApprovalDesk, 'approveShown'> = { approveShown: async (...args) => { asked.push(args); return { outcome: 'decided', decision: { toast: 'Done', message: 'Sent.' }, receipt_sent: true, kind: 'message_send', state: 'done' }; } };
   return { desk, asked };
 };
 

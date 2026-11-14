@@ -44,6 +44,7 @@ export const TOOL_ROUNDS_CEILING = 150;
 export const PROMPT_CACHE_TTL_MS: Readonly<Partial<Record<Provider, number>>> = { [ANTHROPIC_PROVIDER]: 5 * 60_000 };
 // Naming a thread runs in the owner object's serial queue after the app drain, so one slow title call would hold back
 // every surface's next turn. It gets one live call's typical time with room to spare, then the thread stays untitled.
+// The owner reply's claim check holds the reply back the same way, and gets the same time; past it the reply goes unchecked.
 export const THREAD_TITLE_BUDGET_MS = 15_000;
 // A chain's compaction runs in the same queue after the app drain, so a message sent meanwhile waits for it: its memory
 // flush and its summary get one call's limit each, and past that the attempt ends with nothing written.

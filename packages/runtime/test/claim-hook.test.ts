@@ -3,8 +3,8 @@ import { toolNameSchema } from '@waldo/contracts';
 import { TOOL_CLAIM_EFFECT } from '../src/hooks/claim-verify-effects';
 import { evaluateTurnClaims, receiptsFromLoopEvents, type LoopEventLike } from '../src/hooks/claim-hook';
 
-// Advisory claim hook contract: typed done-claims vs receipts built from the turn's tool events.
-// Structured data only. No wording of the reply is read. Not wired into any turn.
+// Claim hook contract: typed done-claims vs receipts built from the turn's tool events.
+// Structured data only. No wording of the reply is read here; the owner turn's wiring is in claim-check-owner-turn.test.ts.
 const ev = (seq: number, name: string, ok: boolean, extra: Partial<LoopEventLike> = {}): LoopEventLike => ({ seq, call: { name, args: {} }, ok, ...extra });
 
 describe('receipts from tool-loop events', () => {

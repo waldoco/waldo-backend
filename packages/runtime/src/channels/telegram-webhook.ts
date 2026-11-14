@@ -241,6 +241,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1": the owner's own reply takes a light step that answers quick chat or hands the turn to the strong role, and every task
   // worker runs on the chat model (async-tools.ts).
   WALDO_LIGHT_CHAT?: string;
+  // "1": before the owner's own reply goes, the auxiliary model names the effects it says were done, and a claimed effect
+  // with no accepted receipt this turn is marked under it as not confirmed (hooks/claim-hook.ts).
+  WALDO_CLAIM_CHECK?: string;
   // The light chat roles' models (roster ids) and the light step's output cap; unset, each is its default (async-tools.ts lightChatRoles).
   WALDO_LIGHT_ROLE_MODEL?: string;
   WALDO_STRONG_ROLE_MODEL?: string;

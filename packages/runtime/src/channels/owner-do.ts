@@ -86,6 +86,7 @@ import { RECEIPT_TOOLS, receiptUrl } from '../conversation/artifact-link-guard';
 import { ownerFirst, ownerHold, ownerMessageWaiting } from './owner-first';
 import { secondMessageEnabled, secondMessages, type OwnerChat } from './second-message';
 import { asyncToolsEnabled, lightChatEnabled, lightChatRoles } from './async-tools';
+import { claimCheckEnabled } from '../hooks/claim-hook';
 import { jobOutcomeRowsEnabled } from '../conversation/job-outcome';
 import { oneTimelineEnabled, timelineSeed } from '../conversation/one-timeline';
 import { compactChatTimeline, whatsappTimelineContext, type ChatTimelineHost, type TimelineChat } from './whatsapp-timeline';
@@ -5400,7 +5401,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const newerOwnerMessages = () => this.secondMessages.round();
     const finishedTasks = this.env.WALDO_TASK_PICKUP === '1' ? (since: number) => finishedTasksNote(this.jobs(), since) : undefined;
     // The owner's chat turn as a router (async-tools.ts): long work goes to tasks, and the reply may start on the light role.
-    const router = { asyncTools: asyncToolsEnabled(this.env), lightChat: lightChatEnabled(this.env), lightRoles: lightChatRoles(this.env), jobOutcomeRows: jobOutcomeRowsEnabled(this.env), machineTime: () => this.machineTime() };
+    const router = { asyncTools: asyncToolsEnabled(this.env), lightChat: lightChatEnabled(this.env), lightRoles: lightChatRoles(this.env), claimCheck: claimCheckEnabled(this.env), jobOutcomeRows: jobOutcomeRowsEnabled(this.env), machineTime: () => this.machineTime() };
     const forgetPass = () => this.forgetPurgeJob().run();
     // An owner who joined openly runs under open sign-up's ceiling; every other owner under the invited one.
     const spend = costs ? () => ({ spentUsd: costs.monthSpendUsd(deps.now()), ceilingUsd: this.openHold().open() ? openOwnerCeilingUsd(this.env) : ownerCeilingUsd(this.env) }) : undefined;
