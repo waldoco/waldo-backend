@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { appContractHeaderV1Schema } from './core';
 import { appProactiveSurfaceV1Schema } from './onboarding';
 import { messagingSurfaceV1Schema } from './surfaces';
 import { appWhyV1Schema } from './why';
@@ -82,13 +83,21 @@ const APP_CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
 // receive the field.
 export const APP_CONTROLS_QUESTS_REVISION = 18;
 export const APP_QUESTS_MAX_V1 = 20;
-// Controls revision 23 (`controls=23`): the day view carries act_without_asking and takes act_without_asking.set ("Just do it").
+// "Just do it", its own contract pair (`x-waldo-app-contract: act_without_asking=1`), independent of controls=N: a build that
+// names it, at any controls revision, reads act_without_asking on the day view and may send act_without_asking.set; one that
+// does not never receives the field (and its day revision does not cover it) and is refused the action as invalid_action.
 // on is the owner's choice: Waldo does what the owner asks it to without an approval card first. It is on until the owner turns
 // it off, so an owner who never chose reads on. available says whether this Waldo acts on the choice: where it is false the
 // choice is kept but changes nothing, Waldo asks before every action, and the app shows the setting as not active rather than
-// on. Even on, Waldo still asks first for what APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1 names. A build below 23 never receives the
-// field and is refused the action.
-export const APP_CONTROLS_ACT_WITHOUT_ASKING_REVISION = 23;
+// on. Even on, Waldo still asks first for what APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1 names.
+export const APP_ACT_WITHOUT_ASKING_CONTRACT = 'act_without_asking';
+export const APP_ACT_WITHOUT_ASKING_CONTRACT_REVISION = 1;
+// Whether a request's header names the pair. A pair left out reads revision 1 under appContractRevision, so this checks that the
+// pair is named rather than its revision.
+export const declaresActWithoutAsking = (header: string | null | undefined): boolean => {
+  const parsed = appContractHeaderV1Schema.safeParse(header);
+  return parsed.success && (parsed.data[APP_ACT_WITHOUT_ASKING_CONTRACT] ?? 0) >= APP_ACT_WITHOUT_ASKING_CONTRACT_REVISION;
+};
 export const appActWithoutAskingV1Schema = z.strictObject({ on: z.boolean(), available: z.boolean() });
 export type AppActWithoutAskingV1 = z.infer<typeof appActWithoutAskingV1Schema>;
 // What Waldo still asks about with the setting on, in the words the app and the website show under it.
@@ -205,7 +214,7 @@ export const appControlActionV1Schema = z.strictObject({
   // Revision 16: one of the five schedules on or off, or the time the Brief or the Close comes each day, from the day view.
   if (action.action === 'schedule.set' && (action.view !== 'day' || !scheduleSetValid(action.id, action.value)
     || (action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation ?? action.code ?? action.notice ?? action.account) !== undefined)) ctx.addIssue({ code: 'custom', path: ['value'], message: 'schedule.set starts from the day view and names a schedule with on or off, or card:brief or card:close with an HH:MM time, nothing else' });
-  // Revision 23: "Just do it" on or off, from the day view, and nothing else.
+  // act_without_asking=1: "Just do it" on or off, from the day view, and nothing else.
   if (action.action === 'act_without_asking.set' && (action.view !== 'day' || (action.value !== 'on' && action.value !== 'off')
     || (action.id ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation ?? action.code ?? action.notice ?? action.account) !== undefined)) ctx.addIssue({ code: 'custom', path: ['value'], message: 'act_without_asking.set starts from the day view and carries on or off in value, nothing else' });
   if (agentMail && ((action.action === 'agent_mail.claim' ? undefined : action.value) ?? action.id ?? action.quiet_start ?? action.quiet_end ?? action.volume ?? action.confirmation ?? action.code) !== undefined) ctx.addIssue({ code: 'custom', message: 'agent_mail.claim carries only the handle and the notice version; agent_mail.release carries nothing' });
@@ -301,7 +310,7 @@ export const appControlDayDataV1Schema = z.strictObject({
   proactive_surface: z.strictObject({ value: appProactiveSurfaceV1Schema, choices: z.array(appProactiveSurfaceV1Schema).min(1).max(appProactiveSurfaceV1Schema.options.length)
     .refine(choices => new Set(choices).size === choices.length, 'A choice is listed once') }).optional(),
   quests: z.array(appQuestV1Schema).max(APP_QUESTS_MAX_V1).optional(),
-  // Controls revision 23: the owner's "Just do it" choice and whether this Waldo acts on it.
+  // act_without_asking=1: the owner's "Just do it" choice and whether this Waldo acts on it.
   act_without_asking: appActWithoutAskingV1Schema.optional(),
 });
 // Controls revision 6 (`controls=6`) adds the days view: the owner's last 14 local days as the app Home showed them, and one of
