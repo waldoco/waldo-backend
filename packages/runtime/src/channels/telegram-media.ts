@@ -3,7 +3,7 @@ import type { InboundPart } from './owner-inbound-turn';
 import type { TelegramMedia } from './telegram-polling';
 import type { RunEffectScope } from './run-effect-scope';
 import { keptNote, type UploadKeeper } from './upload-keeper';
-import { readableBytes, readableFile, typeUndeclared, type ReadableFile } from './readable-file';
+import { modelFile, readableFile, typeUndeclared, type ModelFile, type ReadableFile } from './readable-file';
 
 // Telegram bots can download files up to 20 MB.
 export const TELEGRAM_DOWNLOAD_LIMIT_BYTES = 20 * 1024 * 1024;
@@ -33,23 +33,23 @@ export const createTelegramFileDownloader = (token: string, fetcher: typeof fetc
 // A file the model can read, by what it declares. A photo is an image; its bytes, once read, say which kind.
 export const readableAs = (media: TelegramMedia): ReadableFile | null =>
   media.kind === 'photo' ? { kind: 'image', mime_type: 'image/jpeg', filename: 'photo.jpg' } : readableFile(media.mimeType, media.fileName ?? 'file');
-// The same, judged again by the downloaded bytes.
-const readableOf = (media: TelegramMedia, bytes: Uint8Array): ReadableFile | null =>
-  readableBytes(bytes, media.kind === 'photo' ? 'image/jpeg' : media.mimeType, media.kind === 'photo' ? 'photo.jpg' : media.fileName ?? 'file');
+// What the model is handed for the downloaded file, judged again by its bytes.
+const fileOf = (media: TelegramMedia, bytes: Uint8Array): Promise<ModelFile | null> =>
+  modelFile(bytes, media.kind === 'photo' ? 'image/jpeg' : media.mimeType, media.kind === 'photo' ? 'photo.jpg' : media.fileName ?? 'file');
 
 // A download that failed is logged by the reader's own error text, which names the step and the provider's status and
 // never a token, URL or file name.
 const downloadFailed = (media: TelegramMedia, error: unknown) =>
   console.log(JSON.stringify({ hop: 'media_download', ok: false, kind: media.kind, error: error instanceof Error ? error.message.slice(0, 120) : 'unknown' }));
 
+// An office file reaches the model as the text read out of it, which the note says, so the model does not describe layout,
+// images or formulas it never saw.
+const asText = (file: ModelFile): string => file.extracted ? ' as its text only' : '';
+
 const label = (media: TelegramMedia): string =>
   media.kind === 'photo' ? 'photo' : media.kind === 'voice' ? 'voice note' : media.kind === 'audio' ? `audio file "${media.fileName ?? 'unnamed'}"` : `file "${media.fileName ?? 'unnamed'}"`;
 
-export const toBase64 = (bytes: Uint8Array): string => {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return btoa(binary);
-};
+export { toBase64 } from './readable-file';
 
 // The note joins the conversation so later turns know what was shared; the bytes ride only on the turn
 // that received them. A transcript is its own part: the speaker may be someone other than the owner.
@@ -67,9 +67,9 @@ export const loadTelegramMedia = async (media: TelegramMedia, { download, transc
     return { parts: noted(`[Owner sent ${what}, but it could not be downloaded.]`) };
   }
   if (bytes.length > TELEGRAM_DOWNLOAD_LIMIT_BYTES) return { parts: noted(`[Owner sent ${what} larger than 20 MB, which cannot be read here.]`) };
-  const readable = readableOf(media, bytes);
-  if (!readable) return { parts: noted(`[Owner sent ${what}. This file type cannot be read yet.]`) };
-  return { parts: noted(`[Owner sent ${what}, attached.]`), attachment: { ...readable, data_base64: toBase64(bytes) } };
+  const file = await fileOf(media, bytes);
+  if (!file) return { parts: noted(`[Owner sent ${what}. This file type cannot be read yet.]`) };
+  return { parts: noted(`[Owner sent ${what}, attached${asText(file)}.]`), attachment: file.attachment };
 };
 
 const keepMedia = async (media: TelegramMedia, what: string, download: TelegramFileDownloader, keep: UploadKeeper): Promise<LoadedMedia> => {
@@ -79,10 +79,10 @@ const keepMedia = async (media: TelegramMedia, what: string, download: TelegramF
     return { parts: noted(`[Owner sent ${what}, but it could not be downloaded.]`) };
   }
   if (bytes.length > TELEGRAM_DOWNLOAD_LIMIT_BYTES) return { parts: noted(`[Owner sent ${what} larger than 20 MB, which cannot be read here.]`) };
-  const readable = readableOf(media, bytes);
-  const filename = readable?.filename ?? media.fileName ?? 'file';
-  const kept = await keep({ bytes, filename, mime: readable?.mime_type ?? media.mimeType, key: `media:${media.fileId}`, ...(media.forwarded ? { forwarded: true } : {}) });
-  return { parts: noted(keptNote(what, kept, readable !== null)), ...(readable ? { attachment: { ...readable, data_base64: toBase64(bytes) } } : {}) };
+  const file = await fileOf(media, bytes);
+  const filename = file?.file.filename ?? media.fileName ?? 'file';
+  const kept = await keep({ bytes, filename, mime: file?.file.mime_type ?? media.mimeType, key: `media:${media.fileId}`, ...(media.forwarded ? { forwarded: true } : {}) });
+  return { parts: noted(keptNote(what, kept, file !== null, file?.extracted)), ...(file ? { attachment: file.attachment } : {}) };
 };
 
 const transcribeMedia = async (media: TelegramMedia, what: string, download?: TelegramFileDownloader, transcribe?: Transcriber): Promise<LoadedMedia> => {

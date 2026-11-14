@@ -1,5 +1,6 @@
 import type { LLMAttachment } from '@waldo/contracts';
 import { detectBinary } from '@waldo/workspace';
+import { isOfficeType, OFFICE_TYPES, officeText } from './office-text';
 
 // Which files the model can read, shared by every surface a file reaches Waldo on (WhatsApp, the app, iMessage, agent mail,
 // Telegram). A file is judged by what it declares and, once its bytes are in hand, by what its bytes are: a sender's file
@@ -76,4 +77,31 @@ export const readableBytes = (bytes: Uint8Array, mimeType: string | null, filena
   const declared = readableFile(mimeType, filename);
   if (declared) return declared;
   return typeUndeclared(mimeType) && isText(bytes) ? { kind: 'file', mime_type: 'text/plain', filename: named(filename, 'text/plain') } : null;
+};
+
+export const toBase64 = (bytes: Uint8Array): string => {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+};
+
+const ZIP = [0x50, 0x4b, 0x03, 0x04];
+// What the model is handed for a file it can read: the file itself, or for a Word, Excel or PowerPoint file the text read
+// out of it, as plain text that either provider takes (`extracted`). An office file whose text cannot be read goes as
+// itself, for a provider that reads the format. A zip that declares no type is tried as each office format. `file` is what
+// the original is (its type and name), for keeping it. Null when nothing in it is readable.
+export type ModelFile = Readonly<{ file: ReadableFile; attachment: LLMAttachment; extracted: boolean }>;
+export const modelFile = async (bytes: Uint8Array, mimeType: string | null, filename: string): Promise<ModelFile | null> => {
+  const file = readableBytes(bytes, mimeType, filename)
+    ?? (typeUndeclared(mimeType) && starts(bytes, ZIP) ? await officeOf(bytes, filename) : null);
+  if (!file) return null;
+  if (isOfficeType(file.mime_type)) {
+    const text = await officeText(bytes, file.mime_type);
+    if (text) return { file, attachment: { kind: 'file', mime_type: 'text/plain', filename: `${file.filename}.txt`, data_base64: toBase64(new TextEncoder().encode(text)) }, extracted: true };
+  }
+  return { file, attachment: { ...file, data_base64: toBase64(bytes) }, extracted: false };
+};
+const officeOf = async (bytes: Uint8Array, filename: string): Promise<ReadableFile | null> => {
+  for (const mime of Object.values(OFFICE_TYPES)) if (await officeText(bytes, mime)) return { kind: 'file', mime_type: mime, filename: named(filename, mime) };
+  return null;
 };

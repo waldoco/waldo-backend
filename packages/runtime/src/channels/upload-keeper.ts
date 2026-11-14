@@ -67,9 +67,10 @@ const keepOne = async (open: () => Promise<WorkspaceStore>, ownerRef: string, pr
 };
 
 // The note's words for where the file went. `what` names the file with its article ("a photo", "an audio file …"); `opened`
-// says whether the model has it attached on this turn; a later turn reads the same note with the file no longer attached.
-export const keptNote = (what: string, kept: KeptUpload, opened: boolean): string => {
-  const head = `[Owner sent ${what}${opened ? ', attached' : ''}.`;
+// says whether the model has it attached on this turn, `asText` that what is attached is the text read out of an office
+// file; a later turn reads the same note with the file no longer attached.
+export const keptNote = (what: string, kept: KeptUpload, opened: boolean, asText = false): string => {
+  const head = `[Owner sent ${what}${opened ? `, attached${asText ? ' as its text only' : ''}` : ''}.`;
   if (kept.status === 'saved') return `${head} Saved in their workspace as ${kept.path} (file_id ${kept.file_id}, revision ${kept.revision}).${opened ? ' In a later message it is no longer attached; workspace_read opens it again.' : ' It is not attached here; open it with the workspace tools.'}]`;
   if (opened) return `${head} It could not be saved to their workspace.]`;
   if (kept.status === 'too_large') return `${head} It is larger than the ${LIMITS.fileBytes / (1024 * 1024)} MB a workspace file can hold, so it was not saved and cannot be opened here.]`;

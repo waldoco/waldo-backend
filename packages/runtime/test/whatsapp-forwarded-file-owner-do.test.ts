@@ -22,7 +22,7 @@ const reply = (body: RequestBody): Call[] | string => {
   const text = JSON.stringify(body.input);
   if (filesOf(body).length) return 'Your train leaves at 07:40.';
   const note = /file_id ([0-9a-f-]{36}), revision (\d+)/.exec(text);
-  if (text.includes('what time is the train') && note && !outputOf(body, 'open')) return [{ type: 'function_call', call_id: 'open', name: 'workspace_read', arguments: JSON.stringify({ file_id: note[1], revision: Number(note[2]) }) }];
+  if (text.includes('in that file?') && note && !outputOf(body, 'open')) return [{ type: 'function_call', call_id: 'open', name: 'workspace_read', arguments: JSON.stringify({ file_id: note[1], revision: Number(note[2]) }) }];
   return 'I cannot see that file.';
 };
 vi.mock('openai', () => ({ default: class {
@@ -43,7 +43,7 @@ const SUBJECT = '15550001111';
 const PDF = new Uint8Array([...new TextEncoder().encode('%PDF-1.7\n%'), 0xe2, 0xe3, 0xcf, 0xd3, ...new TextEncoder().encode('\n1 0 obj << /Type /Catalog >> endobj\n%%EOF\n')]);
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
 const TEXT = new TextEncoder().encode('Train 12127 leaves Pune at 07:40.\n');
-const MEDIA: Readonly<Record<string, Uint8Array>> = { '1458377352214907': PDF, '879011204771342': PNG, '1093327716028811': TEXT };
+const MEDIA: Record<string, Uint8Array> = { '1458377352214907': PDF, '879011204771342': PNG, '1093327716028811': TEXT };
 
 beforeEach(() => { model.requests = []; });
 
@@ -127,5 +127,23 @@ it('a forwarded file Meta will not hand over is said to the model and logged by 
     expect(JSON.stringify(replySteps().at(-1)!.input)).toContain('Owner sent a forwarded file \\"Gone.pdf\\", but it could not be downloaded.');
     expect(logs.map(line => { try { return JSON.parse(line) as { hop?: string }; } catch { return {}; } }).filter(line => line.hop === 'media_download'))
       .toEqual([{ hop: 'media_download', ok: false, kind: 'document', error: 'whatsapp media lookup failed: 404' }]);
+  });
+}, 60_000);
+
+it('a forwarded Word file reaches the model as its text, named so, and the owner is told it was read as text only', async () => {
+  const { Document, Packer, Paragraph } = await import('docx');
+  MEDIA['1200000000000001'] = new Uint8Array(await (await Packer.toBlob(new Document({ sections: [{ children: [new Paragraph('Check-in after 14:00 at Gate B.')] }] }))).arrayBuffer());
+  await whatsappOwner('wa-forward-docx', async (deliver) => {
+    await deliver({ id: 'wamid.docx', type: 'document', context: { forwarded: true },
+      document: { filename: 'Booking.docx', mime_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', sha256: 'x', id: '1200000000000001' } });
+    const step = replySteps().at(-1)!;
+    expect(JSON.stringify(step.input)).toContain('Owner sent a forwarded file \\"Booking.docx\\", attached as its text only.');
+    expect(filesOf(step)).toEqual([{ type: 'input_file', filename: 'Booking.docx.txt', file_data: `data:text/plain;base64,${btoa('Check-in after 14:00 at Gate B.')}` }]);
+    // Asked about it later, the model opens the kept Word file and gets its text again.
+    const before = replySteps().length;
+    await deliver({ id: 'wamid.docx.ask', type: 'text', text: { body: 'when is check-in in that file?' } });
+    const opened = replySteps().slice(before)[1]!;
+    expect(outputOf(opened, 'open')).toMatchObject({ ok: true, data: { text: null, opened: 'attached' } });
+    expect(filesOf(opened)).toEqual([expect.objectContaining({ type: 'input_file', filename: 'Booking.docx.txt' })]);
   });
 }, 60_000);

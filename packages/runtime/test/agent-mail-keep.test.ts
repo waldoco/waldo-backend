@@ -58,3 +58,17 @@ describe('mail attachments a name alone would not open', () => {
     expect(mail.text).toContain('"attached_not_opened":[]');
   });
 });
+
+describe('an office file mailed to the Waldo address', () => {
+  it('reaches the model as its text', async () => {
+    const { Document, Packer, Paragraph } = await import('docx');
+    const docx = new Uint8Array(await (await Packer.toBlob(new Document({ sections: [{ children: [new Paragraph('Invoice 118: due 30 Nov.')] }] }))).arrayBuffer());
+    let binary = ''; for (const byte of docx) binary += String.fromCharCode(byte);
+    const mail = await mailForModel(new TextEncoder().encode([
+      'From: Sender <sender@fixture.invalid>', 'To: owner@agent.fixture.invalid', 'Subject: Invoice', 'Message-ID: <m3@fixture.invalid>', 'MIME-Version: 1.0',
+      'Content-Type: multipart/mixed; boundary="b2"', '', '--b2', 'Content-Type: text/plain', '', 'Attached.', '--b2',
+      'Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document; name="invoice.docx"', 'Content-Disposition: attachment; filename="invoice.docx"',
+      'Content-Transfer-Encoding: base64', '', btoa(binary), '--b2--', ''].join('\r\n')), { id: 'row-5', basis: 'owner_from' }, 'owner@agent.fixture.invalid', CANARIES);
+    expect(mail.attachments).toEqual([{ kind: 'file', mime_type: 'text/plain', filename: 'invoice.docx.txt', data_base64: btoa('Invoice 118: due 30 Nov.') }]);
+  });
+});
