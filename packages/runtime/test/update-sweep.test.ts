@@ -558,7 +558,7 @@ describe('applying a sweep job with the day state', () => {
 // or revise, with a push), brief (left for the next main card) or silent (noted, not carried). Code holds only quiet hours,
 // the daily interrupt budget and its cooldown, and the one-notification rule; the outcome of act is what the turn raised.
 type TriageApply = DayApply & Readonly<{ tools: (readonly string[] | undefined)[]; cards: { raised: number; whenOffered?: boolean }; goals: { asked: number } }>;
-const applyingTriage = (h: Harness, interruptions?: Parameters<typeof updateSweepApplier>[0]['interruptions'], actAhead?: Readonly<{ style(): string }>): TriageApply => {
+const applyingTriage = (h: Harness, interruptions?: Parameters<typeof updateSweepApplier>[0]['interruptions'], actAhead?: Readonly<{ style(): string }>, holds?: true): TriageApply => {
   const turns: Apply['turns'] = [], effects: DayApply['effects'] = [], chose: string[] = [], quiet = { on: false }, named = { on: true }, settled = { n: 0 };
   const reply = { text: '{}' }, log: TurnLogEntry[] = [], tools: (readonly string[] | undefined)[] = [], cards: TriageApply['cards'] = { raised: 0 }, goals = { asked: 0 };
   let raisedAt = Number.POSITIVE_INFINITY;
@@ -574,7 +574,7 @@ const applyingTriage = (h: Harness, interruptions?: Parameters<typeof updateSwee
       return reply.text;
     },
     deliver: async (id, _trace, text, _recordId, commit, effect) => { h.storage.transactionSync(() => { commit(); effects.push({ id, text, ...effect }); }); },
-    ...(interruptions ? { interruptions } : {}),
+    ...(interruptions ? { interruptions } : {}), ...(holds ? { holds } : {}),
     dayState: {
       quiet: () => quiet.on, cards: () => 'Today\'s cards: The Daily Brief reached them in the app at 08:00.', delivered: card => card === 'card:brief', revisesCards: true,
       named: () => named.on, chose: (_trace, code) => { chose.push(code); }, settled: () => { settled.n += 1; },
@@ -595,11 +595,11 @@ const applyingTriage = (h: Harness, interruptions?: Parameters<typeof updateSwee
   };
 };
 const unfolded = (h: Harness) => h.updates.unfolded('UTC');
-const triaged = async (h: Harness, reply: unknown, setup: (a: TriageApply) => void = () => undefined, interruptions?: Parameters<typeof applyingTriage>[1]): Promise<TriageApply> => {
+const triaged = async (h: Harness, reply: unknown, setup: (a: TriageApply) => void = () => undefined, interruptions?: Parameters<typeof applyingTriage>[1], holds?: true): Promise<TriageApply> => {
   h.events.push(MOVED);
   await h.check();
   report(h, FOUND);
-  const a = applyingTriage(h, interruptions);
+  const a = applyingTriage(h, interruptions, undefined, holds);
   a.reply.text = typeof reply === 'string' ? reply : JSON.stringify(reply);
   setup(a);
   await a.lane();
@@ -890,6 +890,216 @@ describe('acting ahead on an update', () => {
     await withSweep(async (h) => {
       const a = await acting(h, NOTHING, { decision: 'tell', say: 'never sent' });
       expect([a.turns, a.effects]).toEqual([[], []]);
+    });
+  });
+});
+
+// HELD_RAISE: a batch held while Waldo could not reach the owner waits on its own update row, and is judged again, once, at
+// the first sweep that may speak; a day card that comes first carries it as held and settles it.
+describe('a held item is raised once, when Waldo may speak again', () => {
+  const TELL = { decision: 'tell', say: 'Your sync with Krati moved to 17:00.' };
+  const heldRows = (h: Harness) => h.sql.exec<{ held_code: string; folded: number }>('SELECT held_code, folded FROM update_cards WHERE held_at IS NOT NULL ORDER BY id').toArray();
+  const reportLast = (h: Harness, result: TaskResult) => {
+    const job = h.jobs().at(-1)!;
+    expect(h.book.report(h.book.startAttempt(job.id)!, result, { rounds: 1, costUsd: 0.001 })).toBe('accepted');
+    return job;
+  };
+  const raising = async (h: Harness, reply: unknown) => {
+    reportLast(h, FOUND);
+    const a = applyingTriage(h, undefined, undefined, true);
+    a.reply.text = JSON.stringify(reply);
+    await a.lane();
+    return a;
+  };
+  const heldOvernight = async (h: Harness) => {
+    const first = await triaged(h, TELL, a => { a.quiet.on = true; }, undefined, true);
+    expect(first.chose).toEqual(['held_quiet']);
+    h.events.length = 0;
+    h.clock.at += 8 * 3_600_000;
+  };
+
+  it('golden: a tell held by quiet hours is raised by the first sweep after them, once, with when and why it was held', async () => {
+    await withSweep(async (h) => {
+      await heldOvernight(h);
+      expect(heldRows(h)).toEqual([{ held_code: 'quiet', folded: 0 }]);
+      expect((await h.check({ raise: () => true })).code).toBe('enqueued');
+      expect(taskBrief(h.jobs().at(-1)!).context).toContain('Sync with Krati');
+      const raise = await raising(h, { decision: 'tell', say: 'Overnight your sync with Krati moved to 17:00.' });
+      const text = raise.turns[0]!.text;
+      expect(text).toContain('<held>');
+      expect(text.slice(text.indexOf('<held>'), text.indexOf('</held>'))).toContain('Sync with Krati');
+      expect(text).toContain('held at 2026-10-20T09:00, quiet hours');
+      // The wake, traced: the triage turn's tools, then one tell that also settles the held batch, and one delivery.
+      expect(raise.tools[0]).toContain('get_context');
+      expect(raise.chose).toEqual(['tell', 'raise_told']);
+      expect(raise.effects).toEqual([expect.objectContaining({ text: 'Overnight your sync with Krati moved to 17:00.' })]);
+      expect(heldRows(h)).toEqual([]);
+      // Queued is not delivered: until the tell reaches the owner the next day card still carries the change.
+      expect(unfolded(h)).toContain('Sync with Krati');
+      const raiseRecord = h.rows().at(-1)!.id;
+      h.storage.transactionSync(() => h.updates.pushed(raiseRecord, 'Overnight your sync with Krati moved to 17:00.', h.clock.at));
+      expect(unfolded(h)).not.toContain('not sent');
+      h.clock.at += 10 * 60_000;
+      expect((await h.check({ raise: () => true })).code).toBe('unchanged');
+      expect(h.jobs()).toHaveLength(2);
+    });
+  });
+
+  it('a held item the turn finds no longer true is dropped with its reason traced, and never offered again', async () => {
+    await withSweep(async (h) => {
+      await heldOvernight(h);
+      await h.check({ raise: () => true });
+      const raise = await raising(h, { decision: 'silent', held: 'no_longer_true' });
+      expect([raise.effects, raise.chose]).toEqual([[], ['silent', 'raise_dropped:no_longer_true']]);
+      expect([heldRows(h), unfolded(h)]).toEqual([[], '']);
+      expect((await h.check({ raise: () => true })).code).toBe('unchanged');
+    });
+  });
+
+  it('a raise whose worker finds nothing still settles the held batch once, left for the next card: no job every tick', async () => {
+    await withSweep(async (h) => {
+      await heldOvernight(h);
+      await h.check({ raise: () => true });
+      reportLast(h, NOTHING);
+      const raise = applyingTriage(h, undefined, undefined, true);
+      await raise.lane();
+      expect(raise.turns).toEqual([]);
+      expect(heldRows(h)).toEqual([]);
+      expect(unfolded(h)).toContain('Sync with Krati');
+      h.clock.at += 10 * 60_000;
+      expect((await h.check({ raise: () => true })).code).toBe('unchanged');
+      expect(h.jobs()).toHaveLength(2);
+    });
+  });
+
+  it('held mail still pending is shown to the turn once, inside <held>', async () => {
+    await withSweep(async (h) => {
+      h.gate.code = 'held_window';
+      h.mail.push(MAIL);
+      await h.check({ raise: () => true });
+      h.gate.code = null;
+      h.mail.length = 0;
+      expect((await h.check({ raise: () => true })).code).toBe('enqueued');
+      const raise = await raising(h, TELL);
+      const text = raise.turns[0]!.text;
+      expect(text.split('Quote signed')).toHaveLength(2);
+      expect(text.slice(text.indexOf('<held>'), text.indexOf('</held>'))).toContain('Quote signed');
+      expect(text).toContain('Nothing new came in with this batch');
+    });
+  });
+
+  it('a batch of only what the owner did with mail (read, archived) is context, never held', async () => {
+    await withSweep(async (h) => {
+      h.gate.code = 'held_quiet';
+      const read = { source: 'mail' as const, kind: 'read' as const, detail: JSON.stringify({ from: 'Asha <asha@client.example>', subject: 'Quote signed' }), ref: 'message:m-1' };
+      await h.check({ raise: () => true, phone: { takeChanges: () => [read] } });
+      expect(heldRows(h)).toEqual([]);
+    });
+  });
+
+  it('a held reason the turn gives with anything but silent is unreadable, and the batch is left for the next card', async () => {
+    await withSweep(async (h) => {
+      await heldOvernight(h);
+      await h.check({ raise: () => true });
+      const raise = await raising(h, { ...TELL, held: 'no_longer_true' });
+      expect([raise.effects, raise.chose]).toEqual([[], ['invalid', 'raise_carried']]);
+      expect(unfolded(h)).toContain('Sync with Krati');
+      expect(heldRows(h)).toEqual([]);
+    });
+  });
+
+  it('while the owner still may not be interrupted no raise is written, and the item stays held', async () => {
+    await withSweep(async (h) => {
+      await heldOvernight(h);
+      expect((await h.check({ raise: () => false })).code).toBe('unchanged');
+      expect(h.jobs()).toHaveLength(1);
+      expect(heldRows(h)).toEqual([{ held_code: 'quiet', folded: 0 }]);
+    });
+  });
+
+  it('a raise held again by apply time stays held, with its own batch, for the next moment', async () => {
+    await withSweep(async (h) => {
+      await heldOvernight(h);
+      h.events.push({ ...MOVED, id: 'e-standup', title: 'Standup' });
+      await h.check({ raise: () => true });
+      reportLast(h, FOUND);
+      const raise = applyingTriage(h, undefined, undefined, true);
+      raise.quiet.on = true;
+      raise.reply.text = JSON.stringify(TELL);
+      await raise.lane();
+      expect(raise.chose).toEqual(['held_quiet']);
+      expect(heldRows(h)).toEqual([{ held_code: 'quiet', folded: 0 }, { held_code: 'quiet', folded: 0 }]);
+      h.events.length = 0;
+      expect((await h.check({ raise: () => true })).code).toBe('enqueued');
+      const again = await raising(h, TELL);
+      expect(again.chose).toEqual(['tell', 'raise_told']);
+      expect(heldRows(h)).toEqual([]);
+    });
+  });
+
+  it('a day card that comes first reads the item as held, and its fold settles it: no raise follows', async () => {
+    await withSweep(async (h) => {
+      await heldOvernight(h);
+      expect(unfolded(h)).toContain('held at 2026-10-20T09:00, quiet hours: not yet told');
+      h.storage.transactionSync(() => h.updates.fold(h.clock.at));
+      expect((await h.check({ raise: () => true })).code).toBe('unchanged');
+      expect(h.jobs()).toHaveLength(1);
+    });
+  });
+
+  it('a batch the gate holds before any judgment waits too; one the owner turned off never does', async () => {
+    await withSweep(async (h) => {
+      h.gate.code = 'held_window';
+      h.events.push(MOVED);
+      expect((await h.check({ raise: () => true })).code).toBe('held_window');
+      expect(heldRows(h)).toEqual([{ held_code: 'window', folded: 0 }]);
+      h.gate.code = null;
+      h.events.length = 0;
+      expect((await h.check({ raise: () => true })).code).toBe('enqueued');
+      expect(taskBrief(h.jobs()[0]!).context).toContain('Sync with Krati');
+    });
+    await withSweep(async (h) => {
+      h.gate.code = 'held_preference';
+      h.events.push(MOVED);
+      await h.check({ raise: () => true });
+      expect(heldRows(h)).toEqual([]);
+    });
+  });
+
+  it('across quiet hours, a time-zone change and a day rollover the held item is raised exactly once', async () => {
+    await withSweep(async (h) => {
+      // Held at 22:30 UTC on the 20th; quiet runs to 06:00 in the zone the owner is in at each tick.
+      h.clock.at = Date.parse('2026-10-20T22:30:00Z');
+      await triaged(h, TELL, a => { a.quiet.on = true; }, undefined, true);
+      h.events.length = 0;
+      const raised: number[] = [];
+      for (let tick = 0; tick < 20; tick += 1) {
+        h.clock.at += 30 * 60_000;
+        // Halfway through the night the owner lands in Kolkata: their day and their quiet hours move with them.
+        const timezone = tick < 8 ? 'UTC' : 'Asia/Kolkata';
+        const local = new Date(h.clock.at).toLocaleString('en-GB', { timeZone: timezone, hour: '2-digit', hourCycle: 'h23' });
+        const quiet = Number(local) < 6 || Number(local) >= 22;
+        const day = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(h.clock.at);
+        const checked = await h.check({ raise: () => !quiet, timezone, day });
+        if (checked.code === 'enqueued') {
+          raised.push(h.clock.at);
+          await raising(h, TELL);
+        }
+      }
+      expect(raised).toHaveLength(1);
+      expect(new Date(raised[0]!).toISOString()).toBe('2026-10-21T03:00:00.000Z');
+      expect(heldRows(h)).toEqual([]);
+    });
+  });
+
+  it('with the switch off a held tell marks nothing and no raise is written: the next day card carries it as today', async () => {
+    await withSweep(async (h) => {
+      const first = await triaged(h, TELL, a => { a.quiet.on = true; });
+      expect(first.chose).toEqual(['held_quiet']);
+      h.events.length = 0;
+      expect(heldRows(h)).toEqual([]);
+      expect((await h.check()).code).toBe('unchanged');
+      expect(unfolded(h)).toContain('not sent');
     });
   });
 });

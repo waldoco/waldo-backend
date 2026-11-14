@@ -185,7 +185,7 @@ import { calendarSource, mailSource, reviewMailFollowup, titleDigester, updateBo
 import { meetingPrepApplier, meetingPrepSpec } from './meeting-prep';
 import { prepGranola } from './meeting-prep-granola';
 import { prepFireflies } from './meeting-prep-fireflies';
-import { emitObserved, observedEvents, UPDATE_CARD_FRESH_MS, UPDATE_JUDGE_WAKE_KEY, updateSweepApplier, updateSweepCheck, updateSweepTools, type ObservedSubscriber, type SweepGate } from './update-sweep';
+import { emitObserved, observedEvents, triageHold, UPDATE_CARD_FRESH_MS, UPDATE_JUDGE_WAKE_KEY, updateSweepApplier, updateSweepCheck, updateSweepTools, type ObservedSubscriber, type SweepGate } from './update-sweep';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { recallChain, recallChainOn } from '../history/recall-chain';
 import { searchHistoryHandler } from '../tools/live/search-history';
@@ -6301,6 +6301,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const dayState = this.env.WALDO_DAY_STATE === '1', revisesCards = REVISES_CARDS[channel] === true;
     // Exact Google deltas and the triage turn build on the day state. Off unless '1'.
     const realtime = realtimeTriage(this.env);
+    // HELD_RAISE (with triage): a batch held while Waldo could not reach the owner is judged again at the first sweep that may.
+    const heldRaise = realtime && this.env.HELD_RAISE === '1';
+    // Whether an unasked message could reach the owner now, by the same holds a tell meets: quiet hours, and the owner's limits
+    // or triage's own budget. A raise written while one holds would only wait again.
+    const mayRaise = () => {
+      if (quiet()) return false;
+      const now = Date.now();
+      if (interrupts) return interrupts.book.hold({ consent: true, quiet: false, closed: interrupts.closed(), asks: false, urgent: false, limits: interrupts.limits() }) === null;
+      return triageHold(updates.interrupts(localIso(now, clock.timezone).slice(0, 10)), now, false) === null;
+    };
     const sweepGate = (day: string): SweepGate | null => {
       const { followups, volume } = loops.proactivity();
       return followups === false ? 'held_preference' : !dayState && plans.read(day).some((row) => row.sent && row.card === 'card:close') ? 'held_closed'
@@ -6339,7 +6349,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const day = localIso(now, clock.timezone).slice(0, 10);
         const check = await updateSweepCheck({ updates, jobs: this.jobs(), google: client, now, day, timezone: clock.timezone, surface: channel, sourceFollowups, ...(this.env.BLOCK_LIFECYCLE === '1' ? { blocks: { observe: changes => { noteOwnerEdits(storage.sql, changes, now); } } } : {}), ...(this.env.DEVICE_CALENDAR === '1' ? { phone: this.deviceCalendar() } : {}), ...(actAhead ? { actAhead } : {}), ...(dayState ? { dayState: { titleDigest: titleDigester(storage.kv) } } : {}),
           ...(realtime ? { delta: { accounts: await deltaAccounts(), followups: (await google.client('mail'))?.account?.email } } : {}),
-          gate: () => sweepGate(day), providerDown: () => workerRouteDown(modelAccess), transaction: work => storage.transactionSync(work),
+          gate: () => sweepGate(day), providerDown: () => workerRouteDown(modelAccess), transaction: work => storage.transactionSync(work), ...(heldRaise ? { raise: mayRaise } : {}),
           enqueued: () => holdTaskJobsDue(storage.kv, now), held: () => heldTopicsOf(claimStore(storage.sql)),
           dayChanged: () => { if (dayState) replanToday(`${trace}:replan`); return recompute.calendarChanged().then(
             code => log({ trace, hop: 'health_calendar_change', ms: 0, ok: true, code }),
@@ -6390,7 +6400,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       context: async () => ({ ledger: await promptLedger(), feedback: updates.feedback(), volume: loops.proactivity().volume === 'high' ? 'high' : 'normal' }),
       turn: async (turn, text, current, tools) => this.asOwnerJob('heartbeat', turn, async () =>
         responder.prompt(turn, owner, text, async (_hop, work) => work(), tools ?? updateSweepTools(sweepSourceFollowups()), current, undefined, await healthLogLines(), 'external', interrupts !== null || actAhead)),
-      ...(interrupts ? { interruptions: interrupts } : {}),
+      ...(interrupts ? { interruptions: interrupts } : {}), ...(heldRaise ? { holds: true as const } : {}),
       ...(realtime ? { triage: {
         // The owner's goals as their memory holds them; the turn recalls people and the rest of memory as every job does.
         context: async () => ({ goals: claimStore(storage.sql).claims().filter(claim => claim.kind === 'goal').slice(-12).map(claim => `- ${claim.text}`).join('\n'), shaping: await dayShaping('update-triage') }),
