@@ -17,6 +17,8 @@ import {
   HISTORY_ARCHIVE_TABLE_SCHEMA,
   REPLY_MEMORY_USED_MIGRATION,
   GOAL_QUESTS_MIGRATION,
+  ANNOUNCEMENTS_MIGRATION,
+  ANNOUNCEMENTS_TABLE_SCHEMA,
   EXPERIMENTS_MIGRATION,
   EXPERIMENTS_TABLE_SCHEMA,
   REPLY_MEMORY_USED_TABLE_SCHEMA,
@@ -212,7 +214,7 @@ describe('HEY-10 DO SQLite schema root', () => {
         tables: listTables(state.storage.sql),
       };
     });
-    expect(DO_SCHEMA_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 8, 12, 13, 14, 15, 16, 17, 18, 19]);
+    expect(DO_SCHEMA_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 8, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
     expect(result.applied).toEqual([
       { version: 1, name: 'hey10-base-context-schema' },
       { version: 2, name: 'hey144-goals-schema' },
@@ -225,6 +227,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       { version: 17, name: 'reply-memory-used' },
       { version: 18, name: 'goal-quests' },
       { version: 19, name: 'experiments' },
+      { version: 20, name: 'announcements' },
     ]);
     expect(result.tables).toContain('calendar_last_seen');
     expect(result.tables).toContain('task_jobs');
@@ -255,6 +258,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       const objects = () => state.storage.sql.exec<{ name: string; sql: string }>("SELECT name, sql FROM sqlite_master WHERE name LIKE 'history_archive%' ORDER BY name").toArray();
       provisionDoSchema(state.storage);
       const provisioned = objects();
+      applyDoMigration(state.storage, ANNOUNCEMENTS_MIGRATION, 'down');
       applyDoMigration(state.storage, EXPERIMENTS_MIGRATION, 'down');
       applyDoMigration(state.storage, GOAL_QUESTS_MIGRATION, 'down');
       applyDoMigration(state.storage, REPLY_MEMORY_USED_MIGRATION, 'down');
@@ -274,6 +278,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       const objects = () => state.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE name LIKE 'reply_memory_used%' ORDER BY name").toArray().map(row => row.name);
       provisionDoSchema(state.storage);
       const provisioned = objects();
+      applyDoMigration(state.storage, ANNOUNCEMENTS_MIGRATION, 'down');
       applyDoMigration(state.storage, EXPERIMENTS_MIGRATION, 'down');
       applyDoMigration(state.storage, GOAL_QUESTS_MIGRATION, 'down');
       applyDoMigration(state.storage, REPLY_MEMORY_USED_MIGRATION, 'down');
@@ -292,6 +297,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       const objects = () => state.storage.sql.exec<{ name: string; sql: string }>("SELECT name, sql FROM sqlite_master WHERE name LIKE 'experiments%' ORDER BY name").toArray();
       provisionDoSchema(state.storage);
       const provisioned = objects();
+      applyDoMigration(state.storage, ANNOUNCEMENTS_MIGRATION, 'down');
       applyDoMigration(state.storage, EXPERIMENTS_MIGRATION, 'down');
       const down = objects();
       for (const statement of EXPERIMENTS_TABLE_SCHEMA) state.storage.sql.exec(statement);
@@ -301,6 +307,22 @@ describe('HEY-10 DO SQLite schema root', () => {
     expect(result.down).toEqual([]);
     expect(result.written).toEqual(result.provisioned);
     expect(result.version).toBe(18);
+  });
+
+  it('creates the announcements table from the chain with the same DDL its writer runs, and its down drops it', async () => {
+    const result = await runInDurableObject(freshStub(), (_instance, state) => {
+      const objects = () => state.storage.sql.exec<{ name: string; sql: string }>("SELECT name, sql FROM sqlite_master WHERE name LIKE 'announcements%' ORDER BY name").toArray();
+      provisionDoSchema(state.storage);
+      const provisioned = objects();
+      applyDoMigration(state.storage, ANNOUNCEMENTS_MIGRATION, 'down');
+      const down = objects();
+      for (const statement of ANNOUNCEMENTS_TABLE_SCHEMA) state.storage.sql.exec(statement);
+      return { provisioned, down, written: objects(), version: getSchemaVersion(state.storage.sql) };
+    });
+    expect(result.provisioned.map(row => row.name)).toEqual(['announcements']);
+    expect(result.down).toEqual([]);
+    expect(result.written).toEqual(result.provisioned);
+    expect(result.version).toBe(19);
   });
 
   it('drops the memory hall tables a V1 database created, and its down restores them empty', async () => {
@@ -315,6 +337,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       const atV1 = objects();
       provisionDoSchema(state.storage);
       const current = objects();
+      applyDoMigration(state.storage, ANNOUNCEMENTS_MIGRATION, 'down');
       applyDoMigration(state.storage, EXPERIMENTS_MIGRATION, 'down');
       applyDoMigration(state.storage, GOAL_QUESTS_MIGRATION, 'down');
       applyDoMigration(state.storage, REPLY_MEMORY_USED_MIGRATION, 'down');

@@ -12,6 +12,7 @@ import {OwnerControlsPanel} from './OwnerControls';
 import {ControlsPanel} from './Controls';
 import { MemoryPanel } from './Memory';
 import { ChatLink } from './Chat';
+import { ThemeToggle } from './Appearance';
 import { ChatWorkspace, isThreadRoute } from './ChatThreads';
 import { AdminPanel, type AdminState } from './Admin';
 import { AdminHealthPanel, HealthPanel } from './Health';
@@ -232,7 +233,7 @@ export function App() {
     <header className="topbar"><div className="topbar-inner">
       <a className="brand" href="#/today" aria-label="Waldo dashboard home"><WaldoMark/><span aria-hidden="true">Waldo</span></a>
       <DashboardNavigation route={route} waitingCount={ready?.waiting.count}/>
-      <div className="topbar-actions"><ChatLink current={route.startsWith('chat')}/><a className="settings-link" href="#/settings" aria-label="Settings" aria-current={isSettingsRoute(route) ? 'page' : undefined}><Icon name="settings"/></a></div>
+      <div className="topbar-actions"><ThemeToggle/><ChatLink current={route.startsWith('chat')}/><a className="settings-link" href="#/settings" aria-label="Settings" aria-current={isSettingsRoute(route) ? 'page' : undefined}><Icon name="settings"/></a></div>
     </div></header>
     <main id="main" tabIndex={-1} className={route.startsWith('chat') ? 'chat-main' : undefined}>{route.startsWith('chat') ? <ChatWorkspace thread={route === 'chat' ? null : route.slice(5)} zone={ready?.timezone}/> : route === 'admin' ? <><SettingsHead selected="admin" isAdmin={isAdmin}/><AdminPanel state={adminState} onRefresh={refreshAdmin}/></>
       : state.kind !== 'ready' ? <DashboardFeedback state={state} onRetry={() => setRetry((n) => n + 1)}/>

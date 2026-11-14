@@ -39,6 +39,11 @@ export type CuratedSkillTurn = Readonly<{
 type Result = { ok: true; source_taint: null; data: { name: string; version: number; enabled: boolean; source: string } }
  | { ok: false; code: 'rejected'; error: string };
 const denied = (): Result => ({ok:false,code:'rejected',error:'Skill version, source, owner permission or enabled state is unavailable.'});
+const overBudget = (): Result => ({ok:false,code:'rejected',error:'This skill does not fit beside the ones already loaded this turn; carry on with those.'});
+// One procedure's cap, and a turn's: each loaded skill brings its own allowance, and together they never pass one bundled
+// procedure's cap.
+const skillLimit = (s: Skill) => s.name===NAME ? 600 : BUNDLED_SKILL_MAX_BYTES;
+const blockLimit = (skills: readonly Skill[]) => Math.min(BUNDLED_SKILL_MAX_BYTES, skills.reduce((sum,s)=>sum+skillLimit(s),0));
 const metadata = (s: Skill, enabled: boolean) => ({name:s.name,version:s.version,enabled,source:sourceOf(s.name,s.version)});
 type Stored = { version:number; provenance:string; identity_locked:number; provisional:number; trigger_types_json:string;
  trigger_condition:string; required_tools_json:string; required_connectors_json:string; body_markdown:string; created_by:string;
@@ -78,8 +83,8 @@ export function seededSkillCustody(sql: SqlStorage, catalog: readonly Skill[] = 
 }
 
 export class CuratedOwnerSkills {
- // One selected procedure per invocation; selection does not change tool admission.
- readonly #selected = new Map<string,string>();
+ // The procedures selected for each invocation, in load order; selection does not change tool admission.
+ readonly #selected = new Map<string,readonly string[]>();
  constructor(private readonly sql: SqlStorage, private readonly owner: string,
   private readonly budget: ResolvedSkillBudget = byteUpperBoundSkillBudget(), private readonly custodyKey: string = owner,
   private readonly catalog: readonly Skill[] = CURATED_SKILLS) { this.sql.exec(SKILLS_TABLE_SCHEMA); this.ensureDefaults(); }
@@ -119,32 +124,38 @@ export class CuratedOwnerSkills {
   const row=this.stored(name);
   if(row&&!this.authentic(row,s)) return denied();
   this.sql.exec("UPDATE skills SET status='archived' WHERE name=?",name);
-  for(const [turnId,selected] of [...this.#selected]) if(selected===name) this.#selected.delete(turnId);
+  for(const [turnId,selected] of [...this.#selected]) this.#selected.set(turnId,selected.filter(s=>s!==name));
   return {ok:true,source_taint:null,data:metadata(s,false)};
  }
  load(name:string,version:number,turn:CuratedSkillTurn):Result {
   const s=this.skillFor(name);
   if(!s || turn.owner!==this.owner || !turn.turnId || version!==s.version || !s.trigger_types.includes(turn.trigger) || !this.active(name)) return denied();
-  const prior=this.#selected.get(turn.turnId);
-  if(prior!==undefined && prior!==name) return denied();
-  this.#selected.set(turn.turnId,name);
+  const prior=this.#selected.get(turn.turnId) ?? [];
+  if(!prior.includes(name)){
+   const next=[...prior,name];
+   // Another skill joins only while the turn's block fits; a token is at least one UTF-8 byte, so a block within its budget
+   // in bytes is within it in tokens too. A first skill is measured where it renders, as before.
+   const skills=next.map(n=>this.skillFor(n)!);
+   const bytes=(text:string)=>new TextEncoder().encode(text).length;
+   if(prior.length && (bytes(renderSkill(s))>skillLimit(s) || bytes(renderBlock(skills.map(renderSkill)))>blockLimit(skills))) return overBudget();
+   this.#selected.set(turn.turnId,next);
+  }
   return {ok:true,source_taint:null,data:metadata(s,true)};
  }
  async prompt(turn:CuratedSkillTurn,canaryTokens:readonly string[]):Promise<string> {
   await turn.assertCurrent();
-  const name=this.#selected.get(turn.turnId);
-  const s=name===undefined?undefined:this.skillFor(name);
-  if(!name || !s || turn.owner!==this.owner || !this.active(name)) return '';
-  const before=JSON.stringify(this.stored(name));
-  const fragment=renderSkill(s);
-  const block=renderBlock([fragment]);
-  const fragmentCount=await this.budget.countRenderedSkill(fragment);
+  const names=this.#selected.get(turn.turnId) ?? [];
+  const skills=names.map(n=>this.skillFor(n));
+  if(!names.length || turn.owner!==this.owner || skills.some(s=>!s) || names.some(n=>!this.active(n))) return '';
+  const before=JSON.stringify(names.map(n=>this.stored(n)));
+  const fragments=(skills as Skill[]).map(renderSkill);
+  const block=renderBlock(fragments);
+  const counted=await Promise.all(fragments.map(f=>this.budget.countRenderedSkill(f)));
   const blockCount=await this.budget.countRenderedBlock(block);
-  const limit=s.name===NAME?600:BUNDLED_SKILL_MAX_BYTES;
-  if(!fragmentCount.ok || !blockCount.ok || !Number.isSafeInteger(fragmentCount.tokens) || !Number.isSafeInteger(blockCount.tokens)
-    || fragmentCount.tokens<0 || blockCount.tokens<0 || fragmentCount.tokens>limit || blockCount.tokens>limit) return '';
+  const within=(count:Awaited<ReturnType<ResolvedSkillBudget['countRenderedBlock']>>,limit:number)=>count.ok && Number.isSafeInteger(count.tokens) && count.tokens>=0 && count.tokens<=limit;
+  if(!counted.every((count,i)=>within(count,skillLimit(skills[i]!))) || !within(blockCount,blockLimit(skills as Skill[]))) return '';
   await turn.assertCurrent();
-  if(!this.active(name) || JSON.stringify(this.stored(name))!==before || this.#selected.get(turn.turnId)!==name) return '';
+  if(names.some(n=>!this.active(n)) || JSON.stringify(names.map(n=>this.stored(n)))!==before || JSON.stringify(this.#selected.get(turn.turnId))!==JSON.stringify(names)) return '';
   return block;
  }
  private authorized(name:string,version:number,turn:CuratedSkillTurn,action:'install'|'disable') {
