@@ -9,7 +9,7 @@ import { appSubjectFor } from '../src/channels/app-api';
 import { episodeIndex, NIGHTLY_ID, NIGHTLY_THROUGH_KEY, OWNER_SAID, scrubEpisodeTexts } from '../src/channels/episodes';
 import { traceBook } from '../src/channels/harness';
 import { redactConversationEntries } from '../src/channels/conversation-store';
-import { claimStore, FORGOTTEN } from '../src/memory/claims';
+import { claimStore, FORGOTTEN, withOutsideNotes } from '../src/memory/claims';
 import { forgetPurge, type ForgetStore } from '../src/memory/forget-purge';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
@@ -216,6 +216,18 @@ describe('the owner turn with a forget still pending', () => {
       const promotion = openai.inputs.find(input => input.includes('"name":"promotion"'))!;
       expect(promotion).toContain('The team holds steady');
       expect(promotion).not.toMatch(/\btea\b/i);
+    });
+  });
+  it('promotion is told the rule its store follows: any source only on a store that recalls outside notes', async () => {
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('promote-rule-told')), async (_i, state) => {
+      const memory = claimStore(state.storage.sql);
+      memory.add({ kind: 'observation', text: 'The team holds steady', source: 'stated', evidence: 'The team holds steady', origin: 'owner', source_ref: 'owner, app-2' }, '2026-10-20T08:00:00Z');
+      const everySource = 'it may support a node, and a node resting on one is Waldo';
+      await createOwnerResponder('fixture', undefined, memory).promote('promote-plain');
+      expect(openai.inputs.find(input => input.includes('"name":"promotion"'))).not.toContain(everySource);
+      openai.inputs = [];
+      await createOwnerResponder('fixture', undefined, withOutsideNotes(memory)).promote('promote-outside');
+      expect(openai.inputs.find(input => input.includes('"name":"promotion"'))).toContain(everySource);
     });
   });
   it('promotion cannot build a node on held claims even when it names them', async () => {
