@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { setProactivityArgsSchema } from '@waldo/contracts';
-import { drawingOn, interruptBook, interruptHold, interruptLimits, reopensAt, spendOf, type HoldInput, type InterruptLimits } from '../src/channels/interruptions';
+import { drawingOn, interruptBook, interruptHold, interruptLimits, reopensAt, spendOf, withinBudget, type HoldInput, type InterruptLimits } from '../src/channels/interruptions';
 import { loopBook, loopHandlers, proactivityLine } from '../src/channels/loops';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { episodeIndex, ownerSpokeSince, OWNER_SAID } from '../src/channels/episodes';
@@ -52,23 +52,50 @@ describe('interruptHold', () => {
   });
 });
 
-describe('interruptLimits', () => {
-  it('reads the deployment defaults, and the owner\'s own number wins', () => {
-    const proactivity = { quiet_start: null, quiet_end: null, volume: 'normal' as const };
-    expect(interruptLimits({ PROACTIVE_INTERRUPTS_PER_DAY: '3', PROACTIVE_URGENT_PER_DAY: '0', PROACTIVE_GAP_MIN: '30' }, proactivity)).toEqual({ perDay: 3, urgentPerDay: 0, gapMs: 30 * 60_000 });
-    expect(interruptLimits({ PROACTIVE_INTERRUPTS_PER_DAY: '3' }, { ...proactivity, interruptions_per_day: 1 })).toEqual({ perDay: 1, urgentPerDay: 1, gapMs: 60 * 60_000 });
+describe('interruptLimits: the owner\'s volume sets the daily count, and their own number wins', () => {
+  const at = (volume: 'low' | 'normal' | 'high', interruptions_per_day?: number) => ({ quiet_start: null, quiet_end: null, volume, ...(interruptions_per_day === undefined ? {} : { interruptions_per_day }) });
+  // The deployed PROACTIVE_INTERRUPTS_PER_DAY ("2") no longer decides: volume does.
+  const deployed = { PROACTIVE_INTERRUPTS_PER_DAY: '2', PROACTIVE_URGENT_PER_DAY: '1', PROACTIVE_GAP_MIN: '60' };
+
+  it('normal is six a day', () => {
+    expect(interruptLimits(deployed, at('normal'))).toEqual({ perDay: 6, urgentPerDay: 1, gapMs: 60 * 60_000 });
   });
 
-  it('the owner\'s zero means none at all: no budget and no urgent allowance, whatever the deployment allows', () => {
-    const none = interruptLimits({ PROACTIVE_URGENT_PER_DAY: '3' }, { quiet_start: null, quiet_end: null, volume: 'normal', interruptions_per_day: 0 });
+  it('low is two a day', () => {
+    expect(interruptLimits(deployed, at('low'))).toEqual({ perDay: 2, urgentPerDay: 1, gapMs: 60 * 60_000 });
+  });
+
+  it('high has no daily count; the gap and quiet hours still hold', () => {
+    const high = interruptLimits(deployed, at('high'));
+    expect(high).toEqual({ perDay: Number.POSITIVE_INFINITY, urgentPerDay: 1, gapMs: 60 * 60_000 });
+    const spent = { day: '2026-10-20', count: 40, urgent: 0, last: NOW - 2 * 3_600_000 };
+    expect(interruptHold({ ...base, spent, limits: high })).toBeNull();
+    expect(interruptHold({ ...base, spent: { ...spent, last: NOW - 10 * 60_000 }, limits: high })).toBe('cooldown');
+    expect(interruptHold({ ...base, quiet: true, spent, limits: high })).toBe('quiet');
+    expect(withinBudget(spent, high, NOW)).toBe(true);
+  });
+
+  it('the owner\'s own number wins at every volume', () => {
+    for (const volume of ['low', 'normal', 'high'] as const) expect(interruptLimits(deployed, at(volume, 3)).perDay).toBe(3);
+  });
+
+  it('the owner\'s zero means none at all, even at high: no budget and no urgent allowance', () => {
+    const none = interruptLimits({ PROACTIVE_URGENT_PER_DAY: '3' }, at('high', 0));
     expect(none).toMatchObject({ perDay: 0, urgentPerDay: 0 });
     expect(interruptHold({ ...base, urgent: true, limits: none })).toBe('budget');
   });
 
-  it('an unset or unreadable default falls back rather than opening the gate', () => {
-    const proactivity = { quiet_start: null, quiet_end: null, volume: 'normal' as const };
-    expect(interruptLimits({}, proactivity)).toEqual({ perDay: 2, urgentPerDay: 1, gapMs: 60 * 60_000 });
-    expect(interruptLimits({ PROACTIVE_INTERRUPTS_PER_DAY: '-1', PROACTIVE_URGENT_PER_DAY: 'lots', PROACTIVE_GAP_MIN: '1.5' }, proactivity)).toEqual({ perDay: 2, urgentPerDay: 1, gapMs: 60 * 60_000 });
+  it('an unreadable urgent allowance or gap falls back rather than opening the gate', () => {
+    expect(interruptLimits({ PROACTIVE_URGENT_PER_DAY: 'lots', PROACTIVE_GAP_MIN: '1.5' }, at('normal'))).toEqual({ perDay: 6, urgentPerDay: 1, gapMs: 60 * 60_000 });
+  });
+
+  it('the turn reads what is left: a count at normal, none at high', () => {
+    const kv = new Map<string, unknown>();
+    const book = interruptBook({ get: <T,>(key: string) => kv.get(key) as T | undefined, put: (key, value) => { kv.set(key, value); }, delete: key => kv.delete(key) },
+      { now: () => NOW, timezone: () => 'UTC', ownerSpokeSince: () => false });
+    expect(book.line(interruptLimits(deployed, at('normal')))).toContain('6 more times today');
+    expect(book.line(interruptLimits(deployed, at('high')))).toContain('no daily count');
+    expect(book.line(interruptLimits(deployed, at('high')))).not.toMatch(/Infinity|budget for unasked messages is spent/);
   });
 });
 

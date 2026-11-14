@@ -39,6 +39,10 @@ export const PUSH_DAILY_LIMIT = 3;
 // Pushes for anything but a day card or an approval have their own ceiling: a backstop against a runaway sender. Whether one
 // is sent at all is the model's judgment.
 export const PROACTIVE_PUSH_DAILY_LIMIT = 6;
+// Under the owner's limits the ceiling rises with their daily budget (OwnerPushDeps.proactivePerDay), never below the fixed
+// one: these pushes ride on messages the limits already admitted and charged, or copy one, so the budget never lowers it.
+// High volume has no daily count; this caps it all the same, as a guard against a sender loop, not as a volume rule.
+export const PROACTIVE_PUSH_BACKSTOP = 24;
 // Event pushes, which an outside source's notices raise, count apart: a noisy source never uses up the day's prep and update
 // pushes. This is a backstop under the owner's own limits (OwnerPushDeps.held), which the deploy can set (EVENT_PUSH_PER_DAY).
 export const EVENT_PUSH_DAILY_LIMIT = 3;
@@ -69,6 +73,8 @@ export type OwnerPushDeps = Readonly<{
   held?(kind: PushKind): string | null;
   spent?(kind: PushKind): void;
   eventPerDay?: number;
+  // PROACTIVE_GATE: the owner's daily budget for unasked messages, which raises the proactive ceiling up to the backstop.
+  proactivePerDay?(): number;
 }>;
 
 const readTargets = (value: unknown): readonly PushTarget[] => {
@@ -102,7 +108,8 @@ export const ownerPush = (deps: OwnerPushDeps) => async (kind: PushKind, approva
   const card = CARD_PUSHES.has(kind), key = card ? BUDGET_KEY : kind === 'event' ? EVENT_BUDGET_KEY : PROACTIVE_BUDGET_KEY;
   const day = deps.today(), budget = deps.kv.get<{ day: string; sent: number }>(key);
   const sent = budget?.day === day ? budget.sent : 0;
-  const limit = kind === 'event' ? deps.eventPerDay ?? EVENT_PUSH_DAILY_LIMIT : !card ? PROACTIVE_PUSH_DAILY_LIMIT : kind === 'approval' && deps.kv.get<string>(BRIEF_DAY_KEY) !== day ? PUSH_DAILY_LIMIT - 1 : PUSH_DAILY_LIMIT;
+  const proactive = deps.proactivePerDay ? Math.min(Math.max(deps.proactivePerDay(), PROACTIVE_PUSH_DAILY_LIMIT), PROACTIVE_PUSH_BACKSTOP) : PROACTIVE_PUSH_DAILY_LIMIT;
+  const limit = kind === 'event' ? deps.eventPerDay ?? EVENT_PUSH_DAILY_LIMIT : !card ? proactive : kind === 'approval' && deps.kv.get<string>(BRIEF_DAY_KEY) !== day ? PUSH_DAILY_LIMIT - 1 : PUSH_DAILY_LIMIT;
   if (sent >= limit) return deps.log('daily_limit', 0);
   let devices: readonly PushTarget[];
   try { devices = readTargets(await deps.targets()); } catch { return deps.log('targets_unavailable', 0); }
