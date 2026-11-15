@@ -74,6 +74,13 @@ describe('HISTORY_ARCHIVE in the Worker config', () => {
   });
 });
 
+describe('HEALTH_WEAR_HRV in the Worker config', () => {
+  it('is off in both blocks until the watch writer\'s validation nights are recorded and the gate turns it on with migration 20261114120000', () => {
+    expect(parsed.vars.HEALTH_WEAR_HRV).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_WEAR_HRV).toBe('0');
+  });
+});
+
 describe('MEDICATIONS in the Worker config', () => {
   // The owner turned it on for staging only; the staging deploy that carries it must have migration 20261101040000 applied.
   it('is on in staging only, and off in production', () => {
