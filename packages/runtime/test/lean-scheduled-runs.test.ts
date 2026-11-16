@@ -42,8 +42,9 @@ const storeOf = (entries: ConversationEntry[]): ConversationStore & { saved: Con
 
 const allowed = (name: string) => triggerTypeSchema.options.filter((trigger) => (TOOL_PERMISSIONS[trigger] as readonly string[]).includes(name));
 const calls: string[] = [];
+const started: (boolean | undefined)[] = [];
 const fake = (name: string) => ({ name: name as ToolName, description: `The ${name} tool.`, schema: z.object({}).passthrough(), trigger_allowlist: allowed(name),
-  handle: async () => { calls.push(name); return { ok: true as const, data: { done: name }, source_taint: null }; } });
+  handle: async (_args: unknown, ctx?: { waldoStarted?: boolean }) => { calls.push(name); started.push(ctx?.waldoStarted); return { ok: true as const, data: { done: name }, source_taint: null }; } });
 // Every tool a scheduled job kind may hold, and some it may not (egress reads and a direct send).
 // get_context is the responder's own handler.
 const TOOLS = [...new Set([...SCHEDULED_MENU, 'web_search', 'browse_page', 'send_message'])].filter((name) => name !== 'get_context').map(fake);
@@ -376,5 +377,18 @@ describe('a Waldo-first run leaving itself a follow-up', () => {
     await run(owner, 'retry:1', [...OUTSIDE_TEXT_JOB_TOOLS, 'open_loop'], undefined, false);
     expect(calls).toEqual([]);
     expect(requests[1]!.tool_turns!.find((turn) => turn.call.name === 'open_loop')!.output).toContain('taint_needs_approval');
+  });
+});
+
+// The approvals desk lets an inward change run unasked only in a run Waldo started (AUTONOMY_WALDO_INWARD); the host alone says so.
+describe('the run\'s provenance a tool sees', () => {
+  const script: Script = (_request, index) => index === 0 ? { text: '', tool: 'read_memory' } : { text: 'SKIP' };
+  it('a run its caller marked Waldo-first tells its tools it was Waldo-started; a run that answers the owner never does', async () => {
+    for (const [waldoFirst, lean] of [[true, true], [true, false], [false, true]] as const) {
+      started.length = 0;
+      const { owner } = await harness({ lean, script });
+      await run(owner, `card:brief:${String(waldoFirst)}`, OUTSIDE_TEXT_JOB_TOOLS, undefined, waldoFirst);
+      expect(started, `waldoFirst=${waldoFirst} lean=${lean}`).toEqual([waldoFirst ? true : undefined]);
+    }
   });
 });

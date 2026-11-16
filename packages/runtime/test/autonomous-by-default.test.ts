@@ -37,7 +37,7 @@ const NOW = Date.UTC(2026, 10, 8, 9, 0, 0);
 const OWNER = 447700900123;
 type Surface = 'whatsapp' | 'imessage' | 'telegram' | 'app';
 
-const harness = (state: DurableObjectState, surface: Surface, options: Readonly<{ autonomous?: boolean; now?: () => number; idPrefix?: string; channelUp?: boolean; undoCancels?: boolean; guests?: number; noEtag?: boolean }> = {}) => {
+const harness = (state: DurableObjectState, surface: Surface, options: Readonly<{ autonomous?: boolean; now?: () => number; idPrefix?: string; channelUp?: boolean; undoCancels?: boolean; guests?: number; noEtag?: boolean; waldoInward?: boolean }> = {}) => {
   const { sql } = state.storage;
   const retired: string[] = [], messages: { text: string; buttons: string[] }[] = [], sent: string[] = [], created: unknown[] = [], cancelled: string[] = [], emails: string[] = [], submitted: string[] = [];
   let n = 0, ref = 0;
@@ -52,7 +52,7 @@ const harness = (state: DurableObjectState, surface: Surface, options: Readonly<
   const now = options.now ?? (() => NOW);
   const desk = approvalDesk(sql, {
     owner: OWNER, surface, appIdentity: () => true, appLink: appApprovalLink,
-    autonomous: () => options.autonomous !== false, ownerMessageAt: () => NOW + 30_000, ...(options.undoCancels ? { undoCancels: true } : {}),
+    autonomous: () => options.autonomous !== false, ownerMessageAt: () => NOW + 30_000, ...(options.undoCancels ? { undoCancels: true } : {}), ...(options.waldoInward ? { waldoInward: () => true } : {}),
     call: async (method: string, body: object) => {
       if (method !== 'sendMessage') return true;
       const message = body as { text: string; reply_markup?: { inline_keyboard: { text: string }[][] } };
@@ -633,5 +633,88 @@ describe('a review too long for one card goes out across messages', () => {
     expect(parts.slice(0, -1).every(p => p.length <= 3800)).toBe(true);
     expect(parts.slice(1).every(p => p.startsWith('\n'))).toBe(true);
     expect(reviewParts('x '.repeat(40_000))).toBeNull();
+  });
+});
+
+// AUTONOMY_WALDO_INWARD (ADR-0018 amendment of 17 Nov): in a run Waldo started, even one that read mail, an inward change it can
+// undo runs with no card and is reported with its undo. Inward is code-checked: the owner's own primary calendar, no guests,
+// nothing that notifies anyone. Everything else a Waldo-started run proposes stays a card.
+describe('an inward, undoable change in a run Waldo started', () => {
+  const waldo = { waldoStarted: true as const };
+  it('golden: a guest-free block Waldo adds in its own run is made with no card and can be undone', async () => {
+    await owner('waldo-inward-create', async state => {
+      const f = harness(state, 'app', { waldoInward: true });
+      const id = await f.desk.propose(HOLD, 'run-1', 'op-1', { ...waldo, outside: true });
+      expect(f.messages).toEqual([]);
+      expect(f.created).toHaveLength(1);
+      expect(f.status(id)).toBe('done');
+      expect(f.desk.askedOutcome(id)).toMatchObject({ state: 'done', undo: true });
+    });
+  });
+
+  it('a day plan of guest-free blocks runs the same way', async () => {
+    await owner('waldo-inward-plan', async state => {
+      const f = harness(state, 'app', { waldoInward: true });
+      const id = await f.desk.proposeCalendarPlan({ day: '2026-11-09', time_zone: 'UTC', reason: 'protect the morning',
+        blocks: [{ title: 'Deep work', start: '2026-11-09T09:00:00Z', end: '2026-11-09T10:30:00Z', block: 'deep_work' }] }, waldo);
+      expect(f.messages).toEqual([]);
+      expect(f.status(id)).toBe('done');
+    });
+  });
+
+  it.each([
+    ['with guests', { ...HOLD, attendees: ['guest@example.test'], send_updates: 'all' as const }],
+    ['that emails anyone', { ...HOLD, send_updates: 'all' as const }],
+    ['with a Meet link', { ...HOLD, add_meet_link: true }],
+    ['on a calendar other than the primary', { ...HOLD, calendar_id: 'team@group.calendar.example.test' }],
+  ])('a change %s stays a card', async (_case, change) => {
+    await owner(`waldo-inward-card-${crypto.randomUUID()}`, async state => {
+      const f = harness(state, 'app', { waldoInward: true });
+      const id = await f.desk.propose(change as never, 'run-1', 'op-1', waldo);
+      expect(f.created).toEqual([]);
+      expect(f.status(id)).not.toBe('done');
+    });
+  });
+
+  it('a send, even to the owner, stays a card in a run Waldo started', async () => {
+    await owner('waldo-inward-send', async state => {
+      const f = harness(state, 'whatsapp', { waldoInward: true });
+      const id = await f.desk.proposeSendMessage(message(), waldo);
+      expect(f.sent).toEqual([]);
+      expect(f.status(id)).not.toBe('done');
+    });
+  });
+
+  it('a move of an event with guests stays a card; a cancel runs only where Waldo can put it back', async () => {
+    await owner('waldo-inward-guests', async state => {
+      const f = harness(state, 'app', { waldoInward: true, guests: 2, undoCancels: true });
+      const moved = await f.desk.propose({ action: 'move', event_id: 'ev-1', start: '2026-11-09T16:00:00Z' as never, end: '2026-11-09T17:00:00Z' as never, reason: 'later' }, 'run-1', 'op-1', waldo);
+      expect(f.status(moved)).not.toBe('done');
+    });
+    await owner('waldo-inward-cancel', async state => {
+      const lost = harness(state, 'app', { waldoInward: true });
+      const kept = await lost.desk.propose({ action: 'cancel', event_id: 'ev-1', reason: 'not needed' }, 'run-1', 'op-1', waldo);
+      expect(lost.cancelled).toEqual([]);
+      expect(lost.status(kept)).not.toBe('done');
+    });
+    await owner('waldo-inward-cancel-undo', async state => {
+      const f = harness(state, 'app', { waldoInward: true, undoCancels: true });
+      const id = await f.desk.propose({ action: 'cancel', event_id: 'ev-1', reason: 'not needed' }, 'run-1', 'op-1', waldo);
+      expect(f.cancelled).toEqual(['ev-1']);
+      expect(f.status(id)).toBe('done');
+    });
+  });
+
+  it('nothing runs without the switch, without the owner\'s "Just do it", or in a run Waldo did not start', async () => {
+    for (const [label, options, how] of [
+      ['switch off', {}, waldo], ['choice off', { waldoInward: true, autonomous: false }, waldo], ['not waldo-started', { waldoInward: true }, { outside: true }],
+    ] as const) {
+      await owner(`waldo-inward-${label}`, async state => {
+        const f = harness(state, 'app', options);
+        const id = await f.desk.propose(HOLD, 'run-1', 'op-1', how);
+        expect(f.created, label).toEqual([]);
+        expect(f.status(id), label).not.toBe('done');
+      });
+    }
   });
 });

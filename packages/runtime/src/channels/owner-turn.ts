@@ -661,7 +661,7 @@ export const createOwnerResponder = (
           budget: turnBudget,
           // The child starts with whatever outside text the parent has read by now, so its reads write nothing on that text's say,
           // and a child whose task was written after the owner's readings were shown fences its egress once it is tainted.
-          ctx: { ...safety, ...memoryContext(), ...(readOthersWords() || turnLoopCtx?.toolArgSourceTaint === 'external' ? { toolArgSourceTaint: 'external' as const } : {}), ...(turnLoopCtx?.healthShown ? { healthShown: true } : {}), runOrigin: runOrigin(), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
+          ctx: { ...safety, ...memoryContext(), ...(readOthersWords() || turnLoopCtx?.toolArgSourceTaint === 'external' ? { toolArgSourceTaint: 'external' as const } : {}), ...(turnLoopCtx?.healthShown ? { healthShown: true } : {}), runOrigin: runOrigin(), ...(waldoFirstRun ? { waldoStarted: true } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
           controlRound: consumeRound,
           complete: async (content, tools, turns) => {
             await assertCurrent();
@@ -691,7 +691,7 @@ export const createOwnerResponder = (
       let turnSuffix: FrozenSuffix | undefined;
       // The turn's reads, kept only while a proposing tool can take steps behind its card.
       const turnReads: TrailRead[] | undefined = turnHandlers.some(handler => handler.takes_why) ? [] : undefined;
-      const loopCtx = { ...safety, ...memoryContext(), ...ownerMessage(), ...(turnCarriedOutside ? { carriedOutside: true } : {}), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), runOrigin: runOrigin(), turnId: trace, openFile: openedFiles.open, ...(privateRunScope ? { runScope: privateRunScope } : {}), ...(turnReads ? { turnReads } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
+      const loopCtx = { ...safety, ...memoryContext(), ...ownerMessage(), ...(turnCarriedOutside ? { carriedOutside: true } : {}), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), runOrigin: runOrigin(), ...(waldoFirstRun ? { waldoStarted: true } : {}), turnId: trace, openFile: openedFiles.open, ...(privateRunScope ? { runScope: privateRunScope } : {}), ...(turnReads ? { turnReads } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
       turnLoopCtx = loopCtx;
       let contextHealthCheck: Readonly<{ key: string; holds: Promise<boolean> }> | undefined;
       return runToolLoop({

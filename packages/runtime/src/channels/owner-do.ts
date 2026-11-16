@@ -4970,7 +4970,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       effects, googleTasks: () => googleTasks, currentRunRef, appReplyRef: () => this.activeApp?.id, ownerRef, ownerRefAliases, grants, freeWindowOffers: () => this.env.FREE_WINDOW_OFFERS === '1',
       approvesInChat: () => this.env.APPROVE_IN_CHAT === '1',
       // The deploy's master switch and the owner's "Just do it" choice: off, every consequential effect is a card as before.
-      autonomous: () => actsWithoutAsking(storage.kv, this.env.AUTONOMOUS_BY_DEFAULT === '1'), ownerTurns: () => this.env.AUTONOMY_OWNER_TURNS === '1',
+      autonomous: () => actsWithoutAsking(storage.kv, this.env.AUTONOMOUS_BY_DEFAULT === '1'), ownerTurns: () => this.env.AUTONOMY_OWNER_TURNS === '1', waldoInward: () => this.env.AUTONOMY_WALDO_INWARD === '1',
       // The recipient guard's last look: the owner's Gmail sent folder and saved Google Contacts, with the grants they already hold.
       knownParty: knownPartyLookup({ mail: account => google.client('mail', undefined, undefined, account), contacts: account => google.client('contacts', undefined, undefined, account) }),
       conversationRef: () => this.activeApp?.conversationRef,

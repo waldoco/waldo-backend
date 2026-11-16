@@ -187,6 +187,9 @@ export type HookRuntimeContext = {
   proposalOnlyCall?: ToolName;
   // The owner's loop store: whether a loop is bound to an observed mail source. Unwired, every tainted close is the owner's.
   loopIsSourceBound?: (id: string) => MaybePromise<boolean>;
+  // Set by the host only on a run its caller marked as one Waldo started itself (a card, a check-back, a sweep, an intervention):
+  // never on a run that answers the owner or that someone else's words started. The approvals desk reads it (askedBy).
+  waldoStarted?: boolean;
   // Set by the host only while a run Waldo started may leave itself a follow-up (MODEL_SET_WAKES): such an open_loop, with no
   // mail source, is Waldo's own note. It keeps the run's taint, wakes only a check-back that reads and cards, is bounded by
   // the loop book, and its title never reaches an owner prompt after outside text (openLoopsPrompt).

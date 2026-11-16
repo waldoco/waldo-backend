@@ -143,6 +143,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // a party reached only through outside text, a payment, a password, a browser submit and permanent deletion keep their cards.
   // Off unless "1"; it does nothing where AUTONOMOUS_BY_DEFAULT is not "1".
   AUTONOMY_OWNER_TURNS?: string;
+  // "1": for an owner whose "Just do it" choice is on, a run Waldo started (a card, a check-back, a sweep, an intervention) makes an
+  // inward change it can undo with no card, even after reading mail: a guest-free block on the owner's own primary calendar, a day
+  // plan, a cancel Waldo can put back. Anything that reaches someone else keeps its card. Does nothing where AUTONOMOUS_BY_DEFAULT is not "1".
+  AUTONOMY_WALDO_INWARD?: string;
   // "1" offers track/log/list/stop_medication on owner turns and words medicine reminders in the harness from a health-plane
   // read. Off unless "1".
   MEDICATIONS?: string;
