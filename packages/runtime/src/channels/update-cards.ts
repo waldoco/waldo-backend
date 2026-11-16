@@ -29,7 +29,7 @@ export type ChangeBefore = Readonly<{ start: string; end: string; all_day: boole
 // read, archived, starred: what the owner did with a mail already seen. more: how many new mails one read left unopened.
 // uid: a calendar event's iCal UID, kept beside the detail (never shown), so a phone change and a Google change to the same
 // meeting in one batch are said once.
-export type Change = Readonly<{ source: 'calendar' | 'mail'; kind: 'added' | 'changed' | 'cancelled' | 'new' | MailLabelChange['change'] | 'more'; detail: string; source_message_id?: string; source_ref?: string; ref?: string; before?: ChangeBefore; uid?: string }>;
+export type Change = Readonly<{ source: 'calendar' | 'mail' | 'webhook'; kind: 'added' | 'changed' | 'cancelled' | 'new' | MailLabelChange['change'] | 'more'; detail: string; source_message_id?: string; source_ref?: string; ref?: string; before?: ChangeBefore; uid?: string }>;
 // What the owner did with a mail is context for a judgment, never the reason for one.
 export const CONTEXT_KINDS: readonly Change['kind'][] = ['read', 'archived', 'starred'];
 // A cursor that moved between the read and its write: the write is rolled back and the next tick reads again.

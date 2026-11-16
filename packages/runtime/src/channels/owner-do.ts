@@ -6434,8 +6434,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       gate: () => sweepGate(localIso(Date.now(), clock.timezone).slice(0, 10)),
       transaction: work => storage.transactionSync(work),
       context: async () => ({ ledger: await promptLedger(), feedback: updates.feedback(), volume: loops.proactivity().volume === 'high' ? 'high' : 'normal' }),
-      turn: async (turn, text, current, tools) => this.asOwnerJob('heartbeat', turn, async () =>
-        responder.prompt(turn, owner, text, async (_hop, work) => work(), tools ?? updateSweepTools(sweepSourceFollowups()), current, undefined, await healthLogLines(), 'external', interrupts !== null || actAhead, undefined, undefined, true)),
+      // A batch that carries a webhook's change was started by someone else's words, so its run is not Waldo-first.
+      turn: async (turn, text, current, tools, byOutside) => this.asOwnerJob('heartbeat', turn, async () =>
+        responder.prompt(turn, owner, text, async (_hop, work) => work(), tools ?? updateSweepTools(sweepSourceFollowups()), current, undefined, await healthLogLines(), 'external', interrupts !== null || actAhead, undefined, undefined, byOutside !== true)),
       ...(interrupts ? { interruptions: interrupts } : {}), ...(heldRaise ? { holds: true as const } : {}),
       ...(realtime ? { triage: {
         // The owner's goals as their memory holds them; the turn recalls people and the rest of memory as every job does.
