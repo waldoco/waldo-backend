@@ -3,6 +3,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { SCHEDULE_KINDS } from '@waldo/contracts';
+import { FOLLOWUP_WAKE_PREFIX } from '../src/channels/loops';
 import { applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, schedulePreferenceHandlers, schedulePreferences, schedulePreferencesLine } from '../src/channels/schedule-preferences';
 import { armDayCards, dayPlanBook, ownerCardTime } from '../src/channels/day-cards';
 import { loopBook } from '../src/channels/loops';
@@ -143,6 +144,23 @@ describe('schedule preferences survive an interrupt between the save and the can
       });
     });
   }
+
+  it('a follow-up\'s own wake follows the check-back preference: off clears a due one unrun, on runs it on the heartbeat', async () => {
+    await withOwner(async ({ scheduler, prefs }) => {
+      const id = `${FOLLOWUP_WAKE_PREFIX}o1`;
+      const wake = () => scheduler.schedule({ id, kind: 'heartbeat', payloadRefs: { id: 'o1' }, occurrenceAt: NOW, dueAt: NOW, recurrence: null });
+      const ran: string[] = [];
+      const executors = gateScheduleExecutors({ heartbeat: async (entry: { id: string }) => { ran.push(entry.id); } } as ScheduleExecutors, prefs, scheduler);
+      await wake();
+      await scheduler.dispatchDue(executors);
+      expect(ran).toEqual([id]);
+      prefs.set('heartbeat', false);
+      await wake();
+      await scheduler.dispatchDue(executors);
+      expect(ran).toEqual([id]);
+      expect(scheduler.read(id)).toBeNull();
+    });
+  });
 
   it.each([['a nightly catch-up', NIGHTLY_CATCH_UP_ID], ['a daytime memory pass', MEMORY_DAYTIME_ID]])('%s follows the nightly preference: off clears a due one unrun, and turning nightly off cancels it', async (_label, id) => {
     await withOwner(async ({ scheduler, prefs, ctx }) => {

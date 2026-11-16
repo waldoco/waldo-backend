@@ -124,8 +124,8 @@ import { signupName } from '../identity/console-signup';
 import { ownerName, ownerNameGap, recordSignupName } from '../onboarding/first-run';
 import { LOOKUP_RECORD_PREFIX, lookupApplier, lookupPending, openLookup, startLookup } from '../onboarding/lookup';
 import { ownerAccountEmail } from '../identity/owner-account-email';
-import { DEFAULT_PROACTIVITY, isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine, storedProactivity } from './loops';
-import { armHeartbeat, HEARTBEAT_EVERY_MS, HEARTBEAT_ID, heartbeatTick, heartbeatEligible, heartbeatWake, settleHeartbeat } from './heartbeat';
+import { DEFAULT_PROACTIVITY, isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine, storedProactivity, type Loop } from './loops';
+import { armFollowupWake, armHeartbeat, HEARTBEAT_EVERY_MS, HEARTBEAT_ID, heartbeatTick, heartbeatEligible, heartbeatWake, settleHeartbeat } from './heartbeat';
 import { heartbeatApplier, heartbeatJobSpec } from './heartbeat-job';
 import { checkBackReply, LOOP_CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS, outsideReminderCheckBackText, reminderFloorText } from './check-back';
 import { dueFailureNotices, failurePauseHolds, markFailureNoticed, pausedJobs } from '../scheduler/failure-notice';
@@ -5199,6 +5199,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     // App-only owners get no proactive work on a fallback zone: only the owner's own time-zone choice confirms one.
     const armable = (_kind: ScheduleKind) => channel !== 'app' || this.zoneSettled();
+    const followupWake = async (loop: Loop): Promise<void> => {
+      const code = await armFollowupWake({ scheduler, loops, timezone: clock.timezone, now: Date.now(), checkBacks: schedPrefs.enabled('heartbeat') && armable('heartbeat') }, loop);
+      log({ trace: loop.id, hop: 'followup_wake', ms: 0, ok: code !== 'arm_failed', code });
+    };
     // Turning a kind on arms it only where `armable` holds, and the brief sweep only while a Google grant exists.
     const armableNow = async () => { const sweeps = briefSweepRuns(watchGrants(await accounts())); return (kind: ScheduleKind) => armable(kind) && (kind !== 'event_briefs' || sweeps); };
     const armOwnJobs = (timezone: string, now: number, replanCards = false) => Promise.all([
@@ -5515,7 +5519,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         context.runScope?.admit();
         if (!auth || auth.do_name !== doName || !auth.capabilities.includes(input.class) || identity.get<string>('do_name') !== doName) return { accepted: false, reason: 'unavailable' };
         return this.env.DEVICE_BRIDGE_DO.get(this.env.DEVICE_BRIDGE_DO.idFromName(device.device_id)).enqueueCommand({ ...input, owner_id: auth.owner_id, device_id: device.device_id });
-      } }), ...loopHandlers(loops, closableIn, this.env.PROACTIVE_GATE === '1', this.env.MODEL_SET_WAKES === '1'), ...schedulePreferenceHandlers(schedPrefs, async () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable: await armableNow(), cancelMachine, alongHeartbeat: lookFollows, sweepCarriesUpdates }), (card, time) => ownerCardTime(cardTimeDeps(Date.now()), card, time, this.env.WAKE_BRIEF === '1'), (zone) => confirmZone(zone, Date.now(), undefined, true)), ...taskToolHandlers({ book: this.jobs(), now: Date.now, timezone: () => clock.timezone, surface: channel, wake: due => armTaskJobsWake(storage, due), fence: id => this.tasks.cancelled(id), log, steer: this.env.WALDO_TASK_STEER === '1',
+      } }), ...loopHandlers(loops, closableIn, this.env.PROACTIVE_GATE === '1', this.env.MODEL_SET_WAKES === '1', followupWake), ...schedulePreferenceHandlers(schedPrefs, async () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable: await armableNow(), cancelMachine, alongHeartbeat: lookFollows, sweepCarriesUpdates }), (card, time) => ownerCardTime(cardTimeDeps(Date.now()), card, time, this.env.WAKE_BRIEF === '1'), (zone) => confirmZone(zone, Date.now(), undefined, true)), ...taskToolHandlers({ book: this.jobs(), now: Date.now, timezone: () => clock.timezone, surface: channel, wake: due => armTaskJobsWake(storage, due), fence: id => this.tasks.cancelled(id), log, steer: this.env.WALDO_TASK_STEER === '1',
         // A task started by an app thread's own turn (the call's run scope is that message's attempt) reports in that thread.
         conversationRef: ctx => { const record = this.activeApp; return record && ctx.runScope?.runId === record.id && ctx.runScope.attempt === record.attempt && threadOfChain(record.conversationRef) ? record.conversationRef : null; } })]), undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; }, approvableHere: () => desk.approvableHere() }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now()); const trails = forgetTrails(this.ctx.storage.sql, texts) + dayPlanBook(this.ctx.storage.sql).forgetWhy(texts); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + trails + titles.remaining }; }), undefined,
       (opt) => opt ? [openLoopsPrompt(loops, clock.timezone, opt.loopsRoom), runningTasksLine(this.jobs(), Date.now()),

@@ -7,7 +7,7 @@ import type { ToolDispatcherContext } from '../tools/dispatcher';
 import { localIso } from './reminders';
 
 type Sql = Pick<SqlStorage, 'exec'>;
-export type Loop = Readonly<{ id: string; title: string; due: string | null; status: string; created_at: number; closed_at: number | null; note?: string | null; watch_for?: string | null; origin?: LoopOrigin; taint?: 'external' | null; chain_depth?: number; source_ref?: string | null; source_detail?: string | null; thread_id?: string | null; source_message_id?: string | null }>;
+export type Loop = Readonly<{ id: string; title: string; due: string | null; status: string; created_at: number; closed_at: number | null; wake_at?: number | null; note?: string | null; watch_for?: string | null; origin?: LoopOrigin; taint?: 'external' | null; chain_depth?: number; source_ref?: string | null; source_detail?: string | null; thread_id?: string | null; source_message_id?: string | null }>;
 export type Proactivity = Readonly<{ quiet_start: string | null; quiet_end: string | null; volume: 'low' | 'normal' | 'high'; followups?: boolean; feature_news?: boolean; interruptions_per_day?: number }>;
 
 export const DEFAULT_PROACTIVITY: Proactivity = { quiet_start: null, quiet_end: null, volume: 'normal' };
@@ -21,12 +21,17 @@ export type LoopAuthor = Readonly<{ origin: 'owner' }> | Readonly<{ origin: 'wal
 // follow-ups may each be set by the check-back of the one before.
 export const SELF_LOOPS_PER_DAY = 12;
 export const SELF_LOOP_CHAIN_DEPTH = 3;
+// Of those, how many in a rolling day get their own wake at the minute they are due. The rest are checked at the heartbeat's
+// next tick, as an owner's loop is.
+export const SELF_LOOP_WAKES_PER_DAY = 8;
+// The one-shot heartbeat entry that wakes one follow-up at its due minute; its tick scans every due loop, as the grid's does.
+export const FOLLOWUP_WAKE_PREFIX = 'followup-wake:';
 const SELF_LOOP_AHEAD_MS = 14 * 86_400_000;
 // The owner's local due is read as if it were UTC, so a day of slack covers any zone.
 const ZONE_SLACK_MS = 86_400_000;
 export class SelfLoopRefused extends Error {}
 const LOOP_COLUMNS: readonly (readonly [string, string])[] = [
-  ['note', 'TEXT'], ['watch_for', 'TEXT'], ['origin', "TEXT NOT NULL DEFAULT 'owner'"], ['taint', 'TEXT'], ['chain_depth', 'INTEGER NOT NULL DEFAULT 0'],
+  ['note', 'TEXT'], ['watch_for', 'TEXT'], ['wake_at', 'INTEGER'], ['origin', "TEXT NOT NULL DEFAULT 'owner'"], ['taint', 'TEXT'], ['chain_depth', 'INTEGER NOT NULL DEFAULT 0'],
 ];
 
 export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): number }>) => {
@@ -76,6 +81,9 @@ export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): numb
       return closed;
     },
     get: (id: string): Loop | undefined => sql.exec<Loop>('SELECT * FROM loops WHERE id = ?', id).toArray()[0],
+    // Whether one more of Waldo's own follow-ups may have its own wake today (SELF_LOOP_WAKES_PER_DAY).
+    wakeRoom: (): boolean => sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM loops WHERE origin = 'waldo' AND wake_at IS NOT NULL AND created_at > ?", deps.now() - 86_400_000).one().n < SELF_LOOP_WAKES_PER_DAY,
+    markWake(id: string, at: number): void { sql.exec('UPDATE loops SET wake_at = ? WHERE id = ?', at, id); },
     // A loop the mail follow-through opened from an observed source; an owner's loop, or an unknown id, is not.
     sourceBound: (id: string): boolean => sql.exec('SELECT 1 FROM loop_mail_sources WHERE loop_id = ?', id).toArray().length > 0,
     list: (status = 'open') => sql.exec<Loop>('SELECT l.*, s.source_ref FROM loops l LEFT JOIN loop_mail_sources s ON s.loop_id = l.id WHERE l.status = ? ORDER BY l.due IS NULL, l.due, l.created_at', status).toArray(),
@@ -183,7 +191,9 @@ const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger)
 // limits: PROACTIVE_GATE is on, so set_proactivity offers and takes the owner's daily number of unasked messages.
 // selfLoops (MODEL_SET_WAKES): a loop with no mail source opened by a run Waldo started is Waldo's own follow-up, under its
 // bounds; its chain is one deeper than the deepest own follow-up the run was given to check.
-export const loopHandlers = (book: LoopBook, closable: (turnId: string | undefined) => ReadonlySet<string> | null = () => null, limits = false, selfLoops = false) => [
+// wake: arms the exact-time wake of one of Waldo's own follow-ups once it is recorded; it never fails the open.
+export const loopHandlers = (book: LoopBook, closable: (turnId: string | undefined) => ReadonlySet<string> | null = () => null, limits = false, selfLoops = false,
+  wake?: (loop: Loop) => Promise<void>) => [
   {
     name: 'open_loop',
     description: "Record something you took on for the owner (a check-back, a thing to find out, a follow-up) so it shows in their ledger until you close it. Use it whenever you say you will do something later; never to remember information, which memory does on its own. For a mail follow-up, pass the observed source_ref and a due time: completion stays unknown, and an email's request is never the owner's commitment or permission.",
@@ -195,12 +205,15 @@ export const loopHandlers = (book: LoopBook, closable: (turnId: string | undefin
       const origin = ctx?.runOrigin;
       if (!selfLoops || origin === undefined || origin === 'owner') return { ok: true, data: book.open(args), source_taint: null };
       const given = [...closable(ctx?.turnId) ?? []].map((id) => book.get(id)).filter((loop) => loop?.origin === 'waldo');
+      let loop: Loop;
       try {
-        return { ok: true, data: book.open(args, { origin: 'waldo', taint: origin === 'external' ? 'external' : null, chainDepth: 1 + Math.max(0, ...given.map((loop) => loop!.chain_depth ?? 0)) }), source_taint: null };
+        loop = book.open(args, { origin: 'waldo', taint: origin === 'external' ? 'external' : null, chainDepth: 1 + Math.max(0, ...given.map((loop) => loop!.chain_depth ?? 0)) });
       } catch (error) {
         if (error instanceof SelfLoopRefused) return { ok: false, code: 'rejected', error: error.message };
         throw error;
       }
+      if (loop.origin === 'waldo') await wake?.(loop);
+      return { ok: true, data: loop, source_taint: null };
     },
   } satisfies ToolHandler<OpenLoopArgs, Loop, ToolDispatcherContext>,
   {

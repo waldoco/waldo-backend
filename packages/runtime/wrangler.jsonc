@@ -55,7 +55,8 @@
   // head an hour, and gives the day plan and wake decision the shared health block; "0" is the rollback.
   // MODEL_SET_WAKES: "1" lets a run Waldo starts leave itself a follow-up (open_loop with no mail source): a due time, a note
   // to its future self and what to watch for, which wakes a later check-back and grants nothing; bounded in code to 12 a day,
-  // two weeks ahead and a chain of 3. "0" is the rollback.
+  // two weeks ahead and a chain of 3. Up to 8 a day are checked at the minute they are due, by a one-shot heartbeat entry; the
+  // rest at the heartbeat's next tick. "0" is the rollback.
   // WALDO_TIMEZONE_ASK: "1" tells a turn whose time zone the owner has not confirmed to ask for it when it fits; "0" is the
   // rollback.
   // WALDO_SWITCHES: every feature switch and tuning knob, one JSON var, because Cloudflare caps a Worker at 128 vars and
