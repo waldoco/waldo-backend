@@ -6443,7 +6443,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         context: async () => ({ goals: claimStore(storage.sql).claims().filter(claim => claim.kind === 'goal').slice(-12).map(claim => `- ${claim.text}`).join('\n'), shaping: await dayShaping('update-triage') }),
         // Owner jobs run one at a time, so the cards raised since the turn started are the ones it offered.
         // A done row is a record of something that ran (a draft), not a card waiting on the owner.
-        cardsSince: (at: number) => storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM ledger WHERE created_at >= ? AND status != 'done'", at).one().n,
+        // A change made unasked (an 'asked' run) interrupts the owner as a card does, so it counts against the same limit.
+        cardsSince: (at: number) => storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM ledger WHERE created_at >= ? AND (status != 'done' OR id IN (SELECT approval_id FROM approval_presentations WHERE surface = 'asked'))", at).one().n,
         // Written for where proactive work reaches the owner: on the app, the surface they chose ("reach you on").
         ...(actAhead ? { actAhead: { style: () => channelStyle(PROACTIVE_READS[channel](storage.kv, proactiveBothDefault(this.env))) } } : {}),
       } } : {}),
@@ -6473,7 +6474,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         cards: dayCards(), style: channelStyle(PROACTIVE_READS[channel](storage.kv, proactiveBothDefault(this.env))), shaping: await dayShaping('intervention') }),
       turn: async (turn, text, current, tools) => this.asOwnerJob('heartbeat', turn, async () =>
         responder.prompt(turn, owner, text, async (_hop, work) => work(), tools, current, undefined, await healthLogLines(), 'external', true, undefined, undefined, true)),
-      cardsSince: (at: number) => storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM ledger WHERE created_at >= ? AND status != 'done'", at).one().n,
+      cardsSince: (at: number) => storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM ledger WHERE created_at >= ? AND (status != 'done' OR id IN (SELECT approval_id FROM approval_presentations WHERE surface = 'asked'))", at).one().n,
       deliver: async (id, trace, text, commit) => {
         if (finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
         await finalOutbox.enqueueFenced({ id, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
