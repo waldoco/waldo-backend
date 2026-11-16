@@ -2,7 +2,8 @@ import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
 import { armBriefSweep, BRIEF_SWEEP_ID } from '../src/channels/event-briefs';
-import { webhookChanges } from '../src/channels/webhook-changes';
+import { webhookChange, webhookChanges } from '../src/channels/webhook-changes';
+import { lookQueue } from '../src/channels/first-look';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
@@ -81,5 +82,40 @@ it('a quarantined sweep would not judge it: the fixed note goes and nothing wait
     await entry.recordEvent(request('one'), BODY);
     expect(sends.n).toBe(1);
     expect(webhookChanges(state.storage.kv).take()).toEqual([]);
+  });
+});
+
+// FIRST_LOOK: the event waits for its first look instead of going straight to the sweep.
+it('with the first look on, the event waits for it and nothing goes to the sweep\'s queue yet', async () => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('event-turns-first-look')), async (_instance, state) => {
+    ensureSchema(state.storage);
+    const owner = new OwnerDO(state, { ...env, EVENT_TURNS: '1', FIRST_LOOK: '1' }) as unknown as Entry;
+    const logs: { code?: string }[] = [];
+    let looked = 0;
+    owner.setup = () => ({ runs: { start: () => ({ id: 'synthetic-event' }), finish: () => true }, api: { sendMessage: async () => ({ message_id: 1 }) }, owner: 42,
+      log: (entry: { code?: string }) => { logs.push(entry); }, firstLook: async () => { looked += 1; } });
+    try {
+      await state.storage.put('google:accounts', GOOGLE);
+      await armBriefSweep(new Scheduler(state.storage.sql, state.storage, productionDeps()), Date.now());
+      await owner.recordEvent(request('one'), BODY);
+      expect(lookQueue(state.storage.kv).pending().map(change => change.ref)).toEqual(['webhook:github:id:one']);
+      expect(webhookChanges(state.storage.kv).take()).toEqual([]);
+      expect(logs.map(log => log.code)).toEqual(['queued_for_first_look']);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(looked).toBe(1);
+    } finally { await state.storage.deleteAlarm(); }
+  });
+});
+
+it('with the first look turned off after events queued for it, nothing is asked and every one goes to the sweep', async () => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('event-turns-look-rollback')), async (_instance, state) => {
+    ensureSchema(state.storage);
+    const owner = new OwnerDO(state, { ...env, EVENT_TURNS: '1', FIRST_LOOK: '0', ANTHROPIC_API_KEY: 'sk-ant-fictional-not-a-key' }) as unknown as { setup(surface: string): { firstLook(): Promise<void> } };
+    try {
+      lookQueue(state.storage.kv).add(webhookChange('github', 'id:one', { kind: 'push', title: 'Fix the invoice export' }));
+      await owner.setup('app').firstLook();
+      expect(lookQueue(state.storage.kv).pending()).toEqual([]);
+      expect(webhookChanges(state.storage.kv).take().map(change => change.ref)).toEqual(['webhook:github:id:one']);
+    } finally { await state.storage.deleteAlarm(); }
   });
 });

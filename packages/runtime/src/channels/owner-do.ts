@@ -1,5 +1,6 @@
 import { appControlsRequest } from './app-controls';
 import { webhookChange, webhookChanges } from './webhook-changes';
+import { firstLookDecisions, firstLookInput, lookQueue, settleLook } from './first-look';
 import { HEALTH_READ_TOOLS, healthSharedLately, loadedToolsBook, noteHealthShared, PHONE_TOOLS } from '../tools/loaded';
 import { deliveredLately } from './scheduled-run';
 import { appGooglePicture, googlePictures } from './app-google-picture';
@@ -389,6 +390,8 @@ type OwnerRuntime = Readonly<{
   // carry a workout that just ended (WORKOUT_WAKE), which may reshape the rest of the day.
   healthSamples(cause?: HealthRecomputeCause, woke?: boolean, workout?: boolean): Promise<void>;
   healthRecompute(): Promise<void>;
+  // FIRST_LOOK: the waiting webhooks' first look (first-look.ts).
+  firstLook(): Promise<void>;
   // The health trigger: a day marked by a zone change, and the scheduled evaluation of it.
   healthChanged(day: string): Promise<void>;
   // PROACTIVE_INTERVENTIONS: Waldo's own look across the owner's plate, a patrol entry beside the health trigger's.
@@ -3037,16 +3040,24 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const { kind, title, url, detail, occurred_at } = envelope;
       const change = webhookChange(source, delivery, { kind, title, ...(typeof url === 'string' ? { url } : {}),
         ...(typeof detail === 'string' ? { detail } : {}), ...(typeof occurred_at === 'string' ? { occurred_at } : {}) });
+      // FIRST_LOOK: the event waits for a cheap first look on the owner's chain, which decides whether the sweep judges it now.
+      const look = this.env.FIRST_LOOK === '1';
       const dropped = this.ctx.storage.transactionSync(() => {
-        const gave = webhookChanges(this.ctx.storage.kv).add(change);
+        const gave = look ? lookQueue(this.ctx.storage.kv).add(change) : webhookChanges(this.ctx.storage.kv).add(change);
         inbox.finish(source, delivery);
         return gave;
       });
       runs.finish(run.id, 'completed', `${summary}: queued for Waldo to judge`.slice(0, 200));
+      if (dropped) log({ trace: run.id, hop: 'event_ingress', ms: 0, ok: false, code: 'queue_full_oldest_dropped', detail: String(dropped) });
+      if (look) {
+        log({ trace: run.id, hop: 'event_ingress', ms: 0, ok: true, code: 'queued_for_first_look', detail: `${source}:${kind.slice(0, 60)}` });
+        this.ctx.waitUntil(this.serial(() => this.asOwnerJob('heartbeat', `first-look:${run.id}`, () => runtime.firstLook()))
+          .catch(() => log({ trace: run.id, hop: 'first_look', ms: 0, ok: false, code: 'failed' })));
+        return new Response('ok');
+      }
       // The change is queued either way; a failed pull-forward leaves it for the sweep's next tick.
       const woke = await wakeBriefSweep(new Scheduler(this.ctx.storage.sql, this.ctx.storage, productionDeps()), Date.now()).catch(() => null);
       log({ trace: run.id, hop: 'event_ingress', ms: 0, ok: woke !== null, code: woke === null ? 'queued_wake_failed' : woke ? 'queued_sweep_pulled_forward' : 'queued_sweep_due', detail: `${source}:${kind.slice(0, 60)}` });
-      if (dropped) log({ trace: run.id, hop: 'event_ingress', ms: 0, ok: false, code: 'queue_full_oldest_dropped', detail: String(dropped) });
       return new Response('ok');
     }
     let sent: Awaited<ReturnType<OwnerDO['notifyOwner']>> | null = null;
@@ -6391,7 +6402,22 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       return read;
     };
+    // FIRST_LOOK (first-look.ts): the waiting webhooks' first look. With the switch off (a rollback) nothing is asked and every
+    // waiting event goes to the sweep, so none is stranded. Runs from the event route and from every sweep tick.
+    const firstLook = async (): Promise<void> => {
+      const looks = lookQueue(storage.kv), pending = looks.pending();
+      if (!pending.length) return;
+      const trace = `first-look:${Date.now()}`, started = Date.now(), refs = pending.map(change => change.ref ?? '');
+      const asked = this.env.FIRST_LOOK === '1' && responder.firstLook !== undefined;
+      const raw = asked ? await responder.firstLook!(trace, firstLookInput(pending, openLoopsPrompt(loops, clock.timezone, 2_000), dayCards())).catch((): null => null) : null;
+      const took = storage.transactionSync(() => settleLook({ looks, wake: change => { webhookChanges(storage.kv).add(change); },
+        nextCard: later => { updates.record(localIso(Date.now(), clock.timezone).slice(0, 10), Date.now(), later, null); } }, pending, firstLookDecisions(raw, refs)));
+      log({ trace, hop: 'first_look', ms: Date.now() - started, ok: !asked || raw !== null, code: !asked ? 'not_asked_all_wake' : raw === null ? 'unread_all_wake' : 'judged',
+        detail: `wake=${took.wake} next_card=${took.next_card} ignore=${took.ignore}` });
+      if (took.wake) await wakeBriefSweep(scheduler, Date.now()).catch(() => false);
+    };
     const updateCheck = async (trace: string) => {
+      await firstLook();
       const client = await google.client();
       if (client === null) {
         // Webhooks still waiting are judged once Google reads again; the queue's cap bounds them meanwhile.
@@ -6887,7 +6913,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           doName: identity.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] }, work => storage.transactionSync(() => { work(); commit(); }));
       },
       ended: grant => { welcome.lateWeb(grant); this.continueWelcome(runtime); } });
-    const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, push, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, interventionReview, announcementPass, announcementsCurrent, placeMoved, placeArrived, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, push, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, firstLook, healthChanged, healthTrigger, interventionReview, announcementPass, announcementsCurrent, placeMoved, placeArrived, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       lookupToolHandlers: () => {
         const unlocated = webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch), this.lookupPages) : null;

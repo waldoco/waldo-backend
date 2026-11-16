@@ -22,6 +22,7 @@ import { runToolLoop, type ToolLoopEvent } from '../conversation/tool-loop';
 import { healthInContext } from '../conversation/health-fence';
 import { proposalApplied, turnReceipt } from '../hooks/receipt-line';
 import { THREAD_TITLE_FORMAT, THREAD_TITLE_INSTRUCTION, threadOfChain } from './app-threads';
+import { FIRST_LOOK_FORMAT, FIRST_LOOK_INSTRUCTION } from './first-look';
 import { PROGRESS_NOTE_FORMAT, PROGRESS_NOTE_INSTRUCTION } from './progress-pacer';
 import type { LoopEventLike } from '../hooks/claim-hook';
 import { delegateTaskHandler, runChildLoop, SUBAGENT_SYSTEM_PROMPT, withDelegation } from '../conversation/subagent';
@@ -1337,6 +1338,7 @@ export const createOwnerResponder = (
     },
     threadTitle: (trace, exchange, scope) => withCallDeadline(scope, scope.deadline, () => ask(trace, 'thread_title', THREAD_TITLE_INSTRUCTION, exchange, THREAD_TITLE_FORMAT, undefined, undefined, undefined, auxiliaryModel, scope)),
     progressNote: (trace, input, scope) => withCallDeadline(scope, scope.deadline, () => ask(trace, 'progress_note', PROGRESS_NOTE_INSTRUCTION, input, PROGRESS_NOTE_FORMAT, undefined, undefined, undefined, auxiliaryModel, scope)),
+    firstLook: (trace, input) => ask(trace, 'first_look', FIRST_LOOK_INSTRUCTION, input, FIRST_LOOK_FORMAT, undefined, undefined, undefined, auxiliaryModel),
     // The capacity note's input carries the owner's body as zone words: the memory_ purpose keeps it out of every trace. It runs
     // on the chat model, as the owner's health planning does.
     async capacity(trace, input) {
