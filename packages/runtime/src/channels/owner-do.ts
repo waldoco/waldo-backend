@@ -124,6 +124,7 @@ import { signupName } from '../identity/console-signup';
 import { ownerName, ownerNameGap, recordSignupName } from '../onboarding/first-run';
 import { LOOKUP_RECORD_PREFIX, lookupApplier, lookupPending, openLookup, startLookup } from '../onboarding/lookup';
 import { ownerAccountEmail } from '../identity/owner-account-email';
+import { APP_WATCHING_PATH, appWatchingRequest } from './app-watching';
 import { DEFAULT_PROACTIVITY, isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine, storedProactivity } from './loops';
 import { armHeartbeat, HEARTBEAT_EVERY_MS, HEARTBEAT_ID, heartbeatTick, heartbeatEligible, heartbeatWake, settleHeartbeat } from './heartbeat';
 import { heartbeatApplier, heartbeatJobSpec } from './heartbeat-job';
@@ -2132,7 +2133,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }catch(error){logAppReadFailure('app_onboarding',path,error);return fail(503);}
       });
     }
-    if(path==='/app/v1/controls'||path==='/app/v1/actions'||path.startsWith('/app/v1/actions/')||path==='/app/v1/approvals'||path==='/app/v1/approvals/decisions'||path===APP_AUTONOMY_PATH||path.startsWith(APP_AUTONOMY_PATH+'/')){
+    if(path==='/app/v1/controls'||path==='/app/v1/actions'||path.startsWith('/app/v1/actions/')||path==='/app/v1/approvals'||path==='/app/v1/approvals/decisions'||path===APP_AUTONOMY_PATH||path.startsWith(APP_AUTONOMY_PATH+'/')||path===APP_WATCHING_PATH||path.startsWith(APP_WATCHING_PATH+'/')){
       return this.serial(async()=>{
         const auth=consoleAuth(this.env)!;
         const current=async()=>{await this.appAuthority(name,hash);};
@@ -2140,7 +2141,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         try{
           const rows=await auth.listSessions(name),row=rows.find(row=>row.session===hash);
           if(!row)return fail();
-          step=path.startsWith('/app/v1/approvals')?'approvals':path.startsWith(APP_AUTONOMY_PATH)?'autonomy':'controls';
+          step=path.startsWith('/app/v1/approvals')?'approvals':path.startsWith(APP_AUTONOMY_PATH)?'autonomy':path.startsWith(APP_WATCHING_PATH)?'watching':'controls';
           const expires=Date.parse(row.expires_at),session={token:hash,csrf:hash,expires};
           const runtime=this.setup('app');
           const host={...session,signedInAt:row.signed_in_at,storage:this.ctx.storage,assertCurrent:current,desk:runtime.desk,
@@ -2165,6 +2166,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
               :action.action==='session.revoke'?this.revokeOwnerSession(name,action.value.slice('sess_'.length))
               :runtime.act(action,current),
           };
+          if(path.startsWith(APP_WATCHING_PATH))return await appWatchingRequest(request,{loops:loopBook(this.ctx.storage.sql,{newId:()=>crypto.randomUUID(),now:Date.now}),timezone:this.ctx.storage.kv.get<string>('timezone')??this.env.WALDO_OWNER_TIMEZONE??'UTC',now:Date.now,assertCurrent:current});
           if(path.startsWith(APP_AUTONOMY_PATH))return await appAutonomyRequest(request,{...session,signedInAt:row.signed_in_at,storage:this.ctx.storage,assertCurrent:current,sessions:host.sessions,grants:runtime.autonomy.grants,usesToday:runtime.autonomy.usesToday,now:Date.now});
           return await (path.startsWith('/app/v1/approvals')?appApprovalsRequest(request,host):appControlsRequest(request,host));
         }catch(error){logAppReadFailure('app_controls_read',step,error);return fail(503);}

@@ -76,6 +76,12 @@ export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): numb
       return closed;
     },
     get: (id: string): Loop | undefined => sql.exec<Loop>('SELECT * FROM loops WHERE id = ?', id).toArray()[0],
+    // Waldo's own open follow-ups in due order, each with its row number, which the app names it by (app-watching.ts).
+    watching: (limit: number): readonly (Loop & { row: number })[] =>
+      sql.exec<Loop & { row: number }>("SELECT rowid AS row, * FROM loops WHERE status = 'open' AND origin = 'waldo' AND due IS NOT NULL ORDER BY due, created_at LIMIT ?", limit).toArray(),
+    ownByRow: (row: number): Loop | undefined => sql.exec<Loop>("SELECT * FROM loops WHERE rowid = ? AND origin = 'waldo'", row).toArray()[0],
+    // The owner moved when Waldo looks again at one of its own open follow-ups.
+    moveOwn: (id: string, due: string): boolean => sql.exec("UPDATE loops SET due = ? WHERE id = ? AND status = 'open' AND origin = 'waldo' RETURNING id", due, id).toArray().length > 0,
     // A loop the mail follow-through opened from an observed source; an owner's loop, or an unknown id, is not.
     sourceBound: (id: string): boolean => sql.exec('SELECT 1 FROM loop_mail_sources WHERE loop_id = ?', id).toArray().length > 0,
     list: (status = 'open') => sql.exec<Loop>('SELECT l.*, s.source_ref FROM loops l LEFT JOIN loop_mail_sources s ON s.loop_id = l.id WHERE l.status = ? ORDER BY l.due IS NULL, l.due, l.created_at', status).toArray(),
