@@ -2,7 +2,7 @@ import {
   sendAgentMailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type SendAgentMailArgs, type ToolEligibility, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
-import { ApprovalReplaceError, EmailProposalError, askedStatus, ownerAsked, proposalStatus, type ApprovalDesk, replaceRefusal, replacementStatus, turnReadOutside, callWhy, type CardPlacement, type ProposeOptions, type Replacement } from '../../channels/approvals';
+import { ApprovalReplaceError, EmailProposalError, askedStatus, askedBy, proposalStatus, type ApprovalDesk, replaceRefusal, replacementStatus, turnReadOutside, callWhy, type CardPlacement, type ProposeOptions, type Replacement } from '../../channels/approvals';
 import { ownerEffectOperationRef } from '../../channels/owner-effect-ledger';
 import { agentMailDirectory, agentMailFirstName } from '../../channels/agent-mail/handles';
 import { agentMailInbox } from '../../channels/agent-mail/inbox';
@@ -71,7 +71,7 @@ export const sendAgentMailHandler = (host: AgentMailToolHost): ToolHandler<SendA
       const proposal_id = await host.desk.proposeAgentMailSend({
         ...(operation_ref ? { operation_ref } : {}), idempotency_key, handle, ...draft,
         from: rendered.preview.from, subject: rendered.preview.subject, body: rendered.preview.text, parts_digest: await agentMailPartsDigest(rendered.parts),
-      }, { replaces: args.replaces, outside: turnReadOutside(ctx), why: callWhy(ctx), asked: ownerAsked(ctx) });
+      }, { replaces: args.replaces, outside: turnReadOutside(ctx), why: callWhy(ctx), ...askedBy(ctx) });
       const asked = host.desk.askedOutcome?.(proposal_id);
       if (asked) return { ok: true, data: { proposal_id, status: `${askedStatus(asked)}${replacementStatus(host.desk.replacement?.(proposal_id) ?? null)}`, sent: asked.state === 'done' }, source_taint: null };
       return { ok: true, data: { proposal_id, status: `${proposalStatus(host.desk.placement?.(proposal_id), 'review card requested in chat; nothing was sent', 'Nothing was sent.')}${replacementStatus(host.desk.replacement?.(proposal_id) ?? null)}`, sent: false }, source_taint: null };

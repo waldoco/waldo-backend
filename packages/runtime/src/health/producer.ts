@@ -1,5 +1,5 @@
 import { fromRowZone, toRowZone } from '../../../contracts/src/health/zone-bridge';
-import { healthSleepNeedMinutesV1Schema } from '../../../contracts/src/app/health-ingest';
+import { healthApiErrorV1Schema, healthSleepNeedMinutesV1Schema } from '../../../contracts/src/app/health-ingest';
 import { ENERGY_WINDOWS_VERSION } from './scores/energy-windows';
 import { shiftDay } from './scores/time';
 import { trainingLoad, type TrainingLoad, type WorkoutLoad } from './scores/training-load';
@@ -32,7 +32,22 @@ export type ProducerDeps = Readonly<{
   // The owner's health settings (waldo.health_settings_read), given only while the coaching switch is on. With it, every row
   // is computed on the sleep need the owner stated, and a read that fails writes nothing rather than a row on another need.
   readSettings?: () => Promise<unknown>;
+  // Told which step failed a run that ends failed, and the database's closed answer to it: no owner, day, value or payload.
+  // A run calls it at most once, for the first failure; a late day's backfill never fails a run, so it is never told.
+  onFailure?: (failure: ProducerFailure) => void;
 }>;
+
+// A database answer is its closed error code, or a fixed word: no_answer when the call threw or returned nothing, malformed
+// for anything else. No text the database or a proxy wrote reaches a log.
+export type ProducerFailure = Readonly<{
+  step: 'series_read' | 'settings_read' | 'context_write' | 'producer';
+  code: (typeof healthApiErrorV1Schema.shape.error.options)[number] | 'no_answer' | 'malformed' | 'threw';
+}>;
+const answerCode = (answer: unknown): ProducerFailure['code'] => {
+  if (answer === null || answer === undefined) return 'no_answer';
+  const code = healthApiErrorV1Schema.shape.error.safeParse(asRecord(answer)?.error);
+  return code.success ? code.data : 'malformed';
+};
 
 // The stated need and when it last changed, or null for an answer that is not the settings shape.
 export type StatedNeed = Readonly<{ minutes: number | null; changedAt: number | null }>;
@@ -57,7 +72,7 @@ const WINDOW_DAYS = 30;
 const HOUR_MS = 3_600_000;
 const MAX_BUSY_MINUTES = 1500;
 const DEMAND_GRACE_MS = 5_000;
-const SIGNALS = ['sleep_duration', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'active_energy_window', 'workout'];
+const SIGNALS = ['sleep_duration', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'active_energy_window', 'steps_window', 'workout'];
 // The night's vital signals feed only the drivers. They are read on their own, beside the scores' read: a point signal
 // such as breathing rate can be dense, and a read that reached its row cap would shorten the scores' baseline.
 const VITAL_SIGNALS = ['respiratory_rate', 'spo2', 'wrist_temperature', 'walking_heart_rate_average'];
@@ -186,13 +201,13 @@ const sleepOf = (readings: readonly Reading[]): DayRecord['sleep'] => {
   return asleep && midpoint && when ? { ...when, asleepMinutes: asleep.value, midpointMinute: midpoint.value } : null;
 };
 
-const SCORED_WINDOW_SIGNALS = ['heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'active_energy_window'];
+const SCORED_WINDOW_SIGNALS = ['heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'active_energy_window', 'steps_window'];
 
 const hourlyOf = (readings: readonly Reading[]): HourlyBucket[] => {
   const buckets = new Map<string, { -readonly [K in keyof HourlyBucket]: HourlyBucket[K] }>();
   for (const r of readings) {
     if (!r.startAt || !SCORED_WINDOW_SIGNALS.includes(r.signal)) continue;
-    const bucket = buckets.get(r.startAt) ?? { startAt: r.startAt, heartRate: null, hrvReadings: [], daylightMinutes: null, movementMinutes: null, activeEnergyKcal: null };
+    const bucket = buckets.get(r.startAt) ?? { startAt: r.startAt, heartRate: null, hrvReadings: [], daylightMinutes: null, movementMinutes: null, activeEnergyKcal: null, steps: null };
     if (r.signal === 'heart_rate_window') bucket.heartRate = r.value;
     else if (r.signal === 'hrv_window' && hrvMethod(r.method)) {
       const method = hrvMethod(r.method)!;
@@ -201,6 +216,7 @@ const hourlyOf = (readings: readonly Reading[]): HourlyBucket[] => {
     else if (r.signal === 'daylight_duration') bucket.daylightMinutes = r.value;
     else if (r.signal === 'movement_duration') bucket.movementMinutes = r.value;
     else if (r.signal === 'active_energy_window') bucket.activeEnergyKcal = r.value;
+    else if (r.signal === 'steps_window') bucket.steps = r.value;
     buckets.set(r.startAt, bucket);
   }
   return [...buckets.values()].sort((a, b) => a.startAt.localeCompare(b.startAt));
@@ -470,7 +486,11 @@ const writeOutcome = (answer: unknown): 'written' | 'stale' | 'refused' | 'faile
 };
 
 export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now: number; timezone: string }>): Promise<ProducerOutcome> => {
-  let pending: Promise<unknown> | undefined;
+  let pending: Promise<unknown> | undefined, told = false;
+  const failed = (step: ProducerFailure['step'], code: ProducerFailure['code']): 'failed' => {
+    if (!told) { told = true; deps.onFailure?.({ step, code }); }
+    return 'failed';
+  };
   try {
     const today = localDay(at.now, at.timezone), range = { from: shiftDay(today, -WINDOW_DAYS), to: today };
     // Started beside the series read and bounded, so a slow calendar costs Weight, never the Recovery and Form writes.
@@ -478,10 +498,12 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     const demand = pending ? within(pending, deps.demandGraceMs ?? DEMAND_GRACE_MS) : null;
     const scoresRead = deps.readSeries({ ...range, signals: SIGNALS });
     const vitalsRead = deps.readSeries({ ...range, signals: VITAL_SIGNALS }).then(parseSeries, (): Parsed => ({ kind: 'failed' }));
-    const parsed = parseSeries(await scoresRead);
+    const seriesAnswer = await scoresRead, parsed = parseSeries(seriesAnswer);
+    if (parsed.kind === 'failed') return failed('series_read', answerCode(seriesAnswer));
     if (parsed.kind !== 'series') return parsed.kind;
-    const stated = deps.readSettings ? statedNeedOf(await deps.readSettings().catch(() => null)) : { minutes: null, changedAt: null };
-    if (!stated) return 'failed';
+    const settingsAnswer = deps.readSettings ? await deps.readSettings().catch(() => null) : null;
+    const stated = deps.readSettings ? statedNeedOf(settingsAnswer) : { minutes: null, changedAt: null };
+    if (!stated) return failed('settings_read', answerCode(settingsAnswer));
     // Without its vital readings a day still scores exactly as it would with them; only those drivers are missing.
     const vitals = await vitalsRead;
     if (vitals.kind !== 'series') console.log(JSON.stringify({ hop: 'health_series', ok: false, code: 'vitals_unread' }));
@@ -549,9 +571,9 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       // the next run's fence. That row is left to the recompute the save asks for, and so are the late days; a need saved
       // again with the same figure is the same need. A read that fails asks for nothing, so the run fails and is retried.
       if (targetDay === today && deps.readSettings) {
-        const again = statedNeedOf(await deps.readSettings().catch(() => null));
+        const againAnswer = await deps.readSettings().catch(() => null), again = statedNeedOf(againAnswer);
         if (again === null || again.minutes !== stated.minutes) {
-          outcomes.push(again === null ? 'failed' : 'stale');
+          outcomes.push(again === null ? failed('settings_read', answerCode(againAnswer)) : 'stale');
           needMoved = true;
           continue;
         }
@@ -561,9 +583,10 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
         ...(deps.trainingLoad ? { training_load: trainingLoadOf(chosen, shiftDay(today, -1)) } : {}),
       };
       const answer = await deps.writeContext(JSON.stringify(row));
-      outcomes.push(writeOutcome(answer));
-      if (writeOutcome(answer) === 'written') logWritten(row);
-      if (targetDay === today && writeOutcome(answer) === 'written' && pillarMoved(answer) && !needMovedSince(stated, before)) await deps.onZoneChange?.(today).catch(() => console.error('health zone change notice failed'));
+      const written = writeOutcome(answer);
+      outcomes.push(written === 'failed' ? failed('context_write', answerCode(answer)) : written);
+      if (written === 'written') logWritten(row);
+      if (targetDay === today && written === 'written' && pillarMoved(answer) && !needMovedSince(stated, before)) await deps.onZoneChange?.(today).catch(() => console.error('health zone change notice failed'));
     }
     if (provisional && deps.readHistory && !needMoved) {
       // Late days never decide the outcome of the live rows, and a failure here is only a tag.
@@ -573,7 +596,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     return 'no_readings';
   } catch {
     console.error('health producer failed');
-    return 'failed';
+    return failed('producer', 'threw');
   } finally {
     // A late read still finishes, so the owner object caches it for the next upload.
     await pending?.catch(() => undefined);

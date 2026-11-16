@@ -30,7 +30,7 @@ export const ASKING_SCENARIOS: readonly Scenario[] = [
         mustContain: [
           'When should I leave for the airport tomorrow?',
           'Flight 6E 2041 Bengaluru to Delhi',
-          'Look before you ask: their calendars (all of them, not just the main one)',
+          'Look before you ask or say you don\'t know: their calendars (all of them, not just the main one)',
           'Never ask for a fact you could find there.',
         ],
         mustNotContain: REMOVED_ASKING_RULES,
@@ -89,7 +89,7 @@ export const ASKING_SCENARIOS: readonly Scenario[] = [
         mustContain: [
           'Pune product summit, 22 to 24 Nov',
           'under 5,000 a night',
-          'Look before you ask: their calendars (all of them, not just the main one), mail, memory',
+          'Look before you ask or say you don\'t know: their calendars (all of them, not just the main one), mail, connected sources, memory',
           'Ask only for what is still unknown and would change the result, once, in one message that also confirms what you inferred',
           'Otherwise go ahead and say what you assumed.',
         ],
