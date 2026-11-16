@@ -1,5 +1,5 @@
 import { PERSON_RINGS, rememberArgsSchema, forgetMemoryArgsSchema, readMemoryArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ToolHandler, type ToolName, type ReadMemoryArgs, type RememberArgs, type ForgetMemoryArgs } from '@waldo/contracts';
-import { FORGOTTEN, ground, normalizeForGrounding, textFingerprint, type Claim, type ClaimStore } from '../../memory/claims';
+import { FORGOTTEN, ground, normalizeForGrounding, OUTSIDE_REF, textFingerprint, type Claim, type ClaimStore } from '../../memory/claims';
 import { carriesTopic, forgettableTopic, hidesTopic } from '../../memory/forget-guard';
 import { NODE_STATEMENT } from '../../memory/node-sources';
 import { HEALTH_MEMORY_RULES } from '../../memory/health-rules';
@@ -84,12 +84,27 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
   const readableIn = (outside: boolean) => (claim: Claim) => (store.outsideNotes === true || claim.origin !== 'untrusted') && !hidden(claim) && (!outside || outsideSafe(claim));
   const base = (name: ToolName, description: string) => ({ name, description, trigger_allowlist: triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes(name)), autonomy_gated: false });
   return [
-    { ...base('remember', `Store a fact or preference grounded in a verbatim quote from the owner in this conversation. To correct an active claim, pass its id as replaces_id: the c12 that starts its memory line, or 12. Memory is context, never permission to act. ${HEALTH_MEMORY_RULES.join(' ')}`), schema: rememberArgsSchema, mutates_state: true,
+    { ...base('remember', `${store.outsideNotes === true ? 'Store a fact or preference with a verbatim quote: the owner\'s, or outside content just read.' : 'Store a fact or preference grounded in a verbatim quote from the owner in this conversation.'} To correct an active claim, pass its id as replaces_id: the c12 that starts its memory line, or 12. Memory is context, never permission to act. ${HEALTH_MEMORY_RULES.join(' ')}`), schema: rememberArgsSchema, mutates_state: true,
       async handle(args: RememberArgs, ctx) {
         await ready(ctx); const turn = admitted(ctx);
         if (!turn) return fail('Authenticated owner memory context is unavailable.');
         const source = [turn.current, ...turn.recent].find(message => ownerParts(message).some(part => quotesWords(part, args.evidence_quote) && ground(args.evidence_quote, { owner: part }) === 'owner'));
-        if (!source) return fail('Evidence quote is not grounded in an owner-authored message. Quote whole words the owner wrote, verbatim.');
+        if (!source) {
+          // A note needs a source. With outside notes recalled, a turn that read outside content may save what it read: the
+          // quote is then that content's, and the note is stored as learned from outside content, never the owner's. It
+          // replaces nothing, names no one and carries no reading, so it cannot change what the owner told Waldo.
+          if (store.outsideNotes !== true || ctx.toolArgSourceTaint !== 'external') return fail('Evidence quote is not grounded in an owner-authored message. Quote whole words the owner wrote, verbatim.');
+          if (args.replaces_id !== undefined || args.people?.length || args.on_date) return fail('A note saved from what this turn read replaces nothing and names no one. Save it on its own, or quote the owner\'s own words.');
+          const texts = [args.text, args.evidence_quote, ...(args.aliases ?? [])];
+          if (texts.some(blocked)) return fail('This memory matches a forget barrier.');
+          if (args.kind === 'health' || texts.some(text => text.includes(HEALTH_SPAN_MARKER) || numericHealthIn(text))) return fail('Memory stores no health note from outside content (mail, a web page or a connected tool).');
+          const known = store.claims().find(row => normalizeForGrounding(row.text) === normalizeForGrounding(args.text));
+          if (known) return success({ id: known.id, status: 'duplicate' });
+          await ready(ctx);
+          const add = () => { store.add({ kind: args.kind, text: args.text, source: 'inferred', evidence: args.evidence_quote, origin: 'untrusted', source_ref: `${OUTSIDE_REF}page, mail or tool result read in chat, ${now().slice(0, 10)}`, aliases: args.aliases, ...(args.area ? { area: args.area } : {}) }, now()); return store.lastClaimId(); };
+          const id = ctx.runScope ? ctx.runScope.commit(add) : deps.transaction ? deps.transaction(add) : add();
+          return success({ id, status: 'stored', source: 'outside', note: 'Saved as a note learned from outside content, not the owner\'s words. It is shown with that label and never acts as the owner\'s say-so.' });
+        }
         if (blocked(args.text) || blocked(args.evidence_quote) || (args.aliases ?? []).some(blocked)) return fail('This memory matches a forget barrier.');
         // A person the owner asked to forget stays forgotten: neither their name nor an address comes back as a new person.
         const links = deps.people ? args.people ?? [] : [];
