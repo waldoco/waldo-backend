@@ -9,7 +9,7 @@
 --   a share, points, a direction word, usual-signals from the closed list, a baseline that is personal exactly from fourteen own
 --   days, and for the sleep part its need) and one band per signal (its method, the statistic its signal uses, the band in order,
 --   or crossing midnight for the sleep midpoint), each carrying the days short of fourteen. The shares must add up to one and the points to the pillar's own stored score; a grouped row (Resting State, Circadian) must be exactly the sum of its two parts.
--- - waldo.health_context_write is re-created whole from its last definition (20261101020000), admits the two keys through those
+-- - waldo.health_context_write is re-created whole from its last definition (20261116090000), admits the two keys through those
 --   functions, and never on a backfilled row. waldo.health_scores_read is re-created whole from its last definition (20261027170000)
 --   and returns both columns when set; waldo.health_scores_history is re-created whole from its last definition (20261027140000)
 --   and returns each day's parts when set and asked for ({"days":90,"parts":true}), so the producer's own read of which days hold a row
@@ -253,7 +253,7 @@ begin
         or (select array_agg(k order by k) from jsonb_object_keys(v_p->'used') k) is distinct from array['days','signals']
         or jsonb_typeof(v_p #> '{used,signals}') is distinct from 'array' or jsonb_array_length(v_p #> '{used,signals}') not between 1 and 12
         or exists (select 1 from jsonb_array_elements(v_p #> '{used,signals}') s where jsonb_typeof(s) <> 'string'
-          or (s #>> '{}') not in ('sleep','hrv','resting_heart_rate','sleep_midpoint','daylight','movement','stress','calendar','tasks','messages','physical_load'))
+          or (s #>> '{}') not in ('sleep','hrv','resting_heart_rate','sleep_midpoint','daylight','movement','stress','calendar','tasks','messages','physical_load','steps'))
         or (select count(distinct s) from jsonb_array_elements(v_p #> '{used,signals}') s) <> jsonb_array_length(v_p #> '{used,signals}')
         or jsonb_typeof(v_p #> '{used,days}') is distinct from 'array' or jsonb_array_length(v_p #> '{used,days}') not between 1 and 31
         or exists (select 1 from jsonb_array_elements(v_p #> '{used,days}') d where jsonb_typeof(d) <> 'string' or (d #>> '{}') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
