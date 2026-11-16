@@ -3,7 +3,7 @@ import { ALGORITHM, PROVISIONAL_ALGORITHM, provisionalRecoveryBasis, recoveryBas
 import { BASELINE_DAYS, circularZScore, combine, higherIsBetter, lowerIsBetter, mean, nearUsual, zScore, logZScore, type Component } from './stats';
 import { localDayWindow, wallMinute } from './time';
 import { formZone } from './zones';
-import type { DayRecord, FormResult, HourlyBucket, HrvMethod } from './types';
+import type { DayRecord, FormResult, HourlyBucket, HrvMethod, UsedSignal } from './types';
 
 const FORM_WEIGHTS = { recovery: 0.4, midpoint: 0.1, daylight: 0.1, motion: 0.2, stress: 0.2 } as const;
 const HOUR_MS = 3_600_000;
@@ -81,14 +81,14 @@ export const formScore = (record: DayRecord, earlier: readonly DayRecord[], slee
 
   const scale = FORM_WEIGHTS.recovery;
   const components: Component[] = recovery.components.map(component => ({ ...component, name: `recovery.${component.name}`, weight: component.weight * scale }));
-  const signals = [...recovery.signals];
+  const signals: UsedSignal[] = [...recovery.signals];
   const days = new Set<string>(recovery.days);
-  const add = (name: string, score: number, weight: number, used: readonly string[]) => { components.push({ name, score, weight }); signals.push(name); used.forEach(day => days.add(day)); };
+  const add = (name: UsedSignal, score: number, weight: number, used: readonly string[]) => { components.push({ name, score, weight }); signals.push(name); used.forEach(day => days.add(day)); };
 
   const own: number[] = [...('own' in recovery ? recovery.own ?? [] : [])];
   const usedPrior = 'usedPrior' in recovery && recovery.usedPrior === true;
   // A component with no prior joins at seven own days and is judged against its own days alone.
-  const addOwn = (name: string, at: ReturnType<typeof standing>, entries: readonly { day: string }[], weight: number, score: (z: number) => number) => {
+  const addOwn = (name: UsedSignal, at: ReturnType<typeof standing>, entries: readonly { day: string }[], weight: number, score: (z: number) => number) => {
     if (at === null) return;
     add(name, score(at.z), weight, entries.map(entry => entry.day));
     own.push(at.own);
