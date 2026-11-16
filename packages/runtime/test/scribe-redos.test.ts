@@ -95,6 +95,10 @@ const NEAR_MISSES: Readonly<Record<string, (chars: number) => string>> = {
   'a WhatsApp link, then a long run of digits': n => 'wa.me/' + '9'.repeat(n),
   'WhatsApp links repeated': n => 'wa.me/9 '.repeat(n / 8),
   'national numbers with a hyphen, repeated': n => '098765-'.repeat(n / 7),
+  'a phone word and a national number with a hyphen one digit short, repeated': n => 'call 098765-4321 '.repeat(n / 17),
+  'a phone word and zero-led pairs, repeated': n => 'ph 06 '.repeat(n / 6),
+  'a phone word, a long run of blanks, then a national number with a hyphen': n => 'call' + ' '.repeat(n) + '098765-43210',
+  'a phone word cut short, a long run of blanks, then a national number with a hyphen': n => 'cal' + ' '.repeat(n) + '098765-43210',
   'a letter, a plus sign and a digit, repeated': n => 'x+1'.repeat(n / 3),
   'a country code and a date, repeated': n => '+1 2026-11-06 '.repeat(n / 14),
   'a reference word and ten digits, repeated': n => 'order #1234567890 '.repeat(n / 18),
@@ -152,7 +156,7 @@ describe('the patterns sanitise() runs stay linear on the near-miss and whitespa
     expectLinear('redactNumericHealth', 100_000, n => redactNumericHealth(`${word}${' '.repeat(n)}x`, '[health]'));
   });
 
-  it.each(['wrist temp 36', 'wrist temp up 36', 'wrist temp: 36'])('sanitise reads %s, a run of blanks, then a letter', word => {
+  it.each(['wrist temp 36', 'wrist temp up 36', 'wrist temp: 36', 'call', 'Ph.', 'contact: 098765-'])('sanitise reads %s, a run of blanks, then a letter', word => {
     for (const destination of ['send_message', 'internal_context'] as const) expectLinear(destination, 100_000, n => scan(`${word}${' '.repeat(n)}x`, destination));
   });
 
