@@ -208,7 +208,7 @@ import { healthLogBook, healthLogHandlers, healthSection, sleepNeedHandler } fro
 import { healthContextBook, healthZoneWords, toContextHealthMaterial, type HealthContextRow } from './health-context';
 import { localIso, localToEpoch, reminderBook, reminderHandlers, unreadableRemindersLine } from './reminders';
 import { medicationBook, medicationHandlers } from './medications';
-import { standingOrderBook, standingOrderFireText, standingOrderHandlers, standingOrdersPrompt } from './standing-orders';
+import { standingOrderBook, standingOrderFireText, standingOrderFireTools, standingOrderHandlers, standingOrdersPrompt } from './standing-orders';
 import { compareExperiment, experimentHandlers, questBook, questCardContext, questHandler, questsPrompt, type QuestBook, type ReadZones } from './quests';
 import { standingGrants, type StandingGrants } from './standing-grants';
 import { appAutonomyRequest } from './app-autonomy';
@@ -5729,7 +5729,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             log({ trace, hop, ms: Date.now() - at, ok: false, error: String(error) });
             throw error;
           }
-        })).trim();
+        }, standingOrderFireTools(order))).trim();
         if (text && outboxed) {
           // The run finishes when the report is delivered or ends unsent. A report is current until the order reports again:
           // queuing this one supersedes an earlier report of the order still waiting, so the owner gets the latest one, and a run
