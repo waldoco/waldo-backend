@@ -13,6 +13,9 @@ const MAIL = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.goo
 const OWNER_ID = '6c2e9b14-3a7d-4f05-9e81-2b4c6d8f0a13';
 const BASE = 'https://directory.fixture.invalid';
 const FACT = 'New emails are not pushed to Waldo';
+// The paragraph of the turn context that carries the watch fact. The model is told which accounts the owner connected, by
+// address; the fact itself names no address it has no need of.
+const factIn = (told: string) => told.split('\n\n').find(part => part.includes(FACT)) ?? '';
 const ASKED = 'did my new email come in?';
 
 const model = vi.hoisted(() => ({ requests: [] as LLMGatewayRequest['request'][] }));
@@ -71,14 +74,14 @@ it('an owner turn carries the host fact while the Gmail watch is not running, an
     try {
       for (const told of await turn('client-watch-missed')) {
         expect(told.split(FACT).length - 1, 'the fact appears once').toBe(1);
-        expect(told).not.toContain('owner@example.test');
+        expect(factIn(told)).not.toContain('owner@example.test');
       }
       // An older account first in the list keeps the mail route: the fact names it, since reconnecting another would not help.
       await state.storage.put('google:accounts', [{ id: 'local:old@example.test', email: 'old@example.test', refresh_token: 'synthetic-offline-only', scopes: MAIL }, { id: 'conn-1', email: 'owner@example.test', scopes: MAIL }]);
       gmailPushBook(state.storage.kv).fail(Date.now(), 'local_rail');
       for (const told of await turn('client-watch-older')) {
-        expect(told).toContain('the mail account "old@example.test" is connected the older way');
-        expect(told).not.toContain('owner@example.test');
+        expect(factIn(told)).toContain('the mail account "old@example.test" is connected the older way');
+        expect(factIn(told)).not.toContain('owner@example.test');
       }
       gmailPushBook(state.storage.kv).record({ historyId: '555', expiration: Date.now() + 7 * 86_400_000 }, 'conn-1', Date.now());
       for (const told of await turn('client-watch-running')) expect(told).not.toContain(FACT);
