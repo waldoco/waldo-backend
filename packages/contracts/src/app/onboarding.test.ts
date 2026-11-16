@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import {
   APP_PRIVACY_NOTICE_URL_V1, APP_PRIVACY_NOTICE_VERSION_V1, APP_TERMS_URL_V1, APP_TERMS_VERSION_V1, appConsentChangeV1Schema, appConsentGrantV1Schema, appConsentListV1Schema,
   appConsentStateV1Schema, appConsentWithdrawV1Schema, appFindingActionV1Schema, appFindingListV1Schema, appFindingResultV1Schema,
@@ -277,7 +278,7 @@ describe('setup answers, onboarding revision 2', () => {
   });
 });
 
-describe('setup answers, onboarding revision 3', () => {
+describe('setup answers, onboarding revision 4', () => {
   // The owner's training: as a matter, where it is hardest, and when they usually train.
   const training = {
     request_id: 'setup-answers-03',
@@ -285,9 +286,9 @@ describe('setup answers, onboarding revision 3', () => {
     spots: ['training-fitting', 'training-recovery', 'sleep-onset'],
     train: { picked: ['early', 'weekend'], own_words: 'Club runs on Sundays' },
   };
-  const REVISIONS_BELOW = [1, 2], REVISIONS_AT = [3, 4];
-  it('is the one onboarding revision that also lists the consent copy versions', () => {
-    expect([APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1, APP_ONBOARDING_SETUP_TRAINING_REVISION_V1, APP_ONBOARDING_CONSENT_VERSION_REVISION_V1]).toEqual([2, 3, 3]);
+  const REVISIONS_BELOW = [1, 2, 3], REVISIONS_AT = [4, 5];
+  it('is revision 4, after the consent copy versions at 3, which shipped builds already declare', () => {
+    expect([APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1, APP_ONBOARDING_CONSENT_VERSION_REVISION_V1, APP_ONBOARDING_SETUP_TRAINING_REVISION_V1]).toEqual([2, 3, 4]);
   });
   it('takes training as a matter, its spots and when they train, each set, cleared with null or an empty choice', () => {
     accepted(appSetupAnswersRequestV1Schema, [
@@ -301,7 +302,7 @@ describe('setup answers, onboarding revision 3', () => {
       { ...training, spots: ['training-rest'] }, { ...training, matters: { picked: ['train'], own_words: '' } },
     ]);
   });
-  it('lets only a build that declares revision 3 name training: the matter, its spots, or when they train', () => {
+  it('lets only a build that declares revision 4 name training: the matter, its spots, or when they train', () => {
     const without = { request_id: 'setup-answers-03', matters: { picked: ['sleep'], own_words: '' }, spots: ['sleep-onset'], low: { picked: ['sleep'], own_words: '' } };
     for (const revision of [2, 3, 4]) expect(appSetupAnswersFitRevision(appSetupAnswersRequestV1Schema.parse(without), revision)).toBe(true);
     const naming = [
@@ -330,7 +331,7 @@ describe('setup answers, onboarding revision 3', () => {
     accepted(appSetupAnswersRequestV1Schema, [longest]);
     expect(appJsonWireBytes(longest)).toBeLessThanOrEqual(APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1);
   });
-  it('holds train only for a build that reads revision 3, and the rest as before', () => {
+  it('holds train only for a build that reads revision 4, and the rest as before', () => {
     const all = { name: true, day: false, slips: false, wearable: true, matters: true, spots: true, protect: false, rope: true, season: true, low: false, train: true };
     const result = { request_id: 'setup-answers-03', held: all, replayed: false };
     accepted(appSetupAnswersResultV1Schema, [result, { ...result, held: { ...all, train: false } }]);
@@ -340,11 +341,27 @@ describe('setup answers, onboarding revision 3', () => {
     for (const revision of REVISIONS_BELOW) expect(Object.keys(appSetupAnswersResultAtRevision(result, revision).held)).not.toContain('train');
     expect(appSetupAnswersResultAtRevision(result, 1)).toEqual(first);
     expect(appSetupAnswersResultAtRevision(result, 2)).toEqual({ ...result, held: two });
+    expect(appSetupAnswersResultAtRevision(result, 3)).toEqual({ ...result, held: two });
     for (const revision of REVISIONS_AT) expect(appSetupAnswersResultAtRevision(result, revision)).toBe(result);
     // An answer recorded before the revision replays as it was, whichever revision reads it.
     const earlier = { ...result, held: two };
     for (const revision of [2, 3]) expect(appSetupAnswersResultAtRevision(earlier, revision)).toBe(earlier);
     expect(appSetupAnswersResultAtRevision(earlier, 1)).toEqual(first);
+  });
+  // The answers result exactly as installed builds at onboarding 3 parse it (their pinned schema, written out here): strict, with
+  // the first four answers and the six of revision 2, and no train. Whatever the server holds, what such a build is sent parses.
+  it('answers a build at revision 3 in the shape its strict parser reads', () => {
+    const pinnedAtThree = z.strictObject({
+      request_id: z.string(),
+      held: z.strictObject({ name: z.boolean(), day: z.boolean(), slips: z.boolean(), wearable: z.boolean(), matters: z.boolean().optional(), spots: z.boolean().optional(),
+        protect: z.boolean().optional(), rope: z.boolean().optional(), season: z.boolean().optional(), low: z.boolean().optional() }),
+      replayed: z.boolean(),
+    });
+    const held = { name: true, day: true, slips: false, wearable: true, matters: true, spots: false, protect: true, rope: true, season: false, low: true, train: true };
+    const result = { request_id: 'setup-answers-03', held, replayed: false };
+    expect(pinnedAtThree.safeParse(result).success).toBe(false);
+    expect(pinnedAtThree.safeParse(appSetupAnswersResultAtRevision(result, 3)).success).toBe(true);
+    expect(pinnedAtThree.safeParse(appSetupAnswersResultAtRevision({ ...result, held: { ...held, train: false } }, 3)).success).toBe(true);
   });
 });
 

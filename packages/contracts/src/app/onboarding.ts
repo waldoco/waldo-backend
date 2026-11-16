@@ -66,8 +66,7 @@ export const appConsentListV1Schema = z.strictObject({
 });
 // Onboarding revision 3 (`onboarding=3`) adds current_version to each listed consent, so a build that carries an older copy can
 // say "update Waldo" before the owner ticks and Accept is refused stale_version. It is listed while the agreements are held back
-// too, naming the copy that would be required. A build below revision 3 gets each row exactly as before, without it. The same
-// revision takes the training setup answers (APP_ONBOARDING_SETUP_TRAINING_REVISION_V1): declaring `onboarding=3` turns on both.
+// too, naming the copy that would be required. A build below revision 3 gets each row exactly as before, without it.
 export const APP_ONBOARDING_CONSENT_VERSION_REVISION_V1 = 3;
 export const appConsentListAtRevision = (list: AppConsentListV1, revision: number): AppConsentListV1 =>
   revision >= APP_ONBOARDING_CONSENT_VERSION_REVISION_V1 ? list
@@ -213,14 +212,14 @@ export const appFindingResultV1Schema = z.strictObject({
 // (how Waldo should bring up what it spots: a preference Waldo reads, never a grant), season (what stretch they are in) and low
 // (what goes first when they run low). Only a build that declares revision 2 may send them, and only such a build finds them in
 // held: a build that does not is refused them as invalid_request, exactly as before the revision.
-// Onboarding revision 3 (`onboarding=3`) adds the owner's training: training as a matter, its four spots (fitting it in, keeping
+// Onboarding revision 4 (`onboarding=4`) adds the owner's training: training as a matter, its four spots (fitting it in, keeping
 // it up, recovering between sessions, not getting anywhere) and train (when they usually train, so Waldo can find their capacity
-// windows and guard them). The same header value turns on the consent list's current_version
-// (APP_ONBOARDING_CONSENT_VERSION_REVISION_V1): one revision of the onboarding contract, declared once, carries both. Gated as
-// revision 2 was: a build below revision 3 is refused the training matter, its spots and train as invalid_request, and does not
-// find train in held.
+// windows and guard them). Not revision 3: shipped builds already declare 3 for the consent list's current_version and parse the
+// answers result strictly, so a held.train at 3 would fail every one of them. Naming 4 turns on 3 with it. Gated as revision 2
+// was: a build below revision 4 is refused the training matter, its spots and train as invalid_request, and does not find train
+// in held.
 export const APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1 = 2;
-export const APP_ONBOARDING_SETUP_TRAINING_REVISION_V1 = 3;
+export const APP_ONBOARDING_SETUP_TRAINING_REVISION_V1 = 4;
 export const APP_SETUP_OWN_WORDS_MAX_V1 = 280;
 export const appSetupDayShapeV1Schema = z.enum(['meetings', 'focus', 'fixed', 'varies']);
 export const appSetupSlipV1Schema = z.enum(['replies', 'overlaps', 'promises', 'breaks', 'evenings']);
@@ -235,7 +234,7 @@ export const appSetupSpotV1Schema = z.enum([
   'promises-work', 'promises-home', 'promises-people', 'promises-favours', 'promises-replies', 'promises-lookinto',
   'training-fitting', 'training-keeping', 'training-recovery', 'training-progress',
 ]);
-// The matter and spots a build must declare revision 3 to send.
+// The matter and spots a build must declare revision 4 to send.
 export const APP_SETUP_TRAINING_MATTER_V1 = 'training' satisfies z.infer<typeof appSetupMatterV1Schema>;
 export const APP_SETUP_TRAINING_SPOTS_V1 = ['training-fitting', 'training-keeping', 'training-recovery', 'training-progress'] as const satisfies readonly z.infer<typeof appSetupSpotV1Schema>[];
 export const appSetupProtectV1Schema = z.enum(['workouts', 'family', 'meals', 'mornings', 'focus']);
@@ -262,34 +261,34 @@ export const appSetupAnswersRequestV1Schema = z.strictObject({
   low: picks(appSetupLowV1Schema).nullable().optional(),
   train: picks(appSetupTrainV1Schema).nullable().optional(),
 }).refine(request => SETUP_ANSWERS.some(answer => request[answer] !== undefined), 'name at least one answer');
-// Whether a build reading `revision` may send this request: below revision 2 it names none of the later answers; below revision 3
+// Whether a build reading `revision` may send this request: below revision 2 it names none of the later answers; below revision 4
 // it names no training: not the matter, not its spots, not train.
 export const APP_SETUP_ANSWERS_REVISION_TWO_V1 = ['matters', 'spots', 'protect', 'rope', 'season', 'low'] as const;
-export const APP_SETUP_ANSWERS_REVISION_THREE_V1 = ['train'] as const;
+export const APP_SETUP_ANSWERS_TRAINING_V1 = ['train'] as const;
 const namesTraining = (request: AppSetupAnswersRequestV1): boolean =>
-  APP_SETUP_ANSWERS_REVISION_THREE_V1.some(answer => request[answer] !== undefined)
+  APP_SETUP_ANSWERS_TRAINING_V1.some(answer => request[answer] !== undefined)
   || (request.matters?.picked.includes(APP_SETUP_TRAINING_MATTER_V1) ?? false)
   || (request.spots?.some(spot => (APP_SETUP_TRAINING_SPOTS_V1 as readonly string[]).includes(spot)) ?? false);
 export const appSetupAnswersFitRevision = (request: AppSetupAnswersRequestV1, revision: number): boolean =>
   (revision >= APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1 || APP_SETUP_ANSWERS_REVISION_TWO_V1.every(answer => request[answer] === undefined))
   && (revision >= APP_ONBOARDING_SETUP_TRAINING_REVISION_V1 || !namesTraining(request));
 // held says, for each answer, whether Waldo holds it as an owner fact now, read back after the write. The revision 2 answers
-// are present exactly for a build that declares it, and train exactly for a build that declares revision 3, except in a replay
+// are present exactly for a build that declares it, and train exactly for a build that declares revision 4, except in a replay
 // of an answer recorded before them.
 const revisionTwoHeld = { matters: z.boolean(), spots: z.boolean(), protect: z.boolean(), rope: z.boolean(), season: z.boolean(), low: z.boolean() };
-const revisionThreeHeld = { train: z.boolean() };
+const trainingHeld = { train: z.boolean() };
 export const appSetupAnswersResultV1Schema = z.strictObject({
   request_id: requestId,
   held: z.strictObject({
     name: z.boolean(), day: z.boolean(), slips: z.boolean(), wearable: z.boolean(),
-    ...z.strictObject(revisionTwoHeld).partial().shape, ...z.strictObject(revisionThreeHeld).partial().shape,
+    ...z.strictObject(revisionTwoHeld).partial().shape, ...z.strictObject(trainingHeld).partial().shape,
   }),
   replayed: z.boolean(),
 });
-// A result as a build reading `revision` parses it: below revision 2, held names the first four answers only; below revision 3,
+// A result as a build reading `revision` parses it: below revision 2, held names the first four answers only; below revision 4,
 // it leaves train out.
 export const appSetupAnswersResultAtRevision = (result: AppSetupAnswersResultV1, revision: number): AppSetupAnswersResultV1 => {
-  if (revision < APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1 && Object.keys(result.held).some(key => Object.hasOwn(revisionTwoHeld, key) || Object.hasOwn(revisionThreeHeld, key))) {
+  if (revision < APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1 && Object.keys(result.held).some(key => Object.hasOwn(revisionTwoHeld, key) || Object.hasOwn(trainingHeld, key))) {
     const { name, day, slips, wearable } = result.held;
     return { ...result, held: { name, day, slips, wearable } };
   }

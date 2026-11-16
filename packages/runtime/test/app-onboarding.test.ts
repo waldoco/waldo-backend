@@ -416,7 +416,7 @@ describe('setup answers, onboarding revision 2', () => {
   }, { agreementsOffered: false }));
 });
 
-describe('setup answers, onboarding revision 3', () => {
+describe('setup answers, onboarding revision 4', () => {
   // The owner's training: a matter and its spots, which the app reads from the health plane, and when they usually train, a
   // routine Waldo reads on every turn to find and guard the room for it.
   const TRAINING = {
@@ -424,7 +424,7 @@ describe('setup answers, onboarding revision 3', () => {
     spots: ['training-fitting', 'training-recovery', 'promises-work'],
     train: { picked: ['early', 'weekend'], own_words: 'Club runs on Sundays' },
   };
-  const REVISION_2 = 'approvals=4,onboarding=2', REVISION_3 = 'approvals=4,onboarding=3', ANSWERS = '/app/v1/onboarding/answers';
+  const REVISION_2 = 'approvals=4,onboarding=2', REVISION_3 = 'approvals=4,onboarding=3', REVISION_4 = 'approvals=4,onboarding=4', ANSWERS = '/app/v1/onboarding/answers';
   const NONE = { name: false, day: false, slips: false, wearable: false, matters: false, spots: false, protect: false, rope: false, season: false, low: false, train: false };
   let request = 0;
   const store = (storage: DurableObjectStorage) => claimStore(storage.sql, work => storage.transactionSync(work));
@@ -432,7 +432,7 @@ describe('setup answers, onboarding revision 3', () => {
   const TRAIN_TEXT = 'Usually trains: before work, at weekends. In their own words at setup on 1970-01-01: "Club runs on Sundays"';
 
   it('keeps when they train as a pinned routine every turn reads, and training as a health matter with its spots', () => owner(async ({ storage, send }) => {
-    const saved = await send(ANSWERS, { request_id: `setup-train-${request++}`, ...TRAINING }, 'POST', REVISION_3);
+    const saved = await send(ANSWERS, { request_id: `setup-train-${request++}`, ...TRAINING }, 'POST', REVISION_4);
     expect(await saved.json()).toEqual({ request_id: `setup-train-${request - 1}`, held: { ...NONE, matters: true, spots: true, train: true }, replayed: false });
     const kinds = Object.fromEntries(facts(storage).map(claim => [claim.text, [claim.kind, claim.pinned]]));
     expect(kinds).toEqual({
@@ -451,20 +451,20 @@ describe('setup answers, onboarding revision 3', () => {
   }, { agreementsOffered: false }));
 
   it('says each time they train as Waldo reads it, and their words alone when no time is picked', () => owner(async ({ storage, send }) => {
-    await send(ANSWERS, { request_id: `setup-train-${request++}`, train: { picked: ['early', 'lunch', 'evening', 'weekend', 'gap'], own_words: '' } }, 'POST', REVISION_3);
+    await send(ANSWERS, { request_id: `setup-train-${request++}`, train: { picked: ['early', 'lunch', 'evening', 'weekend', 'gap'], own_words: '' } }, 'POST', REVISION_4);
     expect(facts(storage).map(claim => claim.text)).toEqual(['Usually trains: before work, around lunch, in the evenings, at weekends, whenever there is a gap.']);
-    await send(ANSWERS, { request_id: `setup-train-${request++}`, train: { picked: [], own_words: 'It varies with the season' } }, 'POST', REVISION_3);
+    await send(ANSWERS, { request_id: `setup-train-${request++}`, train: { picked: [], own_words: 'It varies with the season' } }, 'POST', REVISION_4);
     expect(facts(storage).map(claim => claim.text)).toEqual(['When they train, in their own words at setup on 1970-01-01: "It varies with the season"']);
   }, { agreementsOffered: false }));
 
   it('clears when they train with null or an empty choice, and corrects it in place', () => owner(async ({ storage, send }) => {
-    await send(ANSWERS, { request_id: `setup-train-${request++}`, ...TRAINING }, 'POST', REVISION_3);
-    const corrected = await send(ANSWERS, { request_id: `setup-train-${request++}`, train: { picked: ['gap'], own_words: '' } }, 'POST', REVISION_3);
+    await send(ANSWERS, { request_id: `setup-train-${request++}`, ...TRAINING }, 'POST', REVISION_4);
+    const corrected = await send(ANSWERS, { request_id: `setup-train-${request++}`, train: { picked: ['gap'], own_words: '' } }, 'POST', REVISION_4);
     expect((await corrected.json() as { held: { train: boolean } }).held.train).toBe(true);
     expect(facts(storage).filter(claim => claim.source_ref === 'owner, first run: train').map(claim => claim.text)).toEqual(['Usually trains: whenever there is a gap.']);
     for (const train of [null, { picked: [], own_words: '' }]) {
-      await send(ANSWERS, { request_id: `setup-train-${request++}`, ...TRAINING }, 'POST', REVISION_3);
-      const cleared = await send(ANSWERS, { request_id: `setup-train-${request++}`, train }, 'POST', REVISION_3);
+      await send(ANSWERS, { request_id: `setup-train-${request++}`, ...TRAINING }, 'POST', REVISION_4);
+      const cleared = await send(ANSWERS, { request_id: `setup-train-${request++}`, train }, 'POST', REVISION_4);
       expect((await cleared.json() as { held: unknown }).held).toEqual({ ...NONE, matters: true, spots: true });
       expect(facts(storage).some(claim => claim.source_ref === 'owner, first run: train')).toBe(false);
     }
@@ -472,7 +472,7 @@ describe('setup answers, onboarding revision 3', () => {
 
   it('keeps a reading stated with when they train as health, dated, out of the blocks every turn reads', () => owner(async ({ storage, send }) => {
     const said = 'resting HR 52 after the long runs';
-    await send(ANSWERS, { request_id: `setup-train-${request++}`, name: 'Asha', train: { picked: ['weekend'], own_words: said } }, 'POST', REVISION_3);
+    await send(ANSWERS, { request_id: `setup-train-${request++}`, name: 'Asha', train: { picked: ['weekend'], own_words: said } }, 'POST', REVISION_4);
     const claim = facts(storage).find(fact => fact.text.includes(said));
     expect([claim!.text, claim!.kind, claim!.pinned]).toEqual([`Usually trains: at weekends. In their own words at setup on 1970-01-01: "${said}"`, 'health', null]);
     expect(turnMemoryPrompt(store(storage), 'anything')).not.toContain(said);
@@ -488,7 +488,7 @@ describe('setup answers, onboarding revision 3', () => {
       protect: { picked: ['workouts', 'family', 'meals', 'mornings', 'focus'], own_words: words('protect') }, rope: 'draft', season: { choice: 'busy', own_words: words('season') },
       low: { picked: ['focus', 'patience', 'sleep', 'push', 'cancel'], own_words: words('low') }, train: { picked: ['early', 'lunch', 'evening', 'weekend', 'gap'], own_words: words('train') },
     };
-    expect((await send(ANSWERS, { request_id: `setup-train-${request++}`, ...longest }, 'POST', REVISION_3)).status).toBe(200);
+    expect((await send(ANSWERS, { request_id: `setup-train-${request++}`, ...longest }, 'POST', REVISION_4)).status).toBe(200);
     expect(facts(storage)).toHaveLength(14);
     for (const prompt of [turnMemoryPrompt(store(storage), 'anything'), ownerProfilePrompt(store(storage), 'anything')]) {
       for (const claim of facts(storage)) expect(prompt).toContain(claim.text);
@@ -502,50 +502,54 @@ describe('setup answers, onboarding revision 3', () => {
       matters: { picked: ['sleep', 'energy', 'stress', 'schedule', 'mail', 'promises', 'training'], own_words: words }, spots: appSetupSpotV1Schema.options,
       protect: { picked: ['workouts', 'family', 'meals', 'mornings', 'focus'], own_words: words }, rope: 'suggest', season: { choice: 'none', own_words: words },
       low: { picked: ['focus', 'patience', 'sleep', 'push', 'cancel'], own_words: words }, train: { picked: ['early', 'lunch', 'evening', 'weekend', 'gap'], own_words: words } };
-    const saved = await send(ANSWERS, longest, 'POST', REVISION_3);
+    const saved = await send(ANSWERS, longest, 'POST', REVISION_4);
     expect([saved.status, (await saved.json() as { held: Record<string, boolean> }).held]).toEqual([200, Object.fromEntries(Object.keys(NONE).map(key => [key, true]))]);
   }, { agreementsOffered: false }));
 
-  it('refuses training from a build below revision 3, exactly as before, and stores nothing', () => owner(async ({ storage, send }) => {
+  it('refuses training from a build below revision 4, exactly as before, and stores nothing', () => owner(async ({ storage, send }) => {
     const naming = {
       matters: { picked: ['sleep', 'training'], own_words: '' }, spots: ['sleep-onset', 'training-keeping'], train: TRAINING.train,
       train_cleared: null, train_empty: { picked: [], own_words: '' },
     };
-    for (const contract of [undefined, 'onboarding=1', 'onboarding=2', REVISION_2, 'onboarding=3,onboarding=3', 'onboarding= 3']) {
+    for (const contract of [undefined, 'onboarding=1', 'onboarding=2', REVISION_2, 'onboarding=3', REVISION_3, 'onboarding=4,onboarding=4', 'onboarding= 4']) {
       for (const [answer, value] of Object.entries(naming)) {
         const refused = await send(ANSWERS, { request_id: `setup-train-${request++}`, name: 'Asha', [answer.replace(/_.*$/, '')]: value }, 'POST', contract);
         expect([contract, answer, refused.status, await refused.json()]).toEqual([contract, answer, 400, { error: 'invalid_request' }]);
       }
     }
     expect(facts(storage)).toEqual([]);
-    // The revision 2 answers without training still go from a revision 2 build, and from a revision 3 one.
-    for (const contract of [REVISION_2, REVISION_3, ' onboarding=3']) {
+    // The revision 2 answers without training still go from a revision 2 build, and from a revision 4 one.
+    for (const contract of [REVISION_2, REVISION_3, REVISION_4, ' onboarding=4']) {
       const saved = await send(ANSWERS, { request_id: `setup-train-${request++}`, matters: { picked: ['sleep'], own_words: '' }, spots: ['sleep-onset'] }, 'POST', contract);
       expect([contract, saved.status]).toEqual([contract, 200]);
     }
   }, { agreementsOffered: false }));
 
-  it('answers each build at its own revision: train held only at revision 3, and one request replayed to each', () => owner(async ({ send }) => {
+  it('answers each build at its own revision: train held only at revision 4, and one request replayed to each', () => owner(async ({ send }) => {
     const body = { request_id: 'setup-train-replay', name: 'Asha', low: { picked: ['sleep'], own_words: '' }, train: { picked: ['gap'], own_words: '' } };
-    const first = await send(ANSWERS, body, 'POST', REVISION_3);
+    const first = await send(ANSWERS, body, 'POST', REVISION_4);
     expect(await first.json()).toEqual({ request_id: body.request_id, held: { ...NONE, name: true, low: true, train: true }, replayed: false });
-    // A replay from a build below revision 3 is refused as the first send would have been: the body names train.
+    // A replay from a build below revision 4 is refused as the first send would have been: the body names train.
     expect((await send(ANSWERS, body, 'POST', REVISION_2)).status).toBe(400);
-    expect(await (await send(ANSWERS, body, 'POST', REVISION_3)).json()).toEqual({ request_id: body.request_id, held: { ...NONE, name: true, low: true, train: true }, replayed: true });
-    // A request without train, sent first at revision 3, replays to a revision 2 build without train, and to a revision 1 build with the first four.
+    expect((await send(ANSWERS, body, 'POST', REVISION_3)).status).toBe(400);
+    expect(await (await send(ANSWERS, body, 'POST', REVISION_4)).json()).toEqual({ request_id: body.request_id, held: { ...NONE, name: true, low: true, train: true }, replayed: true });
+    // A request without train, sent first at revision 4, replays to a revision 2 build without train, and to a revision 1 build with the first four.
     const plain = { request_id: 'setup-train-replay-2', name: 'Asha', low: { picked: ['sleep'], own_words: '' } };
-    expect(await (await send(ANSWERS, plain, 'POST', REVISION_3)).json()).toEqual({ request_id: plain.request_id, held: { ...NONE, name: true, low: true, train: true }, replayed: false });
+    expect(await (await send(ANSWERS, plain, 'POST', REVISION_4)).json()).toEqual({ request_id: plain.request_id, held: { ...NONE, name: true, low: true, train: true }, replayed: false });
     const { train: _train, ...two } = NONE;
     expect(await (await send(ANSWERS, plain, 'POST', REVISION_2)).json()).toEqual({ request_id: plain.request_id, held: { ...two, name: true, low: true }, replayed: true });
-    expect(await (await send(ANSWERS, { request_id: 'setup-train-replay-3', name: 'Asha' }, 'POST', REVISION_3)).json()).toEqual({ request_id: 'setup-train-replay-3', held: { ...NONE, name: true, low: true, train: true }, replayed: false });
+    // A build at revision 3 declares it for the consent list's copy versions and parses this answer strictly: it is never sent train.
+    expect(await (await send(ANSWERS, plain, 'POST', REVISION_3)).json()).toEqual({ request_id: plain.request_id, held: { ...two, name: true, low: true }, replayed: true });
+    expect(await (await send(ANSWERS, { request_id: 'setup-train-replay-3', name: 'Asha' }, 'POST', REVISION_4)).json()).toEqual({ request_id: 'setup-train-replay-3', held: { ...NONE, name: true, low: true, train: true }, replayed: false });
     expect(await (await send(ANSWERS, { request_id: 'setup-train-replay-3', name: 'Asha' })).json()).toEqual({ request_id: 'setup-train-replay-3', held: { name: true, day: false, slips: false, wearable: false }, replayed: true });
   }, { agreementsOffered: false }));
 
-  it('leaves train out of what a revision 2 build is told it holds, while holding it', () => owner(async ({ send }) => {
-    await send(ANSWERS, { request_id: `setup-train-${request++}`, train: { picked: ['evening'], own_words: '' } }, 'POST', REVISION_3);
+  it('leaves train out of what a revision 2 or 3 build is told it holds, while holding it', () => owner(async ({ send }) => {
+    await send(ANSWERS, { request_id: `setup-train-${request++}`, train: { picked: ['evening'], own_words: '' } }, 'POST', REVISION_4);
     const { train: _train, ...two } = NONE;
     expect(await (await send(ANSWERS, { request_id: `setup-train-${request++}`, name: 'Asha' }, 'POST', REVISION_2)).json()).toEqual({ request_id: `setup-train-${request - 1}`, held: { ...two, name: true }, replayed: false });
-    expect(await (await send(ANSWERS, { request_id: `setup-train-${request++}`, name: 'Asha' }, 'POST', REVISION_3)).json()).toEqual({ request_id: `setup-train-${request - 1}`, held: { ...NONE, name: true, train: true }, replayed: false });
+    expect(await (await send(ANSWERS, { request_id: `setup-train-${request++}`, name: 'Asha' }, 'POST', REVISION_3)).json()).toEqual({ request_id: `setup-train-${request - 1}`, held: { ...two, name: true }, replayed: false });
+    expect(await (await send(ANSWERS, { request_id: `setup-train-${request++}`, name: 'Asha' }, 'POST', REVISION_4)).json()).toEqual({ request_id: `setup-train-${request - 1}`, held: { ...NONE, name: true, train: true }, replayed: false });
   }, { agreementsOffered: false }));
 });
 
