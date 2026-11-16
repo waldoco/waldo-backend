@@ -125,7 +125,7 @@ const metricsOf = ({ groups, ...meter }: Meter, lightRoutes: readonly string[]):
 // The forget barrier runs as staging runs it ('items') unless a trial asks for the earlier rule. toolLoader 'harness' is the
 // staging loader; fallbackKey opens the route's second-provider step, which the gateway must then be able to serve.
 // embeddings turns semantic recall on.
-export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName; toolSearch?: boolean; toolLoader?: 'harness'; fallbackKey?: string; memory?: MemoryMode; forgetBarrier?: ForgetBarrierMode; embeddings?: EmbeddingRunner; memorySelection?: boolean; promptV2?: boolean }>): Promise<TrialRecord> => {
+export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName; toolSearch?: boolean; toolLoader?: 'harness'; fallbackKey?: string; memory?: MemoryMode; forgetBarrier?: ForgetBarrierMode; embeddings?: EmbeddingRunner; memorySelection?: boolean; promptV2?: boolean; leanScheduled?: boolean; modelSetWakes?: boolean }>): Promise<TrialRecord> => {
   const world = evalWorld(scenario.world, scenario.start, deps.memory, deps.embeddings);
   await world.ready;
   const entries: TurnLogEntry[] = [];
@@ -145,7 +145,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
   const seededReviewed = (claim: Readonly<{ id: number }>) => seeded.has(claim.id);
   const responder = createTelegramResponder({ openaiApiKey: 'eval-key', floorReply, ...(deps.fallbackKey ? { anthropicApiKey: deps.fallbackKey } : {}), ...(deps.toolLoader ? { toolLoader: deps.toolLoader } : deps.toolSearch ? { toolSearch: true } : {}), ...(deps.promptV2 ? { promptV2: true } : {}) }, world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
     world.handlers, model, false, undefined, async () => true, metered(shown, deps.budget, outage, meter), undefined, undefined, undefined, undefined,
-    WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app', undefined, { forgetBarrier: deps.forgetBarrier ?? 'items', memoryValidity: true, skills: skills.capability, ...(scenario.light_chat ? { lightChat: true } : {}), ...(world.semantic ? { semanticRecall: world.semantic } : {}), ...(world.connectors ? { connectors: world.connectors } : {}), ...(deps.memorySelection ? { memorySelection: { reviewed: () => seededReviewed } } : {}) });
+    WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app', undefined, { forgetBarrier: deps.forgetBarrier ?? 'items', memoryValidity: true, skills: skills.capability, ...(deps.leanScheduled ? { leanScheduled: true } : {}), ...(deps.modelSetWakes ? { modelSetWakes: true } : {}), ...(scenario.light_chat ? { lightChat: true } : {}), ...(world.semantic ? { semanticRecall: world.semantic } : {}), ...(world.connectors ? { connectors: world.connectors } : {}), ...(deps.memorySelection ? { memorySelection: { reviewed: () => seededReviewed } } : {}) });
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
   const transcript: JudgeInput['transcript'][number][] = [];
   let status: TrialRecord['status'] = 'ran';
@@ -201,7 +201,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
           goals: world.goals(), hold: null, left: TRIAGE_INTERRUPTS_PER_DAY });
         const carded = () => world.effects().filter((effect) => TRIAGE_CARDS.includes(effect.kind)).length;
         const before = carded();
-        const reply = await responder.prompt(`${scenario.id}-triage-${turn}`, 1, prompt, time, triageTools(false, true).filter((name) => offered.has(name)) as never, undefined, undefined, undefined, 'external');
+        const reply = await responder.prompt(`${scenario.id}-triage-${turn}`, 1, prompt, time, triageTools(false, true).filter((name) => offered.has(name)) as never, undefined, undefined, undefined, 'external', undefined, undefined, undefined, true);
         // As the owner object does: a card the turn raised is the act; an unreadable reply is left for the next card.
         const chosen = parseTriage(reply);
         const raised = carded() > before;
@@ -227,7 +227,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         skills.turn(`${scenario.id}-${step.card}`);
         const context = step.capacity === undefined ? undefined : [capacityContext(step.capacity, ''), ...(step.budget ? [await world.weekAhead()] : [])].join('\n\n');
         const said = await responder.prompt(`${scenario.id}-${step.card}`, 1, await world.dayCard(step.card, step.capacity !== undefined, step.tomorrow === true, step.budget === true), time,
-          step.tomorrow || step.budget ? [...OUTSIDE_TEXT_JOB_TOOLS, 'propose_calendar_change', 'propose_action'] : undefined, undefined, undefined, context, 'external');
+          step.tomorrow || step.budget ? [...OUTSIDE_TEXT_JOB_TOOLS, 'propose_calendar_change', 'propose_action'] : undefined, undefined, undefined, context, 'external', undefined, undefined, undefined, true);
         if (!isSkip(said)) transcript.push({ role: 'waldo', surface: 'notification', text: said });
       } else {
         world.shareHealth(step.health === 'shared');

@@ -39,8 +39,8 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_ASYNC_TOOLS: gap('the owner turn holds no long tool and hands that work to start_task; the trial runs no task worker or report turn, so it keeps the long tools inline'),
   WALDO_ONE_TIMELINE: gap('the owner\'s WhatsApp turns share the app chat\'s chain; the trial runs the app surface only, so it never sees a WhatsApp turn in its history'),
   WALDO_JOB_OUTCOME_ROWS: gap('a background job stores a keyed stub in place of its prompt, so a later job turn on the same chain (the Close after the Brief) no longer reads the earlier job\'s prompt; app owner turns already did not, and the trial runs no job turn after another'),
-  WALDO_LEAN_SCHEDULED: gap('a Waldo-first scheduled run (a day card, check-back, sweep or intervention) reads a lean view instead of the chat replay, and the day plan reads the shared health block; the trial\'s day cards and triage turns are not marked Waldo-first, so they read the full chat replay as with the switch off'),
-  MODEL_SET_WAKES: gap('a run Waldo starts may leave itself a bounded follow-up whose check-back reads its note; the trial runs no scheduled job after another, so no follow-up it sets ever comes due'),
+  WALDO_LEAN_SCHEDULED: mapped('the trial\'s day cards and triage turns run as the Waldo-first scheduled runs the owner object marks them, on the lean view and its shared menu'),
+  MODEL_SET_WAKES: mapped('the trial\'s day cards and triage turns may leave themselves a follow-up, as the owner object\'s do; no trial step fires its check-back yet'),
   WALDO_LIGHT_CHAT: gap("the owner's reply takes a light step on the auxiliary model that answers quick chat or hands the turn to the chat model, and task workers run on the chat model; the profile's trials stay on the chat model, and the lc- scenarios run with it on"),
   WALDO_COMPACTION: mapped('the trial\'s chat runs on the canonical store with these compaction settings'),
   WALDO_STEPPED_WINDOW: mapped('the trial\'s chat history is windowed in steps under the same compaction settings'),
@@ -210,6 +210,8 @@ export type StagingProfile = Readonly<{
   forgetBarrier: ForgetBarrierMode;
   memorySelection: boolean;
   semantic: boolean;
+  leanScheduled: boolean;
+  modelSetWakes: boolean;
 }>;
 
 // The owner object's own precedence: the harness loader wins over provider tool search. The model is the chat model of the
@@ -224,5 +226,7 @@ export const stagingProfile = (vars: StagingVars): StagingProfile => {
     forgetBarrier: vars.WALDO_FORGET_BARRIER === 'on' ? 'items' : 'reads',
     memorySelection: vars.MEMORY_SELECTION === '1',
     semantic: vars.MEMORY_SEMANTIC_RECALL === '1',
+    leanScheduled: vars.WALDO_LEAN_SCHEDULED === '1',
+    modelSetWakes: vars.MODEL_SET_WAKES === '1',
   };
 };
