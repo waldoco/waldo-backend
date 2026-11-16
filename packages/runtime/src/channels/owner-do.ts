@@ -44,6 +44,7 @@ import { dispatchProviderCall, HEALTH_PROVIDER_PATH, verifiedProviderCall } from
 import { whoopOwner, WHOOP_SYNC_EVERY_MS, WHOOP_SYNC_ID, type WhoopOwner } from '../health/providers/whoop-owner';
 import { whoopConfig } from '../health/providers/whoop-routes';
 import { dailyScoresFor } from '../health/scores';
+import { passiveLoadSources } from '../health/producer';
 import { invokeHealth } from './app-health';
 import { calendarEgressRuns, comingItemsFrom, healthCardBudget, healthTriggerBook, healthTriggerDueAt, healthTriggerView, healthWordsOf, runHealthTrigger, healthNoticeCurrent, HEALTH_TRIGGER_ID, type HealthTriggerOutcome } from '../health/trigger';
 import { ownerJobAdmission, surfaceOwnerAdmission, type SurfaceOwnerBinding } from '../identity/surface-owner-admission';
@@ -6009,7 +6010,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const recompute = healthRecompute({ scheduler, now: Date.now, ownerZone: () => clock.timezone, producer: {
       readSeries: range => healthRpc('series_read', JSON.stringify(range)), writeContext: payload => healthRpc('context_write', payload),
       readScores: day => healthRpc('scores_read', JSON.stringify({ day })), readHistory: days => healthRpc('scores_history', JSON.stringify({ days })),
-      compute: dailyScoresFor(this.env.HEALTH_PROVISIONAL_SCORES), trainingLoad: this.env.HEALTH_TRAINING_LOAD === '1', scoreParts: this.env.HEALTH_SCORE_PARTS === '1', usual: this.env.HEALTH_USUAL === '1',
+      compute: dailyScoresFor(this.env.HEALTH_PROVISIONAL_SCORES), trainingLoad: this.env.HEALTH_TRAINING_LOAD === '1', scoreParts: this.env.HEALTH_SCORE_PARTS === '1', usual: this.env.HEALTH_USUAL === '1', dayLoad: this.env.HEALTH_DAY_LOAD === '1', passiveLoad: passiveLoadSources(this.env.HEALTH_PASSIVE_LOAD), stressCurve: this.env.HEALTH_STRESS_CURVE === '1',
       ...(this.env.HEALTH_COACHING === '1' ? { readSettings: () => healthRpc('settings_read', '{}') } : {}), readDemand: range => this.setup('app').calendarDemand(range), onZoneChange: healthChanged,
     }, forgetDemand: day => forgetDemandDay(storage.sql, day, Date.now()),
       wakes: { enabled: () => schedPrefs.enabled('health_proposals'), woken: healthWoken,

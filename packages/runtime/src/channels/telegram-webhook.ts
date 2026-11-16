@@ -78,6 +78,15 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // 20261116100000, which admits the two new columns, before turning either on. Both need HEALTH_PROVISIONAL_SCORES "1".
   HEALTH_SCORE_PARTS?: string;
   HEALTH_USUAL?: string;
+  // "1" writes the day's load (HEALTH_DAY_LOAD) or today's hourly stress curve (HEALTH_STRESS_CURVE) on the derived row, and shows
+  // it to a build that names health revision 14; anything else writes and shows none. Apply migrations 20261116110000 (day load)
+  // and 20261116110100 (the stress curve), which admit the new columns, before turning each on.
+  HEALTH_DAY_LOAD?: string;
+  // "0", or a comma list of upload sources (apple, health_connect, samsung) whose days the day's load counts every observed minute
+  // for, from the hourly heart-rate bins, beside HEALTH_DAY_LOAD, and shows to a build that names health revision 15. Apply
+  // migration 20261116110200 first.
+  HEALTH_PASSIVE_LOAD?: string;
+  HEALTH_STRESS_CURVE?: string;
   HEALTH_COACHING?: string;
   // "1" lets a health proposal, and a chat card, swap an event for another in its slot (a hard workout for an easy one) by
   // renaming it; the connector-proxy function must be deployed with the rename first.
