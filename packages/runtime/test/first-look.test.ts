@@ -14,7 +14,7 @@ const withStore = (work: (storage: DurableObjectStorage) => Promise<void> | void
   runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`first-look-${seq += 1}`)), async (_instance, state) => { await work(state.storage); });
 
 describe('the first look\'s answer', () => {
-  const refs = ['webhook:github:a', 'webhook:github:b', 'webhook:github:c'];
+  const refs = ['webhook:github:a', 'webhook:github:b', 'webhook:github:c'] as const;
   it('golden: each event takes the decision the look gave it', () => {
     const raw = JSON.stringify({ looks: [{ ref: refs[0], reason: 'deadline moved', decision: 'wake' }, { ref: refs[1], reason: 'fyi', decision: 'next_card' }, { ref: refs[2], reason: 'bot noise', decision: 'ignore' }] });
     expect([...firstLookDecisions(raw, refs)]).toEqual([[refs[0], 'wake'], [refs[1], 'next_card'], [refs[2], 'ignore']]);
