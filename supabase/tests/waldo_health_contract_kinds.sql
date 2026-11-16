@@ -14,7 +14,7 @@ create function pg_temp.check_def(p_name text) returns text language sql as $$
 $$;
 create function pg_temp.kinds() returns table (v_signals text[], v_sources text[]) language plpgsql as $$
 declare
-  v_signals constant text[] := array['sleep_duration','sleep_efficiency','sleep_midpoint','overnight_hrv','resting_heart_rate','daylight_duration','movement_duration','heart_rate_window','hrv_window','spo2','respiratory_rate','steps_window','active_energy_window','workout','wrist_temperature','walking_heart_rate_average','vo2_max','heart_rate_recovery','mindful_duration','body_mass','body_fat_percentage','lean_body_mass','stand_hour','nutrition','heart_rate_bins_window'];
+  v_signals constant text[] := array['sleep_duration','sleep_efficiency','sleep_midpoint','overnight_hrv','resting_heart_rate','daylight_duration','movement_duration','heart_rate_window','hrv_window','spo2','respiratory_rate','steps_window','active_energy_window','workout','wrist_temperature','walking_heart_rate_average','vo2_max','heart_rate_recovery','mindful_duration','body_mass','body_fat_percentage','lean_body_mass','stand_hour','nutrition','heart_rate_bins_window','hydration','caffeine','alcoholic_drinks','state_of_mind','sleep_breathing_disturbances','audio_exposure_window','walking_steadiness'];
   v_sources constant text[] := array['apple','samsung','health_connect','whoop'];
 begin
   return query select v_signals, v_sources;

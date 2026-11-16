@@ -300,6 +300,17 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\b(?:protein|carbs?|carbohydrates?|fat)\s*:\s*${READING_NUMBER}\s*(?:g|grams?)\b${LABEL_END}`),
   reading(String.raw`\bcrs\b${BARE_GAP}\d`),
   reading(String.raw`\b(?:form|recovery|load|strain|readiness|sleep|hrv)\s+score\b${BARE_GAP}\d`),
+  // Wellbeing as get_health gives it. Water, caffeine and drinks count as the owner's (intake, you, your, logged, a day), never
+  // as a bottle, a recipe or a coffee's label; a mood only as a pleasantness from -1 to 1; a sound level only with its decibels.
+  reading(String.raw`(?:\b(?:water|hydration|caffeine)(?:\s+intake)?\s*[:=]\s*|\b(?:water|hydration|caffeine)\s+intake\b${READING_GAP}|\byour\s+(?:water|caffeine)\b${READING_GAP}|${OWNER_ATE}${READING_GAP}|\byou\s+drank\b${READING_GAP})${READING_NUMBER}\s*(?:ml|millilit(?:re|er)s?|l|lit(?:re|er)s?|mg|milligrams?)\b`),
+  reading(String.raw`\b(?:water|hydration|caffeine)\b\s+${READING_NUMBER}\s*(?:ml|millilit(?:re|er)s?|l|lit(?:re|er)s?|mg|milligrams?)\s+(?:today|yesterday|so\s+far|logged|a\s+day|per\s+day|daily)\b`),
+  reading(String.raw`\b${READING_NUMBER}\s*(?:ml|millilit(?:re|er)s?|l|lit(?:re|er)s?|mg|milligrams?)\s+of\s+(?:water|caffeine)\s+(?:today|yesterday|so\s+far|logged|a\s+day|per\s+day|daily)\b`),
+  reading(String.raw`\b(?:alcohol|alcoholic\s+drinks)\b${BARE_GAP}${READING_NUMBER}(?:\s*(?:alcoholic\s+)?drinks?\b)?(?!\s*(?::\d|[ap]\.?m\b|o'?clock\b))|\b${READING_NUMBER}\s+alcoholic\s+drinks?\b|\b(?:you|I)\s+(?:had|logged|drank)\s+${READING_NUMBER}\s+(?:alcoholic\s+)?drinks?\s+(?:today|yesterday|last\s+night|this\s+week|logged)\b`),
+  reading(String.raw`\b(?:mood|valence|pleasantness|state\s+of\s+mind)\b${BARE_GAP}[+\-−]?(?:0?[.,]\d+|1[.,]0+)\b`),
+  reading(String.raw`(?<![\w.])[+\-−](?:0?[.,]\d+|1(?:[.,]0+)?)\s+(?:mood|valence|pleasantness)\b`),
+  reading(String.raw`\bbreathing\s+disturbances?\b${BARE_GAP}${READING_NUMBER}|\b${READING_NUMBER}\s+breathing\s+disturbances?\b`),
+  reading(String.raw`\b(?:sound|noise|audio|headphone|environmental)(?:\s+(?:audio|sound|noise))?\s+(?:levels?|exposure)\b${READING_GAP}${READING_NUMBER}\s*(?:db|decibels?)\b|\b${READING_NUMBER}\s*(?:db|decibels?)\s+(?:of\s+)?(?:noise|sound|headphone\s+audio|environmental\s+(?:sound|noise))\b`),
+  reading(String.raw`\bwalking\s+steadiness\b${BARE_GAP}${READING_NUMBER}|\b${READING_NUMBER}\s*(?:%|percent)\s+walking\s+steadiness\b`),
   ...LAB_READINGS,
 ];
 // Matched with only emphasis blanked. A word ordinary life shares (hr, pulse, steps, recovery), with no unit, names a

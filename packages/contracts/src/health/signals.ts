@@ -38,6 +38,13 @@ export const HEALTH_SIGNALS = {
   stand_hour: { grain: 'hour', words: 'stand hours' },
   nutrition: { grain: 'reading', words: 'food logged' },
   heart_rate_bins_window: { grain: 'hour', words: 'time in heart rate ranges through the day' },
+  hydration: { grain: 'reading', words: 'water drunk' },
+  caffeine: { grain: 'reading', words: 'caffeine' },
+  alcoholic_drinks: { grain: 'reading', words: 'alcoholic drinks' },
+  state_of_mind: { grain: 'reading', words: 'state of mind the owner logged' },
+  sleep_breathing_disturbances: { grain: 'night', words: 'breathing disturbances in sleep' },
+  audio_exposure_window: { grain: 'hour', words: 'sound levels through the day' },
+  walking_steadiness: { grain: 'reading', words: 'walking steadiness' },
 } as const satisfies Readonly<Record<HealthSignal, Entry>>;
 
 export const HEALTH_SIGNAL_NAMES = healthSignalV1Schema.options;

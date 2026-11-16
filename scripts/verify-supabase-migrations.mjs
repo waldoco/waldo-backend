@@ -128,6 +128,7 @@ const expectedMigrations = [
   '20261116110100_health_stress_curve.sql',
   '20261116110200_health_passive_load.sql',
   '20261116140000_health_inventory.sql',
+  '20261116150000_health_wellbeing_kinds.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);

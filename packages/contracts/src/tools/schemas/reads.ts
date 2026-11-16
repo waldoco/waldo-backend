@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { docProviderSchema, docReadResultSchema } from '../../adapters/doc';
+import { healthStateOfMindAssociationV1Schema, healthStateOfMindLabelV1Schema } from '../../app/health-ingest';
 import { iso8601Schema } from '../../core/error';
 import { hallTypeSchema } from '../../memory/hall';
 import { lifeAreaSchema } from '../../memory/area';
@@ -37,6 +38,10 @@ export const healthReadSignalSchema = z.enum([
   'food_energy', 'protein', 'carbs', 'fat',
   // Heart rate variability through the waking day: the day's mean of the hourly readings, apart from the overnight one.
   'daytime_hrv',
+  // Wellbeing (health revision 17): water and caffeine as a day's sum, alcoholic drinks counted, the logged state of mind as
+  // the day's mean pleasantness from -1 to 1, breathing disturbances per hour asleep, sound levels as the energy mean, walking
+  // steadiness as estimated.
+  'water', 'caffeine', 'alcohol', 'mood', 'breathing_disturbances', 'sound_level', 'walking_steadiness',
 ]);
 export type HealthReadSignal = z.infer<typeof healthReadSignalSchema>;
 const healthReadDaySchema = z.iso.date();
@@ -59,7 +64,7 @@ export const HEALTH_READ_MAX_HOURLY_DAYS = 2;
 // A wall-clock time in the owner's zone, to the minute, as the result's timezone reads it.
 const healthReadLocalTimeSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d$/);
 
-export const healthReadUnitSchema = z.enum(['minutes', 'ms', 'bpm', 'minute_of_day', 'ratio', 'percent', 'breaths_per_minute', 'celsius', 'ml_per_kg_min', 'count', 'kcal', 'kg', 'g']);
+export const healthReadUnitSchema = z.enum(['minutes', 'ms', 'bpm', 'minute_of_day', 'ratio', 'percent', 'breaths_per_minute', 'celsius', 'ml_per_kg_min', 'count', 'kcal', 'kg', 'g', 'ml', 'mg', 'valence', 'per_hour', 'db']);
 // One workout as the watch measured it, from the same source as the workouts signal. A part the store holds in a shape this
 // does not admit is left out, never the session. zone_minutes are minutes in heart-rate zones 1 to 5.
 const sport = <Shape extends z.ZodRawShape>(shape: Shape) => z.strictObject(shape).partial();
@@ -78,6 +83,14 @@ export const healthWorkoutSessionSchema = z.strictObject({
   ...Object.fromEntries(Object.entries(healthWorkoutSessionParts).map(([key, part]) => [key, part.optional()])) as { [K in keyof typeof healthWorkoutSessionParts]: z.ZodOptional<(typeof healthWorkoutSessionParts)[K]> },
 }).refine(session => session.avg_hr_bpm === undefined || session.max_hr_bpm === undefined || session.avg_hr_bpm <= session.max_hr_bpm, 'average heart rate above the maximum');
 export const HEALTH_READ_MAX_SESSIONS = 100;
+// One state of mind as the owner logged it: when, a moment's emotion or the day's mood, how pleasant from -1 to 1, and the
+// labels and associations the owner picked.
+export const healthMoodEntrySchema = z.strictObject({
+  at: healthReadLocalTimeSchema, kind: z.enum(['momentary_emotion', 'daily_mood']), valence: z.number().min(-1).max(1),
+  labels: z.array(healthStateOfMindLabelV1Schema).max(healthStateOfMindLabelV1Schema.options.length).optional(),
+  associations: z.array(healthStateOfMindAssociationV1Schema).max(healthStateOfMindAssociationV1Schema.options.length).optional(),
+});
+export const HEALTH_READ_MAX_MOODS = 100;
 export const healthReadUnavailableReasonSchema = z.enum(['consent_required', 'consent_withdrawn', 'not_linked', 'no_readings', 'read_failed']);
 export const getHealthResultSchema = z.discriminatedUnion('state', [
   z.strictObject({
@@ -91,7 +104,7 @@ export const getHealthResultSchema = z.discriminatedUnion('state', [
       unit: healthReadUnitSchema,
       source: z.enum(['apple', 'samsung', 'health_connect', 'whoop']),
       // A wrist temperature is absolute or a delta against the platform's own baseline, never the two blended.
-      method: z.enum(['asleep', 'rmssd', 'sdnn', 'absolute', 'baseline_delta']).nullable(),
+      method: z.enum(['asleep', 'rmssd', 'sdnn', 'absolute', 'baseline_delta', 'environmental', 'headphone']).nullable(),
       days: z.array(z.strictObject({ day: healthReadDaySchema, value: z.number().nullable() })).optional(),
       // Null when no asked day has a value: nothing is invented.
       summary: z.strictObject({ mean: z.number().nullable(), min: z.number().nullable(), max: z.number().nullable(), days_with_value: z.int().nonnegative() }).optional(),
@@ -107,6 +120,8 @@ export const getHealthResultSchema = z.discriminatedUnion('state', [
     coverage: z.number().min(0).max(1),
     // Daily reads that ask for workouts: each session, oldest first, at most the newest HEALTH_READ_MAX_SESSIONS.
     sessions: z.array(healthWorkoutSessionSchema).max(HEALTH_READ_MAX_SESSIONS).optional(),
+    // Daily reads that ask for mood: each logged state of mind, oldest first, at most the newest HEALTH_READ_MAX_MOODS.
+    moods: z.array(healthMoodEntrySchema).max(HEALTH_READ_MAX_MOODS).optional(),
   }),
   // next: what is true and what can be done, in words; it never carries a reading.
   z.strictObject({ state: z.literal('unavailable'), reason: healthReadUnavailableReasonSchema, next: z.string().min(1).max(400).optional() }),

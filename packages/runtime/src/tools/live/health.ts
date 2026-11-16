@@ -1,5 +1,5 @@
 import {
-  getHealthArgsSchema, HEALTH_READ_MAX_HOURLY_DAYS, HEALTH_READ_MAX_SESSIONS, HEALTH_SIGNALS, healthWorkoutSessionParts, healthWorkoutSessionSchema, TOOL_PERMISSIONS, triggerTypeSchema,
+  getHealthArgsSchema, HEALTH_READ_MAX_HOURLY_DAYS, HEALTH_READ_MAX_MOODS, HEALTH_READ_MAX_SESSIONS, healthMoodEntrySchema, HEALTH_SIGNALS, healthWorkoutSessionParts, healthWorkoutSessionSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type GetHealthArgs, type GetHealthResult, type HealthReadSignal, type HealthSignal, type ToolHandler,
 } from '@waldo/contracts';
 import type { z } from 'zod';
@@ -77,7 +77,8 @@ export const healthReadBook = (call: SignedCall | null, doName: string | null): 
 
 type Available = Extract<GetHealthResult, { state: 'available' }>['signals'][number];
 type Method = NonNullable<Available['method']>;
-type Fold = 'newest' | 'sum' | 'mean';
+// decibel_mean: the energy mean of sound levels, so a loud hour counts as loud and is not averaged away with quiet ones.
+type Fold = 'newest' | 'sum' | 'mean' | 'decibel_mean';
 // stored: the plane's signal. asleep: only time asleep is read, never time in bed. methods: a signal read one method at a
 // time, never blended. value: what the signal reads from the stored reading, when it is not the reading's own value.
 type Spec = Readonly<{ stored: HealthSignal; unit: Available['unit']; fold: Fold; asleep?: true; methods?: readonly Method[]; value?: (reading: Reading) => number | null }>;
@@ -111,6 +112,13 @@ export const SIGNALS: Record<HealthReadSignal, Spec> = {
   carbs: { stored: 'nutrition', unit: 'g', fold: 'sum', value: reading => reading.nutrition?.carbohydrate_g ?? null },
   fat: { stored: 'nutrition', unit: 'g', fold: 'sum', value: reading => reading.nutrition?.fat_g ?? null },
   daytime_hrv: { stored: 'hrv_window', unit: 'ms', fold: 'mean', methods: ['rmssd', 'sdnn'] },
+  water: { stored: 'hydration', unit: 'ml', fold: 'sum' },
+  caffeine: { stored: 'caffeine', unit: 'mg', fold: 'sum' },
+  alcohol: { stored: 'alcoholic_drinks', unit: 'count', fold: 'sum' },
+  mood: { stored: 'state_of_mind', unit: 'valence', fold: 'mean' },
+  breathing_disturbances: { stored: 'sleep_breathing_disturbances', unit: 'per_hour', fold: 'newest' },
+  sound_level: { stored: 'audio_exposure_window', unit: 'db', fold: 'decibel_mean', methods: ['environmental', 'headphone'] },
+  walking_steadiness: { stored: 'walking_steadiness', unit: 'percent', fold: 'newest' },
 };
 type Session = z.infer<typeof healthWorkoutSessionSchema>;
 // One session as the tool shows it: each stored part kept only when it is the shape the result admits, and an average heart
@@ -126,6 +134,13 @@ const sessionOf = (reading: Reading): Session | null => {
   if (typeof parts.avg_hr_bpm === 'number' && typeof parts.max_hr_bpm === 'number' && parts.avg_hr_bpm > parts.max_hr_bpm) { delete parts.avg_hr_bpm; delete parts.max_hr_bpm; }
   const session = healthWorkoutSessionSchema.safeParse({ day: reading.day, activity: workout.activity, minutes: reading.value, ...parts });
   return session.success ? session.data : null;
+};
+// One state of mind as the tool shows it, or none when the stored kind or a word is outside the closed lists.
+const moodEntryOf = (reading: Reading, timezone: string) => {
+  if (!reading.mood) return null;
+  const { kind, labels, associations } = reading.mood;
+  const entry = healthMoodEntrySchema.safeParse({ at: localIso(instantOf(reading, timezone), timezone), kind, valence: reading.value, ...(labels.length ? { labels } : {}), ...(associations.length ? { associations } : {}) });
+  return entry.success ? entry.data : null;
 };
 const FRESH_MS = 36 * 3_600_000;
 const STALE_MS = 72 * 3_600_000;
@@ -171,6 +186,7 @@ export const foldDay = (fold: Fold, readings: readonly Reading[], timezone: stri
   if (readings.length === 0) return null;
   if (fold === 'sum') return Math.round(readings.reduce((total, reading) => total + reading.value, 0));
   if (fold === 'mean') return round1(readings.reduce((total, reading) => total + reading.value, 0) / readings.length);
+  if (fold === 'decibel_mean') return round1(10 * Math.log10(readings.reduce((total, reading) => total + 10 ** (reading.value / 10), 0) / readings.length));
   return [...readings].sort((a, b) => instantOf(b, timezone) - instantOf(a, timezone))[0]!.value;
 };
 
@@ -199,7 +215,7 @@ const allowlist = triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS
 export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolHandler<GetHealthArgs, GetHealthResult, ToolDispatcherContext> => ({
   name: 'get_health',
   description:
-    "The owner's own health readings, up to 31 days ending today, one source per signal: by local day, a summary, hourly over at most two days (heart_rate, daytime_hrv, steps, movement, daylight, active_energy, stand_hours), or nightly with each night's start and end, for sleep when the owner fell asleep and woke (sleep and its stages, sleep_midpoint, sleep_efficiency, hrv, wrist_temperature). Sleep is time asleep, never time in bed. HRV, daytime_hrv and wrist temperature carry their method, never blended. heart_rate, daytime_hrv, respiratory_rate, spo2 and hr_recovery are day means. food_energy, protein, carbs and fat are what the owner's food app logged; a macro is missing on a day an entry lacked it. Context for a plan, never a judgement of what the owner ate. The numbers stay in this turn and are never stored or logged.",
+    "The owner's own health readings, up to 31 days ending today, one source per signal: by local day, a summary, hourly over at most two days for a signal read by the hour, or nightly with each night's start and end (for sleep, when the owner fell asleep and woke); the health block names each kind's grain. Sleep is time asleep, never time in bed. HRV, wrist temperature and sound level carry their method, never blended. heart_rate, daytime_hrv, respiratory_rate, spo2, hr_recovery and mood (-1 to 1) are day means; a daily mood read lists each logged state of mind. Food, water, caffeine and alcohol are what the owner's apps logged: context for a plan, never a judgement. The numbers stay in this turn and are never stored or logged.",
   schema: getHealthArgsSchema,
   trigger_allowlist: allowlist,
   autonomy_gated: false,
@@ -260,12 +276,18 @@ export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolH
       .filter(reading => daysBetween(args.from, reading.day) >= 0 && daysBetween(reading.day, args.to) >= 0)
       .sort((a, b) => a.day.localeCompare(b.day) || (a.startAt ?? '').localeCompare(b.startAt ?? ''))
       .flatMap(reading => sessionOf(reading) ?? []).slice(-HEALTH_READ_MAX_SESSIONS);
+    const moodGroup = args.aggregation === 'daily' && signals.includes('mood') ? chooseGroup('mood', sources) : null;
+    const moods = moodGroup?.readings
+      .filter(reading => daysBetween(args.from, reading.day) >= 0 && daysBetween(reading.day, args.to) >= 0)
+      .sort((a, b) => instantOf(a, timezone) - instantOf(b, timezone))
+      .flatMap(reading => moodEntryOf(reading, timezone) ?? []).slice(-HEALTH_READ_MAX_MOODS);
     const age = clock.now().getTime() - newest;
     return result({
       state: 'available', timezone, from: args.from, to: args.to, read_at: parsed.series.readAt, signals: series,
       freshness: age <= FRESH_MS ? 'fresh' : age <= STALE_MS ? 'stale' : 'expired',
       coverage: Math.round((valued / (signals.length * days.length)) * 1000) / 1000,
       ...(sessions ? { sessions } : {}),
+      ...(moods ? { moods } : {}),
     });
   },
 });

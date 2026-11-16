@@ -115,11 +115,13 @@ export type SleepStages = Readonly<Record<(typeof STAGES)[number], number>>;
 // samsungWriter is whether Samsung Health wrote the reading, as the read says it; false when another app did or none was recorded.
 // A workout's activity, and its zones and effort as the read returns them; detail is the rest of what it stored, unchecked,
 // for a reader that checks it. Null for any other signal. A food entry's grams likewise, each null when not a finite number.
-// max is an hourly heart-rate window's highest; bins an hour's heart-rate bins. Each is null for any other signal.
-export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; samsungWriter: boolean; workout?: WorkoutDetail | null; nutrition?: NutritionGrams | null; max?: number | null; bins?: HeartRateBins | null }>;
+// max is an hourly heart-rate window's highest; bins an hour's heart-rate bins; mood a state of mind's kind and the owner's words.
+// Each is null for any other signal.
+export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; samsungWriter: boolean; workout?: WorkoutDetail | null; nutrition?: NutritionGrams | null; max?: number | null; bins?: HeartRateBins | null; mood?: Mood | null }>;
 const MACROS = ['protein_g', 'carbohydrate_g', 'fat_g'] as const;
 export type NutritionGrams = Readonly<Record<(typeof MACROS)[number], number | null>>;
 export type HeartRateBins = Readonly<{ fromBpm: number; outside: readonly number[]; inside: readonly number[] }>;
+export type Mood = Readonly<{ kind: string; labels: readonly string[]; associations: readonly string[] }>;
 export type WorkoutDetail = Pick<WorkoutLoad, 'zoneSeconds' | 'zonesFromObservedPeak' | 'effort'> & Readonly<{ activity: string | null; detail: Readonly<Record<string, unknown>> }>;
 type Source = Readonly<{ source: string; epoch: number; truncated: boolean; readings: readonly Reading[] }>;
 export type Series = Readonly<{ readAt: string; sources: readonly Source[] }>;
@@ -158,6 +160,12 @@ const binsOf = (raw: unknown): HeartRateBins | null => {
   const fromBpm = r?.from_bpm;
   return outside && inside && outside.length === inside.length && typeof fromBpm === 'number' && Number.isInteger(fromBpm) && fromBpm % 5 === 0 && fromBpm >= 30 && fromBpm <= 225 ? { fromBpm, outside, inside } : null;
 };
+// A state of mind's kind and words, or none. A list that is not all strings is read as empty; the read tool checks each word.
+const words = (raw: unknown): string[] => (Array.isArray(raw) && raw.every(word => typeof word === 'string') ? raw : []);
+const moodOf = (raw: unknown): Mood | null => {
+  const r = asRecord(raw);
+  return typeof r?.kind === 'string' ? { kind: r.kind, labels: words(r.labels), associations: words(r.associations) } : null;
+};
 // A reading the database returned that does not have the shape the math needs is dropped, never repaired.
 const reading = (raw: unknown): Reading | null => {
   const r = asRecord(raw);
@@ -171,6 +179,7 @@ const reading = (raw: unknown): Reading | null => {
     nutrition: r.signal === 'nutrition' ? nutritionOf(r.nutrition) : null,
     max: r.signal === 'heart_rate_window' && typeof r.max === 'number' && Number.isFinite(r.max) ? r.max : null,
     bins: r.signal === 'heart_rate_bins_window' ? binsOf(r.bins) : null,
+    mood: r.signal === 'state_of_mind' ? moodOf(r.mood) : null,
   };
 };
 
