@@ -413,7 +413,7 @@ describe('get_health wellbeing', () => {
     const result = await read(['water', 'sound_level']);
     expect(result).toMatchObject({ state: 'available', signals: [
       { signal: 'water', unit: 'ml', method: null, days: [{ day, value: 750 }] },
-      { signal: 'sound_level', unit: 'db', method: 'environmental', days: [{ day, value: 87 }] },
+      { signal: 'sound_level', unit: 'dba', method: 'environmental', days: [{ day, value: 87 }] },
     ] });
   });
 
@@ -427,7 +427,7 @@ describe('get_health wellbeing', () => {
 
   it('reads sound by the hour and breathing disturbances by the night, as the registry grains them', async () => {
     expect(await read(['sound_level'], 'hourly', '2026-10-11')).toMatchObject({ signals: [{ signal: 'sound_level', hours: [{ at: '2026-10-12T10:00', value: 60 }, { at: '2026-10-12T11:00', value: 90 }] }] });
-    expect(await read(['breathing_disturbances'], 'nightly')).toMatchObject({ signals: [{ signal: 'breathing_disturbances', unit: 'per_hour', nights: [{ day, value: 3.2 }] }] });
+    expect(await read(['breathing_disturbances'], 'nightly')).toMatchObject({ signals: [{ signal: 'breathing_disturbances', unit: 'events_per_hour', nights: [{ day, value: 3.2 }] }] });
     expect(await read(['water'], 'hourly', '2026-10-11')).toMatchObject({ ok: false, code: 'invalid_args' });
   });
 });

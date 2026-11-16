@@ -64,7 +64,7 @@ export const HEALTH_READ_MAX_HOURLY_DAYS = 2;
 // A wall-clock time in the owner's zone, to the minute, as the result's timezone reads it.
 const healthReadLocalTimeSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d$/);
 
-export const healthReadUnitSchema = z.enum(['minutes', 'ms', 'bpm', 'minute_of_day', 'ratio', 'percent', 'breaths_per_minute', 'celsius', 'ml_per_kg_min', 'count', 'kcal', 'kg', 'g', 'ml', 'mg', 'valence', 'per_hour', 'db']);
+export const healthReadUnitSchema = z.enum(['minutes', 'ms', 'bpm', 'minute_of_day', 'ratio', 'percent', 'breaths_per_minute', 'celsius', 'ml_per_kg_min', 'count', 'kcal', 'kg', 'g', 'ml', 'mg', 'valence', 'events_per_hour', 'dba']);
 // One workout as the watch measured it, from the same source as the workouts signal. A part the store holds in a shape this
 // does not admit is left out, never the session. zone_minutes are minutes in heart-rate zones 1 to 5.
 const sport = <Shape extends z.ZodRawShape>(shape: Shape) => z.strictObject(shape).partial();

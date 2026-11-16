@@ -118,7 +118,7 @@ begin
         ('nutrition','kilocalories',0,10000,false),
         ('heart_rate_bins_window','seconds',1,3600,true),
         ('hydration','millilitres',0,5000,false), ('caffeine','milligrams',0,1000,false), ('alcoholic_drinks','count',0,20,false),
-        ('state_of_mind','valence',-1,1,false), ('sleep_breathing_disturbances','per_hour',0,200,false), ('audio_exposure_window','decibels',0,140,true),
+        ('state_of_mind','valence',-1,1,false), ('sleep_breathing_disturbances','events_per_hour',0,200,false), ('audio_exposure_window','dba',0,140,true),
         ('walking_steadiness','percent',0,100,false)
       ) r(signal, unit, lo, hi, windowed) where r.signal = v_signal;
       if v_unit is null or v_sample_id is null or v_sample_id !~ '^[A-Za-z0-9._:-]{1,128}$'

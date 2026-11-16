@@ -34,8 +34,8 @@ create function pg_temp.mood() returns jsonb language sql as $$ select '{"kind":
 create function pg_temp.steps(id text) returns jsonb language sql as $$ select pg_temp.hour_(id,'steps_window','count',412) $$;
 create function pg_temp.seven() returns jsonb language sql as $$ select jsonb_build_array(
   pg_temp.point('HK:water','hydration','millilitres',350,'{"origin":{"read_api":"healthkit"}}'), pg_temp.point('HK:coffee','caffeine','milligrams',95), pg_temp.point('HK:wine','alcoholic_drinks','count',1),
-  pg_temp.point('HK:som','state_of_mind','valence',-0.4,pg_temp.mood()), pg_temp.point('HK:breath','sleep_breathing_disturbances','per_hour',3.2),
-  pg_temp.hour_('HK:sound','audio_exposure_window','decibels',71.5,'{"method":"environmental"}'), pg_temp.point('HK:steady','walking_steadiness','percent',88)) $$;
+  pg_temp.point('HK:som','state_of_mind','valence',-0.4,pg_temp.mood()), pg_temp.point('HK:breath','sleep_breathing_disturbances','events_per_hour',3.2),
+  pg_temp.hour_('HK:sound','audio_exposure_window','dba',71.5,'{"method":"environmental"}'), pg_temp.point('HK:steady','walking_steadiness','percent',88)) $$;
 
 insert into auth.users(id,email) values ('7f100000-0000-0000-0000-0000000000a1','copy2@example.invalid'),('7f100000-0000-0000-0000-0000000000a2','copy5@example.invalid');
 insert into waldo.owners(id,auth_user_id,do_name,email) values
@@ -71,8 +71,8 @@ create temp table bad as select pg_temp.h('ingest','copy5-owner',pg_temp.batch('
   pg_temp.point('b3','state_of_mind','valence',0.5,'{"kind":"momentary_emotion","labels":["calm","calm"]}'),
   pg_temp.point('b4','state_of_mind','valence',0.5,'{"kind":"momentary_emotion","note":"after the board call"}'),
   pg_temp.point('b5','state_of_mind','valence',0.5),
-  pg_temp.hour_('b6','audio_exposure_window','decibels',71),
-  pg_temp.point('b7','audio_exposure_window','decibels',71,'{"method":"headphone"}'),
+  pg_temp.hour_('b6','audio_exposure_window','dba',71),
+  pg_temp.point('b7','audio_exposure_window','dba',71,'{"method":"headphone"}'),
   pg_temp.point('b8','walking_steadiness','percent',0.88,'{"name":"steady"}')))) as r;
 select is((select r->>'accepted' from bad),'0','no malformed wellbeing reading is stored');
 select is((select jsonb_agg(e->>'reason') from jsonb_array_elements((select r->'rejected' from bad)) e),

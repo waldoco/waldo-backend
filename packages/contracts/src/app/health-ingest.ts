@@ -228,11 +228,12 @@ export const HEALTH_OBSERVED_PEAK_REVISION_V1 = 6;
 // build never sends one, and a backend that does not know it rejects that reading alone.
 export const HEALTH_NUTRITION_REVISION_V1 = 7;
 const grams = z.number().finite().min(0).max(1_000);
-// Health revision 16: the backend may ask the phone to sync now with a silent push whose data is this and nothing else: no
-// title, no body, no sound, no reading. A build from revision 16 reads its health store and uploads as on a normal sync; an
-// older build has no handler and shows nothing, since the push has no alert. At most HEALTH_SYNC_DAILY_LIMIT_V1 a day, at
-// least HEALTH_SYNC_MIN_GAP_MINUTES_V1 apart; it is not held by quiet hours, since nothing is shown.
-export const HEALTH_SYNC_REVISION_V1 = 16;
+// The backend may ask the phone to sync now with a silent push whose data is this and nothing else: no title, no body, no
+// sound, no reading. A build that handles it names its own contract pair (`x-waldo-app-contract: health_sync=1`), as
+// act_without_asking does, not a health revision, so naming it turns on nothing else; it reads its health store and uploads
+// as on a normal sync. An older build has no handler and shows nothing, since the push has no alert. At most
+// HEALTH_SYNC_DAILY_LIMIT_V1 a day, at least HEALTH_SYNC_MIN_GAP_MINUTES_V1 apart; not held by quiet hours, since nothing is shown.
+export const APP_HEALTH_SYNC_CONTRACT = 'health_sync';
 export const HEALTH_SYNC_DAILY_LIMIT_V1 = 4;
 export const HEALTH_SYNC_MIN_GAP_MINUTES_V1 = 30;
 export const healthSyncPushV1Schema = z.strictObject({ trigger: z.literal('health_sync') });
@@ -357,9 +358,9 @@ export const healthSampleV1Schema = z.discriminatedUnion('signal', [
     associations: z.array(healthStateOfMindAssociationV1Schema).max(healthStateOfMindAssociationV1Schema.options.length).refine(distinct, 'an association repeats').optional(),
   }),
   // The night's breathing disturbances per hour asleep, as the Watch measured them.
-  z.strictObject({ ...sampleCommon, sleep_context: z.never().optional(), signal: z.literal('sleep_breathing_disturbances'), unit: z.literal('per_hour'), value: z.number().finite().min(0).max(200) }),
-  // One local hour's sound level, the energy average of what the phone measured in it: the surroundings, or headphones.
-  z.strictObject({ ...sampleCommon, sleep_context: z.never().optional(), signal: z.literal('audio_exposure_window'), unit: z.literal('decibels'), method: z.enum(['environmental', 'headphone']), value: z.number().finite().min(0).max(140) }),
+  z.strictObject({ ...sampleCommon, sleep_context: z.never().optional(), signal: z.literal('sleep_breathing_disturbances'), unit: z.literal('events_per_hour'), value: z.number().finite().min(0).max(200) }),
+  // One local hour's A-weighted sound level, the energy average of what the phone measured in it: the surroundings, or headphones.
+  z.strictObject({ ...sampleCommon, sleep_context: z.never().optional(), signal: z.literal('audio_exposure_window'), unit: z.literal('dba'), method: z.enum(['environmental', 'headphone']), value: z.number().finite().min(0).max(140) }),
   // Walking steadiness as the phone estimated it, from 0 to 100 percent.
   z.strictObject({ ...sampleCommon, sleep_context: z.never().optional(), signal: z.literal('walking_steadiness'), unit: z.literal('percent'), value: z.number().finite().min(0).max(100) }),
 ]).refine(sample => Date.parse(sample.start_at) <= Date.parse(sample.end_at), 'sample end precedes start')

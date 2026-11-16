@@ -12,8 +12,8 @@ The app owns the final wording. The backend enforces one rule: a wellbeing readi
 | `caffeine` | One logged entry, in milligrams | per entry | `caffeine` (day sum) |
 | `alcoholic_drinks` | One logged entry, as a count of drinks | per entry | `alcohol` (day sum) |
 | `state_of_mind` | One logged emotion or daily mood: pleasantness from -1 to 1, its kind, and the labels and associations from Apple's closed lists (38 labels, 18 associations). No free text exists in it and none is sent. | per entry | `mood` (day mean, plus each entry) |
-| `sleep_breathing_disturbances` | The night's disturbances per hour asleep, as the Watch measured them | per night | `breathing_disturbances` |
-| `audio_exposure_window` | One local hour's sound level in decibels (the energy average), from the surroundings or from headphones | per hour | `sound_level` (energy mean, one source of sound at a time) |
+| `sleep_breathing_disturbances` | The night's disturbances per hour asleep, `events_per_hour`, as the Watch measured them | per night | `breathing_disturbances` |
+| `audio_exposure_window` | One local hour's A-weighted sound level, `dba` (the energy average), from the surroundings or from headphones | per hour | `sound_level` (energy mean, one source of sound at a time) |
 | `walking_steadiness` | The phone's estimate, 0 to 100 percent | per reading | `walking_steadiness` |
 
 Source: Apple's `HKStateOfMind.Label` and `HKStateOfMind.Association` documentation (developer.apple.com, read 16 Nov 2026). Health Connect offers hydration and nutrition caffeine; the other kinds are Apple's only.
@@ -51,6 +51,13 @@ Options:
 1. **Re-affirm (recommended).** A grant that names a newer copy than the live grant writes a new consent row on that copy and moves the scope to it. The epoch is unchanged, because no data changes. The old row stays as history, marked superseded. This needs a `superseded_at` column, and every function that reads live consents must be audited. It is a separate migration and a separate consent-flow screen in the app.
 2. **Withdraw and re-grant.** Nothing is built, but the owner loses their stored readings. This is acceptable only for staging test accounts.
 3. **Store wellbeing kinds under copy 2.** This is rejected: the owner would never have seen the lines, which goes against ruling 9.
+
+## Reconciled with the phone's proposal (waldoco/waldo-app#257, comment 6927343817)
+
+- **Point records, not hourly sums, for water, caffeine and alcohol.** Each logged entry keeps its own time, which says more than its hour about a late coffee. Each also maps one to one to the store's entry, so a deletion on the phone deletes one reading here, and no hour needs recomputing. `nutrition` already works this way.
+- **Units:** the phone's `events_per_hour` and `dba` (A-weighted) are adopted, being clearer than `per_hour` and `decibels`. `millilitres` and `milligrams` stay as written.
+- **Copy 5, not 3.** Copies 3 and 4 are WHOOP's wordings, and one copy number names one wording. Device grants are offered and stored on 2 or 5. The phone's count of agreed rows needs to accept copy 5 as well as copy 2.
+- **State of mind's labels and associations: DECISION NEEDED (the owner).** The contract takes them as optional closed lists, so either ruling needs no contract change. The phone sends valence and kind only until the owner rules.
 
 ## Evidence Trail
 
