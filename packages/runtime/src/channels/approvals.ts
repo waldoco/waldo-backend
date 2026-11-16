@@ -78,7 +78,7 @@ const SETTLE_RETRY_FIRST_MS = 5 * 60_000, SETTLE_RETRY_MAX_MS = 6 * 60 * 60_000;
 // seen_start/seen_end: the event's time when the card was made, so a move shows what it moves from.
 // time_zone: the zone the review's times were written in.
 // seen_target: for a move, the events already in its new time when it was proposed; one added there after the card stops it.
-type Stored = ProposeCalendarChangeArgs & { seen_etag?: string; seen_start?: string; seen_end?: string; seen_guests?: number; seen_series?: true; seen_target?: readonly string[]; operation_ref?: string; time_zone?: string };
+type Stored = ProposeCalendarChangeArgs & { seen_etag?: string; seen_start?: string; seen_end?: string; seen_guests?: number; seen_target?: readonly string[]; operation_ref?: string; time_zone?: string };
 
 // B-tool-3: the exact thing the owner approved. The executor replays it in a fresh browser
 // session and re-reads the binding from the page before acting - a changed price/item/destination
@@ -266,7 +266,9 @@ export type Replacement = Readonly<{ approval_id: string; replaced: boolean; sta
 // inward change it can undo runs with no card, even after the run read outside text (inwardUndoable).
 export type ProposeOptions = Readonly<{ replaces?: string; outside?: boolean; origin?: RunOrigin; why?: readonly TrailStep[]; asked?: boolean; ownerTurn?: OwnerTurn; waldoStarted?: true }>;
 // What a call's provenance lets it do without a card, as askedBy reads it off the turn.
-export type AskedOptions = Pick<ProposeOptions, 'asked' | 'ownerTurn' | 'waldoStarted'>;
+// series: the event a calendar change names was read as part of a recurring series. It travels with the proposal only, never in
+// the stored change, whose keys stay as a card always had them; nothing decides unasked after the proposal returns.
+export type AskedOptions = Pick<ProposeOptions, 'asked' | 'ownerTurn' | 'waldoStarted'> & Readonly<{ series?: true }>;
 // What the MCP handler knows of the tool a call names, from the owner's connection and the server's definition: a catalogue
 // app (one the console offers, whose writes that speak as the owner are named), a tool its server marks destructive, and a
 // write that speaks as the owner to other people, whose recipients code cannot list.
@@ -2113,18 +2115,18 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // unasked. A cancel also needs Waldo to be able to put it back (runAsked).
   // It carries no text beyond a title, since a shared calendar shows a description or a place to others; it touches no series,
   // whose change reaches every instance; and it replaces no card, so it can never withdraw one the owner has not seen decided.
-  const inwardUndoable = (entry: LedgerRow): boolean => {
+  const inwardUndoable = (entry: LedgerRow, series: boolean): boolean => {
     if (entry.replaces) return false;
     if (entry.kind === 'calendar_plan') return true;
     if (entry.kind !== 'calendar_change') return false;
     const p = JSON.parse(entry.payload_json) as Stored;
     const primary = p.calendar_id === undefined || p.calendar_id === 'primary' || (p.account !== undefined && p.calendar_id.toLowerCase() === p.account.toLowerCase());
     const reachesNoOne = !p.attendees?.length && p.send_updates !== 'all' && !p.add_meet_link && p.description === undefined && p.location === undefined && p.rename_to === undefined;
-    return primary && reachesNoOne && !p.seen_series && (p.action === 'create' || (p.seen_etag !== undefined && (p.seen_guests ?? 0) === 0));
+    return primary && reachesNoOne && !series && (p.action === 'create' || (p.seen_etag !== undefined && (p.seen_guests ?? 0) === 0));
   };
   const askedRule = async (entry: LedgerRow, how: AskedOptions, reach?: McpReach): Promise<'asked' | 'owner' | 'waldo' | null> => {
     if (!autonomous()) return null;
-    if (how.waldoStarted && deps.waldoInward?.() === true) return inwardUndoable(entry) ? 'waldo' : null;
+    if (how.waldoStarted && deps.waldoInward?.() === true) return inwardUndoable(entry, how.series === true) ? 'waldo' : null;
     const wide = deps.ownerTurns?.() === true;
     if (WIDE_KINDS.includes(entry.kind) ? !wide : !ASKED_RUN_KINDS.includes(entry.kind)) return null;
     if (entry.kind === 'mcp_call' && reach?.destructive !== false) return null;
@@ -2505,13 +2507,13 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         const seenTime = before && !before.all_day && before.start && before.end ? { seen_start: before.start, seen_end: before.end } : {};
         // Without a read of the new time there is no baseline, and the move is not rechecked there, as before.
         const seenTarget = client && bound.action === 'move' ? await targetEvents(client, bound).then(ids => ({ seen_target: ids }), () => ({})) : {};
-        const stored: Stored = { ...bound, ...(seen ? { seen_etag: seen } : {}), ...seenTime, ...seenTarget, ...(before?.attendees ? { seen_guests: before.attendees } : {}), ...(before?.recurring_event_id !== undefined || before?.series ? { seen_series: true as const } : {}), ...(operationRef ? { operation_ref: operationRef } : {}), time_zone: deps.timezone };
+        const stored: Stored = { ...bound, ...(seen ? { seen_etag: seen } : {}), ...seenTime, ...seenTarget, ...(before?.attendees ? { seen_guests: before.attendees } : {}), ...(operationRef ? { operation_ref: operationRef } : {}), time_zone: deps.timezone };
         const summary = `${describe(stored)}. ${bound.reason}`;
         sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'calendar_change', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(stored), deps.now());
         bindOrigin(id, originRunRef);
         bindWhy(id, options.why);
         bindOptions(id, options);
-        if (await runAsked(id, options)) return id;
+        if (await runAsked(id, { ...options, ...(before?.recurring_event_id !== undefined || before?.series ? { series: true as const } : {}) })) return id;
         if (client && await granted(id, stored, client, options.origin, before)) return id;
         await present(id);
         return id;
