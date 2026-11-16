@@ -138,6 +138,11 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" runs a send, calendar change or Google task change the owner asked for in their own message with no card, reporting
   // it with an undo where one exists; the cards that remain are approved on the surface showing them. Off unless "1".
   AUTONOMOUS_BY_DEFAULT?: string;
+  // "1" widens AUTONOMOUS_BY_DEFAULT for an owner whose "Just do it" choice is on: a turn the owner started with their own message
+  // acts with no card even after it read outside text, an MCP call, a standing grant and an undoable calendar cancel included;
+  // a party reached only through outside text, a payment, a password, a browser submit and permanent deletion keep their cards.
+  // Off unless "1"; it does nothing where AUTONOMOUS_BY_DEFAULT is not "1".
+  AUTONOMY_OWNER_TURNS?: string;
   // "1" offers track/log/list/stop_medication on owner turns and words medicine reminders in the harness from a health-plane
   // read. Off unless "1".
   MEDICATIONS?: string;
@@ -306,6 +311,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // question waiting, a daily budget the owner can change, the gap between two, and a small urgent allowance past the budget.
   // Anything else keeps each kind's own budget. The three numbers below are the deployment's defaults.
   PROACTIVE_GATE?: string;
+  // '1': each owner-facing schedule toggle gates only what its label says. Notes before events off stops meeting prep, not the
+  // sweep that carries the update cards, and follow-ups off no longer holds those cards. Anything else keeps the old coupling.
+  SEPARATE_TOGGLES?: string;
   PROACTIVE_INTERRUPTS_PER_DAY?: string;
   PROACTIVE_URGENT_PER_DAY?: string;
   PROACTIVE_GAP_MIN?: string;
