@@ -72,7 +72,8 @@ describe('a failed recompute names its step and the database\'s answer', () => {
 
 describe('the recompute run', () => {
   const recompute = (producer: Partial<ProducerDeps>) => healthRecompute({
-    scheduler: { lookup: () => ({ state: 'none' }) as never, schedule: async () => undefined },
+    // run() never asks the scheduler for anything.
+    scheduler: { lookup: () => { throw new Error('unused'); }, schedule: () => { throw new Error('unused'); } },
     now: () => NOW, ownerZone: () => 'UTC',
     producer: { readSeries: async () => series, writeContext: async () => ({ written: true, changed: [] }), compute: dailyScoresFor('1'), ...producer },
   });
