@@ -1,6 +1,6 @@
 import { PULSE_PRIOR, VARIABILITY_PRIOR, sleepNeed, standing, type Prior } from './baseline';
 import { BASELINE_DAYS, higherIsBetter, logZScore, lowerIsBetter, zScore, clampScore, type Component } from './stats';
-import type { DayRecord, HrvMethod, MethodReading, RestingMethod, UnavailableReason } from './types';
+import type { DayRecord, HrvMethod, MethodReading, RestingMethod, UnavailableReason, UsedSignal } from './types';
 
 // Form v2 and Weight v2 leave out days holding an overlapping hour window (Form's hours, Weight's physical load). Form v3
 // reads an hour or day with no daylight or movement reading as missing, not zero; Weight v3 counts every day the calendar
@@ -10,11 +10,11 @@ import type { DayRecord, HrvMethod, MethodReading, RestingMethod, UnavailableRea
 // day whose active-energy windows overlap. Weight v4 reads physical load as the day's active energy, falling back to
 // minutes. Recovery v4 also admits a night with no measured resting heart rate, through the producer's low from its
 // asleep heart-rate hours, a method of its own; Form v8 is Form v5 on Recovery v4's inputs. A change in which inputs are
-// admitted is a new version.
+// admitted is a new version. The provisional Form v10 reads a day without movement minutes on its steps.
 export const ALGORITHM = { recovery: 'recovery.candidate.v4', form: 'form.candidate.v8', weight: 'weight.candidate.v4', sleepDebt: 'sleep-debt.candidate.v1' } as const;
 // Provisional scores (recovery.v5 and the versions on it) read every component against the shared baseline from the
 // owner's first day; the versions above stay as they were for the switch that keeps them.
-export const PROVISIONAL_ALGORITHM = { recovery: 'recovery.v5', form: 'form.v9', weight: 'weight.v5', sleepDebt: 'sleep-debt.v2' } as const;
+export const PROVISIONAL_ALGORITHM = { recovery: 'recovery.v5', form: 'form.v10', weight: 'weight.v5', sleepDebt: 'sleep-debt.v2' } as const;
 // Shares of the Recovery score. Keys name the component's role, not a reading.
 export const RECOVERY_SHARES = { sleep: 0.5, variability: 0.3, pulse: 0.2 } as const;
 // RMSSD is the canonical HRV method and SDNN its labelled fallback. A nightly minimum is the closest resting measure, then a
@@ -24,7 +24,7 @@ const RESTING_ORDER: readonly RestingMethod[] = ['overnight_resting', 'provider_
 
 export interface RecoveryBasis {
   readonly components: readonly Component[];
-  readonly signals: readonly string[];
+  readonly signals: readonly UsedSignal[];
   readonly days: readonly string[];
   readonly hrvMethod: HrvMethod | null;
   // Provisional only: the own-day count of each used component that stands on the owner's history, and whether a prior took part.
@@ -63,7 +63,7 @@ export const recoveryBasis = (target: DayRecord, prior: readonly DayRecord[], sl
   if (!target.overnightHrv.length && !target.restingHeartRate.length) return { reason: 'missing_resting_signal' };
 
   const components: Component[] = [{ name: 'sleep', score: clampScore(target.sleep.asleepMinutes / need * 100), weight: RECOVERY_SHARES.sleep }];
-  const signals = ['sleep'];
+  const signals: UsedSignal[] = ['sleep'];
   const days = new Set<string>([target.day]);
   let hrvMethod: HrvMethod | null = null;
 
@@ -115,7 +115,7 @@ export const provisionalRecoveryBasis = (target: DayRecord, prior: readonly DayR
   if (!target.overnightHrv.length && !target.restingHeartRate.length) return { reason: 'missing_resting_signal' };
 
   const components: Component[] = [{ name: 'sleep', score: clampScore(target.sleep.asleepMinutes / need * 100), weight: RECOVERY_SHARES.sleep }];
-  const signals = ['sleep'];
+  const signals: UsedSignal[] = ['sleep'];
   const days = new Set<string>([target.day]);
   // A need the owner confirmed stands on no history. One taken from the owner's nights is shrunk toward a prior of eight hours.
   const own: number[] = sleepNeedMinutes === null ? [nights.length] : [];
