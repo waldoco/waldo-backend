@@ -95,3 +95,15 @@ it('prices Haiku at $0.10 / $0.01 / $0.50 up to 100,000 prompt tokens and at $0.
     total: expect.closeTo((50_001 * 0.5 + 40_000 * 0.05 + 10_000 * 0.625 + 1_000 * 2.5) / M, 12),
   });
 });
+
+it('prices an Anthropic one-hour cache write at twice input, the five-minute rest at 1.25x', () => {
+  const sonnet = modelCost({ model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, input: 3 * M, output: 0, cached: 0, cache_write: 2 * M, cache_write_1h: M });
+  expect(sonnet?.cache_write).toBeCloseTo(2.5 + 4, 10);
+  expect(sonnet?.total).toBeCloseTo(2 + 2.5 + 4, 10);
+  expect(modelCost({ model: ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, input: 50_000, output: 0, cached: 0, cache_write: 50_000, cache_write_1h: 50_000 })?.total).toBeCloseTo(50_000 * 0.2 / M, 12);
+  expect(modelCost({ model: ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, input: 200_000, output: 0, cached: 0, cache_write: 200_000, cache_write_1h: 200_000 })?.total).toBeCloseTo(200_000 * 1 / M, 12);
+});
+
+it('never prices more one-hour writes than writes', () => {
+  expect(modelCost({ model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, input: M, output: 0, cached: 0, cache_write: M, cache_write_1h: 5 * M })?.total).toBeCloseTo(4, 10);
+});
