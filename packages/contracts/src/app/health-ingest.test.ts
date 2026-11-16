@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  appHealthRoutesV1, checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_COACH_REVISION_V1, HEALTH_NUTRITION_REVISION_V1, HEALTH_OBSERVED_PEAK_REVISION_V1, HEALTH_WELLBEING_CONSENT_VERSION_V1, HEALTH_WELLBEING_REVISION_V1, healthStateOfMindAssociationV1Schema, healthStateOfMindLabelV1Schema, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
+  appHealthRoutesV1, checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_COACH_REVISION_V1, HEALTH_NUTRITION_REVISION_V1, HEALTH_OBSERVED_PEAK_REVISION_V1, HEALTH_SYNC_REVISION_V1, HEALTH_WELLBEING_CONSENT_VERSION_V1, HEALTH_WELLBEING_REVISION_V1, healthStateOfMindAssociationV1Schema, healthStateOfMindLabelV1Schema, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
   healthApiErrorV1Schema, healthBaselineV1Schema, healthChangeRejectionReasonV1Schema, healthDriverPhraseV1Schema, healthEnergyWindowV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema,
   healthConsentListV1Schema, healthConsentVersionV1, healthConsentWithdrawV1Schema, healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthSampleV1Schema,
   HEALTH_SCORES_HISTORY_REVISION_V1, healthScoresHistoryQueryV1Schema, healthScoresHistoryResponseV1Schema,
@@ -963,7 +963,7 @@ describe('health revision 17: wellbeing kinds', () => {
   const point = { ...common, start_at: common.start_at, end_at: common.start_at };
   const mood = { ...point, sample_id: 'HK:som-1', signal: 'state_of_mind', unit: 'valence', value: -0.4, kind: 'momentary_emotion', labels: ['stressed', 'drained'], associations: ['work'] };
   const hour = { ...common, sample_id: 'HK:sound-1', signal: 'audio_exposure_window', unit: 'decibels', value: 71.5, method: 'environmental', start_at: '2026-10-10T09:00:00Z', end_at: '2026-10-10T10:00:00Z', utc_offset_minutes: 0 };
-  it('is revision 17, above the open health revisions and the sync push', () => expect(HEALTH_WELLBEING_REVISION_V1).toBe(17));
+  it('is revision 17, above the open health revisions and the sync push', () => expect([HEALTH_SYNC_REVISION_V1, HEALTH_WELLBEING_REVISION_V1]).toEqual([16, 17]));
   it('takes each kind in its unit and within its bounds', () => {
     for (const sample of [
       { ...point, sample_id: 'HK:w', signal: 'hydration', unit: 'millilitres', value: 350 }, { ...point, sample_id: 'HK:c', signal: 'caffeine', unit: 'milligrams', value: 95 },

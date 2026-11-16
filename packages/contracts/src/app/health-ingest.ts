@@ -228,6 +228,14 @@ export const HEALTH_OBSERVED_PEAK_REVISION_V1 = 6;
 // build never sends one, and a backend that does not know it rejects that reading alone.
 export const HEALTH_NUTRITION_REVISION_V1 = 7;
 const grams = z.number().finite().min(0).max(1_000);
+// Health revision 16: the backend may ask the phone to sync now with a silent push whose data is this and nothing else: no
+// title, no body, no sound, no reading. A build from revision 16 reads its health store and uploads as on a normal sync; an
+// older build has no handler and shows nothing, since the push has no alert. At most HEALTH_SYNC_DAILY_LIMIT_V1 a day, at
+// least HEALTH_SYNC_MIN_GAP_MINUTES_V1 apart; it is not held by quiet hours, since nothing is shown.
+export const HEALTH_SYNC_REVISION_V1 = 16;
+export const HEALTH_SYNC_DAILY_LIMIT_V1 = 4;
+export const HEALTH_SYNC_MIN_GAP_MINUTES_V1 = 30;
+export const healthSyncPushV1Schema = z.strictObject({ trigger: z.literal('health_sync') });
 // Health revision 17: wellbeing kinds, each a reading the owner's phone already holds. A build sends them from revision 17, only
 // after its consent screen shows copy 5; a backend that does not know one rejects that reading alone, and a storage grant on an
 // earlier copy rejects it with consent_required. Blood pressure and glucose are not among them.
