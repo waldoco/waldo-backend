@@ -141,6 +141,8 @@ export const llmResponseSchema = z
     // Prompt tokens the provider wrote to its cache on this call, inside input_tokens and apart from the reads; they bill at
     // the provider's write rate. Absent when the provider wrote nothing or reports no count.
     cache_write_input_tokens: z.int().nonnegative().optional(),
+    // Of those writes, the ones kept an hour (Anthropic's `ttl: '1h'`), which bill at a higher write rate. Absent when none.
+    cache_write_1h_input_tokens: z.int().nonnegative().optional(),
     latency_ms: z.int().nonnegative(),
     output_items: z.array(z.record(z.string(), z.unknown())).optional(),
     truncated: z.boolean().optional(),

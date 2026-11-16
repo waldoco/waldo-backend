@@ -449,6 +449,13 @@ describe('AnthropicMessagesAdapter cache breakpoints', () => {
       expect(procedures).not.toHaveProperty('cache_control');
     });
 
+    it('reports which of its cache writes were kept an hour, so they are priced at the hour rate', async () => {
+      const usage1h = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 900, cache_creation: { ephemeral_5m_input_tokens: 100, ephemeral_1h_input_tokens: 800 } };
+      const { adapter } = recording([reply([{ type: 'text', text: 'ok' }], 'end_turn', { usage: usage1h })]);
+      const result = await adapter.complete(scheduled());
+      expect(result).toMatchObject({ ok: true, data: { cache_write_input_tokens: 900, cache_write_1h_input_tokens: 800 } });
+    });
+
     it('marks nothing on a step without provider caching', async () => {
       const { bodies, adapter } = recording([reply([{ type: 'text', text: 'ok' }])]);
       const base = gatewayRequest();
