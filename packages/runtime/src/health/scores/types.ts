@@ -23,6 +23,8 @@ export interface HourlyBucket {
   readonly daylightMinutes: number | null;
   readonly movementMinutes: number | null;
   readonly activeEnergyKcal: number | null;
+  // Steps the phone summed for the hour. Absent where the read carried none.
+  readonly steps?: number | null;
 }
 export interface Span { readonly startAt: string; readonly endAt: string }
 export interface SleepRecord extends Span {
