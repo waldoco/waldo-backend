@@ -160,6 +160,15 @@ describe('a partial health block from the rows the producer writes', () => {
     expect(renderHealth(off).startsWith('Form zone:')).toBe(true);
   });
 
+  it('a full row without overnight HRV: the switch changes exactly one line, naming HRV as missing', async () => {
+    const stored = await storedRow({ sleep: true, heart: true, steps: true, calendar: true });
+    expect(stored).toMatchObject({ recovery: { zone: expect.any(String) }, form: { zone: expect.any(String) }, weight: { zone: expect.any(String) } });
+    const [on, off] = [renderHealth(read(asRead(stored))).split('\n'), renderHealth(read(asRead(stored), false)).split('\n')];
+    expect(on.length).toBe(off.length);
+    const changed = on.flatMap((line, i) => (line === off[i] ? [] : [[off[i], line]]));
+    expect(changed).toEqual([[expect.stringMatching(/Missing components: none\.$/), expect.stringMatching(/Missing components: hrv\.$/)]]);
+  });
+
   it('the switch off keeps today\'s behaviour: a row without Recovery is no block', async () => {
     for (const kinds of [{ steps: true }, { sleep: true, steps: true }, { heart: true, steps: true }]) {
       expect(read(asRead(await storedRow(kinds)), false), JSON.stringify(kinds)).toBeNull();

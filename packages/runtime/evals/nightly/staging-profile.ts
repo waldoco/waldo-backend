@@ -93,6 +93,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_EGRESS_ALLOWLIST: gap('the world has no network, so the egress boundary is held by its own tests, not by a trial'),
   HEALTH_PROVISIONAL_SCORES: gap('the world serves synthetic health, not the provisional score computation'),
   HEALTH_SOLO_NOTICE: gap('the solo-owner health notice is not run in a trial'),
+  HEALTH_PARTIAL_CONTEXT: gap('the world serves a full synthetic health row, so no trial reads a partial health block'),
   CALENDAR_UNDO_CANCEL: gap('no trial undoes a cancel; staging has it on'),
   NEXT_DUE_ALARM: inert('decides only whether an owner alarm with nothing due runs its pass; a trial turn is not an alarm pass'),
   WHY_TRAIL: gap('no trial reads the steps behind a card; staging has it on'),
