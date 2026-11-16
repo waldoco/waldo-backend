@@ -1,6 +1,7 @@
 import { ControlsPanel } from './Controls';
 import { OwnerControlsPanel } from './OwnerControls';
 import { AppearancePanel } from './Appearance';
+import { MemoryImportPanel } from './MemoryImport';
 export type SettingsSection = 'day' | 'sessions' | 'usage' | 'account' | 'setup';
 export type SettingsTab = 'day' | 'connections' | 'files' | 'usage' | 'account' | 'invites' | 'admin' | 'admin-health' | 'health' | 'vault' | 'setup' | 'sessions';
 const tabs: { key: SettingsTab; label: string; href: string }[] = [
@@ -21,5 +22,6 @@ export function SettingsHead({ selected, isAdmin = false }: { selected: Settings
 export function SettingsPanel({ section, isAdmin = false }: { section: SettingsSection; isAdmin?: boolean }) {
   return <><SettingsHead selected={settingsTab(section)} isAdmin={isAdmin}/>
     {section==='sessions'?<ControlsPanel key="sessions" view="connections" embedded section="sessions"/>:section === 'account' ? <><AppearancePanel/><OwnerControlsPanel view="account" embedded/><ControlsPanel key="sessions" view="connections" embedded section="sessions"/></>
+      : section === 'setup' ? <><MemoryImportPanel/><ControlsPanel key={section} view={section} embedded/></>
       : <ControlsPanel key={section} view={section} embedded/>}</>;
 }

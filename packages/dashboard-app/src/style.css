@@ -951,3 +951,12 @@ footer .refresh:disabled { opacity:1; }
 .card-word { display:inline-block; animation:card-word-in 420ms var(--ease) backwards, card-word-settle 600ms ease backwards; animation-delay:var(--at,0ms), calc(var(--at,0ms) + 900ms); }
 @keyframes card-word-in { from { opacity:0; transform:translateY(4px); } }
 @keyframes card-word-settle { from { color:var(--ink); } }
+
+.panel.memory-import { display:grid; gap:12px; }
+.panel.memory-import p { margin:0; }
+.memory-import-actions { display:flex; flex-wrap:wrap; align-items:center; gap:10px; font-size:13.5px; color:var(--t2); }
+.memory-import-prompt summary { cursor:pointer; font-size:13.5px; color:var(--t2); }
+.memory-import-prompt pre { margin:8px 0 0; padding:12px; max-height:260px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; border-radius:10px; background:var(--fill); font-size:12.5px; line-height:1.5; color:var(--ink); }
+.panel.memory-import textarea { font:inherit; font-size:14.5px; color:var(--ink); width:100%; min-height:160px; padding:10px 12px; border:0; border-radius:10px; background:var(--fill); box-shadow:inset 0 0 0 .5px var(--hair-strong); resize:vertical; }
+.memory-import-note { font-size:12.5px; color:var(--t3); }
+.memory-import-problem { color:var(--red-text); }

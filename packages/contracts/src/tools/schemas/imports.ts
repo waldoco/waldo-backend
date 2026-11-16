@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { lifeAreaSchema } from '../../memory/area';
+import { APP_MEMORY_IMPORT_SOURCES_V1 } from '../../app/memory-import';
 
 // Bringing the owner's past in from another assistant's chat export, uploaded by the owner to their workspace. What is worth
 // keeping is the model's judgment; code holds provenance: the file is the owner's own upload, and every quote sits in a
@@ -7,6 +8,10 @@ import { lifeAreaSchema } from '../../memory/area';
 export const IMPORT_SOURCES = ['chatgpt', 'claude'] as const;
 export const importSourceSchema = z.enum(IMPORT_SOURCES);
 export type ImportSource = z.infer<typeof importSourceSchema>;
+// Every assistant memory can be brought in from: the two whose chat exports Waldo reads, and the summaries the owner pastes
+// from any assistant (the app's memory import). A forget by import_source takes any of them.
+export const memoryImportSourceSchema = z.enum(APP_MEMORY_IMPORT_SOURCES_V1);
+export type MemoryImportSource = z.infer<typeof memoryImportSourceSchema>;
 export const IMPORT_CLAIMS_PER_CALL = 20;
 
 const exportFile = { source: importSourceSchema, file_id: z.string().min(1).max(100), revision: z.int().positive() };

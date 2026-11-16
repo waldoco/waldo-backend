@@ -32,7 +32,9 @@ describe('import from other agents: tool arguments', () => {
 
   it('forgets one import source as a forget selector of its own', () => {
     expect(forgetMemoryArgsSchema.safeParse({ import_source: 'claude', scope_note: 'everything from my Claude export' }).success).toBe(true);
-    expect(forgetMemoryArgsSchema.safeParse({ import_source: 'gemini', scope_note: 'n' }).success).toBe(false);
+    // A summary pasted from any assistant is an import of its own, so every memory import source is a selector.
+    for (const source of ['chatgpt', 'gemini', 'grok', 'other']) expect(forgetMemoryArgsSchema.safeParse({ import_source: source, scope_note: 'n' }).success, source).toBe(true);
+    expect(forgetMemoryArgsSchema.safeParse({ import_source: 'bard', scope_note: 'n' }).success).toBe(false);
   });
 
   it('is offered to the owner\'s own chat turn only, loaded on demand, and never as an outbound or privileged action', () => {

@@ -62,6 +62,9 @@ export type OwnerResponder = Readonly<{
   consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>, policy?: Readonly<{ health: boolean }>): Promise<Readonly<{ done: boolean; detail: string }>>;
   // The model's reply over the day's calendar and mail changes (outside content), applied by the caller. Absent on fakes.
   sourceClaims?(trace: string, updates: string, policy?: Readonly<{ health: boolean; people?: boolean }>): Promise<string>;
+  // The model's reply picking claims out of a summary of the owner that another assistant wrote, applied by the caller. Absent
+  // on fakes.
+  importDoc?(trace: string, input: string): Promise<string>;
   // CAPACITY_PLAN: the model's raw answer keeping the owner's capacity note, applied by the caller. Absent on fakes.
   capacity?(trace: string, input: string): Promise<string>;
   migrate(trace: string, input: string, policy?: Readonly<{ health: boolean }>): Promise<string>;

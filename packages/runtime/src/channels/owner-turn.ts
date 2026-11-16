@@ -51,6 +51,7 @@ import { FORGOTTEN, QUIET_NOTE, QUIET_TAG, withoutBringUpLess, applyClaimOps, ap
 import { CAPACITY_INSTRUCTION, CAPACITY_SCHEMA } from '../prompt/capacity';
 import { sha256Hex } from '../context-composer/canonical';
 import { outsideView } from '../memory/outside-view';
+import { DOC_IMPORT_INSTRUCTION, DOC_IMPORT_SCHEMA } from '../memory/doc-import';
 import { episodesFromSearchTool, previousOwnerMessage, RECALL_MAX_CHARS, recallForTurn, withinReach } from '../memory/turn-recall';
 import type { SemanticRecall } from '../memory/semantic-recall';
 import { coreMemory, CORE_ROOM, LEXICAL_DEADLINE_MS, recallWithin, SEMANTIC_DEADLINE_MS, type MemorySelection } from '../memory/select-memory';
@@ -1269,6 +1270,13 @@ export const createOwnerResponder = (
     },
     threadTitle: (trace, exchange, scope) => withCallDeadline(scope, scope.deadline, () => ask(trace, 'thread_title', THREAD_TITLE_INSTRUCTION, exchange, THREAD_TITLE_FORMAT, undefined, undefined, undefined, auxiliaryModel, scope)),
     progressNote: (trace, input, scope) => withCallDeadline(scope, scope.deadline, () => ask(trace, 'progress_note', PROGRESS_NOTE_INSTRUCTION, input, PROGRESS_NOTE_FORMAT, undefined, undefined, undefined, auxiliaryModel, scope)),
+    // The pasted summary is outside content: the call has no tools and no memory beside it, and the memory_ purpose keeps its
+    // text out of every trace.
+    async importDoc(trace, input) {
+      const asOwner = await asOwnerJob(trace, job => job.importDoc!(trace, input));
+      if (asOwner !== undefined) return asOwner;
+      return ask(trace, 'memory_import_doc', DOC_IMPORT_INSTRUCTION, input, { name: 'doc_import', schema: DOC_IMPORT_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+    },
     // The capacity note's input carries the owner's body as zone words: the memory_ purpose keeps it out of every trace. It runs
     // on the chat model, as the owner's health planning does.
     async capacity(trace, input) {
