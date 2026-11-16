@@ -6,7 +6,7 @@ import type { ConversationStore } from '../src/channels/conversation-store';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { LOOP_CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS } from '../src/channels/check-back';
 import { triageTools, updateSweepTools } from '../src/channels/update-sweep';
-import { fitsScheduledMenu, recentExchange, RECENT_EXCHANGE_ROWS, RECENT_ROW_MAX_CHARS, SCHEDULED_DIRECT, SCHEDULED_MENU } from '../src/channels/scheduled-run';
+import { fitsScheduledMenu, recentExchange, recentExchangeText, RECENT_EXCHANGE_ROWS, RECENT_ROW_MAX_CHARS, SCHEDULED_DIRECT, SCHEDULED_MENU } from '../src/channels/scheduled-run';
 import { toContextHealthMaterial, type HealthContextRow } from '../src/channels/health-context';
 import { ownerJobAdmission } from '../src/identity/surface-owner-admission';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
@@ -97,7 +97,7 @@ describe('a Waldo-first scheduled run with the lean view on', () => {
     expect(told).not.toContain('waldo reply 26:');
     expect(told).toContain('Today: Brief sent 07:30; Check-in due 13:00.');
     expect(request.cache_profile).toBe('scheduled');
-    const shape = logs.findLast((entry) => entry.hop === 'llm_reply')!.shape!.context!;
+    const shape = logs.filter((entry) => entry.hop === 'llm_reply').at(-1)!.shape!.context!;
     expect(shape).toMatchObject({ history_messages: 0, lean_scheduled: true });
     expect(shape.recent_bytes).toBeGreaterThan(0);
   });
@@ -139,7 +139,7 @@ describe('a Waldo-first scheduled run with the lean view on', () => {
       const request = lastReply(requests);
       expect(request.messages.length).toBeGreaterThan(50);
       expect(request.cache_profile).toBeUndefined();
-      expect(logs.findLast((entry) => entry.hop === 'llm_reply')!.shape!.context!.lean_scheduled).toBeUndefined();
+      expect(logs.filter((entry) => entry.hop === 'llm_reply').at(-1)!.shape!.context!.lean_scheduled).toBeUndefined();
       menus.add(toolNames(request).join(','));
     }
     expect(menus.size).toBeGreaterThan(1);
@@ -149,7 +149,7 @@ describe('a Waldo-first scheduled run with the lean view on', () => {
     const sized = async (lean: boolean) => {
       const { owner, logs } = await harness({ lean });
       await run(owner, 'card:brief:1', triageTools(false, true), undefined);
-      return logs.findLast((entry) => entry.hop === 'llm_reply')!.shape!.request_bytes;
+      return logs.filter((entry) => entry.hop === 'llm_reply').at(-1)!.shape!.request_bytes;
     };
     const [full, lean] = [await sized(false), await sized(true)];
     expect(lean).toBeLessThan(full / 2);
@@ -235,13 +235,15 @@ describe('the recent exchange a lean run reads', () => {
     expect(recent.readOutside).toBe(true);
   });
 
-  it(`keeps at most ${RECENT_EXCHANGE_ROWS} rows, each cut to ${RECENT_ROW_MAX_CHARS} characters`, () => {
+  it(`keeps at most ${RECENT_EXCHANGE_ROWS} rows whole, and cuts each to ${RECENT_ROW_MAX_CHARS} characters only as it renders them`, () => {
     const rows = chain();
     const now = row('now', rows.at(-1)!.id, { role: 'user', inputOrigin: 'machine' });
     const recent = recentExchange(tree([...rows, now]), 'now');
     expect(recent.messages).toHaveLength(RECENT_EXCHANGE_ROWS);
-    for (const message of recent.messages) expect(message.content.length).toBeLessThanOrEqual(RECENT_ROW_MAX_CHARS + 1);
+    expect(recent.messages.map((message) => message.content)).toEqual(rows.slice(-RECENT_EXCHANGE_ROWS).map((entry) => entry.modelPayload));
     expect(recent.readOutside).toBe(false);
+    const long = { role: 'assistant' as const, content: 'x'.repeat(RECENT_ROW_MAX_CHARS * 2) };
+    expect(recentExchangeText([{ role: 'user', content: 'hi' }, long])).toBe(`Owner: hi\nWaldo: ${'x'.repeat(RECENT_ROW_MAX_CHARS)}…`);
   });
 });
 

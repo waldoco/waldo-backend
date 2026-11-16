@@ -18,12 +18,13 @@ export const SCHEDULED_MENU: readonly ToolName[] = [...new Set<ToolName>([...LOO
 
 // A run is lean only when what it could be offered sits inside the menu; one that holds more keeps the full chat view.
 export const fitsScheduledMenu = (tools: readonly string[] | undefined): tools is readonly ToolName[] =>
-  tools !== undefined && tools.every((name) => OWNER_TURN_ONLY.has(name) || (SCHEDULED_MENU as readonly string[]).includes(name));
+  tools !== undefined && tools.every((name) => OWNER_TURN_ONLY.has(name as ToolName) || (SCHEDULED_MENU as readonly string[]).includes(name));
 
 // The rows of the owner's own exchange with Waldo a scheduled run reads instead of the chat replay: what the owner said and
 // what Waldo sent, newest last. Machine job prompts, summaries and runs that sent nothing are not part of that exchange.
 export const RECENT_EXCHANGE_ROWS = 6;
-// Enough of each row for its gist, so one long Brief does not fill the run.
+// Enough of each row for its gist, so one long Brief does not fill the run. Rows are cut as they are rendered, after the forget
+// barrier has judged them whole, so a cut can never split a held topic past it.
 export const RECENT_ROW_MAX_CHARS = 1_500;
 
 const SENT_NOTHING = new Set([SKIP_CARD, SKIP_UPDATE]);
@@ -33,10 +34,8 @@ export const recentExchange = (tree: ConversationTree, currentId: string): Reado
   const rows = before.filter((entry: ConversationEntry) => entry.role !== 'compaction' && entry.modelProjection.mode !== 'omit'
     && ((entry.role ?? (entry.id.endsWith('-reply') ? 'assistant' : 'user')) === 'assistant' ? !SENT_NOTHING.has(entry.modelPayload.trim()) : entry.inputOrigin === 'owner'));
   const kept = rows.slice(-RECENT_EXCHANGE_ROWS);
-  const messages = conversationModelMessages(kept).map((message) => message.content.length > RECENT_ROW_MAX_CHARS
-    ? { ...message, content: `${message.content.slice(0, RECENT_ROW_MAX_CHARS)}…` } : message);
-  return { messages, readOutside: kept.some((entry) => entry.readOutside === true) };
+  return { messages: conversationModelMessages(kept), readOutside: kept.some((entry) => entry.readOutside === true) };
 };
 
 export const recentExchangeText = (messages: readonly ConversationModelMessage[]): string =>
-  messages.map((message) => `${message.role === 'assistant' ? 'Waldo' : 'Owner'}: ${message.content}`).join('\n');
+  messages.map((message) => `${message.role === 'assistant' ? 'Waldo' : 'Owner'}: ${message.content.length > RECENT_ROW_MAX_CHARS ? `${message.content.slice(0, RECENT_ROW_MAX_CHARS)}…` : message.content}`).join('\n');
