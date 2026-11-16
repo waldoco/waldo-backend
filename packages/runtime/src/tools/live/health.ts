@@ -116,8 +116,8 @@ export const SIGNALS: Record<HealthReadSignal, Spec> = {
   caffeine: { stored: 'caffeine', unit: 'mg', fold: 'sum' },
   alcohol: { stored: 'alcoholic_drinks', unit: 'count', fold: 'sum' },
   mood: { stored: 'state_of_mind', unit: 'valence', fold: 'mean' },
-  breathing_disturbances: { stored: 'sleep_breathing_disturbances', unit: 'per_hour', fold: 'newest' },
-  sound_level: { stored: 'audio_exposure_window', unit: 'db', fold: 'decibel_mean', methods: ['environmental', 'headphone'] },
+  breathing_disturbances: { stored: 'sleep_breathing_disturbances', unit: 'events_per_hour', fold: 'newest' },
+  sound_level: { stored: 'audio_exposure_window', unit: 'dba', fold: 'decibel_mean', methods: ['environmental', 'headphone'] },
   walking_steadiness: { stored: 'walking_steadiness', unit: 'percent', fold: 'newest' },
 };
 type Session = z.infer<typeof healthWorkoutSessionSchema>;

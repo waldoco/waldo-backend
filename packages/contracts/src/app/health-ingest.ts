@@ -349,9 +349,9 @@ export const healthSampleV1Schema = z.discriminatedUnion('signal', [
     associations: z.array(healthStateOfMindAssociationV1Schema).max(healthStateOfMindAssociationV1Schema.options.length).refine(distinct, 'an association repeats').optional(),
   }),
   // The night's breathing disturbances per hour asleep, as the Watch measured them.
-  z.strictObject({ ...sampleCommon, sleep_context: z.never().optional(), signal: z.literal('sleep_breathing_disturbances'), unit: z.literal('per_hour'), value: z.number().finite().min(0).max(200) }),
-  // One local hour's sound level, the energy average of what the phone measured in it: the surroundings, or headphones.
-  z.strictObject({ ...sampleCommon, sleep_context: z.never().optional(), signal: z.literal('audio_exposure_window'), unit: z.literal('decibels'), method: z.enum(['environmental', 'headphone']), value: z.number().finite().min(0).max(140) }),
+  z.strictObject({ ...sampleCommon, sleep_context: z.never().optional(), signal: z.literal('sleep_breathing_disturbances'), unit: z.literal('events_per_hour'), value: z.number().finite().min(0).max(200) }),
+  // One local hour's A-weighted sound level, the energy average of what the phone measured in it: the surroundings, or headphones.
+  z.strictObject({ ...sampleCommon, sleep_context: z.never().optional(), signal: z.literal('audio_exposure_window'), unit: z.literal('dba'), method: z.enum(['environmental', 'headphone']), value: z.number().finite().min(0).max(140) }),
   // Walking steadiness as the phone estimated it, from 0 to 100 percent.
   z.strictObject({ ...sampleCommon, sleep_context: z.never().optional(), signal: z.literal('walking_steadiness'), unit: z.literal('percent'), value: z.number().finite().min(0).max(100) }),
 ]).refine(sample => Date.parse(sample.start_at) <= Date.parse(sample.end_at), 'sample end precedes start')

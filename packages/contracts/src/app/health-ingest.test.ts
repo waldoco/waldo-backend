@@ -962,13 +962,13 @@ describe('health revision 15: an hour\'s heart-rate bins and the day\'s load cou
 describe('health revision 17: wellbeing kinds', () => {
   const point = { ...common, start_at: common.start_at, end_at: common.start_at };
   const mood = { ...point, sample_id: 'HK:som-1', signal: 'state_of_mind', unit: 'valence', value: -0.4, kind: 'momentary_emotion', labels: ['stressed', 'drained'], associations: ['work'] };
-  const hour = { ...common, sample_id: 'HK:sound-1', signal: 'audio_exposure_window', unit: 'decibels', value: 71.5, method: 'environmental', start_at: '2026-10-10T09:00:00Z', end_at: '2026-10-10T10:00:00Z', utc_offset_minutes: 0 };
+  const hour = { ...common, sample_id: 'HK:sound-1', signal: 'audio_exposure_window', unit: 'dba', value: 71.5, method: 'environmental', start_at: '2026-10-10T09:00:00Z', end_at: '2026-10-10T10:00:00Z', utc_offset_minutes: 0 };
   it('is revision 17, above the open health revisions and the sync push', () => expect(HEALTH_WELLBEING_REVISION_V1).toBe(17));
   it('takes each kind in its unit and within its bounds', () => {
     for (const sample of [
       { ...point, sample_id: 'HK:w', signal: 'hydration', unit: 'millilitres', value: 350 }, { ...point, sample_id: 'HK:c', signal: 'caffeine', unit: 'milligrams', value: 95 },
       { ...point, sample_id: 'HK:a', signal: 'alcoholic_drinks', unit: 'count', value: 1.5 }, mood, { ...mood, kind: 'daily_mood', labels: undefined, associations: undefined },
-      { ...common, sample_id: 'HK:b', signal: 'sleep_breathing_disturbances', unit: 'per_hour', value: 3.2 }, hour, { ...hour, method: 'headphone' },
+      { ...common, sample_id: 'HK:b', signal: 'sleep_breathing_disturbances', unit: 'events_per_hour', value: 3.2 }, hour, { ...hour, method: 'headphone' },
       { ...point, sample_id: 'HK:s', signal: 'walking_steadiness', unit: 'percent', value: 88 },
     ]) expect(healthSampleV1Schema.safeParse(sample).success, sample.signal).toBe(true);
   });
