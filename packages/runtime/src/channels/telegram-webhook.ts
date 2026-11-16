@@ -329,6 +329,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   PROACTIVE_BOTH_DEFAULT?: string;
   // '1' has an event notice that reaches the app chat raise one push, under quiet hours and the owner's own limits.
   EVENT_PUSH?: string;
+  // "1": when today's first health row is written after the Daily Brief reached the owner, one turn reads it against the Brief
+  // and may revise it (in place where cards can be edited). Once a day. Off unless "1".
+  BRIEF_BODY_REVISION?: string;
   // The most event pushes in an owner's day, a backstop under the owner's limits (default 3).
   EVENT_PUSH_PER_DAY?: string;
   // "1": Waldo's own sends follow the owner's choice among their other surfaces even while Telegram is linked.
