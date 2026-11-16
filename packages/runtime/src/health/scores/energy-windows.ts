@@ -13,17 +13,17 @@ const HOUR_MS = 3_600_000;
 // Days whose wake is further than this from the owner's usual describe a different day (a night shift, a flight), not their rhythm.
 const USUAL_WAKE_TOLERANCE_MINUTES = 120;
 // A resting hour has less movement than this: more is activity, which lifts heart rate for reasons that are not the rhythm.
-const RESTING_MOVEMENT_MINUTES = 10;
+export const RESTING_MOVEMENT_MINUTES = 10;
 // The curve follows the first sixteen hours of waking, the span a night's sleep leaves an owner.
 const WAKING_HOURS = 16;
 // An hour needs this many days behind it before its mean says anything about the owner.
-const MIN_DAYS_PER_HOUR = 7;
+export const MIN_DAYS_PER_HOUR = 7;
 // A line through fewer hours than this describes no rhythm.
 const MIN_HOURS = 8;
 // A run shorter than this is a blip, not a stretch of the day.
 const MIN_RUN_HOURS = 2;
 // Below heart-rate measurement noise a residual is no peak or dip, so a flat curve gives none.
-const NOISE_FLOOR = 0.5;
+export const NOISE_FLOOR = 0.5;
 const MAX_PEAKS = 2;
 const GRID_MINUTES = 30;
 const MINUTES_PER_DAY = 1440;

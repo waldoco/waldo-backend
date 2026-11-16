@@ -123,6 +123,31 @@ describe('WORKOUT_WAKE in the Worker config', () => {
   });
 });
 
+describe('HEALTH_PASSIVE_LOAD in the Worker config', () => {
+  it('is off in production and lists the phone sources whose cadence is known in staging, where it acts only once HEALTH_DAY_LOAD is on', () => {
+    expect(parsed.vars.HEALTH_PASSIVE_LOAD).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_PASSIVE_LOAD).toBe('apple,health_connect');
+  });
+});
+
+describe('HEALTH_DAY_LOAD and HEALTH_STRESS_CURVE in the Worker config', () => {
+  it('keeps the day load off in both blocks until migration 20261116110000 is applied and the gate turns it on at a named deploy', () => {
+    expect([parsed.vars.HEALTH_DAY_LOAD, parsed.env.staging.vars.HEALTH_DAY_LOAD]).toEqual(['0', '0']);
+  });
+  it('keeps the stress curve off in both blocks until the gate turns it on at a named deploy with migration 20261116110100', () => {
+    expect([parsed.vars.HEALTH_STRESS_CURVE, parsed.env.staging.vars.HEALTH_STRESS_CURVE]).toEqual(['0', '0']);
+  });
+});
+
+describe('HEALTH_SCORE_PARTS and HEALTH_USUAL in the Worker config', () => {
+  it('are off in both blocks until the gate turns them on at a named deploy with migration 20261116100000', () => {
+    for (const name of ['HEALTH_SCORE_PARTS', 'HEALTH_USUAL']) {
+      expect(parsed.vars[name], name).toBe('0');
+      expect(parsed.env.staging.vars[name], name).toBe('0');
+    }
+  });
+});
+
 describe('SCREEN_TIME in the Worker config', () => {
   it('is on in staging, where migration 20261103120000 is applied (4 Nov 2026), and off in production', () => {
     expect(parsed.vars.SCREEN_TIME).toBe('0');

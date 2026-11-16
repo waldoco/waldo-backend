@@ -61,13 +61,19 @@ export const estimate = (values: readonly number[], prior: Prior | null): Estima
 // same value is no deviation, any other takes the limit.
 export const zOf = (value: number, e: Estimate): number => bounded(value - e.centre, e.spread);
 
-export interface Standing { readonly z: number; readonly own: number; readonly prior: boolean }
+// centre and spread are the estimate's own, on the scale the value was compared on (natural log for 'ln', minutes of a 1440-minute
+// clock for 'circular'); ownShare is how much of the centre is the owner's. They let a reading's usual be shown from the very
+// estimate that scored it.
+export interface Standing {
+  readonly z: number; readonly own: number; readonly prior: boolean;
+  readonly centre: number; readonly spread: number; readonly ownShare: number; readonly scale: 'linear' | 'ln' | 'circular';
+}
 // Where today's value stands against the owner's earlier values, or null when the component has no baseline yet. A natural-log
 // component is compared on that scale and only where every value is positive.
 export const standing = (value: number, earlier: readonly number[], prior: Prior | null, scale: 'linear' | 'ln' = 'linear'): Standing | null => {
   if (scale === 'ln' && !(value > 0)) return null;
   const e = estimate(scale === 'ln' ? earlier.filter(v => v > 0).map(Math.log) : earlier, prior);
-  return e === null ? null : { z: zOf(scale === 'ln' ? Math.log(value) : value, e), own: e.own, prior: e.prior };
+  return e === null ? null : { z: zOf(scale === 'ln' ? Math.log(value) : value, e), own: e.own, prior: e.prior, centre: e.centre, spread: e.spread, ownShare: e.ownShare, scale };
 };
 
 // The same for a time on a 1440-minute clock, where 23:50 and 00:10 are twenty minutes apart. Personal-only.
@@ -79,7 +85,7 @@ export const circularStanding = (value: number, earlier: readonly number[]): Sta
   const centre = ((Math.atan2(sine, cosine) * 720 / Math.PI) + 1440) % 1440;
   const n = earlier.length;
   const spread = Math.sqrt(earlier.reduce((sum, entry) => sum + circularDelta(entry, centre) ** 2, 0) / (n - 1)) * Math.sqrt(1 + 1 / n);
-  return { z: bounded(circularDelta(value, centre), spread), own: n, prior: false };
+  return { z: bounded(circularDelta(value, centre), spread), own: n, prior: false, centre, spread, ownShare: 1, scale: 'circular' };
 };
 
 // Sleep need when the owner has confirmed none: eight hours of prior worth fourteen nights, moved toward the owner's own
@@ -88,6 +94,8 @@ const NEED_CENTRE = 480;
 const NEED_NIGHTS = 14;
 const NEED_FLOOR = 360;
 const NEED_CEILING = 600;
+// How much of that need is the owner's own nights rather than the eight-hour prior.
+export const sleepNeedOwnShare = (nights: number): number => nights / (NEED_NIGHTS + nights);
 export const sleepNeed = (nights: readonly number[]): number =>
   Math.max(NEED_FLOOR, Math.min(NEED_CEILING, (NEED_NIGHTS * NEED_CENTRE + nights.reduce((sum, minutes) => sum + minutes, 0)) / (NEED_NIGHTS + nights.length)));
 

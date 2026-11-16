@@ -54,8 +54,8 @@ describe('the health inventory in words', () => {
     expect(inventory?.newestAt).toBe(NOW - 6 * HOUR);
   });
 
-  it('leaves out a kind or a source it does not know, and gives no inventory for an answer of another shape', () => {
-    expect(toHealthInventory({ sources: [{ source: 'fitbit', kinds: [kind('steps_window', 1, 3)] }, { source: 'apple', kinds: [kind('blood_glucose', 1, 3)] }] }, clock)?.entries).toEqual([]);
+  it('leaves out a kind or a source it does not know, or a kind only the score engine reads, and gives no inventory for an answer of another shape', () => {
+    expect(toHealthInventory({ sources: [{ source: 'fitbit', kinds: [kind('steps_window', 1, 3)] }, { source: 'apple', kinds: [kind('blood_glucose', 1, 3), kind('heart_rate_bins_window', 1, 3)] }] }, clock)?.entries).toEqual([]);
     expect(toHealthInventory({ kinds: [] }, clock)).toBeNull();
   });
 
