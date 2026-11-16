@@ -145,6 +145,7 @@ export type RecoveryHealthView = z.infer<typeof recoveryHealthViewSchema>;
 export const partialHealthSourceSchema = z.enum(['apple', 'oura', 'whoop', 'samsung', 'health_connect']);
 export type PartialHealthSource = z.infer<typeof partialHealthSourceSchema>;
 // Inputs a stored row shows arrived. A signal the row does not record (steps, heart rate through the day) is never named.
+// last_night_sleep is the row's own night, the one that ended on the row's day: last night only for today's row.
 export const partialHealthPresentSchema = z.enum(['last_night_sleep', 'recent_sleep', 'calendar', 'activity', 'workouts']);
 export type PartialHealthPresent = z.infer<typeof partialHealthPresentSchema>;
 export const partialHealthViewSchema = z.strictObject({
