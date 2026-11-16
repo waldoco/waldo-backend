@@ -75,8 +75,10 @@ export const watchUpkeep = async (deps: WatchUpkeepDeps): Promise<void> => {
   // Each calendar keeps its own backoff, so a throw here (the grant lookup) is simply tried again at the next upkeep.
   if (calendars) await step('calendar_watch', grants.calendar, { fail: () => undefined }, async now => {
     const watch = await ensureCalendarWatches({ ...calendars, now });
-    return watch === 'skipped' || (!watch.started && !watch.failed && !watch.stopped) ? null
-      : { ok: watch.failed === 0, code: `calendar_watches:accounts=${calendars.accounts.length}:started=${watch.started}:failed=${watch.failed}:stopped=${watch.stopped}` };
+    if (watch === 'skipped') return null;
+    for (const miss of watch.misses) deps.log({ hop: 'calendar_watch', ok: false, code: `calendar_watch_start_failed:${miss.reason}:${miss.calendar}`, ms: 0 });
+    return !watch.started && !watch.failed && !watch.stopped ? null
+      : { ok: watch.failed === 0, code: `calendar_watches:accounts=${calendars.accounts.length}:started=${watch.started}:failed=${watch.failed}:fresh=${watch.fresh}:stopped=${watch.stopped}` };
   });
   else await step('calendar_watch', grants.calendar, deps.calendar.book, async now => {
     const watch = await ensureCalendarWatch({ ...deps.calendar, now });
@@ -85,6 +87,7 @@ export const watchUpkeep = async (deps: WatchUpkeepDeps): Promise<void> => {
   const gmails = deps.gmails;
   if (gmails) await step('gmail_watch', grants.mail, { fail: () => undefined }, async now => {
     const watch = await ensureGmailWatches({ ...gmails, now });
+    if (watch !== 'skipped') for (const reason of watch.misses) deps.log({ hop: 'gmail_watch', ok: false, code: `gmail_watch_start_failed:${reason}`, ms: 0 });
     return watch === 'skipped' ? { ok: false, code: 'gmail_watch_skipped:unconfigured' } : !watch.started && !watch.failed && !watch.skipped ? null
       : { ok: watch.failed === 0, code: `gmail_watches:accounts=${gmails.accounts.length}:started=${watch.started}:failed=${watch.failed}:skipped=${watch.skipped}` };
   });
