@@ -1866,6 +1866,11 @@ export const PROMOTION_INSTRUCTION = [
   'Never build a node about anything the owner asked to forget. Never turn an inferred claim into a diagnosis. Reply with empty lists when nothing should change.',
 ].join('\n');
 
+// With outside notes recalled, a node may rest on a note from any source; the model judges whether something recurs.
+const NODE_RULE_EVERY_SOURCE = 'A node is a lasting pattern in one domain (sleep, energy, work rhythm, relationships, stress, training, food, or another plain word). Whether something recurs or lasts is your judgment; a seen_count alone is not a second sighting. Create or edit a node only on claims listed here, and list in supporting_spots the id of every claim it rests on, at least one. A claim marked origin="outside" was learned from mail, calendar or other outside content and is not the owner\'s words: it may support a node, and a node resting on one is Waldo\'s read until the owner confirms it. A claim that is neither the owner\'s nor marked outside and has no source ref is refused as support. Weaken a node that claims contradict only with such support. Mark a node stale when its support shows staleness; never drop it.';
+export const promotionInstruction = (store: ClaimStore): string =>
+  store.outsideNotes === true ? PROMOTION_INSTRUCTION.split('\n').map((line, index) => index === 1 ? NODE_RULE_EVERY_SOURCE : line).join('\n') : PROMOTION_INSTRUCTION;
+
 export const promotionInput = (store: ClaimStore): string => `${memoryPrompt(store)}\n\n${barrierPrompt(store)}`;
 
 export const PROMOTION_SCHEMA = {
@@ -1894,11 +1899,14 @@ export const applyPromotion = (store: ClaimStore, raw: string, at: string, onEvi
   // clamp to [0,1]; supporting_spots must name real claims; edge endpoints must
   // resolve to nodes that exist after the save.
   const clamp01 = (n: number) => Math.min(1, Math.max(0, Number.isFinite(n) ? n : 0));
-  // The model cannot assert recurrence. A new node needs two separate, owner-grounded
-  // observations/patterns from different dates. Until source refs arrive, seen_count alone
-  // cannot prove two sightings and legacy rows have no trusted provenance.
+  // The model cannot assert recurrence without sources. On the owner's own store a new node needs two separate, owner-grounded
+  // observations/patterns from different dates. A store that recalls outside notes lets the model judge recurrence, and code
+  // checks only that each cited note exists and has a source: the owner's words, outside content marked as such, or a source ref.
+  const everySource = store.outsideNotes === true;
   const eligible = new Map([...store.claims('active'), ...store.claims('promoted')]
-    .filter((claim) => (claim.kind === 'observation' || claim.kind === 'pattern') && claim.origin === 'owner')
+    .filter((claim) => everySource
+      ? claim.origin === 'owner' || claim.origin === 'untrusted' || (claim.origin === 'agent' && Boolean(claim.source_ref))
+      : (claim.kind === 'observation' || claim.kind === 'pattern') && claim.origin === 'owner')
     .map((claim) => [claim.id, claim]));
   const supported = new Set<number>();
   const ids = plan.nodes.map((node) => {
@@ -1908,8 +1916,9 @@ export const applyPromotion = (store: ClaimStore, raw: string, at: string, onEvi
     }
     const valid = [...new Set(node.supporting_spots)].filter((id) => eligible.has(id));
     const dates = new Set(valid.map((id) => eligible.get(id)!.created_at.slice(0, 10)));
-    if (valid.length < 2 || dates.size < 2) {
-      const reason: PromotionEvidenceReason = valid.length < 2
+    const needed = everySource ? 1 : 2;
+    if (valid.length < needed || (!everySource && dates.size < 2)) {
+      const reason: PromotionEvidenceReason = valid.length < needed
         ? node.supporting_spots.length > valid.length ? 'untrusted_or_missing' : 'too_few_claims'
         : 'same_day';
       onEvidence?.({ outcome: 'held', reason, source_kind: 'owner_observation_pattern', count: 1 });
@@ -1933,7 +1942,7 @@ export const applyPromotion = (store: ClaimStore, raw: string, at: string, onEvi
   for (const edge of edges) store.saveEdge({ from_id: edge.from_id, to_id: edge.to_id, relation: edge.relation, strength: edge.strength, evidence_count: edge.evidence_count });
   // Claim status promotion remains separate from node admission. It requires owner
   // provenance and recurrence, but distinct source refs arrive in the next slice.
-  const promotable = new Set([...eligible.values()].filter((claim) => claim.seen_count >= 2 && supported.has(claim.id)).map((claim) => claim.id));
+  const promotable = new Set([...eligible.values()].filter((claim) => claim.origin === 'owner' && claim.seen_count >= 2 && supported.has(claim.id)).map((claim) => claim.id));
   const promoted = plan.promoted.filter((id) => promotable.has(id));
   const rejected = plan.promoted.length - promoted.length;
   for (const id of promoted) store.setStatus(id, 'promoted');
