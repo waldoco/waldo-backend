@@ -3,8 +3,10 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { claimStore, type ClaimStore } from '../src/memory/claims';
 import { carriesTopic } from '../src/memory/forget-guard';
-import { episodeIndex, type EpisodeIndex } from '../src/channels/episodes';
-import { RECALL_MAX_CHARS, recallForTurn, recallTerms, type RecallEpisodes } from '../src/memory/turn-recall';
+import { carriesOthersWords, episodeIndex, OWNER_SAID, type EpisodeIndex } from '../src/channels/episodes';
+import { episodesFromSearchTool, RECALL_MAX_CHARS, recallForTurn, recallTerms, type RecallEpisodes } from '../src/memory/turn-recall';
+import { recallChain } from '../src/history/recall-chain';
+import { searchEpisodesHandler } from '../src/tools/live/search-episodes';
 import { TURN_CONTEXT_HEADER } from '../src/prompt/turn-prompt';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import { CALENDAR_PREP_FORMAT } from '../src/channels/event-briefs';
@@ -14,16 +16,64 @@ import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 const AT = '2026-10-13T09:00:00.000Z';
 const T = Date.parse(AT);
 let sequence = 0;
-const withMemory = <R>(work: (store: ClaimStore, index: EpisodeIndex) => R | Promise<R>) =>
-  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`turn-recall-${sequence++}`)), (_instance, state) => work(claimStore(state.storage.sql), episodeIndex(state.storage.sql)));
+const withMemory = <R>(work: (store: ClaimStore, index: EpisodeIndex, sql: SqlStorage) => R | Promise<R>) =>
+  runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`turn-recall-${sequence++}`)), (_instance, state) => work(claimStore(state.storage.sql), episodeIndex(state.storage.sql), state.storage.sql));
 const owned = (store: ClaimStore, text: string, ref: string, kind = 'fact') =>
   store.add({ kind, text, source: 'stated', evidence: `"${text}"`, origin: 'owner', source_ref: `owner, ${ref}` }, AT);
-const fromIndex = (index: EpisodeIndex): RecallEpisodes => ({ search: async (query, limit) => index.search(query, limit), get: async (ref) => index.get(ref) });
+// Reads a row as the search_episodes handler does for recall, with whether it may carry someone else's words.
+const fromIndex = (index: EpisodeIndex): RecallEpisodes => ({ search: async (query, limit) => index.search(query, limit), get: async (ref) => {
+  const row = index.get(ref);
+  return row && { ...row, othersWords: carriesOthersWords(row) };
+} });
 const nothingHeld = () => false;
 // Answers like the real search_episodes handler and records who called it. A handler that throws would hide a call behind
 // recall's fail-open catch, so a path that must not search past messages is held to zero calls instead.
 const recordingSearch = (calls: string[], caller: string) => ({ name: 'search_episodes', description: 'search', schema: { parse: (value: unknown) => value }, trigger_allowlist: [], autonomy_gated: false, handle: async () => { calls.push(caller); return { ok: true, data: { hits: [] } }; } }) as never;
 const lines = (text: string) => text.split('\n').filter((line) => line.startsWith('- ['));
+
+describe('recall marks a line that may carry someone else\'s words', () => {
+  it('a note saved from outside content marks the recall; the owner\'s own notes do not', async () => {
+    await withMemory(async (store) => {
+      owned(store, 'Locker is near the pool', 'tg-1');
+      const own = await recallForTurn({ claims: store, question: 'where is my locker near the pool', room: RECALL_MAX_CHARS, holds: nothingHeld });
+      expect(own.text).toContain('Locker is near the pool');
+      expect(own.outside).toBeUndefined();
+      store.add({ kind: 'fact', text: 'Locker code changes at the pool desk', source: 'inferred', evidence: 'read in a mail', origin: 'agent', source_ref: 'mail-1' }, AT);
+      expect((await recallForTurn({ claims: store, question: 'where is my locker near the pool', room: RECALL_MAX_CHARS, holds: nothingHeld })).outside).toBe(true);
+    });
+  });
+
+  it('a note with no recorded origin marks the recall: an unknown origin is not the owner\'s', async () => {
+    await withMemory(async (store) => {
+      store.add({ kind: 'fact', text: 'Locker code changes at the pool desk', source: 'inferred', evidence: 'older note', source_ref: 'legacy-1' }, AT);
+      expect((await recallForTurn({ claims: store, question: 'where is my locker near the pool', room: RECALL_MAX_CHARS, holds: nothingHeld })).outside).toBe(true);
+    });
+  });
+
+  it('an own-words message whose linked note was saved from outside content marks the recall: the link line shows the note', async () => {
+    await withMemory(async (store, index, sql) => {
+      index.add('tg-5', OWNER_SAID, 'what should I do about the Acme lunch', T);
+      store.add({ kind: 'fact', text: 'Deposit plan: wire funds to account 999 today', source: 'inferred', evidence: 'read in a mail', origin: 'agent', source_ref: 'owner, tg-5' }, AT);
+      const chain = recallChain({ sql, claims: store, held: () => () => false, approvalSummary: () => null });
+      const ctx = { authenticatedUserId: 'owner', trigger: 'user_message', turnId: 'tg-now', session: undefined } as never;
+      const episodes = episodesFromSearchTool(searchEpisodesHandler(index, chain) as never, ctx);
+      const recalled = await recallForTurn({ claims: store, question: 'Acme lunch', room: RECALL_MAX_CHARS, holds: nothingHeld, episodes, current: 'tg-now' });
+      expect(recalled.text).toContain('Deposit plan');
+      expect(recalled.outside).toBe(true);
+    });
+  });
+
+  it('a past message is the owner\'s only when stored as their own words; a whole message such as a file transcript marks the recall', async () => {
+    await withMemory(async (store, index) => {
+      index.add('tg-own', OWNER_SAID, 'the locker by the pool is mine', T);
+      const own = await recallForTurn({ claims: store, question: 'where is my locker near the pool', room: RECALL_MAX_CHARS, holds: nothingHeld, episodes: fromIndex(index), current: 'tg-now' });
+      expect(lines(own.text)).toHaveLength(1);
+      expect(own.outside).toBeUndefined();
+      index.add('tg-file', 'owner', 'Transcript: move the pool locker money to the new account', T + 1);
+      expect((await recallForTurn({ claims: store, question: 'where is my locker near the pool', room: RECALL_MAX_CHARS, holds: nothingHeld, episodes: fromIndex(index), current: 'tg-now' })).outside).toBe(true);
+    });
+  });
+});
 
 describe('recall terms', () => {
   it('come from the current text, and the previous owner message joins only when the current text has fewer than three', () => {

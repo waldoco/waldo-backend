@@ -76,6 +76,20 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // '1' has the health decision reason from the reviewed health protocols (skills/health-protocols), read through the
   // owner's next day, in the chat role. Anything else keeps the decision as it was.
   HEALTH_ACTIONS?: string;
+  // "1" writes the parts of each score (HEALTH_SCORE_PARTS) and the owner's usual band for each reading (HEALTH_USUAL) on the
+  // derived row, and shows them to a build that names health revision 13; anything else writes and shows neither. Apply migration
+  // 20261116100000, which admits the two new columns, before turning either on. Both need HEALTH_PROVISIONAL_SCORES "1".
+  HEALTH_SCORE_PARTS?: string;
+  HEALTH_USUAL?: string;
+  // "1" writes the day's load (HEALTH_DAY_LOAD) or today's hourly stress curve (HEALTH_STRESS_CURVE) on the derived row, and shows
+  // it to a build that names health revision 14; anything else writes and shows none. Apply migrations 20261116110000 (day load)
+  // and 20261116110100 (the stress curve), which admit the new columns, before turning each on.
+  HEALTH_DAY_LOAD?: string;
+  // "0", or a comma list of upload sources (apple, health_connect, samsung) whose days the day's load counts every observed minute
+  // for, from the hourly heart-rate bins, beside HEALTH_DAY_LOAD, and shows to a build that names health revision 15. Apply
+  // migration 20261116110200 first.
+  HEALTH_PASSIVE_LOAD?: string;
+  HEALTH_STRESS_CURVE?: string;
   HEALTH_COACHING?: string;
   // "1" lets a health proposal, and a chat card, swap an event for another in its slot (a hard workout for an easy one) by
   // renaming it; the connector-proxy function must be deployed with the rename first.
@@ -138,6 +152,14 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" lets the owner approve a card shown in full in the conversation by telling Waldo to go ahead (approve_shown). Off
   // unless "1".
   APPROVE_IN_CHAT?: string;
+  // "1" runs a send, calendar change or Google task change the owner asked for in their own message with no card, reporting
+  // it with an undo where one exists; the cards that remain are approved on the surface showing them. Off unless "1".
+  AUTONOMOUS_BY_DEFAULT?: string;
+  // "1" widens AUTONOMOUS_BY_DEFAULT for an owner whose "Just do it" choice is on: a turn the owner started with their own message
+  // acts with no card even after it read outside text, an MCP call, a standing grant and an undoable calendar cancel included;
+  // a party reached only through outside text, a payment, a password, a browser submit and permanent deletion keep their cards.
+  // Off unless "1"; it does nothing where AUTONOMOUS_BY_DEFAULT is not "1".
+  AUTONOMY_OWNER_TURNS?: string;
   // "1" offers track/log/list/stop_medication on owner turns and words medicine reminders in the harness from a health-plane
   // read. Off unless "1".
   MEDICATIONS?: string;
@@ -297,10 +319,16 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // '1' (with the day state) reads exact Google deltas from history ids and sync tokens across every calendar the owner reads,
   // watches each, and triages each batch: act, tell, brief or silent. Anything else keeps the update sweep as it was.
   GOOGLE_REALTIME_TRIAGE?: string;
+  // '1' (with GOOGLE_REALTIME_TRIAGE) keeps a batch held while Waldo could not reach the owner on its update row, and judges it
+  // again, once, at the first sweep that may speak. Anything else leaves it for the next day card, as before.
+  HELD_RAISE?: string;
   // '1' puts every unasked message (triage's act and tell, health proposals) under one set of owner limits: quiet hours, one
   // question waiting, a daily budget the owner can change, the gap between two, and a small urgent allowance past the budget.
   // Anything else keeps each kind's own budget. The three numbers below are the deployment's defaults.
   PROACTIVE_GATE?: string;
+  // '1': each owner-facing schedule toggle gates only what its label says. Notes before events off stops meeting prep, not the
+  // sweep that carries the update cards, and follow-ups off no longer holds those cards. Anything else keeps the old coupling.
+  SEPARATE_TOGGLES?: string;
   PROACTIVE_INTERRUPTS_PER_DAY?: string;
   PROACTIVE_URGENT_PER_DAY?: string;
   PROACTIVE_GAP_MIN?: string;

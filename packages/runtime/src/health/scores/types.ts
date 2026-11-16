@@ -23,6 +23,8 @@ export interface HourlyBucket {
   readonly daylightMinutes: number | null;
   readonly movementMinutes: number | null;
   readonly activeEnergyKcal: number | null;
+  // Steps the phone summed for the hour. Absent where the read carried none.
+  readonly steps?: number | null;
 }
 export interface Span { readonly startAt: string; readonly endAt: string }
 export interface SleepRecord extends Span {
@@ -69,11 +71,21 @@ export interface DailyScoresInput {
   readonly asOf: string | null;
   // Off unless true. On, each component reads against the shared baseline from the owner's first day.
   readonly provisional?: boolean;
+  // Off unless true, and only with provisional. On, the result also carries the parts of each available pillar (parts) and the
+  // owner's usual bands (usual); every score, zone and coverage in it is the same as with them off.
+  readonly parts?: boolean;
+  readonly usual?: boolean;
 }
 
 export interface Unavailable { readonly state: 'unavailable'; readonly reason: UnavailableReason }
+// Every name a pillar may list among the signals it used. waldo.health_context_write admits only its own closed list and
+// refuses the whole row for any other name, so a name joins this tuple and that list together; a runtime test compares them.
+export const USED_SIGNALS = [
+  'sleep', 'hrv', 'resting_heart_rate', 'sleep_midpoint', 'daylight', 'movement', 'steps', 'stress', 'calendar', 'tasks', 'messages', 'physical_load',
+] as const;
+export type UsedSignal = (typeof USED_SIGNALS)[number];
 export interface UsedBasis {
-  readonly signals: readonly string[];
+  readonly signals: readonly UsedSignal[];
   readonly days: readonly string[];
 }
 // Whether the owner's own days carry the pillar yet. Present only on a pillar computed provisionally.
@@ -96,6 +108,9 @@ export interface Available<Zone> {
   readonly hrv_method: HrvMethod | null;
   readonly used: UsedBasis;
   readonly baseline?: BaselineLabel;
+  // Provisional and asked for only. Carried to the day's result, which removes them from the pillar.
+  readonly parts?: readonly PartRow[];
+  readonly usual?: readonly UsualRow[];
 }
 export type RecoveryResult = Available<RecoveryZone> | Unavailable;
 export type FormResult = Available<FormZone> | Unavailable;
@@ -125,4 +140,50 @@ export interface DailyScores {
   readonly weight: WeightResult;
   // Today's energy windows, clock times in the target day's zone. Only on a provisional computation; empty when there are none.
   readonly windows?: readonly { readonly start: string; readonly end: string; readonly kind: 'peak' | 'dip' }[];
+  // Only on a provisional computation asked for them (DailyScoresInput.parts, .usual): the parts of each available pillar and
+  // the owner's usual bands. They describe the scores above and change none of them.
+  readonly components?: PartsByPillar;
+  readonly usual?: readonly UsualRow[];
+}
+
+// What a component stood on, carried out of the computation that scored it: the signed distance from the owner's usual in
+// spreads (null for a part judged against a need), the own days and the share of the centre that is the owner's own data
+// (null when no baseline stands under it), the usual-signals it reads against, and the sleep need for the sleep part.
+export interface PartBasis {
+  readonly z: number | null;
+  readonly own: number | null;
+  readonly ownShare: number | null;
+  readonly signals: readonly string[];
+  readonly need?: Readonly<{ minutes: number; basis: 'owner_confirmed' | 'blended_average' }>;
+}
+export type Absent = 'no_reading' | 'baseline_immature';
+// days_until_personal is the days short of the fourteen that make the usual the owner's own, so no client does the subtraction.
+export type PartBaseline = Readonly<{ state: 'provisional' | 'personal'; own_days: number; own_share: number; days_until_personal: number }>;
+export type PartDirection = 'above_usual' | 'usual' | 'below_usual';
+export type PartRow =
+  | Readonly<{
+    key: string; state: 'available'; score: number; share: number; points: number; direction: PartDirection | null; signals: readonly string[];
+    baseline: PartBaseline | null;
+    need_minutes?: number; need_basis?: 'owner_confirmed' | 'blended_average';
+  }>
+  | Readonly<{ key: string; state: 'unavailable'; reason: Absent }>;
+// One row of the app's screens made of two parts of a pillar: Resting State (HRV and resting heart rate, in Recovery) and
+// Circadian (sleep midpoint and daylight, in Form). The fine parts stay as they are; a group is their sum.
+export type GroupRow =
+  | Readonly<{ key: 'resting_state' | 'circadian'; pillar: 'recovery' | 'form'; state: 'available'; score: number; share: number; points: number; direction: PartDirection | null; parts: readonly string[]; signals: readonly string[]; baseline: PartBaseline | null }>
+  | Readonly<{ key: 'resting_state' | 'circadian'; pillar: 'recovery' | 'form'; state: 'unavailable'; reason: Absent }>;
+export type PartsByPillar = Readonly<{ recovery?: readonly PartRow[]; form?: readonly PartRow[]; weight?: readonly PartRow[]; groups?: readonly GroupRow[] }>;
+// One band of the owner's usual for a reading, in the shape the contract serves.
+export interface UsualRow {
+  readonly signal: string;
+  readonly method: string | null;
+  readonly state: 'provisional' | 'personal';
+  readonly low: number;
+  readonly centre: number;
+  readonly high: number;
+  readonly own_days: number;
+  readonly own_share: number;
+  readonly days_until_personal: number;
+  readonly window_days: 30;
+  readonly estimator: 'shrunk_predictive' | 'own_mean_sd';
 }

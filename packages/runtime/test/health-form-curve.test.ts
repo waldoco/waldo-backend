@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { formCurve, formProjection, withProjection, type FormCurvePoint, type StoredFormCurve } from '../src/health/scores/form-curve';
 import { computeDailyScores } from '../src/health/scores';
+import { ALGORITHM, PROVISIONAL_ALGORITHM } from '../src/health/scores/recovery';
 import type { DailyScoresInput, DayRecord, FormResult, HourlyBucket } from '../src/health/scores/types';
 
 // Today's measured Form curve. Every value is synthetic.
@@ -65,9 +66,9 @@ describe('the measured Form curve', () => {
     expect(points.some(point => Date.parse(point.at) > Date.parse(at(TARGET, 14)))).toBe(false);
   });
   it('names the version of the Form on the row, for either engine', () => {
-    expect(curveOf(input)!.version).toBe('form.v9');
+    expect(curveOf(input)!.version).toBe(PROVISIONAL_ALGORITHM.form);
     const earlier = inputOf(week(day(0, 15)), at(TARGET, 14, 30), { provisional: false });
-    expect(curveOf(earlier)!.version).toBe('form.candidate.v8');
+    expect(curveOf(earlier)!.version).toBe(ALGORITHM.form);
     expect(curveOf(earlier)!.points.at(-1)!.score).toBe(score(rowFormOf(earlier)));
   });
   it('is the whole day when the read comes after it ended, at most ninety-six points', () => {
@@ -101,7 +102,7 @@ describe('the measured Form curve', () => {
     expect(formCurve(input, { state: 'unavailable', reason: 'stale_inputs' })).toBeNull();
     const form = rowFormOf(input);
     if (form.state !== 'available') throw new Error('form unavailable');
-    expect(formCurve(input, { ...form, algorithm_version: 'form.v10' })).toBeNull();
+    expect(formCurve(input, { ...form, algorithm_version: 'form.v1' })).toBeNull();
     expect(formCurve(input, { ...form, score: form.score + 1 })).toBeNull();
   });
   it('is no curve with no wake to start from', () => {

@@ -11,10 +11,12 @@ import { wakeFreshMs } from '../health/wake-notice';
 import { linkCodeHash, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { signedRpc } from '../identity/owner-directory';
 import { dailyScoresFor } from '../health/scores';
+import { passiveLoadSources } from '../health/producer';
 import { APP_HEALTH_PATH, handleAppHealth } from './app-health';
 import { APP_DEVICE_CONTEXT_PATH, handleAppDeviceContext } from './app-device-context';
 import { APP_SCREEN_TIME_PATH, handleAppScreenTime } from './app-screen-time';
 import { APP_CALENDAR_DAY_PATH } from './app-calendar-day';
+import { APP_CALENDAR_PROPOSALS_PATH } from './app-calendar-proposal';
 import { APP_TODAY_PATH, appToday } from './app-today';
 import { APP_GOOGLE_PICTURE_PATH_V1 } from '../../../contracts/src/app/controls';
 import { replyChartSeriesPartV1Schema } from '../../../contracts/src/app/parts';
@@ -44,7 +46,7 @@ export const APP_DEVICES_PATH = `${APP_PATH}/devices`;
 const MAX_BODY_BYTES = 8192;
 
 // APP_ID_TOKEN_SIGNIN "1" serves Sign in with Apple and Google; otherwise the route answers 404 and the app offers the email code.
-type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_FORM_CURVE?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string; DEVICE_PLACE?: string; DEVICE_CALENDAR?: string; WAKE_BRIEF?: string; WAKE_BRIEF_FRESH_MIN?: string; APP_CHAT_ATTACHMENTS?: string; WORKOUT_WAKE?: string; ARRIVAL_LOOK?: string }>;
+type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_SCORE_PARTS?: string; HEALTH_USUAL?: string; HEALTH_DAY_LOAD?: string; HEALTH_PASSIVE_LOAD?: string; HEALTH_STRESS_CURVE?: string; HEALTH_FORM_CURVE?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string; DEVICE_PLACE?: string; DEVICE_CALENDAR?: string; WAKE_BRIEF?: string; WAKE_BRIEF_FRESH_MIN?: string; APP_CHAT_ATTACHMENTS?: string; WORKOUT_WAKE?: string; ARRIVAL_LOOK?: string }>;
 
 const UPLOAD_READ_MS = 60_000;
 // Errors before authentication share one shape so the app cannot learn who is invited.
@@ -65,6 +67,27 @@ export const readBoundedBody = async (request:Request, max:number, timeoutMs=500
   try { for(;;){const part=await reader.read();if(expired)return null;if(part.done)break;size+=part.value.byteLength;if(size>max){await reader.cancel();return null;}chunks.push(part.value);} }
   catch{return null;} finally{clearTimeout(timer);reader.releaseLock();}
   const bytes=new Uint8Array(size);let at=0;for(const chunk of chunks){bytes.set(chunk,at);at+=chunk.byteLength;}return bytes;
+};
+
+// The Worker's half of a chat upload, for the app's bearer and the console's owner cookie alike. It spends its own per-owner
+// budget and is bounded at the attachment cap before it is read; a voice note or photo comes from a phone, so the read may take
+// up to a minute. Off, the route is not there. The owner object stays the authority on what it keeps.
+export const forwardAppUpload = async (request: Request, env: Readonly<{ owners: DurableObjectNamespace; limiter: RateLimit; on: boolean }>, doName: string, sessionHash: string): Promise<Response> => {
+  if (!env.on) return fail(404);
+  if (request.method !== 'POST') return fail(405);
+  try { if (!(await env.limiter.limit({ key: `app-upload:${doName}` })).success) return fail(429); } catch { return fail(503); }
+  const length = request.headers.get('content-length');
+  if (length && (!/^\d+$/.test(length) || Number(length) > APP_CHAT_UPLOAD_MAX_BYTES)) return fail(413);
+  const asked = appUploadHeaders(request.headers);
+  if ('refused' in asked) return Response.json({ error: asked.refused.error }, { status: asked.refused.status, headers: { 'cache-control': 'no-store' } });
+  const body = await readBoundedBody(request, APP_CHAT_UPLOAD_MAX_BYTES, UPLOAD_READ_MS);
+  if (!body) return fail(413);
+  const forwarded = new Request(`https://telegram-owner${APP_CHAT_UPLOAD_PATH}`, { method: 'POST', body, headers: {
+    'x-waldo-do-name': doName, 'x-waldo-app-session-hash': sessionHash,
+    'content-type': request.headers.get('content-type') ?? '', [APP_CHAT_UPLOAD_KIND_HEADER]: request.headers.get(APP_CHAT_UPLOAD_KIND_HEADER) ?? '',
+    ...(request.headers.has(APP_CHAT_UPLOAD_NAME_HEADER) ? { [APP_CHAT_UPLOAD_NAME_HEADER]: request.headers.get(APP_CHAT_UPLOAD_NAME_HEADER)! } : {}),
+  } });
+  try { return await env.owners.get(env.owners.idFromName(doName)).fetch(forwarded); } catch { return fail(503); }
 };
 
 const bearer = (request: Request): string | null => {
@@ -254,7 +277,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-health:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
     const secret = env.WALDO_ROUTER_HMAC_SECRET, doName = who.doName;
     if (url.pathname === APP_PROVIDERS_PATH || url.pathname.startsWith(`${APP_PROVIDERS_PATH}/`)) return handleAppHealthProviders({ request, url, doName, owners, secret, mayConnect: async () => (await import('./console-step-up')).APP_STEP_UP_ROUTES[`${APP_PROVIDERS_PATH}/connect`]?.gated === false || await signedIn() });
-    return handleAppHealth({ request, url, doName, rpc: signedRpc(env), readBody: readBoundedBody, defer, compute: dailyScoresFor(env.HEALTH_PROVISIONAL_SCORES), trainingLoad: env.HEALTH_TRAINING_LOAD === '1', formCurve: env.HEALTH_FORM_CURVE === '1', coaching: env.HEALTH_COACHING === '1',
+    return handleAppHealth({ request, url, doName, rpc: signedRpc(env), readBody: readBoundedBody, defer, compute: dailyScoresFor(env.HEALTH_PROVISIONAL_SCORES), trainingLoad: env.HEALTH_TRAINING_LOAD === '1', scoreParts: env.HEALTH_SCORE_PARTS === '1', usual: env.HEALTH_USUAL === '1', dayLoad: env.HEALTH_DAY_LOAD === '1', passiveLoad: passiveLoadSources(env.HEALTH_PASSIVE_LOAD), stressCurve: env.HEALTH_STRESS_CURVE === '1', formCurve: env.HEALTH_FORM_CURVE === '1', coaching: env.HEALTH_COACHING === '1',
       ...(env.WAKE_BRIEF === '1' ? { wakeFreshMs: wakeFreshMs(env.WAKE_BRIEF_FRESH_MIN) } : {}),
       ...(env.WORKOUT_WAKE === '1' ? { workoutWake: true } : {}),
       ...(secret ? { readDemand: (range: { from: string; to: string; timezone: string }) => readOwnerDemand(owners, secret, doName, range),
@@ -275,25 +298,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     const secret = env.WALDO_ROUTER_HMAC_SECRET;
     return handleAppDeviceContext({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody, ...(secret ? { moved: () => notifyOwnerPlaceMoved(owners, secret, who.doName) } : {}), ...(secret && env.ARRIVAL_LOOK === '1' ? { arrived: (place: ArrivalPlace) => notifyOwnerPlaceArrived(owners, secret, who.doName, place) } : {}), ...(defer ? { defer } : {}) });
   }
-  // A chat attachment spends its own per-owner budget and is bounded at the attachment cap before it is read; a voice note or
-  // photo comes from a phone, so the read may take up to a minute. Off, the route is not there.
-  if (url.pathname === APP_CHAT_UPLOAD_PATH) {
-    if (env.APP_CHAT_ATTACHMENTS !== '1') return fail(404);
-    if (request.method !== 'POST') return fail(405);
-    try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-upload:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
-    const length = request.headers.get('content-length');
-    if (length && (!/^\d+$/.test(length) || Number(length) > APP_CHAT_UPLOAD_MAX_BYTES)) return fail(413);
-    const asked = appUploadHeaders(request.headers);
-    if ('refused' in asked) return Response.json({ error: asked.refused.error }, { status: asked.refused.status, headers: { 'cache-control': 'no-store' } });
-    const body = await readBoundedBody(request, APP_CHAT_UPLOAD_MAX_BYTES, UPLOAD_READ_MS);
-    if (!body) return fail(413);
-    const forwarded = new Request(`https://telegram-owner${APP_CHAT_UPLOAD_PATH}`, { method: 'POST', body, headers: {
-      'x-waldo-do-name': who.doName, 'x-waldo-app-session-hash': await linkCodeHash(sessionIdOf(who.credential)!),
-      'content-type': request.headers.get('content-type') ?? '', [APP_CHAT_UPLOAD_KIND_HEADER]: request.headers.get(APP_CHAT_UPLOAD_KIND_HEADER) ?? '',
-      ...(request.headers.has(APP_CHAT_UPLOAD_NAME_HEADER) ? { [APP_CHAT_UPLOAD_NAME_HEADER]: request.headers.get(APP_CHAT_UPLOAD_NAME_HEADER)! } : {}),
-    } });
-    try { return await owners.get(owners.idFromName(who.doName)).fetch(forwarded); } catch { return fail(503); }
-  }
+  if (url.pathname === APP_CHAT_UPLOAD_PATH) return forwardAppUpload(request, { owners, limiter: env.RESPONSIBILITY_RATE_LIMITER, on: env.APP_CHAT_ATTACHMENTS === '1' }, who.doName, await linkCodeHash(sessionIdOf(who.credential)!));
   // The phone's calendar spends its own per-owner budget and is answered by the owner's object, which holds its consent and
   // events. Off, the routes are not there.
   if (url.pathname === APP_DEVICE_CALENDAR_PATH || url.pathname.startsWith(`${APP_DEVICE_CALENDAR_PATH}/`)) {
@@ -318,7 +323,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   const rating = url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) && url.pathname.endsWith(APP_RATING_SUFFIX);
   const linkCode = url.pathname === APP_IMESSAGE_LINK_CODE_PATH;
   const onboarding = APP_ONBOARDING_PATHS.includes(url.pathname);
-  const bucket = url.pathname === APP_TODAY_PATH ? 'app-today' : request.method !== 'POST' || stop || linkCode ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : url.pathname === APP_AUTONOMY_CHANGES_PATH ? 'app-autonomy-change' : onboarding ? 'app-onboarding' : url.pathname === `${APP_PATH}/auth/renew` ? 'app-renew' : url.pathname.startsWith(APP_DEVICES_PATH) ? 'app-devices' : 'app-chat-send';
+  const bucket = url.pathname === APP_TODAY_PATH ? 'app-today' : request.method !== 'POST' || stop || linkCode ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : url.pathname === APP_AUTONOMY_CHANGES_PATH ? 'app-autonomy-change' : url.pathname === APP_CALENDAR_PROPOSALS_PATH ? 'app-calendar-proposal' : onboarding ? 'app-onboarding' : url.pathname === `${APP_PATH}/auth/renew` ? 'app-renew' : url.pathname.startsWith(APP_DEVICES_PATH) ? 'app-devices' : 'app-chat-send';
   try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `${bucket}:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
 
   if (url.pathname === `${APP_PATH}/session`) {
@@ -387,9 +392,9 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     return appToday((path, signal) => owner.fetch(new Request(`https://telegram-owner${path}`, { headers, signal })));
   }
 
-  if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === APP_THREADS_PATH || url.pathname.startsWith(`${APP_THREADS_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`) || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_APPROVAL_DECISIONS_PATH || url.pathname === APP_AUTONOMY_PATH || url.pathname === APP_AUTONOMY_CHANGES_PATH || url.pathname === APP_CALENDAR_DAY_PATH || url.pathname.startsWith(`${APP_GOOGLE_PICTURE_PATH_V1}/`) || onboarding) {
+  if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === APP_THREADS_PATH || url.pathname.startsWith(`${APP_THREADS_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`) || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_APPROVAL_DECISIONS_PATH || url.pathname === APP_AUTONOMY_PATH || url.pathname === APP_AUTONOMY_CHANGES_PATH || url.pathname === APP_CALENDAR_DAY_PATH || url.pathname === APP_CALENDAR_PROPOSALS_PATH || url.pathname.startsWith(`${APP_GOOGLE_PICTURE_PATH_V1}/`) || onboarding) {
     const sending = url.pathname === APP_CHAT_SEND_PATH;
-    if ((rating ? request.method !== 'PUT' : !['GET', 'POST'].includes(request.method)) || ((url.pathname === APP_CHAT_PATH || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_AUTONOMY_PATH || url.pathname === APP_CALENDAR_DAY_PATH) && request.method !== 'GET') || ((sending || url.pathname === APP_APPROVAL_DECISIONS_PATH || url.pathname === APP_AUTONOMY_CHANGES_PATH) && request.method !== 'POST')) return fail(405);
+    if ((rating ? request.method !== 'PUT' : !['GET', 'POST'].includes(request.method)) || ((url.pathname === APP_CHAT_PATH || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_AUTONOMY_PATH || url.pathname === APP_CALENDAR_DAY_PATH) && request.method !== 'GET') || ((sending || url.pathname === APP_APPROVAL_DECISIONS_PATH || url.pathname === APP_AUTONOMY_CHANGES_PATH || url.pathname === APP_CALENDAR_PROPOSALS_PATH) && request.method !== 'POST')) return fail(405);
     const mutating = request.method === 'POST' || request.method === 'PUT';
     const maxBytes = APP_SEND_MAX_WIRE_BYTES;
     const length = request.headers.get('content-length');

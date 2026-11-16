@@ -1,7 +1,10 @@
 import { fromRowZone, toRowZone } from '../../../contracts/src/health/zone-bridge';
-import { healthSleepNeedMinutesV1Schema } from '../../../contracts/src/app/health-ingest';
+import { healthApiErrorV1Schema, healthSleepNeedMinutesV1Schema } from '../../../contracts/src/app/health-ingest';
+import { dayLoad } from './scores/day-load';
+import { dayLoadV2, type PassiveInput } from './scores/passive-load';
 import { ENERGY_WINDOWS_VERSION } from './scores/energy-windows';
 import { formCurve, formProjection, withProjection, type FormCurvePoint, type StoredFormCurve } from './scores/form-curve';
+import { stressCurve } from './scores/stress-curve';
 import { shiftDay } from './scores/time';
 import { trainingLoad, type TrainingLoad, type WorkoutLoad } from './scores/training-load';
 import { formZone, heldZone, recoveryZone, weightZone } from './scores/zones';
@@ -37,10 +40,39 @@ export type ProducerDeps = Readonly<{
   // The curves the owner's earlier days hold (waldo.health_form_curves_read). With it, today's curve is followed by projected
   // points; absent, failing or unreadable, the curve is its measured points alone.
   readCurves?: () => Promise<unknown>;
+  // Off unless true. On, today's and yesterday's rows carry the parts of each available pillar (scoreParts) and the owner's usual
+  // bands (usual), which the row writer must admit. They are computed in the same pass as the scores, from the provisional
+  // engine only, and never on a backfilled row; neither changes a score, and each is its own column the model's read never has.
+  scoreParts?: boolean;
+  usual?: boolean;
+  // Off unless true. On, today's and yesterday's rows carry the day's load as a score (dayLoad), and today's row today's hourly
+  // stress curve (stressCurve), which the row writer must admit. Each is computed from the
+  // same readings as the scores, changes none of them, and costs the owner only itself if it cannot be computed. Never on a
+  // backfilled row.
+  dayLoad?: boolean;
+  // The upload sources whose days the day's load counts every observed minute for (day-load.candidate.v2), from the hourly
+  // heart-rate bins; empty or absent, every day is v1. It applies only beside dayLoad. A day v2 cannot read is v1 with the reason.
+  passiveLoad?: readonly string[];
+  stressCurve?: boolean;
   // The owner's health settings (waldo.health_settings_read), given only while the coaching switch is on. With it, every row
   // is computed on the sleep need the owner stated, and a read that fails writes nothing rather than a row on another need.
   readSettings?: () => Promise<unknown>;
+  // Told which step failed a run that ends failed, and the database's closed answer to it: no owner, day, value or payload.
+  // A run calls it at most once, for the first failure; a late day's backfill never fails a run, so it is never told.
+  onFailure?: (failure: ProducerFailure) => void;
 }>;
+
+// A database answer is its closed error code, or a fixed word: no_answer when the call threw or returned nothing, malformed
+// for anything else. No text the database or a proxy wrote reaches a log.
+export type ProducerFailure = Readonly<{
+  step: 'series_read' | 'settings_read' | 'context_write' | 'producer';
+  code: (typeof healthApiErrorV1Schema.shape.error.options)[number] | 'no_answer' | 'malformed' | 'threw';
+}>;
+const answerCode = (answer: unknown): ProducerFailure['code'] => {
+  if (answer === null || answer === undefined) return 'no_answer';
+  const code = healthApiErrorV1Schema.shape.error.safeParse(asRecord(answer)?.error);
+  return code.success ? code.data : 'malformed';
+};
 
 // The stated need and when it last changed, or null for an answer that is not the settings shape.
 export type StatedNeed = Readonly<{ minutes: number | null; changedAt: number | null }>;
@@ -65,11 +97,18 @@ const WINDOW_DAYS = 30;
 const HOUR_MS = 3_600_000;
 const MAX_BUSY_MINUTES = 1500;
 const DEMAND_GRACE_MS = 5_000;
-const SIGNALS = ['sleep_duration', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'active_energy_window', 'workout'];
+const SIGNALS = ['sleep_duration', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'active_energy_window', 'steps_window', 'workout'];
 // The night's vital signals feed only the drivers. They are read on their own, beside the scores' read: a point signal
 // such as breathing rate can be dense, and a read that reached its row cap would shorten the scores' baseline.
 const VITAL_SIGNALS = ['respiratory_rate', 'spo2', 'wrist_temperature', 'walking_heart_rate_average'];
 const NIGHT_SIGNALS = ['respiratory_rate', 'spo2', 'wrist_temperature'];
+// The passive load's readings are read on their own too: 24 bins and 24 step windows a day would otherwise eat the scores' row cap.
+const PASSIVE_SIGNALS = ['heart_rate_bins_window', 'steps_window'];
+// Only the phone's own transports send heart-rate bins.
+const PASSIVE_SOURCES: readonly string[] = ['apple', 'health_connect', 'samsung'];
+// HEALTH_PASSIVE_LOAD: "0", or a comma list of the sources passive load is on for. Anything not a phone transport is ignored.
+export const passiveLoadSources = (value: string | undefined): readonly string[] =>
+  (value ?? '').split(',').map(source => source.trim()).filter(source => PASSIVE_SOURCES.includes(source));
 const RESTING_METHODS: readonly string[] = ['overnight_resting', 'provider_resting_daily', 'resting_measurement', 'unknown'];
 const STAGES = ['light', 'deep', 'rem', 'unspecified', 'awake'] as const;
 // ADR-0081's confidence order for whole sources (Apple > Oura > WHOOP), then the phone transports. Ranked, not counted:
@@ -83,9 +122,11 @@ export type SleepStages = Readonly<Record<(typeof STAGES)[number], number>>;
 // samsungWriter is whether Samsung Health wrote the reading, as the read says it; false when another app did or none was recorded.
 // A workout's activity, and its zones and effort as the read returns them; detail is the rest of what it stored, unchecked,
 // for a reader that checks it. Null for any other signal. A food entry's grams likewise, each null when not a finite number.
-export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; samsungWriter: boolean; workout?: WorkoutDetail | null; nutrition?: NutritionGrams | null }>;
+// max is an hourly heart-rate window's highest; bins an hour's heart-rate bins. Each is null for any other signal.
+export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; samsungWriter: boolean; workout?: WorkoutDetail | null; nutrition?: NutritionGrams | null; max?: number | null; bins?: HeartRateBins | null }>;
 const MACROS = ['protein_g', 'carbohydrate_g', 'fat_g'] as const;
 export type NutritionGrams = Readonly<Record<(typeof MACROS)[number], number | null>>;
+export type HeartRateBins = Readonly<{ fromBpm: number; outside: readonly number[]; inside: readonly number[] }>;
 export type WorkoutDetail = Pick<WorkoutLoad, 'zoneSeconds' | 'zonesFromObservedPeak' | 'effort'> & Readonly<{ activity: string | null; detail: Readonly<Record<string, unknown>> }>;
 type Source = Readonly<{ source: string; epoch: number; truncated: boolean; readings: readonly Reading[] }>;
 export type Series = Readonly<{ readAt: string; sources: readonly Source[] }>;
@@ -116,6 +157,14 @@ const nutritionOf = (raw: unknown): NutritionGrams => {
   const r = asRecord(raw);
   return Object.fromEntries(MACROS.map(key => [key, typeof r?.[key] === 'number' && Number.isFinite(r[key]) && r[key] >= 0 ? r[key] : null])) as NutritionGrams;
 };
+const binSeconds = (raw: unknown): number[] | null =>
+  Array.isArray(raw) && raw.length >= 1 && raw.length <= 40 && raw.every(s => Number.isInteger(s) && s >= 0) ? raw as number[] : null;
+// An hour's bins, or none: two arrays of one length starting on the 5 bpm grid, as the contract admits.
+const binsOf = (raw: unknown): HeartRateBins | null => {
+  const r = asRecord(raw), outside = binSeconds(r?.outside_workouts), inside = binSeconds(r?.in_workouts);
+  const fromBpm = r?.from_bpm;
+  return outside && inside && outside.length === inside.length && typeof fromBpm === 'number' && Number.isInteger(fromBpm) && fromBpm % 5 === 0 && fromBpm >= 30 && fromBpm <= 225 ? { fromBpm, outside, inside } : null;
+};
 // A reading the database returned that does not have the shape the math needs is dropped, never repaired.
 const reading = (raw: unknown): Reading | null => {
   const r = asRecord(raw);
@@ -127,6 +176,8 @@ const reading = (raw: unknown): Reading | null => {
     samsungWriter: r.samsung_writer === true,
     workout: r.signal === 'workout' ? workoutDetailOf(r.activity, r.workout) : null,
     nutrition: r.signal === 'nutrition' ? nutritionOf(r.nutrition) : null,
+    max: r.signal === 'heart_rate_window' && typeof r.max === 'number' && Number.isFinite(r.max) ? r.max : null,
+    bins: r.signal === 'heart_rate_bins_window' ? binsOf(r.bins) : null,
   };
 };
 
@@ -186,7 +237,8 @@ const span = (r: Reading): Span | null => (r.startAt && r.endAt ? { startAt: r.s
 
 // The phone sends time in bed and time asleep under one signal; only time asleep is sleep. An unlabelled duration is
 // time asleep by the contract; a duration labelled time in bed or unknown is not taken for it.
-const asleepOf = (readings: readonly Reading[]): Reading | undefined => newest(readings.filter(r => r.signal === 'sleep_duration' && (r.method === null || r.method === 'asleep_duration')));
+const isAsleep = (r: Reading): boolean => r.signal === 'sleep_duration' && (r.method === null || r.method === 'asleep_duration');
+const asleepOf = (readings: readonly Reading[]): Reading | undefined => newest(readings.filter(isAsleep));
 const sleepOf = (readings: readonly Reading[]): DayRecord['sleep'] => {
   const asleep = asleepOf(readings);
   const midpoint = newest(readings.filter(r => r.signal === 'sleep_midpoint'));
@@ -194,13 +246,13 @@ const sleepOf = (readings: readonly Reading[]): DayRecord['sleep'] => {
   return asleep && midpoint && when ? { ...when, asleepMinutes: asleep.value, midpointMinute: midpoint.value } : null;
 };
 
-const SCORED_WINDOW_SIGNALS = ['heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'active_energy_window'];
+const SCORED_WINDOW_SIGNALS = ['heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'active_energy_window', 'steps_window'];
 
 const hourlyOf = (readings: readonly Reading[]): HourlyBucket[] => {
   const buckets = new Map<string, { -readonly [K in keyof HourlyBucket]: HourlyBucket[K] }>();
   for (const r of readings) {
     if (!r.startAt || !SCORED_WINDOW_SIGNALS.includes(r.signal)) continue;
-    const bucket = buckets.get(r.startAt) ?? { startAt: r.startAt, heartRate: null, hrvReadings: [], daylightMinutes: null, movementMinutes: null, activeEnergyKcal: null };
+    const bucket = buckets.get(r.startAt) ?? { startAt: r.startAt, heartRate: null, hrvReadings: [], daylightMinutes: null, movementMinutes: null, activeEnergyKcal: null, steps: null };
     if (r.signal === 'heart_rate_window') bucket.heartRate = r.value;
     else if (r.signal === 'hrv_window' && hrvMethod(r.method)) {
       const method = hrvMethod(r.method)!;
@@ -209,6 +261,7 @@ const hourlyOf = (readings: readonly Reading[]): HourlyBucket[] => {
     else if (r.signal === 'daylight_duration') bucket.daylightMinutes = r.value;
     else if (r.signal === 'movement_duration') bucket.movementMinutes = r.value;
     else if (r.signal === 'active_energy_window') bucket.activeEnergyKcal = r.value;
+    else if (r.signal === 'steps_window') bucket.steps = r.value;
     buckets.set(r.startAt, bucket);
   }
   return [...buckets.values()].sort((a, b) => a.startAt.localeCompare(b.startAt));
@@ -400,15 +453,41 @@ const sessionsOf = (workouts: readonly Reading[]): Reading[] => workouts.reduce<
   return kept;
 }, []);
 
+// Another source's workouts never mix in, and a session is counted once.
+const workoutsOf = (source: Source): WorkoutLoad[] => sessionsOf(source.readings.filter(r => r.signal === 'workout'))
+  .map(r => ({ day: r.day, minutes: r.value, zoneSeconds: r.workout?.zoneSeconds ?? null, zonesFromObservedPeak: r.workout?.zonesFromObservedPeak === true, effort: r.workout?.effort ?? null }));
+const observedDaysOf = (source: Source): string[] => [...new Set(source.readings.filter(r => WORN_SIGNALS.has(r.signal)).map(r => r.day))];
+
+// What the passive load reads of one source: its hourly bins and steps (read on their own, under the same consent epoch), and
+// from its scores' readings its nights, its day peaks and its sessions with their spans.
+const passiveInputOf = (source: Source, passive: Series, targetDay: string): PassiveInput | null => {
+  const read = passive.sources.find(other => other.source === source.source && other.epoch === source.epoch);
+  if (!read) return null;
+  const ms = (at: string | null) => (at ? Date.parse(at) : NaN);
+  const sessions = sessionsOf(source.readings.filter(r => r.signal === 'workout'));
+  return {
+    targetDay,
+    bins: read.readings.flatMap(r => (r.signal === 'heart_rate_bins_window' && r.bins && r.startAt && r.endAt ? [{ day: r.day, startAt: ms(r.startAt), endAt: ms(r.endAt), ...r.bins }] : [])),
+    steps: read.readings.flatMap(r => (r.signal === 'steps_window' && r.startAt ? [{ startAt: ms(r.startAt), count: r.value }] : [])),
+    nights: source.readings.filter(r => isAsleep(r) && r.startAt && r.endAt).map(r => ({ startAt: ms(r.startAt), endAt: ms(r.endAt) })),
+    peaks: [
+      ...source.readings.flatMap(r => (r.signal === 'heart_rate_window' && r.max !== null && r.max !== undefined ? [{ day: r.day, bpm: r.max }] : [])),
+      ...sessions.flatMap(r => { const max = r.workout?.detail.max_hr_bpm; return typeof max === 'number' && Number.isFinite(max) ? [{ day: r.day, bpm: max }] : []; }),
+    ],
+    sessions: sessions.flatMap(r => (r.startAt && r.endAt ? [{ day: r.day, startAt: ms(r.startAt), endAt: ms(r.endAt), zoneSeconds: r.workout?.zoneSeconds ?? null }] : [])),
+  };
+};
+
 // The source's own workouts and observed days for the 28 whole days ending yesterday, for today's row and yesterday's alike.
-// Another source's workouts never mix in.
-const trainingLoadOf = (source: Source, yesterday: string): TrainingLoad => trainingLoad({
-  throughDay: yesterday,
-  observedDays: [...new Set(source.readings.filter(r => WORN_SIGNALS.has(r.signal)).map(r => r.day))],
-  workouts: sessionsOf(source.readings.filter(r => r.signal === 'workout')).map(r => ({ day: r.day, minutes: r.value, zoneSeconds: r.workout?.zoneSeconds ?? null, zonesFromObservedPeak: r.workout?.zonesFromObservedPeak === true, effort: r.workout?.effort ?? null })),
+const trainingLoadOf = (source: Source, yesterday: string): TrainingLoad => trainingLoad({ throughDay: yesterday, observedDays: observedDaysOf(source), workouts: workoutsOf(source) });
+
+// What a row carries of the parts and bands, when asked for and when the engine had them: absent otherwise, which clears the column.
+const scoreDetailOf = (scores: DailyScores, ask: Readonly<{ parts: boolean; usual: boolean }>): object => ({
+  ...(ask.parts && scores.components ? { components: scores.components } : {}),
+  ...(ask.usual && scores.usual && scores.usual.length > 0 ? { usual: scores.usual } : {}),
 });
 
-// A computation that cannot be done costs the owner that one part, never the row. The tag holds no value.
+// A computation that cannot be done costs the owner that one key, never the row. The tag holds no value.
 const orNothing = <T>(tag: string, make: () => T | null): T | null => {
   try { return make(); } catch { console.error(`health ${tag} failed`); return null; }
 };
@@ -498,7 +577,11 @@ const writeOutcome = (answer: unknown): 'written' | 'stale' | 'refused' | 'faile
 };
 
 export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now: number; timezone: string }>): Promise<ProducerOutcome> => {
-  let pending: Promise<unknown> | undefined;
+  let pending: Promise<unknown> | undefined, told = false;
+  const failed = (step: ProducerFailure['step'], code: ProducerFailure['code']): 'failed' => {
+    if (!told) { told = true; deps.onFailure?.({ step, code }); }
+    return 'failed';
+  };
   try {
     const today = localDay(at.now, at.timezone), range = { from: shiftDay(today, -WINDOW_DAYS), to: today };
     // Started beside the series read and bounded, so a slow calendar costs Weight, never the Recovery and Form writes.
@@ -506,14 +589,27 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     const demand = pending ? within(pending, deps.demandGraceMs ?? DEMAND_GRACE_MS) : null;
     const scoresRead = deps.readSeries({ ...range, signals: SIGNALS });
     const vitalsRead = deps.readSeries({ ...range, signals: VITAL_SIGNALS }).then(parseSeries, (): Parsed => ({ kind: 'failed' }));
-    const parsed = parseSeries(await scoresRead);
+    const passiveOn = deps.dayLoad === true && (deps.passiveLoad?.length ?? 0) > 0;
+    const passiveRead = passiveOn ? deps.readSeries({ ...range, signals: PASSIVE_SIGNALS }).then(parseSeries, (): Parsed => ({ kind: 'failed' })) : null;
+    const seriesAnswer = await scoresRead, parsed = parseSeries(seriesAnswer);
+    if (parsed.kind === 'failed') return failed('series_read', answerCode(seriesAnswer));
     if (parsed.kind !== 'series') return parsed.kind;
-    const stated = deps.readSettings ? statedNeedOf(await deps.readSettings().catch(() => null)) : { minutes: null, changedAt: null };
-    if (!stated) return 'failed';
+    const settingsAnswer = deps.readSettings ? await deps.readSettings().catch(() => null) : null;
+    const stated = deps.readSettings ? statedNeedOf(settingsAnswer) : { minutes: null, changedAt: null };
+    if (!stated) return failed('settings_read', answerCode(settingsAnswer));
     // Without its vital readings a day still scores exactly as it would with them; only those drivers are missing.
     const vitals = await vitalsRead;
     if (vitals.kind !== 'series') console.log(JSON.stringify({ hop: 'health_series', ok: false, code: 'vitals_unread' }));
     const series = withVitals(untruncated(parsed.series, 'series_truncated'), vitals.kind === 'series' ? untruncated(vitals.series, 'vitals_truncated') : null);
+    // Without its bins read a day's load is v1, as with the switch off: nothing is claimed about a passive part it could not read.
+    const passiveParsed = passiveRead && await passiveRead;
+    if (passiveParsed && passiveParsed.kind !== 'series') console.log(JSON.stringify({ hop: 'health_series', ok: false, code: 'passive_unread' }));
+    const passive = passiveParsed?.kind === 'series' ? untruncated(passiveParsed.series, 'passive_truncated') : null;
+    const dayLoadOf = (chosen: Source, targetDay: string) => {
+      const v1 = dayLoad({ targetDay, observedDays: observedDaysOf(chosen), workouts: workoutsOf(chosen) });
+      const input = passive && deps.passiveLoad?.includes(chosen.source) ? passiveInputOf(chosen, passive, targetDay) : null;
+      return input ? dayLoadV2(v1, input) : v1;
+    };
     // One source's readings are computed on its own, per day. Two wearables' sleep for one night is never added up. The
     // day's source is the highest-ranked one holding that night's sleep, or the highest-ranked with any reading.
     const present = [...series.sources].filter(s => s.readings.length > 0);
@@ -560,6 +656,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
         if (outcome === 'refused') break;
       }
     };
+    const ask = { parts: deps.scoreParts === true, usual: deps.usual === true };
     const outcomes: ReturnType<typeof writeOutcome>[] = [];
     // Only the provisional engine names its windows, even when there are none; the earlier engine never backfills.
     let provisional = false, needMoved = false;
@@ -567,7 +664,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       const chosen = chooseFor(targetDay);
       const { readingDays, travelled, days } = recordsOf(chosen);
       const input: DailyScoresInput = { access: 'granted', targetDay, days, sleepNeedMinutes: stated.minutes, asOf: series.readAt };
-      const scores = deps.compute(input);
+      const scores = deps.compute({ ...input, ...(ask.parts ? { parts: true } : {}), ...(ask.usual ? { usual: true } : {}) });
       provisional ||= scores.windows !== undefined;
       const nothingToShow = [scores.recovery, scores.form, scores.weight].every(p => p.state === 'unavailable');
       if (nothingToShow && !readingDays.some(d => d.day === targetDay)) continue;
@@ -578,27 +675,32 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       // the next run's fence. That row is left to the recompute the save asks for, and so are the late days; a need saved
       // again with the same figure is the same need. A read that fails asks for nothing, so the run fails and is retried.
       if (targetDay === today && deps.readSettings) {
-        const again = statedNeedOf(await deps.readSettings().catch(() => null));
+        const againAnswer = await deps.readSettings().catch(() => null), again = statedNeedOf(againAnswer);
         if (again === null || again.minutes !== stated.minutes) {
-          outcomes.push(again === null ? 'failed' : 'stale');
+          outcomes.push(again === null ? failed('settings_read', answerCode(againAnswer)) : 'stale');
           needMoved = true;
           continue;
         }
       }
+      const forToday = targetDay === today;
       // Today's curve: its measured points, then the projected ones when the earlier days' curves can be read. A projection
       // that cannot be made leaves the measured curve as it is.
-      const curve = targetDay === today && deps.formCurve ? orNothing('form curve', () => formCurve(input, scores.form)) : null;
+      const curve = forToday && deps.formCurve ? orNothing('form curve', () => formCurve(input, scores.form)) : null;
       const held = curve && deps.readCurves ? storedCurvesOf(await deps.readCurves().catch(() => null)) : [];
       const projected: readonly FormCurvePoint[] = curve && held.length > 0 ? orNothing('form projection', () => formProjection({ targetDay, days, measured: curve.points, stored: held })) ?? [] : [];
       const row = {
-        ...rowOf(targetDay, steadied(scores, before), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, targetDay === today),
+        ...rowOf(targetDay, steadied(scores, before), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, forToday),
         ...(deps.trainingLoad ? { training_load: trainingLoadOf(chosen, shiftDay(today, -1)) } : {}),
+        ...scoreDetailOf(scores, ask),
+        ...(deps.dayLoad ? orNothing('day load', () => ({ day_load: dayLoadOf(chosen, targetDay) })) : {}),
+        ...(forToday && deps.stressCurve ? orNothing('stress curve', () => { const curve = stressCurve({ targetDay, days, asOf: series.readAt }); return curve && { stress_curve: curve }; }) : {}),
         ...(curve ? { form_curve: withProjection(curve, projected) } : {}),
       };
       const answer = await deps.writeContext(JSON.stringify(row));
-      outcomes.push(writeOutcome(answer));
-      if (writeOutcome(answer) === 'written') logWritten(row);
-      if (targetDay === today && writeOutcome(answer) === 'written' && pillarMoved(answer) && !needMovedSince(stated, before)) await deps.onZoneChange?.(today).catch(() => console.error('health zone change notice failed'));
+      const written = writeOutcome(answer);
+      outcomes.push(written === 'failed' ? failed('context_write', answerCode(answer)) : written);
+      if (written === 'written') logWritten(row);
+      if (targetDay === today && written === 'written' && pillarMoved(answer) && !needMovedSince(stated, before)) await deps.onZoneChange?.(today).catch(() => console.error('health zone change notice failed'));
     }
     if (provisional && deps.readHistory && !needMoved) {
       // Late days never decide the outcome of the live rows, and a failure here is only a tag.
@@ -608,7 +710,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     return 'no_readings';
   } catch {
     console.error('health producer failed');
-    return 'failed';
+    return failed('producer', 'threw');
   } finally {
     // A late read still finishes, so the owner object caches it for the next upload.
     await pending?.catch(() => undefined);

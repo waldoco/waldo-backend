@@ -5,6 +5,7 @@ import { runToolLoop } from '../src/conversation/tool-loop';
 import { TOOL_ARG_SCHEMAS } from '../src/hooks/registry';
 import { sanitise } from '../src/scribe/sanitiser';
 import { EGRESS_READ_TOOLS } from '../src/tools/records';
+import { searchEpisodesHandler } from '../src/tools/live/search-episodes';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 
 // Once the model has been shown the owner's health readings beside outside content, a call it makes could carry a reading
@@ -138,5 +139,33 @@ describe('a reading in the request\'s own context', () => {
   it('counts as one when nothing can read it', async () => {
     expect(await healthInContext([said('Move my 4:30 to Friday.')], context({ sanitise: undefined }))).toBe(true);
     expect(await healthInContext([said('Move my 4:30 to Friday.')], context({ sanitise: () => { throw new Error('down'); } }))).toBe(true);
+  });
+});
+
+// A past-chat search taints the turn whatever AUTONOMOUS_BY_DEFAULT says, so it also closes this fence: a hit that may carry
+// someone else's words, beside the owner's readings, stops every call that sends text out. That is the fence doing its job.
+describe('a past-chat search that may carry someone else\'s words fences like any outside read', () => {
+  const searchOf = (speaker: 'owner' | 'waldo', own: boolean) => searchEpisodesHandler({
+    search: () => [{ ref: '1', entry_id: 'app-1-reply', speaker, at: '2026-10-12T09:00:00.000Z', snippet: 'Acme sent the figures' }],
+    get: () => ({ entry_id: 'app-1-reply', speaker, at: Date.parse('2026-10-12T09:00:00Z'), text: 'Acme sent the figures', ...(own ? { own: true } : {}) }),
+  } as never);
+  const EPISODES = call('e', 'search_episodes', { query: 'Acme figures' });
+  const run = async (speaker: 'owner' | 'waldo', own: boolean) => {
+    const { ran, handlers } = fakes();
+    let last: readonly LLMToolTurn[] = [];
+    const rounds = [[HEALTH], [EPISODES], [SEARCH]];
+    let round = 0;
+    await runToolLoop({ handlers: [...handlers, searchOf(speaker, own)], ctx: context(), maxSteps: 10, step: async (_tools, turns) => { last = turns; return round < rounds.length ? { text: '', tool_calls: [...rounds[round++]!] } : { text: 'Done.' }; } });
+    return { ran, outcome: JSON.parse(last.find((turn) => turn.call.call_id === 's')!.output) as { ok: boolean; error_code?: string } };
+  };
+  it('the readings, then a Waldo reply found by search: the next web search is refused', async () => {
+    const { ran, outcome } = await run('waldo', false);
+    expect(outcome).toMatchObject({ ok: false, error_code: 'egress_denied' });
+    expect(ran.filter((line) => line.startsWith('web_search'))).toEqual([]);
+  });
+  it('the readings, then only the owner\'s own words found by search: the web search runs', async () => {
+    const { ran, outcome } = await run('owner', true);
+    expect(outcome.ok).toBe(true);
+    expect(ran.filter((line) => line.startsWith('web_search'))).toHaveLength(1);
   });
 });

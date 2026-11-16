@@ -5,7 +5,8 @@ import { artifactMarker, extractArtifacts } from '../../security/artifact-hygien
 import { BodyWithheld, omitLongRuns, READ_BODY_BUDGET, scribedExternal } from '../../tools/live/google';
 import { checkBackReply, OUTSIDE_TEXT_JOB_TOOLS } from '../check-back';
 import { ClosedRunError } from '../run-effect-scope';
-import { readableFile, TELEGRAM_DOWNLOAD_LIMIT_BYTES, toBase64 } from '../telegram-media';
+import { readableBytes } from '../readable-file';
+import { TELEGRAM_DOWNLOAD_LIMIT_BYTES, toBase64 } from '../telegram-media';
 import type { KeptUpload, UploadKeeper } from '../upload-keeper';
 import type { AgentMailInbox, AgentMailRow } from './inbox';
 import { messageIds } from './ingress';
@@ -51,8 +52,8 @@ export const mailForModel = async (raw: Uint8Array, row: Pick<AgentMailRow, 'id'
   const keepable: { bytes: Uint8Array; filename: string; mime: string; key: string }[] = [];
   for (const [index, file] of files.entries()) {
     const filename = cleaned((file.filename ?? 'attachment').slice(0, 256)) || 'attachment';
-    const readable = readableFile(file.mimeType, filename);
     const bytes = new Uint8Array(file.content as ArrayBuffer);
+    const readable = readableBytes(bytes, file.mimeType, filename);
     if (keep && bytes.byteLength > 0 && file.disposition !== 'inline') keepable.push({ bytes, filename, mime: file.mimeType, key: `mail:${row.id}:${index}` });
     if (!readable || opened.length >= LLM_ATTACHMENTS_MAX || bytes.byteLength === 0 || bytes.byteLength > TELEGRAM_DOWNLOAD_LIMIT_BYTES) {
       unopened.push(`${filename} (${file.mimeType}${readable || keep ? '' : ', a type Waldo cannot read'})`);

@@ -1,6 +1,6 @@
 import type { Scheduler } from '../scheduler/multiplexer';
 import { localIso } from '../channels/reminders';
-import { produceHealthScores, statedNeedOf, type ProducerDeps, type ProducerOutcome } from './producer';
+import { produceHealthScores, statedNeedOf, type ProducerDeps, type ProducerFailure, type ProducerOutcome } from './producer';
 import { detectHealthWakes, healthSnapshot, type HealthSnapshot, type HealthWakeReason } from './wakes';
 
 // The owner's derived rows are recomputed in the owner's own object, one recompute at a time. Every upload that changed a
@@ -32,6 +32,16 @@ export type HealthRecomputeDeps = Readonly<{
     noted?(runStartedAt: number): readonly HealthWakeReason[];
   }>;
 }>;
+
+// A failed run names the step that failed and the database's closed answer, as one typed code such as
+// context_write:invalid_request, so the log line says which call refused without carrying anything it was sent.
+export class HealthRecomputeFailed extends Error {
+  readonly errorCode: `${ProducerFailure['step']}:${ProducerFailure['code']}` | null;
+  constructor(failure: ProducerFailure | undefined) {
+    super('health recompute failed');
+    this.errorCode = failure ? `${failure.step}:${failure.code}` : null;
+  }
+}
 
 const record = (value: unknown): Record<string, unknown> | null => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null);
 
@@ -75,8 +85,9 @@ export const healthRecompute = (deps: HealthRecomputeDeps) => {
     async run(): Promise<ProducerOutcome> {
       const now = deps.now(), timezone = deps.ownerZone(), today = localIso(now, timezone).slice(0, 10), wakes = deps.wakes?.enabled() ? deps.wakes : null;
       const before = wakes ? await read(wakes.readContext).catch((): null => null) : null;
-      const outcome = await produceHealthScores(deps.producer, { now, timezone });
-      if (outcome === 'failed') throw new Error('health recompute failed');
+      const failures: ProducerFailure[] = [];
+      const outcome = await produceHealthScores({ ...deps.producer, onFailure: failure => failures.push(failure) }, { now, timezone });
+      if (outcome === 'failed') throw new HealthRecomputeFailed(failures[0]);
       if (wakes && (outcome === 'written' || (wakes.noted?.(now).length ?? 0) > 0)) await wake(wakes, before, today, now);
       return outcome;
     },

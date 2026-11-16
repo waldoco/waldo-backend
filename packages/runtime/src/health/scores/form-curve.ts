@@ -33,7 +33,7 @@ export const formCurve = (input: DailyScoresInput, rowForm: FormResult): FormCur
   const through = (cutoff: number): FormResult => {
     const hours = { ...target, hourly: target.hourly.filter(bucket => Date.parse(bucket.startAt) < cutoff) };
     const asOf = new Date(cutoff).toISOString();
-    const reading = formReading(hours, asOf);
+    const reading = formReading(hours, asOf, provisional);
     const key = reading ? `${reading.settled}:${reading.stale}` : 'none';
     const known = evaluated.get(key);
     if (known) return known;
@@ -41,7 +41,7 @@ export const formCurve = (input: DailyScoresInput, rowForm: FormResult): FormCur
     evaluated.set(key, fresh);
     return fresh;
   };
-  const last = formReading(target, input.asOf);
+  const last = formReading(target, input.asOf, provisional);
   if (last === null || last.stale) return null;
 
   const wake = Math.max(Date.parse(target.sleep.endAt), localDayWindow(target.day, target.timezone).start);

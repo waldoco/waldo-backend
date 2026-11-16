@@ -9,17 +9,17 @@
 --   latest measured point must be the row's own Form score; measured points alone name the row Form's version, and a curve
 --   with projected points names form-curve.v1.
 -- - waldo.health_form_curves_read is new: the curves the owner's last days hold, read by the producer alone for the projection.
--- - waldo.health_context_write is re-created whole from its last definition (20261101020000) and admits form_curve through
+-- - waldo.health_context_write is re-created whole from its last definition (20261116110100) and admits form_curve through
 --   that function, only on a write for the owner's own today by the row's zone, or for yesterday (a run that crosses
 --   midnight must not lose its row), and never on a backfilled row. A write for today without it clears it. A write
---   without it for any other day leaves that day's stored curve as it is: the producer rewrites
---   yesterday on every run and sends it no curve, and the curve a day held while it was today is that day's measured curve.
---   The payload limit stays 16 KiB: a full curve is 96 points of about 58 bytes.
--- - waldo.health_scores_read is re-created whole from its last definition (20261027170000) and returns the row's form_curve
+--   without it for any other day leaves that day's stored curve as it is: the producer rewrites yesterday on every run and
+--   sends it no curve, and the curve a day held while it was today is that day's measured curve. Every other line is that
+--   definition's, so steps stays an accepted used signal. The payload limit stays 32 KiB: a full curve is 96 points of about
+--   58 bytes.
+-- - waldo.health_scores_read is re-created whole from its last definition (20261116110100) and returns the row's form_curve
 --   when it holds one. The Worker serves it only on GET /app/v1/calendar/day and leaves it out of /app/v1/health/scores.
 -- Signatures, security definer, search_path and grants of the two re-created functions are unchanged. Apply this before the
--- Worker runs with HEALTH_FORM_CURVE on. To roll back: turn the switch off, re-create the two functions from the definitions
--- named above, then drop waldo.health_form_curves_read, waldo.health_form_curve_valid and the column.
+-- Worker runs with HEALTH_FORM_CURVE on. Rollback: supabase/rollback/20261116130000_health_form_curve.down.sql.
 alter table public.health_context_daily add column form_curve jsonb;
 
 create function waldo.health_form_curve_valid(p_curve jsonb, p_form jsonb) returns boolean
@@ -66,9 +66,9 @@ begin
   end if;
   select o.id, o.auth_user_id into v_owner, v_auth from waldo.owners o join auth.users u on u.id = o.auth_user_id where o.do_name = p_do_name and o.state = 'active' for update of o;
   if v_owner is null then return '{"error":"not_linked"}'; end if;
-  if octet_length(p_payload) > 16384 then return '{"error":"invalid_request"}'; end if;
+  if octet_length(p_payload) > 32768 then return '{"error":"invalid_request"}'; end if;
   begin v_body := p_payload::jsonb; exception when others then return '{"error":"invalid_request"}'; end;
-  if jsonb_typeof(v_body) is distinct from 'object' or exists (select 1 from jsonb_object_keys(v_body) k where k not in ('day','timezone','basis','form','recovery','weight','drivers','confidence','freshness','tags','read_at','sleep_debt','windows','windows_version','backfilled','training_load','form_curve')) then return '{"error":"invalid_request"}'; end if;
+  if jsonb_typeof(v_body) is distinct from 'object' or exists (select 1 from jsonb_object_keys(v_body) k where k not in ('day','timezone','basis','form','recovery','weight','drivers','confidence','freshness','tags','read_at','sleep_debt','windows','windows_version','backfilled','training_load','components','usual','day_load','stress_curve','form_curve')) then return '{"error":"invalid_request"}'; end if;
   if jsonb_typeof(v_body->'timezone') is distinct from 'string' or not exists (select 1 from pg_timezone_names where name = v_body->>'timezone') then return '{"error":"invalid_request"}'; end if;
   v_tz := v_body->>'timezone';
   if v_body ? 'read_at' then
@@ -121,7 +121,7 @@ begin
         or (select array_agg(k order by k) from jsonb_object_keys(v_p->'used') k) is distinct from array['days','signals']
         or jsonb_typeof(v_p #> '{used,signals}') is distinct from 'array' or jsonb_array_length(v_p #> '{used,signals}') not between 1 and 12
         or exists (select 1 from jsonb_array_elements(v_p #> '{used,signals}') s where jsonb_typeof(s) <> 'string'
-          or (s #>> '{}') not in ('sleep','hrv','resting_heart_rate','sleep_midpoint','daylight','movement','stress','calendar','tasks','messages','physical_load'))
+          or (s #>> '{}') not in ('sleep','hrv','resting_heart_rate','sleep_midpoint','daylight','movement','stress','calendar','tasks','messages','physical_load','steps'))
         or (select count(distinct s) from jsonb_array_elements(v_p #> '{used,signals}') s) <> jsonb_array_length(v_p #> '{used,signals}')
         or jsonb_typeof(v_p #> '{used,days}') is distinct from 'array' or jsonb_array_length(v_p #> '{used,days}') not between 1 and 31
         or exists (select 1 from jsonb_array_elements(v_p #> '{used,days}') d where jsonb_typeof(d) <> 'string' or (d #>> '{}') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
@@ -178,6 +178,28 @@ begin
         or v_p->'algorithm_version' is distinct from '"training-load.candidate.v1"'::jsonb or v_p->'activation' is distinct from '"candidate_unaccepted"'::jsonb))
       or v_p->>'state' not in ('available','unavailable') or v_body ? 'backfilled' then return '{"error":"invalid_request"}'; end if;
   end if;
+  -- The parts of each available pillar and the owner's usual bands, when sent: each in its own closed shape (waldo.health_parts_valid,
+  -- waldo.health_usual_valid), never on a backfilled row, and the parts only for a pillar the row holds as available, so no figure
+  -- can ride a key and no part can belong to a pillar the row does not score.
+  if v_body ? 'components' then
+    v_p := v_body->'components';
+    if jsonb_typeof(v_p) is distinct from 'object' or v_body ? 'backfilled' or not exists (select 1 from jsonb_object_keys(v_p))
+      or exists (select 1 from jsonb_object_keys(v_p) k where k not in ('recovery','form','weight','groups')) then return '{"error":"invalid_request"}'; end if;
+    foreach v_pillar in array array['recovery','form','weight'] loop
+      if v_p ? v_pillar and ((v_body->v_pillar) ? 'reason' or not waldo.health_parts_valid(v_pillar, v_p->v_pillar, (v_body->v_pillar->>'score')::numeric)) then return '{"error":"invalid_request"}'; end if;
+    end loop;
+    if v_p ? 'groups' and not waldo.health_groups_valid(v_p->'groups', v_p) then return '{"error":"invalid_request"}'; end if;
+  end if;
+  if v_body ? 'usual' and (v_body ? 'backfilled' or not waldo.health_usual_valid(v_body->'usual')) then return '{"error":"invalid_request"}'; end if;
+  -- The day's load, when sent: its closed shape (waldo.health_day_load_valid), never on a backfilled row, so no figure can ride
+  -- a key and no day other than a live one can hold a load.
+  if v_body ? 'day_load' and (v_body ? 'backfilled' or not waldo.health_day_load_valid(v_body->'day_load')) then return '{"error":"invalid_request"}'; end if;
+  -- Today's hourly stress curve, when sent: its closed shape, never on a backfilled row and only on a write for the owner's own
+  -- today by the row's zone. A write for today without it clears it.
+  if v_body ? 'stress_curve' then
+    if v_body ? 'backfilled' or v_day <> (now() at time zone v_tz)::date then return '{"error":"invalid_request"}'; end if;
+  end if;
+  if v_body ? 'stress_curve' and not waldo.health_stress_curve_valid(v_body->'stress_curve') then return '{"error":"invalid_request"}'; end if;
   -- The day's measured Form curve, when sent: in its closed shape, never on a backfilled row and only on a write for the owner's
   -- own today by the row's zone, or for yesterday, which is the producer's today when its run crosses midnight. It must be the
   -- row's own Form: its version the row's Form version, its last point the row's Form score. A write for today without it
@@ -227,15 +249,20 @@ begin
     end loop;
   end if;
   v_conf := case when jsonb_typeof(v_body->'confidence') = 'number' then (v_body->>'confidence')::numeric else null end;
-  insert into public.health_context_daily as c(user_id, day, form, recovery, weight, sleep_debt, drivers, confidence, freshness, tags, windows, windows_version, backfilled, training_load, form_curve)
+  insert into public.health_context_daily as c(user_id, day, form, recovery, weight, sleep_debt, drivers, confidence, freshness, tags, windows, windows_version, backfilled, training_load, components, usual, day_load, stress_curve, form_curve)
     values (v_auth, v_day,
       v_body->'form', v_body->'recovery', v_body->'weight', v_body->'sleep_debt',
       coalesce(v_body->'drivers', '[]'::jsonb), v_conf, v_body->>'freshness',
       coalesce((select array_agg(t) from jsonb_array_elements_text(v_body->'tags') t), '{}'::text[]),
-      v_body->'windows', v_body->>'windows_version', (v_body->>'backfilled')::boolean, v_body->'training_load', v_body->'form_curve')
+      v_body->'windows', v_body->>'windows_version', (v_body->>'backfilled')::boolean, v_body->'training_load', v_body->'components', v_body->'usual', v_body->'day_load', v_body->'stress_curve', v_body->'form_curve')
     on conflict (user_id, day) do update set form = excluded.form, recovery = excluded.recovery, weight = excluded.weight, sleep_debt = excluded.sleep_debt, drivers = excluded.drivers,
       confidence = excluded.confidence, freshness = excluded.freshness, tags = excluded.tags,
       windows = excluded.windows, windows_version = excluded.windows_version, backfilled = excluded.backfilled, training_load = excluded.training_load,
+      components = excluded.components, usual = excluded.usual, day_load = excluded.day_load,
+      -- A curve is today's: a write for any other day (the producer rewrites yesterday on every run and sends it no curve) leaves
+      -- that day's stored curve as it is, kept for the row's own retention and deletion. A write for today replaces or clears it.
+      stress_curve = case when v_day = (now() at time zone v_tz)::date then excluded.stress_curve else c.stress_curve end,
+      -- The Form curve is also kept when a write for yesterday carries none; a write that carries one replaces it.
       form_curve = case when excluded.form_curve is not null or v_day = (now() at time zone v_tz)::date then excluded.form_curve else c.form_curve end;
   insert into waldo.health_context_basis(owner_id, day, consent_basis, timezone, read_at) values (v_owner, v_day, v_body->'basis', v_tz, v_read_at)
     on conflict (owner_id, day) do update set consent_basis = excluded.consent_basis, timezone = excluded.timezone, read_at = excluded.read_at;
@@ -261,7 +288,7 @@ begin
     if jsonb_typeof(v_body->'day') is distinct from 'string' or (v_body->>'day') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' then return '{"error":"invalid_request"}'; end if;
     v_day := (v_body->>'day')::date;
   end if;
-  select c.day, b.timezone, c.updated_at, c.freshness, c.form, c.recovery, c.weight, c.sleep_debt, c.drivers, c.windows, c.form_curve into v_row
+  select c.day, b.timezone, c.updated_at, c.freshness, c.form, c.recovery, c.weight, c.sleep_debt, c.drivers, c.windows, c.components, c.usual, c.day_load, c.stress_curve, c.form_curve into v_row
     from public.health_context_daily c join waldo.health_context_basis b on b.owner_id = v_owner and b.day = c.day
     where c.user_id = v_auth and (v_day is null or c.day = v_day) and (v_day is not null or c.backfilled is not true) and waldo.health_basis_live(v_owner, b.consent_basis, false)
     order by c.day desc limit 1;
@@ -272,6 +299,10 @@ begin
       || case when v_row.sleep_debt is null then '{}'::jsonb else jsonb_build_object('sleep_debt', v_row.sleep_debt) end
       || jsonb_build_object('drivers', v_row.drivers)
       || case when v_row.windows is null or v_row.day <> (now() at time zone v_row.timezone)::date then '{}'::jsonb else jsonb_build_object('windows', v_row.windows) end
+      || case when v_row.components is null then '{}'::jsonb else jsonb_build_object('components', v_row.components) end
+      || case when v_row.usual is null then '{}'::jsonb else jsonb_build_object('usual', v_row.usual) end
+      || case when v_row.day_load is null then '{}'::jsonb else jsonb_build_object('day_load', v_row.day_load) end
+      || case when v_row.stress_curve is null or v_row.day <> (now() at time zone v_row.timezone)::date then '{}'::jsonb else jsonb_build_object('stress_curve', v_row.stress_curve) end
       || case when v_row.form_curve is null then '{}'::jsonb else jsonb_build_object('form_curve', v_row.form_curve) end);
   end if;
   -- No row to show: say why, so the app can tell a missing grant from missing readings.

@@ -167,6 +167,18 @@ describe('a tool output that proposed an approval', () => {
     expect(JSON.stringify(await ledger.recent())).toContain('OUTSIDE-1');
   });
 
+  it('an owner turn also reads each card it can approve in words that no kept row names, by id and kind only', async () => {
+    const OTHER = 'p7c2d4e19';
+    const ledger = toolOutputLedger(fakeStorage() as never, { proposalState: states('open'),
+      approvableHere: () => [{ id: ID, kind: 'email_send', shown_minutes_ago: 9 }, { id: OTHER, kind: 'calendar_plan', shown_minutes_ago: 2 }] });
+    await ledger.record({ tool: 'send_email', ok: true, at: 1000, taint: 'external', origin: 'owner', summary: proposed() });
+    expect(await ledger.ownerTurnResults()).toEqual([
+      `send_email succeeded: proposed approval ${ID} (email_send). Its current state on the approval desk is open; this replaces what the tool reported when it proposed.`,
+      `approval ${OTHER} (calendar_plan) waits on the owner's word in this chat; its card was shown here in full 2 min ago. approve_shown takes this id.`,
+    ]);
+    expect((await ledger.carried()).map(fragment => fragment.text).join('\n')).not.toContain(OTHER);
+  });
+
   it.each(['done', 'skipped', 'open'])('shows the desk\'s current state (%s) instead of the snapshot', async (state) => {
     const ledger = toolOutputLedger(fakeStorage() as never, { proposalState: states(state) });
     await ledger.record({ tool: 'send_email', ok: true, at: 1000, taint: 'external', summary: proposed() });
