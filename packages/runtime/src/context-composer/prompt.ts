@@ -268,7 +268,7 @@ const MISSING_FIX: Readonly<Record<DerivedMissingPillarReason, string>> = {
   missing_sleep: "wearing the watch or ring overnight, and letting Waldo read sleep in the phone's health settings",
   missing_resting_signal: "wearing the watch or ring overnight, and letting Waldo read heart rate in the phone's health settings",
   stale_inputs: "opening the Waldo app so the phone sends today's readings",
-  conflicting_inputs: 'opening the Waldo app so the phone sends the readings again',
+  conflicting_inputs: 'none the owner can take: Waldo scores again when the next readings arrive',
   intraday_inputs_unavailable: "letting Waldo read heart rate, steps or movement in the phone's health settings",
   calendar_demand_unavailable: 'connecting a calendar',
 };

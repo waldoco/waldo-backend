@@ -290,3 +290,34 @@ Coverage without Recovery, as a share of Form v10's full weight, for the three o
 - a producer switch;
 - a check that the write function's closed `used` signals list and the app's reader take a Form with no `sleep` signal;
 - golden vectors for each coverage band.
+
+## Rulings (Ansh, owner of the health score rules, 16 November)
+
+The owner's direction of 16 November already settles the principle: every score is the best estimate from what exists, with a
+stated confidence; no pillar switches another off; raw values stay in the health store; numbers a tool returns stay in the turn.
+These rulings fix the details this draft left open.
+
+1. **Scores degrade, they do not gate: adopted.**
+   - Form no longer takes Recovery's reason. It computes from the components that have inputs, re-weighted over the weight
+     present. Coverage is the present share of Form's full weight, and it lowers the confidence.
+   - **No coverage floor**, on the score or on the zone word. The three owners this amendment started from sit at 0.2 to 0.4, so
+     a 0.5 floor would rebuild the dead end for exactly them. Instead every score reaches the model with its confidence band
+     (the existing thresholds: high from 0.66, medium from 0.33, low below) and its basis in words ("from steps only"). Whether a
+     low-confidence Form is worth mentioning is the model's judgment, not a fixed cut.
+   - **Recovery still needs the night.** It may stand on sleep alone, without an overnight heart signal, at lower confidence:
+     sleep is the primary input of the SAFTE-FAST grounding (ADR-0011). Without the night there is no Recovery, and Form and
+     Load still compute.
+   - New algorithm versions, written `candidate_unaccepted`, behind their own switch (staging on, production off). Built in a
+     separate pull request in the health lane; this pull request does not change.
+   - When that lands, a row with a Form zone and no Recovery renders as a Form view, not as this partial view.
+   - The app already receives `confidence` with each score; the app lane is asked to show it when it is low.
+2. **An expired row gives the block.** Its age, its sources, the one step that brings new readings and the pointer to the read
+   tool. This is freshness and missingness, which §3 already allows; absence would be the dead end the owner ruled out.
+3. **The component mapping is accepted as written.** Sleep timing or daylight is circadian; movement or steps is motion; daytime
+   stress has no ADR-0081 component and is never named. A full row without overnight HRV says `Missing components: hrv.`
+4. **The reason and fix words are accepted, with one change.** For `conflicting_inputs` (a day stored twice with different
+   values, or an unreadable time zone) no step by the owner fixes it, so the fix line now says so rather than sending the owner
+   to the app.
+5. **Depth.** Answered by the owner's direction: the always-on block stays words; `get_health` returns figures for the turn,
+   never stored or logged. A comparison against the owner's usual returned by the read tool falls under the same rule. Helper
+   runs stay without health reads for now; that is revisited only with a use that needs it.
