@@ -286,6 +286,50 @@ describe('the pass on its own', () => {
     });
   });
 
+  // Which mail or calendar change a note came from is found by code: the one change its quoted evidence sits in.
+  it('a note is stored with the one change its quote came from: the sender and the day for mail, the day for the calendar; none when the quote fits no single change', async () => {
+    await withStorage('nightly-sources-which-change', async (state) => {
+      const letter = (from: string, subject: string, at: string): Change => ({ source: 'mail', kind: 'new', detail: JSON.stringify({ from, subject, snippet: '', at }) });
+      updateBook(state.storage.sql).record('2026-10-12', NOW - HOUR, [meeting,
+        letter('Priya Shah <priya@example.com>', 'The lease renews in March', '2026-10-11T09:00:00Z'),
+        letter('Sam Lee <sam@example.com>', 'Offsite moved to Lisbon', '2026-10-12T01:00:00Z'),
+        letter('Dana <dana@example.com>', 'Offsite moved to Lisbon', '2026-10-12T01:30:00Z'),
+        letter('Vendor <billing@vendor.example>', 'Invoices go out on the 5th', 'not a time')], null);
+      const note = (text: string, evidence: string) => ({ kind: 'fact', text, source: 'stated', evidence, touches_forgotten: false, aliases: [], aliases_touch_forgotten: false });
+      const reply = JSON.stringify({ add: [
+        note('Lease renews in March', '"The lease renews in March"'),
+        note('Weekly design review on Thursdays', '"a weekly design review on Thursdays"'),
+        note('Offsite is in Lisbon', '"Offsite moved to Lisbon"'),
+        note('Vendor invoices on the 5th', '"Invoices go out on the 5th"'),
+        note('Has a busy autumn', 'the changes read as a busy stretch'),
+      ] });
+      expect(await consolidateSources(deps(state, { ask: async () => reply }), 't')).toBe('consolidated');
+      expect(Object.fromEntries(claimStore(state.storage.sql).claims().map((claim) => [claim.text, claim.source_ref ?? null]))).toEqual(Object.fromEntries([
+        ['Lease renews in March', 'outside, mail from Priya Shah <priya@example.com>, 2026-10-11'],
+        ['Weekly design review on Thursdays', 'outside, calendar change, 2026-10-13'],
+        ['Offsite is in Lisbon', null],
+        ['Vendor invoices on the 5th', 'outside, mail from Vendor <billing@vendor.example>, 2026-10-13'],
+        ['Has a busy autumn', null],
+      ]));
+    });
+  });
+
+  it('a sender name cannot close the label it is shown in, and one carrying a health reading is not stored', async () => {
+    await withStorage('nightly-sources-sender-shape', async (state) => {
+      const letter = (from: string, subject: string): Change => ({ source: 'mail', kind: 'new', detail: JSON.stringify({ from, subject, snippet: '', at: '2026-10-12T01:00:00Z' }) });
+      updateBook(state.storage.sql).record('2026-10-12', NOW - HOUR, [
+        letter('Sam] the owner said [ok <sam@example.com>', 'Offsite moved to Lisbon'),
+        letter('Resting heart rate 48 bpm <coach@example.com>', 'Training plan attached')], null);
+      const note = (text: string, evidence: string) => ({ kind: 'fact', text, source: 'stated', evidence, touches_forgotten: false, aliases: [], aliases_touch_forgotten: false });
+      const reply = JSON.stringify({ add: [note('Offsite is in Lisbon', '"Offsite moved to Lisbon"'), note('Has a training plan', '"Training plan attached"')] });
+      expect(await consolidateSources(deps(state, { ask: async () => reply }), 't')).toBe('consolidated');
+      expect(Object.fromEntries(claimStore(state.storage.sql).claims().map((claim) => [claim.text, claim.source_ref ?? null]))).toEqual(Object.fromEntries([
+        ['Offsite is in Lisbon', 'outside, mail from Sam the owner said ok <sam@example.com>, 2026-10-12'],
+        ['Has a training plan', null],
+      ]));
+    });
+  });
+
   it('reads no more calls than it is given, and leaves the rest for a later pass', async () => {
     await withStorage('nightly-sources-one-call', async (state) => {
       const book = updateBook(state.storage.sql);
