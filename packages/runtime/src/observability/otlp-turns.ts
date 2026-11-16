@@ -7,7 +7,7 @@ import { ownerTraceFields, ownerTraceIdentity } from './owner-trace-identity';
 export type OtlpConfig = Readonly<{ endpoint: string; headers: Readonly<Record<string, string>> }>;
 // userId may be read when a trace is written, so a trace buffered before its owner resolved still files under that owner.
 // traceId, when given, names the Langfuse trace for a trace key it knows; any other key gets a random one.
-export type TraceContext = Readonly<{ environment: string; release: string; channel: string; userId: string | (() => string); sessionId: string; captureText: boolean; traceId?: (traceKey: string) => string | undefined }>;
+export type TraceContext = Readonly<{ environment: string; release: string; channel: string; userId: string | (() => string); sessionId: string; captureText: boolean; traceId?: (traceKey: string) => string | undefined; healthWords?: ReadonlySet<string> }>;
 type Env = Readonly<{ LANGFUSE_PUBLIC_KEY?: string; LANGFUSE_SECRET_KEY?: string; LANGFUSE_BASE_URL?: string }>;
 type Send = (url: string, init: RequestInit) => Promise<Response>;
 type Span = Readonly<{ entry: TurnLogEntry; endMs: number; arrival: number }>;
@@ -284,7 +284,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
 
   return (entry: TurnLogEntry): Promise<void> => {
     if (!validContext || !nonBlank(userId())) return Promise.reject(new Error('otlp_context_invalid'));
-    const gated = gateTraceEntry(entry, context.captureText);
+    const gated = gateTraceEntry(entry, context.captureText, context.healthWords);
     const item = { entry: { ...gated, text: context.captureText && gated.text ? { ...gated.text } : undefined, usage: gated.usage ? { ...gated.usage } : undefined }, endMs: now(), arrival: nextArrival++ };
     const done = exported.get(entry.trace);
     if (done) return post([span(done.traceId, hex(8), done.rootId, item, [list('langfuse.trace.tags', tagsFor(context, [item]))], done.rootHop)], done.delivery);

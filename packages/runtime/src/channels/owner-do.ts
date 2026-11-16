@@ -154,7 +154,7 @@ import { ownerTraceId, ownerTraceSalt, rowTraces, syncRatingScore, type RatingSc
 import { costRollup, costRollupEnabled } from '../observability/cost-rollup';
 import { ownerCeilingUsd } from '../llm/cost-ledger';
 import { barrierMemory, type ForgetBarrierMode } from '../context-composer/forget-barrier';
-import { errorClass, gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
+import { errorClass, gateTraceEntry, resolveCaptureText, resolveTraceHealthWords } from '../observability/trace-privacy';
 import { nextDailyLocalOccurrence, nextOccurrence, Scheduler } from '../scheduler/multiplexer';
 import { CURATED_PACK_SKILLS } from '../skills/curated-catalog';
 import { FORGET_PURGE_ID, forgetPurge, type ForgetPurge, type ForgetStore } from '../memory/forget-purge';
@@ -4371,7 +4371,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       traceId: (key) => ownerTraceId(ownerTraceSalt(this.ctx.storage.kv), key),
       environment: this.env.WALDO_ENVIRONMENT ?? 'development', release: this.env.WALDO_RELEASE ?? 'unknown',
       channel, userId: () => tracePrincipal ?? (owner > 0 ? `${channel}:${owner}` : `${channel}:unlinked`), sessionId: owner > 0 ? `${channel}-dm:${owner}` : `${channel}-dm:unlinked`,
-      captureText: resolveCaptureText(this.env),
+      captureText: resolveCaptureText(this.env), healthWords: resolveTraceHealthWords(this.env),
     }) : undefined;
     const deps = productionDeps();
     const traces = traceBook(this.ctx.storage.sql);
@@ -4401,7 +4401,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // the capture switch is off; whitelisted hops keep their count/enum detail either way.
       const enriched: TurnLogEntry = gateTraceEntry(enrichOwnerTrace(entry,
         channel === 'telegram' ? identity.get<InboxRecord[]>(OWNER_INBOX_KEY) ?? [] : [],
-        identity.get<string>('do_name') ?? '', String(owner)), captureText);
+        identity.get<string>('do_name') ?? '', String(owner)), captureText, resolveTraceHealthWords(this.env));
       traces.record(enriched, deps.now());
       console.log(JSON.stringify({ ...enriched, text: undefined }));
       if (costs?.record(enriched, deps.now())) this.ctx.waitUntil(costs.flush());

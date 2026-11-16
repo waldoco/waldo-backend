@@ -23,6 +23,7 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   LANGFUSE_SECRET_KEY?: string;
   LANGFUSE_BASE_URL?: string;
   LANGFUSE_CAPTURE_TEXT?: string;
+  TRACE_HEALTH_WORDS?: string;
   // 'on' sends per-day spend to waldo.cost_ledger_daily after each turn; anything else keeps it off.
   WALDO_COST_LEDGER_SYNC?: string;
   // An invited owner's monthly spend ceiling in USD (llm/cost-ledger.ts ownerCeilingUsd); unset or invalid reads as 25.

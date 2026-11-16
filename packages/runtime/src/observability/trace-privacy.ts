@@ -53,9 +53,9 @@ const withholdEmail = (entry: TurnLogEntry): TurnLogEntry => entry.owner_email =
 
 // Capture on still keeps health values out: the scrub withholds them from text, detail, error and code. A scrub that
 // throws sends the entry through the capture-off gate with no text at all, since a capture-on sink would export it raw.
-export const gateTraceEntry = (entry: TurnLogEntry, captureText: boolean): TurnLogEntry => {
+export const gateTraceEntry = (entry: TurnLogEntry, captureText: boolean, healthWords: ReadonlySet<string> = NO_ACCOUNTS): TurnLogEntry => {
   if (captureText) {
-    try { return scrubTraceHealth(entry); } catch { return { ...gateWithoutCapture(withholdEmail(typedFieldsOnly(entry))), text: undefined }; }
+    try { return scrubTraceHealth(entry, entry.owner_id !== undefined && healthWords.has(entry.owner_id)); } catch { return { ...gateWithoutCapture(withholdEmail(typedFieldsOnly(entry))), text: undefined }; }
   }
   return gateWithoutCapture(withholdEmail(typedFieldsOnly(entry)));
 };
@@ -100,6 +100,14 @@ const gateWithoutCapture = (entry: TurnLogEntry): TurnLogEntry => {
 // says, so a misconfigured prod deploy fails safe (types/counts only), never open.
 export const resolveCaptureText = (env: Readonly<{ LANGFUSE_CAPTURE_TEXT?: string; WALDO_ENVIRONMENT?: string }>): boolean =>
   env.LANGFUSE_CAPTURE_TEXT === 'true' && (env.WALDO_ENVIRONMENT ?? 'development') !== 'production';
+
+// TRACE_HEALTH_WORDS: the owner ids, comma separated, whose captured traces keep the health block's zone and driver words, with
+// numbers still redacted and a menstrual cycle never. Empty, so off, for every account unless named. It adds nothing where
+// capture is off, which production always is.
+const NO_ACCOUNTS: ReadonlySet<string> = new Set();
+const OWNER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export const resolveTraceHealthWords = (env: Readonly<{ TRACE_HEALTH_WORDS?: string }>): ReadonlySet<string> =>
+  new Set((env.TRACE_HEALTH_WORDS ?? '').split(',').map((id) => id.trim().toLowerCase()).filter((id) => OWNER_ID.test(id)));
 
 // A failure as its class only, for logs, traces and replies: its text can carry provider or internal detail.
 export const errorClass = (error: unknown): string => error instanceof Error ? error.name : 'unknown';
