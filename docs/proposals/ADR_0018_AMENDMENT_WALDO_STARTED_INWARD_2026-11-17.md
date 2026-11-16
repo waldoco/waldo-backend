@@ -4,13 +4,23 @@
 
 ## Decision
 
-1. **A run Waldo started may make an inward change it can undo, with no card.** That includes such a run that has read mail, a calendar invite or another tool's answer. The run is recorded, keyed and reported through the same path as an owner-asked run (`runAsked` → `decideOnce`: `<operation>:apply` effect keys, recorded before dispatch and never dispatched inside the SQLite transaction), and the "what Waldo did" report carries an Undo.
+1. **A run Waldo started may make an inward change it can undo, with no card.** That includes such a run that has read mail, a calendar invite or another tool's answer. The run is recorded and keyed through the same path as an owner-asked run (`runAsked` → `decideOnce`: `<operation>:apply` effect keys, recorded before dispatch and never dispatched inside the SQLite transaction).
+   - **The desk itself always tells the owner** ("Done without asking: …", with an Undo button where the surface has buttons), whatever the run's own reply says or whether it stays silent. Being told is part of the safety bound.
+   - A change made this way counts against the owner's interruption limit as a card does.
+   - A run that came back without an Undo logs `approval_waldo_run:no_undo`.
 2. **"A run Waldo started" is provenance, set by the host.** The caller that starts the run marks it Waldo-first: a day card, a loop check-back, the update sweep, an intervention, and later the wake run of the model-set wakes design. The host then sets `waldoStarted` on the run's tool context, and the approvals desk reads it there (`askedBy`), never from a tool's arguments. The following are never Waldo-started, so their effects keep the 14 Nov rules:
    - a run that answers the owner (their own turn, a retry of it, a Mac result, a task's report);
-   - a run that someone else's words started: inbound mail to the Waldo address, a forward, and a webhook (ruling 3).
+   - a run that someone else's words started: inbound mail to the Waldo address, a forward, and an `/events/` webhook (ruling 3). An update-sweep batch that carries a webhook's change is not Waldo-started either.
+
+   The update sweep that a push from the owner's own Gmail or Calendar pulls forward stays Waldo-started. Its input is the owner's own mail and calendar, which is the D1 case ("even when the idea came from mail or an invite").
 3. **"Inward and undoable" is bounded in code** (`inwardUndoable` in `channels/approvals.ts`):
    - **a day plan's blocks.** They carry no guests, and Undo removes them;
-   - **a calendar change on the owner's own primary calendar that invites, emails or links no one.** That means no attendees, no `send_updates: all` and no Meet link. A create qualifies as is. A move or a cancel qualifies only for an event read before the change that has no guests;
+   - **a calendar change on the owner's own primary calendar that invites, emails or links no one and carries no text beyond its title.** That means:
+     - no attendees, no `send_updates: all` and no Meet link;
+     - no description, location or rename, because a shared calendar shows these to others;
+     - no event in a series (an instance or its master), because a change there reaches every instance;
+     - and for a move or a cancel, an event read before the change that has no guests;
+   - **no proposal that replaces another card.** Replacing happens where the owner sees the new card;
    - **a cancel**, only where Waldo can put it back (`CALENDAR_UNDO_CANCEL`, an event read before the change). One it cannot put back is a permanent deletion and keeps its card.
 
    Whether the change serves the owner is the model's judgment. Code bounds only what may run unasked. Waldo's own follow-ups (`open_loop` with no mail source, `MODEL_SET_WAKES`) were already card-free under the same provenance and stay governed by their own bounds.

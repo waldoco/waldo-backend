@@ -37,7 +37,7 @@ const NOW = Date.UTC(2026, 10, 8, 9, 0, 0);
 const OWNER = 447700900123;
 type Surface = 'whatsapp' | 'imessage' | 'telegram' | 'app';
 
-const harness = (state: DurableObjectState, surface: Surface, options: Readonly<{ autonomous?: boolean; now?: () => number; idPrefix?: string; channelUp?: boolean; undoCancels?: boolean; guests?: number; noEtag?: boolean; waldoInward?: boolean }> = {}) => {
+const harness = (state: DurableObjectState, surface: Surface, options: Readonly<{ autonomous?: boolean; now?: () => number; idPrefix?: string; channelUp?: boolean; undoCancels?: boolean; guests?: number; noEtag?: boolean; waldoInward?: boolean; series?: boolean }> = {}) => {
   const { sql } = state.storage;
   const retired: string[] = [], messages: { text: string; buttons: string[] }[] = [], sent: string[] = [], created: unknown[] = [], cancelled: string[] = [], emails: string[] = [], submitted: string[] = [];
   let n = 0, ref = 0;
@@ -45,7 +45,7 @@ const harness = (state: DurableObjectState, surface: Surface, options: Readonly<
     account: { connection_id: 'local:owner@example.test', email: 'owner@example.test' },
     createEvent: async (input: unknown) => { created.push(input); return { id: `ev${created.length}`, title: 'Focus', start: '', end: '', all_day: false, etag: 'v2' }; },
     cancelEvent: async (id: string) => { cancelled.push(id); return { id, status: 'cancelled', etag: 'v3' }; },
-    event: async (id: string) => ({ id, title: 'Focus', start: '2026-11-09T15:00:00Z', end: '2026-11-09T16:00:00Z', all_day: false, ...(options.noEtag ? {} : { etag: 'v2' }), status: 'confirmed', ...(options.guests ? { attendees: options.guests } : {}) }),
+    event: async (id: string) => ({ id, title: 'Focus', start: '2026-11-09T15:00:00Z', end: '2026-11-09T16:00:00Z', all_day: false, ...(options.noEtag ? {} : { etag: 'v2' }), status: 'confirmed', ...(options.guests ? { attendees: options.guests } : {}), ...(options.series ? { recurring_event_id: 'series-1' } : {}) }),
     sendRaw: async (raw: string) => { emails.push(raw); return { message_id: `g${emails.length}` }; },
     findSentByMessageId: async (messageId: string) => ({ message_id: 'g1', thread_id: 't', rfc822_message_id: messageId, label_ids: ['SENT'] }),
   } as unknown as GoogleClient;
@@ -645,7 +645,7 @@ describe('an inward, undoable change in a run Waldo started', () => {
     await owner('waldo-inward-create', async state => {
       const f = harness(state, 'app', { waldoInward: true });
       const id = await f.desk.propose(HOLD, 'run-1', 'op-1', { ...waldo, outside: true });
-      expect(f.messages).toEqual([]);
+      expect(f.messages.map(m => m.text)).toEqual([expect.stringMatching(/^Done without asking/)]);
       expect(f.created).toHaveLength(1);
       expect(f.status(id)).toBe('done');
       expect(f.desk.askedOutcome(id)).toMatchObject({ state: 'done', undo: true });
@@ -657,7 +657,7 @@ describe('an inward, undoable change in a run Waldo started', () => {
       const f = harness(state, 'app', { waldoInward: true });
       const id = await f.desk.proposeCalendarPlan({ day: '2026-11-09', time_zone: 'UTC', reason: 'protect the morning',
         blocks: [{ title: 'Deep work', start: '2026-11-09T09:00:00Z', end: '2026-11-09T10:30:00Z', block: 'deep_work' }] }, waldo);
-      expect(f.messages).toEqual([]);
+      expect(f.messages.map(m => m.text)).toEqual([expect.stringMatching(/^Done without asking/)]);
       expect(f.status(id)).toBe('done');
     });
   });
@@ -702,6 +702,46 @@ describe('an inward, undoable change in a run Waldo started', () => {
       const id = await f.desk.propose({ action: 'cancel', event_id: 'ev-1', reason: 'not needed' }, 'run-1', 'op-1', waldo);
       expect(f.cancelled).toEqual(['ev-1']);
       expect(f.status(id)).toBe('done');
+    });
+  });
+
+  it('the owner is always told what it did, with an Undo, whatever the run itself says', async () => {
+    await owner('waldo-inward-told', async state => {
+      const f = harness(state, 'whatsapp', { waldoInward: true });
+      const id = await f.desk.propose(HOLD, 'run-1', 'op-1', waldo);
+      expect(f.status(id)).toBe('done');
+      expect(f.messages).toHaveLength(1);
+      expect(f.messages[0]!.text).toMatch(/^Done without asking/);
+      expect(f.messages[0]!.buttons).toEqual(['Undo']);
+    });
+  });
+
+  it.each([
+    ['carrying a description', { ...HOLD, description: 'notes copied from somewhere' }],
+    ['carrying a location', { ...HOLD, location: 'somewhere' }],
+  ])('a block %s stays a card: its text could reach whoever can see the calendar', async (_case, change) => {
+    await owner(`waldo-inward-text-${crypto.randomUUID()}`, async state => {
+      const f = harness(state, 'app', { waldoInward: true });
+      const id = await f.desk.propose(change as never, 'run-1', 'op-1', waldo);
+      expect(f.created).toEqual([]);
+      expect(f.status(id)).not.toBe('done');
+    });
+  });
+
+  it('a move of one event in a series, or one that replaces another card, stays a card', async () => {
+    await owner('waldo-inward-series', async state => {
+      const f = harness(state, 'app', { waldoInward: true, series: true });
+      const id = await f.desk.propose({ action: 'move', event_id: 'ev-1', start: '2026-11-09T16:00:00Z' as never, end: '2026-11-09T17:00:00Z' as never, reason: 'later' }, 'run-1', 'op-1', waldo);
+      expect(f.status(id)).not.toBe('done');
+    });
+    await owner('waldo-inward-replaces', async state => {
+      const f = harness(state, 'whatsapp', { waldoInward: true });
+      const card = await f.desk.proposeSendMessage(message(), waldo);
+      const id = await f.desk.propose(HOLD, 'run-2', 'op-2', { ...waldo, replaces: card });
+      // It goes to the owner as a card, and replacing the earlier card happens where the owner sees the new one, as for any card.
+      expect(f.created).toEqual([]);
+      expect(f.status(id)).not.toBe('done');
+      expect(f.messages.at(-1)!.buttons.length).toBeGreaterThan(0);
     });
   });
 
