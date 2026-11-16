@@ -147,8 +147,9 @@ export const reminderHandlers = (book: ReminderBook) => [
     trigger_allowlist: allowlist('list_reminders'),
     autonomy_gated: false,
     async handle() {
-      const unreadable = book.unreadable();
-      return { ok: true, data: { reminders: book.list(), ...(unreadable > 0 ? { unreadable } : {}) }, source_taint: null };
+      const unreadable = book.unreadable(), reminders = book.list();
+      // A reminder set while reading outside content may carry that content's words, so listing it taints the rest of the turn.
+      return { ok: true, data: { reminders, ...(unreadable > 0 ? { unreadable } : {}) }, source_taint: reminders.some(reminder => reminder.outside) ? 'external' as const : null };
     },
   } satisfies ToolHandler<ListRemindersArgs, { reminders: readonly Reminder[]; unreadable?: number }, ToolDispatcherContext>,
   {

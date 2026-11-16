@@ -29,7 +29,7 @@ const withBeat = async <T>(now: number, work: (ctx: {
   beat: (occurrenceAt: number) => Promise<unknown>;
   sent: string[];
   plans: ReturnType<typeof dayPlanBook>;
-}) => Promise<T> | T) =>
+}) => Promise<T> | T, checkBacksPerDay?: () => number) =>
   runInDurableObject(stub(), async (_instance, state) => {
     ensureSchema(state.storage);
     const sql = state.storage.sql;
@@ -41,7 +41,7 @@ const withBeat = async <T>(now: number, work: (ctx: {
     const beat = async (occurrenceAt: number) => {
       await scheduler.schedule({ id: HEARTBEAT_ID, kind: 'heartbeat', occurrenceAt, dueAt: occurrenceAt, payloadRefs: { id: HEARTBEAT_ID } }).catch(() => undefined);
       const dispatched = await scheduler.dispatchDue({
-        heartbeat: heartbeatTick({ scheduler, sql, loops: book, plans, timezone: TZ, now: () => now, ...jobs.tickDeps }),
+        heartbeat: heartbeatTick({ scheduler, sql, loops: book, plans, timezone: TZ, now: () => now, ...jobs.tickDeps, ...(checkBacksPerDay ? { checkBacksPerDay } : {}) }),
       } as ScheduleExecutors);
       await jobs.runJobs();
       return dispatched;
@@ -136,6 +136,26 @@ describe('heartbeat tick (H1, scheduler-owned run history)', () => {
       expect(sent).toEqual(['Checked Loop 1', 'Checked Loop 2', 'Checked Loop 3', 'Checked Loop 4', 'Checked Loop 5', 'Checked Loop 6']);
       expect(book.list().find(loop => loop.title === 'Loop 7')?.status).toBe('open');
     });
+  });
+
+  // PROACTIVE_GATE: the ceiling follows the owner's daily budget for unasked messages: normal's six, low's two, the owner's own
+  // number, 0 included, and no count at high.
+  const capped = async (perDay: number, loopsDue: number) => {
+    let sent: string[] = [];
+    await withBeat(at('2026-09-26T10:30:00Z'), async (ctx) => {
+      const book = loopBook(ctx.sql, { newId: (() => { let n = 0; return () => `cap${++n}`; })(), now: () => at('2026-09-26T08:00:00Z') });
+      for (let n = 1; n <= loopsDue; n += 1) {
+        book.open({ title: `Loop ${n}`, due: '2026-09-26T13:00' });
+        await ctx.beat(at('2026-09-26T10:00:00Z') + n * 60_000);
+      }
+      sent = ctx.sent;
+    }, () => perDay);
+    return sent.length;
+  };
+  it('with the owner\'s budget the check-backs follow it: two, their own 0, and no count at high', async () => {
+    expect(await capped(2, 4)).toBe(2);
+    expect(await capped(0, 2)).toBe(0);
+    expect(await capped(Number.POSITIVE_INFINITY, 9)).toBe(9);
   });
 
   it('quiet hours suppress the send even when loops are past due', async () => {

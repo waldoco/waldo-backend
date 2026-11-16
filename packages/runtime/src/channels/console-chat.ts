@@ -1,6 +1,6 @@
-import { APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appContractHeaderV1Schema, appSendRequestV1Schema } from '../../../contracts/src/app/core';
+import { APP_CHAT_UPLOAD_PATH, APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appContractHeaderV1Schema, appSendRequestV1Schema } from '../../../contracts/src/app/core';
 import { appThreadArchiveV1Schema, appThreadCreateV1Schema, appThreadDeleteV1Schema, appThreadIdV1Schema, appThreadRenameV1Schema, appThreadSendV1Schema } from '../../../contracts/src/app/threads';
-import { APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, readBoundedBody } from './app-api';
+import { APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, forwardAppUpload, readBoundedBody } from './app-api';
 import { DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
 import { consoleAuth, type ConsoleAuth } from '../identity/console-auth';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
@@ -15,7 +15,7 @@ export const CONSOLE_CHAT_PATH = '/console/dashboard/api/v1/chat';
 // request without a CORS preflight, which this route never answers.
 export const CONSOLE_CHAT_HEADER = 'x-waldo-console';
 
-type ChatEnv = OwnerDirectoryEnv & PublicOriginEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
+type ChatEnv = OwnerDirectoryEnv & PublicOriginEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; APP_CHAT_ATTACHMENTS?: string }>;
 
 const answer = (status: number, body: object, extra: Record<string, string> = {}) =>
   Response.json(body, { status, headers: { ...DASHBOARD_OVERVIEW_HEADERS, ...extra } });
@@ -32,7 +32,8 @@ const sameSite = (request: Request, url: URL): boolean => {
 };
 
 type Checked = Readonly<{ safeParse(value: unknown): Readonly<{ success: boolean }> }>;
-type Route = Readonly<{ target: string; bucket: 'app-read' | 'app-chat-send'; method: 'GET' | 'POST'; body?: Checked }>;
+// upload: the app's chat upload route, whose raw bytes and budget the app's own upload handling owns.
+type Route = Readonly<{ target: string; bucket: 'app-read' | 'app-chat-send'; method: 'GET' | 'POST'; body?: Checked; upload?: true }>;
 const CLIENT = /^[A-Za-z0-9_-]{8,64}$/;
 const OPERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 // Only the query keys the app route reads pass through.
@@ -49,7 +50,7 @@ const messageRoute = (base: string, rest: readonly string[], method: string, sen
   if (action === undefined) return method === 'GET' ? { target: `${base}/${client}`, bucket: 'app-read', method: 'GET' } : null;
   return action === 'cancel' && method === 'POST' ? { target: `${base}/${client}/cancel`, bucket: 'app-read', method: 'POST' } : null;
 };
-// Each console chat path is one app.v1 route: main chat, a thread beside it, today's cards with what each delivered to
+// Each console chat path is one app.v1 route: main chat, a chat attachment's upload, a thread beside it, today's cards with what each delivered to
 // main chat (the app's day view, which the console's Brief shows), or the day history the console's day pager reads. Anything else, including the wrong method on a known
 // path, has no route.
 const route = (url: URL, method: string): Route | null => {
@@ -57,6 +58,7 @@ const route = (url: URL, method: string): Route | null => {
   const [head, id, action, ...rest] = segments;
   if (head === undefined) return method === 'GET' ? { target: withQuery(APP_CHAT_PATH, url, ['cursor', 'limit']), bucket: 'app-read', method: 'GET' } : null;
   if (head === 'messages') return messageRoute(APP_CHAT_SEND_PATH, segments.slice(1), method, appSendRequestV1Schema);
+  if (head === 'uploads') return id === undefined && method === 'POST' ? { target: APP_CHAT_UPLOAD_PATH, bucket: 'app-chat-send', method: 'POST', upload: true } : null;
   if (head === 'day') return id === undefined && method === 'GET' ? { target: '/app/v1/controls?view=day', bucket: 'app-read', method: 'GET' } : null;
   if (head === 'days') {
     const date = url.searchParams.get('date');
@@ -95,6 +97,8 @@ export const handleConsoleChat = async (request: Request, env: ChatEnv, auth: Co
 
   // The app's own per-owner buckets: chat from the app and the console shares one budget, sized for the app's polling.
   if (!env.RESPONSIBILITY_RATE_LIMITER) return answer(503, { error: 'chat_unavailable' });
+  // An attachment is staged exactly as the app stages one, on the app's upload budget; the send that names it comes after.
+  if (chosen.upload) return relay(await forwardAppUpload(request, { owners, limiter: env.RESPONSIBILITY_RATE_LIMITER, on: env.APP_CHAT_ATTACHMENTS === '1' }, doName, sessionHash));
   try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `${chosen.bucket}:${doName}` })).success) return answer(429, { error: 'rate_limited' }, { 'retry-after': '60' }); }
   catch { return answer(503, { error: 'chat_unavailable' }); }
 
@@ -121,7 +125,11 @@ export const handleConsoleChat = async (request: Request, env: ChatEnv, auth: Co
   });
   let response: Response;
   try { response = await owners.get(owners.idFromName(doName)).fetch(forwarded); } catch { return answer(503, { error: 'chat_unavailable' }); }
-  // The owner object refuses a session that has ended or was revoked since the cookie check: to the console that is a sign-in.
+  return relay(response);
+};
+
+// The owner object refuses a session that has ended or was revoked since the cookie check: to the console that is a sign-in.
+const relay = (response: Response): Response => {
   if (response.status === 403) return answer(401, { error: 'sign_in_required' });
   const headers = new Headers(response.headers);
   for (const [key, value] of Object.entries(DASHBOARD_OVERVIEW_HEADERS)) headers.set(key, value);

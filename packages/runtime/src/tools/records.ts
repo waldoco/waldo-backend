@@ -261,11 +261,18 @@ export const byToolName = (a: Readonly<{ name: string }>, b: Readonly<{ name: st
 // The brain's tool list with each tool's place on the surface: core tools as they are, the rest named into their
 // namespace and deferred, and the routing line of each namespace in use. A name outside the record (a test double) stays
 // core. Off, every tool goes up front. Either way the list is in name order and namespaces in BRAIN_NAMESPACES order.
+// Where a turn offers a tool: its record's place, except finding and reading the owner's own connected tools, which are
+// why they connected them. Those are admitted only with a connection (tools/live/mcp.ts eligible), so when admitted they are
+// offered in full, outside the core's budget, rather than one tool-search hop away.
+const OFFERED_IN_FULL: ReadonlySet<string> = new Set(['search_mcp_tools', 'read_mcp_tool']);
+export const offeredPlacement = (name: string): 'core' | BrainNamespace =>
+  OFFERED_IN_FULL.has(name) ? 'core' : (TOOL_RECORDS as Partial<Record<string, ToolRecord>>)[name]?.brain ?? 'core';
+
 export const brainTools = (tools: readonly LLMTool[], toolSearch: boolean): Pick<LLMRequest, 'tools' | 'tool_search'> => {
   const ordered = [...tools].sort(byToolName);
   if (!toolSearch) return { tools: ordered };
   const placed = ordered.map((tool) => {
-    const placement = (TOOL_RECORDS as Partial<Record<string, ToolRecord>>)[tool.name]?.brain ?? 'core';
+    const placement = offeredPlacement(tool.name);
     return placement === 'core' ? tool : { ...tool, namespace: placement, defer_loading: true };
   });
   const inUse = new Set(placed.flatMap((tool) => tool.namespace ? [tool.namespace as BrainNamespace] : []));

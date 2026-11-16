@@ -233,6 +233,14 @@ export const planWithout = (plan: CompactionPlan, drop: (message: ConversationMo
 // machine-made, or stored before inputs were stamped), or a reply or an earlier summary already marked.
 const carriesOutside = (entry: ConversationEntry): boolean =>
   entry.role === 'user' ? !(entry.inputOrigin === 'owner' && entry.ownerWordsOnly === true) : entry.readOutside === true;
+// Whether the chain the model reads for this leaf may carry outside text: the live summary when it is marked, or any row after
+// it (every row when there is none). A superset of the window the model is shown, so a row the window drops still counts.
+export const chainCarriesOutside = (tree: ConversationTree, leafId: string, settings: CompactionSettings = COMPACTION): boolean => {
+  const entries = tree.path(leafId);
+  const live = settings.enabled ? liveCompaction(tree, leafId) : null;
+  const after = live ? entries.slice(entries.findIndex((entry) => entry.id === live.covers!.to_id) + 1) : entries;
+  return live?.readOutside === true || after.some(carriesOutside);
+};
 export const compactionRow = (plan: CompactionPlan, summary: string, ownerId: string, now: number): ConversationEntry => ({
   id: compactionId(plan.covers.to_id), ownerId, chatId: plan.toEntry.chatId, parentId: plan.toEntry.id, threadAnchorId: plan.toEntry.threadAnchorId,
   surface: plan.toEntry.surface, modelPayload: summary, appPayload: '', modelProjection: { mode: 'include' }, role: 'compaction', covers: plan.covers, createdAt: now,
