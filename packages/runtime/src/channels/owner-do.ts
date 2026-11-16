@@ -1,4 +1,5 @@
 import { appControlsRequest } from './app-controls';
+import { webhookChange, webhookChanges } from './webhook-changes';
 import { HEALTH_READ_TOOLS, healthSharedLately, loadedToolsBook, noteHealthShared, PHONE_TOOLS } from '../tools/loaded';
 import { deliveredLately } from './scheduled-run';
 import { appGooglePicture, googlePictures } from './app-google-picture';
@@ -3004,7 +3005,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async recordEvent(request: Request, body: string): Promise<Response> {
     const source = (request.headers.get('x-waldo-event-source') ?? 'unknown').slice(0, 60);
     const notify = request.headers.get('x-waldo-event-notify') === '1';
-    type EventPayload = { subject?: unknown; kind?: unknown; title?: unknown; url?: unknown };
+    type EventPayload = { subject?: unknown; kind?: unknown; title?: unknown; url?: unknown; detail?: unknown; occurred_at?: unknown };
     let envelope: EventPayload | null = null;
     try {
       envelope = JSON.parse(body) as EventPayload;
@@ -3027,6 +3028,26 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const surface = this.ownerSurface(), runtime = this.setup(surface), { runs, log } = runtime;
     const run = runs.start('event', null);
     const summary = `${source}: ${envelope.title}`.slice(0, 180);
+    // EVENT_TURNS: the event goes to the update sweep's model, which judges it with the owner's mail and calendar and may tell
+    // the owner, raise a card or stay quiet, in place of the fixed note. Only where that sweep runs: it is armed and reads a
+    // connected Google account. Elsewhere the fixed note stands, so an event is never queued for a judge that never comes. A
+    // source set to record only stays recorded only.
+    if (notify && this.env.EVENT_TURNS === '1' && ((await this.ctx.storage.get<readonly unknown[]>('google:accounts')) ?? []).length > 0
+      && new Scheduler(this.ctx.storage.sql, this.ctx.storage, productionDeps()).lookup(BRIEF_SWEEP_ID).state === 'entry') {
+      const { kind, title, url, detail, occurred_at } = envelope;
+      const change = webhookChange(source, delivery, { kind, title, ...(typeof url === 'string' ? { url } : {}),
+        ...(typeof detail === 'string' ? { detail } : {}), ...(typeof occurred_at === 'string' ? { occurred_at } : {}) });
+      const dropped = this.ctx.storage.transactionSync(() => {
+        const gave = webhookChanges(this.ctx.storage.kv).add(change);
+        inbox.finish(source, delivery);
+        return gave;
+      });
+      const woke = await wakeBriefSweep(new Scheduler(this.ctx.storage.sql, this.ctx.storage, productionDeps()), Date.now());
+      runs.finish(run.id, 'completed', `${summary}: queued for Waldo to judge`.slice(0, 200));
+      log({ trace: run.id, hop: 'event_ingress', ms: 0, ok: true, code: woke ? 'queued_sweep_pulled_forward' : 'queued_sweep_due', detail: `${source}:${envelope.kind.slice(0, 60)}` });
+      if (dropped) log({ trace: run.id, hop: 'event_ingress', ms: 0, ok: false, code: 'queue_full_oldest_dropped', detail: String(dropped) });
+      return new Response('ok');
+    }
     let sent: Awaited<ReturnType<OwnerDO['notifyOwner']>> | null = null;
     try {
       if (notify) {
@@ -6383,7 +6404,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const now = Date.now();
         const sourceFollowups = sweepSourceFollowups();
         const day = localIso(now, clock.timezone).slice(0, 10);
-        const check = await updateSweepCheck({ updates, jobs: this.jobs(), google: client, now, day, timezone: clock.timezone, surface: channel, sourceFollowups, ...(this.env.BLOCK_LIFECYCLE === '1' ? { blocks: { observe: changes => { noteOwnerEdits(storage.sql, changes, now); } } } : {}), ...(this.env.DEVICE_CALENDAR === '1' ? { phone: this.deviceCalendar() } : {}), ...(actAhead ? { actAhead } : {}), ...(dayState ? { dayState: { titleDigest: titleDigester(storage.kv) } } : {}),
+        const check = await updateSweepCheck({ updates, jobs: this.jobs(), google: client, now, day, timezone: clock.timezone, surface: channel, sourceFollowups, ...(this.env.BLOCK_LIFECYCLE === '1' ? { blocks: { observe: changes => { noteOwnerEdits(storage.sql, changes, now); } } } : {}), ...(this.env.DEVICE_CALENDAR === '1' ? { phone: this.deviceCalendar() } : {}), ...(this.env.EVENT_TURNS === '1' ? { webhooks: webhookChanges(storage.kv) } : {}), ...(actAhead ? { actAhead } : {}), ...(dayState ? { dayState: { titleDigest: titleDigester(storage.kv) } } : {}),
           ...(realtime ? { delta: { accounts: await deltaAccounts(), followups: (await google.client('mail'))?.account?.email } } : {}),
           gate: () => sweepGate(day), providerDown: () => workerRouteDown(modelAccess), transaction: work => storage.transactionSync(work), ...(heldRaise ? { raise: mayRaise } : {}),
           enqueued: () => holdTaskJobsDue(storage.kv, now), held: () => heldTopicsOf(claimStore(storage.sql)),

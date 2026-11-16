@@ -1,7 +1,7 @@
 import type { ToolName } from '@waldo/contracts';
 import { z } from 'zod';
 import type { GoogleClient } from '../connectors/google';
-import { machineResultText, UPDATE_SWEEP_ACT_AHEAD_TEXT, UPDATE_SWEEP_JOB_TEXT } from '../prompt/machine-jobs';
+import { machineResultText, UPDATE_SWEEP_ACT_AHEAD_TEXT, UPDATE_SWEEP_JOB_TEXT, UPDATE_SWEEP_WEBHOOK_LINE } from '../prompt/machine-jobs';
 import { SKIP_UPDATE, triagePrompt, updateCardPrompt, updateEffectsPrompt, type TriageHold } from '../prompt/update-cards';
 import { taskBrief, type JobBook, type JobRow } from '../tasks/jobs';
 import { enqueueMachine, type MachineEnqueued, type MachineHandler, type MachineSpec } from '../tasks/machine';
@@ -146,8 +146,10 @@ export const emitObserved = (subscribers: readonly ObservedSubscriber[], events:
   for (const event of events) for (const subscriber of subscribers) subscriber(event);
 };
 
+const withWebhookLine = <T extends Readonly<{ goal: string }>>(text: T, analysis: readonly Change[]): T =>
+  analysis.some(change => change.source === 'webhook') ? { ...text, goal: `${text.goal} ${UPDATE_SWEEP_WEBHOOK_LINE}` } : text;
 const updateSweepSpec = (analysis: readonly Change[], job: Readonly<{ key: string; recordId: number; surface: string; timezone: string; now: number; actAhead: boolean }>): MachineSpec => ({
-  job: 'update_sweep', scope: 'owner', key: job.key, surface: job.surface, text: job.actAhead ? UPDATE_SWEEP_ACT_AHEAD_TEXT : UPDATE_SWEEP_JOB_TEXT,
+  job: 'update_sweep', scope: 'owner', key: job.key, surface: job.surface, text: withWebhookLine(job.actAhead ? UPDATE_SWEEP_ACT_AHEAD_TEXT : UPDATE_SWEEP_JOB_TEXT, analysis),
   // Mail with a source is named by its thread ref, which the apply turn's own prompt already carries; the rest by the event
   // or message a reader opens it by, and a change recorded before those were kept by position.
   items: analysis.map((change, index) => ({ ref: change.source_ref ?? change.ref ?? `${change.source}-${index + 1}`, detail: `${change.source} ${change.kind}: ${changeDetail(change)}` })),
