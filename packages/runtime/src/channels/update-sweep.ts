@@ -1,6 +1,7 @@
 import type { ToolName } from '@waldo/contracts';
 import { z } from 'zod';
 import type { GoogleClient } from '../connectors/google';
+import { carriesWebhook } from './webhook-changes';
 import { machineResultText, UPDATE_SWEEP_ACT_AHEAD_TEXT, UPDATE_SWEEP_JOB_TEXT, UPDATE_SWEEP_WEBHOOK_LINE } from '../prompt/machine-jobs';
 import { SKIP_UPDATE, triagePrompt, updateCardPrompt, updateEffectsPrompt, type TriageHold } from '../prompt/update-cards';
 import { taskBrief, type JobBook, type JobRow } from '../tasks/jobs';
@@ -347,21 +348,23 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
       const heldRefs = new Set(held.flatMap(row => row.changes.flatMap(change => change.source_ref ? [change.source_ref] : [])));
       const fresh = heldRefs.size ? changes.filter(change => !(change.source_ref && heldRefs.has(change.source_ref))) : changes;
       if (!changes.length && !held.length) { deps.transaction(io.settle); return { held: 'held_stale' }; }
-      const byOutside = [...changes, ...held.flatMap(row => row.changes)].some(change => change.source === 'webhook');
+      // Read from the job's own refs as well as its record, so a held webhook folded before this apply still counts.
+      const byOutside = carriesWebhook(refs) || [...changes, ...held.flatMap(row => row.changes)].some(change => change.source === 'webhook');
+      const outsideLine = byOutside ? `\n\n${UPDATE_SWEEP_WEBHOOK_LINE}` : '';
       const sourceFollowups = deps.sourceFollowups();
       const commit = () => { deps.updates.judgedJob(recordId!, refs); io.settle(); };
       const day = deps.dayState;
       if (!day) {
         const text = updateSweepApplyText(localIso(deps.now(), deps.timezone), changes, { ...await deps.context(), sourceFollowups }, result, withheld);
-        const reply = (await deps.turn(io.trace, text, io.current, undefined, byOutside)).trim();
+        const reply = (await deps.turn(io.trace, `${text}${outsideLine}`, io.current, undefined, byOutside)).trim();
         if (!reply || reply === SKIP_UPDATE) { judged(row, io.settle); return 'skipped'; }
         await deps.deliver(`update:${row.id}`, io.trace, reply, recordId!, commit);
         return 'delivered';
       }
-      if (deps.triage) return triage(row, result, io, day, deps.triage, fresh, held, recordId!, withheld, sourceFollowups, commit);
+      if (deps.triage) return triage(row, result, io, day, deps.triage, fresh, held, recordId!, withheld, sourceFollowups, commit, byOutside);
       const quiet = day.quiet();
       const prompt = updateEffectsPrompt(localIso(deps.now(), deps.timezone), { changes: changeLines(changes), ...await deps.context(), sourceFollowups, cards: day.cards(), quiet, revisesCards: day.revisesCards });
-      const chosen = parseUpdateEffects(await deps.turn(io.trace, `${prompt}\n\n${machineResultText(result, withheld)}`, io.current, undefined, byOutside));
+      const chosen = parseUpdateEffects(await deps.turn(io.trace, `${prompt}${outsideLine}\n\n${machineResultText(result, withheld)}`, io.current, undefined, byOutside));
       const skip = (code: UpdateEffectCode) => { day.chose(io.trace, code); judged(row, io.settle); return 'skipped' as const; };
       if (chosen === 'invalid') return skip('effects_invalid');
       if (chosen.revise && !day.delivered(chosen.revise.card)) return skip('revise_undelivered');
@@ -378,7 +381,7 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
   // The triage outcome is what the turn did, held to the owner's limits by code: a card it raised is the act, whatever it
   // answered; a tell that would interrupt them waits while quiet hours, the budget or the cooldown hold.
   const triage = async (row: JobRow, result: Parameters<MachineHandler['apply']>[1], io: Parameters<MachineHandler['apply']>[2], day: NonNullable<UpdateSweepApplyDeps['dayState']>,
-    sense: NonNullable<UpdateSweepApplyDeps['triage']>, changes: readonly Change[], held: readonly HeldRow[], recordId: number, withheld: readonly string[] | undefined, sourceFollowups: boolean, commit: () => void) => {
+    sense: NonNullable<UpdateSweepApplyDeps['triage']>, changes: readonly Change[], held: readonly HeldRow[], recordId: number, withheld: readonly string[] | undefined, sourceFollowups: boolean, commit: () => void, byOutside: boolean) => {
     const started = deps.now();
     const localDay = localIso(started, deps.timezone).slice(0, 10);
     const limits = deps.interruptions?.limits();
@@ -392,8 +395,8 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
       cards: day.cards(), revisesCards: day.revisesCards, hold, left: TRIAGE_INTERRUPTS_PER_DAY - deps.updates.interrupts(localDay).count, ...(own ? { limits: own.book.line(own.limits) } : {}),
       ...(sense.actAhead ? { actAhead: { style: sense.actAhead.style() } } : {}) });
     const heldText = held.length ? `\n\n${heldSection(held, changes, deps.timezone)}` : '';
-    const byOutside = [...changes, ...held.flatMap(entry => entry.changes)].some(change => change.source === 'webhook');
-    const reply = await deps.turn(io.trace, `${prompt}${heldText}\n\n${machineResultText(result, withheld)}`, io.current, triageTools(sourceFollowups, canAct), byOutside);
+    const outsideLine = byOutside ? `\n\n${UPDATE_SWEEP_WEBHOOK_LINE}` : '';
+    const reply = await deps.turn(io.trace, `${prompt}${heldText}${outsideLine}\n\n${machineResultText(result, withheld)}`, io.current, triageTools(sourceFollowups, canAct), byOutside);
     const chosen = parseTriage(reply);
     const asks = chosen !== 'invalid' && chosen.asks === true;
     const urgent = chosen !== 'invalid' && chosen.urgent === true;

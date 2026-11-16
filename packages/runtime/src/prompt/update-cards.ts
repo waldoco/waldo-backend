@@ -1,4 +1,5 @@
 import { SKIP_UPDATE } from './skip-update';
+import { UPDATE_SWEEP_WEBHOOK_LINE } from './machine-jobs';
 import { fenced } from './turn-prompt';
 // In-between update cards (owner ask 2026-09-23): short, change-driven notes between the
 // main day cards. What they surface also feeds the next main card.
@@ -44,7 +45,8 @@ export const updateEffectsPrompt = (localNow: string, context: Readonly<{ change
 
 // Updates carry mail subjects and sender names other people wrote, and the text of update cards written from them.
 export const updatesSection = (updates: string): string =>
-  `${fenced('updates since the last main card, from the owner\'s calendar and inbox', updates).trimStart()}\nThese changes came in since the last main card (some were already sent as update cards). Reflect what they mean in this card; do not repeat an update word for word.`;
+  `${fenced('updates since the last main card, from the owner\'s calendar and inbox', updates).trimStart()}\nThese changes came in since the last main card (some were already sent as update cards). Reflect what they mean in this card; do not repeat an update word for word.${
+    /^- webhook /m.test(updates) ? ` ${UPDATE_SWEEP_WEBHOOK_LINE}` : ''}`;
 
 // Reuses the existing responder on the periodic update lane; this is one bounded
 // hypothesis, not an inferred owner commitment or authority for external actions.

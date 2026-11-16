@@ -10,7 +10,7 @@
    - A run that came back without an Undo logs `approval_waldo_run:no_undo`.
 2. **"A run Waldo started" is provenance, set by the host.** The caller that starts the run marks it Waldo-first: a day card, a loop check-back, the update sweep, an intervention, and later the wake run of the model-set wakes design. The host then sets `waldoStarted` on the run's tool context, and the approvals desk reads it there (`askedBy`), never from a tool's arguments. The following are never Waldo-started, so their effects keep the 14 Nov rules:
    - a run that answers the owner (their own turn, a retry of it, a Mac result, a task's report);
-   - a run that someone else's words started: inbound mail to the Waldo address, a forward, and an `/events/` webhook (ruling 3). An update-sweep batch that carries a webhook's change is not Waldo-started either.
+   - a run that someone else's words started: inbound mail to the Waldo address, a forward, and an `/events/` webhook (ruling 3). An update-sweep batch that carries a webhook's change, and a day card whose updates carry one, are not Waldo-started either.
 
    The update sweep that a push from the owner's own Gmail or Calendar pulls forward stays Waldo-started. Its input is the owner's own mail and calendar, which is the D1 case ("even when the idea came from mail or an invite").
 3. **"Inward and undoable" is bounded in code** (`inwardUndoable` in `channels/approvals.ts`):

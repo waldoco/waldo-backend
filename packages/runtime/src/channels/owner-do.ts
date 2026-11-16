@@ -300,7 +300,7 @@ import { observeModelAuth } from '../llm/auth-incident';
 import type { OwnerJobHost } from './owner-turn';
 import type { TurnControl } from './turn-control';
 import { turnFailureCode } from './turn-failure-code';
-import { calendarPushBook, wakeBriefSweep } from './calendar-push';
+import { calendarPushBook, sweepArmed, wakeBriefSweep } from './calendar-push';
 import { actWithoutAsking, actsWithoutAsking, setActWithoutAsking } from './act-without-asking';
 import { knownPartyLookup } from './known-parties';
 import { calendarSet, realtimeTriage } from './calendar-set';
@@ -3033,7 +3033,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // connected Google account. Elsewhere the fixed note stands, so an event is never queued for a judge that never comes. A
     // source set to record only stays recorded only.
     if (notify && this.env.EVENT_TURNS === '1' && ((await this.ctx.storage.get<readonly unknown[]>('google:accounts')) ?? []).length > 0
-      && new Scheduler(this.ctx.storage.sql, this.ctx.storage, productionDeps()).lookup(BRIEF_SWEEP_ID).state === 'entry') {
+      && sweepArmed(new Scheduler(this.ctx.storage.sql, this.ctx.storage, productionDeps()))) {
       const { kind, title, url, detail, occurred_at } = envelope;
       const change = webhookChange(source, delivery, { kind, title, ...(typeof url === 'string' ? { url } : {}),
         ...(typeof detail === 'string' ? { detail } : {}), ...(typeof occurred_at === 'string' ? { occurred_at } : {}) });
@@ -3042,9 +3042,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         inbox.finish(source, delivery);
         return gave;
       });
-      const woke = await wakeBriefSweep(new Scheduler(this.ctx.storage.sql, this.ctx.storage, productionDeps()), Date.now());
       runs.finish(run.id, 'completed', `${summary}: queued for Waldo to judge`.slice(0, 200));
-      log({ trace: run.id, hop: 'event_ingress', ms: 0, ok: true, code: woke ? 'queued_sweep_pulled_forward' : 'queued_sweep_due', detail: `${source}:${envelope.kind.slice(0, 60)}` });
+      // The change is queued either way; a failed pull-forward leaves it for the sweep's next tick.
+      const woke = await wakeBriefSweep(new Scheduler(this.ctx.storage.sql, this.ctx.storage, productionDeps()), Date.now()).catch(() => null);
+      log({ trace: run.id, hop: 'event_ingress', ms: 0, ok: woke !== null, code: woke === null ? 'queued_wake_failed' : woke ? 'queued_sweep_pulled_forward' : 'queued_sweep_due', detail: `${source}:${kind.slice(0, 60)}` });
       if (dropped) log({ trace: run.id, hop: 'event_ingress', ms: 0, ok: false, code: 'queue_full_oldest_dropped', detail: String(dropped) });
       return new Response('ok');
     }
@@ -6392,7 +6393,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const updateCheck = async (trace: string) => {
       const client = await google.client();
-      if (client === null) return;
+      if (client === null) {
+        // Webhooks still waiting are judged once Google reads again; the queue's cap bounds them meanwhile.
+        const waiting = webhookChanges(storage.kv).waiting();
+        if (waiting) log({ trace, hop: 'machine_check', ms: 0, ok: false, code: 'webhooks_waiting_no_google', detail: String(waiting) });
+        return;
+      }
       const started = Date.now();
       // Close each trace with a machine_turn root like every other machine run, so the trace exporter flushes it.
       let followupPrompted = false;
@@ -6404,7 +6410,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const now = Date.now();
         const sourceFollowups = sweepSourceFollowups();
         const day = localIso(now, clock.timezone).slice(0, 10);
-        const check = await updateSweepCheck({ updates, jobs: this.jobs(), google: client, now, day, timezone: clock.timezone, surface: channel, sourceFollowups, ...(this.env.BLOCK_LIFECYCLE === '1' ? { blocks: { observe: changes => { noteOwnerEdits(storage.sql, changes, now); } } } : {}), ...(this.env.DEVICE_CALENDAR === '1' ? { phone: this.deviceCalendar() } : {}), ...(this.env.EVENT_TURNS === '1' ? { webhooks: webhookChanges(storage.kv) } : {}), ...(actAhead ? { actAhead } : {}), ...(dayState ? { dayState: { titleDigest: titleDigester(storage.kv) } } : {}),
+        const check = await updateSweepCheck({ updates, jobs: this.jobs(), google: client, now, day, timezone: clock.timezone, surface: channel, sourceFollowups, ...(this.env.BLOCK_LIFECYCLE === '1' ? { blocks: { observe: changes => { noteOwnerEdits(storage.sql, changes, now); } } } : {}), ...(this.env.DEVICE_CALENDAR === '1' ? { phone: this.deviceCalendar() } : {}), webhooks: webhookChanges(storage.kv), ...(actAhead ? { actAhead } : {}), ...(dayState ? { dayState: { titleDigest: titleDigester(storage.kv) } } : {}),
           ...(realtime ? { delta: { accounts: await deltaAccounts(), followups: (await google.client('mail'))?.account?.email } } : {}),
           gate: () => sweepGate(day), providerDown: () => workerRouteDown(modelAccess), transaction: work => storage.transactionSync(work), ...(heldRaise ? { raise: mayRaise } : {}),
           enqueued: () => holdTaskJobsDue(storage.kv, now), held: () => heldTopicsOf(claimStore(storage.sql)),
@@ -6644,9 +6650,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const questText = questCardContext(card.id, quests, verdicts), questsDue = close ? quests.due().map(quest => quest.id) : [], verdictsOffered = offering.map(experiment => experiment.id);
       // New capabilities waiting to be told: this card carries them, and they count as told once it reaches the owner.
       const announcing = await stillLive(announced.waiting(now), trace), announcementText = announcementCardSection(announcing), announcementIds = announcing.map(row => row.id);
+      // A webhook's text among the updates is someone else's words: this card then is not a run Waldo started, so what it
+      // leads to keeps its card (ruling 3).
+      const unfoldedUpdates = updates.unfolded(clock.timezone), carriesWebhook = updates.unfoldedWebhook();
       const said = await composeDayCard(card, now, clock.timezone, {
         google: client, connectable: !client && google.configured(),
-        ledger: await promptLedger(), today: transcript(episodes.since(midnight, 30_000), clock.timezone), updates: updates.unfolded(clock.timezone),
+        ledger: await promptLedger(), today: transcript(episodes.since(midnight, 30_000), clock.timezone), updates: unfoldedUpdates,
         waiting: waitingSection(waitingApprovals(desk.pending(now))), ...(planning ? { planning } : {}), ...(actAhead ? { dayShape: true } : {}), ...(capacity ? { capacity } : {}), ...(tomorrow ? { tomorrow } : {}),
         ...(this.env.BRIEF_DAY_PLAN === '1' ? { layout: true } : {}), ...(this.env.CALENDAR_PLAN === '1' ? { planCard: true } : {}),
       });
@@ -6665,7 +6674,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const capacityText = capacity ? [capacityContext(cardCapacityNote(memory, storage.kv, healthMemoryOn(identity), await healthContext.read(trace).then(read => read === 'unknown' ? read : read !== null)), recentBlocks(storage.sql, now, clock.timezone)),
             ...(budget ? [await capacityBudgetContext(now, clock.timezone, client, !client && google.configured(), recentMoves(storage.sql, now, clock.timezone))] : [])].join('\n\n') : undefined;
           text = (await ledgerJob(trace, said, proposing ? [...OUTSIDE_TEXT_JOB_TOOLS, ...proposes] : undefined, proposing ? proposes : undefined, actAhead || capacity || tomorrow || questText !== null || shaping !== '',
-            [shaping, capacityText, questText, announcementText].filter(Boolean).join('\n\n') || undefined, true)).trim();
+            [shaping, capacityText, questText, announcementText].filter(Boolean).join('\n\n') || undefined, !carriesWebhook)).trim();
         } finally {
           raised = this.whyHolder.collected ?? []; this.whyHolder.collected = undefined;
           if (asks) replies = cardReplies.take(trace);
