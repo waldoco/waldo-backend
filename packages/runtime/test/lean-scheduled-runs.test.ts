@@ -48,7 +48,7 @@ const fake = (name: string) => ({ name: name as ToolName, description: `The ${na
 const TOOLS = [...new Set([...SCHEDULED_MENU, 'web_search', 'browse_page', 'send_message'])].filter((name) => name !== 'get_context').map(fake);
 
 type Script = (request: LLMRequest, index: number) => Readonly<{ text: string; tool?: string; args?: string }>;
-const harness = async ({ lean, entries = chain(), script = () => ({ text: 'SKIP' }), health, loader = false }: { lean: boolean; entries?: ConversationEntry[]; script?: Script; health?: boolean; loader?: boolean }) => {
+const harness = async ({ lean, entries = chain(), script = () => ({ text: 'SKIP' }), health, loader = false, wakes = false }: { lean: boolean; entries?: ConversationEntry[]; script?: Script; health?: boolean; loader?: boolean; wakes?: boolean }) => {
   const requests: LLMRequest[] = [];
   const logs: TurnLogEntry[] = [];
   const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {
@@ -63,7 +63,7 @@ const harness = async ({ lean, entries = chain(), script = () => ({ text: 'SKIP'
   const args: Parameters<typeof createOwnerResponder> = [loader ? { openaiApiKey: 'fixture', toolLoader: 'harness' } : 'fixture'];
   args[1] = store; args[3] = (entry) => logs.push(entry); args[5] = TOOLS as never; args[7] = false; args[10] = gateway;
   if (health !== undefined) args[17] = async () => health ? toContextHealthMaterial(HEALTH_ROW, { timezone: 'UTC', now: () => new Date() }) : null;
-  args[21] = { jobHost: { admit: async () => admission, chain: (_admission, surfaceChain) => surfaceChain }, dayCards: () => 'Today: Brief sent 07:30; Check-in due 13:00.', ...(lean ? { leanScheduled: true } : {}) };
+  args[21] = { jobHost: { admit: async () => admission, chain: (_admission, surfaceChain) => surfaceChain }, dayCards: () => 'Today: Brief sent 07:30; Check-in due 13:00.', ...(lean ? { leanScheduled: true } : {}), ...(wakes ? { modelSetWakes: true } : {}) };
   return { requests, logs, store, owner: createOwnerResponder(...args) };
 };
 
@@ -285,5 +285,34 @@ describe('the day plan and the wake decision with the lean view on', () => {
     const entry = scrubTraceHealth(logs.find((log) => log.hop === 'llm_day_plan')!);
     expect(entry.text!.input).toContain(HEALTH_WITHHELD);
     expect(entry.text!.input).not.toContain('Form zone:');
+  });
+});
+
+// MODEL_SET_WAKES: a run Waldo starts may leave itself a follow-up with no mail source; the loop book holds its bounds.
+describe('a Waldo-first run leaving itself a follow-up', () => {
+  const followUp = JSON.stringify({ title: 'Check the evening gym block', due: '2026-11-16T19:20', note: 'Did the 18:00 block happen?', watch_for: 'no workout, flat steps' });
+  const script: Script = (_request, index) => index === 0 ? { text: '', tool: 'open_loop', args: followUp } : { text: 'SKIP' };
+  it.each(KINDS.filter(([kind]) => kind !== 'an update sweep' && kind !== 'an update triage'))('%s is offered open_loop and its call runs', async (_kind, tools, direct) => {
+    calls.length = 0;
+    const { owner, requests } = await harness({ lean: true, wakes: true, script });
+    await run(owner, 'card:brief:1', tools, direct);
+    expect(toolNames(requests[0]!)).toContain('open_loop');
+    expect(calls).toEqual(['open_loop']);
+  });
+
+  it('with the switch off, a day card cannot open one, as before', async () => {
+    calls.length = 0;
+    const { owner, requests } = await harness({ lean: true, script });
+    await run(owner, 'card:brief:1', undefined, undefined);
+    expect(calls).toEqual([]);
+    expect(requests[1]!.tool_turns!.find((turn) => turn.call.name === 'open_loop')!.output).toContain('forbidden');
+  });
+
+  it('a run its caller did not mark Waldo-first still sends a sourceless open_loop to the owner\'s card', async () => {
+    calls.length = 0;
+    const { owner, requests } = await harness({ lean: true, wakes: true, script });
+    await run(owner, 'retry:1', [...OUTSIDE_TEXT_JOB_TOOLS, 'open_loop'], undefined, false);
+    expect(calls).toEqual([]);
+    expect(requests[1]!.tool_turns!.find((turn) => turn.call.name === 'open_loop')!.output).toContain('taint_needs_approval');
   });
 });
