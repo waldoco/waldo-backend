@@ -32,6 +32,7 @@ import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
 import { localTrustedBriefContextComposer, localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, type LocalSystemSkillBinding } from '../llm/run-loop-adapters';
 import type { ContextHealthMaterial } from '../context-composer/types';
 import { renderHealth } from '../context-composer/prompt';
+import { BYTES_PER_TOKEN_EST, estimatedTokens } from '../conversation/window';
 import { JoinedConversationPath } from '../conversation/joined-path';
 import { COMPACTION, COMPACTION_INSTRUCTION, chainCarriesOutside, compactedHistory, compactionDue, compactionId, compactionPlan, compactionRow, liveCompaction, seedBasePlan, ownerExchangeHistory, ownerRowsSince, planWithout, supersededCompaction, type CompactedStats, type CompactionFlush, type SpanMemory } from '../conversation/compaction';
 import { ownerReadings, readingBeyondOwner, sanitise } from '../scribe/sanitiser';
@@ -172,8 +173,6 @@ const toolErrorCode = (event: ToolLoopEvent): { error_code?: string } => {
   const code = event.error_code ?? event.code;
   return code ? { error_code: code } : {};
 };
-// Tool definitions are JSON: about four UTF-8 bytes per token on current tokenizers, close enough to compare rounds.
-const BYTES_PER_TOKEN_EST = 4;
 // The reply's system prompt with the byte size of each joined section, so a trace shows what fills it.
 type SystemPrompt = Readonly<{ text: string; sections: Readonly<Partial<Record<SystemSection, number>>>; contextSections?: Readonly<Partial<Record<SystemSection, number>>> }>;
 
@@ -398,10 +397,10 @@ export const createOwnerResponder = (
     privateRunScope?.admit();
     const input = JSON.stringify([{ role: 'system', content: system }, ...userMessages, ...(turns ?? [])]);
     const layers = {
-      tools: tools?.length ? Math.ceil(utf8Bytes(JSON.stringify(tools)) / BYTES_PER_TOKEN_EST) : 0,
-      system: Math.ceil(utf8Bytes(system) / BYTES_PER_TOKEN_EST),
-      history: Math.ceil(utf8Bytes(JSON.stringify(userMessages.slice(0, -1))) / BYTES_PER_TOKEN_EST),
-      current: Math.ceil(utf8Bytes(userMessages.at(-1)?.content ?? '') / BYTES_PER_TOKEN_EST),
+      tools: tools?.length ? estimatedTokens(utf8Bytes(JSON.stringify(tools))) : 0,
+      system: estimatedTokens(utf8Bytes(system)),
+      history: estimatedTokens(utf8Bytes(JSON.stringify(userMessages.slice(0, -1)))),
+      current: estimatedTokens(utf8Bytes(userMessages.at(-1)?.content ?? '')),
     };
     const base = layers.tools + layers.system + layers.history + layers.current;
     if (purpose === 'reply' && ownerTurnActive && !light) replyBaseTokens = base;
@@ -420,7 +419,7 @@ export const createOwnerResponder = (
         system_tokens_est: layers.system, history_tokens_est: layers.history, current_tokens_est: layers.current,
         ...(purpose === 'reply' && historyMoved !== undefined ? { history_moved: historyMoved } : {}),
         ...(leanRun && purpose === 'reply' ? { lean_scheduled: true, recent_bytes: leanRecentBytes } : {}),
-        ...(ceiling !== undefined && purpose === 'reply' ? { ceiling_tokens: ceiling, over_ceiling: base + Math.ceil((turns?.length ? utf8Bytes(JSON.stringify(turns)) : 0) / BYTES_PER_TOKEN_EST) > ceiling } : {}),
+        ...(ceiling !== undefined && purpose === 'reply' ? { ceiling_tokens: ceiling, over_ceiling: base + estimatedTokens(turns?.length ? utf8Bytes(JSON.stringify(turns)) : 0) > ceiling } : {}),
         ...(typeof systemPrompt === 'string' ? {} : { system_sections: systemPrompt.sections, ...(systemPrompt.contextSections ? { context_sections: systemPrompt.contextSections } : {}) }),
       },
     };
