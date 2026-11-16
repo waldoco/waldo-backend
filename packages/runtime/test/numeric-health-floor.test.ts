@@ -6,6 +6,47 @@ import { numericHealthIn, redactNumericHealth } from '../src/scribe/sanitiser';
 // write, so precision wins over recall: it must not fire on ordinary life that puts a number near a word a metric also
 // uses. Synthetic values only.
 describe('the numeric health floor', () => {
+  // A reply's label shapes: a day word with a colon, or a macro's own label, frames a reading as the owner's.
+  it.each([
+    'Yesterday: 1,022 kcal, 61 g protein',
+    'Yesterday: 61 g protein, 140 g carbs',
+    'Protein: 61 g',
+    'Carbs: 140 g, fat: 52 g',
+    'Yesterday: 72 kg',
+    'Mon: 72.4 kg',
+    'Today: 58 bpm resting',
+    'Last night: 42 ms',
+    'This morning: 97% SpO2',
+    'Yesterday: 7.5 hours asleep',
+    'Yesterday: 72 kg\nNice work this week',
+    'Protein: 61 g\nAnything else?',
+    '- Mon: 72.4 kg\n- Tue: 3 calls',
+    'Yesterday: 72 kg!',
+  ])('holds a reading framed by a label: %s', (text) => {
+    expect(numericHealthIn(text)).toBe(true);
+    expect(redactNumericHealth(text, '[H]')).not.toBe(text);
+  });
+  it.each([
+    'Protein: 25 g per serving',
+    'Protein: 25 g per 100 g',
+    'Serving: 30 g',
+    'Fat: 9 g / 100 g',
+    'Today: 3 hours of meetings',
+    'Yesterday: 20 kg of rice delivered',
+    'Today: 15 kg bag to the airport',
+    'Mon: 3 calls, Tue: 2 calls',
+    'Yesterday: 2 hours on the train',
+    'Today: 500 ms latency',
+    'Sat: 60 ms ping',
+    'Mon: 10 kg flour order',
+    'Today: 5 kg laundry',
+    'Sun: 100 kcal per bar',
+    'Fat: 10 g butter',
+    'Carbs: 30 g sugar',
+  ])('lets a label that is not the owner\'s reading through: %s', (text) => {
+    expect(numericHealthIn(text)).toBe(false);
+  });
+
   it.each([
     'Needs to file Form 16 by July',
     'Form 16',
