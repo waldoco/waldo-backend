@@ -72,6 +72,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" gives the model a partial health block, in words, for a day whose body data made no Recovery score, and fills the
   // block's missing lists from the stored row; anything else leaves such a day with no health block.
   HEALTH_PARTIAL_CONTEXT?: string;
+  // "1", with HEALTH_PARTIAL_CONTEXT, adds to the health block which kinds of body data exist, in words, and gives an owner with
+  // readings but no score row a block of that alone; anything else leaves the block as the stored row makes it.
+  HEALTH_INVENTORY?: string;
   HEALTH_TRAINING_LOAD?: string;
   // '1' has the health decision reason from the reviewed health protocols (skills/health-protocols), read through the
   // owner's next day, in the chat role. Anything else keeps the decision as it was.

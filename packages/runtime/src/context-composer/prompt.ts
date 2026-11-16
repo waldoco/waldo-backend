@@ -5,6 +5,8 @@ import {
   type CanaryTokens,
   type DerivedMissingPillarReason,
   type DerivedMissingPillars,
+  HEALTH_SIGNALS,
+  type HealthInventoryEntry,
   type NarrativeContext,
   type PartialHealthView,
   type Skill,
@@ -208,6 +210,7 @@ export function renderHealth(health: ContextHealthMaterial | null): string {
     `Confidence: ${health.view.confidence_band}. Missing components: ${missing}.`,
     `Recovery: ${health.narrative.recovery_descriptor}. Load: ${health.narrative.load_descriptor ?? 'unavailable'}.`,
     ...renderMissingPillars(health.view.missing_pillars),
+    ...renderInventory(health.view.inventory),
     ...renderBaseline(health.view.baseline_state),
     ...renderSleepDebt(health.view.sleep_debt),
     ...renderEnergyWindows(health.view.energy_windows),
@@ -232,14 +235,21 @@ function renderPartialHealth(view: PartialHealthView, daySummary: string, highSt
     return [
       `Partial health context: the newest body data${sourceNames.length === 0 ? '' : ` (from ${sourceNames})`} is more than three days old, so there is no current recovery, readiness or load reading.`,
       `Would fix it: ${MISSING_FIX.no_readings}.`,
+      ...renderInventory(view.inventory),
       'If get_health is in your function list, call it to see what did arrive and when before telling the owner nothing is available.',
     ].join('\n');
   }
-  const lookFurther = 'Readings these scores do not use, such as steps or heart rate through the day, may still have arrived: if get_health is in your function list, call it to see what did before telling the owner nothing is available.';
+  const lookFurther = view.inventory === undefined
+    ? 'Readings these scores do not use, such as steps or heart rate through the day, may still have arrived: if get_health is in your function list, call it to see what did before telling the owner nothing is available.'
+    : 'If get_health is in your function list, it reads any kind on hand; read what the question needs before answering from the body data.';
   return [
-    'Partial health context: Recovery and Form were not computed for this day, so there is no recovery or readiness reading to give.',
+    view.no_score_row === true
+      ? 'Partial health context: no Recovery, Form or Load reading is stored for this owner yet, so there is no recovery or readiness reading to give.'
+      : 'Partial health context: Recovery and Form were not computed for this day, so there is no recovery or readiness reading to give.',
     `Freshness: ${view.freshness}. Latest body data: ${AS_OF_WORDS[view.as_of_day]}${sources}.`,
-    `In the row: ${view.present.length === 0 ? 'none of the inputs these scores use' : view.present.map((item) => PRESENT_WORDS[item]).join('; ')}.`,
+    ...(view.inventory === undefined
+      ? [`In the row: ${view.present.length === 0 ? 'none of the inputs these scores use' : view.present.map((item) => PRESENT_WORDS[item]).join('; ')}.`]
+      : renderInventory(view.inventory)),
     ...renderMissingPillars(view.missing_pillars),
     ...(view.load_zone === undefined ? [] : [`Load: ${view.load_zone}.`]),
     ...renderBaseline(view.baseline_state),
@@ -249,6 +259,21 @@ function renderPartialHealth(view: PartialHealthView, daySummary: string, highSt
     ...(highStakes.length === 0 ? [] : [`Upcoming high-stakes: ${highStakes.join('; ')}`]),
     lookFurther,
   ].join('\n');
+}
+
+// What body data exists, kind by kind, in words: how often it carries a value, how recent the newest is and how regularly it
+// arrived this month. A source is named per kind only when the owner has more than one.
+const GRAIN_WORDS = { hour: 'hourly', night: 'nightly', day: 'daily', session: 'per session', reading: 'per reading' } as const;
+const NEWEST_WORDS = { within_hours: 'newest within hours', today: 'newest today', yesterday: 'newest yesterday', this_week: 'newest this week', this_month: 'newest earlier this month' } as const;
+const REGULARITY_WORDS = { nearly_every_day: 'nearly every day', most_days: 'most days', some_days: 'some days', a_few_days: 'a few days' } as const;
+function renderInventory(inventory: readonly HealthInventoryEntry[] | undefined): string[] {
+  if (inventory === undefined || inventory.length === 0) return [];
+  const several = new Set(inventory.flatMap((entry) => entry.sources)).size > 1;
+  const kinds = inventory.map((entry) => {
+    const from = several ? `; from ${joinNames(entry.sources.map((source) => SOURCE_NAMES[source]))}` : '';
+    return `${HEALTH_SIGNALS[entry.signal].words} (${GRAIN_WORDS[entry.grain]}; ${NEWEST_WORDS[entry.newest]}; ${REGULARITY_WORDS[entry.regularity]}${from})`;
+  });
+  return [`Body data on hand this month: ${kinds.join('; ')}.`];
 }
 
 // Each stored reason in words, and the one step that supplies what it lacks. Facts about inputs, never advice on the body.
