@@ -62,7 +62,8 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
       return { ok: false, code: 'invalid_args', error: 'Anthropic adapter received an attachment type it cannot send', unsendable: true };
     }
     const cached = input.step.cache === 'anthropic_native';
-    const messages = cached ? withMessageBreakpoints(rendered) : rendered;
+    const scheduled = input.request.cache_profile === 'scheduled';
+    const messages = cached && !(scheduled && !input.request.tool_turns?.length) ? withMessageBreakpoints(rendered) : rendered;
 
     input.runScope?.admit();
     const controller = new AbortController();
@@ -77,7 +78,7 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
       const body: Anthropic.MessageCreateParamsNonStreaming = {
         model: input.request.model,
         max_tokens: input.request.max_tokens,
-        ...(input.request.system ? { system: systemPrompt(input.request.system, cached) } : {}),
+        ...(input.request.system ? { system: systemPrompt(input.request.system, cached, scheduled) } : {}),
         messages,
         ...toolsParams(input.request),
         ...outputConfig(input.request),
@@ -212,11 +213,14 @@ const onlySearched = (response: Anthropic.Message): boolean => response.stop_rea
 // A skill loaded mid-turn appends its procedures after the stable head, so the breakpoint stays on the head: the tools and
 // the head remain a cached prefix on the next round, and the procedures are read through the rolling message breakpoints.
 // The two blocks join to the exact system text; anything that is not the head plus the procedures stays one block.
-function systemPrompt(system: string, cached: boolean): Anthropic.MessageCreateParams['system'] {
+// A scheduled run's head is kept an hour: the next run that shares it starts minutes to hours later, past a five-minute entry.
+// The API wants a longer-lived marker ahead of shorter ones, and the head comes before every message marker.
+function systemPrompt(system: string, cached: boolean, scheduled: boolean): Anthropic.MessageCreateParams['system'] {
   if (!cached) return system;
+  const cache_control: Anthropic.CacheControlEphemeral = scheduled ? { type: 'ephemeral', ttl: '1h' } : { type: 'ephemeral' };
   const split = system.endsWith(OWNER_SKILL_SAFEGUARDS) ? system.indexOf(`\n\n${OWNER_SKILL_PROCEDURES_LEAD}`) : -1;
-  if (split <= 0) return [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }];
-  return [{ type: 'text', text: system.slice(0, split), cache_control: { type: 'ephemeral' } }, { type: 'text', text: system.slice(split) }];
+  if (split <= 0) return [{ type: 'text', text: system, cache_control }];
+  return [{ type: 'text', text: system.slice(0, split), cache_control }, { type: 'text', text: system.slice(split) }];
 }
 
 // Rolling breakpoints beside the system one, four in all as the API allows. A round appends two messages, so the last

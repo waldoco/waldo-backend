@@ -241,6 +241,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_ASYNC_TOOLS?: string;
   // "1": a background job's request row keeps only a key, never the job's prompt (conversation/job-outcome.ts).
   WALDO_JOB_OUTCOME_ROWS?: string;
+  // "1": a Waldo-first scheduled run (day card, check-back, update sweep, intervention) reads a lean view: its own event, the
+  // composed context and the last few rows of the owner's exchange instead of the chat replay, under one tool menu and a
+  // 1-hour cached head shared by every scheduled job kind (channels/owner-turn.ts).
+  WALDO_LEAN_SCHEDULED?: string;
   // "1": the owner's WhatsApp turns read and write the owner's own chain, the one their app chat uses (conversation/one-timeline.ts).
   WALDO_ONE_TIMELINE?: string;
   // "1": the owner's own reply takes a light step that answers quick chat or hands the turn to the strong role, and every task

@@ -62,6 +62,7 @@ export type TurnModelUsage = z.infer<typeof turnModelUsageSchema>;
 // ceiling_tokens: the tokens a call of this class aims at (a chat turn 40k, a card or job 25k); over_ceiling: whether this
 // call's layers and tool results together were estimated above it. Set while the deploy measures calls against ceilings.
 // context_sections: the parts of the turn context that ride the owner's message instead of the system prompt.
+// lean_scheduled: a Waldo-first scheduled run that read the lean view (no chat replay); recent_bytes: the recent exchange it read.
 export const turnContextShapeSchema = z.strictObject({
   tools_count: count, tools_bytes: count, tools_tokens_est: count.optional(), tool_turns_bytes: count,
   history_messages: count, history_bytes: count, current_bytes: count, attachments: count,
@@ -69,6 +70,7 @@ export const turnContextShapeSchema = z.strictObject({
   ceiling_tokens: count.optional(), over_ceiling: z.boolean().optional(),
   system_sections: z.partialRecord(systemSectionSchema, count).optional(),
   context_sections: z.partialRecord(systemSectionSchema, count).optional(),
+  lean_scheduled: z.boolean().optional(), recent_bytes: count.optional(),
 });
 export type TurnContextShape = z.infer<typeof turnContextShapeSchema>;
 

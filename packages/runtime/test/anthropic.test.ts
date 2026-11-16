@@ -414,6 +414,48 @@ describe('AnthropicMessagesAdapter cache breakpoints', () => {
     expect(use).not.toHaveProperty('cache_control');
     expect((bodies[0]!.tools as Array<Record<string, unknown>>).some((tool) => 'cache_control' in tool)).toBe(false);
   });
+
+  // A scheduled run's head (tools and system) is shared by every scheduled run of the owner, hours apart; its first round is
+  // unique to the run, so a marker there would only pay a write nothing reads.
+  describe('a scheduled run', () => {
+    const HOUR = { type: 'ephemeral', ttl: '1h' };
+    const scheduled = (extra: Partial<LLMRequest> = {}) => {
+      const base = gatewayRequest(ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, 'anthropic_native');
+      return { ...base, request: { ...base.request, tools, cache_profile: 'scheduled' as const, ...extra } };
+    };
+    const round = (n: number) => ({ call: { call_id: `c${n}`, name: 'get_context', arguments: '{}' }, output: `o${n}`, prior_items: [{ type: 'tool_use', provider: ANTHROPIC_PROVIDER, block: { type: 'tool_use', id: `c${n}`, name: 'get_context', input: {} } }] });
+
+    it('keeps the head an hour and marks no message on its first round', async () => {
+      const { bodies, adapter } = recording([reply([{ type: 'text', text: 'ok' }])]);
+      await adapter.complete(scheduled());
+      expect(bodies[0]!.system).toEqual([{ type: 'text', text: 'Be concise.', cache_control: HOUR }]);
+      expect(marked(bodies[0]!)).toEqual([]);
+      expect(breakpoints(bodies[0]!)).toBe(1);
+    });
+
+    it('keeps the hour-long head ahead of the rolling markers once it has tool rounds', async () => {
+      const { bodies, adapter } = recording([reply([{ type: 'text', text: 'ok' }])]);
+      await adapter.complete(scheduled({ tool_turns: [round(1)] }));
+      expect(bodies[0]!.system).toEqual([{ type: 'text', text: 'Be concise.', cache_control: HOUR }]);
+      expect(marked(bodies[0]!)).toEqual(['0.0', '1.0', '2.0']);
+      expect(JSON.stringify(bodies[0]!.messages)).not.toContain('"ttl"');
+    });
+
+    it('keeps a loaded skill procedure after the hour-long head, unmarked', async () => {
+      const { bodies, adapter } = recording([reply([{ type: 'text', text: 'ok' }])]);
+      await adapter.complete(scheduled({ system: withOwnerSkillProcedures('Be concise.', 'Step one.') }));
+      const [head, procedures] = bodies[0]!.system as Array<{ text: string; cache_control?: unknown }>;
+      expect(head).toEqual({ type: 'text', text: 'Be concise.', cache_control: HOUR });
+      expect(procedures).not.toHaveProperty('cache_control');
+    });
+
+    it('marks nothing on a step without provider caching', async () => {
+      const { bodies, adapter } = recording([reply([{ type: 'text', text: 'ok' }])]);
+      const base = gatewayRequest();
+      await adapter.complete({ ...base, request: { ...base.request, cache_profile: 'scheduled' } });
+      expect(breakpoints(bodies[0]!)).toBe(0);
+    });
+  });
 });
 
 describe('AnthropicMessagesAdapter as the primary provider', () => {
