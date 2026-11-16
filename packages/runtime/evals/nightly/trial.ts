@@ -6,7 +6,7 @@ import { createTelegramResponder } from '../../src/channels/telegram-turn';
 import { isSkip } from '../../src/channels/day-cards';
 import type { CardId } from '../../src/prompt/day-cards';
 import { capacityContext } from '../../src/prompt/capacity';
-import { OUTSIDE_TEXT_JOB_TOOLS } from '../../src/channels/check-back';
+import { checkBackReply, LOOP_CHECK_BACK_TOOLS, loopCheckBackText, OUTSIDE_TEXT_JOB_TOOLS } from '../../src/channels/check-back';
 import { inboundTurn, ownerWords } from '../../src/channels/owner-inbound-turn';
 import type { TurnLogEntry } from '../../src/channels/telegram-listener';
 import type { ForgetBarrierMode } from '../../src/context-composer/forget-barrier';
@@ -35,6 +35,8 @@ export type Step =
   | Readonly<{ say: string; upload: SeedUpload }>
   | Readonly<{ advance_to: string }>
   | Readonly<{ fire_due: true }>
+  // The heartbeat's check-back runs now, as the owner object runs it: on the loops past due, with the check-back tools, tainted.
+  | Readonly<{ check_back: true }>
   // The owner says this while no model is reachable: they get the floor reply's promise, and the retry answers it later.
   | Readonly<{ late_answer: string }>
   | Readonly<{ health: 'shared' | 'withdrawn' }>
@@ -126,7 +128,7 @@ const metricsOf = ({ groups, ...meter }: Meter, lightRoutes: readonly string[]):
 // staging loader; fallbackKey opens the route's second-provider step, which the gateway must then be able to serve.
 // embeddings turns semantic recall on.
 export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName; toolSearch?: boolean; toolLoader?: 'harness'; fallbackKey?: string; memory?: MemoryMode; forgetBarrier?: ForgetBarrierMode; embeddings?: EmbeddingRunner; memorySelection?: boolean; promptV2?: boolean; leanScheduled?: boolean; modelSetWakes?: boolean }>): Promise<TrialRecord> => {
-  const world = evalWorld(scenario.world, scenario.start, deps.memory, deps.embeddings);
+  const world = evalWorld(scenario.world, scenario.start, deps.memory, deps.embeddings, deps.modelSetWakes === true);
   await world.ready;
   const entries: TurnLogEntry[] = [];
   const model = deps.model ?? WALDO_CHAT_MODEL;
@@ -186,6 +188,17 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
           transcript.push({ role: 'world', text: `The reminder "${reminder.note}" fires.` });
           transcript.push({ role: 'waldo', surface: 'notification', text: await responder.remind(`${scenario.id}-${reminder.id}`, 1, reminder.note, time) });
         }
+      } else if ('check_back' in step) {
+        const due = world.checkBack.due(), trace = `${scenario.id}-checkback-${turn += 1}`;
+        if (!due.length) { transcript.push({ role: 'world', text: `At ${world.localNow()} (${TIMEZONE}) the heartbeat finds nothing due.` }); continue; }
+        transcript.push({ role: 'world', text: `At ${world.localNow()} (${TIMEZONE}) the heartbeat finds these due and the check-back runs: ${due.map((loop) => loop.title).join('; ')}.` });
+        skills.turn(trace);
+        world.checkBack.scope(trace, due);
+        const offered = new Set(world.handlers.map((handler) => handler.name));
+        try {
+          const reply = checkBackReply(await responder.prompt(trace, 1, loopCheckBackText(due), time, LOOP_CHECK_BACK_TOOLS.filter((name) => offered.has(name)) as never, undefined, undefined, undefined, 'external', undefined, undefined, undefined, true));
+          if (reply !== null) transcript.push({ role: 'waldo', surface: 'notification', text: reply });
+        } finally { world.checkBack.done(trace, due); }
       } else if ('outside_job' in step) {
         turn += 1;
         transcript.push({ role: 'world', text: `A background job reads this outside text: ${step.outside_job}` });
