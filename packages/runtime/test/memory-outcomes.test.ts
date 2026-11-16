@@ -33,16 +33,18 @@ const seed = (state: DurableObjectState) => {
   return loops;
 };
 
-const pass = (state: DurableObjectState, reply: string | Error, health = true) => {
+const pass = (state: DurableObjectState, reply: string | Error, health = true, readZones?: OutcomesDeps['readZones']) => {
   const asked: string[] = [];
+  const bodies: boolean[] = [];
   const logs: Record<string, unknown>[] = [];
   const deps: OutcomesDeps = {
     kv: state.storage.kv, outcomes: outcomeBook(state.storage.sql), claims: claimStore(state.storage.sql, work => state.storage.transactionSync(work)),
     transaction: work => state.storage.transactionSync(work), timezone: 'Asia/Kolkata', now: () => NOW, health,
-    ask: async text => { asked.push(text); if (reply instanceof Error) throw reply; return reply; },
+    ask: async (text, body) => { asked.push(text); bodies.push(body); if (reply instanceof Error) throw reply; return reply; },
+    ...(readZones ? { readZones } : {}),
     log: entry => logs.push(entry as never),
   };
-  return { deps, asked, logs };
+  return { deps, asked, logs, bodies };
 };
 
 it('reads the week\'s decided cards and closed loops once, in the order they ended, in words, and adds only Waldo\'s untrusted reads', async () => {
@@ -98,5 +100,44 @@ it('moves no mark when the model call fails, so the next night reads the same ro
 it('reads nothing from an owner object that never raised a card or set a loop', async () => {
   await owner('outcomes-none', async state => {
     expect(await consolidateOutcomes(pass(state, '{"add":[]}').deps, 'trace-1')).toBe('empty');
+  });
+});
+
+// Owner's ruling 7: the body around each outcome, in zone words, from the model-consented zones read. Row words as the read
+// returns them (low, moderate, good, high), shown to the model as the pillar's own zone words.
+const ZONES = { zones: { from: '2026-11-09', to: '2026-11-17', days: [
+  { day: '2026-11-14', recovery: 'moderate', form: 'good' }, { day: '2026-11-15', recovery: 'high', form: null },
+  { day: '2026-11-16', recovery: null, form: 'low' }, { day: '2026-11-17', recovery: 'low', form: 'low' },
+] } };
+
+it('gives each outcome the owner\'s Recovery and Form that day and the next, in zone words, and tells the model it may say how the body tended to be', async () => {
+  await owner('outcomes-body', async state => {
+    seed(state);
+    const windows: string[][] = [];
+    const { deps, asked, bodies } = pass(state, '{"add":[]}', true, async (from, to) => { windows.push([from, to]); return ZONES; });
+    await consolidateOutcomes(deps, 'trace-1');
+    expect(windows).toEqual([['2026-11-14', '2026-11-17']]);
+    expect(bodies).toEqual([true]);
+    expect(asked[0]).toContain('[2026-11-14T04:00] Then the owner approved it and it was done.\nThe owner\'s body: that day Recovery mixed, Form steady; the next day Recovery excellent.');
+    expect(asked[0]).toContain('Then the owner declined it.\nThe owner\'s body: that day Recovery excellent; the next day Form depleted.');
+    expect(asked[0]).not.toMatch(/\b(?:low|moderate|good|high)\b/);
+  });
+});
+
+it('reads no body when the owner does not share health with memory, and goes on without it when the read fails', async () => {
+  await owner('outcomes-body-off', async state => {
+    seed(state);
+    let read = 0;
+    const off = pass(state, '{"add":[]}', false, async () => { read++; return ZONES; });
+    await consolidateOutcomes(off.deps, 'trace-1');
+    expect([read, off.bodies]).toEqual([0, [false]]);
+    expect(off.asked[0]).not.toContain('body');
+  });
+  await owner('outcomes-body-failed', async state => {
+    seed(state);
+    const failed = pass(state, '{"add":[]}', true, async () => { throw new Error('synthetic outage'); });
+    expect(await consolidateOutcomes(failed.deps, 'trace-1')).toBe('consolidated');
+    expect(failed.bodies).toEqual([false]);
+    expect(failed.logs).toContainEqual(expect.objectContaining({ code: 'body_unread', ok: false }));
   });
 });
