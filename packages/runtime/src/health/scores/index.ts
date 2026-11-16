@@ -1,7 +1,7 @@
 import { labelOf } from './baseline';
 import { driversOf } from './drivers';
 import { formScore } from './form';
-import { ALGORITHM, PROVISIONAL_ALGORITHM, provisionalRecoveryBasis, recoveryBasis } from './recovery';
+import { ALGORITHM, DEGRADED_ALGORITHM, PROVISIONAL_ALGORITHM, provisionalRecoveryBasis, recoveryBasis } from './recovery';
 import { energyWindows } from './energy-windows';
 import { priorDays, sleepDebt } from './sleep-debt';
 import { combine } from './stats';
@@ -42,14 +42,16 @@ export const computeDailyScores = (input: DailyScoresInput): DailyScores => {
   const prior = priorDays(input.targetDay, byDay);
 
   const provisional = input.provisional === true;
-  const basis = provisional ? provisionalRecoveryBasis(target, prior, input.sleepNeedMinutes) : recoveryBasis(target, prior, input.sleepNeedMinutes);
+  const degrade = provisional && input.degrade === true;
+  const basis = provisional ? provisionalRecoveryBasis(target, prior, input.sleepNeedMinutes, degrade) : recoveryBasis(target, prior, input.sleepNeedMinutes);
   let recovery: RecoveryResult;
   if ('reason' in basis) recovery = { state: 'unavailable', reason: basis.reason };
   else {
     const { score, coverage } = combine(basis.components);
     const used = { signals: basis.signals, days: basis.days };
     recovery = provisional
-      ? { state: 'available', score, zone: recoveryZone(score), algorithm_version: PROVISIONAL_ALGORITHM.recovery, activation: 'accepted', coverage, hrv_method: basis.hrvMethod, used, baseline: labelOf(basis.own ?? [], basis.usedPrior === true) }
+      ? { state: 'available', score, zone: recoveryZone(score), coverage, hrv_method: basis.hrvMethod, used, baseline: labelOf(basis.own ?? [], basis.usedPrior === true),
+        ...(basis.sleepOnly ? { algorithm_version: DEGRADED_ALGORITHM.recovery, activation: 'candidate_unaccepted' as const } : { algorithm_version: PROVISIONAL_ALGORITHM.recovery, activation: 'accepted' as const }) }
       : { state: 'available', score, zone: recoveryZone(score), algorithm_version: ALGORITHM.recovery, activation: 'candidate_unaccepted', coverage, hrv_method: basis.hrvMethod, used };
   }
   const debt = sleepDebt(input.targetDay, byDay, prior, input.sleepNeedMinutes, provisional);
@@ -57,7 +59,7 @@ export const computeDailyScores = (input: DailyScoresInput): DailyScores => {
     recovery,
     drivers: driversOf(target, prior),
     sleep_debt: debt,
-    form: formScore(target, prior, input.sleepNeedMinutes, input.asOf, provisional),
+    form: formScore(target, prior, input.sleepNeedMinutes, input.asOf, provisional, degrade),
     weight: weightScore(target, prior, provisional),
     ...(provisional ? { windows: energyWindows({ targetDay: input.targetDay, days: [...byDay.values()], recoveryZone: recovery.state === 'available' ? recovery.zone : null, sleepTrend: debt.state === 'unavailable' ? 'steady' : debt.trend ?? 'steady' }) } : {}),
   };
@@ -65,5 +67,6 @@ export const computeDailyScores = (input: DailyScoresInput): DailyScores => {
 
 // The engine the owner's recompute runs, chosen by the HEALTH_PROVISIONAL_SCORES variable: only the exact value "1" turns
 // provisional scores on, and anything else is the earlier engine itself.
-export const dailyScoresFor = (flag: string | undefined): ((input: DailyScoresInput) => DailyScores) =>
-  (flag === '1' ? input => computeDailyScores({ ...input, provisional: true }) : computeDailyScores);
+// HEALTH_SCORES_DEGRADE "1" adds the degraded rule to the provisional engine, and does nothing without it.
+export const dailyScoresFor = (flag: string | undefined, degrade?: string): ((input: DailyScoresInput) => DailyScores) =>
+  (flag === '1' ? input => computeDailyScores({ ...input, provisional: true, degrade: degrade === '1' }) : computeDailyScores);

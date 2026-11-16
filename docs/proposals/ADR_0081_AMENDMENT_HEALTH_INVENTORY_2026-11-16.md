@@ -342,3 +342,18 @@ Built behind `HEALTH_INVENTORY` (on in staging with `HEALTH_PARTIAL_CONTEXT`, of
   reading with its local start and end: for sleep, falling asleep and waking). The names each takes come from the signal
   registry's grains; any other name is refused before the store is read. `daytime_hrv` reads `hrv_window`, the one stored kind
   the tool could not read.
+
+## Slice 3: scores degrade, they do not gate (Ansh, 16 November)
+
+Built behind `HEALTH_SCORES_DEGRADE` (staging on, production off), on the provisional engine only.
+
+- **Recovery stands on the night's sleep** when no overnight heart signal arrived or none has a baseline yet: `recovery.v6`,
+  written `candidate_unaccepted`, coverage 0.5 (sleep's share) times the source's confidence. Without the night there is still no
+  Recovery.
+- **Form stands on the day's own parts** when Recovery has none: `form.v11`, `candidate_unaccepted`, coverage the parts'
+  share. A Form built on a sleep-only Recovery is also `form.v11`. Its existing data rules hold: the day's parts still need
+  eight hours of the day and their own baselines, so a steps-only owner has a Form from mid-afternoon, not at noon.
+- **Nothing changes for an owner with every input**: the same rows byte for byte (tested through the real producer).
+- **The model** reads a Form without Recovery inside the partial block: its zone, the parts it stood on and its confidence
+  band, never a reading on the night. A sleep-only Recovery reads as a Recovery view whose missing components name HRV.
+- **The writer** needs no migration: versions are checked by pattern, and the used names are unchanged.

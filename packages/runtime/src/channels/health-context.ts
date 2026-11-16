@@ -232,6 +232,17 @@ const presentOf = (context: RowContext): PartialHealthPresent[] => {
   ];
 };
 
+// A Form computed without Recovery (the degraded rule): its zone, the day's parts it stood on and its confidence, in words.
+const FORM_BASIS = { sleep_midpoint: 'sleep_timing', daylight: 'daylight', movement: 'movement', steps: 'steps', stress: 'stress' } as const;
+const bandOf = (confidence: number | null): 'high' | 'medium' | 'low' => (confidence === null ? 'low' : confidence >= 0.66 ? 'high' : confidence >= 0.33 ? 'medium' : 'low');
+const formWithoutRecovery = (form: unknown): PartialHealthView['form_without_recovery'] => {
+  const zone = fromRowZone('form', pillarZone(form));
+  const basis = (usedSignals(form) ?? []).flatMap((signal) => (Object.hasOwn(FORM_BASIS, signal) ? [FORM_BASIS[signal as keyof typeof FORM_BASIS]] : []));
+  if (zone === null || basis.length === 0) return undefined;
+  const confidence = isRecord(form) && typeof form['confidence'] === 'number' && Number.isFinite(form['confidence']) ? form['confidence'] : null;
+  return { zone, basis, confidence_band: bandOf(confidence) };
+};
+
 const daySummaryParts = (context: RowContext): string[] => {
   const parts: string[] = [];
   const drivers = [...new Set([...pillarDrivers(context.form), ...wordList(context.drivers, 4)])].slice(0, 4);
@@ -296,8 +307,10 @@ const partialMaterial = (context: RowContext, clock: OwnerClock, stamp: RowStamp
     // A sleep debt the row could not compute is named among the missing pillars, not again as an unknown amount.
     const sleepDebt = missingReason(context.sleep_debt) === undefined ? sleepDebtWords(context.sleep_debt) : undefined;
     const windows = energyWindows(context.windows);
+    const form = formWithoutRecovery(context.form);
     view = {
       ...shared, present: presentOf(context), missing_pillars: missingPillarsOf(context),
+      ...(form === undefined ? {} : { form_without_recovery: form }),
       ...(load === undefined ? {} : { load_zone: load }),
       ...(loadState === undefined ? {} : { baseline_state: { load: loadState } }),
       ...(sleepDebt === undefined ? {} : { sleep_debt: sleepDebt }),
@@ -515,7 +528,7 @@ export function toContextHealthMaterial(
 // The zone words a rendered health block shows the model (renderHealth), for checks that keep them out of what leaves.
 export const healthZoneWords = (material: ContextHealthMaterial | null): readonly string[] => {
   if (material === null) return [];
-  if (isPartialHealth(material)) return material.view.load_zone === undefined ? [] : [material.view.load_zone];
+  if (isPartialHealth(material)) return [material.view.form_without_recovery?.zone, material.view.load_zone].filter((word): word is NonNullable<typeof word> => word !== undefined);
   return [
     'form_zone' in material.view ? material.view.form_zone : material.view.recovery_zone,
     material.narrative.recovery_descriptor, ...(material.narrative.load_descriptor ? [material.narrative.load_descriptor] : []),

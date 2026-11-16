@@ -72,6 +72,9 @@ export interface DailyScoresInput {
   readonly asOf: string | null;
   // Off unless true. On, each component reads against the shared baseline from the owner's first day.
   readonly provisional?: boolean;
+  // Provisional only, off unless true. On, no pillar switches another off: Recovery stands on the night's sleep without an
+  // overnight heart signal, and Form on the day's own parts without Recovery, each at the lower coverage that leaves.
+  readonly degrade?: boolean;
 }
 
 export interface Unavailable { readonly state: 'unavailable'; readonly reason: UnavailableReason }

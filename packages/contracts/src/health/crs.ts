@@ -176,6 +176,13 @@ export const partialHealthViewSchema = z.strictObject({
   // No score row is stored for the owner at all: the view stands on the inventory alone, and its day and freshness are those of
   // the newest reading.
   no_score_row: z.literal(true).optional(),
+  // A Form the degraded rule computed from the day's own parts without Recovery: its zone, the parts it stood on and how
+  // confident it is. Never a readiness reading on the night, which was not computed.
+  form_without_recovery: z.strictObject({
+    zone: formZoneSchema,
+    basis: z.array(z.enum(['sleep_timing', 'daylight', 'movement', 'steps', 'stress'])).min(1).max(5),
+    confidence_band: z.enum(['high', 'medium', 'low']),
+  }).optional(),
 });
 export type PartialHealthView = z.infer<typeof partialHealthViewSchema>;
 
