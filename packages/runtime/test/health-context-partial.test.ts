@@ -78,7 +78,7 @@ describe('a partial health block from the rows the producer writes', () => {
     expect(block).toContain('get_health');
     expect(block).not.toMatch(/Recovery zone|Form zone|Recovery: |readiness is|\d/);
     // The row records what is missing, never that steps arrived; the block does not claim it.
-    expect(block).not.toMatch(/Present:.*steps/);
+    expect(block).not.toMatch(/In the row:.*steps/);
   });
 
   it('sleep plus steps: names last night\'s sleep and the sleep debt, and that no overnight heart signal arrived', async () => {
@@ -92,6 +92,19 @@ describe('a partial health block from the rows the producer writes', () => {
     expect(block).toContain('Sleep debt:');
     expect(block).toContain('no overnight heart rate or heart rate variability');
     expect(block).not.toMatch(/Recovery zone|Form zone/);
+  });
+
+  // A sleep-plus-steps owner at 07:00, before the day's first upload: the newest row is yesterday's, and its night is the one
+  // before last. The block never says last night's sleep is in hand.
+  it('names a row\'s night by the row\'s day: yesterday\'s row read at 07:00 has the night before last, not last night', async () => {
+    const stored = await storedRow({ sleep: true, steps: true });
+    const early = { timezone: TZ, now: () => new Date(local(addDays(TODAY, 1), 7)) };
+    const material = toContextHealthMaterial(asRead(stored), early, undefined, { partial: true });
+    expect(material!.view).toMatchObject({ as_of_day: 'yesterday', present: ['last_night_sleep', 'recent_sleep'] });
+    const block = renderHealth(material);
+    expect(block).toContain('Latest body data: yesterday, from Health Connect.');
+    expect(block).toContain('In the row: the sleep of the night before last; sleep across recent nights.');
+    expect(block).not.toContain("last night's sleep");
   });
 
   it('heart plus steps: the stored row cannot tell it from steps only, so the block says no more than steps only does', async () => {
