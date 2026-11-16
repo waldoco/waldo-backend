@@ -29,4 +29,15 @@ describe('console admin', () => {
     expect(JSON.parse(String((fetcher.mock.calls[0] as [string, RequestInit])[1].body))).toMatchObject({ p_do_name: 'do-admin', p_email: 'new@test.invalid' });
     expect(await auth.adminOverview('do-user')).toBeNull();
   });
+
+  it('asks the admin check with a signature of its own for the calling owner, and takes only an exact true as admin', async () => {
+    const fetcher = vi.fn(async () => json(true));
+    expect(await consoleAuth(env, fetcher as unknown as typeof fetch, now)!.adminCheck('do-admin')).toBe(true);
+    const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toContain('/rpc/admin_check');
+    const args = JSON.parse(String(init.body));
+    expect(args).toMatchObject({ p_do_name: 'do-admin' });
+    expect(args.p_sig).toBe(await routerSignature('router', 1_790_000_000, 'admincheck.do-admin'));
+    for (const answer of [false, null, 'true', 1, {}]) expect([answer, await consoleAuth(env, vi.fn(async () => json(answer)) as unknown as typeof fetch, now)!.adminCheck('do-admin')]).toEqual([answer, false]);
+  });
 });

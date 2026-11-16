@@ -36,7 +36,8 @@ async function world() {
   const owners: FixtureOwner[] = [{ do_name: ownerName, owner_id: '10000000-0000-4000-8000-000000000001', state: 'active', state_version: 1, admission_revision: 1 }];
   const fx = fixtureDirectory({ origin: ORIGIN, secret: SECRET, owners, extra: (fn) => {
     if (fn === 'console_session_touch' || fn === 'console_session_open' || fn === 'console_session_open_for') return Response.json(true);
-    if (fn === 'health_context_read' || fn === 'health_plane' || fn === 'admin_overview') return Response.json(null);
+    if (fn === 'health_context_read' || fn === 'health_plane') return Response.json(null);
+    if (fn === 'admin_check') return Response.json(false);
     return null;
   } });
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {

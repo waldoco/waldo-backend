@@ -85,7 +85,7 @@ export async function iMessageConsolePage(env: IMessageEnv, owner: string, csrf:
       return { ...r, online: s.online, textReady: s.textReady, tapbacksReady: s.tapbacksReady, quarantine: s.quarantine };
     }));
     const auth = consoleAuth(env);
-    const admin = await auth?.adminOverview(owner).then((v) => v !== null).catch(() => false) ?? false;
+    const admin = await auth?.adminCheck(owner).catch(() => false) ?? false;
     const linkedHint = await auth?.iMessageHandleHint?.(owner) ?? null;
     const view = await iMessageNumberView(env, owner), photon = admin ? await photonConnection(env) : null;
     return new Response(renderIMessage(withStatus, csrf, { admin, linkedHint, enrollable: view.enrollable, phone: view.phone, photon, media: env.IMESSAGE_MEDIA === '1', voice: env.IMESSAGE_VOICE === '1', ...(view.number ? { address: view.number } : {}) }), { headers: HEADERS });

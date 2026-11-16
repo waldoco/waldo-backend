@@ -30,7 +30,7 @@ async function world(o: { admin?: boolean } = {}) {
   const fx = fixtureDirectory({ origin: ORIGIN, secret: SECRET, owners, extra: (fn, a) => {
     if (fn === 'console_session_touch') return Response.json(true);
     if (fn === 'health_context_read' || fn === 'health_plane') return Response.json(null);
-    if (fn === 'admin_overview') return Response.json(owners.find((owner) => owner.do_name === a.p_do_name)?.admin ? { owners: [], invites: [] } : null);
+    if (fn === 'admin_check') return Response.json(owners.find((owner) => owner.do_name === a.p_do_name)?.admin === true);
     return null;
   } });
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {

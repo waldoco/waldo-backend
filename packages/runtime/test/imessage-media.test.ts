@@ -31,12 +31,13 @@ type Attached = { id: string; name: string; mimeType: string; bytes: Uint8Array 
 
 afterEach(() => { vi.restoreAllMocks(); proof.turns = []; });
 
-async function world() {
+async function world(o: Readonly<{ admin?: boolean }> = {}) {
   const ownerName = `imsg-media-${crypto.randomUUID()}`;
   const owners: FixtureOwner[] = [{ do_name: ownerName, owner_id: '40000000-0000-4000-8000-000000000001', state: 'active', state_version: 1, admission_revision: 1 }];
   const fx = fixtureDirectory({ origin: ORIGIN, secret: SECRET, owners, extra: (fn) => {
     if (fn === 'console_session_touch' || fn === 'console_session_open' || fn === 'console_session_open_for') return Response.json(true);
-    if (fn === 'health_context_read' || fn === 'health_plane' || fn === 'admin_overview') return Response.json(null);
+    if (fn === 'health_context_read' || fn === 'health_plane') return Response.json(null);
+    if (fn === 'admin_check') return Response.json(o.admin === true);
     return null;
   } });
   // Photon as its HTTP routes answer: one project token, each message's own record, each attachment's bytes.
@@ -119,6 +120,11 @@ async function world() {
 it('the owner\'s iMessage console page says voice notes, photos and documents reach Waldo', async () => {
   const w = await world();
   expect(await w.page()).toContain('Direct iMessages: text, voice notes, and photos and documents sent to your Waldo number. Groups and SMS are not supported.');
+});
+
+it('the iMessage console page offers the shared-number operator section to an admin only, by the directory\'s admin check', async () => {
+  expect(await (await world({ admin: true })).page()).toContain('<h2>Shared Waldo number (operator)</h2>');
+  expect(await (await world()).page()).not.toContain('(operator)');
 });
 
 const photo: Attached = { id: 'photon-att-photo', name: 'IMG_0001.png', mimeType: 'image/png', bytes: PNG };
