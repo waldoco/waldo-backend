@@ -99,6 +99,10 @@ export const llmRequestSchema = z.strictObject({
   // Prompt-cache affinity hint (OpenAI prompt_cache_key): stable per owner, never content,
   // never a credential. Providers without keyed caching ignore it.
   cache_key: z.string().min(1).max(128).optional(),
+  // A scheduled run's cache shape on providers that cache by marked prefix (Anthropic): its tools and system head are the same
+  // for every scheduled run of the owner and are kept an hour, since such runs come minutes to hours apart; its first round's
+  // messages are unique to the run and are not marked, and its later rounds mark as any turn does. Others ignore it.
+  cache_profile: z.literal('scheduled').optional(),
   // OpenAI reasoning effort for this call; without it the adapter sends the roster's effort for
   // the model (OPENAI_REASONING). Providers without a reasoning effort ignore it.
   reasoning_effort: reasoningEffortSchema.optional(),
@@ -137,6 +141,8 @@ export const llmResponseSchema = z
     // Prompt tokens the provider wrote to its cache on this call, inside input_tokens and apart from the reads; they bill at
     // the provider's write rate. Absent when the provider wrote nothing or reports no count.
     cache_write_input_tokens: z.int().nonnegative().optional(),
+    // Of those writes, the ones kept an hour (Anthropic's `ttl: '1h'`), which bill at a higher write rate. Absent when none.
+    cache_write_1h_input_tokens: z.int().nonnegative().optional(),
     latency_ms: z.int().nonnegative(),
     output_items: z.array(z.record(z.string(), z.unknown())).optional(),
     truncated: z.boolean().optional(),

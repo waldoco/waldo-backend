@@ -49,6 +49,10 @@
   // the chat, job and hard ceilings in tokens, the share of the budget a stepped cut keeps, and the caps' clear-at characters,
   // results kept, and standing-order and quest characters. Each is fixed per deploy so the cached prefix holds; a value that
   // is not a valid size reads as its default.
+  // WALDO_LEAN_SCHEDULED: "1" sends a Waldo-first scheduled run (a day card, a loop check-back, an update sweep, an
+  // intervention) its own event, the composed context and the last six rows of the owner's exchange instead of the chat
+  // replay, offers every such run one tool menu (each still calls only its own) so the cached head is shared, keeps that
+  // head an hour, and gives the day plan and wake decision the shared health block; "0" is the rollback.
   // WALDO_TIMEZONE_ASK: "1" tells a turn whose time zone the owner has not confirmed to ask for it when it fits; "0" is the
   // rollback.
   // WALDO_SWITCHES: every feature switch and tuning knob, one JSON var, because Cloudflare caps a Worker at 128 vars and
@@ -175,6 +179,7 @@
       "MEMORY_NIGHTLY_SOURCE_UPDATES": "0",
       "MEMORY_DAYTIME_CONSOLIDATOR": "0",
       "MEMORY_VALIDITY": "0",
+      "MEMORY_OUTSIDE_NOTES": "0",
       "MEMORY_CLAIM_CONTROLS": "0",
       "MEMORY_USED_SHOWN": "0",
       "AGENT_MAIL_INBOUND": "0",
@@ -194,6 +199,7 @@
       "WALDO_FILE_TOOLS": "0",
       "WALDO_ASYNC_TOOLS": "0",
       "WALDO_JOB_OUTCOME_ROWS": "0",
+      "WALDO_LEAN_SCHEDULED": "0",
       "WALDO_ONE_TIMELINE": "0",
       "WALDO_LIGHT_CHAT": "0",
       "GOOGLE_REALTIME_TRIAGE": "0",
@@ -428,6 +434,7 @@
           "MEMORY_NIGHTLY_SOURCE_UPDATES": "1",
           "MEMORY_DAYTIME_CONSOLIDATOR": "1",
           "MEMORY_VALIDITY": "1",
+          "MEMORY_OUTSIDE_NOTES": "0",
           "MEMORY_CLAIM_CONTROLS": "1",
           "MEMORY_USED_SHOWN": "1",
           "AGENT_MAIL_INBOUND": "1",
@@ -447,6 +454,7 @@
           "WALDO_FILE_TOOLS": "1",
           "WALDO_ASYNC_TOOLS": "1",
           "WALDO_JOB_OUTCOME_ROWS": "1",
+          "WALDO_LEAN_SCHEDULED": "1",
           "WALDO_ONE_TIMELINE": "1",
           "WALDO_LIGHT_CHAT": "0",
           "GOOGLE_REALTIME_TRIAGE": "1",
