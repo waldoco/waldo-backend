@@ -233,3 +233,60 @@ gives no block, and that a full row renders the same either way. The additive co
 4. **The depth ruling** above, and then (d).
 5. **Day plan and wake decision.** Feeding the inventory into the scheduled day plan and the wake decision belongs to the session
    rewriting scheduled-run assembly.
+
+## Separate ruling: scores degrade, they do not gate (Ansh)
+
+This section is its own commit so it can be dropped without touching the inventory. It changes no code. Any score-rule change
+waits for Ansh's ruling, and then needs its own versions, switch and producer work, which sit outside this PR's files.
+
+### The proposed general rule
+
+Every score is the best estimate the consented signals allow, stated with its coverage (which parts it stood on) and a confidence.
+No pillar switches another off. When coverage is too thin to carry a zone word honestly, the score says so in words ("from
+steps alone"), and the inventory carries the parts, rather than the score vanishing.
+
+### Where the engine gates today (`health/scores/`, provisional engine)
+
+| Gate | Effect |
+|---|---|
+| Recovery needs last night's sleep, then a resting signal (HRV or resting heart rate) with a baseline | No sleep, or no overnight heart signal, means no Recovery |
+| Form takes Recovery's reason whenever Recovery fails (`form.ts`) | One missing pillar switches a second one off; this is the gate the rule removes |
+| Form needs at least one day signal (daylight, movement, steps or stress) | Without one it is `baseline_immature` |
+| ADR-0081 §2 for Form v1: sleep and HRV are required, and coverage below 0.925 is unavailable | The accepted bar this rule would amend |
+
+Two pillars already degrade:
+
+- **Load** (`weight.v5`) stands on any one component that has a baseline.
+- **Sleep debt** has a `partial` state.
+
+### The trade-off, plainly
+
+- **A low-coverage score can mislead.** A Form zone such as "depleted" from steps alone reads as readiness, and the owner, or the
+  model, may act on it. The zone words were built as readiness bands over a mix whose largest share (0.4) is Recovery.
+- **No score is a dead end.** That is what the owner ruled out. The inventory in this PR removes the dead end without inventing a
+  score, which is why it can ship first.
+
+Coverage without Recovery, as a share of Form v10's full weight, for the three owners this amendment started from:
+
+| Owner | Components left | Coverage |
+|---|---|---|
+| Steps only | steps | 0.2 |
+| Sleep plus steps, no overnight heart signal | sleep timing, steps | 0.3 |
+| Heart rate plus steps, no sleep | stress (at least eight awake heart-rate hours), steps | 0.4 |
+
+### Recommendation
+
+- **Adopt the rule.** No pillar switches another off: Form no longer takes Recovery's reason, and computes from the parts that
+  exist.
+- **Keep a coverage floor for the zone word.** Below it, the row carries the score's parts and the reason rather than a zone.
+  0.5 of Form's full weight is a reasonable start, and none of the three owners above reaches it. The number is Ansh's call.
+- **Name the basis wherever a zone shows at partial coverage.** For example "Form from the day alone, without last night". The
+  version is new (`form.v11` or later) and is written `candidate_unaccepted` until accepted.
+- **Recovery keeps requiring sleep.** A Recovery without the night is not a recovery estimate. Whether it may stand on sleep
+  alone without a heart signal is a separate question for Ansh.
+
+### What it needs beyond this PR
+
+- a producer switch;
+- a check that the write function's closed `used` signals list and the app's reader take a Form with no `sleep` signal;
+- golden vectors for each coverage band.
