@@ -1,7 +1,8 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { claimStore, type ClaimStore } from '../src/memory/claims';
+import { claimStore, withOutsideNotes, type ClaimStore } from '../src/memory/claims';
+import { outsideView } from '../src/memory/outside-view';
 import { recallForTurn } from '../src/memory/turn-recall';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
@@ -177,6 +178,19 @@ describe('semantic recall read path', () => {
     });
   });
 
+  it('with outside notes on, a note learned from outside content is embedded and found by meaning, but only by a store that recalls such notes', async () => {
+    await inOwner(async ({ sql, store, ai }) => {
+      owned(store, 'Cafe on 4th Cross has the best latte', 'fact', 'untrusted');
+      const semantic = semanticRecallFromEnv({ MEMORY_SEMANTIC_RECALL: '1', MEMORY_OUTSIDE_NOTES: '1', AI: ai }, { sql, transaction: (fn) => fn() })!;
+      expect(await semantic.sync()).toEqual({ embedded: 1, withheld: 0 });
+      const ask = (claims: Pick<ClaimStore, 'recall'>) => recallForTurn({ claims, question: 'an espresso somewhere', room: 100_000, holds: nothingHeld, semantic: semantic.near });
+      expect((await ask(store)).text).toBe('');
+      expect((await ask(outsideView(withOutsideNotes(store)))).text).toContain('best latte');
+      // Off, the same note is neither embedded nor ranked.
+      const off = semanticRecallFromEnv({ MEMORY_SEMANTIC_RECALL: '1', AI: ai }, { sql, transaction: (fn) => fn() })!;
+      expect(await off.near('an espresso somewhere')).toEqual([]);
+    });
+  });
   it('cannot bring back what a view filters: health for an outside-content job, untrusted rows, held topics', async () => {
     await inOwner(async ({ store, semantic }) => {
       owned(store, 'Pulse runs high after cardio', 'health');
