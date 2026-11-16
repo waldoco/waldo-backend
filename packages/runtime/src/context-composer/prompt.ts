@@ -221,9 +221,10 @@ export function renderHealth(health: ContextHealthMaterial | null): string {
 // reading, so readings it does not record are offered as a question for get_health, never stated as present.
 const SOURCE_NAMES = { apple: 'Apple Health', oura: 'Oura', whoop: 'WHOOP', samsung: 'Samsung Health', health_connect: 'Health Connect' } as const;
 const PRESENT_WORDS = {
-  last_night_sleep: "last night's sleep", recent_sleep: 'sleep across recent nights', calendar: 'the calendar',
-  activity: 'activity through the day', workouts: 'workouts over recent weeks',
+  recent_sleep: 'sleep across recent nights', calendar: 'the calendar', activity: 'activity through the day', workouts: 'workouts over recent weeks',
 } as const;
+// The row's night is the one that ended on the row's day, so it is last night only when the row is today's.
+const NIGHT_WORDS = { today: "last night's sleep", yesterday: 'the sleep of the night before last', earlier: 'the sleep of the night that ended on that earlier day' } as const;
 const AS_OF_WORDS = { today: 'today', yesterday: 'yesterday', earlier: 'an earlier day' } as const;
 function renderPartialHealth(view: PartialHealthView, daySummary: string, highStakes: readonly string[]): string {
   const sourceNames = joinNames(view.sources.map((source) => SOURCE_NAMES[source]));
@@ -239,7 +240,7 @@ function renderPartialHealth(view: PartialHealthView, daySummary: string, highSt
   return [
     'Partial health context: Recovery and Form were not computed for this day, so there is no recovery or readiness reading to give.',
     `Freshness: ${view.freshness}. Latest body data: ${AS_OF_WORDS[view.as_of_day]}${sources}.`,
-    `In the row: ${view.present.length === 0 ? 'none of the inputs these scores use' : view.present.map((item) => PRESENT_WORDS[item]).join('; ')}.`,
+    `In the row: ${view.present.length === 0 ? 'none of the inputs these scores use' : view.present.map((item) => (item === 'last_night_sleep' ? NIGHT_WORDS[view.as_of_day] : PRESENT_WORDS[item])).join('; ')}.`,
     ...renderMissingPillars(view.missing_pillars),
     ...(view.load_zone === undefined ? [] : [`Load: ${view.load_zone}.`]),
     ...renderBaseline(view.baseline_state),
