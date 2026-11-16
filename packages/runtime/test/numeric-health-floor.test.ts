@@ -1,6 +1,6 @@
-import { healthReadSignalSchema, type HealthReadSignal } from '@waldo/contracts';
+import { healthReadSignalSchema, type HealthReadSignal, type SanitiseDestination } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
-import { numericHealthIn, redactNumericHealth } from '../src/scribe/sanitiser';
+import { numericHealthIn, redactNumericHealth, sanitise } from '../src/scribe/sanitiser';
 
 // The one floor that keeps measurements from outside content out of memory, and out of stored summaries. A match drops the
 // write, so precision wins over recall: it must not fire on ordinary life that puts a number near a word a metric also
@@ -406,5 +406,26 @@ describe('trace redaction takes every value a reading carries', () => {
     const redacted = redactNumericHealth('Resting HR 61 | 10:30 check-in', '[W]');
     expect(redacted).not.toContain('61');
     expect(redacted).toContain('10:30');
+  });
+});
+
+// The egress floor over the same shapes: what leaves is refused, what reaches the model from outside is withheld.
+const CANARIES = ['a1b2c3d4e5f60718', '0f1e2d3c4b5a6978', '9a8b7c6d5e4f3021'];
+const egress = (text: string, destination: SanitiseDestination) =>
+  sanitise({ payload: destination === 'send_message' ? text : { body: text }, destination, canary_tokens: [...CANARIES], source_taint: 'external' });
+const passedUnchanged = (text: string, destination: SanitiseDestination): boolean => {
+  const result = egress(text, destination);
+  return result.ok && JSON.stringify(result.payload).includes(JSON.stringify(text).slice(1, -1));
+};
+
+describe('a wrist temperature given as a whole number, with no unit', () => {
+  it.each(['wrist temp 36', 'wrist temperature 36', 'Wrist temperature: 36', 'wrist temp was 35', 'wrist temp 97'])('holds %s at every destination', (text) => {
+    for (const destination of ['send_message', 'memory_block'] as const) expect(egress(text, destination), destination).toMatchObject({ ok: false, reason: 'health_value_leak' });
+    expect(passedUnchanged(text, 'internal_context')).toBe(false);
+    expect(numericHealthIn(text)).toBe(true);
+    expect(redactNumericHealth(text, '[H]')).not.toMatch(/\d/);
+  });
+  it.each(['temp job 36 hours', 'wrist temp 3 times a day', 'wrist temp 90 days of data', 'wrist temperature feature in iOS 17', 'wrist temp 40 minutes', 'wrist temp 90 seconds', 'wrist temp 100 percent accurate'])('lets %s through', (text) => {
+    for (const destination of ['send_message', 'internal_context', 'memory_block'] as const) expect(passedUnchanged(text, destination), destination).toBe(true);
   });
 });
