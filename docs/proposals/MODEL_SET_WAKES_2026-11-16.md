@@ -28,8 +28,9 @@ whether to wake. A wake is always the same lean run on the chat role: the event,
 to read health, calendar, mail, memory, phone and the day. It ends in exactly one recorded outcome: speak, stay quiet, ask
 on a card, set another follow-up, or act inside the owner's grants and tell them, with an undo. Code holds only the bounds:
 one writer, caps on self-set wakes, quiet hours and the owner's interruption limits, consent and health destinations,
-provenance, grants rechecked before every effect, intent before I/O. Seven existing wake paths fold into this one in four
-steps; nothing is rewritten at once.
+provenance, grants rechecked before every effect, intent before I/O. The existing wake paths (loop check-backs, the health
+trigger and wake decision, the update sweep, the intervention look, webhooks, agent mail, the day plan) fold into this one in
+four steps; nothing is rewritten at once.
 
 ## 1. Context: what exists at `95acaa51`
 
@@ -69,7 +70,7 @@ cents each; `open_loop` was called twice in 30 days, both from chat.
 
 | Tool | Stores | Who may call it | When due, the wake run gets |
 |---|---|---|---|
-| `open_loop` (`channels/loops.ts:154`) | `loops(id, title, due, status, …)`; a mail link in `loop_mail_sources` | Owner turns; among machine runs only the update sweep with mail follow-ups on, where `source_ref` is required (`update-sweep.ts:195`; `owner-turn.ts:546`) | The heartbeat check-back: the **title** and due, no why, no "watch for" (`check-back.ts:47-53`), on the heartbeat's 30-minute grid, so up to 30 minutes late [inference from the grid] |
+| `open_loop` (`channels/loops.ts:154`) | `loops(id, title, due, status, …)`; a mail link in `loop_mail_sources` | Owner turns. Among machine runs: the update sweep with mail follow-ups on, where `source_ref` is required (`update-sweep.ts:195`; `owner-turn.ts:546`), and runs that get every non-owner-only tool (standing-order fires, untainted task reports). The runs that plan the day (day plan, cards, health trigger, check-backs, interventions) are not offered it | The heartbeat check-back: the **title** and due, no why, no "watch for" (`check-back.ts:47-53`), on the heartbeat's 30-minute grid, so up to 30 minutes late [inference from the grid] |
 | `set_reminder` (`reminders.ts:129`) | `reminder_notes`, a scheduler row | Owner turns; standing-order fires (full tool set) | `reminderCheckBackText`: "This message is the reminder itself", read tools (`check-back.ts:24-33`) |
 | `set_standing_order` (`standing-orders.ts:130`) | `standing_orders`, a scheduler row | Owner turns, standing-order fires | The full tool set; `confirm_first` is carried by the fire text (`OD:5701`) [inference: no code check found beyond provenance] |
 | `start_task` (`tasks/tools.ts:41`) | `task_jobs` | Owner turns, standing-order fires | A report turn when the task ends |
@@ -117,8 +118,9 @@ first. That rule is right and stays.
 
 ### 1.5 What this shows [inference]
 
-Three gaps, not one. (a) Scheduled runs are not offered the follow-up tool, and when one is due the run gets a title, not
-a reason, so the model cannot carry an intention across time. (b) Events are judged by fixed lists (health), by a timer
+Three gaps, not one. (a) The runs that plan the day are not offered the follow-up tool ([reported] it was never set from a
+scheduled run in 30 days), and when one is due the run gets a title, not a reason, so the model cannot carry an intention
+across time. (b) Events are judged by fixed lists (health), by a timer
 (interventions) or not at all (webhooks); only Google changes reach a model, and only through a sweep tuned for mail.
 (c) A run Waldo started may change nothing without a card, apart from one grant class, so "goes ahead and makes changes"
 cannot happen today. Most misses on the 16 Nov list are (a) and (b): nothing woke, or what woke had no tools. The cost
@@ -154,8 +156,10 @@ check-back run. A third follow-up store would be a second writer of the same con
   to check and why), `watch_for` (what would make it worth acting on, in words), `origin` (`owner` | `waldo`), `chain_id`
   and `chain_depth`, `source_ref` (already exists for mail), and `run_ref` (the run that set it). The title stays the
   owner-visible line.
-- **Offered in every run that plans or acts**: chat turns, day-plan and card runs, the wake run, the update sweep, task
-  reports. Not offered to the first look, which only routes.
+- **Offered in every run that plans or acts**: chat turns, card runs, the wake run, the update sweep, task reports. The
+  day plan is a no-tool structured call (`owner-turn.ts:1319-1320`), so its schema gains a `follow_ups` field (time, title,
+  note, watch-for) that code turns into loops through the same capped `open_loop` path, until step 4 makes the plan a run.
+  Not offered to the first look, which only routes.
 - **Owner-set reminders stay separate.** They are the owner's words, they skip quiet hours by design, and they carry the
   medication path that never reaches a model. A model-set follow-up must not inherit that path, or it would lose the
   quiet-hours check.
@@ -163,7 +167,8 @@ check-back run. A third follow-up store would be a second writer of the same con
   coding agent's "todo with context", not a title.
 - **Granularity:** a follow-up fires at its own time, not on the 30-minute grid. The scheduler already supports one entry
   per due time; the heartbeat keeps scanning as a safety net.
-- `track_responsibility` is retired from the permission list (it has no handler); its job is this one.
+- `track_responsibility` (permitted, no handler) is retired; its job is this one. Removing it changes `toolNameSchema`, a
+  contract, so it goes through the contract path with its own migration note, not with this build.
 
 Examples the model would write: after the Brief plans a gym block 18:00–19:00, a follow-up at 19:20, note "check whether
 the gym block happened (workout or steps), and if not whether tonight or tomorrow morning can take it; owner's training
@@ -189,9 +194,12 @@ It ends in **exactly one recorded outcome**: `spoke`, `quiet`, `asked` (a card),
 are written to the run row (`background_runs`), which the learning loop and the evals read.
 
 **Provenance split.** A wake whose event is outside text (mail, a webhook body, a calendar invite from someone else, a
-connector result) runs at the outside-text ceiling (`OUTSIDE_TEXT_JOB_TOOLS` plus `open_loop`), whatever the outcome list
-says. Its effects are cards. A wake from the owner's own body data, the owner's own calendar block, or a follow-up the
-model set from an untainted run is `waldo`-origin and may use 3.6.
+connector result), or that read outside text, carries that taint, as today. Reads that send something out (egress reads)
+are dropped, as `OUTSIDE_TEXT_READS` already does. Anything that reaches another party, and anything the outside content
+itself asked for (a webhook saying "move my 3pm", a `tainted_action`, a party only outside text named), is a card. That
+holds before and after the amendment in 3.6. What 3.6 changes is the inward, undoable move Waldo decides on itself, which
+the D1 ruling allows even when the idea came from mail or an invite. Note that day cards run tainted today
+(`composeDayCard` → `ledgerJob`), so a follow-up a card sets inherits that taint.
 
 **Role:** chat. Health and planning judgments run on the chat role by owner ruling (5 Nov). The run uses the lean,
 cacheable head from `lean-scheduled-runs`.
@@ -204,7 +212,7 @@ the owner object's existing admission paths, nothing new outside it:
 
 | Source | Event | Summary written |
 |---|---|---|
-| Health recompute (`health/recompute.ts`) | `body.changed` when the derived row for today changed | Value-free: which pillars or drivers changed, zone words, the day. Never readings |
+| Health recompute (`health/recompute.ts`) | `body.changed` when the derived row for today changed | Only which pillar or driver changed (no direction, no zone word) and the day. Never readings |
 | Wake notice (`health/wake-notice.ts`) | `body.woke` | The day only |
 | Google deltas (update sweep's `readChanges`) | `calendar.changed`, `mail.arrived` | Today's change lines (`changeLines`) |
 | `/events/` webhook | `webhook.<kind>` | Envelope `title` and `kind`, fenced, external taint |
@@ -221,8 +229,10 @@ It answers, per event: `wake` (with the one-line reason that becomes the run's o
 moves its due time earlier, adds the event to its note), `next_card` (the day state carries it), or `ignore`. Its output is
 validated with a schema; a parse failure wakes the run (fail open to judgment, never to silence).
 
-- It never sees a health value: the summary for body events is zone and driver words, which the producer already makes
-  value-free (`health/trigger.ts:265-275` shows the existing words-only check).
+- It never sees a health value, and nothing stored holds even zone words, which are treated as sensitive today (the
+  capacity call keeps them out of traces, `owner-turn.ts:1272-1273`). The stored summary names only what changed. For a
+  body event, the first look reads the zone and driver words **live** through the consented `health_context_read` at look
+  time, so consent withdrawn between the event and the look yields nothing.
 - Outside text in a summary is fenced as data. Deciding to wake grants nothing: the wake still runs at the outside-text
   ceiling (3.2).
 - `due follow-ups` skip the first look: the model already decided to come back.
@@ -246,7 +256,7 @@ any change, per the additive-only rule).
 | No run wakes itself forever | Per owner-local day: at most **12** Waldo-set follow-ups created and **8** wake runs from follow-ups; per chain: `chain_depth ≤ 3` (a wake set by a wake set by a wake). Past either cap `open_loop` returns `rejected` with the reason, and the run must end in another outcome. Numbers are deployment settings, starting conservative ("start quiet") |
 | Spend | A per-owner daily wake spend ceiling read from the cost ledger (`llm/cost-ledger.ts`); past it, first looks continue and wakes defer to the next card. The monthly ceiling already clamps to auxiliary [verified] |
 | Quiet hours and interruption limits | Every `spoke`/`asked` outcome goes through `interruptions.ts` `withinBudget` and the delivery gate **at send time**, after the run, never before the model is asked. A held message waits for the next card or the end of quiet hours |
-| Consent and health destinations | Health reads go through the consented `health_context_read` and `get_health` paths (ADR-0081 as amended); no reading enters the inbox, a loop note, the day state, an outcome row, a trace label or memory; the owner's own reply may carry what the health plane returns under the beta owner ruling |
+| Consent and health destinations | Health reads go through the consented `health_context_read` and `get_health` paths (ADR-0081 as amended); no reading or zone word enters the inbox, a loop note, the day state, an outcome row, a trace label or memory (they are read live under consent); the owner's own reply may carry what the health plane returns under the beta owner ruling |
 | Grants rechecked before every effect | The existing effect ledger reservation (`owner-effect-ledger.ts:60-77`) and `decideOnce` [verified as today's rule] |
 | Intent before any effect | Unchanged: `<operation>:apply` keys, frozen intent, then I/O outside the transaction [verified] |
 | Cancellation when the owner turns a behaviour off | Turning off health suggestions, follow-ups or a day card closes the matching Waldo-set loops (`origin = waldo`) and fences runs already queued (`schedule-preferences.ts` re-check at fire, as today) |
@@ -259,12 +269,15 @@ What the owner asked for ("just goes ahead and makes changes") is not allowed fo
 14 Nov amendment, except the `calendar.move_own_block` grant. This design does **not** change that. It proposes, for the
 ADR-0018 amendment the D1 ruling already calls for:
 
-- In a `waldo`-origin wake (not outside-text), **inward, undoable** effects run with no card, recorded and reported with
-  the undo: moving or adding a block on the owner's own primary calendar with no guests, adding or changing the owner's
-  own Google task, opening or closing Waldo's own loops, archiving mail with undo (D8). Sends, anything reaching another
-  party, deletion, payments and credentials keep their card.
-- Until that amendment is accepted, the `acted` outcome is reachable only through standing grants, and everything else is
-  `asked`.
+- As D1 says: in a Waldo-started wake, **inward, undoable** effects run with no card, recorded and reported with the
+  undo, even when the idea came from mail or a calendar invite. Inward and undoable today means moving or adding a block on
+  the owner's own primary calendar with no guests, and opening or closing Waldo's own loops. Google task changes join only
+  once they have an undo (the 8 Nov amendment §4 says they have none). Archiving mail (D8) joins once the wider Gmail
+  scope (D4) is granted.
+- Unchanged, as the 14 Nov amendment draws it: what outside content itself asked for is a card; sends, anything reaching
+  another party, deletion, payments and credentials keep their card.
+- Until the amendment is accepted, the `acted` outcome is reachable only through standing grants, and everything else is
+  `asked`. Scenario 1 can reach `spoke` or `asked` before it, and `acted` after it.
 
 The report goes where Waldo writes, through the existing outbox and "what Waldo did" line. Because app check-back rows
 raise no push today, an `acted` or `spoke` outcome on the app needs a push class of its own (`update` is the closest).
@@ -301,7 +314,8 @@ changed enough to speak now, inside the interruption limits.
 - Steps: (1) day state written by the card runs and the wake run, read-only to everything else; (2) the Brief and Close
   render from it; (3) "revise the Brief" works on every surface by sending the delta as one line, not a rewrite, where the
   surface cannot edit; (4) the day plan's fixed card list becomes the owner's preferred moments, not the only ones.
-- No health value enters the day state; it holds zone words and plan words.
+- No health value and no zone word enters the day state. It holds plan words ("lighter morning, moved the 08:30");
+  each run reads the body live.
 
 ## 5. Learning loop [proposed]
 
@@ -312,8 +326,9 @@ whether a suggestion was taken or what followed.
 
 **Generalised:**
 - Each wake outcome writes an **outcome row**: what Waldo suggested or did, the follow-up it set to check, and later, from
-  that follow-up's wake, whether it happened (the block was kept, the reply came, the change was undone). No health value:
-  "how the body responded" is a day pointer plus zone words, read **live** from the health plane at review time.
+  that follow-up's wake, whether it happened (the block was kept, the reply came, the change was undone). The row stores
+  no health value and no zone word, only a day pointer. "How the body responded" is read live from the health plane, under
+  consent, when the nightly review runs; it is never copied into the row.
 - The nightly review (the existing 03:00 pass) reads the week's outcome rows and proposes **patterns in words** ("moves to
   the morning stick when the night was short; evening gym blocks after 19:00 rarely happen") as claims the owner can see and
   correct, through the existing claim path. Memory is context, never permission: a pattern never widens a grant.
@@ -427,8 +442,11 @@ given the tool and a reason, leaves itself useful notes.
 For the owner:
 
 1. **Acting without a card.** Accept the ADR-0018 amendment in §3.6 (D1 made concrete: inward, undoable effects in a
-   Waldo-started, untainted wake run with no card, reported with undo)? Without it, "goes ahead and makes changes" stays
-   cards except the own-calendar grant.
+   Waldo-started wake run with no card, reported with undo, even after reading mail; what outside content asked for stays
+   a card)? Without it, "goes ahead and makes changes" stays cards except the own-calendar grant. My one reservation, for
+   the owner to weigh, not a change to D1: a wake started by a webhook from a source the owner has not used before is the
+   widest injection path, and a narrower first version would apply D1 only to wakes from the owner's own data, mail and
+   calendar.
 2. **Webhooks reach the model.** Reverse `/events/` "never fed to a turn", with the body fenced and every effect a card?
 3. **Budget.** A daily wake spend per owner, and the starting caps (12 follow-ups, 8 follow-up wakes, chain depth 3)?
 4. **Health patterns in memory.** Should the learning loop's health patterns ("short nights make afternoon runs slip")
@@ -440,7 +458,7 @@ For Ark (agent loop owner):
 
 7. Does the wake run reuse `responder.prompt` with the lean shape, or does it need its own entry beside `remind`?
 8. Should due Waldo-set loops get their own scheduler entries (exact time) or stay on the heartbeat with a finer grid?
-9. Where should the first look live: in the update sweep's job lane (a machine job) or as a direct `ask` on the chain?
+9. Confirm the first look runs as a direct `ask` on the owner's chain (§3.3), not as a job in the update sweep's lane.
 10. Is the outcome row a new table or columns on `background_runs`?
 11. The standing-order fire gets every non-owner-only tool and has no quiet-hours check that I found. Fold it into the wake
     run's tool rules now or leave it?
