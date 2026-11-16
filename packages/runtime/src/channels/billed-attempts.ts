@@ -8,7 +8,7 @@ export const billedAttemptEntries = (
   stamp: Pick<TurnLogEntry, 'trace' | 'hop'> & Partial<Pick<TurnLogEntry, 'cost_kind' | 'job_id' | 'job_profile'>>,
 ): TurnLogEntry[] => attempts.flatMap((attempt) => {
   if (attempt.outcome !== 'failure' || !attempt.spent) return [];
-  const { input_tokens: input, output_tokens: output, cache_read_input_tokens: cached, cache_write_input_tokens: written } = attempt.spent;
+  const { input_tokens: input, output_tokens: output, cache_read_input_tokens: cached, cache_write_input_tokens: written, cache_write_1h_input_tokens: writtenHour } = attempt.spent;
   return [{ ...stamp, ms: 0, ok: false, error_code: attempt.code, provider: attempt.provider,
-    usage: { model: attempt.billed_model ?? attempt.model, input, output, cached, ...(written ? { cache_write: written } : {}), web_searches: 0 } }];
+    usage: { model: attempt.billed_model ?? attempt.model, input, output, cached, ...(written ? { cache_write: written } : {}), ...(writtenHour ? { cache_write_1h: writtenHour } : {}), web_searches: 0 } }];
 });
