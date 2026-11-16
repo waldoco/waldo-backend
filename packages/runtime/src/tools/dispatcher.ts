@@ -77,7 +77,8 @@ export type ToolDispatcherContext = HookRuntimeContext & {
   // Set by the host only on a turn the owner's own message started, with no one else's words in it: that message's ref and
   // when the turn took it. A tool that acts on the owner's word reads it here, never from its arguments. ownWordsOnly: every
   // part of the message is the owner's own typed or spoken words, with no transcript of a file they sent and no media note.
-  ownerMessage?: Readonly<{ messageRef: string; receivedAt: number; ownWordsOnly?: boolean }>;
+  // words: those own words alone, for the recipient guard (approvals ownerStartedTurn); never a quote, transcript or note.
+  ownerMessage?: Readonly<{ messageRef: string; receivedAt: number; ownWordsOnly?: boolean; words?: string }>;
   // Set by the host when this turn's context carries text that may be someone else's from before the turn: a row on the
   // conversation the model reads (a reply that read outside content, a Brief, a forward, a marked summary) or a recalled note
   // or past message that is not the owner's own. Work the owner asks for then still goes to a card (ownerAsked).
