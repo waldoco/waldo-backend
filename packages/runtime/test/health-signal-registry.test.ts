@@ -2,7 +2,8 @@ import { HEALTH_ENGINE_ONLY_SIGNALS, HEALTH_SCORE_INPUTS, HEALTH_SIGNAL_NAMES, H
 import { healthSampleV1Schema } from '../../contracts/src/app/health-ingest';
 import { describe, expect, it } from 'vitest';
 import { SIGNALS as READ_SIGNALS } from '../src/tools/live/health';
-import { INGEST_SIGNALS, INGEST_UNITS, SAMPLE_CHECK_SIGNALS, SERIES_READ_SIGNALS, WRITER_USED_SIGNALS } from './support/migration-lists';
+import { healthUsualSignalV1Schema } from '../../contracts/src/app/health-ingest';
+import { INGEST_SIGNALS, INGEST_UNITS, PARTS_USUAL_SIGNALS, SAMPLE_CHECK_SIGNALS, SERIES_READ_SIGNALS, USUAL_BAND_SIGNALS, WRITER_USED_SIGNALS } from './support/migration-lists';
 
 // One registry of health signal names (packages/contracts/src/health/signals.ts). Every list elsewhere either types against it
 // or is checked here: a kind the phone may send but the database refuses, or a score name the writer refuses, stops uploads or
@@ -30,6 +31,10 @@ describe('the health signal registry', () => {
 
   it('is what the derived-row writer admits as a score\'s used signals', () => {
     expect(sorted(WRITER_USED_SIGNALS)).toEqual(sorted(Object.keys(HEALTH_SCORE_INPUTS)));
+  });
+
+  it('keeps the usual names the database checks equal to the contract\'s', () => {
+    for (const list of [PARTS_USUAL_SIGNALS, USUAL_BAND_SIGNALS]) expect([...list], list.file).toEqual([...healthUsualSignalV1Schema.options]);
   });
 
   it('leaves no stored kind the read tool cannot read, unless only the score engine reads it', () => {
