@@ -74,8 +74,14 @@ export interface DailyScoresInput {
 }
 
 export interface Unavailable { readonly state: 'unavailable'; readonly reason: UnavailableReason }
+// Every name a pillar may list among the signals it used. waldo.health_context_write admits only its own closed list and
+// refuses the whole row for any other name, so a name joins this tuple and that list together; a runtime test compares them.
+export const USED_SIGNALS = [
+  'sleep', 'hrv', 'resting_heart_rate', 'sleep_midpoint', 'daylight', 'movement', 'steps', 'stress', 'calendar', 'tasks', 'messages', 'physical_load',
+] as const;
+export type UsedSignal = (typeof USED_SIGNALS)[number];
 export interface UsedBasis {
-  readonly signals: readonly string[];
+  readonly signals: readonly UsedSignal[];
   readonly days: readonly string[];
 }
 // Whether the owner's own days carry the pillar yet. Present only on a pillar computed provisionally.
