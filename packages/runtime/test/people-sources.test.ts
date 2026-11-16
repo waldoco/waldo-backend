@@ -126,7 +126,7 @@ describe('people from the source pass', () => {
       book.record('2026-11-07', NOW - 2 * HOUR, [mail('Sam <sam@family.example>', 'The secret surprise party')], null);
       expect(await consolidateSources(deps(state, async () => '{"add":[]}'), 't')).toBe('consolidated');
       expect(store.people.person(sam!)?.last_contact_at).toBeNull();
-      book.record('2026-11-07', NOW - HOUR, [{ source: 'mail', kind: 'new', detail: JSON.stringify({ from: 'Sam <sam@family.example>', subject: 'Dinner', date: '2026-11-07T05:30:00Z' }) }], null);
+      book.record('2026-11-07', NOW - HOUR, [{ source: 'mail', kind: 'new', detail: JSON.stringify({ from: 'Sam <sam@family.example>', subject: 'Dinner', at: '2026-11-07T05:30:00Z' }) }], null);
       expect(await consolidateSources(deps(state, async () => '{"add":[]}'), 't')).toBe('consolidated');
       expect(store.people.person(sam!)?.last_contact_at).toBe('2026-11-07T05:30:00.000Z');
     });
