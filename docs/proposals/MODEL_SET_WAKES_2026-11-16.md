@@ -156,10 +156,11 @@ check-back run. A third follow-up store would be a second writer of the same con
   to check and why), `watch_for` (what would make it worth acting on, in words), `origin` (`owner` | `waldo`), `chain_id`
   and `chain_depth`, `source_ref` (already exists for mail), and `run_ref` (the run that set it). The title stays the
   owner-visible line.
-- **Offered in every run that plans or acts**: chat turns, card runs, the wake run, the update sweep, task reports. The
-  day plan is a no-tool structured call (`owner-turn.ts:1319-1320`), so its schema gains a `follow_ups` field (time, title,
-  note, watch-for) that code turns into loops through the same capped `open_loop` path, until step 4 makes the plan a run.
-  Not offered to the first look, which only routes.
+- **Offered in every run that plans or acts**: chat turns, card runs, interventions, the wake run, the update sweep, task
+  reports. The day plan, the health trigger and the wake decision are no-tool structured calls (`owner-turn.ts:1319-1320`,
+  `:1223`). Following the seam #2156 names, each becomes a lean run whose JSON answer is a decision tool, and
+  `open_loop` sits beside that tool. Until then, the day plan's schema gains a `follow_ups` field (time, title, note,
+  watch-for), which code writes through the same capped path. Not offered to the first look, which only routes.
 - **Owner-set reminders stay separate.** They are the owner's words, they skip quiet hours by design, and they carry the
   medication path that never reaches a model. A model-set follow-up must not inherit that path, or it would lose the
   quiet-hours check.
@@ -174,6 +175,54 @@ Examples the model would write: after the Brief plans a gym block 18:00–19:00,
 the gym block happened (workout or steps), and if not whether tonight or tomorrow morning can take it; owner's training
 quest wants 3 sessions a week". After a reply that needs an answer: a follow-up two working days out, `source_ref` the
 thread, watch-for "their reply".
+
+### 3.1a The authority change this needs: background runs may set Waldo's own follow-ups
+
+Two code rules stop a scheduled run from setting a follow-up today [verified at `95acaa51`]:
+
+- **The `source_ref` refusal.** In any run given a named tool list, `open_loop` without a string `source_ref` is refused:
+  "Background mail follow-up requires an observed source_ref" (`owner-turn.ts:546-548`, added in `173213ec8` with the mail
+  review lifecycle). `loops.ts:24-39` then requires that the `source_ref` names mail the update sweep observed, and keeps
+  one loop per source. A free-standing note such as "check at 19:20 whether the gym block happened" is therefore refused.
+  [inference] This, together with the next rule, is the likeliest reason no scheduled run set a loop in 30 days. Runs
+  given no list (standing-order fires) are not held by it.
+- **Each job's own tool list.** Day cards get `OUTSIDE_TEXT_JOB_TOOLS`, interventions `triageTools(false, true)`, and
+  check-backs `LOOP_CHECK_BACK_TOOLS`. None of them holds `open_loop` (`check-back.ts:11-17`, `update-sweep.ts:194-201`).
+  No scheduled job list holds `set_reminder`, and neither does the lean branch's `SCHEDULED_MENU`. Only list-less runs
+  reach it: standing-order fires and untainted task reports.
+
+**Why the refusal exists** [inference from the code and its comments]. A loop is shown to the owner as something
+"Waldo is on for the owner" (`loops.ts:132`). The `open_loop` description says an email's request "is never the owner's
+commitment or permission". A background run reads other people's text, so without the rule a sentence in a mail ("follow
+up with me Friday") could become a commitment in the owner's ledger, and a check-back that later acts on it. The rule
+makes outside text unable to create the owner's commitments, and dedupes one loop per mail.
+
+**Decision** [proposed; an authority change for Ark and the owner, question 7]:
+
+- **A new loop kind, `self`: Waldo's reminder to itself, not the owner's commitment.** Background runs may open `self`
+  loops without a `source_ref`. A `self` loop:
+  - is listed apart in the ledger ("What I'm keeping an eye on", §3.4), never as something the owner took on;
+  - when due, wakes a run and nothing else;
+  - grants nothing. The wake run's effects follow the card rules of §3.2 and §3.6 exactly as if no loop existed.
+- **The mail path is unchanged.** A loop with a `source_ref` still needs observed mail and stays one per source. A
+  background run still cannot open an owner-kind loop.
+- **Taint travels with the note.** A `self` loop set by a run that read outside text stores `taint = external`. Its note
+  reaches the wake as data, framed the way `outsideReminderCheckBackText` frames an outside reminder (`check-back.ts:37`),
+  and the wake runs with that taint. Outside text can schedule Waldo's own look; it cannot make the look act.
+- **Bounds replace the refusal**, all in code:
+  - per owner-local day, 12 `self` loops created and 8 wakes from them;
+  - chain depth 3;
+  - due no more than 14 days ahead;
+  - at most 3 open `self` loops per `source_ref` or per calendar event;
+  - closing or rescheduling a `self` loop is the model's own call (no card). Closing an owner loop keeps today's rule
+    (`check-back.ts`).
+  Past a bound, `open_loop` returns `rejected` with the reason, as `refusingUnreachableCheckBacks` does today.
+- **Per-job lists:** `open_loop` (kind `self`) and `close_loop` (own `self` loops only) join the day-card, intervention,
+  check-back and wake-run lists. Under #2156 that means the shared `SCHEDULED_MENU` and each job's own list.
+- **`set_reminder` stays off background runs.** A reminder is the owner's words, skips quiet hours and carries the
+  medication path; a `self` loop is the model's equivalent and keeps every quiet-hours and interruption check.
+- **Contract:** `openLoopArgsSchema` gains optional `kind`, `note` and `watch_for`, which is additive. The tool schema is
+  a contract, so it gets its valid and invalid test pair.
 
 ### 3.2 One wake run, whatever caused it
 
@@ -412,16 +461,19 @@ first look and run option D with tighter coalescing; the third means C buys noth
 
 Missed gym block, end to end, behind one switch (`MODEL_SET_WAKES`, staging only):
 
-1. `loops` gains `note`, `watch_for`, `origin`, `chain_id`, `chain_depth` (DO SQLite, additive, no Supabase migration).
-2. The Brief's run is offered `open_loop`; its instructions say: when you plan a block, decide whether you would want to
-   know it happened, and if so leave yourself a note.
+1. `loops` gains `kind`, `note`, `watch_for`, `taint`, `chain_id`, `chain_depth` (DO SQLite, additive, no Supabase
+   migration). The `owner-turn.ts:546` refusal admits `kind = self` under the §3.1a bounds.
+2. The Brief's run is offered `open_loop` (kind `self`). Its instructions say: when you plan a block, decide whether you
+   would want to know it happened, and if so leave yourself a note.
 3. A due Waldo-set loop fires at its own time into the lean wake run with its note, read tools including `get_health` and
    `query_calendar`, `open_loop` (capped), `close_loop`, and card tools.
 4. The run's outcome is recorded; `spoke` goes through `interruptions.ts` and the outbox; `asked` is a card.
 5. Scenarios 1, 5 and 10 and both bound cases in the eval set; `channels/**` added to the eval trigger paths.
 
-This needs no event inbox, no first look and no ADR change, and it tests the riskiest assumption first: whether the model,
-given the tool and a reason, leaves itself useful notes.
+This needs no event inbox, no first look and no ADR-0018 change, but it does need the §3.1a authority change signed off
+(question 7). It tests the riskiest assumption first: whether the model, given the tool and a reason, leaves itself useful
+notes. Because the Brief runs tainted today, the slice's wake runs at the outside-text ceiling. It can reach `spoke` and
+`asked`, which is enough to test the assumption.
 
 ## 10. Consequences
 
@@ -454,13 +506,19 @@ For the owner:
 5. **Traces.** May eval and staging traces carry zone and driver words, so body reasoning can be checked?
 6. **"What I'm keeping an eye on"** in the app: yes, and on which screen?
 
+For Ark and the owner together:
+
+7. **Background runs set Waldo's own follow-ups (§3.1a).** Admit a `self` loop kind without `source_ref` in background
+   runs, under the code bounds listed there. It carries its taint, grants nothing, and leaves `set_reminder` and the mail
+   path unchanged. This is the authority change the first slice needs.
+
 For Ark (agent loop owner):
 
-7. Does the wake run reuse `responder.prompt` with the lean shape, or does it need its own entry beside `remind`?
-8. Should due Waldo-set loops get their own scheduler entries (exact time) or stay on the heartbeat with a finer grid?
-9. Confirm the first look runs as a direct `ask` on the owner's chain (§3.3), not as a job in the update sweep's lane.
-10. Is the outcome row a new table or columns on `background_runs`?
-11. The standing-order fire gets every non-owner-only tool and has no quiet-hours check that I found. Fold it into the wake
+8. Does the wake run reuse `responder.prompt` with the lean shape, or does it need its own entry beside `remind`?
+9. Should due Waldo-set loops get their own scheduler entries (exact time) or stay on the heartbeat with a finer grid?
+10. Confirm the first look runs as a direct `ask` on the owner's chain (§3.3), not as a job in the update sweep's lane.
+11. Is the outcome row a new table or columns on `background_runs`?
+12. The standing-order fire gets every non-owner-only tool and has no quiet-hours check that I found. Fold it into the wake
     run's tool rules now or leave it?
 
 ## Evidence
