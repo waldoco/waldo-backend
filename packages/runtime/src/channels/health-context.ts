@@ -2,16 +2,25 @@ import {
   derivedBaselineStateSchema,
   derivedEnergyWindowsSchema,
   derivedHealthDestinationViewSchema,
+  derivedMissingPillarReasonSchema,
   derivedSleepDebtTrendSchema,
   formHealthViewSchema,
   fromRowZone,
   narrativeContextSchema,
+  partialHealthNarrativeSchema,
+  partialHealthSourceSchema,
   recoveryHealthViewSchema,
   type DerivedBaselineState,
   type DerivedHealthDestinationView,
+  type DerivedMissingPillars,
   type DerivedSleepDebt,
+  type FormHealthView,
+  type PartialHealthPresent,
+  type PartialHealthView,
+  type RecoveryHealthView,
 } from '@waldo/contracts';
-import type { ContextHealthMaterial } from '../context-composer/types';
+import { isPartialHealth } from '../context-composer/prompt';
+import type { ContextHealthMaterial, ZoneHealthMaterial } from '../context-composer/types';
 import { TRAINING_LOAD_PHRASES } from '../health/scores/training-load';
 import { STEADY_SCORE_MOVE } from '../health/scores/zones';
 import type { OwnerClock } from '../tools/live/get-context';
@@ -61,6 +70,8 @@ export type HealthContextRow = Readonly<{
     // narrative's compiled_at - the truthful as-of the prepareHealth provenance bound checks
     // against the turn's snapshot time, which a read-time stamp would always violate.
     compiled_at: unknown;
+    // The consent basis the row was computed under: each source and its consent epoch. Only the source names are read.
+    basis?: unknown;
   }> | null;
   previous: Readonly<{ day: string; form_score: unknown }> | null;
 }>;
@@ -154,15 +165,176 @@ const trainingLoadWords = (value: unknown): string | null => {
 const pillarDrivers = (value: unknown): readonly string[] =>
   value !== null && typeof value === 'object' ? wordList((value as Record<string, unknown>)['drivers'], 4) : [];
 
-export const toContextHealthMaterial = (
+// The reason a stored pillar names for not being computed. A pillar written unavailable is { reason } alone, sleep debt
+// { state, reason }; a reason outside the engine's words is no reason.
+const LINK_OR_CONSENT = new Set(['not_linked', 'consent_required', 'consent_withdrawn']);
+const storedReason = (value: unknown): unknown => (isRecord(value) ? value['reason'] : undefined);
+const missingReason = (value: unknown) => {
+  const parsed = derivedMissingPillarReasonSchema.safeParse(storedReason(value));
+  return parsed.success ? parsed.data : undefined;
+};
+type RowContext = NonNullable<HealthContextRow['context']>;
+// A pillar stored without link or consent means the row speaks for no live consent, so nothing of it is read. The read RPC
+// already returns no row without a live basis; this holds even if a row says otherwise.
+const consentAbsent = (context: RowContext): boolean =>
+  [context.recovery, context.form, context.weight, context.sleep_debt].some((pillar) => LINK_OR_CONSENT.has(String(storedReason(pillar))));
+const missingPillarsOf = (context: RowContext): DerivedMissingPillars => {
+  const pillars: [keyof DerivedMissingPillars, unknown][] = [['recovery', context.recovery], ['form', context.form], ['load', context.weight], ['sleep_debt', context.sleep_debt]];
+  return Object.fromEntries(pillars.flatMap(([pillar, value]) => { const reason = missingReason(value); return reason === undefined ? [] : [[pillar, reason]]; }));
+};
+
+// The signals a computed pillar says it used. Only a provisional pillar names them; any other has none to read.
+const usedSignals = (value: unknown): readonly string[] | null => {
+  const used = isRecord(value) ? value['used'] : undefined;
+  const signals = isRecord(used) ? used['signals'] : undefined;
+  return Array.isArray(signals) && signals.every((signal) => typeof signal === 'string') ? signals : null;
+};
+// The ADR-0081 components a pillar went without, read from the signals it used: HRV, the circadian timing of sleep or
+// daylight, and motion as movement or steps. Without a used list nothing is claimed either way.
+const recoveryMissing = (value: unknown): RecoveryHealthView['missing_components'] => {
+  const signals = usedSignals(value);
+  return signals === null || signals.includes('hrv') ? [] : ['hrv'];
+};
+const formMissing = (value: unknown): FormHealthView['missing_components'] => {
+  const signals = usedSignals(value);
+  if (signals === null) return [];
+  const has = (...names: string[]) => names.some((name) => signals.includes(name));
+  return [
+    ...(has('hrv') ? [] : ['hrv' as const]),
+    ...(has('sleep_midpoint', 'daylight') ? [] : ['circadian' as const]),
+    ...(has('movement', 'steps') ? [] : ['motion' as const]),
+  ];
+};
+
+const sourcesOf = (basis: unknown): PartialHealthView['sources'] => {
+  if (!Array.isArray(basis)) return [];
+  const names = basis.flatMap((entry) => { const parsed = partialHealthSourceSchema.safeParse(isRecord(entry) ? entry['source'] : undefined); return parsed.success ? [parsed.data] : []; });
+  return [...new Set(names)];
+};
+
+// What a stored row shows arrived. A Recovery that failed for its resting signal or its baseline had last night's sleep (the
+// engine checks sleep first), a sleep debt with a figure or a share had recent nights, a computed Load names its calendar or
+// activity, and a computed training load had workouts. Nothing the row does not record is named.
+const presentOf = (context: RowContext): PartialHealthPresent[] => {
+  const loadSignals = usedSignals(context.weight) ?? [];
+  const debtState = isRecord(context.sleep_debt) ? context.sleep_debt['state'] : undefined;
+  return [
+    ...(['missing_resting_signal', 'baseline_immature'].includes(String(storedReason(context.recovery))) ? ['last_night_sleep' as const] : []),
+    ...(debtState === 'available' || debtState === 'partial' ? ['recent_sleep' as const] : []),
+    ...(loadSignals.includes('calendar') ? ['calendar' as const] : []),
+    ...(loadSignals.includes('physical_load') ? ['activity' as const] : []),
+    ...(isRecord(context.training_load) && context.training_load['state'] === 'available' ? ['workouts' as const] : []),
+  ];
+};
+
+const daySummaryParts = (context: RowContext): string[] => {
+  const parts: string[] = [];
+  const drivers = [...new Set([...pillarDrivers(context.form), ...wordList(context.drivers, 4)])].slice(0, 4);
+  const tags = wordList(context.tags, 4);
+  if (drivers.length > 0) parts.push(`Drivers: ${drivers.join('; ')}.`);
+  if (tags.length > 0) parts.push(`Tags: ${tags.join(', ')}.`);
+  const trainingLoad = trainingLoadWords(context.training_load);
+  if (trainingLoad !== null) parts.push(trainingLoad);
+  return parts;
+};
+
+type RowStamp = Readonly<{ compiledAt: string; freshness: 'fresh' | 'stale' | 'expired' }>;
+// compiled_at is the row's own compilation time (app updated_at), never the read time:
+// prepareHealth requires it at or before the turn's snapshot time, and a read-time stamp
+// is always after the fixture snapshot created at responder construction. An unparseable
+// stamp degrades to absence rather than guessing one.
+const rowStamp = (context: RowContext, clock: OwnerClock, onError?: (error: unknown) => void): RowStamp | null => {
+  const now = clock.now().getTime();
+  const compiledAt =
+    typeof context.compiled_at === 'string' && Number.isSafeInteger(Date.parse(context.compiled_at))
+      ? new Date(Date.parse(context.compiled_at)).toISOString()
+      : null;
+  if (compiledAt === null) {
+    onError?.(new Error('health context row has no valid compiled_at'));
+    return null;
+  }
+  // A stamp ahead of this read (clock skew) cannot be attested before the turn's snapshot.
+  if (Date.parse(compiledAt) > now) {
+    onError?.(new Error('health context row compiled_at is in the future'));
+    return null;
+  }
+  return { compiledAt, freshness: rowFreshness(compiledAt, context.day, clock.timezone, now) };
+};
+
+const sourceOf = (context: RowContext, compiledAt: string): ContextHealthMaterial['source'] => ({
+  source_key: `health-context:${context.day}`,
+  source_kind: 'derived_health_view',
+  scope: 'principal',
+  source_taint: null,
+  // When the app produced it. The read happens during composition, after the turn's
+  // snapshot, and the composer rejects a source produced after its snapshot.
+  produced_at: Date.parse(compiledAt),
+});
+
+// A day whose body data made no Recovery, or whose newest row is over three days old. It says only what the row records, in
+// words; an expired row gives nothing of its old day but its age and sources.
+const partialMaterial = (context: RowContext, clock: OwnerClock, stamp: RowStamp, onError?: (error: unknown) => void): ContextHealthMaterial | null => {
+  const now = clock.now().getTime();
+  const asOfDay: PartialHealthView['as_of_day'] = context.day === localIso(now, clock.timezone).slice(0, 10) ? 'today'
+    : context.day === localIso(now - 24 * HOUR_MS, clock.timezone).slice(0, 10) ? 'yesterday' : 'earlier';
+  const shared = {
+    authority: 'backend' as const, availability: 'partial' as const, freshness: stamp.freshness, as_of_day: asOfDay,
+    sources: sourcesOf(context.basis),
+    provenance_refs: [`hpr_${md5Hex(`health-context.${context.id}`)}`], destination_eligibility: ['trigger_prompt' as const],
+  };
+  let view: PartialHealthView;
+  let summary: string[] = [];
+  if (stamp.freshness === 'expired') view = { ...shared, present: [], missing_pillars: {} };
+  else {
+    const load = fromRowZone('weight', pillarZone(context.weight)) ?? undefined;
+    const loadState = load === undefined ? undefined : pillarBaselineState(context.weight);
+    // A sleep debt the row could not compute is named among the missing pillars, not again as an unknown amount.
+    const sleepDebt = missingReason(context.sleep_debt) === undefined ? sleepDebtWords(context.sleep_debt) : undefined;
+    const windows = energyWindows(context.windows);
+    view = {
+      ...shared, present: presentOf(context), missing_pillars: missingPillarsOf(context),
+      ...(load === undefined ? {} : { load_zone: load }),
+      ...(loadState === undefined ? {} : { baseline_state: { load: loadState } }),
+      ...(sleepDebt === undefined ? {} : { sleep_debt: sleepDebt }),
+      ...(windows === undefined ? {} : { energy_windows: windows }),
+    };
+    summary = daySummaryParts(context);
+  }
+  const viewParsed = derivedHealthDestinationViewSchema.safeParse(view);
+  const narrativeParsed = partialHealthNarrativeSchema.safeParse({ day_summary: summary.join(' '), active_goals: [], upcoming_high_stakes: [], compiled_at: stamp.compiledAt });
+  if (!viewParsed.success || !('availability' in viewParsed.data) || !narrativeParsed.success) {
+    onError?.(new Error('partial health context failed contract validation'));
+    return null;
+  }
+  return { view: viewParsed.data, narrative: narrativeParsed.data, source: sourceOf(context, stamp.compiledAt) };
+};
+
+// partial: the switch that gives the model a block for a row without Recovery, or too old to score, and fills the missing
+// lists from the row. Off, the reader is as it was.
+export type HealthContextOptions = Readonly<{ partial?: boolean }>;
+
+// Without the partial switch the material is always a zone one.
+export function toContextHealthMaterial(row: HealthContextRow, clock: OwnerClock, onError?: (error: unknown) => void, options?: Readonly<{ partial?: false }>): ZoneHealthMaterial | null;
+export function toContextHealthMaterial(row: HealthContextRow, clock: OwnerClock, onError?: (error: unknown) => void, options?: HealthContextOptions): ContextHealthMaterial | null;
+export function toContextHealthMaterial(
   row: HealthContextRow,
   clock: OwnerClock,
   onError?: (error: unknown) => void,
-): ContextHealthMaterial | null => {
+  options: HealthContextOptions = {},
+): ContextHealthMaterial | null {
   try {
     const context = row.context;
     if (context === null) return null;
+    const partial = options.partial === true;
     const recovery = fromRowZone('recovery', pillarZone(context.recovery));
+    if (partial) {
+      if (consentAbsent(context)) return null;
+      // A Recovery that is neither a zone nor a stored reason is unreadable, and stays absence.
+      if (recovery === null && missingReason(context.recovery) === undefined) return null;
+      const stamp = rowStamp(context, clock, onError);
+      if (stamp === null) return null;
+      if (recovery === null || stamp.freshness === 'expired') return partialMaterial(context, clock, stamp, onError);
+    }
     if (recovery === null) return null;
     const recoveryVersion = pillarVersion(context.recovery, 'recovery');
     if (recoveryVersion === null) {
@@ -180,7 +352,7 @@ export const toContextHealthMaterial = (
       row.previous !== null && typeof row.previous.form_score === 'number' && Number.isFinite(row.previous.form_score)
         ? row.previous.form_score
         : null;
-    const trend: DerivedHealthDestinationView['trend'] =
+    const trend: FormHealthView['trend'] =
       previousScore === null || formScore === null
         ? 'insufficient'
         : formScore - previousScore > STEADY_SCORE_MOVE
@@ -189,30 +361,14 @@ export const toContextHealthMaterial = (
             ? 'declining'
             : 'steady';
 
-    const now = clock.now().getTime();
-    // compiled_at is the row's own compilation time (app updated_at), never the read time:
-    // prepareHealth requires it at or before the turn's snapshot time, and a read-time stamp
-    // is always after the fixture snapshot created at responder construction. An unparseable
-    // stamp degrades to absence rather than guessing one.
-    const compiledAt =
-      typeof context.compiled_at === 'string' && Number.isSafeInteger(Date.parse(context.compiled_at))
-        ? new Date(Date.parse(context.compiled_at)).toISOString()
-        : null;
-    if (compiledAt === null) {
-      onError?.(new Error('health context row has no valid compiled_at'));
-      return null;
-    }
-    // A stamp ahead of this read (clock skew) cannot be attested before the turn's snapshot.
-    if (Date.parse(compiledAt) > now) {
-      onError?.(new Error('health context row compiled_at is in the future'));
-      return null;
-    }
-    // An expired row is absence for the prompt, as no row is.
-    const freshness = rowFreshness(compiledAt, context.day, clock.timezone, now);
+    const stamp = rowStamp(context, clock, onError);
+    if (stamp === null) return null;
+    const { compiledAt, freshness } = stamp;
+    // An expired row is absence for the prompt, as no row is, unless the partial block says how old it is.
     if (freshness === 'expired') return null;
 
     const confidence = typeof context.confidence === 'number' && Number.isFinite(context.confidence) ? context.confidence : null;
-    const confidenceBand: DerivedHealthDestinationView['confidence_band'] =
+    const confidenceBand: FormHealthView['confidence_band'] =
       confidence === null ? 'low' : confidence >= 0.66 ? 'high' : confidence >= 0.33 ? 'medium' : 'low';
 
     // Only the pillars the prompt names are labelled, and only when the row labels them.
@@ -223,24 +379,24 @@ export const toContextHealthMaterial = (
     ].flatMap(([pillar, state]) => state === undefined ? [] : [[pillar, state] as const]);
     const sleepDebt = sleepDebtWords(context.sleep_debt);
     const windows = energyWindows(context.windows);
+    const formShown = zone !== undefined && formVersion !== null;
+    // With the switch, the pillars this view does not show say why, from the row; a Form view shows Recovery's day too.
+    const { recovery: _recovery, ...notShown } = partial ? missingPillarsOf(context) : {};
+    const { form: _form, ...notShownBesideForm } = notShown;
+    const missingPillars = formShown ? notShownBesideForm : notShown;
     const common = {
-      authority: 'backend' as const, trend, freshness, missing_components: [], confidence_band: confidenceBand,
+      authority: 'backend' as const, trend, freshness, confidence_band: confidenceBand,
       provenance_refs: [`hpr_${md5Hex(`health-context.${context.id}`)}`], destination_eligibility: ['trigger_prompt' as const],
       ...(states.length === 0 ? {} : { baseline_state: Object.fromEntries(states) }),
       ...(sleepDebt === undefined ? {} : { sleep_debt: sleepDebt }),
       ...(windows === undefined ? {} : { energy_windows: windows }),
+      ...(Object.keys(missingPillars).length === 0 ? {} : { missing_pillars: missingPillars }),
     };
-    const view: DerivedHealthDestinationView = zone === undefined || formVersion === null
-      ? { ...common, algorithm_version: recoveryVersion, recovery_zone: recovery }
-      : { ...common, algorithm_version: formVersion, form_zone: zone };
+    const view: DerivedHealthDestinationView = !formShown
+      ? { ...common, algorithm_version: recoveryVersion, recovery_zone: recovery, missing_components: partial ? recoveryMissing(context.recovery) : [] }
+      : { ...common, algorithm_version: formVersion, form_zone: zone, missing_components: partial ? formMissing(context.form) : [] };
 
-    const drivers = [...new Set([...pillarDrivers(context.form), ...wordList(context.drivers, 4)])].slice(0, 4);
-    const tags = wordList(context.tags, 4);
-    const summaryParts = [`${zone === undefined ? '' : `Form ${zone}; `}${zone === undefined ? 'Recovery' : 'recovery'} ${recovery}; load ${load ?? 'unavailable'}.`];
-    if (drivers.length > 0) summaryParts.push(`Drivers: ${drivers.join('; ')}.`);
-    if (tags.length > 0) summaryParts.push(`Tags: ${tags.join(', ')}.`);
-    const trainingLoad = trainingLoadWords(context.training_load);
-    if (trainingLoad !== null) summaryParts.push(trainingLoad);
+    const summaryParts = [`${zone === undefined ? '' : `Form ${zone}; `}${zone === undefined ? 'Recovery' : 'recovery'} ${recovery}; load ${load ?? 'unavailable'}.`, ...daySummaryParts(context)];
 
     const viewParsed = derivedHealthDestinationViewSchema.safeParse(view);
     const narrativeParsed = narrativeContextSchema.safeParse({
@@ -260,30 +416,26 @@ export const toContextHealthMaterial = (
       return null;
     }
 
-    return {
-      view: viewParsed.data,
-      narrative: narrativeParsed.data,
-      source: {
-        source_key: `health-context:${context.day}`,
-        source_kind: 'derived_health_view',
-        scope: 'principal',
-        source_taint: null,
-        // When the app produced it. The read happens during composition, after the turn's
-        // snapshot, and the composer rejects a source produced after its snapshot.
-        produced_at: Date.parse(compiledAt),
-      },
-    };
+    if ('availability' in viewParsed.data) {
+      onError?.(new Error('health context material failed contract validation'));
+      return null;
+    }
+    return { view: viewParsed.data, narrative: narrativeParsed.data, source: sourceOf(context, compiledAt) };
   } catch (error) {
     onError?.(error);
     return null;
   }
-};
+}
 
 // The zone words a rendered health block shows the model (renderHealth), for checks that keep them out of what leaves.
-export const healthZoneWords = (material: ContextHealthMaterial | null): readonly string[] => material === null ? [] : [
-  'form_zone' in material.view ? material.view.form_zone : material.view.recovery_zone,
-  material.narrative.recovery_descriptor, ...(material.narrative.load_descriptor ? [material.narrative.load_descriptor] : []),
-];
+export const healthZoneWords = (material: ContextHealthMaterial | null): readonly string[] => {
+  if (material === null) return [];
+  if (isPartialHealth(material)) return material.view.load_zone === undefined ? [] : [material.view.load_zone];
+  return [
+    'form_zone' in material.view ? material.view.form_zone : material.view.recovery_zone,
+    material.narrative.recovery_descriptor, ...(material.narrative.load_descriptor ? [material.narrative.load_descriptor] : []),
+  ];
+};
 
 export type HealthContextBook = Readonly<{
   linked(): boolean;
@@ -297,7 +449,9 @@ export const healthContextBook = (
   doName: string | null,
   clock: OwnerClock,
   onReadError?: (error: unknown, trace?: string) => void,
-  onReadSuccess?: (present: boolean, trace?: string) => void,
+  // partial: the block given is a partial one, so a staging log can tell partial reads from full ones.
+  onReadSuccess?: (present: boolean, trace?: string, partial?: boolean) => void,
+  options: HealthContextOptions = {},
 ): HealthContextBook => {
   const read: HealthContextBook['read'] = async (trace) => {
     if (!call || !doName) return null;
@@ -308,10 +462,10 @@ export const healthContextBook = (
       onReadError?.(error, trace);
       return 'unknown';
     }
-    if (row === null || typeof row !== 'object') { onReadSuccess?.(false, trace); return null; }
+    if (row === null || typeof row !== 'object') { onReadSuccess?.(false, trace, false); return null; }
     let invalid = false;
-    const material = toContextHealthMaterial(row as HealthContextRow, clock, (error) => { invalid = true; onReadError?.(error, trace); });
-    if (!invalid) onReadSuccess?.(material !== null, trace);
+    const material = toContextHealthMaterial(row as HealthContextRow, clock, (error) => { invalid = true; onReadError?.(error, trace); }, options);
+    if (!invalid) onReadSuccess?.(material !== null, trace, material !== null && isPartialHealth(material));
     return invalid ? 'unknown' : material;
   };
   return {
