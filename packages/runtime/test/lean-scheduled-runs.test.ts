@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { FinalRecord } from '../src/channels/telegram-final-outbox';
 import { z } from 'zod';
 import { TOOL_PERMISSIONS, triggerTypeSchema, type ConversationEntry, type LLMRequest, type ToolName } from '@waldo/contracts';
 import { createOwnerResponder } from '../src/channels/owner-turn';
@@ -6,7 +7,7 @@ import type { ConversationStore } from '../src/channels/conversation-store';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { LOOP_CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS } from '../src/channels/check-back';
 import { triageTools, updateSweepTools } from '../src/channels/update-sweep';
-import { fitsScheduledMenu, recentExchange, recentExchangeText, RECENT_EXCHANGE_ROWS, RECENT_ROW_MAX_CHARS, SCHEDULED_DIRECT, SCHEDULED_MENU } from '../src/channels/scheduled-run';
+import { deliveredLately, fitsScheduledMenu, recentExchange, recentExchangeText, RECENT_OWNER_MESSAGES, RECENT_ROW_MAX_CHARS, RECENT_SENT_MESSAGES, SCHEDULED_DIRECT, SCHEDULED_MENU } from '../src/channels/scheduled-run';
 import { toContextHealthMaterial, type HealthContextRow } from '../src/channels/health-context';
 import { ownerJobAdmission } from '../src/identity/surface-owner-admission';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
@@ -48,7 +49,7 @@ const fake = (name: string) => ({ name: name as ToolName, description: `The ${na
 const TOOLS = [...new Set([...SCHEDULED_MENU, 'web_search', 'browse_page', 'send_message'])].filter((name) => name !== 'get_context').map(fake);
 
 type Script = (request: LLMRequest, index: number) => Readonly<{ text: string; tool?: string; args?: string }>;
-const harness = async ({ lean, entries = chain(), script = () => ({ text: 'SKIP' }), health, loader = false, wakes = false }: { lean: boolean; entries?: ConversationEntry[]; script?: Script; health?: boolean; loader?: boolean; wakes?: boolean }) => {
+const harness = async ({ lean, entries = chain(), script = () => ({ text: 'SKIP' }), health, loader = false, wakes = false, sent }: { lean: boolean; entries?: ConversationEntry[]; script?: Script; health?: boolean; loader?: boolean; wakes?: boolean; sent?: readonly Readonly<{ at: number; text: string }>[] }) => {
   const requests: LLMRequest[] = [];
   const logs: TurnLogEntry[] = [];
   const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {
@@ -63,7 +64,7 @@ const harness = async ({ lean, entries = chain(), script = () => ({ text: 'SKIP'
   const args: Parameters<typeof createOwnerResponder> = [loader ? { openaiApiKey: 'fixture', toolLoader: 'harness' } : 'fixture'];
   args[1] = store; args[3] = (entry) => logs.push(entry); args[5] = TOOLS as never; args[7] = false; args[10] = gateway;
   if (health !== undefined) args[17] = async () => health ? toContextHealthMaterial(HEALTH_ROW, { timezone: 'UTC', now: () => new Date() }) : null;
-  args[21] = { jobHost: { admit: async () => admission, chain: (_admission, surfaceChain) => surfaceChain }, dayCards: () => 'Today: Brief sent 07:30; Check-in due 13:00.', ...(lean ? { leanScheduled: true } : {}), ...(wakes ? { modelSetWakes: true } : {}) };
+  args[21] = { jobHost: { admit: async () => admission, chain: (_admission, surfaceChain) => surfaceChain }, dayCards: () => 'Today: Brief sent 07:30; Check-in due 13:00.', ...(lean ? { leanScheduled: true } : {}), ...(wakes ? { modelSetWakes: true } : {}), ...(sent ? { waldoSent: () => sent } : {}) };
   return { requests, logs, store, owner: createOwnerResponder(...args) };
 };
 
@@ -215,35 +216,96 @@ describe('the owner\'s own turns with the lean view on', () => {
   });
 });
 
+describe('what Waldo sent the owner, in a lean run', () => {
+  const at = Date.parse('2026-11-16T07:30:00Z');
+  it('reads the messages delivered to the owner, apart from the owner\'s exchange, and none when nothing was', async () => {
+    const { owner, requests } = await harness({ lean: true, sent: [{ at, text: 'Brief: protect the morning, gym at 18:00.' }, { at: at + 3_600_000, text: 'Your 15:00 moved to 16:00.' }] });
+    await run(owner, 'heartbeat:1', LOOP_CHECK_BACK_TOOLS, undefined);
+    const current = lastReply(requests).messages.at(-1)!.content;
+    expect(current).toContain('messages Waldo sent the owner lately, oldest first');
+    expect(current.indexOf('protect the morning')).toBeLessThan(current.indexOf('Your 15:00 moved'));
+    expect(current).toContain('recent conversation with the owner');
+    const { owner: quiet, requests: none } = await harness({ lean: true, sent: [] });
+    await run(quiet, 'heartbeat:2', LOOP_CHECK_BACK_TOOLS, undefined);
+    expect(lastReply(none).messages.at(-1)!.content).not.toContain('messages Waldo sent the owner lately');
+  });
+
+  it('is not read by a run the lean view does not take', async () => {
+    const { owner, requests } = await harness({ lean: false, sent: [{ at, text: 'Brief: protect the morning.' }] });
+    await run(owner, 'heartbeat:1', LOOP_CHECK_BACK_TOOLS, undefined);
+    expect(JSON.stringify(lastReply(requests).messages)).not.toContain('messages Waldo sent the owner lately');
+  });
+});
+
+describe('what the outbox delivered lately', () => {
+  const now = Date.parse('2026-11-16T12:00:00Z');
+  const record = (id: string, status: FinalRecord['status'], at: number, extra: Partial<FinalRecord> = {}): FinalRecord => ({
+    id, trace: id, payload: { chat_id: 7, text: `text ${id}` }, digest: id, ownerSubject: '7', doName: 'owner', status, dueAt: at, createdAt: at, attempts: 1, ...extra }) as FinalRecord;
+  it('reads delivered and accepted messages of the last day, oldest first, never a pending, blocked or forgotten one', () => {
+    const records = [
+      record('old', 'delivered', now - 25 * 3_600_000), record('pending', 'pending', now - 60_000), record('blocked', 'blocked', now - 60_000),
+      record('forgotten', 'delivered', now - 60_000, { forgotten: true }), record('brief', 'delivered', now - 5 * 3_600_000, { deliveredAt: now - 5 * 3_600_000 }),
+      record('whatsapp', 'accepted', now - 3_600_000), record('checkin', 'delivered', now - 2 * 3_600_000),
+    ];
+    expect(deliveredLately(records, now).map((message) => message.text)).toEqual(['text brief', 'text checkin', 'text whatsapp']);
+  });
+  it(`keeps the newest ${RECENT_SENT_MESSAGES}`, () => {
+    const records = Array.from({ length: 6 }, (_, i) => record(`m${i}`, 'delivered', now - (6 - i) * 60_000));
+    expect(deliveredLately(records, now).map((message) => message.text)).toEqual(['text m3', 'text m4', 'text m5']);
+  });
+});
+
 describe('the recent exchange a lean run reads', () => {
   const tree = (rows: ConversationEntry[]) => { const built = new ConversationTree(); for (const row of rows) built.append(row); return built; };
   const row = (id: string, parentId: string | null, extra: Partial<ConversationEntry>): ConversationEntry => ({ id, ownerId: PRINCIPAL, chatId: CHAIN, parentId, threadAnchorId: null, surface: 'telegram',
     modelPayload: id, appPayload: id, modelProjection: { mode: 'include' }, createdAt: 0, ...extra });
 
-  it('leaves out machine job prompts, runs that sent nothing and summaries, and keeps the newest rows', () => {
-    const rows = [
-      row('a', null, { role: 'user', inputOrigin: 'owner', modelPayload: 'owner words' }),
-      row('a-reply', 'a', { role: 'assistant', modelPayload: 'waldo answer' }),
-      row('job', 'a-reply', { role: 'user', inputOrigin: 'machine', modelPayload: 'Write the Brief.' }),
-      row('job-reply', 'job', { role: 'assistant', modelPayload: 'SKIP' }),
-      row('job2', 'job-reply', { role: 'user', inputOrigin: 'machine', modelPayload: '#stub', modelProjection: { mode: 'omit' } }),
-      row('job2-reply', 'job2', { role: 'assistant', modelPayload: 'Brief text', readOutside: true }),
-      row('now', 'job2-reply', { role: 'user', inputOrigin: 'machine', modelPayload: 'Write the Check-in.' }),
-    ];
+  const ownerSaid = (n: number, parent: string | null, text = `owner words ${n}`) => [
+    row(`o${n}`, parent, { role: 'user', inputOrigin: 'owner', modelPayload: text }),
+    row(`o${n}-reply`, `o${n}`, { role: 'assistant', modelPayload: `waldo answer ${n}` }),
+  ];
+  const job = (id: string, parent: string, reply: string, extra: Partial<ConversationEntry> = {}) => [
+    row(id, parent, { role: 'user', inputOrigin: 'machine', modelPayload: `Run ${id}.` }),
+    row(`${id}-reply`, id, { role: 'assistant', modelPayload: reply, ...extra }),
+  ];
+
+  // The owner said something, then six scheduled runs answered with their machine shapes. The owner's words must survive.
+  it('keeps the owner\'s words however many scheduled runs answered after them, whatever shape their answers take', () => {
+    const rows = [...ownerSaid(1, null, 'in a meeting till 5')];
+    const noOps = ['{"decision":"none"}', '{}', '{"decision":"silent"}', 'SKIP', '{"decision":"none"}', 'A shape no one listed'];
+    noOps.forEach((reply, i) => rows.push(...job(`job${i}`, rows.at(-1)!.id, reply)));
+    rows.push(row('now', rows.at(-1)!.id, { role: 'user', inputOrigin: 'machine', modelPayload: 'Write the Check-in.' }));
     const recent = recentExchange(tree(rows), 'now');
-    expect(recent.messages).toEqual([{ role: 'user', content: 'owner words' }, { role: 'assistant', content: 'waldo answer' }, { role: 'assistant', content: 'Brief text' }]);
-    expect(recent.readOutside).toBe(true);
+    expect(recent.messages).toEqual([{ role: 'user', content: 'in a meeting till 5' }, { role: 'assistant', content: 'waldo answer 1' }]);
   });
 
-  it(`keeps at most ${RECENT_EXCHANGE_ROWS} rows whole, and cuts each to ${RECENT_ROW_MAX_CHARS} characters only as it renders them`, () => {
-    const rows = chain();
-    const now = row('now', rows.at(-1)!.id, { role: 'user', inputOrigin: 'machine' });
-    const recent = recentExchange(tree([...rows, now]), 'now');
-    expect(recent.messages).toHaveLength(RECENT_EXCHANGE_ROWS);
-    expect(recent.messages.map((message) => message.content)).toEqual(rows.slice(-RECENT_EXCHANGE_ROWS).map((entry) => entry.modelPayload));
+  it('reads a scheduled run\'s raw answer as nothing the owner received, and leaves out summaries and omitted rows', () => {
+    const rows = [
+      ...ownerSaid(1, null),
+      ...job('brief', 'o1-reply', 'Brief text', { readOutside: true }),
+      row('stub', 'brief-reply', { role: 'user', inputOrigin: 'owner', modelPayload: '#stub', modelProjection: { mode: 'omit' } }),
+      row('now', 'stub', { role: 'user', inputOrigin: 'machine', modelPayload: 'Write the Check-in.' }),
+    ];
+    const recent = recentExchange(tree(rows), 'now');
+    expect(recent.messages).toEqual([{ role: 'user', content: 'owner words 1' }, { role: 'assistant', content: 'waldo answer 1' }]);
     expect(recent.readOutside).toBe(false);
+  });
+
+  it(`keeps the last ${RECENT_OWNER_MESSAGES} owner messages, each with its answer, and cuts each row only as it renders it`, () => {
+    const rows: ConversationEntry[] = [];
+    for (let n = 1; n <= 8; n += 1) rows.push(...ownerSaid(n, rows.at(-1)?.id ?? null));
+    rows.push(row('now', rows.at(-1)!.id, { role: 'user', inputOrigin: 'machine' }));
+    const recent = recentExchange(tree(rows), 'now');
+    expect(recent.messages.map((message) => message.content)).toEqual(['owner words 6', 'waldo answer 6', 'owner words 7', 'waldo answer 7', 'owner words 8', 'waldo answer 8']);
     const long = { role: 'assistant' as const, content: 'x'.repeat(RECENT_ROW_MAX_CHARS * 2) };
     expect(recentExchangeText([{ role: 'user', content: 'hi' }, long])).toBe(`Owner: hi\nWaldo: ${'x'.repeat(RECENT_ROW_MAX_CHARS)}…`);
+  });
+
+  it('a long row is cut on a whole character, never inside a surrogate pair', () => {
+    const text = `${'x'.repeat(RECENT_ROW_MAX_CHARS - 1)}😀tail`;
+    const rendered = recentExchangeText([{ role: 'user', content: text }]);
+    expect(rendered).not.toMatch(/[\uD800-\uDBFF]…$/);
+    expect(rendered.endsWith('…')).toBe(true);
   });
 });
 

@@ -49,7 +49,7 @@ import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
 import { fitPromptToBudget } from '../prompt/fit-prompt';
 import { ownerProfilePrompt } from '../memory/owner-profile';
-import { FORGOTTEN, QUIET_NOTE, QUIET_TAG, withoutBringUpLess, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, knownPeopleBlock, SOURCE_PEOPLE_CLAIMS_SCHEMA, SOURCE_PEOPLE_RULE, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, SOURCE_CLAIMS_SCHEMA, SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput, withoutHealthClaims, type ClaimStore, barrierPrompt, memoryPrompt, RETIRE_RULES } from '../memory/claims';
+import { FORGOTTEN, QUIET_NOTE, QUIET_TAG, withoutBringUpLess, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, knownPeopleBlock, SOURCE_PEOPLE_CLAIMS_SCHEMA, SOURCE_PEOPLE_RULE, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, promotionInstruction, PROMOTION_SCHEMA, promotionInput, SOURCE_CLAIMS_SCHEMA, SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput, withoutHealthClaims, type ClaimStore, barrierPrompt, memoryPrompt, RETIRE_RULES } from '../memory/claims';
 import { CAPACITY_INSTRUCTION, CAPACITY_SCHEMA } from '../prompt/capacity';
 import { sha256Hex } from '../context-composer/canonical';
 import { outsideView } from '../memory/outside-view';
@@ -72,7 +72,8 @@ import type { RunBook } from './background-runs';
 import { toolOutputLedger } from '../conversation/tool-output-ledger';
 import { replyGate, withReplyStream } from '../conversation/reply-gate';
 import { recordSharedHealth, type TrailRead } from '../tools/why-trail';
-import { fitsScheduledMenu, recentExchange, recentExchangeText, SCHEDULED_DIRECT, SCHEDULED_MENU } from './scheduled-run';
+import { localIso } from './reminders';
+import { fitsScheduledMenu, RECENT_SENT_MESSAGES, recentExchange, recentExchangeText, SCHEDULED_DIRECT, SCHEDULED_MENU, sentText } from './scheduled-run';
 
 const TURN_ONLY_OUTPUT = JSON.stringify({ retained: false, reason: 'turn_only_output' });
 // What find_tools returned, or a tool outside the core list the model reached by name: either stays offered next turn.
@@ -162,10 +163,12 @@ export type OwnerContextIntegration = Readonly<{ skills?: OwnerSkillCapability; 
   // once per call so every round offers the same list; and where a tool the model loaded or reached by name is noted.
   promotedTools?: () => readonly string[]; noteLoaded?: (names: readonly string[]) => void;
   // MODEL_SET_WAKES: a run Waldo starts may leave itself a follow-up (open_loop with no mail source; channels/loops.ts bounds it).
-  modelSetWakes?: boolean }>;
+  modelSetWakes?: boolean;
+  // The messages the owner's outbox delivered to the owner lately, oldest first: what a lean scheduled run reads of what Waldo said.
+  waldoSent?: () => readonly Readonly<{ at: number; text: string }>[] }>;
 // This owner's spend so far this month and the ceiling it is held to, read once when a turn starts.
 export type OwnerSpend = Readonly<{ spentUsd: number; ceilingUsd: number }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; finishedTasks?: (since: number) => string; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; turnCharts?: (turnId: string) => readonly ConversationChart[]; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; jobOutcomeRows?: boolean; timelineSeed?: TimelineSeed; machineTime?: OwnerContextIntegration['machineTime']; leanScheduled?: boolean; promotedTools?: OwnerContextIntegration['promotedTools']; noteLoaded?: OwnerContextIntegration['noteLoaded']; modelSetWakes?: boolean }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; finishedTasks?: (since: number) => string; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; turnCharts?: (turnId: string) => readonly ConversationChart[]; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; jobOutcomeRows?: boolean; timelineSeed?: TimelineSeed; machineTime?: OwnerContextIntegration['machineTime']; leanScheduled?: boolean; promotedTools?: OwnerContextIntegration['promotedTools']; noteLoaded?: OwnerContextIntegration['noteLoaded']; modelSetWakes?: boolean; waldoSent?: OwnerContextIntegration['waldoSent'] }>;
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 // The typed failure on a tool hop: the ToolError code when the tool returned one, else the loop's coarse code.
@@ -500,13 +503,15 @@ export const createOwnerResponder = (
   // turn; a machine turn (a reminder or a job) and a background decision recall claims only. A job built from external data
   // recalls by words the owner did not write, so those words never select a health claim.
   const episodeSearch = tools.find((handler) => handler.name === 'search_episodes');
+  // How many notes learned from outside content this owner turn's recall showed only as a number; 0 when it showed none.
+  let outsideNotesWaiting = 0;
   const recallFor = async (source: ClaimStore, text: string, room: number, ownerTurn?: string, stubs = false): Promise<Readonly<{ text: string; outside: boolean }>> => {
     const previous = ownerTurn === undefined ? undefined : previousOwnerMessage((id) => tree.get(id), ownerTurn);
     const searched = ownerTurn === undefined || !episodeSearch ? undefined : episodesFromSearchTool(episodeSearch, { ...safety, turnId: ownerTurn, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) });
     // A chat's recall stays in that chat; search_episodes, which the model calls on purpose, still reaches every chat.
     const reach = conversationStore?.recalls;
     const episodes = searched && reach ? withinReach(searched, reach) : searched;
-    const args = { claims: memoryFor(source), question: text, room, holds: barrier().holds, ...(privateOwner?.memoryValidity ? { replaced: true } : {}), ...(privateOwner?.semanticRecall ? { semantic: privateOwner.semanticRecall.near } : {}), ...(previous === undefined ? {} : { previous }), ...(episodes && ownerTurn !== undefined ? { episodes, current: ownerTurn } : {}) };
+    const args = { claims: memoryFor(source), question: text, room, holds: barrier().holds, ...(ownerTurn !== undefined && (turnCarriedOutside || readOthersWords()) ? { marked: true } : {}), ...(privateOwner?.memoryValidity ? { replaced: true } : {}), ...(privateOwner?.semanticRecall ? { semantic: privateOwner.semanticRecall.near } : {}), ...(previous === undefined ? {} : { previous }), ...(episodes && ownerTurn !== undefined ? { episodes, current: ownerTurn } : {}) };
     // With memory selection on, recall waits no longer than its deadline, and offers stubs past its full lines to a call that
     // can open them with read_memory.
     const recalled = privateOwner?.memorySelection ? await recallWithin({ ...args, stubs }, privateOwner.semanticRecall ? SEMANTIC_DEADLINE_MS : LEXICAL_DEADLINE_MS) : await recallForTurn(args);
@@ -514,6 +519,7 @@ export const createOwnerResponder = (
     for (const claim of recalled.used ?? []) usedClaims.add(claim);
     if (recalled.failed.length) log({ trace: traceId, hop: 'memory_recall', ms: 0, ok: false, code: 'recall_failed', detail: recalled.failed.join(',') });
     const outside = recalled.outside === true;
+    if (ownerTurn !== undefined && recalled.waiting) outsideNotesWaiting = recalled.waiting;
     if (recalled.text && privateOwner?.memoryUsed && ownerTurnActive) return { text: `${recalled.text}\n${SAY_WHICH_MEMORY}`, outside };
     return { text: recalled.text, outside };
   };
@@ -772,13 +778,17 @@ export const createOwnerResponder = (
           };
           const raw = reuseSuffix ? undefined : await gather();
           // Everything this call shows the model crosses the forget barrier here, once.
-          // A lean scheduled run reads the last rows of the owner's own exchange with Waldo instead of the replayed chain; the
-          // current message rides last so the barrier, which always keeps a view's last message, judges every row before it.
+          // A lean scheduled run reads the owner's own exchange and what Waldo delivered to the owner instead of the replayed
+          // chain (scheduled-run.ts). The current message rides last in each so the barrier, which always keeps a view's last
+          // message, judges every row before it. Delivered messages may carry what Waldo read elsewhere, so they read as outside.
           const recent = leanRun ? recentExchange(tree, trace) : undefined;
+          const sent = leanRun ? (privateOwner?.waldoSent?.() ?? []).slice(-RECENT_SENT_MESSAGES) : [];
+          if (sent.length) (loopCtx as { carriedOutside?: boolean }).carriedOutside = true;
           if (recent?.readOutside) (loopCtx as { carriedOutside?: boolean }).carriedOutside = true;
           const cut = applyForgetBarrier({
             history: { kind: 'messages', messages: request.messages },
             recent: { kind: 'messages', messages: recent ? [...recent.messages, request.messages.at(-1)!] : [] },
+            sent: { kind: 'messages', messages: sent.length ? [...sent.map((message) => ({ role: 'assistant' as const, content: message.text })), request.messages.at(-1)!] : [] },
             // The light step's own view of the chat (WALDO_LIGHT_CHAT), read only when this step may take it.
             exchange: { kind: 'messages', messages: lightFirst ? ownerExchangeHistory(tree, trace, compaction) : [] },
             replyQuote: { kind: 'text', origin: 'external', text: turnReplyContext },
@@ -834,7 +844,10 @@ export const createOwnerResponder = (
           const current = entries[entries.length - 1]!;
           const ownTail = current.content + (cut.replyQuote ? '\n\n' + cut.replyQuote : '') + (cut.jobContext ? '\n\n' + cut.jobContext : '') + added;
           const recentRows = cut.recent.slice(0, -1);
-          const recentBlock = recentRows.length ? fenced('recent conversation with the owner, oldest first', recentExchangeText(recentRows)) : '';
+          const kept = new Set(cut.sent.slice(0, -1).map((message) => message.content));
+          const sentRows = sent.filter((message) => kept.has(message.text)).map((message) => ({ at: localIso(message.at, clock.timezone).slice(0, 16).replace('T', ' '), text: message.text }));
+          const recentBlock = (recentRows.length ? fenced('recent conversation with the owner, oldest first', recentExchangeText(recentRows)) : '')
+            + (sentRows.length ? fenced('messages Waldo sent the owner lately, oldest first, as delivered', sentText(sentRows)) : '');
           leanRecentBytes = utf8Bytes(recentBlock);
           entries[entries.length - 1] = { ...current, content: ownTail + recentBlock + built.suffix.text };
           const browserImages = privateOwner?.skillHost?.browserAttachments?.(privateRunScope) ?? [];
@@ -1008,7 +1021,7 @@ export const createOwnerResponder = (
       onPhase: (phase, previousMs) => log({ trace, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }),
     });
     const jobSkills = jobHost.skills?.(jobContext.invocation.verified_authority.principal_ref, trace, () => jobContext.assertCurrent());
-    const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, privateRunScope, privateSystemSkills, { context: jobContext, ...(jobSkills ? { skills: jobSkills } : {}), ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}), ...(privateOwner?.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner?.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}), ...(privateOwner?.loopIsSourceBound ? { loopIsSourceBound: privateOwner.loopIsSourceBound } : {}), ...(privateOwner?.profileView ? { profileView: true } : {}), ...(privateOwner?.semanticRecall ? { semanticRecall: privateOwner.semanticRecall } : {}), ...(privateOwner?.memorySelection ? { memorySelection: privateOwner.memorySelection } : {}), ...(privateOwner?.memoryUsed ? { memoryUsed: privateOwner.memoryUsed } : {}), ...(privateOwner?.turnCharts ? { turnCharts: privateOwner.turnCharts } : {}), ...(privateOwner?.memoryValidity ? { memoryValidity: true } : {}), ...(privateOwner?.machineTime ? { machineTime: privateOwner.machineTime } : {}), ...(privateOwner?.jobOutcomeRows ? { jobOutcomeRows: true } : {}), ...(privateOwner?.leanScheduled ? { leanScheduled: true } : {}), ...(privateOwner?.dayCards ? { dayCards: privateOwner.dayCards } : {}), ...(privateOwner?.promotedTools ? { promotedTools: privateOwner.promotedTools } : {}), ...(privateOwner?.noteLoaded ? { noteLoaded: privateOwner.noteLoaded } : {}), ...(privateOwner?.modelSetWakes ? { modelSetWakes: true } : {}) });
+    const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, privateRunScope, privateSystemSkills, { context: jobContext, ...(jobSkills ? { skills: jobSkills } : {}), ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}), ...(privateOwner?.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner?.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}), ...(privateOwner?.loopIsSourceBound ? { loopIsSourceBound: privateOwner.loopIsSourceBound } : {}), ...(privateOwner?.profileView ? { profileView: true } : {}), ...(privateOwner?.semanticRecall ? { semanticRecall: privateOwner.semanticRecall } : {}), ...(privateOwner?.memorySelection ? { memorySelection: privateOwner.memorySelection } : {}), ...(privateOwner?.memoryUsed ? { memoryUsed: privateOwner.memoryUsed } : {}), ...(privateOwner?.turnCharts ? { turnCharts: privateOwner.turnCharts } : {}), ...(privateOwner?.memoryValidity ? { memoryValidity: true } : {}), ...(privateOwner?.machineTime ? { machineTime: privateOwner.machineTime } : {}), ...(privateOwner?.jobOutcomeRows ? { jobOutcomeRows: true } : {}), ...(privateOwner?.leanScheduled ? { leanScheduled: true } : {}), ...(privateOwner?.dayCards ? { dayCards: privateOwner.dayCards } : {}), ...(privateOwner?.promotedTools ? { promotedTools: privateOwner.promotedTools } : {}), ...(privateOwner?.noteLoaded ? { noteLoaded: privateOwner.noteLoaded } : {}), ...(privateOwner?.modelSetWakes ? { modelSetWakes: true } : {}), ...(privateOwner?.waldoSent ? { waldoSent: privateOwner.waldoSent } : {}) });
     control.route(scoped.control);
     try { return await work(scoped); }
     finally { control.unroute(scoped.control); }
@@ -1029,6 +1042,7 @@ export const createOwnerResponder = (
     // Past the spend ceiling every call already runs on the auxiliary route, so a light step would only add a call.
     lightFirst = fromOwner && privateOwner?.lightChat === true && turnOwnWordsOnly && !turnCapped();
     turnToolEvents = [];
+    outsideNotesWaiting = 0;
     usedClaims.clear();
     control.begin(fromOwner);
     try {
@@ -1068,6 +1082,8 @@ export const createOwnerResponder = (
       const answered = tree.get(publication.leafId)!;
       const told = notice ? { ...answered, modelPayload: `${answered.modelPayload}\n\n${notice.modelLine}` } : answered;
       const readOutside = readOthersWords() || turnLoopCtx?.toolArgSourceTaint === 'external';
+      // Counts only: how often a chat shown the number opens the notes, and how often it ends up marked.
+      if (fromOwner && outsideNotesWaiting) log({ trace: traceId, hop: 'memory_outside_notes', ms: 0, ok: true, detail: `waiting ${outsideNotesWaiting} opened ${turnToolEvents.some((event) => event.call.name === 'read_memory' && event.ok) ? 1 : 0} marked ${readOutside ? 1 : 0}` });
       // The charts this turn drew go with its reply, so the app reads them back with it.
       const charts = fromOwner && context ? privateOwner?.turnCharts?.(id) ?? [] : [];
       const jobStub = !fromOwner && privateOwner?.jobOutcomeRows ? jobPromptStub(tree.get(id)!, await jobPromptKey(said)) : null;
@@ -1354,7 +1370,7 @@ export const createOwnerResponder = (
       const visible = promptMemory()!;
       const input = promotionInput(visible);
       if (gate && await sha256Hex(input) === gate.last) return 'unchanged';
-      const raw = await ask(trace, 'constellation', PROMOTION_INSTRUCTION, input, { name: 'promotion', schema: PROMOTION_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+      const raw = await ask(trace, 'constellation', promotionInstruction(visible), input, { name: 'promotion', schema: PROMOTION_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
       await assertFresh();
       const detail = applyPromotion(visible, raw, new Date().toISOString(), (receipt) => log({
         trace, hop: 'constellation_evidence', ms: 0, ok: true,
