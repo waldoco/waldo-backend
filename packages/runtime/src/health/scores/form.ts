@@ -5,7 +5,7 @@ import { localDayWindow, wallMinute } from './time';
 import { formZone } from './zones';
 import { fromTheNight, partRows, PART_ORDER } from './parts';
 import { usualOfStanding } from './usual';
-import type { Absent, DayRecord, FormResult, HourlyBucket, HrvMethod } from './types';
+import type { Absent, DayRecord, FormResult, HourlyBucket, HrvMethod, UsedSignal } from './types';
 
 const FORM_WEIGHTS = { recovery: 0.4, midpoint: 0.1, daylight: 0.1, motion: 0.2, stress: 0.2 } as const;
 const HOUR_MS = 3_600_000;
@@ -83,9 +83,9 @@ export const formScore = (record: DayRecord, earlier: readonly DayRecord[], slee
 
   const scale = FORM_WEIGHTS.recovery;
   const components: Component[] = recovery.components.map(component => ({ ...component, name: `recovery.${component.name}`, weight: component.weight * scale }));
-  const signals = [...recovery.signals];
+  const signals: UsedSignal[] = [...recovery.signals];
   const days = new Set<string>(recovery.days);
-  const add = (name: string, score: number, weight: number, used: readonly string[], extra: Pick<Component, 'basis' | 'usual'> = {}) => { components.push({ name, score, weight, ...extra }); signals.push(name); used.forEach(day => days.add(day)); };
+  const add = (name: UsedSignal, score: number, weight: number, used: readonly string[], extra: Pick<Component, 'basis' | 'usual'> = {}) => { components.push({ name, score, weight, ...extra }); signals.push(name); used.forEach(day => days.add(day)); };
   const absent = new Map<string, Absent>('absent' in recovery ? recovery.absent ?? [] : []);
 
   const own: number[] = [...('own' in recovery ? recovery.own ?? [] : [])];
@@ -93,7 +93,7 @@ export const formScore = (record: DayRecord, earlier: readonly DayRecord[], slee
   // A component with no prior joins at seven own days and is judged against its own days alone.
   // A component with no usual band of its own kind (steps standing in for movement: the contract reads a steps band as the plain
   // mean of the owner's own days, not this estimate) keeps its direction and links to no band, as physical_load does.
-  const addOwn = (name: string, signal: string | null, at: ReturnType<typeof standing>, entries: readonly { day: string }[], weight: number, score: (z: number) => number) => {
+  const addOwn = (name: UsedSignal, signal: string | null, at: ReturnType<typeof standing>, entries: readonly { day: string }[], weight: number, score: (z: number) => number) => {
     if (at === null) { absent.set(name, 'baseline_immature'); return; }
     add(name, score(at.z), weight, entries.map(entry => entry.day), { basis: { z: at.z, own: at.own, ownShare: at.ownShare, signals: signal ? [signal] : [] }, usual: signal === null ? undefined : usualOfStanding(signal, null, at) ?? undefined });
     own.push(at.own);

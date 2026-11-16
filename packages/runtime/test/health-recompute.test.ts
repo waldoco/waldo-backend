@@ -24,7 +24,7 @@ const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00
 // What the database functions hold and answer for this owner: the derived rows by day, and every call made.
 const plane = vi.hoisted(() => ({
   rows: new Map<string, Record<string, Record<string, unknown>>>(), calls: [] as { fn: string; payload: Record<string, unknown> }[],
-  seriesFails: false, hourly: false, during: null as null | (() => Promise<void>), otlp: [] as string[],
+  seriesFails: false, writeRefused: false, hourly: false, during: null as null | (() => Promise<void>), otlp: [] as string[],
 }));
 vi.mock('../src/channels/telegram-api', async load => ({ ...await load<typeof import('../src/channels/telegram-api')>(), createTelegramCaller: () => async () => true }));
 vi.mock('../src/channels/telegram-turn', async load => {
@@ -68,7 +68,7 @@ const newestBefore = (day: string) => [...plane.rows.keys()].filter(d => d < day
 let sequence = 0;
 const printed: string[] = [];
 beforeEach(() => {
-  plane.rows.clear(); plane.calls = []; plane.seriesFails = false; plane.hourly = false; plane.during = null; plane.otlp = []; printed.length = 0;
+  plane.rows.clear(); plane.calls = []; plane.seriesFails = false; plane.writeRefused = false; plane.hourly = false; plane.during = null; plane.otlp = []; printed.length = 0;
   vi.useFakeTimers({ toFake: ['Date'], now: NOW });
   for (const method of ['log', 'info', 'warn', 'error'] as const) vi.spyOn(console, method).mockImplementation((...args: unknown[]) => { printed.push(args.map(String).join(' ')); });
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -88,6 +88,7 @@ beforeEach(() => {
       return Response.json(row ? { scores: { day, timezone: 'Asia/Kolkata', compiled_at: new Date().toISOString(), freshness: 'fresh', ...row } } : { unavailable: 'no_readings' });
     }
     if (fn === 'health_context_write') {
+      if (plane.writeRefused) return Response.json({ error: 'invalid_request' });
       const row = payload as Record<string, Record<string, unknown>> & { day: string };
       const old = plane.rows.get(row.day) ?? plane.rows.get(newestBefore(row.day) ?? '');
       const changed = old ? ['recovery', 'form', 'weight'].filter(p => typeof old[p]?.zone === 'string' && typeof row[p]?.zone === 'string' && old[p]!.zone !== row[p]!.zone) : [];
@@ -124,7 +125,7 @@ const seriesReads = (vitals: boolean) => plane.calls.filter(call => call.fn === 
 const reads = () => seriesReads(false);
 const writtenDays = () => plane.calls.filter(call => call.fn === 'health_context_write').map(call => call.payload.day);
 const pending = (state: DurableObjectState) => state.storage.sql.exec<{ day: string }>("SELECT day FROM health_trigger_pending").toArray().map(row => row.day);
-const recomputeLogs = () => printed.flatMap(line => { try { const entry = JSON.parse(line) as Record<string, unknown>; return entry.hop === 'health_recompute' ? [{ ok: entry.ok, code: entry.code }] : []; } catch { return []; } });
+const recomputeLogs = () => printed.flatMap(line => { try { const entry = JSON.parse(line) as Record<string, unknown>; return entry.hop === 'health_recompute' ? [{ ok: entry.ok, code: entry.code, ...('error_code' in entry ? { error_code: entry.error_code } : {}) }] : []; } catch { return []; } });
 const tableExists = (state: DurableObjectState, name: string) => state.storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", name).toArray().length > 0;
 // Today's row as an earlier upload left it, in another Recovery zone than the readings now give.
 const earlierToday = (day = '2026-10-21') => plane.rows.set(day, { recovery: { score: 20, zone: 'low', algorithm_version: 'recovery.candidate.v1' }, form: { reason: 'intraday_inputs_unavailable' }, weight: { reason: 'calendar_demand_unavailable' } });
@@ -353,7 +354,7 @@ describe('the owner object recomputes the derived rows', () => {
         expect(entry(state)).toMatchObject(attempt < 3 ? { status: 'armed', attempts: attempt } : { status: 'quarantined' });
       }
       expect(writtenDays()).toEqual([]);
-      expect(recomputeLogs()).toEqual([{ ok: false, code: 'failed' }, { ok: false, code: 'failed' }, { ok: false, code: 'failed' }]);
+      expect(recomputeLogs()).toEqual(Array.from({ length: 3 }, () => ({ ok: false, code: 'failed', error_code: 'series_read:no_answer' })));
       plane.seriesFails = false;
       await upload();
       expect(entry(state)).toMatchObject({ status: 'armed', attempts: 0, due_at: Date.now() + HEALTH_RECOMPUTE_WINDOW_MS });
@@ -380,7 +381,7 @@ describe('the recompute\'s trace', () => {
       await upload();
       vi.setSystemTime(entry(state)!.due_at);
       await pass();
-      expect(recomputeLogs()).toEqual([{ ok: true, code: 'written' }, { ok: false, code: 'failed' }]);
+      expect(recomputeLogs()).toEqual([{ ok: true, code: 'written' }, { ok: false, code: 'failed', error_code: 'series_read:no_answer' }]);
       expect(roots(state)).toEqual([{ trace: expect.stringMatching(/^health-recompute:/), ok: 1 }, { trace: expect.stringMatching(/^health-recompute:/), ok: 0 }]);
       const recomputeRoots = () => spans().filter(span => span.name.endsWith('.machine') && attribute(span, 'langfuse.observation.metadata.trace_key')?.startsWith('health-recompute:'));
       await vi.waitFor(() => expect(recomputeRoots()).toHaveLength(2));
@@ -388,7 +389,21 @@ describe('the recompute\'s trace', () => {
         const key = attribute(root, 'langfuse.observation.metadata.trace_key');
         expect(spans().filter(span => !span.name.endsWith('.machine') && attribute(span, 'langfuse.observation.metadata.trace_key') === key).map(span => span.name)).toEqual(['health_recompute']);
       }
+      // The failed run's step and the database's answer survive the privacy gate into the export; the written run has none.
+      expect(spans().filter(span => span.name === 'health_recompute').map(span => attribute(span, 'langfuse.observation.metadata.error_code')).sort()).toEqual(['series_read:no_answer', undefined]);
       for (const leak of LEAKS) expect(plane.otlp.join('\n'), leak).not.toContain(leak);
     }, { ...CONFIG, ...LANGFUSE });
+  });
+
+  it('names a row the writer refused as context_write:invalid_request, with nothing of the row', async () => {
+    plane.writeRefused = true;
+    await withOwner(async ({ state, upload, pass }) => {
+      await upload();
+      vi.setSystemTime(NOW + HEALTH_RECOMPUTE_WINDOW_MS);
+      await pass();
+      expect(entry(state)).toMatchObject({ status: 'armed', attempts: 1 });
+      expect(recomputeLogs()).toEqual([{ ok: false, code: 'failed', error_code: 'context_write:invalid_request' }]);
+      for (const leak of [...LEAKS, '2026-10-21']) expect(printed.filter(line => line.includes('"health_recompute"')).join('\n'), leak).not.toContain(leak);
+    });
   });
 });

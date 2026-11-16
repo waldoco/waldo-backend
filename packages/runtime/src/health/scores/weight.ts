@@ -3,11 +3,11 @@ import { ALGORITHM, PROVISIONAL_ALGORITHM } from './recovery';
 import { BASELINE_DAYS, combine, higherIsBetter, zScore, type Component } from './stats';
 import { weightZone } from './zones';
 import { partRows, PART_ORDER } from './parts';
-import type { Absent, DayRecord, DemandInputs, WeightResult } from './types';
+import type { Absent, DayRecord, DemandInputs, UsedSignal, WeightResult } from './types';
 
 const FIELDS = [
   ['calendar', 'meetingMinutes', 0.35], ['tasks', 'openTaskMinutes', 0.3], ['messages', 'messageCount', 0.15],
-] as const satisfies readonly (readonly [string, keyof DemandInputs, number])[];
+] as const satisfies readonly (readonly [UsedSignal, keyof DemandInputs, number])[];
 const PHYSICAL_LOAD_SHARE = 0.2;
 
 // The day's active energy, the sum of its hours; unknown on a day with no energy reading.
@@ -28,13 +28,13 @@ const history = (prior: readonly DayRecord[], read: (day: DayRecord) => number |
 // is still forming.
 const provisionalWeight = (target: DayRecord, prior: readonly DayRecord[], detail: boolean): WeightResult => {
   const components: Component[] = [];
-  const signals: string[] = [];
+  const signals: UsedSignal[] = [];
   const own: number[] = [];
   const absent = new Map<string, Absent>();
   const days = new Set<string>([target.day]);
   const demand = target.demand;
   let anyReading = false;
-  const add = (name: string, value: number, past: readonly { day: string; value: number }[], share: number): boolean => {
+  const add = (name: UsedSignal, value: number, past: readonly { day: string; value: number }[], share: number): boolean => {
     anyReading = true;
     const at = standing(value, past.map(entry => entry.value), null);
     if (at === null) { absent.set(name, 'baseline_immature'); return false; }
@@ -70,9 +70,9 @@ export const weightScore = (target: DayRecord, prior: readonly DayRecord[], prov
   const demand = target.demand;
   if (demand?.meetingMinutes === null || demand === null) return { state: 'unavailable', reason: 'calendar_demand_unavailable' };
   const components: Component[] = [];
-  const signals: string[] = [];
+  const signals: UsedSignal[] = [];
   const days = new Set<string>([target.day]);
-  const add = (name: string, value: number, past: readonly { day: string; value: number }[], weight: number) => {
+  const add = (name: UsedSignal, value: number, past: readonly { day: string; value: number }[], weight: number) => {
     components.push({ name, score: higherIsBetter(zScore(value, past.map(entry => entry.value))), weight });
     signals.push(name);
     past.forEach(entry => days.add(entry.day));
