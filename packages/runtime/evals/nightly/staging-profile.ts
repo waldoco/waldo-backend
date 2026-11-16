@@ -131,6 +131,8 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   HEALTH_ACTIONS: gap('the health trigger\'s decision is not run in a trial; the trial\'s skill book always offers health-protocols, as staging does'),
   HEALTH_COACHING: gap('the trial offers no set_sleep_need, and the world serves synthetic health with no stated sleep need'),
   HEALTH_TRAINING_LOAD: gap('the world serves synthetic health, not the candidate training load the producer writes'),
+  HEALTH_SCORE_PARTS: gap('the parts of each score are served to the app only; the model never reads them and the world serves synthetic health; staging has it off until the gate turns it on with migration 20261116100000'),
+  HEALTH_USUAL: gap('the usual bands are served to the app only; the model never reads them and the world serves synthetic health; staging has it off until the gate turns it on with migration 20261116100000'),
   MEMORY_NIGHTLY_SOURCE_UPDATES: gap('the nightly memory pass is not run in a trial'),
   MEMORY_CLAIM_CONTROLS: inert('the app\'s claim controls (confirm, forget, dismiss, bring up less) are an app read; the trial runs no app controls'),
   MEMORY_VALIDITY: gap('the trial turns on recall of replaced facts and read_memory include_replaced, as staging has them; the nightly pass that retires a contradicted claim is not run in a trial'),

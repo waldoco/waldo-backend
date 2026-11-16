@@ -1,6 +1,7 @@
-import { PULSE_PRIOR, VARIABILITY_PRIOR, sleepNeed, standing, type Prior } from './baseline';
+import { PULSE_PRIOR, VARIABILITY_PRIOR, sleepNeed, sleepNeedOwnShare, standing, type Prior } from './baseline';
 import { BASELINE_DAYS, higherIsBetter, logZScore, lowerIsBetter, zScore, clampScore, type Component } from './stats';
-import type { DayRecord, HrvMethod, MethodReading, RestingMethod, UnavailableReason } from './types';
+import { usualOfStanding } from './usual';
+import type { Absent, DayRecord, HrvMethod, MethodReading, RestingMethod, UnavailableReason } from './types';
 
 // Form v2 and Weight v2 leave out days holding an overlapping hour window (Form's hours, Weight's physical load). Form v3
 // reads an hour or day with no daylight or movement reading as missing, not zero; Weight v3 counts every day the calendar
@@ -30,6 +31,8 @@ export interface RecoveryBasis {
   // Provisional only: the own-day count of each used component that stands on the owner's history, and whether a prior took part.
   readonly own?: readonly number[];
   readonly usedPrior?: boolean;
+  // Provisional only: why a part that has no row is missing, for the parts the app is shown.
+  readonly absent?: ReadonlyMap<string, Absent>;
 }
 export type RecoveryOutcome = RecoveryBasis | Readonly<{ reason: UnavailableReason }>;
 
@@ -114,9 +117,12 @@ export const provisionalRecoveryBasis = (target: DayRecord, prior: readonly DayR
   if (need <= 0) return { reason: 'baseline_immature' };
   if (!target.overnightHrv.length && !target.restingHeartRate.length) return { reason: 'missing_resting_signal' };
 
-  const components: Component[] = [{ name: 'sleep', score: clampScore(target.sleep.asleepMinutes / need * 100), weight: RECOVERY_SHARES.sleep }];
+  // The sleep part is read against the need, not a usual: it carries the need and what the need stands on.
+  const sleepBasis = { z: null, own: sleepNeedMinutes === null ? nights.length : null, ownShare: sleepNeedMinutes === null ? sleepNeedOwnShare(nights.length) : null, signals: [], need: { minutes: need, basis: sleepNeedMinutes === null ? 'blended_average' as const : 'owner_confirmed' as const } };
+  const components: Component[] = [{ name: 'sleep', score: clampScore(target.sleep.asleepMinutes / need * 100), weight: RECOVERY_SHARES.sleep, basis: sleepBasis }];
   const signals = ['sleep'];
   const days = new Set<string>([target.day]);
+  const absent = new Map<string, Absent>();
   // A need the owner confirmed stands on no history. One taken from the owner's nights is shrunk toward a prior of eight hours.
   const own: number[] = sleepNeedMinutes === null ? [nights.length] : [];
   let usedPrior = sleepNeedMinutes === null;
@@ -124,21 +130,27 @@ export const provisionalRecoveryBasis = (target: DayRecord, prior: readonly DayR
 
   const hrv = matchedStanding(HRV_ORDER, target.overnightHrv, prior, day => day.overnightHrv, HRV_PRIORS, 'ln');
   if (hrv) {
-    components.push({ name: 'hrv', score: higherIsBetter(hrv.at.z), weight: RECOVERY_SHARES.variability });
+    components.push({
+      name: 'hrv', score: higherIsBetter(hrv.at.z), weight: RECOVERY_SHARES.variability,
+      basis: { z: hrv.at.z, own: hrv.at.own, ownShare: hrv.at.ownShare, signals: ['overnight_hrv'] }, usual: usualOfStanding('overnight_hrv', hrv.reading.method, hrv.at) ?? undefined,
+    });
     signals.push('hrv');
     hrvMethod = hrv.reading.method;
     hrv.days.forEach(day => days.add(day));
     own.push(hrv.at.own);
     usedPrior ||= hrv.at.prior;
-  }
+  } else absent.set('hrv', target.overnightHrv.length ? 'baseline_immature' : 'no_reading');
   const resting = matchedStanding(RESTING_ORDER, target.restingHeartRate, prior, day => day.restingHeartRate, RESTING_PRIORS, 'linear');
   if (resting) {
-    components.push({ name: 'resting_heart_rate', score: lowerIsBetter(resting.at.z), weight: RECOVERY_SHARES.pulse });
+    components.push({
+      name: 'resting_heart_rate', score: lowerIsBetter(resting.at.z), weight: RECOVERY_SHARES.pulse,
+      basis: { z: resting.at.z, own: resting.at.own, ownShare: resting.at.ownShare, signals: ['resting_heart_rate'] }, usual: usualOfStanding('resting_heart_rate', resting.reading.method, resting.at) ?? undefined,
+    });
     signals.push('resting_heart_rate');
     resting.days.forEach(day => days.add(day));
     own.push(resting.at.own);
     usedPrior ||= resting.at.prior;
-  }
+  } else absent.set('resting_heart_rate', target.restingHeartRate.length ? 'baseline_immature' : 'no_reading');
   if (!hrv && !resting) return { reason: 'baseline_immature' };
-  return { components, signals, days: [...days].sort(), hrvMethod, own, usedPrior };
+  return { components, signals, days: [...days].sort(), hrvMethod, own, usedPrior, absent };
 };
