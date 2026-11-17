@@ -237,7 +237,8 @@ it('says connected first, then reads the new connection once and tells the threa
     const messages = (await rig.read(path)).map((message) => message.text);
     expect(messages.filter((text) => text === FIRST_LOOK_LINE)).toHaveLength(1);
     expect(messages.filter((text) => text === 'Notion is connected.')).toHaveLength(1);
-    expect(messages.indexOf('Notion is connected.')).toBeLessThan(messages.indexOf(FIRST_LOOK_LINE));
+    // Newest first: the look's line came after the plain one.
+    expect(messages.indexOf(FIRST_LOOK_LINE)).toBeLessThan(messages.indexOf('Notion is connected.'));
     // One read, of the tool that runs without asking and takes no argument; the write was never touched.
     expect(calls).toEqual(['recent_pages']);
     const asked = model.requests.find((request) => request.includes(FIRST_LOOK_LABEL))!;
@@ -337,7 +338,8 @@ it('reads a connection a device code linked once, and tells the chat what Waldo 
     const messages = (await rig.read('/chat/main')).map((message) => message.text);
     expect(messages.filter((text) => text === FIRST_LOOK_LINE)).toHaveLength(1);
     expect(messages.filter((text) => text === 'Notion is connected.')).toHaveLength(1);
-    expect(messages.indexOf('Notion is connected.')).toBeLessThan(messages.indexOf(FIRST_LOOK_LINE));
+    // Newest first: the look's line came after the plain one.
+    expect(messages.indexOf(FIRST_LOOK_LINE)).toBeLessThan(messages.indexOf('Notion is connected.'));
   }, { device: true, deviceAnswers: ['ok'], tools: [{ name: 'recent_pages', annotations: { readOnlyHint: true } }],
     results: () => ({ content: [{ type: 'text', text: 'Q4 plan (edited today).' }] }) });
 });
