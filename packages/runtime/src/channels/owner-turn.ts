@@ -152,7 +152,7 @@ export type OwnerContextIntegration = Readonly<{ skills?: OwnerSkillCapability; 
   // WALDO_LEAN_SCHEDULED: a run its caller marks Waldo-first reads the lean scheduled view (scheduled-run.ts) instead of the chat replay.
   leanScheduled?: boolean;
   // The messages the owner's outbox delivered to the owner lately, oldest first: what a lean scheduled run reads of what Waldo said.
-  waldoSent?: () => readonly Readonly<{ at: number; text: string }>[] }>;
+  waldoSent?: () => readonly Readonly<{ at: number; text: string; confirmed: boolean }>[] }>;
 // This owner's spend so far this month and the ceiling it is held to, read once when a turn starts.
 export type OwnerSpend = Readonly<{ spentUsd: number; ceilingUsd: number }>;
 type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; finishedTasks?: (since: number) => string; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; turnCharts?: (turnId: string) => readonly ConversationChart[]; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; jobOutcomeRows?: boolean; timelineSeed?: TimelineSeed; machineTime?: OwnerContextIntegration['machineTime']; leanScheduled?: boolean; waldoSent?: OwnerContextIntegration['waldoSent'] }>;
@@ -831,9 +831,9 @@ export const createOwnerResponder = (
           const ownTail = current.content + (cut.replyQuote ? '\n\n' + cut.replyQuote : '') + (cut.jobContext ? '\n\n' + cut.jobContext : '') + added;
           const recentRows = cut.recent.slice(0, -1);
           const kept = new Set(cut.sent.slice(0, -1).map((message) => message.content));
-          const sentRows = sent.filter((message) => kept.has(message.text)).map((message) => ({ at: localIso(message.at, clock.timezone).slice(0, 16).replace('T', ' '), text: message.text }));
+          const sentRows = sent.filter((message) => kept.has(message.text)).map((message) => ({ at: localIso(message.at, clock.timezone).slice(0, 16).replace('T', ' '), text: message.text, confirmed: message.confirmed }));
           const recentBlock = (recentRows.length ? fenced('recent conversation with the owner, oldest first', recentExchangeText(recentRows)) : '')
-            + (sentRows.length ? fenced('messages Waldo sent the owner lately, oldest first, as delivered', sentText(sentRows)) : '');
+            + (sentRows.length ? fenced('messages Waldo sent the owner lately, oldest first', sentText(sentRows)) : '');
           leanRecentBytes = utf8Bytes(recentBlock);
           entries[entries.length - 1] = { ...current, content: ownTail + recentBlock + built.suffix.text };
           const browserImages = privateOwner?.skillHost?.browserAttachments?.(privateRunScope) ?? [];

@@ -1,4 +1,5 @@
 import { conversationModelMessages, type ConversationEntry, type ConversationModelMessage, type ConversationTree, type ToolName } from '@waldo/contracts';
+import { surfaceOfTrace } from './owner-turn-envelope';
 import { LOOP_CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS } from './check-back';
 import { toolsWhere } from '../tools/records';
 import type { FinalRecord } from './telegram-final-outbox';
@@ -53,14 +54,16 @@ const gist = (text: string): string => {
 export const recentExchangeText = (messages: readonly ConversationModelMessage[]): string =>
   messages.map((message) => `${message.role === 'assistant' ? 'Waldo' : 'Owner'}: ${gist(message.content)}`).join('\n');
 
-export const sentText = (sent: readonly Readonly<{ at: string; text: string }>[]): string =>
-  sent.map((message) => `[${message.at}] ${gist(message.text)}`).join('\n');
+export const sentText = (sent: readonly Readonly<{ at: string; text: string; confirmed: boolean }>[]): string =>
+  sent.map((message) => `[${message.at}]${message.confirmed ? '' : ' (sent, not yet confirmed delivered)'} ${gist(message.text)}`).join('\n');
 
-// What the outbox delivered to the owner in the last day, oldest first: a surface's confirmation (delivered), or its acceptance
-// where it confirms arrival later (WhatsApp). A record a forget reached is not read.
+// What Waldo sent the owner of its own accord in the last day, oldest first: a surface's confirmation (delivered), or its
+// acceptance where it confirms arrival later (WhatsApp), which is marked not yet confirmed. A reply to the owner's own message
+// is left out, since the recent exchange already shows it; a notice of Waldo's own stays, whatever turn queued it. A record a
+// forget reached is not read.
 const SENT_WITHIN_MS = 24 * 3_600_000;
-export const deliveredLately = (records: readonly FinalRecord[], now: number): readonly Readonly<{ at: number; text: string }>[] =>
+export const deliveredLately = (records: readonly FinalRecord[], now: number): readonly Readonly<{ at: number; text: string; confirmed: boolean }>[] =>
   records.filter((record) => (record.status === 'delivered' || record.status === 'accepted') && !record.forgotten && record.payload.text.trim() !== ''
-    && now - (record.deliveredAt ?? record.createdAt) < SENT_WITHIN_MS)
-    .map((record) => ({ at: record.deliveredAt ?? record.createdAt, text: record.payload.text }))
+    && (record.notice === true || surfaceOfTrace(record.trace) === null) && now - (record.deliveredAt ?? record.createdAt) < SENT_WITHIN_MS)
+    .map((record) => ({ at: record.deliveredAt ?? record.createdAt, text: record.payload.text, confirmed: record.status === 'delivered' }))
     .sort((a, b) => a.at - b.at).slice(-RECENT_SENT_MESSAGES);
