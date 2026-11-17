@@ -1,9 +1,11 @@
 import {
   derivedHealthDestinationViewSchema,
   narrativeContextSchema,
+  partialHealthNarrativeSchema,
   type CanaryTokens,
   type DerivedHealthDestinationView,
   type NarrativeContext,
+  type PartialHealthNarrative,
   type RuntimeContextSourceKind,
   type SanitiseFailureReason,
   type TrustedInvocationEnvelope,
@@ -298,10 +300,13 @@ export async function loadLocalOwnerBinding(
   });
 }
 
+// A partial view carries no zone, and its narrative is parsed with the schema that has none, so a zone cannot ride beside it.
 function viewMatchesNarrative(
   view: DerivedHealthDestinationView,
-  narrative: NarrativeContext,
+  narrative: NarrativeContext | PartialHealthNarrative,
 ): boolean {
+  if ('availability' in view) return !('recovery_descriptor' in narrative);
+  if (!('recovery_descriptor' in narrative)) return false;
   return 'form_zone' in view
     ? narrative.zone === view.form_zone
     : narrative.recovery_descriptor === view.recovery_zone;
@@ -316,7 +321,7 @@ export function prepareHealth(
 ): ContextHealthMaterial | null {
   if (health === null) return null;
   const view = derivedHealthDestinationViewSchema.safeParse(health.view);
-  const narrative = narrativeContextSchema.safeParse(health.narrative);
+  const narrative = (view.success && 'availability' in view.data ? partialHealthNarrativeSchema : narrativeContextSchema).safeParse(health.narrative);
   if (
     !view.success ||
     !narrative.success ||
@@ -351,7 +356,8 @@ export function prepareHealth(
   if (!preparedView.ok) throw new FailClosed(`sanitisation_failed:${preparedView.reason}:narrative`);
   const preparedNarrative = {
     ...narrative.data,
-    day_summary: preparePromptSourceText(narrative.data.day_summary, null, canaries, 'narrative'),
+    // A partial view's summary is empty on a day with no drivers or tags; empty text carries nothing to sanitise.
+    day_summary: narrative.data.day_summary.length === 0 ? '' : preparePromptSourceText(narrative.data.day_summary, null, canaries, 'narrative'),
     active_goals: narrative.data.active_goals.map((item) => preparePromptSourceText(item, null, canaries, 'narrative')),
     upcoming_high_stakes: narrative.data.upcoming_high_stakes.map((item) =>
       preparePromptSourceText(item, null, canaries, 'narrative'),
@@ -363,9 +369,9 @@ export function prepareHealth(
       ...preparedNarrative,
       active_goals: Object.freeze([...preparedNarrative.active_goals]),
       upcoming_high_stakes: Object.freeze([...preparedNarrative.upcoming_high_stakes]),
-    }) as NarrativeContext,
+    }),
     source: health.source,
-  });
+  }) as ContextHealthMaterial;
 }
 
 function prepareMandatoryFragment(
