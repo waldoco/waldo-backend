@@ -8,7 +8,9 @@ alter table waldo.health_consents add constraint health_consents_source_check ch
 alter table waldo.health_scopes drop constraint health_scopes_source_check;
 alter table waldo.health_scopes add constraint health_scopes_source_check check (source in ('apple','samsung','health_connect','whoop','google_health'));
 alter table waldo.health_samples drop constraint health_samples_source_check;
-alter table waldo.health_samples add constraint health_samples_source_check check (source in ('apple','samsung','health_connect','whoop','google_health'));
+-- Added NOT VALID, then validated: the scan takes a lighter lock than re-checking the samples under a full one.
+alter table waldo.health_samples add constraint health_samples_source_check check (source in ('apple','samsung','health_connect','whoop','google_health')) not valid;
+alter table waldo.health_samples validate constraint health_samples_source_check;
 
 -- waldo.health_consent_view: re-created whole from 20261107090000_health_whoop_consent_copy_4.sql; only the source list and copy version change.
 create or replace function waldo.health_consent_view(p_scope waldo.health_scopes) returns jsonb language sql stable security definer set search_path = '' as $$
@@ -308,7 +310,7 @@ exception
   when serialization_failure then return '{"error":"sample_conflict"}';
 end $$;
 
--- waldo.health_context_write: re-created whole from 20261101020000_health_zone_observed_peak.sql; only the source list and copy version change.
+-- waldo.health_context_write: re-created whole from 20261116090000_health_context_steps.sql; only the source lists change.
 create or replace function waldo.health_context_write(p_do_name text, p_payload text, p_at bigint, p_sig text) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare
@@ -380,7 +382,7 @@ begin
         or (select array_agg(k order by k) from jsonb_object_keys(v_p->'used') k) is distinct from array['days','signals']
         or jsonb_typeof(v_p #> '{used,signals}') is distinct from 'array' or jsonb_array_length(v_p #> '{used,signals}') not between 1 and 12
         or exists (select 1 from jsonb_array_elements(v_p #> '{used,signals}') s where jsonb_typeof(s) <> 'string'
-          or (s #>> '{}') not in ('sleep','hrv','resting_heart_rate','sleep_midpoint','daylight','movement','stress','calendar','tasks','messages','physical_load'))
+          or (s #>> '{}') not in ('sleep','hrv','resting_heart_rate','sleep_midpoint','daylight','movement','stress','calendar','tasks','messages','physical_load','steps'))
         or (select count(distinct s) from jsonb_array_elements(v_p #> '{used,signals}') s) <> jsonb_array_length(v_p #> '{used,signals}')
         or jsonb_typeof(v_p #> '{used,days}') is distinct from 'array' or jsonb_array_length(v_p #> '{used,days}') not between 1 and 31
         or exists (select 1 from jsonb_array_elements(v_p #> '{used,days}') d where jsonb_typeof(d) <> 'string' or (d #>> '{}') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'

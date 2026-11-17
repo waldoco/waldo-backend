@@ -2,7 +2,7 @@ import { literalTextRedactor, LLM_ATTACHMENTS_MAX } from '@waldo/contracts';
 import { carriesTopic } from '../memory/forget-guard';
 import { WHATSAPP_INBOX_DUE_KEY } from '../scheduler/alarm-slot';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
-import { burstOwnerMessage, plainOwnerText, WA_UPDATE_BASE, type WaSyntheticUpdate } from './whatsapp-api';
+import { burstOwnerMessage, plainOwnerText, WA_UPDATE_BASE, WHATSAPP_TEXT_MAX_CHARS, type WaSyntheticUpdate } from './whatsapp-api';
 
 // Owner-DO side of WhatsApp ingress: one durable row per owner message, written in the same synchronous step that claims its
 // wamid and before Meta gets its 200. The alarm drains the rows one turn at a time, so a message that arrives while another
@@ -23,6 +23,10 @@ export const WHATSAPP_FINISHED_RETENTION_MS = 24 * 60 * 60_000;
 export const WHATSAPP_QUIET_MAX_MS = 8_000;
 const PREFIX = 'whatsapp:inbox-record:';
 const SEQ = 'wa_seq';
+
+// What a turn is told of the burst messages that rode with it but did not parse: a count, never the message.
+export const unreadBurstNote = (count: number): string =>
+  `${count === 1 ? 'One message' : `${count} messages`} the owner sent with this one could not be read, so Waldo has not seen ${count === 1 ? 'it' : 'them'}. Tell the owner, so they can send ${count === 1 ? 'it' : 'them'} again.`;
 
 export class WhatsAppInboxFull extends Error { constructor() { super('whatsapp inbox full'); } }
 
@@ -108,8 +112,8 @@ export class WhatsAppOwnerInbox {
   /**
    * Claims the next turn in one step: running, with a new attempt and its deadline. When the oldest waiting row is a burst
    * message (text, a forward or a file the owner sent), the burst messages from the same sender right behind it ride in its
-   * turn under the newest one (its update id and wamid), and their own rows close: plain texts join into one text, and any
-   * other burst keeps the newest message as the update and the rest, oldest first, as `earlier`. Null when no row waits, or while the owner may still be typing; the inbox's due wake
+   * turn under the newest one (its update id and wamid), and their own rows close: plain texts join into one text while it fits
+   * one message, and any other burst keeps the newest message as the update and the rest, oldest first, as `earlier`. Null when no row waits, or while the owner may still be typing; the inbox's due wake
    * brings the drain back when the quiet window ends.
    */
   claimNext(deadline: number): WhatsAppInboxRecord | null {
@@ -121,8 +125,9 @@ export class WhatsAppOwnerInbox {
       const last = run.at(-1)!;
       if (run.length > 1) {
         const members = run.flatMap(row => [...(row.earlier ?? []), row.update!]);
-        if (members.every(plainOwnerText)) {
-          const joined = members.map(update => (update as { message: { text: string } }).message.text).join('\n');
+        const joined = members.every(plainOwnerText) ? members.map(update => (update as { message: { text: string } }).message.text).join('\n') : null;
+        // Joined text past one message's limit would not parse as the turn's update, so those messages ride whole instead.
+        if (joined !== null && joined.length <= WHATSAPP_TEXT_MAX_CHARS) {
           r.update = { ...last.update!, message: { ...(last.update!.message as object), text: joined } };
           delete r.earlier;
         } else { r.update = last.update; r.earlier = members.slice(0, -1); }

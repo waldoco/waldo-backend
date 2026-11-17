@@ -180,7 +180,7 @@ it('five files in one burst are a turn of four and a turn of one: two replies, a
 }, 60_000);
 
 // A burst message that does not parse is left out of the turn, and the owner object says so by count, never by content.
-it('a burst message that fails the schema is left out and logged by count only', async () => {
+it('a burst message that fails the schema is left out, logged by count only, and the turn is told one was not read', async () => {
   await whatsappOwner('wa-merge-schema-drop', async (admit, drain, graph, storage) => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
@@ -197,8 +197,30 @@ it('a burst message that fails the schema is left out and logged by count only',
       expect(JSON.parse(dropped[0]!)).toMatchObject({ hop: 'whatsapp_burst_dropped', ok: false, detail: 'schema_rejected:1' });
       expect(dropped[0]).not.toContain('secret-name');
       expect(lastMessage()).toContain('Here is the plan');
+      // The message left out closes with this turn, so the turn is told one was not read; never its name or words.
+      expect(lastMessage()).toContain('One message the owner sent with this one could not be read');
+      expect(JSON.stringify(turns().at(-1)!.input)).not.toContain('secret-name');
       expect(replies(graph)).toHaveLength(1);
     } finally { log.mockRestore(); }
+  });
+}, 60_000);
+
+it('a burst whose joined text runs past one message\'s limit still reaches the model whole, in one turn with one reply', async () => {
+  await whatsappOwner('wa-merge-long', async (admit, drain, graph, storage) => {
+    // Two messages near WhatsApp's 4,096-character maximum: joined they are past it, and past what one turn's text may carry.
+    const first = `Contract notes, part one. ${'The renewal clause needs a second look. '.repeat(95)}END-ONE`;
+    const second = `Part two. ${'Payment terms move to net 45 from January. '.repeat(90)}END-TWO`;
+    expect([first.length, second.length].every(length => length <= 4096) && first.length + second.length > 4096).toBe(true);
+    await admit(text(first, 'wamid.long1'), text(second, 'wamid.long2'));
+    await drain();
+    expect(turns()).toHaveLength(1);
+    const read = JSON.stringify(turns()[0]!.input);
+    expect(read).toContain('END-ONE');
+    expect(read).toContain('END-TWO');
+    expect(replies(graph)).toEqual(['Reply 1.']);
+    // Both rows closed with the one turn that answered them.
+    const rows = [...storage.kv.list<{ state: string }>({ prefix: 'whatsapp:inbox-record:' })].map(([, row]) => row.state);
+    expect(rows).toEqual(['completed', 'completed']);
   });
 }, 60_000);
 

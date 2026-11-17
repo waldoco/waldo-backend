@@ -74,11 +74,23 @@ export const derivedEnergyWindowSchema = z.strictObject({
 export type DerivedEnergyWindow = z.infer<typeof derivedEnergyWindowSchema>;
 export const derivedEnergyWindowsSchema = z.array(derivedEnergyWindowSchema).max(4);
 
-const derivedViewCommon = {
+// Why the stored row could not compute a pillar, in the score engine's own reason words. A link or consent reason is never
+// here: without a live consent there is no view at all.
+export const derivedMissingPillarReasonSchema = z.enum([
+  'no_readings', 'baseline_immature', 'missing_sleep', 'missing_resting_signal', 'stale_inputs', 'conflicting_inputs',
+  'intraday_inputs_unavailable', 'calendar_demand_unavailable',
+]);
+export type DerivedMissingPillarReason = z.infer<typeof derivedMissingPillarReasonSchema>;
+export const derivedMissingPillarsSchema = z.strictObject({
+  recovery: derivedMissingPillarReasonSchema.optional(),
+  form: derivedMissingPillarReasonSchema.optional(),
+  load: derivedMissingPillarReasonSchema.optional(),
+  sleep_debt: derivedMissingPillarReasonSchema.optional(),
+});
+export type DerivedMissingPillars = z.infer<typeof derivedMissingPillarsSchema>;
+
+const derivedViewShared = {
   authority: z.literal('backend'),
-  trend: z.enum(['improving', 'steady', 'declining', 'insufficient']),
-  freshness: z.enum(['fresh', 'stale']),
-  confidence_band: z.enum(['high', 'medium', 'low']),
   provenance_refs: z.array(opaqueHealthProvenanceRefSchema).min(1).max(4),
   destination_eligibility: z.array(derivedHealthDestinationEligibilitySchema).min(1),
   // Each pillar the view tells the model about, by its own baseline state; a pillar the row did not label is absent.
@@ -91,6 +103,15 @@ const derivedViewCommon = {
     .optional(),
   sleep_debt: derivedSleepDebtSchema.optional(),
   energy_windows: derivedEnergyWindowsSchema.optional(),
+  // The pillars the row could not compute and the reason it stored for each. Absent on a view written before it existed.
+  missing_pillars: derivedMissingPillarsSchema.optional(),
+} as const;
+
+const derivedViewCommon = {
+  ...derivedViewShared,
+  trend: z.enum(['improving', 'steady', 'declining', 'insufficient']),
+  freshness: z.enum(['fresh', 'stale']),
+  confidence_band: z.enum(['high', 'medium', 'low']),
 } as const;
 
 // A version name as a stored row carries it, e.g. form.v9 or recovery.candidate.v4: the pillar's own name, optional middle
@@ -117,8 +138,41 @@ export const recoveryHealthViewSchema = z.strictObject({
 });
 export type RecoveryHealthView = z.infer<typeof recoveryHealthViewSchema>;
 
-// Which pillar a view is about is which zone it carries; no version name is read to decide it.
-export const derivedHealthDestinationViewSchema = z.union([formHealthViewSchema, recoveryHealthViewSchema]);
+// The view for a day whose body data could not make a Recovery score, or whose newest row is more than three days old. It
+// carries no Recovery or Form zone and no readiness word, only what the row records in words: which sources it was computed
+// from, which inputs it shows arrived, which pillars it could not compute and why, and any pillar honest on its own (Load,
+// sleep debt, energy windows). An expired view carries nothing from that old day but its age and sources.
+export const partialHealthSourceSchema = z.enum(['apple', 'oura', 'whoop', 'samsung', 'health_connect']);
+export type PartialHealthSource = z.infer<typeof partialHealthSourceSchema>;
+// Inputs a stored row shows arrived. A signal the row does not record (steps, heart rate through the day) is never named.
+// last_night_sleep is the row's own night, the one that ended on the row's day: last night only for today's row.
+export const partialHealthPresentSchema = z.enum(['last_night_sleep', 'recent_sleep', 'calendar', 'activity', 'workouts']);
+export type PartialHealthPresent = z.infer<typeof partialHealthPresentSchema>;
+export const partialHealthViewSchema = z.strictObject({
+  ...derivedViewShared,
+  availability: z.literal('partial'),
+  freshness: z.enum(['fresh', 'stale', 'expired']),
+  // The row's day against the owner's local today.
+  as_of_day: z.enum(['today', 'yesterday', 'earlier']),
+  sources: z.array(partialHealthSourceSchema).max(5),
+  present: z.array(partialHealthPresentSchema).max(5),
+  missing_pillars: derivedMissingPillarsSchema,
+  load_zone: loadZoneSchema.optional(),
+});
+export type PartialHealthView = z.infer<typeof partialHealthViewSchema>;
+
+// The narrative beside a partial view: no Form zone and no Recovery descriptor, since neither was computed.
+export const partialHealthNarrativeSchema = z.strictObject({
+  day_summary: z.string().max(2000),
+  active_goals: z.array(z.string().min(1)).default([]),
+  upcoming_high_stakes: z.array(z.string().min(1)).default([]),
+  compiled_at: iso8601Schema,
+});
+export type PartialHealthNarrative = z.infer<typeof partialHealthNarrativeSchema>;
+
+// Which pillar a view is about is which zone it carries; no version name is read to decide it. A partial view carries
+// neither zone and says so by its availability.
+export const derivedHealthDestinationViewSchema = z.union([formHealthViewSchema, recoveryHealthViewSchema, partialHealthViewSchema]);
 export type DerivedHealthDestinationView = z.infer<typeof derivedHealthDestinationViewSchema>;
 
 // The sensor-named pillar key must never sit directly against a numeric literal in non-test

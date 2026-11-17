@@ -53,6 +53,20 @@ describe('google proxy', () => {
     await client.patchTask!('list-a', 't1', { title: 'Task' }, 'etag-1');
     for (const call of [0, 1]) expect(JSON.parse(String(sent(fetcher, call)[1].body))).toMatchObject({ method: call ? 'patchTask' : 'createTask', intent_id: 'approval:fixture:apply' });
   });
+  it('keys each calendar write by its operation marker within the intent, and a write with no marker by the intent alone', async () => {
+    const fetcher = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ data: { id: 'e1', title: 'x', start: '', end: '', all_day: false } })));
+    const client = proxyOf(fetcher).client('do-a', 'c-1', undefined, { id: 'approval:fixture:apply' });
+    const [a, b, c, d] = ['a', 'b', 'c', 'd'].map(ch => ch.repeat(64)) as [string, string, string, string];
+    await client.createEvent({ title: 'x', start: '2026-11-05T09:00:00Z', end: '2026-11-05T10:00:00Z', id: a, operationMarker: a });
+    await client.moveEvent('e1', '2026-11-05T09:00:00Z', '2026-11-05T10:00:00Z', 'etag-1', b);
+    await client.cancelEvent('e1', 'etag-1', c);
+    await client.restoreEvent('e1', 'etag-1', d);
+    await client.cancelEvent('e1', 'etag-1');
+    await client.createEvent({ title: 'x', start: '2026-11-05T09:00:00Z', end: '2026-11-05T10:00:00Z', operationMarker: 'not-waldos' });
+    expect(fetcher.mock.calls.map((_, call) => JSON.parse(String(sent(fetcher, call)[1].body)).intent_id)).toEqual([
+      `approval:fixture:apply:${a}`, `approval:fixture:apply:${b}`, `approval:fixture:apply:${c}`, `approval:fixture:apply:${d}`, 'approval:fixture:apply', 'approval:fixture:apply',
+    ]);
+  });
   it('refuses a Google Tasks write that has no approval intent before anything leaves the runtime', async () => {
     const fetcher = vi.fn();
     const client = proxyOf(fetcher).client('do-a', 'c-1');
