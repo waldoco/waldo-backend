@@ -1,5 +1,8 @@
+import { z } from 'zod';
+import { fromRowZone } from '../../../contracts/src/health/zone-bridge';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
 import { localIso } from '../channels/reminders';
+import { shiftDay } from '../health/scores/time';
 import { applyClaimOps, sourceClaimOps, withoutHealthClaims, type ClaimStore } from './claims';
 import { heldTopicsOf, holdsIn } from './forget-guard';
 
@@ -7,7 +10,9 @@ import { heldTopicsOf, holdsIn } from './forget-guard';
 // nightly pass reads the cards decided and the loops closed since its own mark, and the model may add patterns across them
 // ("moves to the morning are taken; evening ones are declined") as Waldo's own reads, untrusted until the owner confirms them.
 // The rows are read where they live (the approval ledger and the loops table) and never copied; nothing here stores a health
-// value. How the body responded is not read yet: a health pattern is new health-pattern persistence and waits for its contract.
+// value. With the body read (owner's ruling 7, MEMORY_BODY_PATTERNS, and only while the owner shares health with memory), each
+// line also gives the owner's Recovery and Form zone words on the day the outcome ended and the next, read through the
+// model-consented zones read, so a pattern may say how the body tended to respond. Words only: no score reaches the model.
 export const OUTCOMES_THROUGH_KEY = 'nightly_outcomes_through_v1';
 const ROWS_PER_READ = 200;
 const DAY_MS = 24 * 60 * 60_000;
@@ -43,10 +48,42 @@ export const outcomeBook = (sql: SqlStorage): OutcomeBook => ({
   },
 });
 
-const outcomeLine = (row: OutcomeRow, timezone: string): string => {
+// The zones read answers a window of at most 31 days, so the body is read for the newest outcomes' days only.
+const ZONE_WINDOW_DAYS = 31;
+const zonesAnswer = z.object({ zones: z.object({ days: z.array(z.object({ day: z.string(), recovery: z.string().nullable(), form: z.string().nullable() })) }) });
+type DayZones = Readonly<{ recovery: string | null; form: string | null }>;
+const zoneWords = (raw: { recovery: string | null; form: string | null }): DayZones => ({ recovery: fromRowZone('recovery', raw.recovery), form: fromRowZone('form', raw.form) });
+const said = (zones: DayZones | undefined): string | null => {
+  const words = [zones?.recovery ? `Recovery ${zones.recovery}` : null, zones?.form ? `Form ${zones.form}` : null].filter(Boolean);
+  return words.length ? words.join(', ') : null;
+};
+// The owner's body around one outcome, in zone words: the day it ended and the day after. Null when neither day has a zone.
+const bodyLine = (day: string, zones: ReadonlyMap<string, DayZones>): string | null => {
+  const that = said(zones.get(day)), next = said(zones.get(shiftDay(day, 1)));
+  if (!that && !next) return null;
+  return `The owner's body: ${[that ? `that day ${that}` : null, next ? `the next day ${next}` : null].filter(Boolean).join('; ')}.`;
+};
+const readBody = async (rows: readonly OutcomeRow[], deps: OutcomesDeps, trace: string): Promise<ReadonlyMap<string, DayZones> | null> => {
+  if (!deps.readZones || !deps.health) return null;
+  const today = localIso(deps.now(), deps.timezone).slice(0, 10);
+  const to = today, earliest = localIso(rows[0]!.at, deps.timezone).slice(0, 10), floor = shiftDay(today, 1 - ZONE_WINDOW_DAYS);
+  const from = earliest > floor ? earliest : floor;
+  try {
+    const answer = zonesAnswer.safeParse(await deps.readZones(from, to));
+    if (!answer.success) throw new Error('zones answer of another shape');
+    return new Map(answer.data.zones.days.map(row => [row.day, zoneWords(row)]));
+  } catch (error) {
+    // The outcomes are read without the body; a pattern about the body waits for a night the read answers.
+    deps.log({ trace, hop: 'nightly_memory', ms: 0, ok: false, code: 'body_unread', error: error instanceof Error ? error.name : 'error' });
+    return null;
+  }
+};
+
+const outcomeLine = (row: OutcomeRow, timezone: string, body: ReadonlyMap<string, DayZones> | null): string => {
   const ended = row.source === 'card' ? CARD_ENDED[row.status as keyof typeof CARD_ENDED] : LOOP_ENDED[row.status as keyof typeof LOOP_ENDED];
   const what = row.source === 'card' ? 'Waldo suggested' : 'Waldo set itself to follow up on';
-  return `[${localIso(row.created_at, timezone)}] ${what}: ${row.text}\n[${localIso(row.at, timezone)}] Then ${ended}.`;
+  const after = body ? bodyLine(localIso(row.at, timezone).slice(0, 10), body) : null;
+  return `[${localIso(row.created_at, timezone)}] ${what}: ${row.text}\n[${localIso(row.at, timezone)}] Then ${ended}.${after ? `\n${after}` : ''}`;
 };
 
 export type OutcomesDeps = Readonly<{
@@ -57,8 +94,10 @@ export type OutcomesDeps = Readonly<{
   timezone: string;
   now: () => number;
   health: boolean;
-  // One model call over the outcome lines; its reply is applied here.
-  ask: (outcomes: string) => Promise<string>;
+  // The owner's zone words for each day from..to, as waldo.health_zones_read answers. Given only with MEMORY_BODY_PATTERNS on.
+  readZones?: (from: string, to: string) => Promise<unknown>;
+  // One model call over the outcome lines (outcomesInput, with body when the lines carry the owner's body); its reply is applied here.
+  ask: (outcomes: string, body: boolean) => Promise<string>;
   log: (entry: TurnLogEntry) => void;
 }>;
 
@@ -72,7 +111,9 @@ export const consolidateOutcomes = async (deps: OutcomesDeps, trace: string): Pr
   if (!rows.length) return 'empty';
   const last = rows[rows.length - 1]!.at;
   const held = holdsIn(heldTopicsOf(deps.claims));
-  const lines = rows.filter(row => !held(row.text)).map(row => outcomeLine(row, deps.timezone));
+  const kept = rows.filter(row => !held(row.text));
+  const body = kept.length ? await readBody(kept, deps, trace) : null;
+  const lines = kept.map(row => outcomeLine(row, deps.timezone, body));
   const settle = () => {
     if (deps.kv.get<number>(OUTCOMES_THROUGH_KEY) !== through) return false;
     deps.kv.put(OUTCOMES_THROUGH_KEY, last);
@@ -83,7 +124,7 @@ export const consolidateOutcomes = async (deps: OutcomesDeps, trace: string): Pr
   const started = deps.now();
   try {
     const outcomes = lines.join('\n');
-    const raw = await deps.ask(outcomes);
+    const raw = await deps.ask(outcomes, body !== null);
     const ops = deps.health ? sourceClaimOps(raw) : withoutHealthClaims(sourceClaimOps(raw));
     const detail = deps.transaction(() => (settle() ? applyClaimOps(deps.claims, ops, new Date(deps.now()).toISOString(), `Waldo's suggestions and what became of them, ${trace}`, undefined, { shared: outcomes, outside: true }, false) : null));
     if (detail === null) return raced();

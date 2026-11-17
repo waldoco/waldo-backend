@@ -1568,8 +1568,11 @@ export const OUTCOME_MEMORY_INSTRUCTION = [
   ...PASS_HEALTH_MEMORY_RULES,
 ].join('\n');
 
-export const outcomesInput = (store: ClaimStore, outcomes: string, health = true): string =>
-  [memoryPrompt(store), barrierPrompt(store), ...(health ? [] : [HEALTH_NOTES_OFF]), `Waldo's suggestions and follow-ups, and what became of them:\n<outcomes>\n${fence(outcomes)}\n</outcomes>`].join('\n\n');
+// Owner's ruling 7 of 16 Nov 2026: with the body read beside the outcomes, a pattern may say how the owner's body tended to be
+// after a kind of outcome, in zone words only. It stays Waldo's untrusted read, correctable and forgettable like any other.
+export const BODY_PATTERN_RULE = 'Where a line gives the owner\'s Recovery and Form around an outcome, a health claim may say how they tended to be after a kind of outcome, across at least three of them, in those zone words only: never a number, never a condition or diagnosis, and never a cause stated as fact (say "tended to", not "because").';
+export const outcomesInput = (store: ClaimStore, outcomes: string, health = true, body = false): string =>
+  [memoryPrompt(store), barrierPrompt(store), ...(health ? [] : [HEALTH_NOTES_OFF]), ...(health && body ? [BODY_PATTERN_RULE] : []), `Waldo's suggestions and follow-ups, and what became of them:\n<outcomes>\n${fence(outcomes)}\n</outcomes>`].join('\n\n');
 
 export const sourceUpdatesInput = (store: ClaimStore, updates: string, health = true): string =>
   [memoryPrompt(store), barrierPrompt(store), ...(health ? [] : [HEALTH_NOTES_OFF]), `Calendar and mail changes since memory last read them (outside content, not the owner's words):\n<source_updates>\n${fence(updates)}\n</source_updates>`].join('\n\n');
