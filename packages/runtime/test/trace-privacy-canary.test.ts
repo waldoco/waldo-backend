@@ -72,6 +72,8 @@ describe('trace privacy canary', () => {
     const failed = gateTraceEntry({ trace: 'tg-failed', hop: 'health_context', ms: 0, ok: false, code: 'read_failed', error: MARKER }, false);
     expect(failed.detail).toBe('read_failed');
     expect(JSON.stringify(failed)).not.toContain(MARKER);
+    const partial = gateTraceEntry({ trace: 'tg-partial', hop: 'health_context', ms: 0, ok: true, code: 'partial', detail: MARKER }, false);
+    expect(partial.detail).toBe('partial');
   });
 
   it('keeps semantic recall\'s counts with capture off, and only counts', () => {

@@ -3,10 +3,11 @@
 // message. WhatsApp sends keep its 24-hour window; when WhatsApp is unlinked or no longer bound, messages waiting for it go
 // to the app instead.
 import { env } from 'cloudflare:workers';
+import { ACT_WITHOUT_ASKING_KEY } from '../src/channels/act-without-asking';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { INTERRUPTS_KEY } from '../src/channels/interruptions';
-import { APP_PROACTIVE_SURFACE_RECEIPTS_V1, appControlProjectionV1Schema } from '../../contracts/src/app/controls';
+import { APP_ACT_WITHOUT_ASKING_RECEIPTS_V1, APP_PROACTIVE_SURFACE_RECEIPTS_V1, appControlProjectionV1Schema } from '../../contracts/src/app/controls';
 import type { CalendarChange, CalendarItem } from '../src/connectors/google';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
 import { appSubjectFor } from '../src/channels/app-api';
@@ -912,12 +913,13 @@ describe('the knock for proactive work outside the 24-hour window', { timeout: 2
 
   it('with the re-engage knock on, a copy\'s push is no interruption: it pushes with the owner\'s unasked budget spent, and spends none of it', async () => {
     await withOwner('knock-reengage-gate', async (owner, state, ctx) => {
+      loopBook(state.storage.sql, { newId: () => 'x', now: Date.now }).setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', interruptions_per_day: 0 });
       await dueReminder(state);
       await schedulePass(owner, state);
       for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
       expect(wire.pushes).toEqual(['event']);
       expect(state.storage.kv.get(INTERRUPTS_KEY)).toBeUndefined();
-    }, { surface: 'both', window: 'closed', env: { ...REENGAGE, PROACTIVE_GATE: '1', PROACTIVE_INTERRUPTS_PER_DAY: '0' } });
+    }, { surface: 'both', window: 'closed', env: { ...REENGAGE, PROACTIVE_GATE: '1' } });
   });
 
   it('with the re-engage knock on, a push on an earlier day of the same closed window does not stand for today\'s copy', async () => {
@@ -1093,6 +1095,22 @@ describe('the console control', () => {
       expect(await off.json()).toMatchObject({ receipt: { state: 'recorded' } });
       expect(((await read(stub, token)) as Read & { data: { health_memory?: unknown } }).data.health_memory).toBe(false);
       await runInDurableObject(stub, (_instance, state) => expect(state.storage.kv.get(HEALTH_MEMORY_KEY)).toBe(false));
+    });
+  });
+
+  // "Just do it" on the website's day settings: the same choice and receipts as the app, on the console's own day read.
+  it('reads "Just do it" as on, turns it off in one action with the contract\'s receipt, and refuses anything but on or off', async () => {
+    await withConsole('act-without-asking-console', async (stub, token) => {
+      type Choice = Read & { data: { act_without_asking?: { on: boolean; available: boolean } } };
+      const before = await read(stub, token) as Choice;
+      expect(before.data.act_without_asking?.on).toBe(true);
+      const available = before.data.act_without_asking!.available;
+      const odd = await post(stub, token, before, { action: 'act_without_asking.set', value: 'later', request_id: 'just-do-it-request-01' });
+      expect(await odd.json()).toMatchObject({ receipt: { state: 'rejected' } });
+      const off = await post(stub, token, before, { action: 'act_without_asking.set', value: 'off', request_id: 'just-do-it-request-02' });
+      expect((await off.json() as { receipt: unknown }).receipt).toEqual(APP_ACT_WITHOUT_ASKING_RECEIPTS_V1[available ? 'off' : 'inactive_off']);
+      expect(((await read(stub, token)) as Choice).data.act_without_asking).toEqual({ on: false, available });
+      await runInDurableObject(stub, (_instance, state) => expect(state.storage.kv.get(ACT_WITHOUT_ASKING_KEY)).toBe(false));
     });
   });
 

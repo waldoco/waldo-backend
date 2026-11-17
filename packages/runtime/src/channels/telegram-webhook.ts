@@ -69,6 +69,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" lets the health trigger, on a day with nothing coming, send one short note as an update card when the model judges
   // it worth it; anything else keeps such a day silent.
   HEALTH_SOLO_NOTICE?: string;
+  // "1" gives the model a partial health block, in words, for a day whose body data made no Recovery score, and fills the
+  // block's missing lists from the stored row; anything else leaves such a day with no health block.
+  HEALTH_PARTIAL_CONTEXT?: string;
   HEALTH_TRAINING_LOAD?: string;
   // '1' has the health decision reason from the reviewed health protocols (skills/health-protocols), read through the
   // owner's next day, in the chat role. Anything else keeps the decision as it was.
@@ -138,6 +141,11 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" runs a send, calendar change or Google task change the owner asked for in their own message with no card, reporting
   // it with an undo where one exists; the cards that remain are approved on the surface showing them. Off unless "1".
   AUTONOMOUS_BY_DEFAULT?: string;
+  // "1" widens AUTONOMOUS_BY_DEFAULT for an owner whose "Just do it" choice is on: a turn the owner started with their own message
+  // acts with no card even after it read outside text, an MCP call, a standing grant and an undoable calendar cancel included;
+  // a party reached only through outside text, a payment, a password, a browser submit and permanent deletion keep their cards.
+  // Off unless "1"; it does nothing where AUTONOMOUS_BY_DEFAULT is not "1".
+  AUTONOMY_OWNER_TURNS?: string;
   // "1" offers track/log/list/stop_medication on owner turns and words medicine reminders in the harness from a health-plane
   // read. Off unless "1".
   MEDICATIONS?: string;
@@ -236,6 +244,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_ASYNC_TOOLS?: string;
   // "1": a background job's request row keeps only a key, never the job's prompt (conversation/job-outcome.ts).
   WALDO_JOB_OUTCOME_ROWS?: string;
+  // "1": a Waldo-first scheduled run (day card, check-back, update sweep, intervention) reads a lean view: its own event, the
+  // composed context and the last few rows of the owner's exchange instead of the chat replay, under one tool menu and a
+  // 1-hour cached head shared by every scheduled job kind (channels/owner-turn.ts).
+  WALDO_LEAN_SCHEDULED?: string;
   // "1": the owner's WhatsApp turns read and write the owner's own chain, the one their app chat uses (conversation/one-timeline.ts).
   WALDO_ONE_TIMELINE?: string;
   // "1": the owner's own reply takes a light step that answers quick chat or hands the turn to the strong role, and every task
@@ -283,6 +295,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" with MEMORY_NIGHTLY_SOURCE_UPDATES also "1": mail and calendar changes reach memory the same day (memory/consolidator.ts).
   MEMORY_DAYTIME_CONSOLIDATOR?: string;
   MEMORY_VALIDITY?: string;
+  // "1": an owner turn also recalls notes learned from mail and calendar, shown as not the owner's words; a turn that recalls one is marked as carrying outside content (memory/claims.ts withOutsideNotes).
+  MEMORY_OUTSIDE_NOTES?: string;
   MEMORY_CLAIM_CONTROLS?: string;
   MEMORY_USED_SHOWN?: string;
   // Opt-in only after mixed-inbox privacy and live usefulness acceptance.
@@ -297,10 +311,16 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // '1' (with the day state) reads exact Google deltas from history ids and sync tokens across every calendar the owner reads,
   // watches each, and triages each batch: act, tell, brief or silent. Anything else keeps the update sweep as it was.
   GOOGLE_REALTIME_TRIAGE?: string;
+  // '1' (with GOOGLE_REALTIME_TRIAGE) keeps a batch held while Waldo could not reach the owner on its update row, and judges it
+  // again, once, at the first sweep that may speak. Anything else leaves it for the next day card, as before.
+  HELD_RAISE?: string;
   // '1' puts every unasked message (triage's act and tell, health proposals) under one set of owner limits: quiet hours, one
   // question waiting, a daily budget the owner can change, the gap between two, and a small urgent allowance past the budget.
   // Anything else keeps each kind's own budget. The three numbers below are the deployment's defaults.
   PROACTIVE_GATE?: string;
+  // '1': each owner-facing schedule toggle gates only what its label says. Notes before events off stops meeting prep, not the
+  // sweep that carries the update cards, and follow-ups off no longer holds those cards. Anything else keeps the old coupling.
+  SEPARATE_TOGGLES?: string;
   PROACTIVE_INTERRUPTS_PER_DAY?: string;
   PROACTIVE_URGENT_PER_DAY?: string;
   PROACTIVE_GAP_MIN?: string;
