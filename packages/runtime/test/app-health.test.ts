@@ -140,6 +140,25 @@ describe('app health routes: signed database calls', () => {
     expect([response.status, (await response.json() as { deletion_routed: boolean }).deletion_routed]).toEqual([200, false]);
     expect(rpcs[0]!.fn).toBe('health_consent_withdraw');
   });
+  it('has the owner\'s object end the WHOOP connection once the owner withdraws WHOOP storage, and for no other withdrawal', async () => {
+    const ops: (string | null)[] = [], deferred: Promise<unknown>[] = [];
+    const owners = { idFromName: (n: string) => n, get: () => ({ fetch: async (request: Request) => { ops.push(request.headers.get('x-waldo-provider-op')); return Response.json({ revoked_at_provider: true }); } }) };
+    const withdrawOf = async (source: string, purpose: string, answer: unknown) => {
+      rpcResult = answer;
+      const response = await handleApp(new Request('https://w.test/app/v1/health/consents/withdraw', {
+        method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ request_id: `withdraw-${source}-${purpose}`, source, purpose, expected_epoch: 1 }),
+      }), { ...(env() as object), OWNER_DO: owners } as never, auth, (work) => { deferred.push(work); }) as Response;
+      await Promise.all(deferred);
+      return response.status;
+    };
+    const withdrawn = (source: string, purpose: string) => ({ consent: { ...consent, source, purpose, version: source === 'whoop' ? 4 : 2, status: 'withdrawn', epoch: 2, withdrawn_at: '2026-10-10T09:00:00.000Z' }, replayed: false, deletion_routed: purpose === 'storage_compute' });
+    expect(await withdrawOf('whoop', 'storage_compute', withdrawn('whoop', 'storage_compute'))).toBe(200);
+    expect(ops).toEqual(['disconnect']);
+    expect(await withdrawOf('whoop', 'model_processing', withdrawn('whoop', 'model_processing'))).toBe(200);
+    expect(await withdrawOf('apple', 'storage_compute', withdrawn('apple', 'storage_compute'))).toBe(200);
+    expect(await withdrawOf('whoop', 'storage_compute', { error: 'epoch_conflict' })).toBe(409);
+    expect(ops).toEqual(['disconnect']);
+  });
   it('ingests a valid batch and returns the receipt', async () => {
     rpcResult = receipt;
     const response = await post('/app/v1/health/ingest', batch, { 'idempotency-key': batch.request_id });
