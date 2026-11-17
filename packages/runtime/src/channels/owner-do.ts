@@ -279,7 +279,7 @@ import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler, executeMcp, McpConnectError, type McpGoogleAuth, type McpGoogleResolution } from '../tools/live/mcp';
 import { connectorsLine, googleConnectionFacts, mcpConnections, McpRefusal, MCP_FINISH_PATH, MCP_START_PATH, type ConnectOutcome, type McpConnections } from '../connectors/mcp-connections';
 import { catalogueEntry, catalogueTiles, MCP_CATALOGUE } from '../connectors/mcp-catalogue';
-import { firstLookPrompt, firstLookRead } from '../connectors/mcp-first-look';
+import { FIRST_LOOK_MS, firstLookPrompt, firstLookRead } from '../connectors/mcp-first-look';
 import { oauthProxy } from '../connectors/oauth-proxy-client';
 import { sendMessageHandler } from '../tools/live/messaging';
 import { agentMailToolHost, sendAgentMailHandler } from '../tools/live/agent-mail';
@@ -691,8 +691,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const told = this.appConnects().settled(ticket, outcome);
     const tile = told !== null && 'tile' in told;
     const chat = told && !('tile' in told) ? told : undefined;
+    // The settled line is in the conversation's delivery outbox before the callback answers, so it survives a restart; the
+    // first look is a second message after it, or nothing.
+    if (chat) await this.tellConnectOutcome(nonce, chat);
     if (outcome.kind === 'linked') this.ctx.waitUntil(this.serial(() => this.firstLook(nonce, outcome, chat)));
-    else if (chat) await this.tellConnectOutcome(nonce, chat);
     const call = signedRpc(this.env);
     if (outcome.kind !== 'linked' || !call) return tile;
     const done = await call('connect_session_complete', `connsess.complete.${ticket}`, { p_ticket_hash: ticket }).catch(() => null);
@@ -720,38 +722,39 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const told = await this.appConnects().poll(nonce);
     if (!told) return;
     const { outcome, ...chat } = told;
+    await this.tellConnectOutcome(nonce, chat);
     // The look runs as its own unit of work, not inside the alarm pass that polled: its model call is an owner job of its own.
     if (outcome.kind === 'linked') this.ctx.waitUntil(this.serial(() => this.firstLook(nonce, outcome, chat)));
-    else await this.tellConnectOutcome(nonce, chat);
   }
-  // Read on connect (connectors/mcp-first-look.ts): one read of the new server, and one line on what Waldo can now see, to the
-  // conversation that asked or, for a tile, the surface that takes the owner's proactive work. With no read to make, a chat
-  // still hears its plain connected line and a tile hears nothing, as before.
-  private async firstLook(nonce: string, outcome: Extract<ConnectOutcome, { kind: 'linked' }>, chat?: Readonly<{ channel: ConnectAppChannel; thread?: string; text: string }>): Promise<void> {
+  // How long a first look may hold the owner's queue: its server reads and its one model line together. Past it the look is
+  // dropped and nothing more is said; the plain line already went. The meeting-prep read is bounded the same way.
+  private firstLookMs = FIRST_LOOK_MS;
+  // Read on connect (connectors/mcp-first-look.ts): one read of the new server, and one line on what Waldo can now see, after
+  // the plain line, to the conversation that asked or, for a tile, the surface that takes the owner's proactive work. A look
+  // with nothing to say, a failed one and a slow one say nothing.
+  private async firstLook(nonce: string, outcome: Extract<ConnectOutcome, { kind: 'linked' }>, chat?: Readonly<{ channel: ConnectAppChannel; thread?: string }>): Promise<void> {
     const trace = `connect-first-look:${nonce.slice(0, 12)}`, started = Date.now();
-    let code: string = 'no_connection', line: string | undefined;
-    try {
+    const look = async (): Promise<Readonly<{ code: string; line?: string }>> => {
       const view = this.mcp().list().find((candidate) => candidate.id === outcome.id);
-      if (view) {
-        const read = await firstLookRead({ tools: async (server) => (await this.mcp().search({ server, ownerTurn: () => true })).tools, invoke: (input) => this.mcp().invoke(input) }, view);
-        code = read.status === 'read' ? 'read' : read.code;
-        if (read.status === 'read') {
-          const runtime = this.setup(chat?.channel ?? this.taskChannel());
-          const said = (await this.asOwnerJob('connect_first_look', trace, () => runtime.macFollowup(trace, runtime.owner, firstLookPrompt(view.name, catalogueEntry(view.server_url, view.issuer)?.about, read), async (_hop, work) => work(), [], undefined, undefined, undefined, 'external'))).trim();
-          if (said) line = said; else code = 'no_line';
-        }
-      }
-    } catch (error) {
-      code = 'failed';
+      if (!view) return { code: 'no_connection' };
+      const read = await firstLookRead({ tools: async (server) => (await this.mcp().search({ server, ownerTurn: () => true })).tools, invoke: (input) => this.mcp().invoke(input) }, view);
+      if (read.status !== 'read') return { code: read.code };
+      const runtime = this.setup(chat?.channel ?? this.taskChannel());
+      const said = (await this.asOwnerJob('connect_first_look', trace, () => runtime.macFollowup(trace, runtime.owner, firstLookPrompt(view.name, catalogueEntry(view.server_url, view.issuer)?.about, read), async (_hop, work) => work(), [], undefined, undefined, undefined, 'external'))).trim();
+      return said ? { code: 'read', line: said } : { code: 'no_line' };
+    };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<Readonly<{ code: string }>>((resolve) => { timer = setTimeout(() => resolve({ code: 'timeout' }), this.firstLookMs); });
+    const { code, line } = await Promise.race([look(), late]).catch((error: unknown) => {
       console.log(JSON.stringify({ trace, hop: 'connect_first_look', ok: false, error: error instanceof Error ? error.message : String(error) }));
-    }
+      return { code: 'failed', line: undefined };
+    }).finally(() => clearTimeout(timer)) as Readonly<{ code: string; line?: string }>;
     console.log(JSON.stringify({ trace, hop: 'connect_first_look', ms: Date.now() - started, ok: line !== undefined, code }));
-    const channel = chat?.channel ?? (line === undefined ? undefined : this.taskChannel());
-    if (channel) await this.tellConnectOutcome(nonce, { channel, ...(chat?.thread ? { thread: chat.thread } : {}), text: line ?? chat!.text });
+    if (line !== undefined) await this.tellConnectOutcome(nonce, { channel: chat?.channel ?? this.taskChannel(), ...(chat?.thread ? { thread: chat.thread } : {}), text: line }, trace);
   }
-  // The settled line goes to the conversation the link was sent to, through that surface's delivery outbox, once per attempt.
-  private async tellConnectOutcome(nonce: string, told: Readonly<{ channel: ConnectAppChannel; thread?: string; text: string }>): Promise<void> {
-    const trace = `connect-app:${nonce.slice(0, 12)}`;
+  // A settled line goes to the conversation the link was sent to, through that surface's delivery outbox, once per attempt; the
+  // first look's line has its own id, so the outbox does not take it for the settled one.
+  private async tellConnectOutcome(nonce: string, told: Readonly<{ channel: ConnectAppChannel; thread?: string; text: string }>, trace = `connect-app:${nonce.slice(0, 12)}`): Promise<void> {
     try {
       const runtime = this.setup(told.channel);
       if (runtime.owner === 0) throw new Error('owner_unbound');
