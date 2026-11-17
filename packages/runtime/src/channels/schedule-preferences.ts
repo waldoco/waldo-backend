@@ -67,11 +67,21 @@ export const schedulePreferencesLine = (prefs: SchedulePreferences, healthMode: 
 // `armable` says whether a kind may be armed on this surface right now; a kind that is on but not armable is left as is.
 // `cancelMachine` stops the open background jobs of a kind the owner turned off, so no worker keeps reading for it.
 // alongHeartbeat: work that follows the owner's heartbeat preference (Waldo's own look), armed or dropped with it.
+// sweepCarriesUpdates (SEPARATE_TOGGLES): the brief sweep's update cards answer to no schedule toggle, so notes before events
+// off stops only meeting prep and the sweep stays armed for the updates.
 export type ScheduleApplyContext = Readonly<{ scheduler: Scheduler; plans: DayPlanBook; timezone: string; now: number; armable?: (kind: ScheduleKind) => boolean; cancelMachine?: (job: MachineJob) => void;
-  alongHeartbeat?: (on: boolean) => Promise<void> }>;
+  alongHeartbeat?: (on: boolean) => Promise<void>; sweepCarriesUpdates?: boolean }>;
 
 // The brief sweep runs both update cards and meeting prep, so turning it off stops the open jobs of both.
 const cancelSweepJobs = (ctx: ScheduleApplyContext): void => { ctx.cancelMachine?.('update_sweep'); ctx.cancelMachine?.('meeting_prep'); };
+// Whether the brief sweep has anything to run: the notes before events, or the update cards when they are their own.
+export const sweepWanted = (prefs: SchedulePreferences, carriesUpdates = false): boolean => prefs.event_briefs || carriesUpdates;
+// Notes before events are off: the sweep stops with them, or, while it carries the updates, only meeting prep does.
+const briefsOff = async (ctx: ScheduleApplyContext, prefs: SchedulePreferences): Promise<void> => {
+  if (sweepWanted(prefs, ctx.sweepCarriesUpdates)) { ctx.cancelMachine?.('meeting_prep'); return; }
+  await ctx.scheduler.cancelReadable(BRIEF_SWEEP_ID);
+  cancelSweepJobs(ctx);
+};
 
 // Bring the scheduler in line with the preferences: off cancels the entries, on arms them again.
 export const applySchedulePreferences = async (prefs: SchedulePreferences, ctx: ScheduleApplyContext, only?: ScheduleKind): Promise<void> => {
@@ -79,7 +89,7 @@ export const applySchedulePreferences = async (prefs: SchedulePreferences, ctx: 
   const want = (kind: ScheduleKind) => (only === undefined || only === kind) && (!prefs[kind] || (ctx.armable?.(kind) ?? true));
   if (want('nightly')) { if (prefs.nightly) await armNightly(scheduler, timezone, now); else for (const id of [NIGHTLY_ID, NIGHTLY_CATCH_UP_ID, MEMORY_DAYTIME_ID]) await scheduler.cancelReadable(id); }
   if (want('heartbeat')) { if (prefs.heartbeat) await armHeartbeat(scheduler, now); else { await scheduler.cancelReadable(HEARTBEAT_ID); ctx.cancelMachine?.('heartbeat'); } await ctx.alongHeartbeat?.(prefs.heartbeat); }
-  if (want('event_briefs')) { if (prefs.event_briefs) await armBriefSweep(scheduler, now); else { await scheduler.cancelReadable(BRIEF_SWEEP_ID); cancelSweepJobs(ctx); } }
+  if (want('event_briefs')) { if (prefs.event_briefs) await armBriefSweep(scheduler, now); else await briefsOff(ctx, prefs); }
   // Health proposals are armed by a zone change, never by the clock, so on arms nothing.
   if (want('health_proposals') && !prefs.health_proposals) await scheduler.cancelReadable(HEALTH_TRIGGER_ID);
   if (want('daily_brief')) {
@@ -104,7 +114,7 @@ export const reconcileSchedulePreferences = async (prefs: SchedulePreferences, c
   const cancelIf = (id: string) => scheduler.cancelReadable(id);
   if (!prefs.nightly) for (const id of [NIGHTLY_ID, NIGHTLY_CATCH_UP_ID, MEMORY_DAYTIME_ID]) await cancelIf(id);
   if (!prefs.heartbeat) { await cancelIf(HEARTBEAT_ID); ctx.cancelMachine?.('heartbeat'); await ctx.alongHeartbeat?.(false); }
-  if (!prefs.event_briefs) { await cancelIf(BRIEF_SWEEP_ID); cancelSweepJobs(ctx); }
+  if (!prefs.event_briefs) await briefsOff(ctx, prefs);
   if (!prefs.health_proposals) await cancelIf(HEALTH_TRIGGER_ID);
   if (!prefs.daily_brief) for (const card of DAY_CARDS) await cancelIf(card.id);
 };
@@ -125,10 +135,11 @@ const scheduleKindOf = (entry: ScheduleEntry): ScheduleKind | null => {
 // A held kind is skipped without cancelling: the occurrence passes and a recurring entry stays armed for its next one.
 // A dropped kind is cancelled: it cannot run on this surface at all, so it is not kept waking.
 export type ScheduleHold = 'hold' | 'drop' | false;
-export const gateScheduleExecutors = (executors: ScheduleExecutors, prefs: SchedulePreferenceBook, scheduler: Scheduler, held: (kind: ScheduleKind) => ScheduleHold = () => false, onHeld: (kind: ScheduleKind, outcome: Exclude<ScheduleHold, false>) => void = () => {}): ScheduleExecutors =>
+export const gateScheduleExecutors = (executors: ScheduleExecutors, prefs: SchedulePreferenceBook, scheduler: Scheduler, held: (kind: ScheduleKind) => ScheduleHold = () => false, onHeld: (kind: ScheduleKind, outcome: Exclude<ScheduleHold, false>) => void = () => {},
+  sweepCarriesUpdates = false): ScheduleExecutors =>
   Object.fromEntries(Object.entries(executors).map(([kind, executor]) => [kind, async (entry: ScheduleEntry) => {
     const owned = scheduleKindOf(entry);
-    if (owned !== null && !prefs.enabled(owned)) { await scheduler.cancel(entry.id); return; }
+    if (owned !== null && !(owned === 'event_briefs' ? sweepWanted(prefs.all(), sweepCarriesUpdates) : prefs.enabled(owned))) { await scheduler.cancel(entry.id); return; }
     const outcome = owned === null ? false : held(owned);
     if (outcome === 'drop') await scheduler.cancel(entry.id);
     if (outcome) { onHeld(owned!, outcome); return; }

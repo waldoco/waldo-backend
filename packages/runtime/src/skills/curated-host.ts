@@ -15,7 +15,7 @@ export type OwnerSkillCapability = Readonly<{
  prompt(canaries:readonly string[]):Promise<string>;
  assertProcedureCurrent(expected:string,canaries:readonly string[]):Promise<void>;
 }>;
-const LOAD_DESCRIPTION='Load one enabled skill from the reviewed index for this turn. Its instructions join your next step; it grants no tools.';
+const LOAD_DESCRIPTION='Load an enabled skill from the reviewed index for this turn; a few may load while they fit. Its instructions join your next step; it grants no tools.';
 // Existing owner-channel ingress supplies this private capability; model arguments never do.
 export function createScopedCuratedSkillCapability(sql:SqlStorage, turn:CuratedSkillTurn, scope:RunEffectScope):OwnerSkillCapability {
  const owner=turn.owner;

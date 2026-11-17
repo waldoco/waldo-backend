@@ -40,7 +40,10 @@ it.each(['ack', 'blocked', 'unlink'])('actual owner alarm keeps heartbeat backgr
       effects.sends = 0; effects.ack = mode === 'ack';
       await owner.alarm();
       expect(reportMachineJobs(state.storage.sql)).toHaveLength(1);
-      await owner.alarm();
+      // The apply pass queues the send 250 ms out. The clock holds still for that pass, so however long it runs, the row is
+      // still queued, not yet sent, when the checks below read it.
+      const applyAt = Date.now(), wallClock = Date.now; Date.now = () => applyAt;
+      try { await owner.alarm(); } finally { Date.now = wallClock; }
       expect(state.storage.kv.get('owner_alarm_failures_v1')).toBeUndefined();
       const rows = state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)!;
       expect(rows).toHaveLength(1); expect(rows[0]?.heartbeat?.runId).toBeTruthy();

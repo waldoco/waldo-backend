@@ -35,6 +35,11 @@ export type FinalRecord = {
   // An answer to work the owner asked for (a task's report), addressed to the chat they asked in: it goes there whichever surface
   // takes Waldo's own proactive messages.
   answersOwner?: true;
+  // A notice of Waldo's own (a dead grant's reconnect notice, the approvals desk's notice), not an answer to what the owner
+  // wrote, though a turn may have queued it: it goes where the owner's proactive messages go.
+  notice?: true;
+  // Under the owner's choice "both", WhatsApp gets a copy once the app has it (a task or job report, agent mail, a reconnect notice).
+  copied?: true;
   // accepted: every part was accepted by a surface that confirms arrival later (WhatsApp); not yet delivered, not settled.
   receiptUrls?: string[]; ownerSubject: string; doName: string; status: 'pending' | 'attempting' | 'accepted' | 'delivered' | 'quarantined' | 'blocked';
   dueAt: number; createdAt: number; attempts: number; settled?: boolean; messageId?: number; deliveredAt?: number; reason?: string;
@@ -71,7 +76,10 @@ export type FinalRecord = {
   // A day card on a surface where sends can wait: once it is delivered the day plan records it sent and folds the updates
   // written up to foldUpTo, the time the card was written, the quests it checked in on count as checked in and the
   // experiments whose verdict it offered count as offered.
-  dayCard?: { day: string; card: CardId; foldUpTo: number; quests?: readonly string[]; verdicts?: readonly string[] };
+  dayCard?: { day: string; card: CardId; foldUpTo: number; quests?: readonly string[]; verdicts?: readonly string[]; announcements?: readonly string[] };
+  // Waldo telling the owner about new capabilities (announcements.ts): the announcements it covers count as told once it is
+  // delivered, and go back to waiting for the next card if it never is.
+  announcement?: { ids: readonly string[] };
   // A standing order's report: the order's run finishes when the report is delivered, or when it ends unsent.
   standingOrder?: { runId: string; gate: StandingGate };
 };
@@ -543,4 +551,4 @@ export const redactCalendarPrepEntries = (kv: Kv, texts: readonly string[], mark
 // owner forget reaches them the same way. A reminder's message is such a copy too: the model writes it from the note and
 // what its read tools find. Only the waiting message is cancelled; the reminder itself is the owner's and stays.
 export const redactJobReportEntries = (kv: Kv, texts: readonly string[], marker: string, scope?: RunEffectScope) => redactSourceFinalEntries(kv, texts, marker, scope,
-  row => !!row.dayCard || !!row.standingOrder || !!row.heartbeat || !!row.reminder || !!row.update);
+  row => !!row.dayCard || !!row.standingOrder || !!row.heartbeat || !!row.reminder || !!row.update || !!row.announcement);

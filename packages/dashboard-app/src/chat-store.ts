@@ -1,9 +1,20 @@
+import { ATTACHMENT_GONE, CAPTION_MAX_CHARS, kindOf, ONE_ATTACHMENT, ONLY_FIRST, plainName, retryable, uploadChatAttachment, uploadFailureLine, uploadRefusal, type AttachmentKind, type UploadResult } from './chat-attachments';
 import { archiveThread, cancelChatMessage, ChatRequestError, ChatSignInRequired, createThread, deleteThread, fetchChatPage, fetchReceipt, fetchThreadPage, fetchThreads, newClientId, renameThread, sendChatMessage, type ChatActivity, type ChatMessage, type ChatPage, type ChatReceipt, type ChatThread, type RunState } from './chat-model';
+
+// The file attached to the message being written: uploaded as soon as it is attached, and named by the send once the server holds it.
+// Its bytes stay in this page; nothing about it is written to browser storage.
+export type DraftAttachment = { name: string; bytes: number; kind: AttachmentKind; preview: string | null; state: 'uploading' | 'ready' | 'failed'; error: string | null; retryable: boolean };
+// An attachment as it was sent, drawn on the owner's message for as long as this page is open. History keeps the words, not the file.
+export type SentAttachment = { name: string; bytes: number; kind: AttachmentKind; preview: string | null; caption: string };
+// Whether this server takes attachments, shared by every chat on the page: unknown until an upload answers, off after a 404.
+export type UploadsServed = { served: 'unknown' | 'on' | 'off' };
 
 // A message typed here, from the moment it is sent until history shows it and its turn has closed. `landed` means
 // the server's copy is in history, so only the turn's state is still drawn from here.
 export type LocalMessage = {
   clientId: string; text: string; sentAt: number; state: 'sending' | 'failed' | RunState; messageId: string | null;
+  // With an attachment, `text` is its caption and may be empty; a resend names the same upload.
+  attachment?: SentAttachment & { uploadId: string };
   error: string | null; closedReason: string | null; effectsUnconfirmed: boolean; stopping: boolean; landed: boolean;
   // The reply written so far, while the turn runs and the server streams replies; before it, what the turn's tools are on. A closed
   // turn keeps its last draft until its reply lands (or, closed without one, beside the closure).
@@ -22,11 +33,14 @@ export type ChatSnapshot = {
   // Replies that took the place of a draft shown while they were written, by reply id, with the draft's last words: drawn where the
   // draft was, with no arrival motion.
   streamed: ReadonlyMap<string, string>;
+  attachment: DraftAttachment | null; attachOff: boolean;
+  // What was attached to each message sent from this page, by its message id.
+  attached: ReadonlyMap<string, SentAttachment>;
 };
 
 export type ChatDeps = {
   page: (cursor: string | null, limit: number) => Promise<ChatPage>;
-  send: (clientId: string, text: string) => Promise<ChatReceipt>;
+  send: (clientId: string, text: string, uploadId?: string) => Promise<ChatReceipt>;
   receipt: (clientId: string) => Promise<ChatReceipt>;
   cancel: (clientId: string) => Promise<ChatReceipt>;
   id: () => string;
@@ -36,6 +50,11 @@ export type ChatDeps = {
   visible: () => boolean;
   // After a turn closes: a thread may have been named, and its place in the list moved.
   settled?: () => void;
+  // Attachments: absent, the composer offers none.
+  upload?: (file: File, signal: AbortSignal) => Promise<UploadResult>;
+  preview?: (file: File) => string | null;
+  release?: (url: string) => void;
+  uploads?: UploadsServed;
 };
 
 const PAGE = 30;
@@ -59,14 +78,19 @@ const BACKOFF_MAX = 30_000;
 const active = (state: LocalMessage['state']) => state === 'sending' || state === 'admitted' || state === 'running';
 const closed = (state: LocalMessage['state']) => state === 'completed' || state === 'interrupted' || state === 'revoked';
 
+const servedUploads: UploadsServed = { served: 'unknown' };
 export const browserDeps = (): ChatDeps => ({
-  page: fetchChatPage, send: sendChatMessage, receipt: fetchReceipt, cancel: cancelChatMessage, id: newClientId, now: () => Date.now(),
+  upload: uploadChatAttachment, uploads: servedUploads,
+  preview: file => { try { return URL.createObjectURL(file); } catch { return null; } }, release: url => URL.revokeObjectURL(url),
+  page: fetchChatPage, send: (clientId, text, uploadId) => sendChatMessage(clientId, text, null, undefined, uploadId), receipt: fetchReceipt, cancel: cancelChatMessage, id: newClientId, now: () => Date.now(),
   setTimer: (run, ms) => window.setTimeout(run, ms), clearTimer: id => window.clearTimeout(id),
   visible: () => typeof document === 'undefined' || document.visibilityState !== 'hidden',
 });
 
 export function createChatStore(deps: ChatDeps) {
-  let snap: ChatSnapshot = { phase: 'idle', error: null, messages: [], nextCursor: null, older: 'idle', local: [], draft: '', notice: null, arrived: new Set(), streamed: new Map() };
+  const uploads = deps.uploads ?? { served: 'unknown' };
+  let snap: ChatSnapshot = { phase: 'idle', error: null, messages: [], nextCursor: null, older: 'idle', local: [], draft: '', notice: null, arrived: new Set(), streamed: new Map(),
+    attachment: null, attachOff: uploads.served === 'off', attached: new Map() };
   const listeners = new Set<() => void>();
   const set = (next: Partial<ChatSnapshot>) => { snap = { ...snap, ...next }; listeners.forEach(listener => listener()); };
   const setLocal = (clientId: string, change: Partial<LocalMessage>) => set({ local: snap.local.map(item => item.clientId === clientId ? { ...item, ...change } : item) });
@@ -75,7 +99,37 @@ export function createChatStore(deps: ChatDeps) {
   let open = false, idleTimer: number | null = null, refreshing: Promise<void> | null = null, lastHistory = 0;
   const polls = new Map<string, { timer: number; tries: number; failures: number }>();
 
-  const signedOut = (error: unknown) => { if (error instanceof ChatSignInRequired) { set({ phase: 'signed-out', error: error.message }); stopAll(); return true; } return false; };
+  const signedOut = (error: unknown) => { if (error instanceof ChatSignInRequired) { dropHeld(); set({ phase: 'signed-out', error: error.message, attachment: null }); stopAll(); return true; } return false; };
+
+  // The file behind the draft attachment, and its upload id once the server holds it.
+  let held: { file: File; uploadId: string | null; abort: AbortController | null } | null = null;
+  const dropHeld = () => { const mine = held; held = null; mine?.abort?.abort(); };
+  const setAttachment = (change: Partial<DraftAttachment>) => set({ attachment: snap.attachment ? { ...snap.attachment, ...change } : null });
+  const failUpload = (status: number) => {
+    const kind = snap.attachment?.kind ?? 'file';
+    setAttachment({ state: 'failed', error: uploadFailureLine(status, kind), retryable: status !== 404 && retryable(status) });
+  };
+  const upload = async () => {
+    const mine = held;
+    if (!mine || !deps.upload) return;
+    const refused = uploadRefusal(mine.file);
+    if (refused) { failUpload(refused); return; }
+    const abort = new AbortController();
+    mine.abort = abort;
+    setAttachment({ state: 'uploading', error: null, retryable: false });
+    try {
+      const result = await deps.upload(mine.file, abort.signal);
+      if (held !== mine) return;
+      mine.uploadId = result.upload_id; uploads.served = 'on';
+      setAttachment({ state: 'ready' });
+    } catch (error) {
+      if (held !== mine || signedOut(error)) return;
+      const status = error instanceof ChatRequestError ? error.status : 0;
+      // A server without the route takes no attachments: the composer stops offering them for this page.
+      if (status === 404) { uploads.served = 'off'; set({ attachOff: true }); }
+      failUpload(status);
+    } finally { mine.abort = null; }
+  };
   const stopAll = () => { for (const poll of polls.values()) deps.clearTimer(poll.timer); polls.clear(); if (idleTimer !== null) deps.clearTimer(idleTimer); idleTimer = null; };
 
   // The reply to a local message: the assistant row naming it as parent, else the first one after its own row.
@@ -89,14 +143,15 @@ export function createChatStore(deps: ChatDeps) {
   const holding = (item: LocalMessage, messages: readonly ChatMessage[]) => item.state === 'completed' && !!item.draft && !replyTo(item, messages);
 
   // A user row in history that is this local message: its run id, or the same words in a row that arrived after it was
-  // sent and that no earlier local message has already claimed.
+  // sent and that no earlier local message has already claimed. A message with an attachment is matched only by its run id:
+  // its caption can be empty, and history stores it with a note in its place.
   const reconcile = (messages: readonly ChatMessage[]) => {
     const claimed = new Set<string>();
     return snap.local.map(item => {
       if (item.state === 'sending' || item.state === 'failed' || item.landed) return item;
       const from = item.after === null ? 0 : messages.findIndex(message => message.id === item.after) + 1;
       const row = messages.find(message => message.role === 'user' && message.id === item.messageId)
-        ?? messages.slice(from).find(message => message.role === 'user' && !claimed.has(message.id) && message.text.trim() === item.text.trim());
+        ?? (item.attachment ? undefined : messages.slice(from).find(message => message.role === 'user' && !claimed.has(message.id) && message.text.trim() === item.text.trim()));
       if (row) claimed.add(row.id);
       return row ? { ...item, landed: true } : item;
     }).filter(item => !(item.landed && closed(item.state) && !item.effectsUnconfirmed && item.closedReason === null && !holding(item, messages)));
@@ -189,11 +244,19 @@ export function createChatStore(deps: ChatDeps) {
     const item = find(clientId);
     if (!item) return;
     try {
-      const receipt = await deps.send(clientId, item.text);
+      const receipt = await deps.send(clientId, item.text, item.attachment?.uploadId);
       setLocal(clientId, { state: receipt.state, messageId: receipt.message_id, error: null });
+      if (item.attachment) { const { uploadId: _, ...sent } = item.attachment; set({ attached: new Map(snap.attached).set(receipt.message_id, sent) }); }
       poll(clientId, RECEIPT_DELAYS[0]!);
     } catch (error) {
       if (signedOut(error)) return;
+      // The upload this message named is not there to take (expired, already sent, or attachments went off): the message was not
+      // taken, so it is dropped with a line saying so rather than offered for a resend that cannot work.
+      if (item.attachment && error instanceof ChatRequestError && error.code === 'upload_unavailable') {
+        if (item.attachment.preview) deps.release?.(item.attachment.preview);
+        set({ local: snap.local.filter(other => other.clientId !== clientId), notice: ATTACHMENT_GONE });
+        return;
+      }
       setLocal(clientId, { state: 'failed', error: error instanceof Error ? error.message : 'Not sent.' });
     }
   };
@@ -204,6 +267,7 @@ export function createChatStore(deps: ChatDeps) {
     working: () => snap.local.some(item => active(item.state)),
     open() {
       open = true;
+      if (snap.attachOff !== (uploads.served === 'off')) set({ attachOff: uploads.served === 'off' });
       if (snap.phase !== 'ready') set({ phase: 'loading', error: null });
       void refresh().then(scheduleIdle);
     },
@@ -220,19 +284,52 @@ export function createChatStore(deps: ChatDeps) {
       } catch (error) { if (!signedOut(error)) set({ older: 'error' }); }
     },
     setDraft(draft: string) { set({ draft }); },
-    send(text: string): boolean {
+    // Whether the composer offers attachments on this page.
+    attachable: () => !!deps.upload && !snap.attachOff && snap.phase !== 'signed-out',
+    // One attachment per message: a second waits until the first is sent or removed, and of several given at once the first is taken.
+    attach(files: readonly File[]) {
+      const file = files[0];
+      if (!file || !this.attachable()) return;
+      if (snap.attachment) { set({ notice: ONE_ATTACHMENT }); return; }
+      const kind = kindOf(file);
+      held = { file, uploadId: null, abort: null };
+      set({ attachment: { name: plainName(file.name), bytes: file.size, kind, preview: kind === 'photo' ? deps.preview?.(file) ?? null : null, state: 'uploading', error: null, retryable: false },
+        notice: files.length > 1 ? ONLY_FIRST : snap.notice === ONE_ATTACHMENT || snap.notice === ONLY_FIRST ? null : snap.notice });
+      void upload();
+    },
+    retryAttachment() { if (held && snap.attachment?.state === 'failed' && snap.attachment.retryable) void upload(); },
+    // Stops an upload on its way. One the server already holds is left to expire unsent.
+    removeAttachment() {
+      dropHeld();
+      if (snap.attachment?.preview) deps.release?.(snap.attachment.preview);
+      set({ attachment: null, notice: snap.notice === ONE_ATTACHMENT || snap.notice === ONLY_FIRST ? null : snap.notice });
+    },
+    // The draft attachment goes with the words once the server holds it; the words are then its caption and may be empty. A quick reply
+    // or an ask-again leaves it where it is (withAttachment false).
+    send(text: string, withAttachment = true): boolean {
       const words = text.trim();
-      if (!words || snap.phase === 'signed-out') return false;
-      const item: LocalMessage = { clientId: deps.id(), text: words, sentAt: deps.now(), state: 'sending', messageId: null, error: null, closedReason: null, effectsUnconfirmed: false, stopping: false, landed: false, after: snap.messages.at(-1)?.id ?? null };
-      set({ local: [...snap.local, item], draft: '' });
+      const draft = withAttachment ? snap.attachment : null;
+      if (snap.phase === 'signed-out') return false;
+      if (draft ? draft.state !== 'ready' || !held?.uploadId || words.length > CAPTION_MAX_CHARS : !words) return false;
+      const attachment = draft && held?.uploadId ? { name: draft.name, bytes: draft.bytes, kind: draft.kind, preview: draft.preview, caption: words, uploadId: held.uploadId } : undefined;
+      if (attachment) held = null;
+      const item: LocalMessage = { clientId: deps.id(), text: words, sentAt: deps.now(), state: 'sending', messageId: null, error: null, closedReason: null, effectsUnconfirmed: false, stopping: false, landed: false, after: snap.messages.at(-1)?.id ?? null, ...(attachment ? { attachment } : {}) };
+      set({ local: [...snap.local, item], draft: '', ...(attachment ? { attachment: null } : {}) });
       void deliver(item.clientId);
       return true;
     },
     // The same client id makes a resend idempotent: a message the server did take is not taken twice.
     retry(clientId: string) { const item = find(clientId); if (!item || item.state !== 'failed') return; setLocal(clientId, { state: 'sending', error: null }); void deliver(clientId); },
-    // An interrupted turn is asked again as a new message.
-    askAgain(clientId: string) { const item = find(clientId); if (!item) return; set({ local: snap.local.filter(other => other.clientId !== clientId) }); this.send(item.text); },
-    dismiss(clientId: string) { const poll = polls.get(clientId); if (poll) deps.clearTimer(poll.timer); polls.delete(clientId); set({ local: snap.local.filter(item => item.clientId !== clientId) }); },
+    // An interrupted turn is asked again as a new message. Its attachment went with it, so one with an attachment is not asked again.
+    askAgain(clientId: string) { const item = find(clientId); if (!item || item.attachment) return; set({ local: snap.local.filter(other => other.clientId !== clientId) }); this.send(item.text, false); },
+    dismiss(clientId: string) {
+      const poll = polls.get(clientId), item = find(clientId);
+      if (poll) deps.clearTimer(poll.timer);
+      polls.delete(clientId);
+      // A message the server never took is drawn nowhere else, so its preview can go.
+      if (item?.attachment?.preview && item.messageId === null) deps.release?.(item.attachment.preview);
+      set({ local: snap.local.filter(other => other.clientId !== clientId) });
+    },
     async stop(clientId: string) {
       const item = find(clientId);
       if (!item || !active(item.state) || item.state === 'sending' || item.stopping) return;
@@ -291,9 +388,9 @@ export type ThreadsStore = ReturnType<typeof createThreadsStore>;
 export const threadDeps = (thread: string, threads: ThreadsStore, base: ChatDeps = browserDeps()): ChatDeps => {
   let revision: number | null = null;
   const page = async (cursor: string | null, limit: number) => { const read = await fetchThreadPage(thread, cursor, limit); revision = read.thread.revision; threads.seen(read.thread); return read.page; };
-  const sendOnce = async (id: string, text: string) => { if (revision === null) await page(null, 1); return sendChatMessage(id, text, thread, revision!); };
+  const sendOnce = async (id: string, text: string, uploadId?: string) => { if (revision === null) await page(null, 1); return sendChatMessage(id, text, thread, revision!, uploadId); };
   return { ...base, page,
-    send: async (id, text) => { try { return await sendOnce(id, text); } catch (error) { if (!(error instanceof ChatRequestError && error.code === 'thread_revision_conflict')) throw error; await page(null, 1); return sendOnce(id, text); } },
+    send: async (id, text, uploadId) => { try { return await sendOnce(id, text, uploadId); } catch (error) { if (!(error instanceof ChatRequestError && error.code === 'thread_revision_conflict')) throw error; await page(null, 1); return sendOnce(id, text, uploadId); } },
     receipt: id => fetchReceipt(id, thread), cancel: id => cancelChatMessage(id, thread),
     settled: () => void threads.load() };
 };

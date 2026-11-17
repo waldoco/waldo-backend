@@ -1,5 +1,5 @@
 import { PERSON_RINGS, rememberArgsSchema, forgetMemoryArgsSchema, readMemoryArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ToolHandler, type ToolName, type ReadMemoryArgs, type RememberArgs, type ForgetMemoryArgs } from '@waldo/contracts';
-import { FORGOTTEN, ground, normalizeForGrounding, textFingerprint, type Claim, type ClaimStore } from '../../memory/claims';
+import { FORGOTTEN, ground, normalizeForGrounding, OUTSIDE_REF, textFingerprint, type Claim, type ClaimStore } from '../../memory/claims';
 import { carriesTopic, forgettableTopic, hidesTopic } from '../../memory/forget-guard';
 import { NODE_STATEMENT } from '../../memory/node-sources';
 import { HEALTH_MEMORY_RULES } from '../../memory/health-rules';
@@ -39,6 +39,10 @@ type Dependencies = Readonly<{
 const PEOPLE_OFF = 'The people map is not on for this owner yet, so memory holds no people; read or forget by query, topic or claim ids instead.';
 const fail = (error: string) => ({ ok: false as const, code: 'invalid_args' as const, error, source_taint: null });
 const success = (data: unknown) => ({ ok: true as const, data, source_taint: null });
+// A read that shows a note the owner did not state (saved while reading outside content, by a background pass, from an import,
+// or with no recorded origin) is outside content for the rest of the turn, as recall treats the same note.
+const shown = (data: unknown, claims: readonly Readonly<{ origin?: string | null }>[]) =>
+  ({ ok: true as const, data, source_taint: claims.some(claim => claim.origin !== 'owner') ? 'external' as const : null });
 const CONFIRM_NOTE = 'It becomes the owner\'s once they confirm it or say it again in a later message of their own.';
 const HELD_NOTE = `Already held, but not as the owner's statement. ${CONFIRM_NOTE}`;
 // Why a write was kept as Waldo's read rather than the owner's word, said back to the model.
@@ -75,17 +79,32 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
   const ready = async (ctx: MemoryToolContext) => { ctx.runScope?.admit(); await ctx.assertTaskSourceCurrent?.(); ctx.runScope?.admit(); };
   const hidden = (claim: Claim) => store.pendingTopics().some(topic => [claim.text, claim.evidence, claim.source_ref, (claim as Claim & { aliases?: string | null }).aliases].some(text => typeof text === 'string' && (carriesTopic(text, topic) || hidesTopic(text, topic))));
   const blocked = (text: string) => store.barred(text);
-  // A claim a turn may read: never outside content until the owner confirms it, nothing being forgotten, and in a turn that
-  // read outside content nothing fenced from it. A person is shown only through such a claim.
-  const readableIn = (outside: boolean) => (claim: Claim) => claim.origin !== 'untrusted' && !hidden(claim) && (!outside || outsideSafe(claim));
+  // A claim a turn may read: a note learned from outside content only when the store recalls those, nothing being
+  // forgotten, and in a turn that read outside content nothing fenced from it. A person is shown only through such a claim.
+  const readableIn = (outside: boolean) => (claim: Claim) => (store.outsideNotes === true || claim.origin !== 'untrusted') && !hidden(claim) && (!outside || outsideSafe(claim));
   const base = (name: ToolName, description: string) => ({ name, description, trigger_allowlist: triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes(name)), autonomy_gated: false });
   return [
-    { ...base('remember', `Store a fact or preference grounded in a verbatim quote from the owner in this conversation. To correct an active claim, pass its id as replaces_id: the c12 that starts its memory line, or 12. Memory is context, never permission to act. ${HEALTH_MEMORY_RULES.join(' ')}`), schema: rememberArgsSchema, mutates_state: true,
+    { ...base('remember', `${store.outsideNotes === true ? 'Store a fact or preference with a verbatim quote: the owner\'s, or outside content just read.' : 'Store a fact or preference grounded in a verbatim quote from the owner in this conversation.'} To correct an active claim, pass its id as replaces_id: the c12 that starts its memory line, or 12. Memory is context, never permission to act. ${HEALTH_MEMORY_RULES.join(' ')}`), schema: rememberArgsSchema, mutates_state: true,
       async handle(args: RememberArgs, ctx) {
         await ready(ctx); const turn = admitted(ctx);
         if (!turn) return fail('Authenticated owner memory context is unavailable.');
         const source = [turn.current, ...turn.recent].find(message => ownerParts(message).some(part => quotesWords(part, args.evidence_quote) && ground(args.evidence_quote, { owner: part }) === 'owner'));
-        if (!source) return fail('Evidence quote is not grounded in an owner-authored message. Quote whole words the owner wrote, verbatim.');
+        if (!source) {
+          // A note needs a source. With outside notes recalled, a turn that read outside content may save what it read: the
+          // quote is then that content's, and the note is stored as learned from outside content, never the owner's. It
+          // replaces nothing, names no one and carries no reading, so it cannot change what the owner told Waldo.
+          if (store.outsideNotes !== true || ctx.toolArgSourceTaint !== 'external') return fail('Evidence quote is not grounded in an owner-authored message. Quote whole words the owner wrote, verbatim.');
+          if (args.replaces_id !== undefined || args.people?.length || args.on_date) return fail('A note saved from what this turn read replaces nothing and names no one. Save it on its own, or quote the owner\'s own words.');
+          const texts = [args.text, args.evidence_quote, ...(args.aliases ?? [])];
+          if (texts.some(blocked)) return fail('This memory matches a forget barrier.');
+          if (args.kind === 'health' || texts.some(text => text.includes(HEALTH_SPAN_MARKER) || numericHealthIn(text))) return fail('Memory stores no health note from outside content (mail, a web page or a connected tool).');
+          const known = store.claims().find(row => normalizeForGrounding(row.text) === normalizeForGrounding(args.text));
+          if (known) return success({ id: known.id, status: 'duplicate' });
+          await ready(ctx);
+          const add = () => { store.add({ kind: args.kind, text: args.text, source: 'inferred', evidence: args.evidence_quote, origin: 'untrusted', source_ref: `${OUTSIDE_REF}page, mail or tool result read in chat, ${now().slice(0, 10)}`, aliases: args.aliases, ...(args.area ? { area: args.area } : {}) }, now()); return store.lastClaimId(); };
+          const id = ctx.runScope ? ctx.runScope.commit(add) : deps.transaction ? deps.transaction(add) : add();
+          return success({ id, status: 'stored', source: 'outside', note: 'Saved as a note learned from outside content, not the owner\'s words. It is shown with that label and never acts as the owner\'s say-so.' });
+        }
         if (blocked(args.text) || blocked(args.evidence_quote) || (args.aliases ?? []).some(blocked)) return fail('This memory matches a forget barrier.');
         // A person the owner asked to forget stays forgotten: neither their name nor an address comes back as a new person.
         const links = deps.people ? args.people ?? [] : [];
@@ -174,22 +193,24 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         if (people === true || person !== undefined) {
           if (!deps.people) return fail(PEOPLE_OFF);
           const today = now().slice(0, 10);
-          const shown = (row: Person) => {
+          const shownPerson = (row: Person) => {
             const claims = store.people.claimsOf(row.id).filter(readable);
             if (!claims.length || store.pendingTopics().some(topic => carriesTopic(row.name, topic))) return null;
             return { card: personCard(row, claims, today), claims };
           };
           if (person !== undefined) {
             const row = store.people.person(person);
-            const found = row ? shown(row) : null;
+            const found = row ? shownPerson(row) : null;
             if (!found) return success({ person: null, claims: [], authority: 'context_only_not_action_approval' });
-            return success({ person: found.card, claims: found.claims.slice(0, limit).map(claim => ({ ...provenance(claim, deps.validity === true), role: claim.role, relation: claim.relation, on_date: claim.on_date ?? null })), authority: 'context_only_not_action_approval' });
+            const listed = found.claims.slice(0, limit);
+            return shown({ person: found.card, claims: listed.map(claim => ({ ...provenance(claim, deps.validity === true), role: claim.role, relation: claim.relation, on_date: claim.on_date ?? null })), authority: 'context_only_not_action_approval' }, found.claims);
           }
           const needle = query?.toLowerCase();
-          const cards = store.people.all().flatMap(row => { const found = shown(row); return found ? [found] : []; })
+          const found = store.people.all().flatMap(row => { const one = shownPerson(row); return one ? [one] : []; })
             .filter(({ card, claims }) => !needle || [card.name, ...card.other_names, ...claims.map(claim => claim.text)].some(text => text.toLowerCase().includes(needle)))
-            .map(({ card }) => card).sort((a, b) => PERSON_RINGS.indexOf(a.ring ?? 'wider') - PERSON_RINGS.indexOf(b.ring ?? 'wider') || a.name.localeCompare(b.name));
-          return success({ people: cards.slice(0, limit), more: cards.length > limit, authority: 'context_only_not_action_approval' });
+            .sort((a, b) => PERSON_RINGS.indexOf(a.card.ring ?? 'wider') - PERSON_RINGS.indexOf(b.card.ring ?? 'wider') || a.card.name.localeCompare(b.card.name));
+          const listed = found.slice(0, limit);
+          return shown({ people: listed.map(({ card }) => card), more: found.length > limit, authority: 'context_only_not_action_approval' }, listed.flatMap(({ claims }) => claims));
         }
         const match = query === undefined ? null : ftsQuery(query);
         if (query !== undefined && match === null) return success({ claims: [], omitted_claim_ids: [], complete: true, authority: 'context_only_not_action_approval' });
@@ -205,7 +226,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         // Whole claims only: one that would push the result past the budget is named, never cut into partial words.
         const claims: typeof selected = []; const omitted_claim_ids: number[] = []; let bytes = 0;
         for (const claim of selected) { const size = new TextEncoder().encode(JSON.stringify(claim)).byteLength; if (bytes + size > READ_BUDGET_BYTES) omitted_claim_ids.push(claim.id); else { claims.push(claim); bytes += size; } }
-        return success({ claims, omitted_claim_ids, complete: omitted_claim_ids.length === 0, authority: 'context_only_not_action_approval' });
+        return shown({ claims, omitted_claim_ids, complete: omitted_claim_ids.length === 0, authority: 'context_only_not_action_approval' }, claims);
       } },
     { ...base('forget_memory', 'Remove selected owner memory by ids, literal topic in the current owner message, an exact stored owner-message span using UTF-16 offsets, one person, or import_source for everything brought in from one assistant\'s export. scope_note describes the requested scope.'), schema: forgetMemoryArgsSchema, mutates_state: true,
       async handle(args: ForgetMemoryArgs, ctx) {

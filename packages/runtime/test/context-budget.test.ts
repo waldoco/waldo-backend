@@ -12,16 +12,16 @@ describe('contextBudget', () => {
   it('defaults to the sizes the turn used before they were settings', () => {
     expect(CONTEXT_BUDGET).toEqual({
       historyTokens: 22_000, chatCeilingTokens: 40_000, jobCeilingTokens: 25_000, hardCeilingTokens: 80_000,
-      steppedTarget: 0.5, clearAtChars: 120_000, keepLatest: 3, standingOrdersChars: 3_000, questsChars: 3_000,
+      steppedTarget: 0.5, clearAtChars: 120_000, keepLatest: 3, standingOrdersChars: 3_000, questsChars: 3_000, whatsNewChars: 1_200,
     });
     expect(contextBudget({})).toEqual(CONTEXT_BUDGET);
   });
 
   it('reads each size from its own setting', () => {
     const set = { WALDO_HISTORY_BUDGET_TOKENS: '14000', WALDO_CHAT_CEILING_TOKENS: '36000', WALDO_JOB_CEILING_TOKENS: '20000', WALDO_HARD_CEILING_TOKENS: '64000',
-      WALDO_STEPPED_WINDOW_TARGET: '0.6', WALDO_TOOL_RESULTS_CLEAR_AT_CHARS: '90000', WALDO_TOOL_RESULTS_KEEP_LATEST: '2', WALDO_STANDING_ORDERS_CHARS: '2000', WALDO_QUESTS_CHARS: '1500' };
+      WALDO_STEPPED_WINDOW_TARGET: '0.6', WALDO_TOOL_RESULTS_CLEAR_AT_CHARS: '90000', WALDO_TOOL_RESULTS_KEEP_LATEST: '2', WALDO_STANDING_ORDERS_CHARS: '2000', WALDO_QUESTS_CHARS: '1500', WALDO_WHATS_NEW_CHARS: '900' };
     expect(contextBudget(set)).toEqual({ historyTokens: 14_000, chatCeilingTokens: 36_000, jobCeilingTokens: 20_000, hardCeilingTokens: 64_000,
-      steppedTarget: 0.6, clearAtChars: 90_000, keepLatest: 2, standingOrdersChars: 2_000, questsChars: 1_500 });
+      steppedTarget: 0.6, clearAtChars: 90_000, keepLatest: 2, standingOrdersChars: 2_000, questsChars: 1_500, whatsNewChars: 900 });
     expect(Object.values(CONTEXT_BUDGET_SETTINGS).sort()).toEqual(Object.keys(set).sort());
   });
 
