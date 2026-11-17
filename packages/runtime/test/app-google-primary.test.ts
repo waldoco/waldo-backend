@@ -9,7 +9,7 @@ import { ensureSchema } from '../src/tracer/schema';
 
 const { OwnerDO } = await import('../src/channels/owner-do');
 
-// Controls revision 20 on the app's Connections: one Google account is primary, the one Waldo uses when nothing names an
+// Controls revision 24 on the app's Connections: one Google account is primary, the one Waldo uses when nothing names an
 // account, and the owner chooses it with google.set_primary. Builds below it read and do what they did.
 const OWNER_ID = '6d7e8f9a-0b1c-4d2e-8f3a-4b5c6d7e8f9a';
 const HASH = 'c'.repeat(64);
@@ -71,11 +71,11 @@ const accounts = [
   { id: 'local:second@example.test', email: 'second@example.test', scopes: null, refresh_token: 'synthetic-offline-only-2' },
 ];
 const GOOGLE = { GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };
-const act = async ({ owner, name }: Ctx, body: Record<string, unknown>, contract = 'controls=20') => {
+const act = async ({ owner, name }: Ctx, body: Record<string, unknown>, contract = 'controls=24') => {
   const response = await owner.fetch(new Request('https://telegram-owner/app/v1/actions', { method: 'POST', headers: { ...headers(name, contract), 'content-type': 'application/json' }, body: JSON.stringify(body) }));
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 };
-const read = async ({ owner, name }: Ctx, contract = 'controls=20') => {
+const read = async ({ owner, name }: Ctx, contract = 'controls=24') => {
   const body = await (await owner.fetch(new Request('https://telegram-owner/app/v1/controls?view=connections', { headers: headers(name, contract) }))).json() as { revision: string; data: { google: { accounts: Array<Record<string, unknown>> } } };
   expect(appControlProjectionV1Schema.safeParse(body).success).toBe(true);
   return body;
@@ -132,13 +132,15 @@ describe('the primary Google account', () => {
     }, GOOGLE);
   });
 
-  it('is neither shown nor chosen by a build below revision 20', async () => {
+  // 24 is the threshold: 23 (the session devices) and 22 (people) shipped below it, and 19 to 21 are retired.
+  it('is neither shown nor chosen by a build below revision 24', async () => {
     await appOwner('app-google-primary-older', async (ctx) => {
       await ctx.state.storage.put('google:accounts', accounts);
-      for (const contract of ['controls=19', 'controls=17']) for (const account of (await read(ctx, contract)).data.google.accounts) expect(Object.hasOwn(account, 'primary')).toBe(false);
-      const { revision } = await read(ctx, 'controls=19');
-      expect((await act(ctx, { view: 'connections', action: 'google.set_primary', id: 'local:second@example.test', revision, request_id: 'primary-0201' }, 'controls=19')).status).toBe(400);
+      for (const contract of ['controls=23', 'controls=22', 'controls=17']) for (const account of (await read(ctx, contract)).data.google.accounts) expect(Object.hasOwn(account, 'primary')).toBe(false);
+      const { revision } = await read(ctx, 'controls=23');
+      expect((await act(ctx, { view: 'connections', action: 'google.set_primary', id: 'local:second@example.test', revision, request_id: 'primary-0201' }, 'controls=23')).status).toBe(400);
       expect(await ctx.state.storage.get('google:primary')).toBeUndefined();
+      expect((await read(ctx, 'controls=24')).data.google.accounts.filter((account) => (account as { primary?: boolean }).primary)).toHaveLength(1);
     }, GOOGLE);
   });
 });

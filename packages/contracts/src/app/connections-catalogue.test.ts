@@ -77,9 +77,9 @@ describe('the wearables catalogue', () => {
 
 describe('the primary Google account', () => {
   const second = { ...account, id: 'conn-2', email: 'second@example.test' };
-  it('comes at revision 20, with exactly one primary account whenever primary is named', async () => {
+  it('comes at revision 24, with exactly one primary account whenever primary is named', async () => {
     const { APP_CONTROLS_GOOGLE_PRIMARY_REVISION } = await import('./controls');
-    expect(APP_CONTROLS_GOOGLE_PRIMARY_REVISION).toBe(20);
+    expect(APP_CONTROLS_GOOGLE_PRIMARY_REVISION).toBe(24);
     const shown = (accounts: object[]) => appControlProjectionV1Schema.safeParse(connections({ google: { connectAvailable: true, accounts } })).success;
     expect(shown([{ ...account, primary: true }, { ...second, primary: false }])).toBe(true);
     expect(shown([account, second])).toBe(true);

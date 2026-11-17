@@ -257,7 +257,7 @@ describe('a machine job never takes the owner\'s place', () => {
   it('is hidden from the owner\'s running-task line and from cancel_task', async () => {
     await withBook(async ({ book }) => {
       const machine = enqueue(book, spec()).job;
-      expect(runningTasksLine(book)).toBe('');
+      expect(runningTasksLine(book, T0)).toBe('');
       const [, cancel] = taskToolHandlers({ book, now: () => T0, timezone: () => 'UTC', surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined });
       const refused = await (cancel as { handle(args: CancelTaskArgs, ctx: ToolDispatcherContext): Promise<unknown> }).handle({ job_id: machine.id }, {} as ToolDispatcherContext);
       expect(refused).toMatchObject({ ok: false, code: 'not_found' });

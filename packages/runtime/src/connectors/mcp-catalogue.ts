@@ -46,6 +46,15 @@ export const MCP_CATALOGUE: readonly McpCatalogueEntry[] = [
   { id: 'todoist', label: 'Todoist', about: 'Find and read your tasks and projects.', url: 'https://ai.todoist.net/mcp', issuer: 'https://todoist.com' },
   { id: 'linear', label: 'Linear', about: 'Find and read issues, projects and comments.', url: 'https://mcp.linear.app/mcp', issuer: 'https://mcp.linear.app' },
   {
+    // docs.fireflies.ai documents api.fireflies.ai/mcp with OAuth. Its tools carry no read-only labels, and some act for the
+    // owner towards other people (sharing a meeting, revoking access), so the reads are named here and every other tool asks first.
+    id: 'fireflies', label: 'Fireflies', url: 'https://api.fireflies.ai/mcp', issuer: 'https://api.fireflies.ai', sends_as_owner: true,
+    about: 'Search and read your meeting transcripts, summaries and soundbites.',
+    reads: ['fireflies_search', 'fireflies_get_transcripts', 'fireflies_get_transcript', 'fireflies_fetch', 'fireflies_get_summary', 'fireflies_get_active_meetings', 'fireflies_get_analytics',
+      'fireflies_list_channels', 'fireflies_get_channel', 'fireflies_get_soundbites', 'fireflies_get_user', 'fireflies_get_usergroups', 'fireflies_get_user_contacts', 'fireflies_get_rule_executions'],
+    send_target: ['emails', 'email'],
+  },
+  {
     id: 'slack', label: 'Slack', url: 'https://mcp.slack.com/mcp', issuer: 'https://mcp.slack.com', pre_registered: true, token_dialect: 'ok_envelope', sends_as_owner: true,
     about: 'Search messages and read channels and threads.',
     // Slack's read tools by name. Slack's documentation describes its tools by what they do, not by name, so a name here

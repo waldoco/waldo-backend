@@ -28,6 +28,8 @@ export type ToolOutputEntry = Readonly<{
 
 // The approval desk's current state for one approval, or null when it holds none by that id.
 export type ProposalState = (id: string) => Promise<Readonly<{ kind: string; state: string }> | null>;
+// The open cards the owner can approve in words in this chat, by id and kind only, as the approval desk names them.
+export type ApprovableHere = () => readonly Readonly<{ id: string; kind: string; shown_minutes_ago: number }>[];
 
 // The tools whose output reports an approval on the desk, and the field that names it. No other tool's output links.
 const APPROVAL_FIELD: Readonly<Record<string, string>> = {
@@ -185,7 +187,7 @@ const fragmentOf = ({ entry, seq, text }: Readonly<{ entry: ToolOutputEntry; seq
   },
 });
 
-export const toolOutputLedger = (storage: KeyValueStorage, options: Readonly<{ proposalState?: ProposalState }> = {}) => ({
+export const toolOutputLedger = (storage: KeyValueStorage, options: Readonly<{ proposalState?: ProposalState; approvableHere?: ApprovableHere }> = {}) => ({
   forgetSourceBatchCurrent(topic: string) {
     const all = this.forgetSourcesCurrent(topic);
     if (!all) return null;
@@ -233,9 +235,13 @@ export const toolOutputLedger = (storage: KeyValueStorage, options: Readonly<{ p
   async carried(texts: readonly string[] = [], thread?: string): Promise<readonly ContextFragment[]> {
     return (await carriedRows(storage, options, texts, row => row.thread === thread)).map(fragmentOf);
   },
-  // What the owner's own earlier turns' tools returned, as a later owner turn may read it.
+  // What the owner's own earlier turns' tools returned, as a later owner turn may read it, then each card the owner can approve
+  // in words here that no kept row names. A card a machine turn raised, or one whose row was pushed out, is otherwise reachable
+  // only through raise_approval list, whose card words can carry outside text and so leave the turn unable to approve it.
   async ownerTurnResults(texts: readonly string[] = [], thread?: string): Promise<readonly string[]> {
-    return (await carriedRows(storage, options, texts, row => ownersRow(row) && row.thread === thread)).map(({ text }) => text);
+    const rows = (await carriedRows(storage, options, texts, row => ownersRow(row) && row.thread === thread)).map(({ text }) => text);
+    const cards = (options.approvableHere?.() ?? []).filter(card => !rows.some(text => text.includes(`approval ${card.id} (`))).slice(-MAX_KEPT);
+    return [...rows, ...cards.map(card => `approval ${card.id} (${card.kind}) waits on the owner's word in this chat; its card was shown here in full ${card.shown_minutes_ago} min ago. approve_shown takes this id.`)];
   },
 });
 

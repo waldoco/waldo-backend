@@ -76,6 +76,23 @@ describe('proactive follow-ups are on by default, per-owner opt-out', () => {
   });
 });
 
+describe('news of new capabilities is on by default, per-owner opt-out', () => {
+  it('"no more feature news" turns it off through the tool, it stays off when later calls omit it, and the ledger line says so', async () => {
+    await withSql(async (sql) => {
+      const book = loopBook(sql, { newId: () => 'x', now: () => at('2026-09-24T04:00:00Z') });
+      const tool = loopHandlers(book).find((h) => h.name === 'set_proactivity')!;
+      expect(book.proactivity().feature_news).not.toBe(false);
+      await run(tool, { quiet_start: null, quiet_end: null, volume: 'normal', feature_news: false });
+      expect(proactivityLine(book.proactivity())).toBe('Proactivity: volume normal; no quiet hours; news of new capabilities off');
+      await run(tool, { quiet_start: '23:00', quiet_end: '07:00', volume: 'low', followups: false });
+      expect(book.proactivity()).toMatchObject({ feature_news: false, followups: false });
+      await run(tool, { quiet_start: null, quiet_end: null, volume: 'normal', feature_news: true });
+      expect(book.proactivity().feature_news).toBe(true);
+      expect(() => tool.schema.parse({ quiet_start: null, quiet_end: null, volume: 'normal', feature_news: 'off' })).toThrow();
+    });
+  });
+});
+
 describe('proactivity', () => {
   it('defaults to normal with no quiet hours and stores owner settings', async () => {
     await withSql((sql) => {

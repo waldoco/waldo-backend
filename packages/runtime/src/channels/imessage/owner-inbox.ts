@@ -40,7 +40,7 @@ export type IMessageInboxRecord = {
   replyNote?: string;
   state: 'admitted' | 'running' | 'completed' | 'interrupted' | 'revoked';
   attempt?: string; deadline?: number; closedAt?: number;
-  closedReason?: 'interrupted' | 'authority_revoked' | 'final_committed'; effectsUnconfirmed?: boolean;
+  closedReason?: 'interrupted' | 'authority_revoked' | 'final_committed' | 'stopped'; effectsUnconfirmed?: boolean;
 };
 export type IMessageAdmitInput = Omit<IMessageInboxRecord, 'id' | 'updateId' | 'admittedAt' | 'state' | 'reactions'>;
 // key names the tapback (chat, message, part, reaction), so the owner taking it back finds it. seq is arrival order.
@@ -179,6 +179,32 @@ export class IMessageOwnerInbox {
     }
     for (const n of this.notes()) if (holds(n.line)) { this.storage.kv.delete(NOTE + n.key); rewritten += 1; }
     return { rewritten, remaining: this.records().filter((r) => r.state !== 'running' && held(r)).length };
+  }
+  /**
+   * The owner's explicit stop, for the waiting /stop row `id`. In one commit: the running turn closes as interrupted (it stops
+   * at its next scope check, and its settle owes no second notice), and the owner's messages still waiting ahead of the
+   * /stop close as revoked and never run, except those `keep` names (an approval decision is not a message to stop).
+   * `answer` freezes the /stop row's one reply in the same commit, and the row closes with it, so it runs no turn of its
+   * own. Null when the row no longer waits, as on a repeated handoff. Returns the rows it stopped.
+   */
+  stop(id: string, keep: (row: IMessageInboxRecord) => boolean, answer: (row: IMessageInboxRecord, stopped: readonly IMessageInboxRecord[]) => void): IMessageInboxRecord[] | null {
+    return this.storage.transactionSync(() => {
+      const r = this.storage.kv.get<IMessageInboxRecord>(PREFIX + id);
+      if (!r || r.state !== 'admitted') return null;
+      const stopped: IMessageInboxRecord[] = [];
+      for (const row of this.records()) {
+        const running = row.state === 'running';
+        if (!running && !(row.state === 'admitted' && row.updateId < r.updateId && !keep(row))) continue;
+        stopped.push({ ...row });
+        row.state = running ? 'interrupted' : 'revoked'; row.closedReason = 'stopped'; row.effectsUnconfirmed = running; row.closedAt = this.now(); clear(row);
+        this.storage.kv.put(PREFIX + row.id, row);
+      }
+      answer(r, stopped);
+      r.state = 'completed'; r.closedReason = 'final_committed'; r.closedAt = this.now(); clear(r);
+      this.storage.kv.put(PREFIX + r.id, r);
+      this.storage.kv.put(IMESSAGE_INBOX_DUE_KEY, due(this.records(), this.now()));
+      return stopped;
+    });
   }
   /** Called inside the scope's commit transaction together with the frozen reply. */
   closeFinal(record: IMessageInboxRecord): void {

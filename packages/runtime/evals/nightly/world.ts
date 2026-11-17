@@ -21,6 +21,7 @@ import { connectServiceHandler, googleHandlers, type EffectDesk, type GoogleAcce
 import { memoryHandlers } from '../../src/tools/live/memory';
 import { searchEpisodesHandler } from '../../src/tools/live/search-episodes';
 import { getHealthHandler, healthReadBook } from '../../src/tools/live/health';
+import { healthLogHandlers, type HealthLogBook, type HealthLogEntry } from '../../src/channels/health-log';
 import { EffectUnknownError } from '../../src/channels/owner-effect-ledger';
 import { claimStore, FORGOTTEN, textFingerprint } from '../../src/memory/claims';
 import { semanticRecall, workersAiEmbedder, type EmbeddingRunner } from '../../src/memory/semantic-recall';
@@ -31,7 +32,7 @@ import { findingStore, observedPages, observeReads, ownerLookupHandlers } from '
 import { webSearchHandler } from '../../src/tools/live/web-search';
 import type { GoogleClient, MailItem, ThreadMessage } from '../../src/connectors/google';
 import type { OwnerClock } from '../../src/tools/live/get-context';
-import { mcpConnections } from '../../src/connectors/mcp-connections';
+import { connectorsLine, mcpConnections } from '../../src/connectors/mcp-connections';
 import { callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler } from '../../src/tools/live/mcp';
 import { evalConversation, type ConversationSeed } from './conversation-world';
 import { approvalDesk } from '../../src/channels/approvals';
@@ -95,6 +96,8 @@ export type WorldSeed = Readonly<{
   // The owner's private workspace, in memory, with the production workspace tools and WALDO_FILE_TOOLS on. An upload step
   // keeps its file here through the production keeper.
   files?: true;
+  // The owner's meal and workout log, with the production log tools; each entry is recorded as a health.log effect.
+  meals?: true;
 }> & ConversationSeed;
 // A file the owner sends with a step: text, or a zip of named text entries.
 export type SeedUpload = Readonly<{ filename: string; mime: string; text?: string; zip?: Readonly<Record<string, string>> }>;
@@ -377,7 +380,28 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     bodies: { put: async (body, bytes) => { blobs.set(body.blob_id, bytes.slice()); }, get: async (body) => blobs.get(body.blob_id)?.slice() ?? null, remove: async (body) => { blobs.delete(body.blob_id); } },
     now, newId: () => `f17e0000-f17e-4f17-8f17-${String(++fileIds).padStart(12, '0')}` }) : null;
   const keepUpload = store ? uploadKeeper(() => store, OWNER) : null;
+  const logged: HealthLogEntry[] = [];
+  let logIds = 0;
+  const mealBook: HealthLogBook = {
+    linked: () => true,
+    log: async (kind, payload, atLocal) => {
+      const at = atLocal ?? localIso(now(), TIMEZONE);
+      effect('health.log', { kind, payload, at });
+      const id = ++logIds;
+      logged.unshift({ id, kind, logged_at: new Date(now()).toISOString(), source: 'console', payload });
+      return { id, at };
+    },
+    recent: async (limit) => logged.slice(0, limit),
+    remove: async (id) => {
+      const index = logged.findIndex((entry) => entry.id === id);
+      if (index < 0) return null;
+      const [entry] = logged.splice(index, 1);
+      effect('health.remove', { id });
+      return { id, kind: entry!.kind, at: localIso(Date.parse(entry!.logged_at), TIMEZONE), payload: entry!.payload };
+    },
+  };
   const offered = [
+    ...(seed.meals ? healthLogHandlers(mealBook) : []),
     ...(store ? workspaceToolHandlers(() => store, { origin: async () => null, durable: false }, undefined, { fileTools: true }) : []),
     ...taskToolHandlers({ book: jobs, now, timezone: () => TIMEZONE, surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined }),
     ...googleHandlers(google, desk, clock), connectServiceHandler(google), ...reminderHandlers(reminderBook), ...standingOrderHandlers(standingOrders),
@@ -456,6 +480,8 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     weekAhead: () => capacityBudgetContext(now(), TIMEZONE, client, false, ''),
     // The seeded claims are embedded before the first turn, as a long-lived owner's would be.
     ready: Promise.all([mcpReady, chat.seed(conversation), semantic?.sync(), cardsReady]),
+    // The host fact an owner turn carries about what the owner connected, as the owner object builds it.
+    ...(seed.mcp ? { connectors: () => connectorsLine(mcp.list()) } : {}),
     health: async () => (sharing === 'shared' ? toContextHealthMaterial(sharedHealth(), clock) : null),
     shareHealth(shared: boolean) { sharing = shared ? 'shared' : 'withdrawn'; },
     // New mail reaching the inbox mid-trial.

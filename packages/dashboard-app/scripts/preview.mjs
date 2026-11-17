@@ -3,7 +3,7 @@ import { memoryPreview } from './memory-preview.mjs';
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 const dist = new URL('../dist/console/dashboard/', import.meta.url);
-const cases = ['recorded', 'empty', 'missing-summary', 'signed-out', 'unavailable', 'malformed', 'loading', 'admin', 'admin-refresh-failure','memory','memory-partial','memory-error'];
+const cases = ['recorded', 'empty', 'missing-summary', 'signed-out', 'unavailable', 'malformed', 'loading', 'admin', 'admin-refresh-failure','memory','memory-partial','memory-error','attachments-off'];
 const selected = process.argv.find((arg) => arg.startsWith('--case='))?.slice(7) ?? 'recorded';
 const port = Number(process.argv.find((arg) => arg.startsWith('--port='))?.slice(7) ?? 4178);
 if (!cases.includes(selected) || !Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Use --case=' + cases.join('|') + ' and --port=1024..65535');
@@ -73,6 +73,9 @@ const chatRows = selected === 'empty' ? [] : [
       { type: 'quick_replies', choices: [{ id: 'thanks', label: 'Thanks' }, { id: 'later', label: 'Remind me at 4' }], fallback_text: 'Thanks / Remind me at 4' }] },
 ];
 const chatRuns = new Map();
+// Synthetic chat uploads: kept in memory by id for the preview's life. `--case=attachments-off` answers 404, as a server without them.
+const uploads = new Map();
+const sentText = b => b.text || (b.attachments ? `[Owner sent a ${uploads.get(b.attachments[0]?.upload_id)?.kind ?? 'file'}.]` : '');
 const threads = selected === 'empty' ? [] : [
   { thread_id: 'thr_6a1f0c2e-9b4d-4c3a-8e7f-1a2b3c4d5e6f', title: 'Goa trip in December', revision: 1, title_revision: 2, state: 'active', created_at: Date.now() - 3 * 86400000, last_activity_at: Date.now() - 2 * 3600000,
     rows: [{ id: 'syn-g1', role: 'user', text: 'Find three beach hotels in North Goa under 6k a night for Dec 20–23', parts: [], channel: 'app', parent_id: null, created_at: Date.now() - 2 * 3600000 - 60000 },
@@ -90,6 +93,17 @@ const server = createServer((req, res) => {
   if(req.url?.startsWith('/console/dashboard/api/v1/memory?')) {
     const data=memoryPreview(new URL(req.url,'http://localhost').searchParams,selected==='memory-partial');
     res.writeHead(selected==='memory-error'?503:data.error?404:200,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(selected==='memory-error'?{error:'memory_unavailable'}:data));return;
+  }
+  if (req.url === '/console/dashboard/api/v1/chat/uploads' && req.method === 'POST') {
+    if (selected === 'attachments-off') return chatJson(res, 404, { error: 'unavailable' });
+    const kind = req.headers['x-waldo-upload-kind'];
+    if (kind !== 'photo' && kind !== 'file') return chatJson(res, 400, { error: 'invalid_kind' });
+    let size = 0; req.on('data', c => { size += c.length; }); req.on('end', () => setTimeout(() => {
+      if (size === 0) return chatJson(res, 400, { error: 'empty' });
+      if (size > 20 * 1024 * 1024) return chatJson(res, 413, { error: 'too_large' });
+      const id = `up_${crypto.randomUUID().replace(/-/g, '').slice(0, 22)}`; uploads.set(id, { kind });
+      chatJson(res, 201, { upload_id: id, kind, bytes: size, expires_at: Date.now() + 3600000 });
+    }, 1500)); return;
   }
   if (req.url?.startsWith('/console/dashboard/api/v1/chat/threads')) {
     const url = new URL(req.url, 'http://localhost'), [, , id, action, client, extra] = url.pathname.slice('/console/dashboard/api/v1/chat'.length).split('/');
@@ -110,8 +124,8 @@ const server = createServer((req, res) => {
     });
     if (action === 'messages' && !client && req.method === 'POST') return void body().then(b => {
       if (t.state === 'archived') return chatJson(res, 409, { error: 'thread_archived' });
-      const rid = `syn-t${Date.now()}`; t.rows.push({ id: rid, role: 'user', text: b.text, parts: [], channel: 'app', parent_id: null, created_at: Date.now() });
-      chatRuns.set(b.client_message_id, { id: rid, text: b.text, at: Date.now(), rows: t.rows, thread: t }); chatJson(res, 202, { accepted: true, message_id: rid, state: 'admitted' });
+      const rid = `syn-t${Date.now()}`; t.rows.push({ id: rid, role: 'user', text: sentText(b), parts: [], channel: 'app', parent_id: null, created_at: Date.now() });
+      chatRuns.set(b.client_message_id, { id: rid, text: sentText(b), at: Date.now(), rows: t.rows, thread: t }); chatJson(res, 202, { accepted: true, message_id: rid, state: 'admitted' });
     });
     if (action === 'messages' && client) { const run = chatRuns.get(client); if (run && extra === 'cancel') run.cancelled = true; const receipt = chatReceipt(client); return chatJson(res, receipt ? 200 : 404, receipt ?? { error: 'message_not_found' }); }
     return chatJson(res, 404, { error: 'not_found' });
@@ -120,7 +134,7 @@ const server = createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost'), rest = url.pathname.slice('/console/dashboard/api/v1/chat'.length);
     if (selected === 'signed-out') return chatJson(res, 401, { error: 'sign_in_required' });
     if (rest === '' && req.method === 'GET') { const limit = Number(url.searchParams.get('limit') ?? 30); return chatJson(res, 200, { messages: [...chatRows].reverse().slice(0, limit), next_cursor: null }); }
-    if (rest === '/messages' && req.method === 'POST') { let body = ''; req.on('data', c => body += c); req.on('end', () => { const { client_message_id: client, text } = JSON.parse(body); const id = `syn-${chatRows.length}`;
+    if (rest === '/messages' && req.method === 'POST') { let body = ''; req.on('data', c => body += c); req.on('end', () => { const b = JSON.parse(body), client = b.client_message_id, text = sentText(b); const id = `syn-${chatRows.length}`;
       chatRows.push({ id, role: 'user', text, parts: [], channel: 'app', parent_id: null, created_at: Date.now() }); chatRuns.set(client, { id, text, at: Date.now() }); chatJson(res, 202, { accepted: true, message_id: id, state: 'admitted' }); }); return; }
     const [, , client, action] = rest.split('/');
     if (action === 'cancel') { const run = chatRuns.get(client); if (run) run.cancelled = true; }

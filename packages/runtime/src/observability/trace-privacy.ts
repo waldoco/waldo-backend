@@ -35,7 +35,7 @@ const SAFE_DETAIL_HOPS = new Set([
 // These receipts are strictly enum/count-only, even if a caller supplies a free-form
 // code or detail. Never promote raw claim text or provider payload into a safe hop.
 const MEMORY_EVIDENCE = /^(?:admitted:supported|held:(?:same_day|too_few_claims|untrusted_or_missing)):owner_observation_pattern:1$/;
-const HEALTH_READ = /^(?:present|absent|read_failed)$/;
+const HEALTH_READ = /^(?:present|absent|partial|read_failed)$/;
 // Semantic recall's details are counts and its leg name (semantic-recall.ts), checked here rather than trusted.
 const SEMANTIC_COUNTS = /^(?:sweep texts=\d{1,9}|query rows=\d{1,9} scan_ms=\d{1,9}|embedded=\d{1,9} withheld=\d{1,9}|sweep|query)$/;
 const SEMANTIC_HOPS = new Set(['memory_embedding', 'memory_embed']);
@@ -100,3 +100,6 @@ const gateWithoutCapture = (entry: TurnLogEntry): TurnLogEntry => {
 // says, so a misconfigured prod deploy fails safe (types/counts only), never open.
 export const resolveCaptureText = (env: Readonly<{ LANGFUSE_CAPTURE_TEXT?: string; WALDO_ENVIRONMENT?: string }>): boolean =>
   env.LANGFUSE_CAPTURE_TEXT === 'true' && (env.WALDO_ENVIRONMENT ?? 'development') !== 'production';
+
+// A failure as its class only, for logs, traces and replies: its text can carry provider or internal detail.
+export const errorClass = (error: unknown): string => error instanceof Error ? error.name : 'unknown';

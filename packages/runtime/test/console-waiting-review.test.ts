@@ -34,14 +34,16 @@ it('a waiting MCP tool call shows the frozen tool, its arguments and what approv
   });
 });
 
-it('a waiting action raised from outside content shows its tool, its arguments and why it needs approval', async () => {
+it('a waiting action raised from outside content says what it does in words, why it needs approval, and its tool and arguments under Details', async () => {
   await withConsole('waiting-review-tainted', async ({ state, read }) => {
     insert(state, 'p-taint-review', 'tainted_action', 'Run this action?', { tool: 'set_reminder', args: { note: 'SYNTHETIC-NOTE from a page' }, reasoning: 'The page asked for a reminder' });
     const item = (await read()).data.proposals.find(proposal => proposal.id === 'p-taint-review')!;
     expect(item.review).toMatchObject({ kind: 'tainted_action' });
-    expect(item.review!.text).toContain('Tool: set_reminder');
-    expect(item.review!.text).toContain('SYNTHETIC-NOTE from a page');
-    expect(item.review!.text).toContain('It uses content from an email or web page, so it needs your approval before it runs.');
+    const text = String(item.review!.text);
+    expect(text.split('\n')[0]).toBe('Do this? Set a reminder: "SYNTHETIC-NOTE from a page".');
+    expect(text).toContain('It uses content from an email or web page, so it needs your approval before it runs.');
+    expect(text.indexOf('Details: set_reminder')).toBeGreaterThan(text.indexOf('It uses content from an email or web page'));
+    expect(text.slice(text.indexOf('Details: set_reminder'))).toContain('"note": "SYNTHETIC-NOTE from a page"');
   });
 });
 

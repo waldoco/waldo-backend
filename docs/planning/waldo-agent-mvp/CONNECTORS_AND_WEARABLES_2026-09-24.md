@@ -4,7 +4,7 @@ Recorded 24 September 2026 from owner rulings relayed that night. Planning input
 
 ## WHOOP
 
-**Status: last on the wearables roadmap, blocked on terms review of the AI/ML clause.**
+**Status: superseded on the terms question.** The owner ruled on 7 November 2026 that each user's own consent when connecting WHOOP is the express authorization its terms require; the current rules are in `docs/app/WHOOP_AND_OURA_2026-10-21.md`. The text below is the September plan.
 
 WHOOP's new terms take effect on 6 October 2026. They ban using the API or WHOOP data to create, develop, test, train, fine-tune or improve AI models. We don't know yet whether putting one user's WHOOP data into an LLM prompt for that user counts. WHOOP needs to confirm in writing before anything beyond the prototype.
 

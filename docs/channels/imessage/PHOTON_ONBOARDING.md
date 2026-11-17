@@ -54,7 +54,8 @@ is shared by every Worker that names it.
    With it on, a photo or document an owner sends is fetched from Photon for that turn only: a project token from
    `spectrum.photon.codes`, then the message and the file from `imessage.spectrum.photon.codes`, no other host. Waldo
    reads a file only when Photon shows it on a message that owner sent. With it off, or when a fetch fails, the owner
-   gets one reply saying the file was not opened. Voice notes are always refused. The host must forward each message's
+   gets one reply saying the file was not opened. A voice note sent on its own is transcribed when `IMESSAGE_VOICE` is
+   `"1"` (and refused with one reply otherwise). The host must forward each message's
    `photonAttachments` (see `HOST_CONNECTOR.md`).
 
 Photon's Dashboard API takes only user OAuth tokens. Refresh tokens rotate on every use and last 30 days, so one

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, appNodeSourceV13Schema, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_PROACTIVE_SURFACE_RECEIPTS_V1, APP_CONTROLS_SCHEDULE_REVISION, APP_SCHEDULE_RECEIPTS_V1, appClock12V1, appScheduleTimeReceiptV1, APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1, APP_AGENT_MAIL_RECEIPTS_V1, APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema, APP_WELCOME_STAGES_V1, APP_WELCOME_STAGES_V5, appWelcomeBuildV1Schema } from './controls';
+import { appContractRevision } from './core';
+import { APP_ACT_WITHOUT_ASKING_RECEIPTS_V1, APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1, APP_ACT_WITHOUT_ASKING_CONTRACT, APP_ACT_WITHOUT_ASKING_CONTRACT_REVISION, declaresActWithoutAsking, APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, appNodeSourceV13Schema, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_PROACTIVE_SURFACE_RECEIPTS_V1, APP_CONTROLS_SCHEDULE_REVISION, APP_CONTROLS_QUESTS_REVISION, APP_QUESTS_MAX_V1, APP_SCHEDULE_RECEIPTS_V1, appClock12V1, appScheduleTimeReceiptV1, APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1, APP_AGENT_MAIL_RECEIPTS_V1, APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema, APP_WELCOME_STAGES_V1, APP_WELCOME_STAGES_V5, appWelcomeBuildV1Schema } from './controls';
 
 const revision = 'f'.repeat(64);
 const connections = {
@@ -775,5 +776,68 @@ describe('schedule.set, controls revision 16', () => {
     const messages = todays.map(today => appScheduleTimeReceiptV1({ card: 'card:brief', time: '07:10', today, noLaterThan: false }));
     for (const receipt of messages) { expect(appControlReceiptV1Schema.safeParse(receipt).success).toBe(true); expect(receipt.message).toContain('7:10am'); }
     expect(new Set(messages.map(receipt => receipt.message)).size).toBe(todays.length);
+  });
+});
+
+describe('quests on the day view, controls revision 18', () => {
+  const day = (extra: object) => ({
+    version: 1, state: 'available', revision, view: 'day',
+    data: { timezone: 'Europe/London', date: '2026-11-06', cards: [], proactivity: { quiet_start: null, quiet_end: null, volume: 'normal' }, schedules: { daily_brief: true, followups: true, event_briefs: true, nightly: true, heartbeat: true }, ...extra },
+  });
+  const quest = (extra: object = {}) => ({
+    id: 'quest:a1b2c3', title: 'Sleep by 11 on weeknights', state: 'active', plan: 'Screens off at 10:30', usual: 'Usually past midnight', target: null,
+    progress: null, deadline: null, check_in_days: 7, next_check_in: '2026-11-13', ...extra,
+  });
+  it('is revision 18', () => expect(APP_CONTROLS_QUESTS_REVISION).toBe(18));
+  it('lists the owner\'s quests, and stays optional for a build below 17', () => {
+    for (const valid of [{}, { quests: [] }, { quests: [quest(), quest({ id: 'quest:z9', state: 'ambient', check_in_days: null, next_check_in: null }), quest({ id: 'quest:y8', state: 'completed', next_check_in: null, deadline: '2026-12-01' })] }])
+      expect(appControlProjectionV1Schema.safeParse(day(valid)).success).toBe(true);
+    for (const invalid of [quest({ id: 'goal-1' }), quest({ state: 'paused' }), quest({ state: 'ambient' }), quest({ check_in_days: null }), quest({ check_in_days: 29, next_check_in: null }),
+      quest({ title: '' }), quest({ deadline: '13 Nov' }), quest({ plan: undefined }), quest({ hrv_ms: 52 })])
+      expect(appControlProjectionV1Schema.safeParse(day({ quests: [invalid] })).success).toBe(false);
+    expect(appControlProjectionV1Schema.safeParse(day({ quests: Array.from({ length: APP_QUESTS_MAX_V1 + 1 }, (_, n) => quest({ id: `quest:q${n}` })) })).success).toBe(false);
+  });
+});
+
+describe('"Just do it" on the day view, its own contract pair act_without_asking=1', () => {
+  const set = (extra: object = {}) => ({ view: 'day', action: 'act_without_asking.set', value: 'off', revision, request_id: 'just-do-it-0001', ...extra });
+  const day = (extra: object) => ({
+    version: 1, state: 'available', revision, view: 'day',
+    data: { timezone: 'Europe/London', date: '2026-11-14', cards: [], proactivity: { quiet_start: null, quiet_end: null, volume: 'normal' }, schedules: { daily_brief: true, followups: true, event_briefs: true, nightly: true, heartbeat: true }, ...extra },
+  });
+  it('is its own pair, act_without_asking=1, which the header takes beside controls=13', () => {
+    expect([APP_ACT_WITHOUT_ASKING_CONTRACT, APP_ACT_WITHOUT_ASKING_CONTRACT_REVISION]).toEqual(['act_without_asking', 1]);
+    const header = `approvals=5,health=5,chat=6,onboarding=2,controls=13,${APP_ACT_WITHOUT_ASKING_CONTRACT}=${APP_ACT_WITHOUT_ASKING_CONTRACT_REVISION}`;
+    expect(declaresActWithoutAsking(header)).toBe(true);
+    expect(appContractRevision(header, 'controls')).toBe(13);
+    // Left out, or a header that does not parse, is not named: a pair left out would otherwise read revision 1.
+    for (const other of ['approvals=5,controls=13', 'controls=23', 'act_without_asking=0', 'act_without_asking=1,act_without_asking=1', '', null, undefined]) expect(declaresActWithoutAsking(other)).toBe(false);
+    expect(declaresActWithoutAsking('act_without_asking=2')).toBe(true);
+  });
+  it('turns it on or off from the day view, carrying on or off and nothing else', () => {
+    for (const value of ['on', 'off']) expect(appControlActionV1Schema.safeParse(set({ value })).success).toBe(true);
+    for (const bad of [set({ value: undefined }), set({ value: 'ON' }), set({ value: 'true' }), set({ value: '' }), set({ view: 'connections' }), set({ view: 'account' }),
+      set({ id: 'act_without_asking' }), set({ volume: 'low' }), set({ quiet_start: '22:00' }), set({ confirmation: 'DELETE' }), set({ code: '123456' }), set({ notice: '1' }), set({ account: 'signin' })])
+      expect(appControlActionV1Schema.safeParse(bad).success).toBe(false);
+  });
+  it('the day view says the owner\'s choice and whether this Waldo acts on it, and stays optional for a build that does not name the pair', () => {
+    for (const valid of [{}, { act_without_asking: { on: true, available: true } }, { act_without_asking: { on: false, available: true } }, { act_without_asking: { on: true, available: false } }])
+      expect(appControlProjectionV1Schema.safeParse(day(valid)).success).toBe(true);
+    for (const invalid of [{ act_without_asking: { on: true } }, { act_without_asking: { available: true } }, { act_without_asking: true }, { act_without_asking: { on: 'on', available: true } },
+      { act_without_asking: { on: true, available: true, still_asks: [] } }]) expect(appControlProjectionV1Schema.safeParse(day(invalid)).success).toBe(false);
+  });
+  it('has one fixed receipt per outcome, each one the app can parse, with distinct messages', () => {
+    for (const receipt of Object.values(APP_ACT_WITHOUT_ASKING_RECEIPTS_V1)) expect(appControlReceiptV1Schema.safeParse(receipt).success).toBe(true);
+    const messages = Object.values(APP_ACT_WITHOUT_ASKING_RECEIPTS_V1).map(receipt => receipt.message);
+    expect(new Set(messages).size).toBe(messages.length);
+    // Where this Waldo does not act on it, the receipt says so instead of reading as on.
+    expect(APP_ACT_WITHOUT_ASKING_RECEIPTS_V1.inactive_on.message).toContain('not active');
+    expect(APP_ACT_WITHOUT_ASKING_RECEIPTS_V1.inactive_off.message).toContain('not active');
+  });
+  it('names what Waldo still asks about in one line', () => {
+    expect(APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1).not.toMatch(/\n/);
+    for (const kept of ['paying', 'password', 'deleting', 'web form', 'email or message']) expect(APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1).toContain(kept);
+    // Lasting access and tools on a server added by address run with the setting on, so the line does not name them.
+    for (const gone of ['lasting access', 'by its address']) expect(APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1).not.toContain(gone);
   });
 });

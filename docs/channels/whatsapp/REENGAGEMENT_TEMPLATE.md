@@ -62,8 +62,7 @@ described on the same categorization page:
 3. **Wait for review**, which can take up to 24 hours.
    *Check:* status APPROVED, category UTILITY.
    *Falsifier:* category MARKETING. Do not configure it.
-4. **Configure.** In `packages/runtime/wrangler.jsonc`, staging `vars` (line 90, where both are empty
-   today), set:
+4. **Configure.** In `packages/runtime/wrangler.jsonc`, staging `vars` (set there since 6 Nov), set:
    - `WHATSAPP_REENGAGE_TEMPLATE` to `waldo_update_ready`;
    - `WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE` to `en`.
 
@@ -100,21 +99,19 @@ described on the same categorization page:
 
 The reply template above says the owner asked for something ("a reply waiting ... on something you asked about"). That is
 untrue for a Brief, a clash card or any other message Waldo starts, so the runtime never uses it for one. Such a message
-(a day card, an update, meeting prep, a pause notice, a mail follow-up, a health note, or the WhatsApp copy of an app
-message) knocks with its own template, configured separately. With none configured it sends no template at all and the
+(a day card, an update, meeting prep, a pause notice, a mail follow-up, a health note, a check-back on an open loop, an
+event notice, or the WhatsApp copy of an app message) knocks with its own template, configured separately. With none configured it sends no template at all and the
 message keeps waiting until the owner writes (or until its own expiry, a day for a copy). A reply may fall back to this
 template when the reply template is unset, since its words are true of any message.
 
 - **Name:** `waldo_proactive_update` (any name matching `^[a-z0-9_]{1,512}$`)
-- **Category:** UTILITY, **language:** `en`
-- **Body, no variables:** `Waldo has an update for you. Reply here to see it.`
-  Alternatives if Meta recategorizes it as marketing: `Waldo has something to tell you about your day. Reply here to read it.`
-  or `You have an update from Waldo. Send any message here to see it.`
-- **No header, footer, media or buttons.**
-- **Risk:** the same as the reply template. A body with no order or account detail can be judged marketing. Accept it only
-  if it reads back APPROVED with category UTILITY.
+- **Category:** submitted as UTILITY; Meta approved it as MARKETING (`previous_category` UTILITY). **Language:** `en`
+- **Body, no variables:** `Waldo has an update about your day or something you asked it to keep track of. Reply here to see it.`
+- **Footer:** `Unlink WhatsApp any time from your Waldo console.` No header, media or buttons.
+- **Marketing category, accepted by the owner on 8 Nov 2026:** it costs more per message than utility, and Meta's
+  per-user marketing limits can refuse or not deliver a knock. The held message still waits for the owner's next message.
 
-Once approved, set in `packages/runtime/wrangler.jsonc`, staging `vars` (both empty today):
+Once approved, set in `packages/runtime/wrangler.jsonc`, staging `vars`:
 
 - `WHATSAPP_PROACTIVE_TEMPLATE` to `waldo_proactive_update`;
 - `WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE` to `en`.
@@ -125,7 +122,7 @@ proactive message without this configuration is `{"hop":"whatsapp_window","ok":f
 ## Staging status
 
 `waldo_update_ready` (`en`) reads back APPROVED and UTILITY with a static body and footer, and staging's `vars` carry it.
-`WHATSAPP_PROACTIVE_TEMPLATE` stays empty until `waldo_proactive_update` is approved.
+`waldo_proactive_update` (`en`) reads back APPROVED and MARKETING, and staging's `vars` carry it.
 
 ## Opt-in comes first
 

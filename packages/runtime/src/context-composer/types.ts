@@ -1,10 +1,13 @@
 import type {
   CanaryTokens,
-  DerivedHealthDestinationView,
+  FormHealthView,
   InvocationInputReference,
   NarrativeContext,
+  PartialHealthNarrative,
+  PartialHealthView,
   RecallKey,
   RecallResult,
+  RecoveryHealthView,
   RuntimeContextCheckpoint,
   RuntimeContextFailureReason,
   RuntimeContextSource,
@@ -72,11 +75,10 @@ export type LocalOwnerBinding = Readonly<{
   source: ContextSource;
 }>;
 
-export type ContextHealthMaterial = Readonly<{
-  view: DerivedHealthDestinationView;
-  narrative: NarrativeContext;
-  source: ContextSource;
-}>;
+// A Form or Recovery view rides with the zone narrative; a partial view, which carries neither zone, with its own.
+export type ZoneHealthMaterial = Readonly<{ view: FormHealthView | RecoveryHealthView; narrative: NarrativeContext; source: ContextSource }>;
+export type PartialHealthMaterial = Readonly<{ view: PartialHealthView; narrative: PartialHealthNarrative; source: ContextSource }>;
+export type ContextHealthMaterial = ZoneHealthMaterial | PartialHealthMaterial;
 
 export type RuntimeContextMaterials = Readonly<{
   principal_ref: string;
@@ -92,6 +94,9 @@ export type RuntimeContextMaterials = Readonly<{
   workspace: readonly ContextFragment[];
   // Recent tool outputs, staged as tool_result sources. Each fragment carries its own taint.
   tool_outputs: readonly ContextFragment[];
+  // Count of tool_outputs fragments omitted by the fragment budget (0 = nothing omitted).
+  // Loaders always set 0; prepareMaterials computes the actual count during preparation.
+  tool_outputs_omitted: number;
 }>;
 
 export type StagedInputResolver = Readonly<{

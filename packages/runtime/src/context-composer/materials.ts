@@ -1,9 +1,11 @@
 import {
   derivedHealthDestinationViewSchema,
   narrativeContextSchema,
+  partialHealthNarrativeSchema,
   type CanaryTokens,
   type DerivedHealthDestinationView,
   type NarrativeContext,
+  type PartialHealthNarrative,
   type RuntimeContextSourceKind,
   type SanitiseFailureReason,
   type TrustedInvocationEnvelope,
@@ -136,6 +138,9 @@ export async function loadRuntimeContextMaterials(
     'health',
     'workspace',
     'tool_outputs',
+    // Admitted so loaders satisfy the type; the adapter-supplied value is never trusted -
+    // prepareMaterials recomputes the omission count from the actual array below.
+    'tool_outputs_omitted',
   ], 'materials_unavailable');
   if (
     materials.principal_ref !== invocation.verified_authority.principal_ref ||
@@ -211,10 +216,15 @@ export async function loadRuntimeContextMaterials(
     return prepared;
   });
   const toolOutputValues = snapshotArray(materials.tool_outputs);
-  if (toolOutputValues === null || toolOutputValues.length > MAX_TOOL_OUTPUT_FRAGMENTS) {
+  if (toolOutputValues === null) {
     throw new FailClosed('materials_unavailable');
   }
-  const toolOutputs = toolOutputValues.map((fragment) => {
+  // Degrade per item (S1): an over-budget tool_outputs array used to fail the whole compose.
+  // Keep the first MAX_TOOL_OUTPUT_FRAGMENTS and expose the omission count so the prompt can
+  // state it truthfully instead of the turn failing all-or-nothing.
+  const toolOutputsKept = toolOutputValues.slice(0, MAX_TOOL_OUTPUT_FRAGMENTS);
+  const toolOutputsOmitted = toolOutputValues.length - toolOutputsKept.length;
+  const toolOutputs = toolOutputsKept.map((fragment) => {
     // Tool outputs may be untainted (internal tools) or external (fetched data); the
     // fragment declares its own taint, so only the kind and scope are constrained.
     const prepared = prepareMandatoryFragment(
@@ -244,6 +254,7 @@ export async function loadRuntimeContextMaterials(
     health,
     workspace: Object.freeze([...workspace].sort(compareFragments)),
     tool_outputs: Object.freeze([...toolOutputs].sort(compareFragments)),
+    tool_outputs_omitted: toolOutputsOmitted,
   });
 }
 
@@ -289,10 +300,13 @@ export async function loadLocalOwnerBinding(
   });
 }
 
+// A partial view carries no zone, and its narrative is parsed with the schema that has none, so a zone cannot ride beside it.
 function viewMatchesNarrative(
   view: DerivedHealthDestinationView,
-  narrative: NarrativeContext,
+  narrative: NarrativeContext | PartialHealthNarrative,
 ): boolean {
+  if ('availability' in view) return !('recovery_descriptor' in narrative);
+  if (!('recovery_descriptor' in narrative)) return false;
   return 'form_zone' in view
     ? narrative.zone === view.form_zone
     : narrative.recovery_descriptor === view.recovery_zone;
@@ -307,7 +321,7 @@ export function prepareHealth(
 ): ContextHealthMaterial | null {
   if (health === null) return null;
   const view = derivedHealthDestinationViewSchema.safeParse(health.view);
-  const narrative = narrativeContextSchema.safeParse(health.narrative);
+  const narrative = (view.success && 'availability' in view.data ? partialHealthNarrativeSchema : narrativeContextSchema).safeParse(health.narrative);
   if (
     !view.success ||
     !narrative.success ||
@@ -342,7 +356,8 @@ export function prepareHealth(
   if (!preparedView.ok) throw new FailClosed(`sanitisation_failed:${preparedView.reason}:narrative`);
   const preparedNarrative = {
     ...narrative.data,
-    day_summary: preparePromptSourceText(narrative.data.day_summary, null, canaries, 'narrative'),
+    // A partial view's summary is empty on a day with no drivers or tags; empty text carries nothing to sanitise.
+    day_summary: narrative.data.day_summary.length === 0 ? '' : preparePromptSourceText(narrative.data.day_summary, null, canaries, 'narrative'),
     active_goals: narrative.data.active_goals.map((item) => preparePromptSourceText(item, null, canaries, 'narrative')),
     upcoming_high_stakes: narrative.data.upcoming_high_stakes.map((item) =>
       preparePromptSourceText(item, null, canaries, 'narrative'),
@@ -354,9 +369,9 @@ export function prepareHealth(
       ...preparedNarrative,
       active_goals: Object.freeze([...preparedNarrative.active_goals]),
       upcoming_high_stakes: Object.freeze([...preparedNarrative.upcoming_high_stakes]),
-    }) as NarrativeContext,
+    }),
     source: health.source,
-  });
+  }) as ContextHealthMaterial;
 }
 
 function prepareMandatoryFragment(

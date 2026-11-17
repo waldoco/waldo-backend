@@ -135,7 +135,7 @@ describe('an approval card the surface cannot send now', () => {
 
       f.tick(HOUR); f.writes();
       await f.desk.ownerWrote();
-      expect(f.attempts).toEqual([expect.stringContaining('Run this action?')]);
+      expect(f.attempts).toEqual([expect.stringMatching(/^Do this\? /)]);
       expect(f.attempts[0]).toContain('approved in the Waldo app');
       expect(f.shown(id).map(row => [row.surface, row.approvable])).toEqual([['app', 1], ['whatsapp', 0]]);
 

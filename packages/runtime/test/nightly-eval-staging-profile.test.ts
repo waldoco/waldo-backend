@@ -57,6 +57,9 @@ describe('the staging profile', () => {
     expect(stagingProfile({ ...STAGING, WALDO_TOOL_LOADER: 'off', WALDO_TOOL_SEARCH: 'off' }).toolLoader).toBeUndefined();
     expect(stagingProfile({ ...STAGING, WALDO_FORGET_BARRIER: 'off' }).forgetBarrier).toBe('reads');
     expect(stagingProfile({ ...STAGING, WALDO_COMPACTION: 'off' }).compaction.enabled).toBe(false);
+    // The history budget and the stepped target are the deploy's own, read as the Worker reads them.
+    const tuned = stagingProfile({ ...STAGING, WALDO_CALL_CEILINGS: '1', WALDO_HISTORY_BUDGET_TOKENS: '14000', WALDO_STEPPED_WINDOW_TARGET: '0.7' }).compaction;
+    expect([tuned.budgetTokens, tuned.steppedTarget]).toEqual([14_000, 0.7]);
     expect(stagingProfile({ ...STAGING, MEMORY_SELECTION: '1' }).memorySelection).toBe(true);
     expect(stagingProfile({ ...STAGING, MEMORY_SELECTION: '0' }).memorySelection).toBe(false);
   });

@@ -304,6 +304,17 @@ describe('on the iMessage outbox, the card must still be Waldo\'s latest message
     });
   });
 
+  it('a /stop\'s answer frozen after the card does not write past it: "1" still approves it', async () => {
+    await owner('imsg-latest-stop-answer', async state => {
+      const f = thread(state);
+      let id = '';
+      await f.turn(inbound(), async () => { id = await f.desk.propose(hold('Focus')); });
+      f.outbox.freeze(inbound(), 'Stopped.', 'stop');
+      expect(await f.number(inbound(), '1')).toMatchObject({ toast: 'Done' });
+      expect(f.status(id)).toBe('done');
+    });
+  });
+
   it('a tapback the card\'s own turn sends does not write past it: "1" still approves it', async () => {
     await owner('imsg-latest-own-tapback', async state => {
       const f = thread(state);

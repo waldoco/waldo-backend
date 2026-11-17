@@ -57,7 +57,7 @@ export const FINDING_ACTIONS: readonly FindingAction[] = ['none', 'nudge', 'park
 // other people's words, so none of its own text reaches the worker's brief.
 export const NUDGE_LINES: Readonly<Record<NudgeCode, string>> = {
   looping: `[Waldo checked this task's progress: the recent steps repeat earlier ones without getting closer to the goal. Try a different approach, or if what you have is enough, call ${FINISH_TASK} with it.]`,
-  drifting: `[Waldo checked this task's progress: the recent steps have moved away from the goal above. Go back to it, or call ${FINISH_TASK} with what you have.]`,
+  drifting: `[Waldo checked this task's progress: the recent steps have moved away from the goal above and any changes Waldo made to it. Go back to them, or call ${FINISH_TASK} with what you have.]`,
 };
 
 // No CHECK lists on these tables: an "if not exists" create leaves an existing table's CHECK as it was, so a code added later
@@ -184,7 +184,7 @@ const cut = (text: string, max: number) => (text.length > max ? `${text.slice(0,
 // worker's tool results, so they go in fenced as data.
 export const watchdogJudgeText = (row: JobRow, seen: Seen | null, earlier: readonly Finding[], now: number): string => {
   const brief = taskBrief(row);
-  const turns = jobCheckpoint(row).turns;
+  const { turns, steers } = jobCheckpoint(row);
   const shown = turns.slice(-STEPS_SHOWN);
   const steps = shown.map((turn, index) => `${turns.length - shown.length + index + 1}. ${turn.call.name}(${cut(turn.call.arguments, ARGS_SHOWN)}) -> ${cut(turn.output, OUTPUT_SHOWN)}`).join('\n');
   const verdicts = earlier.filter(finding => (VERDICTS as readonly string[]).includes(finding.code)).map(finding => `${finding.code} (${finding.action}) at round ${finding.seq ?? 0}`);
@@ -192,6 +192,8 @@ export const watchdogJudgeText = (row: JobRow, seen: Seen | null, earlier: reado
   return [
     `Task: ${brief.title}`,
     `Goal:\n${brief.goal}`,
+    // A change the owner's turn made after the task started wins over the goal, so a worker following it is not drifting.
+    ...(steers?.length ? [`Changes made after it started, on the owner's word, which win over the goal where they differ:\n${steers.map(steer => `- ${cut(steer.text, CONTEXT_SHOWN)}`).join('\n')}`] : []),
     `A good result:\n${brief.done_when}`,
     `${brief.machine ? 'Data the job was started on' : 'Context from the owner\'s conversation'}:\n${cut(brief.context, CONTEXT_SHOWN) || '(none)'}`,
     `Timings: started ${minutes(now - row.created_at)} min ago, ${minutes(row.deadline_at - now)} min before its deadline; ${row.checkpoint_seq} rounds over ${row.attempt} attempt(s); lost attempts ${row.crashes}; waits for a model ${row.deferrals}.`,

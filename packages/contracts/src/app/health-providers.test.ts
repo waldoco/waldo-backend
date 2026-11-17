@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { healthConsentListAtRevisionV1, healthConsentGrantV1Schema, healthPurposeV1Schema, isHealthProviderSourceV1 } from './health-ingest';
+import { HEALTH_PROVIDER_CONSENT_VERSION_V1, healthConsentListAtRevisionV1, healthConsentGrantV1Schema, healthPurposeV1Schema, isHealthProviderSourceV1 } from './health-ingest';
 import {
   appHealthProviderRoutesV1, healthProviderConnectResultV1Schema, healthProviderConnectV1Schema, healthProviderDisconnectResultV1Schema,
   healthProviderDisconnectV1Schema, healthProviderErrorV1Schema, healthProviderListV1Schema, healthProviderStatusV1Schema,
@@ -54,7 +54,7 @@ describe('health providers: connect and disconnect', () => {
 });
 
 describe('health providers: consent at revision 2', () => {
-  const grant = { request_id: 'health-consent-w01', source: 'whoop', purpose: 'storage_compute', version: 3, expected_epoch: 0, age_attested_18_plus: true };
+  const grant = { request_id: 'health-consent-w01', source: 'whoop', purpose: 'storage_compute', version: HEALTH_PROVIDER_CONSENT_VERSION_V1, expected_epoch: 0, age_attested_18_plus: true };
 
   it('takes the provider\'s express authorization as the two purposes every source has, and no third', () => {
     expect(healthPurposeV1Schema.options).toEqual(['storage_compute', 'model_processing']);

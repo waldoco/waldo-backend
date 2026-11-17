@@ -14,6 +14,8 @@ export type DayRecord = Base<'day', {
   proactive_surface?: ProactiveSurface;
   // Whether notes Waldo keeps on its own include health. Absent from a Worker that does not say.
   health_memory?: boolean;
+  // "Just do it": the owner's choice, and whether this Waldo acts on it. Absent from a Worker that does not say.
+  act_without_asking?: { on: boolean; available: boolean };
   // What schedule.set changes: each schedule's switch, and the Brief and Close times. Absent from a Worker that does not say.
   schedule_controls?: ScheduleControl[];
 }>;
@@ -80,7 +82,7 @@ export type AgentMailRecord = Base<'agent_mail', {
 }>;
 type Records = { day: DayRecord; connections: ConnectionsRecord; waiting: WaitingRecord; activity: ActivityRecord; profile: ProfileRecord; setup: SetupRecord; usage: UsageRecord; files: FilesRecord; imessage: IMessageRecord; devices: DevicesRecord; phone: PhoneRecord; agent_mail: AgentMailRecord };
 export type ControlRecord = Records[ControlsView];
-export type ControlAction = 'card.retry' | 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'spot.pin' | 'spot.unpin' | 'spot.edit' | 'spot.area' | 'node.forget' | 'node.confirm' | 'node.correct' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'schedule.set' | 'health_memory.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
+export type ControlAction = 'card.retry' | 'spot.confirm' | 'spot.dismiss' | 'spot.forget' | 'spot.pin' | 'spot.unpin' | 'spot.edit' | 'spot.area' | 'node.forget' | 'node.confirm' | 'node.correct' | 'card.today' | 'card.pin' | 'card.unpin' | 'timezone.set' | 'proactivity.set' | 'proactive_surface.set' | 'schedule.set' | 'health_memory.set' | 'act_without_asking.set' | 'google.connect' | 'google.disconnect' | 'telegram.link' | 'telegram.unlink' | 'whatsapp.link' | 'whatsapp.unlink' | 'session.signout' | 'session.signout.all' | 'approval.approve' | 'approval.send' | 'approval.edit' | 'approval.skip' | 'approval.undo' | 'file.remove' | 'mcp.connect' | 'mcp.disconnect' | 'mcp.runs'
   | (typeof IMESSAGE_TOP)[number] | (typeof IMESSAGE_ROW)[number] | 'device.pair' | (typeof DEVICE_ROW)[number] | (typeof PHONE_ACTIONS)[number] | (typeof AGENT_MAIL_ACTIONS)[number];
 export type ControlFields = { id?: string; value?: string; quiet_start?: string; quiet_end?: string; volume?: string; subject?: string; chat?: string; phone?: string; query_kind?: string; body?: string; severity?: string; code?: string; notice?: string };
 export type ActionReceipt = { state: 'recorded' | 'incomplete' | 'rejected' | 'unconfirmed'; message: string; navigation?: string; signed_out?: boolean };
@@ -129,6 +131,8 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
     const surface = data.proactive_surface;
     if (surface !== undefined && (!obj(surface) || !['app', 'whatsapp', 'both', 'app_imessage'].includes(String(surface.value)) || ![surface.app_linked, surface.whatsapp_linked, surface.telegram_linked].every(value => typeof value === 'boolean') || (surface.imessage_linked !== undefined && typeof surface.imessage_linked !== 'boolean'))) throw shapeError();
     if (data.health_memory !== undefined && typeof data.health_memory !== 'boolean') throw shapeError();
+    const choice = data.act_without_asking;
+    if (choice !== undefined && (!obj(choice) || typeof choice.on !== 'boolean' || typeof choice.available !== 'boolean')) throw shapeError();
     const schedules = data.schedule_controls;
     if (schedules !== undefined && (!Array.isArray(schedules) || !schedules.every(row => obj(row) && SCHEDULE_IDS.includes(row.id as ScheduleControl['id']) && typeof row.on === 'boolean' && ['on_off', 'time'].includes(String(row.accepts)) && optionalClock(row.time) && typeof row.no_later_than === 'boolean'))) throw shapeError();
     return { ...base, view: 'day', data: {
@@ -139,6 +143,7 @@ export function readControls<V extends ControlsView>(value: unknown, expected: V
       proactivity: { quiet_start: data.proactivity.quiet_start, quiet_end: data.proactivity.quiet_end, volume: data.proactivity.volume },
       ...(obj(surface) ? { proactive_surface: { value: surface.value, app_linked: surface.app_linked, whatsapp_linked: surface.whatsapp_linked, ...(surface.imessage_linked === undefined ? {} : { imessage_linked: surface.imessage_linked }), telegram_linked: surface.telegram_linked } } : {}),
       ...(typeof data.health_memory === 'boolean' ? { health_memory: data.health_memory } : {}),
+      ...(obj(choice) ? { act_without_asking: { on: choice.on as boolean, available: choice.available as boolean } } : {}),
       ...(Array.isArray(schedules) ? { schedule_controls: schedules.map(row => ({ id: row.id, on: row.on, accepts: row.accepts, time: row.time, no_later_than: row.no_later_than })) } : {}),
     } } as Records[V];
   }

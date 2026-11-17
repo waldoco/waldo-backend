@@ -1,5 +1,5 @@
 import { healthIngestReceiptV1Schema, healthSampleV1Schema, type HealthSampleV1 } from '../../../../contracts/src/app/health-ingest';
-import { sleepJustEnded } from '../wake-notice';
+import { sleepJustEnded, workoutJustEnded } from '../wake-notice';
 import { invokeHealth } from '../../channels/app-health';
 import { HANDOFF_CODE_TTL_MS, newHandoff } from '../../channels/connect-confirm';
 import { md5Hex } from '../../channels/md5';
@@ -46,10 +46,13 @@ export type WhoopOwnerDeps = Readonly<{
   now(): number;
   timezone(): string;
   // Recomputes the owner's derived rows after readings were committed, and tells the health trigger about a zone change.
-  // woke: the committed readings carry a night that just ended (WAKE_BRIEF).
-  produce(woke?: boolean): Promise<unknown>;
+  // woke: the committed readings carry a night that just ended (WAKE_BRIEF). workout: they carry a workout that just ended
+  // (WORKOUT_WAKE).
+  produce(woke?: boolean, workout?: boolean): Promise<unknown>;
   // WAKE_BRIEF: how fresh a night's end must be to count as the owner just waking. Absent, a sync never says so.
   wakeFreshMs?: number;
+  // WORKOUT_WAKE: present, a sync or hint that commits a workout that just ended says so. Absent, none does.
+  workoutWake?: true;
   arm(at: number): Promise<void>;
   disarm(): Promise<void>;
   log(line: WhoopLog): void;
@@ -161,8 +164,9 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
 
   // ---- Ingest: the app's own signed write, in batches the contract accepts ----
   type Staged = Readonly<{ samples: readonly HealthSampleV1[]; deletions: readonly WhoopDeletion[] }>;
-  // pass.woke: whether this pass committed a night that just ended; only the yes leaves this object, never the time.
-  type Pass = { woke: boolean };
+  // pass.woke / pass.workout: whether this pass committed a night or a workout that just ended; only the yes leaves this
+  // object, never the time, sport or detail.
+  type Pass = { woke: boolean; workout: boolean };
   const ingest = async (staged: Staged, epoch: number, pass: Pass): Promise<number> => {
     const samples = staged.samples.filter(sample => healthSampleV1Schema.safeParse(sample).success);
     if (samples.length !== staged.samples.length) deps.log({ hop: 'whoop', ok: false, code: 'sample_dropped' });
@@ -185,6 +189,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
       if (!receipt.data.replayed) committed += receipt.data.accepted + receipt.data.deleted;
     }
     if (committed > 0 && deps.wakeFreshMs !== undefined && sleepJustEnded(samples, deps.now(), deps.wakeFreshMs)) pass.woke = true;
+    if (committed > 0 && deps.workoutWake && workoutJustEnded(samples, deps.now())) pass.workout = true;
     return committed;
   };
 
@@ -241,7 +246,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
     const started = deps.now();
     let progress = cursor();
     let changed = 0;
-    const pass: Pass = { woke: false };
+    const pass: Pass = { woke: false, workout: false };
     try {
       const consent = await consents();
       if (!consent) return await finish('failed', 'consent_unreadable', started + RETRY_MS);
@@ -255,10 +260,10 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
         if (!progress.backfilled) { progress = { ...progress, next_from: to }; kv.put('whoop:cursor', progress); }
       }
       kv.put('whoop:cursor', { backfilled: true, next_from: null, last_sync_at: started });
-      if (changed > 0) await deps.produce(pass.woke).catch(() => deps.log({ hop: 'whoop', ok: false, code: 'produce_failed' }));
+      if (changed > 0) await deps.produce(pass.woke, pass.workout).catch(() => deps.log({ hop: 'whoop', ok: false, code: 'produce_failed' }));
       return await finish('synced', 'synced', started + SYNC_EVERY_MS);
     } catch (error) {
-      if (changed > 0) await deps.produce(pass.woke).catch(() => undefined);
+      if (changed > 0) await deps.produce(pass.woke, pass.workout).catch(() => undefined);
       const result = classify(error);
       // Committed pages stay committed; nothing is zero-filled for the rest. A reconnect or a consent waits for the owner.
       return finish(result, result === 'failed' ? 'failed' : result, result === 'rate_limited' ? started + (error as RateLimited).afterMs : result === 'failed' ? started + RETRY_MS : result === 'consent_required' ? started + SYNC_EVERY_MS : null);
@@ -275,7 +280,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
     if (kv.get<number>(seen) !== undefined) return 'duplicate';
     const [, kind, action] = match as unknown as [string, 'sleep' | 'recovery' | 'workout', 'updated' | 'deleted'];
     let changed = 0;
-    const pass: Pass = { woke: false };
+    const pass: Pass = { woke: false, workout: false };
     try {
       const consent = await consents();
       if (!consent) return 'failed';
@@ -290,13 +295,13 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
         const recovery: WhoopRecovery | null = sleep ? await guard(() => api.cycleRecovery(sleep.cycle_id)) : null;
         changed = sleep ? await ingest({ samples: whoopNightSamples({ sleep, recovery }), deletions: [] }, consent.epoch, pass) : 0;
       }
-      if (changed > 0) await deps.produce(pass.woke).catch(() => deps.log({ hop: 'whoop', ok: false, code: 'produce_failed' }));
+      if (changed > 0) await deps.produce(pass.woke, pass.workout).catch(() => deps.log({ hop: 'whoop', ok: false, code: 'produce_failed' }));
       for (const [key, at] of [...kv.list<number>({ prefix: 'whoop:seen:' })]) if (deps.now() - at > SEEN_TTL_MS) kv.delete(key);
       kv.put(seen, deps.now());
       deps.log({ hop: 'whoop', ok: true, code: 'hint_handled' });
       return 'handled';
     } catch (error) {
-      if (changed > 0) await deps.produce(pass.woke).catch(() => undefined);
+      if (changed > 0) await deps.produce(pass.woke, pass.workout).catch(() => undefined);
       const result = classify(error);
       deps.log({ hop: 'whoop', ok: false, code: `hint_${result}` });
       // A rate limit or a failure is caught up by the next reconcile; nothing is guessed in the meantime.
