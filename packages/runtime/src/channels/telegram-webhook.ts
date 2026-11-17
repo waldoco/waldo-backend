@@ -332,6 +332,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   PROACTIVE_BOTH_DEFAULT?: string;
   // '1' has an event notice that reaches the app chat raise one push, under quiet hours and the owner's own limits.
   EVENT_PUSH?: string;
+  // "1": an app owner's Waldo look (meeting prep, update cards) and heartbeat arm whether or not they have confirmed a time
+  // zone; the day cards and the nightly pass still wait for their own choice. Off unless "1".
+  OWN_LOOK_ANY_ZONE?: string;
   // The most event pushes in an owner's day, a backstop under the owner's limits (default 3).
   EVENT_PUSH_PER_DAY?: string;
   // "1": Waldo's own sends follow the owner's choice among their other surfaces even while Telegram is linked.

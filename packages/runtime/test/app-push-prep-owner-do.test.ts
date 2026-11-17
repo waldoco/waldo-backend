@@ -103,3 +103,39 @@ it.each([
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
   });
 });
+
+// OWN_LOOK_ANY_ZONE: an app owner who never confirmed a time zone (no Brief-time step) still gets Waldo's own look, armed by the
+// runtime itself, and a meeting's prep before it starts. With the switch off the look is never armed: the staging gap.
+it.each([{ anyZone: '1', armed: true }, { anyZone: '0', armed: false }])('an owner with no confirmed zone, Google connected (OWN_LOOK_ANY_ZONE=$anyZone): look armed $armed', async ({ anyZone, armed }) => {
+  const name = `push-prep-unconfirmed-${anyZone}`;
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    const originalNow = Date.now;
+    let now = Date.parse('2026-10-03T04:30:00Z');
+    Date.now = () => now;
+    fixture.event = { id: 'event-1', title: 'Design review', status: 'confirmed', start: '2026-10-03T10:30:00+05:30', end: '2026-10-03T11:00:00+05:30', all_day: false,
+      description: 'Bring the onboarding mocks', etag: 'r1', attendee_emails: ['pat@example.test'] };
+    try {
+      claimStore(state.storage.sql); ensureSchema(state.storage); traceBook(state.storage.sql);
+      state.storage.kv.put('do_name', name);
+      state.storage.kv.put('app_subject', String(appSubjectFor(name)));
+      await state.storage.put('origin', 'https://fixture.invalid');
+      await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
+      const owner = new OwnerDO(state, { ...env, ...directory, CALENDAR_GROUNDED_PREP: '1', OWN_LOOK_ANY_ZONE: anyZone, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture',
+        WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', WALDO_OWNER_TELEGRAM_ID: undefined, EXPO_ACCESS_TOKEN: 'synthetic-expo-access', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' }) as unknown as Owner;
+      await owner.setup('app').ready;
+      const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
+      expect(scheduler.lookup(BRIEF_SWEEP_ID).state === 'entry').toBe(armed);
+      expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM schedule WHERE id LIKE 'card:%'").one().n).toBe(0);
+      // Ten minutes on, the look's first tick: the meeting is an hour away.
+      now += 10 * 60_000 + 1000;
+      state.storage.kv.put('owner_alarm_last_v1', 1);
+      await owner.alarm();
+      now += 1000;
+      state.storage.kv.put('owner_alarm_last_v1', 0);
+      await owner.alarm();
+      const prep = (state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY) ?? []).filter(record => record.calendarPrep);
+      expect(prep.map(record => record.status)).toEqual(armed ? ['delivered'] : []);
+      expect(now).toBeLessThan(Date.parse('2026-10-03T10:30:00+05:30'));
+    } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
+  });
+});

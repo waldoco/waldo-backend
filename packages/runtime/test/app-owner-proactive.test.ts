@@ -58,7 +58,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 
 type Runtime = Readonly<{ ready: Promise<unknown>; timezone: string; view(session: { token: string; csrf: string; expires: number }, notice: null): Promise<{ timezoneConfirmed: boolean }>; act(action: { action: string; id?: string; value?: string }): Promise<boolean | string> }>;
 type Owner = Readonly<{ setup(channel: string): Runtime; fetch(request: Request): Promise<Response>; alarm(): Promise<void> }>;
-type Stored = Readonly<{ zone?: string; confirmed?: boolean; pins?: Record<string, string>; capture?: boolean; google?: false }>;
+type Stored = Readonly<{ zone?: string; confirmed?: boolean; pins?: Record<string, string>; capture?: boolean; google?: false; anyZone?: true }>;
 
 const withAppOwner = async <T>(name: string, stored: Stored, run: (owner: Owner, state: DurableObjectState) => Promise<T>): Promise<T> => {
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
@@ -72,7 +72,7 @@ const withAppOwner = async <T>(name: string, stored: Stored, run: (owner: Owner,
     if (stored.confirmed) state.storage.kv.put('timezone_confirmed', true);
     if (stored.google !== false) await state.storage.put('google:accounts', MAIL_ONLY_GOOGLE);
     for (const [card, time] of Object.entries(stored.pins ?? {})) dayPlanBook(state.storage.sql).pin(card as never, time);
-    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: FALLBACK, WALDO_OWNER_TELEGRAM_ID: undefined, ...(stored.capture ? { LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'staging' } : {}) }) as unknown as Owner;
+    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', ...(stored.anyZone ? { OWN_LOOK_ANY_ZONE: '1' } : {}), WALDO_OWNER_TIMEZONE: FALLBACK, WALDO_OWNER_TELEGRAM_ID: undefined, ...(stored.capture ? { LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'staging' } : {}) }) as unknown as Owner;
     try { return await run(owner, state); } finally { await state.storage.deleteAlarm(); poolAlarm.mockRestore(); }
   });
 };
@@ -110,6 +110,18 @@ describe('proactive work for an owner who only uses the app', () => {
       await withAppOwner('proactive-unconfirmed-logged', { zone: 'UTC' }, async (owner) => { await owner.setup('app').ready; });
       expect(lines.mock.calls.map(call => String(call[0])).filter(line => line.includes('"hop":"own_jobs"'))).toEqual([expect.stringContaining('"code":"waiting_timezone_unconfirmed"')]);
     } finally { lines.mockRestore(); }
+  });
+
+  it('with OWN_LOOK_ANY_ZONE, an owner with no confirmed zone gets the look and the heartbeat, and no day card or nightly pass', async () => {
+    const lines = vi.spyOn(console, 'log');
+    try {
+      await withAppOwner('proactive-any-zone', { zone: 'UTC', anyZone: true }, async (owner, state) => {
+        await owner.setup('app').ready;
+        expect(ownJobs(state)).toEqual([BRIEF_SWEEP_ID, HEARTBEAT_ID].sort());
+      });
+      expect(lines.mock.calls.map(call => String(call[0])).filter(line => line.includes('"hop":"own_jobs"'))).toEqual([expect.stringContaining('"code":"day_cards_waiting_timezone_unconfirmed"')]);
+    } finally { lines.mockRestore(); }
+    expect(model.calls).toBe(0);
   });
 
   it('with a confirmed zone and no Google connected, Waldo\'s own look is off and says so; the heartbeat still arms', async () => {

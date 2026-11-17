@@ -55,7 +55,8 @@ type SweepScheduler = Readonly<{
   pullForward(id: string, at: number): Promise<boolean>;
 }>;
 
-// No sweep means the owner turned these updates off or their zone is not confirmed yet: a push changes nothing then.
+// No sweep means the owner turned these updates off, has no Google grant, or (with OWN_LOOK_ANY_ZONE off) has not confirmed a
+// zone yet: a push changes nothing then.
 export const wakeBriefSweep = async (scheduler: SweepScheduler, now: number): Promise<boolean> => {
   const found = scheduler.lookup(BRIEF_SWEEP_ID);
   if (found.state !== 'entry' || found.entry.status !== 'armed') return false;

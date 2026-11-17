@@ -870,6 +870,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const kv = this.ctx.storage.kv;
     return kv.get<boolean>('timezone_confirmed') === true || (this.proactiveOverTelegram() && telegramLinked(kv));
   }
+  // OWN_LOOK_ANY_ZONE: Waldo's own look (meeting prep, update cards) and its heartbeat need no confirmed zone. Prep is timed
+  // off the meeting's own start, and a check-back compares a loop's due with the clock in the same zone the owner's turns
+  // wrote it in. Only the day cards and the nightly pass, pinned to local clock times, still wait for the owner's own choice.
+  private zoneFree(kind: ScheduleKind): boolean { return this.env.OWN_LOOK_ANY_ZONE === '1' && (kind === 'event_briefs' || kind === 'heartbeat'); }
   // REENGAGE_PROACTIVE: a copy of an app message that WhatsApp's closed window keeps raises a push, unless an app push already
   // reached the owner in this closed window (the Brief's own push, or this push for an earlier copy) or the owner set Waldo's
   // volume low. The sender holds quiet hours, and a push that reached no device leaves the next copy to try.
@@ -3704,7 +3708,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         try {
           // An app owner's jobs wait for a confirmed zone. The event-brief sweep, which a Telegram runtime build can arm, is
           // cancelled instead of held, so it does not wake every ten minutes; confirming the zone arms it again.
-          const held = (kind: ScheduleKind): ScheduleHold => channel !== 'app' || this.zoneSettled() ? false : kind === 'event_briefs' ? 'drop' : 'hold';
+          const held = (kind: ScheduleKind): ScheduleHold => channel !== 'app' || this.zoneSettled() || this.zoneFree(kind) ? false : kind === 'event_briefs' ? 'drop' : 'hold';
           const onHeld = (kind: ScheduleKind, outcome: 'hold' | 'drop') => {
             const code = `${kind}_timezone_unconfirmed`;
             log({ trace: `alarm:${started}`, hop: outcome === 'drop' ? 'scheduled_drop' : 'scheduled_hold', ms: 0, ok: true, code, detail: code });
@@ -5198,7 +5202,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         phone: this.env.DEVICE_CALENDAR === '1' ? this.deviceCalendar() : null }) : null }) + (lifecycle ? `\n\n${lifecycle}` : '');
     };
     // App-only owners get no proactive work on a fallback zone: only the owner's own time-zone choice confirms one.
-    const armable = (_kind: ScheduleKind) => channel !== 'app' || this.zoneSettled();
+    const armable = (kind: ScheduleKind) => channel !== 'app' || this.zoneSettled() || this.zoneFree(kind);
     // Turning a kind on arms it only where `armable` holds, and the brief sweep only while a Google grant exists.
     const armableNow = async () => { const sweeps = briefSweepRuns(watchGrants(await accounts())); return (kind: ScheduleKind) => armable(kind) && (kind !== 'event_briefs' || sweeps); };
     const armOwnJobs = (timezone: string, now: number, replanCards = false) => Promise.all([
@@ -5228,12 +5232,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     // Native chat initialization cannot launch unrequested background model work. An owner whose only surface is iMessage is the
     // exception: their iMessage runtime runs their scheduled work, so it arms it, as a WhatsApp-only owner's runtime does.
-    // An app owner whose zone is not confirmed gets none of it (no nightly pass, look, heartbeat or day card) until they choose
-    // one; that wait is logged by its closed reason on every runtime build, so an account left without them is visible.
+    // An app owner whose zone is not confirmed gets no day card or nightly pass until they choose one, and, with
+    // OWN_LOOK_ANY_ZONE off, no look or heartbeat either. That wait is logged by its closed reason on every runtime build, so an
+    // account left without them is visible. armOwnJobs arms each kind only where `armable` lets it.
+    // The nightly pass is never zone-free, so it is held exactly when an app owner's zone is unconfirmed.
+    const zoneWait = !armable('nightly');
+    if (zoneWait) log({ trace: 'own-jobs', hop: 'own_jobs', ms: 0, ok: false, code: armable('event_briefs') ? 'day_cards_waiting_timezone_unconfirmed' : 'waiting_timezone_unconfirmed' });
     const proactiveReady = channel === 'imessage' && !this.imessageOnly() ? this.browserReady : channel === 'app'
-      ? (armable('nightly') ? Promise.all([backfillEpisodes(kv, episodes), armOwnJobs(clock.timezone, Date.now()), this.browserReady])
+      ? (armable('nightly') || armable('event_briefs') ? Promise.all([backfillEpisodes(kv, episodes), armOwnJobs(clock.timezone, Date.now()), this.browserReady])
         .then(() => reconcileSchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now: Date.now(), cancelMachine, alongHeartbeat: lookFollows, sweepCarriesUpdates }))
-        : (log({ trace: 'own-jobs', hop: 'own_jobs', ms: 0, ok: false, code: 'waiting_timezone_unconfirmed' }), this.browserReady))
+        : this.browserReady)
       : Promise.all([backfillEpisodes(kv, episodes), armOwnJobs(clock.timezone, Date.now()), this.browserReady])
       .then(async ([, [, , seeded]]) => {
         await reconcileSchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now: Date.now(), cancelMachine, alongHeartbeat: lookFollows, sweepCarriesUpdates });
