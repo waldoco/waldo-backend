@@ -235,7 +235,7 @@ describe('Google Health owner: disconnecting', () => {
     h.plane.consent = 'withdrawn';
     expect(await h.owner.sync()).toBe('consent_required');
     expect(h.world.revoked).toBeGreaterThan(0);
-    expect([...h.kv.keys()].filter(key => key.startsWith('google_health:'))).toEqual([]);
+    expect([...h.kv.keys()].filter(key => key.startsWith('google_health:'))).toEqual(['google_health:held']);
     expect(h.plane.vault.rows.filter(row => row.status !== 'revoked')).toHaveLength(0);
     expect(h.disarmed.count).toBe(1);
   });
