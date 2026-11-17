@@ -185,6 +185,7 @@ describe('the numeric health floor', () => {
     sleep: ['time asleep 412 min', '412 minutes asleep', 'sleep duration 412 minutes', 'slept 6.9 hours'],
     sleep_midpoint: ['sleep midpoint 03:12', 'sleep midpoint was 192'],
     hrv: ['HRV 48ms', 'HRV was 48ms', 'HRV (rmssd) 48 ms', 'HRV sdnn 52', 'rmssd 48'],
+    daytime_hrv: ['daytime HRV 42ms', 'HRV through the day 42 ms', 'daytime heart rate variability 42 ms', 'HRV during the day was 42'],
     resting_hr: ['resting heart rate 58 bpm', 'resting HR 58'],
     heart_rate: ['mean heart rate 72.4 bpm', 'average heart rate 72'],
     movement: ['movement 45 minutes', '45 minutes of movement', '45 movement minutes'],

@@ -69,6 +69,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" lets the health trigger, on a day with nothing coming, send one short note as an update card when the model judges
   // it worth it; anything else keeps such a day silent.
   HEALTH_SOLO_NOTICE?: string;
+  // "1" gives the model a partial health block, in words, for a day whose body data made no Recovery score, and fills the
+  // block's missing lists from the stored row; anything else leaves such a day with no health block.
+  HEALTH_PARTIAL_CONTEXT?: string;
   HEALTH_TRAINING_LOAD?: string;
   // '1' has the health decision reason from the reviewed health protocols (skills/health-protocols), read through the
   // owner's next day, in the chat role. Anything else keeps the decision as it was.

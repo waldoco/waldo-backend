@@ -15,6 +15,7 @@ import {
   crsScoreSchema,
   derivedHealthDestinationEligibilitySchema,
   derivedHealthDestinationViewSchema,
+  partialHealthNarrativeSchema,
   formZoneOf,
   formZoneSchema,
   HRV_SOURCE_CONFIDENCE,
@@ -365,5 +366,37 @@ describe('derived health view carries the row\'s own version and what the model 
       [{ ...window, start: '09:30–11:30' }], '09:30–11:30', [['09:30', '11:30']],
     ];
     for (const energy_windows of bad) expect(parse(form({ energy_windows })).success, JSON.stringify(energy_windows)).toBe(false);
+  });
+});
+
+describe('a partial view: words for a day whose body data made no Recovery score', () => {
+  const parse = (value: unknown) => derivedHealthDestinationViewSchema.safeParse(value);
+  const partial = (extra: Record<string, unknown> = {}) => ({
+    authority: 'backend', availability: 'partial', freshness: 'fresh', as_of_day: 'today', sources: ['health_connect'],
+    present: ['last_night_sleep'], missing_pillars: { recovery: 'missing_resting_signal', form: 'missing_resting_signal' },
+    provenance_refs: ['hpr_0123456789abcdef0123456789abcdef'], destination_eligibility: ['trigger_prompt'], ...extra,
+  });
+
+  it('accepts what the row records in words, Load on its own, and an expired view with nothing from its day', () => {
+    expect(parse(partial()).success).toBe(true);
+    expect(parse(partial({ load_zone: 'moderate', baseline_state: { load: 'personal' }, sleep_debt: { amount: 'some', trend: 'building' } })).success).toBe(true);
+    expect(parse(partial({ freshness: 'expired', as_of_day: 'earlier', present: [], missing_pillars: {} })).success).toBe(true);
+    expect(partialHealthNarrativeSchema.safeParse({ day_summary: '', compiled_at: '2026-11-01T06:00:00.000Z' }).success).toBe(true);
+  });
+
+  it('rejects a zone, a readiness score, a link or consent reason, a signal it cannot record, or a figure', () => {
+    const bad: Record<string, unknown>[] = [
+      { recovery_zone: 'solid' }, { form_zone: 'steady' }, { score: 61 }, { trend: 'steady' }, { confidence_band: 'high' },
+      { missing_pillars: { recovery: 'consent_withdrawn' } }, { missing_pillars: { recovery: 'missing_sleep', readiness: 'missing_sleep' } },
+      { present: ['steps'] }, { present: ['heart_rate'] }, { sources: ['fitbit'] }, { freshness: 'old' }, { as_of_day: '2026-11-01' },
+      { load_zone: 'good' }, { missing_pillars: undefined }, { availability: 'full' },
+    ];
+    for (const extra of bad) expect(parse(partial(extra)).success, JSON.stringify(extra)).toBe(false);
+    expect(partialHealthNarrativeSchema.safeParse({ day_summary: 'x', recovery_descriptor: 'solid', compiled_at: '2026-11-01T06:00:00.000Z' }).success).toBe(false);
+  });
+
+  it('lets a Form or Recovery view say which pillars the row could not compute, in the same reason words', () => {
+    expect(parse({ ...baseDestinationView, missing_pillars: { load: 'calendar_demand_unavailable' } }).success).toBe(true);
+    expect(parse({ ...baseDestinationView, missing_pillars: { load: 'consent_required' } }).success).toBe(false);
   });
 });

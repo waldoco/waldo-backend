@@ -311,6 +311,19 @@ describe('get_health', () => {
   });
 });
 
+describe('get_health daytime heart rate variability', () => {
+  const hour = (h: number, value: number, method: string) => reading('hrv_window', '2026-10-12', value, { method, start_at: `2026-10-12T0${h}:00:00Z`, end_at: `2026-10-12T0${h + 1}:00:00Z` });
+  it('gives the day\'s mean of the hourly readings, one method, apart from the overnight reading, and asks for hrv_window', async () => {
+    const hours = { ...series, sources: [{ source: 'apple', consent_epoch: 3, samples: [hour(3, 40, 'sdnn'), hour(4, 45, 'sdnn'), hour(5, 30, 'rmssd'), ...series.sources[0]!.samples] }] };
+    const { calls, handler } = fake({ series: hours });
+    const result = await handler.handle({ signals: ['daytime_hrv'], from: '2026-10-12', to: '2026-10-12', aggregation: 'daily' }, ctx);
+    expect(result.ok && result.data.state === 'available' && result.data.signals).toEqual([
+      { signal: 'daytime_hrv', unit: 'ms', source: 'apple', method: 'sdnn', days: [{ day: '2026-10-12', value: 42.5 }] },
+    ]);
+    expect(JSON.parse(String(calls[1]!.args.p_payload)).signals).toEqual(['hrv_window']);
+  });
+});
+
 describe('get_health food from the owner\'s app', () => {
   const food = (id: number, kcal: number, macros: Record<string, number>) => reading('nutrition', '2026-10-12', kcal, {
     start_at: `2026-10-12T0${id}:00:00Z`, end_at: `2026-10-12T0${id}:00:00Z`, nutrition: { meal: 'lunch', ...macros } });
