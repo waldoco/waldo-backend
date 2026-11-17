@@ -135,6 +135,21 @@ describe('app sign-in and main chat routes', () => {
     expect(forwards).toHaveLength(1);
     expect(keys).toEqual(['app-read:owner-1', 'app-chat-send:owner-1']);
   });
+  it('forwards a calendar proposal to the credential owner DO as a POST on its own budget, and refuses it without a credential or over the limit', async () => {
+    forwards.length = 0;
+    const keys: string[] = [];
+    const counted = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async ({ key }: { key: string }) => { keys.push(key); return { success: true }; } } } as never;
+    const auth = fakeAuth().auth, bearer = { authorization: `Bearer ${CREDENTIAL}` };
+    const body = { request_id: 'request-0001', change: { action: 'cancel', event_id: 'evt_0123456789abcdef', day: '2026-10-27' } };
+    expect(await (await handleApp(post('/app/v1/calendar/proposals', body, bearer), counted, auth))!.json()).toEqual({ forwarded: true });
+    expect([forwards[0]!.method, new URL(forwards[0]!.url).pathname, forwards[0]!.headers.get('x-waldo-do-name'), await forwards[0]!.json()]).toEqual(['POST', '/app/v1/calendar/proposals', 'owner-1', body]);
+    expect(keys).toEqual(['app-calendar-proposal:owner-1']);
+    expect((await handleApp(post('/app/v1/calendar/proposals', body), counted, auth))!.status).toBe(401);
+    const limited = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: false }) } } as never;
+    expect((await handleApp(post('/app/v1/calendar/proposals', body, bearer), limited, auth))!.status).toBe(429);
+    expect((await handleApp(new Request('https://w.test/app/v1/calendar/proposals', { headers: bearer }), counted, auth))!.status).toBe(405);
+    expect(forwards).toHaveLength(1);
+  });
   it('rate limits chat sends per owner and fails closed without the limiter', async () => {
     const auth = fakeAuth().auth;
     const limited = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: false }) } } as never;
@@ -314,5 +329,33 @@ describe('Connect iMessage from the app', () => {
     expect((await handleApp(authed('GET'), withAddress(), auth))!.status).toBe(405);
     expect((await handleApp(authed(), env(), auth))!.status).toBe(503);
     expect((await handleApp(authed(), withAddress(), fakeAuth({ issueProviderLinkCode: async () => null } as never).auth))!.status).toBe(503);
+  });
+});
+
+describe('a chat attachment upload at the Worker', () => {
+  const upload = (headers: Record<string, string>) => new Request('https://w.test/app/v1/chat/uploads', {
+    method: 'POST', body: new Uint8Array(1024).fill(7), headers: { authorization: `Bearer ${CREDENTIAL}`, ...headers } });
+  const on = () => ({ ...(env() as object), APP_CHAT_ATTACHMENTS: '1' }) as never;
+
+  it('refuses an upload its headers already rule out without reading its bytes or reaching the owner object', async () => {
+    for (const [headers, status, error] of [
+      [{ 'content-type': 'image/png', 'x-waldo-upload-kind': 'sticker' }, 400, 'invalid_kind'],
+      [{ 'content-type': 'image/png' }, 400, 'invalid_kind'],
+      [{ 'content-type': 'image/png', 'x-waldo-upload-kind': 'voice' }, 415, 'unsupported_type'],
+      [{ 'content-type': 'application/pdf', 'x-waldo-upload-kind': 'file', 'x-waldo-upload-name': '%E0%A4%A' }, 400, 'invalid_name'],
+      [{ 'content-type': 'application/pdf', 'x-waldo-upload-kind': 'file' }, 400, 'invalid_name'],
+    ] as const) {
+      forwards.length = 0;
+      const request = upload(headers);
+      const response = (await handleApp(request, on(), fakeAuth().auth))!;
+      expect([error, response.status, await response.json(), request.bodyUsed, forwards.length]).toEqual([error, status, { error }, false, 0]);
+    }
+  });
+
+  it('forwards an upload whose headers pass to the owner object, with its kind and name', async () => {
+    forwards.length = 0;
+    const response = (await handleApp(upload({ 'content-type': 'application/pdf', 'x-waldo-upload-kind': 'file', 'x-waldo-upload-name': 'lease.pdf' }), on(), fakeAuth().auth))!;
+    expect(await response.json()).toEqual({ forwarded: true });
+    expect([forwards[0]!.headers.get('x-waldo-upload-kind'), forwards[0]!.headers.get('x-waldo-upload-name'), (await forwards[0]!.arrayBuffer()).byteLength]).toEqual(['file', 'lease.pdf', 1024]);
   });
 });

@@ -40,6 +40,7 @@ const WRITES: Readonly<Record<string, readonly (readonly [ToolName, Record<strin
   'health logs': [
     ['log_meal', { description: 'Lunch at the client office', calories_estimate: 2400 }],
     ['log_workout', { type: 'run', duration_minutes: 30 }],
+    ['delete_health_log', { id: 7 }],
   ],
   'workspace writes': [
     ['workspace_render', { source_file_id: 'f1', source_revision: 1, path: 'out/vendor.pdf', expected_revision: 0, format: 'pdf' }],
@@ -47,6 +48,7 @@ const WRITES: Readonly<Record<string, readonly (readonly [ToolName, Record<strin
   ],
   artifacts: [
     ['revise_artifact', { artifact_id: 'a1', expected_revision: 1, body_markdown: 'Pay the new account.' }],
+    ['restore_artifact', { artifact_id: 'a1', revision: 1, expected_revision: 2 }],
     ['export_artifact', { artifact_id: 'a1', expected_revision: 1, format: 'pdf' }],
   ],
   // A download saves into the owner's workspace; a call with no typed command takes the legacy path.
@@ -202,22 +204,30 @@ describe('a tainted turn sends every write to the owner card', () => {
   });
 
   // The derived set, pinned: a record change that widens or narrows what a tainted turn may do shows up here in review.
+  it('the owner\'s own steer of a background task runs after outside text without a card; with no owner in the turn it is carded', async () => {
+    const args = { job_id: 'job_0123456789ab', instruction: 'Only vendors that ship to Pune.', mode: 'interrupt' };
+    expect(await taintedCallNeedsOwnerApproval('steer_task', 'external', args, { ownerInitiated: true })).toBe(false);
+    expect(await taintedCallNeedsOwnerApproval('steer_task', 'external', args, {})).toBe(true);
+    expect(await taintedCallNeedsOwnerApproval('steer_task', null, args, {})).toBe(false);
+  });
+
   it('the carded set is every privileged action and every tool with a claim, less the named exemptions', async () => {
     const carded: ToolName[] = [];
     for (const tool of toolNameSchema.options) if (await taintedCallNeedsOwnerApproval(tool, 'external', {}, {})) carded.push(tool);
     expect(carded.sort()).toEqual([
       'archive_thread', 'call_mcp_tool', 'close_loop', 'close_responsibility', 'create_artifact', 'create_thread',
-      'browse_act', 'delete_message', 'draft_document', 'execute_action', 'export_artifact', 'extract_archive', 'forget_memory', 'log_meal', 'log_workout', 'open_loop',
-      'propose_calendar_change', 'propose_calendar_plan', 'propose_google_task_change', 'propose_schedule', 'restore_message', 'revise_artifact', 'send_agent_mail', 'send_email', 'send_message',
-      'set_proactivity', 'set_reminder', 'set_schedule_preference', 'set_standing_order', 'skills_disable', 'skills_install', 'start_task',
+      'browse_act', 'delete_health_log', 'delete_message', 'draft_document', 'execute_action', 'export_artifact', 'extract_archive', 'forget_memory', 'log_meal', 'log_workout', 'open_loop',
+      'propose_calendar_change', 'propose_calendar_plan', 'propose_google_task_change', 'propose_schedule', 'restore_artifact', 'restore_message', 'revise_artifact', 'send_agent_mail', 'send_email', 'send_message',
+      'set_experiment', 'set_proactivity', 'set_quest', 'set_reminder', 'set_schedule_preference', 'set_standing_order', 'skills_disable', 'skills_install', 'start_task', 'steer_task',
       'track_responsibility', 'update_task', 'update_thread_topics', 'update_todo', 'use_mac', 'workspace_render', 'workspace_write', 'write_sheet_cell', 'write_task',
     ].sort());
     for (const tool of toolNameSchema.options) expect(await taintedCallNeedsOwnerApproval(tool, null, {}, {}), tool).toBe(false);
-    // With the owner's own message in the turn, exactly the inward writes leave the carded set; sends, publishes, grants,
-    // background tasks, MCP writes and the writes with no undo stay on the owner's card.
+    // With the owner's own message in the turn, exactly the inward writes leave the carded set, a change to a running background
+    // task among them; sends, publishes, grants, starting background tasks, MCP writes and the writes with no undo stay on the
+    // owner's card.
     const ownerTurn: ToolName[] = [];
     for (const tool of toolNameSchema.options) if (await taintedCallNeedsOwnerApproval(tool, 'external', {}, { ownerInitiated: true })) ownerTurn.push(tool);
-    expect(carded.filter((tool) => !ownerTurn.includes(tool)).sort()).toEqual(['create_artifact', 'set_reminder', 'track_responsibility', 'update_todo', 'workspace_write']);
+    expect(carded.filter((tool) => !ownerTurn.includes(tool)).sort()).toEqual(['create_artifact', 'set_reminder', 'steer_task', 'track_responsibility', 'update_todo', 'workspace_write']);
     expect(ownerTurn).toEqual(expect.arrayContaining(['send_message', 'send_email', 'call_mcp_tool', 'export_artifact', 'set_standing_order', 'skills_install', 'start_task', 'log_meal', 'log_workout', 'revise_artifact', 'forget_memory']));
   });
 });

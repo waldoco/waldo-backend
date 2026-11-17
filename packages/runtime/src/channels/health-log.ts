@@ -1,12 +1,13 @@
 import {
-  listHealthLogsArgsSchema, logMealArgsSchema, logWorkoutArgsSchema, setSleepNeedArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
-  type ListHealthLogsArgs, type LogMealArgs, type LogWorkoutArgs, type SetSleepNeedArgs, type SetSleepNeedResult, type ToolHandler, type ToolName,
+  deleteHealthLogArgsSchema, listHealthLogsArgsSchema, logMealArgsSchema, logWorkoutArgsSchema, setSleepNeedArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
+  type DeleteHealthLogArgs, type ListHealthLogsArgs, type LogMealArgs, type LogWorkoutArgs, type SetSleepNeedArgs, type SetSleepNeedResult, type ToolHandler, type ToolName,
 } from '@waldo/contracts';
 import { healthSleepNeedMinutesV1Schema } from '../../../contracts/src/app/health-ingest';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 import type { OwnerClock } from '../tools/live/get-context';
 import { localIso, localToEpoch } from './reminders';
 import { md5Hex } from './md5';
+import { OwnerDirectoryError } from '../identity/owner-directory';
 
 // A9 (BUILD_PLAN_2026-09-25): meal + workout logging over the signed router rail. The DO
 // signs md5 of the exact payload text it sends (the RPC takes text and casts to jsonb
@@ -22,12 +23,16 @@ export type HealthLogEntry = Readonly<{
   payload: Record<string, unknown>;
 }>;
 
+export type RemovedHealthLog = Readonly<{ id: number; kind: 'meal' | 'workout'; at: string; payload: Record<string, unknown> }>;
+
 type SignedCall = (fn: string, message: string, args: Record<string, string | number>) => Promise<unknown>;
 
 export type HealthLogBook = Readonly<{
   linked(): boolean;
   log(kind: 'meal' | 'workout', payload: Record<string, unknown>, atLocal: string | undefined): Promise<{ id: number; at: string }>;
   recent(limit: number): Promise<readonly HealthLogEntry[]>;
+  // The removed entry at the owner's local time, or null when the owner has no log with that id.
+  remove(id: number): Promise<RemovedHealthLog | null>;
 }>;
 
 const NOT_LINKED = 'health logging is not linked yet';
@@ -65,6 +70,12 @@ export const healthLogBook = (
         return [];
       }
     },
+    async remove(id) {
+      if (!call || !doName) throw new Error(NOT_LINKED);
+      const rows = (await call('health_log_delete', `health.delete.${doName}.${id}`, { p_do_name: doName, p_id: id })) as HealthLogEntry[] | null;
+      const row = Array.isArray(rows) ? rows[0] : undefined;
+      return row ? { id: row.id, kind: row.kind, at: localIso(Date.parse(row.logged_at), clock.timezone), payload: row.payload } : null;
+    },
   };
 };
 
@@ -90,6 +101,7 @@ const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger)
 
 type LogResult = { id: number; kind: 'meal' | 'workout'; at: string };
 type ListResult = { linked: boolean; entries: readonly HealthLogEntry[] };
+type DeleteResult = { removed: RemovedHealthLog };
 
 export const healthLogHandlers = (book: HealthLogBook) => [
   {
@@ -137,11 +149,36 @@ export const healthLogHandlers = (book: HealthLogBook) => [
     schema: listHealthLogsArgsSchema,
     trigger_allowlist: allowlist('list_health_logs'),
     autonomy_gated: false,
+    // The entries carry the owner's values: the model sees them in this turn only, never the cross-turn tool ledger.
+    turn_only_output: true,
     async handle(args) {
       const entries = (await book.recent(args.limit)).filter((entry) => args.kind === undefined || entry.kind === args.kind);
       return { ok: true, data: { linked: book.linked(), entries }, source_taint: null };
     },
   } satisfies ToolHandler<ListHealthLogsArgs, ListResult, ToolDispatcherContext>,
+  {
+    name: 'delete_health_log',
+    description: "Remove one of the owner's meal or workout logs by id: the id log_meal or log_workout returned, or one from list_health_logs. Use it when the owner asks to undo or remove a log. The result is the entry removed; tell the owner which entry it was in words (what and when, not its figures), so they can log it again if it was a mistake.",
+    schema: deleteHealthLogArgsSchema,
+    trigger_allowlist: allowlist('delete_health_log'),
+    autonomy_gated: false,
+    // The entries carry the owner's values: the model sees them in this turn only, never the cross-turn tool ledger.
+    turn_only_output: true,
+    mutates_state: true,
+    async handle(args) {
+      try {
+        const removed = await book.remove(args.id);
+        if (removed === null) return { ok: false, code: 'not_found', error: 'The owner has no health log with that id. Use list_health_logs to see the ids.' };
+        return { ok: true, data: { removed }, source_taint: null };
+      } catch (error) {
+        if (error instanceof Error && error.message === NOT_LINKED) return { ok: false, code: 'transient', error: NOT_LINKED };
+        // The database answered with an error, so the delete rolled back. A timeout, a lost connection or a gateway error can
+        // come after the delete committed: then nothing is known, and a second delete would only answer not_found.
+        if (error instanceof OwnerDirectoryError && error.status < 500) return { ok: false, code: 'transient', error: 'the health log could not be removed' };
+        return { ok: false, code: 'transient', error: 'It is not known whether the health log was removed: the answer was lost. Call list_health_logs to see whether it is still there before telling the owner.' };
+      }
+    },
+  } satisfies ToolHandler<DeleteHealthLogArgs, DeleteResult, ToolDispatcherContext>,
 ];
 
 // The owner's own sleep need, from chat on any surface. The figure goes to the health plane's setting and nowhere else; the

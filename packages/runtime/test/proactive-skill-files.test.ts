@@ -16,3 +16,13 @@ it.each(PROACTIVE)('%s names only existing owner-turn tools and loads in owner t
   }
   expect(skill!.trigger_types).toEqual(['user_message']);
 });
+
+it('day-shaping is listed only while CALENDAR_COVERAGE or FREE_WINDOW_OFFERS is on, and names only owner-turn tools', async () => {
+  const { curatedSkills } = await import('../src/skills/curated-owner');
+  expect(CURATED_SKILLS.some(entry => entry.name === 'day-shaping')).toBe(false);
+  expect(curatedSkills(true).some(entry => entry.name === 'day-shaping')).toBe(false);
+  const skill = curatedSkills(false, true).find(entry => entry.name === 'day-shaping');
+  expect(skill).toBeDefined();
+  expect(curatedSkills(false, true).some(entry => entry.name === 'health-protocols')).toBe(false);
+  for (const tool of skill!.required_tools) expect(TOOL_PERMISSIONS.user_message, tool).toContain(tool);
+});

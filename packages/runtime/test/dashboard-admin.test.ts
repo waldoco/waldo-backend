@@ -45,6 +45,38 @@ describe('dashboard admin existing handlers', () => {
   });
 });
 
+const announcing = (action: string, fields: Record<string, string>) => new Request('https://w.test/console/action', { method: 'POST', headers: { accept: 'application/json' }, body: new URLSearchParams({ action, csrf: 'csrf', ...fields }) });
+const DRAFT = { id: 'family', release: 'r1', title: 'Family coordination', shipped: 'Waldo can coordinate with your family\'s Waldo.', why: 'Less back and forth.', capability: 'TRUSTED_COORDINATION', requires: [], environments: ['staging', 'production'] };
+describe('admin announcements', () => {
+  it('create signs every field: the signature names a SHA-256 of the copy, so other copy cannot ride on it', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => json(true));
+    const response = await adminAction(announcing('announcement.create', { value: JSON.stringify(DRAFT) }), 'csrf', consoleAuth(env, fetcher as typeof fetch, () => 1790000000000)!, 'owner');
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('dry run');
+    const args = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body));
+    expect(String(fetcher.mock.calls[0]?.[0])).toContain('/rpc/admin_announce');
+    expect(args).toMatchObject({ p_id: 'family', p_requires: '', p_environments: 'staging,production', p_title: 'Family coordination' });
+    const fields = ['r1', DRAFT.title, DRAFT.shipped, DRAFT.why, DRAFT.capability, '', 'staging,production'].join('\u001f');
+    const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(fields)))].map(b => b.toString(16).padStart(2, '0')).join('');
+    expect(args.p_sig).toBe(await routerSignature('router', 1790000000, `announce.owner.family.${digest}`));
+  });
+  it('a draft outside the shape never reaches the database, and a refusal stays a refusal', async () => {
+    const fetcher = vi.fn(async () => json(false)); const auth = consoleAuth(env, fetcher as typeof fetch)!;
+    for (const value of ['not json', JSON.stringify({ ...DRAFT, environments: ['moon'] }), JSON.stringify({ ...DRAFT, extra: 'x' }), JSON.stringify({ ...DRAFT, requires: ['calendar'] })])
+      expect((await adminAction(announcing('announcement.create', { value }), 'csrf', auth, 'owner')).status).toBe(400);
+    expect(fetcher).not.toHaveBeenCalled();
+    expect((await adminAction(announcing('announcement.create', { value: JSON.stringify(DRAFT) }), 'csrf', auth, 'owner')).status).toBe(409);
+  });
+  it('the go names one environment, and the report is counts only', async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/admin_announcement_report') ? json({ live_in: ['staging'], owners: 3, outcomes: { eligible: 2, folded: 1 } }) : json(true));
+    const auth = consoleAuth(env, fetcher as typeof fetch)!;
+    expect((await adminAction(announcing('announcement.live', { id: 'family', value: 'everywhere' }), 'csrf', auth, 'owner')).status).toBe(400);
+    expect((await adminAction(announcing('announcement.live', { id: 'family', value: 'production' }), 'csrf', auth, 'owner')).status).toBe(200);
+    expect(JSON.parse(String((fetcher.mock.calls[0] as unknown as [string, RequestInit])[1].body))).toMatchObject({ p_id: 'family', p_environment: 'production' });
+    expect(await (await adminAction(announcing('announcement.report', { id: 'family' }), 'csrf', auth, 'owner')).json()).toEqual({ report: { live_in: ['staging'], owners: 3, outcomes: { eligible: 2, folded: 1 } } });
+  });
+});
+
 describe('actual owner DO admin route',()=>{
  it('keeps session isolation, JSON dispatch and CSRF ahead of signed writes',async()=>{
   const {env:bindings}=await import('cloudflare:workers');const {runInDurableObject}=await import('cloudflare:test');

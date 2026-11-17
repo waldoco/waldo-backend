@@ -176,6 +176,7 @@ describe('an app turn that does not finish', () => {
       await owner().alarm();
       expect(notices(await shown(owner(), name))).toHaveLength(1);
       expect(await state.storage.get(APP_INBOX_DUE_KEY)).toBeNull();
+      expect(state.storage.sql.exec("SELECT trace, ok, note FROM trace_log WHERE hop = 'turn_aborted'").toArray()).toEqual([{ trace: id, ok: 0, note: 'running' }]);
     });
   });
 

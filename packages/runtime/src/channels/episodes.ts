@@ -28,6 +28,15 @@ const episodeOf = ({ speaker, ...row }: StoredEpisode): Episode => speaker === O
 // ref is the index row's own id: unique per stored row, so a snippet traces to exactly its row
 // even if the same entry_id was indexed twice (entry_id is informational, not unique).
 // surface and links are set only with the recall chain on (history/recall-chain.ts).
+// Whether a past message may carry someone else's words: every row but the owner's own words, typed by them and not
+// answering outside content. A Waldo reply counts too, marked or not, because a reply stored before replies were marked may
+// have read mail, and history reaches every row.
+export const carriesOthersWords = (episode: Pick<Episode, 'speaker' | 'own' | 'answersOutside'>): boolean =>
+  !(episode.speaker === 'owner' && episode.own === true && episode.answersOutside !== true);
+// Whether a hit's links may: a link to a message by that message's row (unreadable counts), and any other link (a note, a
+// run, a task, a card) always, since its line is not the owner's own words.
+export const linksCarryOthersWords = (links: readonly RecallLink[] | undefined, rowCarries: (ref: string) => boolean): boolean =>
+  (links ?? []).some((link) => /^[1-9][0-9]*$/.test(link.ref) ? rowCarries(link.ref) : true);
 export type EpisodeHit = Readonly<{ ref: string; entry_id: string; speaker: Speaker; at: string | null; snippet: string; surface?: string | null; links?: readonly RecallLink[] }>;
 
 export type EpisodeIndex = Readonly<{
@@ -65,6 +74,18 @@ export const ftsQuery = (text: string): string | null => {
 // An owner message is stored whole ('owner') or split into their own words and what they quoted; any of its rows counts.
 export const ownerSpokeSince = (sql: SqlStorage, at: number): boolean =>
   sql.exec("SELECT 1 FROM episodes WHERE speaker IN ('owner', ?, ?, 'quoted') AND at > ? LIMIT 1", OWNER_SAID, OWNER_ANSWERED_OUTSIDE, at).toArray().length > 0;
+
+// What Waldo and the owner said since `at`, oldest first, the newest kept within maxChars: the owner's own words and Waldo's
+// replies, never a quote or a machine note. outside: a reply from a turn that read outside content, or the owner's words
+// answering one, is among them, so a turn that reads this runs as one over outside text.
+export const RECENT_EXCHANGE_CHARS = 4_000;
+export const recentExchange = (index: EpisodeIndex, at: number, maxChars = RECENT_EXCHANGE_CHARS): Readonly<{ text: string; outside: boolean }> => {
+  const said = index.since(at, maxChars).filter((episode) => episode.speaker === 'waldo' || (episode.speaker === 'owner' && episode.own === true));
+  return {
+    text: said.map((episode) => `${episode.speaker === 'owner' ? 'Owner' : 'Waldo'}: ${episode.text}`).join('\n'),
+    outside: said.some((episode) => episode.speaker === 'waldo' ? index.readOutside(episode.entry_id) : episode.answersOutside === true),
+  };
+};
 
 export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
   sql.exec("CREATE VIRTUAL TABLE IF NOT EXISTS episodes USING fts5(entry_id UNINDEXED, speaker UNINDEXED, at UNINDEXED, text, tokenize = 'unicode61 remove_diacritics 2')");

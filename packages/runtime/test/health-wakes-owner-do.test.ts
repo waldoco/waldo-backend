@@ -112,7 +112,7 @@ const dump = (state: DurableObjectState) => JSON.stringify([
   [...state.storage.kv.list()],
 ]);
 type Owner = { fetch(request: Request): Promise<Response>; alarm(): Promise<void> };
-const withOwner = (work: (o: { state: DurableObjectState; upload(): Promise<void>; pass(): Promise<void>; recompute(): Promise<void> }) => Promise<void>, config: object = CONFIG) => {
+const withOwner = (work: (o: { state: DurableObjectState; upload(): Promise<void>; finished(): Promise<void>; pass(): Promise<void>; recompute(): Promise<void> }) => Promise<void>, config: object = CONFIG) => {
   const doName = `health-wakes-do-${sequence++}`;
   return runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName)), async (_i, state) => {
     ensureSchema(state.storage);
@@ -120,11 +120,14 @@ const withOwner = (work: (o: { state: DurableObjectState; upload(): Promise<void
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
     const owner = new OwnerDO(state, config as never) as unknown as Owner;
-    const upload = () => notifyOwnerHealthSamples({ idFromName: (name: string) => name as never, get: () => ({ fetch: (request: Request) => owner.fetch(request) }) }, SECRET, doName);
+    const owners = { idFromName: (name: string) => name as never, get: () => ({ fetch: (request: Request) => owner.fetch(request) }) };
+    const upload = () => notifyOwnerHealthSamples(owners, SECRET, doName);
+    // An upload whose readings include a workout that just ended (WORKOUT_WAKE).
+    const finished = () => notifyOwnerHealthSamples(owners, SECRET, doName, 'readings', false, true);
     const pass = async () => { await armAlarm(state.storage, Date.now()); await state.storage.deleteAlarm(); state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm(); };
     // One upload and the recompute window it arms, run through the real scheduler.
     const recompute = async () => { await upload(); vi.setSystemTime(Date.now() + HEALTH_RECOMPUTE_WINDOW_MS); await pass(); };
-    try { await work({ state, upload, pass, recompute }); } finally { await state.storage.deleteAlarm(); }
+    try { await work({ state, upload, finished, pass, recompute }); } finally { await state.storage.deleteAlarm(); }
   });
 };
 const evaluations = () => plane.requests.filter(r => r.request.response_format?.name === 'health_proposal');
@@ -209,6 +212,82 @@ describe('a wake beyond a zone change, on the owner object', () => {
 
 // The owner's stated sleep need on the owner object's recompute: read only with the coaching switch on, and every row computed
 // on it. Every value is synthetic.
+describe('a finished workout on the owner object (WORKOUT_WAKE)', () => {
+  const ON = { ...CONFIG, WORKOUT_WAKE: '1' };
+  const WORDS = 'The owner just finished a workout.';
+  it('wakes the health trigger once that day; the model sees the workout in words and the day ahead, and decides', async () => {
+    await withOwner(async ({ state, pass, finished }) => {
+      await finished();
+      // Nothing wakes until the recompute this upload asked for has written today's row.
+      expect([wakes(state), triggerEntry(state)]).toEqual([[], []]);
+      vi.setSystemTime(Date.now() + HEALTH_RECOMPUTE_WINDOW_MS);
+      await pass();
+      expect(wakes(state)).toEqual([{ day: TODAY, reason: 'workout_ended', taken: 0 }]);
+      // Handed to the trigger once, so no later recompute today hands it again.
+      expect(state.storage.kv.get('health_workout_noted_v1')).toBeUndefined();
+      await pass();
+      expect(evaluations()).toHaveLength(1);
+      const sent = JSON.stringify(evaluations()[0]!.request);
+      expect(sent).toContain(WORDS);
+      expect(sent).toContain('Quarterly board review');
+      expect(runs(state)).toMatchObject([{ local_day: TODAY, outcome: 'proposed' }]);
+      // A second workout the same day finds the day's wake already taken.
+      await finished();
+      vi.setSystemTime(Date.now() + HEALTH_RECOMPUTE_WINDOW_MS);
+      await pass();
+      expect(triggerEntry(state)).toEqual([]);
+      expect(evaluations()).toHaveLength(1);
+      for (const leak of LEAKS) expect(dump(state), leak).not.toContain(leak);
+    }, ON);
+  });
+
+  it('never calls a workout "just finished" hours later, when the wake could not read the row at the time', async () => {
+    await withOwner(async ({ state, pass, finished, recompute }) => {
+      plane.consent = false;
+      await finished();
+      vi.setSystemTime(Date.now() + HEALTH_RECOMPUTE_WINDOW_MS);
+      await pass();
+      expect(wakes(state)).toEqual([]);
+      plane.consent = true;
+      vi.setSystemTime(Date.now() + 4 * 60 * 60_000);
+      await recompute();
+      expect(wakes(state).filter(wake => wake.reason === 'workout_ended')).toEqual([]);
+      await pass();
+      for (const request of evaluations()) expect(JSON.stringify(request.request)).not.toContain(WORDS);
+    }, ON);
+  });
+
+  it('stays silent when the model finds nothing to change', async () => {
+    plane.decision = JSON.stringify({ kind: 'no_op', action: null, item: null, start: null, end: null, title: null, block: null, notify_guests: null, reason: '' });
+    await withOwner(async ({ state, pass, finished }) => {
+      await finished();
+      vi.setSystemTime(Date.now() + HEALTH_RECOMPUTE_WINDOW_MS);
+      await pass();
+      await pass();
+      expect(evaluations()).toHaveLength(1);
+      expect(runs(state)).toMatchObject([{ local_day: TODAY, outcome: 'no_op' }]);
+    }, ON);
+  });
+
+  it('wakes nothing with the switch off, or while the owner\'s health proposals are off', async () => {
+    const finishedThenRecomputed = async ({ finished, pass }: { finished(): Promise<void>; pass(): Promise<void> }) => {
+      await finished();
+      vi.setSystemTime(Date.now() + HEALTH_RECOMPUTE_WINDOW_MS);
+      await pass();
+    };
+    await withOwner(async (o) => {
+      await finishedThenRecomputed(o);
+      expect([wakes(o.state), triggerEntry(o.state), evaluations()]).toEqual([[], [], []]);
+    });
+    await withOwner(async (o) => {
+      o.state.storage.sql.exec('CREATE TABLE IF NOT EXISTS schedule_preferences (kind TEXT PRIMARY KEY, enabled INTEGER NOT NULL)');
+      o.state.storage.sql.exec("INSERT INTO schedule_preferences (kind, enabled) VALUES ('health_proposals', 0)");
+      await finishedThenRecomputed(o);
+      expect([wakes(o.state), triggerEntry(o.state), evaluations()]).toEqual([[], [], []]);
+    }, ON);
+  });
+});
+
 describe('the stated sleep need on the owner object', () => {
   it('reads no settings with the coaching switch off', async () => {
     await withOwner(async ({ recompute }) => {

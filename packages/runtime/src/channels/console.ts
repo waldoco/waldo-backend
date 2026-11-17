@@ -46,7 +46,7 @@ export type ConsoleSession = Readonly<{ token: string; csrf: string; expires: nu
 // One row per live browser session: the latest sign-in on that browser and when it ends unless used again. No device
 // name is recorded. Tokens never leave this function.
 // ref names a directory-held session, so the app can sign that device out; browser rows from this store have none.
-// device and last_active describe a directory-held session for the app (controls revision 19); they stay out of the
+// device and last_active describe a directory-held session for the app (controls revision 23); they stay out of the
 // connections view's revision.
 export type ConsoleSessionRow = Readonly<{ signed_in: string; until: string; current: boolean; ref?: string; device?: SessionDevice | null; last_active?: string }>;
 const signedInAt = (session: ConsoleSession) => session.signed_in ?? session.expires - LEGACY_SESSION_MS;
@@ -154,7 +154,7 @@ export const grantHeaders = (doName: string, request: Request): Record<string, s
   return { 'x-waldo-do-name': doName, ...(current ? { cookie: `${CONSOLE_COOKIE}=${current}` } : {}) };
 };
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'spot.pin', 'spot.unpin', 'spot.edit', 'spot.area', 'spot.quiet', 'spot.unquiet', 'node.forget', 'node.confirm', 'node.correct', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'schedule.resume', 'card.retry', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'granola.connect', 'granola.disconnect', 'session.signout', 'session.signout.all', 'session.revoke', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'health_memory.set', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'agent_mail.claim', 'agent_mail.release'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'spot.pin', 'spot.unpin', 'spot.edit', 'spot.area', 'spot.quiet', 'spot.unquiet', 'node.forget', 'node.confirm', 'node.correct', 'person.confirm', 'person.rename', 'person.ring', 'person.forget', 'forget.retry', 'proactivity.set', 'schedule.set', 'schedule.reset', 'schedule.resume', 'card.retry', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'granola.connect', 'granola.disconnect', 'session.signout', 'session.signout.all', 'session.revoke', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.edit', 'approval.send', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'invite.member', 'account.delete', 'device.pair', 'device.revoke', 'device.query', 'device.notify', 'imessage.enroll', 'imessage.pair', 'imessage.verify', 'imessage.activate', 'imessage.revoke', 'imessage.link', 'imessage.unlink', 'imessage.pair_shared', 'imessage.activate_shared', 'whatsapp.link', 'whatsapp.unlink', 'proactive_surface.set', 'mcp.connect', 'mcp.disconnect', 'mcp.runs', 'health_memory.set', 'act_without_asking.set', 'phone.sms_send', 'phone.sms_check', 'phone.set', 'app.connect', 'app.disconnect', 'agent_mail.claim', 'agent_mail.release', 'announcement.create', 'announcement.live', 'announcement.report'] as const;
 // made: where the owner made a memory pin or edit, recorded on the claim it writes (app:claim.edit); absent, the console's own.
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string; made?: string }>;
 
@@ -184,6 +184,7 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'proactivity.set': 'Saved. Waldo will reach out on your new settings.',
   'proactive_surface.set': 'Saved. Waldo sends its next messages there.',
   'health_memory.set': 'Saved. Notes Waldo keeps on its own include health only while this is on; what you ask it to remember is kept either way.',
+  'act_without_asking.set': 'Saved.',
   'schedule.reset': 'Reset. Every scheduled behavior is back to its default (on).',
   'invite.create': 'Invite saved. Send the code to the intended person yourself; Waldo did not email anyone.',
   'invite.member': 'Invite saved. Send the code yourself; Waldo did not email anyone.',
@@ -207,6 +208,12 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'node.forget.incomplete': 'The pattern was hidden and blocked from relearning, but retained conversation text could not be fully redacted. Supporting Spots remain. Ask Waldo in chat to inspect the incomplete removal; no dashboard retry target is available.',
   'node.forget': 'Pattern removed and its name blocked from relearning. What Waldo read behind it goes with it; anything you said yourself stays - forget that too to remove it. The current chat may still mention it until the conversation moves on.',
   'node.confirm': 'Confirmed. Waldo now treats this pattern as yours.',
+  'person.confirm': 'Confirmed. Waldo now knows them as someone you know.',
+  'person.rename': 'Renamed. Waldo now uses the name you gave.',
+  'person.rename.failed': 'Nothing was changed. The name must be 1 to 120 characters and hold no password, key or token.',
+  'person.ring': 'Saved. Waldo now keeps them where you put them.',
+  'person.ring.failed': 'Nothing was changed. Choose inner, close or wider.',
+  'person.forget': 'Forgotten: everything Waldo held about them, and their name and addresses are blocked from relearning, unless someone else you know shares the name. Older copies are cleared from storage in the background. Their mail and calendar events stay in Gmail and Google Calendar.',
   'node.correct': 'Corrected. Waldo now keeps your words instead, and will not bring back its earlier read.',
   'node.correct.failed': 'Nothing was changed. The text must be 1 to 140 characters and hold no password, key or token.',
   'schedule.resume': 'Resumed. It runs now.',
@@ -244,7 +251,7 @@ export type ConsoleView = Readonly<{
   usage: readonly Readonly<{ model: string; calls: number; input: number; cached: number; output: number; usd: number }>[];
   csrf: string;
   notice: string | null;
-  google: Readonly<{ accounts: readonly Readonly<{ id: string; email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean }>[]; connectAvailable: boolean }>;
+  google: Readonly<{ accounts: readonly Readonly<{ id: string; email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean; drive?: boolean; docs?: boolean; sheets?: boolean; slides?: boolean }>[]; connectAvailable: boolean }>;
   // Granola, read from the owner's MCP connections. Only the app's read fills it; the console lists every server under mcp.
   granola?: Readonly<{ connectAvailable: boolean; connection: Readonly<{ status: 'active' | 'reauth_needed'; connected_at: number }> | null }>;
   // Every catalogue app as a Connections tile. Only the app's read fills it.
@@ -272,6 +279,8 @@ export type ConsoleView = Readonly<{
   schedules: SchedulePreferences;
   // WAKE_BRIEF: a wake may bring the Brief earlier than its time, so the owner's Brief time is the latest it comes.
   wakeBrief?: boolean;
+  // The owner's "Just do it" choice and whether this Waldo acts on it (act-without-asking). Absent from a view that does not say.
+  actWithoutAsking?: Readonly<{ on: boolean; available: boolean }>;
   // Jobs the scheduler paused after their own runs failed, as the owner knows them, with the retry's local time.
   pausedJobs: readonly Readonly<{ id: string; name: string; until: string }>[];
   files: readonly StoredFile[];

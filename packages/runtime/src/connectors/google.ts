@@ -42,7 +42,7 @@ export const GOOGLE_CALLBACK_PATH = '/oauth/google/callback';
 
 export type GoogleApp = Readonly<{ clientId: string; clientSecret: string; redirectUri: string }>;
 // What Google says about the account at connect, validated by shape only (parseGoogleProfile). A provider fact, not the owner's word.
-export type GoogleProfile = Readonly<{ name?: string; given_name?: string; family_name?: string; phone?: string }>;
+export type GoogleProfile = Readonly<{ name?: string; given_name?: string; family_name?: string; phone?: string; picture?: string }>;
 export type GoogleTokens = Readonly<{ refresh_token: string; email?: string; scopes?: readonly string[] | null; profile?: GoogleProfile }>;
 type Fetch = typeof fetch;
 
@@ -89,7 +89,7 @@ export async function readConsentState(secret: string, state: string): Promise<R
   return constantTimeEqual(await sign(secret, `${owner}.${nonce}`), mac) ? { owner, nonce } : null;
 }
 
-// The account's name (the profile scope's ID token claims) and phone number are read once, at connect. Neither is a
+// The account's name and picture (the profile scope's ID token claims) and phone number are read once, at connect. Neither is a
 // feature: no tool is gated on them, and a grant without them connects as before.
 export const GOOGLE_PHONE_SCOPE = `${AUTH}user.phonenumbers.read`;
 export const GOOGLE_CONSENT_SCOPES: readonly string[] = ['openid', 'email', 'profile', ...GOOGLE_FEATURE_SCOPES.calendar, ...GOOGLE_FEATURE_SCOPES.availability, ...GOOGLE_FEATURE_SCOPES.calendar_list, ...GOOGLE_FEATURE_SCOPES.mail, ...GOOGLE_FEATURE_SCOPES.tasks, ...new Set([...GOOGLE_FEATURE_SCOPES.drive, ...GOOGLE_FEATURE_SCOPES.docs, ...GOOGLE_FEATURE_SCOPES.sheets, ...GOOGLE_FEATURE_SCOPES.slides]), ...GOOGLE_FEATURE_SCOPES.contacts, GOOGLE_PHONE_SCOPE];
@@ -140,10 +140,19 @@ const PROFILE_TEXT_MAX = 100;
 const E164 = /^\+[1-9]\d{6,14}$/;
 const profileText = (value: unknown): string | undefined =>
   typeof value === 'string' && value.trim() !== '' && value.length <= PROFILE_TEXT_MAX && !/\p{Cc}/u.test(value) ? value : undefined;
+// The picture is kept only as an https address on Google's profile image hosts, the one place Waldo fetches it from.
+const GOOGLE_PICTURE_HOST = /^lh[3-6]\.googleusercontent\.com$/;
+const GOOGLE_PICTURE_URL_MAX = 2048;
+export const googlePictureUrl = (value: unknown): string | undefined => {
+  if (typeof value !== 'string' || value.length > GOOGLE_PICTURE_URL_MAX) return undefined;
+  let url: URL;
+  try { url = new URL(value); } catch { return undefined; }
+  return url.protocol === 'https:' && GOOGLE_PICTURE_HOST.test(url.hostname) && !url.port && !url.username && !url.password && url.href === value ? value : undefined;
+};
 export const parseGoogleProfile = (value: unknown): GoogleProfile => {
   const record = isObject(value) ? value : {};
   const phone = typeof record.phone === 'string' && E164.test(record.phone) ? record.phone : undefined;
-  const fields = { name: profileText(record.name), given_name: profileText(record.given_name), family_name: profileText(record.family_name), phone };
+  const fields = { name: profileText(record.name), given_name: profileText(record.given_name), family_name: profileText(record.family_name), phone, picture: googlePictureUrl(record.picture) };
   return Object.fromEntries(Object.entries(fields).filter(([, field]) => field !== undefined));
 };
 
@@ -180,7 +189,7 @@ export async function exchangeGoogleCode(app: GoogleApp, code: string, fetcher: 
   const claims = result.id_token ? idTokenClaims(result.id_token) : {};
   const scopes = (result.scope ?? '').split(' ').filter(Boolean);
   const phone = scopes.includes(GOOGLE_PHONE_SCOPE) ? await peopleMePhone(result.access_token, fetcher, phoneTimeoutMs) : undefined;
-  const profile = parseGoogleProfile({ name: claims.name, given_name: claims.given_name, family_name: claims.family_name, phone });
+  const profile = parseGoogleProfile({ name: claims.name, given_name: claims.given_name, family_name: claims.family_name, phone, picture: claims.picture });
   return { refresh_token: result.refresh_token, scopes, ...(typeof claims.email === 'string' && claims.email ? { email: claims.email } : {}), profile };
 }
 
@@ -194,7 +203,9 @@ export type CalendarItem = Readonly<{ id: string; title: string; start: string; 
   status?: 'confirmed' | 'tentative' | 'cancelled'; updated?: string; recurring_event_id?: string; original_start?: string; source_url?: string; attendee_names?: readonly string[];
   attendee_emails?: readonly string[]; conference_url?: string; attachments?: readonly CalendarAttachment[]; owner_status?: 'organizer' | 'accepted';
   // The event carries the private mark Waldo writes on the events it creates.
-  waldo_made?: true }>;
+  waldo_made?: true;
+  // The event's iCal UID, the one id a phone calendar shares with Google for the same meeting.
+  ical_uid?: string }>;
 export type CalendarAttachment = Readonly<{ title: string; file_id?: string }>;
 // Whether Google emails the guests about a write. Left out, Google emails no one.
 export type CalendarSendUpdates = 'all' | 'none';
@@ -206,8 +217,8 @@ export type CalendarMoveOptions = CalendarWriteOptions & Readonly<{ title?: stri
 // connector API for concurrency (moveEvent/cancelEvent), not in a card prompt. Attendee emails,
 // the join link, attachments and the owner's status stay out of the shared card projection; meeting
 // prep adds the link and attachment titles itself.
-export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag' | 'operation_marker' | 'attendee_emails' | 'conference_url' | 'attachments' | 'owner_status' | 'waldo_made'> => {
-  const { etag: _etag, operation_marker: _marker, attendee_emails: _emails, conference_url: _link, attachments: _attachments, owner_status: _status, waldo_made: _made, ...projection } = event;
+export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag' | 'operation_marker' | 'attendee_emails' | 'conference_url' | 'attachments' | 'owner_status' | 'waldo_made' | 'ical_uid'> => {
+  const { etag: _etag, operation_marker: _marker, attendee_emails: _emails, conference_url: _link, attachments: _attachments, owner_status: _status, waldo_made: _made, ical_uid: _uid, ...projection } = event;
   return projection;
 };
 
@@ -1230,6 +1241,7 @@ const toItem = (event: GoogleEvent, details: boolean, ownerStatus: boolean): Cal
   // Waldo's markers are 64 lowercase hex characters; any other value there isn't Waldo's, so it is never reported as one.
   ...(typeof event.extendedProperties?.private?.waldoOperation === 'string' && /^[0-9a-f]{64}$/.test(event.extendedProperties.private.waldoOperation) ? { operation_marker: event.extendedProperties.private.waldoOperation } : {}),
   ...(event.extendedProperties?.private?.waldoMade === '1' ? { waldo_made: true as const } : {}),
+  ...(typeof event.iCalUID === 'string' && event.iCalUID.length > 0 && event.iCalUID.length <= 1024 ? { ical_uid: event.iCalUID } : {}),
   ...(['confirmed', 'tentative', 'cancelled'].includes(event.status ?? '') ? { status: event.status as CalendarItem['status'] } : {}),
   ...(typeof event.updated === 'string' && validCalendarInstant(event.updated) ? { updated: event.updated } : {}),
   ...(typeof event.recurringEventId === 'string' ? { recurring_event_id: event.recurringEventId.slice(0, 1024) } : {}),
@@ -1289,7 +1301,7 @@ const historyChanges = (records: readonly GmailHistoryRecord[]): Readonly<{ adde
 };
 
 type GoogleEvent = {
-  id: string; etag?: string; status?: string; transparency?: string; summary?: string; location?: string; description?: string; created?: string; updated?: string; recurringEventId?: string; originalStartTime?: { dateTime?: string; date?: string }; htmlLink?: string;
+  id: string; iCalUID?: string; etag?: string; status?: string; transparency?: string; summary?: string; location?: string; description?: string; created?: string; updated?: string; recurringEventId?: string; originalStartTime?: { dateTime?: string; date?: string }; htmlLink?: string;
   recurrence?: string[];
   start: { dateTime?: string; date?: string }; end: { dateTime?: string; date?: string };
   extendedProperties?: { private?: Record<string,string> };

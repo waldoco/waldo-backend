@@ -177,6 +177,8 @@ export type CapacityPassDeps = Readonly<{
   health: () => Promise<string | null | 'unknown'>;
   google: () => Promise<GoogleClient | null>;
   ask: (input: string) => Promise<string>;
+  // BLOCK_LIFECYCLE: how Waldo's blocks and window offers went lately, for calibration.
+  blocks?: () => string;
 }>;
 
 // The nightly pass. Google is read before the model is asked and the note written after, with no transaction held across it.
@@ -195,7 +197,7 @@ export const runCapacityPass = async (deps: CapacityPassDeps): Promise<CapacityO
   if (health === 'unknown') return 'health_unknown';
   const withdrawn = current !== null && health === null && deps.kv.get<boolean>(CAPACITY_BODY_KEY) === true;
   const raw = await deps.ask(capacityInput({ now: localIso(now, deps.timezone).replace('T', ' ').slice(0, 16), note: current?.text ?? null, health, withdrawn,
-    calendar: client ? calendarShape(items, days, deps.timezone, now) : NO_CALENDAR }));
+    calendar: client ? calendarShape(items, days, deps.timezone, now) : NO_CALENDAR, ...(deps.blocks ? { blocks: deps.blocks() } : {}) }));
   const outcome = keepCapacityNote(deps.store, deps.kv, raw, new Date(deps.now()).toISOString(), health !== null, transaction);
   return withdrawn && (outcome === 'unchanged' || outcome === 'held') ? retire(deps.store, deps.kv, transaction) : outcome;
 };

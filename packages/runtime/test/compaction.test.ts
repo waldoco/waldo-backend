@@ -10,7 +10,7 @@ afterEach(() => { Object.assign(COMPACTION, defaults); });
 
 const row = (id: string, parentId: string | null, role: 'user' | 'assistant', text: string, createdAt = 0): ConversationEntry => ({
   id, ownerId: 'owner', chatId: 'owner', parentId, threadAnchorId: null, surface: 'app', modelPayload: text, appPayload: text,
-  modelProjection: { mode: 'include' }, role, ...(role === 'user' ? { inputOrigin: 'owner' as const } : {}), createdAt,
+  modelProjection: { mode: 'include' }, role, ...(role === 'user' ? { inputOrigin: 'owner' as const, ownerWordsOnly: true as const } : {}), createdAt,
 });
 // n rounds of owner question and reply, each side `chars` long; ids u1, a1, u2, a2, ...
 const chain = (rounds: number, chars = 100): ConversationTree => {
@@ -63,7 +63,7 @@ describe('compaction', () => {
   });
 
   it('plans the span as everything older than the tail, bounded to the input budget, with covers naming original rows', () => {
-    const settings = { ...COMPACTION, budgetTokens: 120 };
+    const settings = { ...COMPACTION, budgetTokens: 120, summaryInputTokens: 120 };
     const tree = chain(8);
     const first = compactionPlan(tree, leafOf(8), null, settings)!;
     // the tail holds at most half the budget: the newest round (about 72 tokens) is always kept, a second round does not fit
@@ -112,7 +112,7 @@ describe('compaction', () => {
   });
 
   it('no owner instruction is lost when the span outgrows the summarizer input: replies give way first, and the summary view stays within budget', () => {
-    const settings = { ...COMPACTION, enabled: true, budgetTokens: 2_000 };
+    const settings = { ...COMPACTION, enabled: true, budgetTokens: 2_000, summaryInputTokens: 2_000 };
     const tree = new ConversationTree();
     let parent: string | null = null;
     const instructions: string[] = [];

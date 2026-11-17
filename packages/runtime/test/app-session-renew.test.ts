@@ -212,7 +212,7 @@ it('a session renewed three hours after its sign-in still needs a new code to de
   });
 });
 
-it('names each session by the device that holds it, keeps the name through a renewal, and shows it from controls revision 19', async () => {
+it('names each session by the device that holds it, keeps the name through a renewal, and shows it from controls revision 23', async () => {
   await withOwner('session-device', async (app) => {
     const phone = await signIn(app), tablet = await signIn(app);
     const put = (body: unknown, credential: string) => app('/session/device', body, credential, { method: 'PUT' });
@@ -226,8 +226,9 @@ it('names each session by the device that holds it, keeps the name through a ren
     type Item = { current: boolean; session_ref?: string; kind?: string; label?: string; last_active?: string };
     const read = async (credential: string, controls?: number) => appControlProjectionV1Schema.parse(await (await app('/controls?view=connections', undefined, credential, controls ? { headers: { 'x-waldo-app-contract': `controls=${controls}` } } : {})).json());
     const items = (view: { data: unknown }) => (view.data as { sessions: { items: Item[] } }).sessions.items;
-    for (const older of [undefined, 18]) for (const item of items(await read(phone.credential, older))) expect(Object.keys(item).sort()).toEqual(['current', 'signed_in', 'until']);
-    const shown = await read(phone.credential, 19);
+    // A build at 22 or below (people shipped at 22, and 19 to 21 are retired) sees none of it; 23 is the threshold.
+    for (const older of [undefined, 18, 19, 22]) for (const item of items(await read(phone.credential, older))) expect(Object.keys(item).sort()).toEqual(['current', 'signed_in', 'until']);
+    const shown = await read(phone.credential, 23);
     expect(shown.revision).toBe((await read(phone.credential)).revision);
     const mine = items(shown).find(item => item.current)!, other = items(shown).find(item => !item.current)!;
     expect(mine).toMatchObject({ session_ref: phone.session_ref, kind: 'phone', label: 'iPhone 17 Pro · iOS 26' });
@@ -235,6 +236,6 @@ it('names each session by the device that holds it, keeps the name through a ren
     expect(other).toMatchObject({ session_ref: tablet.session_ref, kind: 'unknown' });
     expect(other.label).toBeUndefined();
     const next = await renew(app, phone.credential);
-    expect(items(await read(next.credential, 19)).find(item => item.current)).toMatchObject({ session_ref: next.session_ref, kind: 'phone', label: 'iPhone 17 Pro · iOS 26' });
+    expect(items(await read(next.credential, 23)).find(item => item.current)).toMatchObject({ session_ref: next.session_ref, kind: 'phone', label: 'iPhone 17 Pro · iOS 26' });
   });
 });

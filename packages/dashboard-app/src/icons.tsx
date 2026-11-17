@@ -25,6 +25,8 @@ import chat from './assets/icons/ui-chat.svg?inline';
 import sun from './assets/icons/ui-sun.svg?inline';
 import moon from './assets/icons/ui-moon.svg?inline';
 import graph from './assets/icons/graph.svg?inline';
+import fileDocument from './assets/icons/document.svg?inline';
+import paperclip from './assets/icons/ui-paperclip.svg?inline';
 import gmail from './assets/logos/gmail.svg?inline';
 import googleCalendar from './assets/logos/google-calendar.svg?inline';
 import telegram from './assets/logos/telegram.svg?inline';
@@ -36,7 +38,7 @@ import whatsapp from './assets/logos/whatsapp.svg?inline';
 
 // SF Symbols from Waldo's icon set (Waldo-App/assets/sf, waldo-landing). Drawn as masks so each
 // glyph takes the colour of the text around it.
-const glyphs = { today, waiting, memory, patrol, settings, brief, spot, calendar, calendarClock, envelope, paperplane, checklist, close, entry, warning, person, bell, check, pending, retry, chevron, arrow, chat, sun, moon, graph };
+const glyphs = { today, waiting, memory, patrol, settings, brief, spot, calendar, calendarClock, envelope, paperplane, checklist, close, entry, warning, person, bell, check, pending, retry, chevron, arrow, chat, sun, moon, graph, document: fileDocument, paperclip };
 export type IconName = keyof typeof glyphs;
 export const Icon = ({ name, className }: { name: IconName; className?: string }) =>
   <span className={className ? `icon ${className}` : 'icon'} style={{ '--icon': `url("${glyphs[name]}")` } as CSSProperties} aria-hidden="true"/>;

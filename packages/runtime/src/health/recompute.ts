@@ -1,6 +1,6 @@
 import type { Scheduler } from '../scheduler/multiplexer';
 import { localIso } from '../channels/reminders';
-import { produceHealthScores, statedNeedOf, type ProducerDeps, type ProducerOutcome } from './producer';
+import { produceHealthScores, statedNeedOf, type ProducerDeps, type ProducerFailure, type ProducerOutcome } from './producer';
 import { detectHealthWakes, healthSnapshot, type HealthSnapshot, type HealthWakeReason } from './wakes';
 
 // The owner's derived rows are recomputed in the owner's own object, one recompute at a time. Every upload that changed a
@@ -27,8 +27,21 @@ export type HealthRecomputeDeps = Readonly<{
     enabled(): boolean;
     readContext(): Promise<unknown>;
     woken(day: string, reasons: readonly HealthWakeReason[]): Promise<void>;
+    // Reasons an upload named rather than the rows (a workout that just ended), for a run that started at runStartedAt. They
+    // go to the trigger with the run's own, once today's row is there to read, even when the run changed no row.
+    noted?(runStartedAt: number): readonly HealthWakeReason[];
   }>;
 }>;
+
+// A failed run names the step that failed and the database's closed answer, as one typed code such as
+// context_write:invalid_request, so the log line says which call refused without carrying anything it was sent.
+export class HealthRecomputeFailed extends Error {
+  readonly errorCode: `${ProducerFailure['step']}:${ProducerFailure['code']}` | null;
+  constructor(failure: ProducerFailure | undefined) {
+    super('health recompute failed');
+    this.errorCode = failure ? `${failure.step}:${failure.code}` : null;
+  }
+}
 
 const record = (value: unknown): Record<string, unknown> | null => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null);
 
@@ -36,14 +49,14 @@ const read = async (readContext: () => Promise<unknown>): Promise<HealthSnapshot
 
 export const healthRecompute = (deps: HealthRecomputeDeps) => {
   // A wake that cannot be read or noted never fails the recompute: a retry would only run the producer again.
-  const wake = async (wakes: NonNullable<HealthRecomputeDeps['wakes']>, before: HealthSnapshot | null, today: string): Promise<void> => {
+  const wake = async (wakes: NonNullable<HealthRecomputeDeps['wakes']>, before: HealthSnapshot | null, today: string, startedAt: number): Promise<void> => {
     try {
       const after = await read(wakes.readContext);
       if (!after || after.day !== today) return;
       const { readSettings } = deps.producer;
       const stated = readSettings ? statedNeedOf(await readSettings().catch(() => null)) : null;
       const needChangedAt = readSettings ? stated?.changedAt ?? (stated ? null : 'unknown') : null;
-      const reasons = await detectHealthWakes({ before, after, today, readDebt: async day => deps.producer.readScores?.(day), needChangedAt });
+      const reasons = [...await detectHealthWakes({ before, after, today, readDebt: async day => deps.producer.readScores?.(day), needChangedAt }), ...(wakes.noted?.(startedAt) ?? [])];
       if (reasons.length) await wakes.woken(today, reasons);
     } catch { console.error('health wake check failed'); }
   };
@@ -72,9 +85,10 @@ export const healthRecompute = (deps: HealthRecomputeDeps) => {
     async run(): Promise<ProducerOutcome> {
       const now = deps.now(), timezone = deps.ownerZone(), today = localIso(now, timezone).slice(0, 10), wakes = deps.wakes?.enabled() ? deps.wakes : null;
       const before = wakes ? await read(wakes.readContext).catch((): null => null) : null;
-      const outcome = await produceHealthScores(deps.producer, { now, timezone });
-      if (outcome === 'failed') throw new Error('health recompute failed');
-      if (outcome === 'written' && wakes) await wake(wakes, before, today);
+      const failures: ProducerFailure[] = [];
+      const outcome = await produceHealthScores({ ...deps.producer, onFailure: failure => failures.push(failure) }, { now, timezone });
+      if (outcome === 'failed') throw new HealthRecomputeFailed(failures[0]);
+      if (wakes && (outcome === 'written' || (wakes.noted?.(now).length ?? 0) > 0)) await wake(wakes, before, today, now);
       return outcome;
     },
   };

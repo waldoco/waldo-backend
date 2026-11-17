@@ -1,6 +1,7 @@
 import { RECEIPT_MAX_ITEMS, type ConversationReceipt, type ToolName } from '@waldo/contracts';
 import { sha256Hex, stableJson } from '../context-composer/canonical';
-import { receiptsFromLoopEvents, type LoopEventLike } from './claim-hook';
+import { receiptsFromLoopEvents, toolName, type LoopEventLike } from './claim-hook';
+import { TOOL_CLAIM_EFFECT } from './claim-verify-effects';
 
 // Receipt-first status line: what this turn's effect tools actually did, from typed receipts only.
 // No reply wording is read and the model produces no claim. 'accepted' means the tool accepted the
@@ -14,7 +15,7 @@ const STATE_WORD = { accepted: 'accepted', failed: 'failed', unresolved: 'unconf
 // The tools whose repeat is harmless (forgetting twice forgets once), each with the arguments that pick its target, so a
 // retry that only rewords its note names the same target. Any other effect can land before a later step refuses it (an
 // oversize result, a post-call halt), so its retry may be a second copy and its refusal stays shown.
-const REPEATABLE_TARGET_ARGS: Partial<Record<ToolName, readonly string[]>> = { forget_memory: ['claim_ids', 'topic', 'source'] };
+const REPEATABLE_TARGET_ARGS: Partial<Record<ToolName, readonly string[]>> = { forget_memory: ['claim_ids', 'topic', 'source', 'import_source'] };
 const targetOf = (keys: readonly string[], args: unknown): string =>
   !args || typeof args !== 'object' ? stableJson(args ?? null)
     : stableJson(Object.fromEntries(keys.flatMap(key => (args as Record<string, unknown>)[key] === undefined ? [] : [[key, (args as Record<string, unknown>)[key]]])));
@@ -37,8 +38,17 @@ const shownReceipts = (events: readonly LoopEventLike[]) => {
 };
 const TARGET_MAX = 200;
 
-// A proposal's effect only asks the owner for an approval: accepted, it is waiting on their yes, never done.
+// A proposal's effect only asks the owner for an approval: accepted, it is waiting on their yes, never done. One that ran
+// with no card and was done says so in its tool's own result (applied, or sent for a send), and is listed as done.
 const PROPOSED = '_proposed';
+export const proposalApplied = (tool: string, output: string): boolean => {
+  const name = toolName(tool);
+  if (!name || !TOOL_CLAIM_EFFECT[name]?.endsWith(PROPOSED)) return false;
+  try {
+    const data = (JSON.parse(output) as { data?: { applied?: unknown; sent?: unknown } }).data;
+    return data?.applied === true || data?.sent === true;
+  } catch { return false; }
+};
 
 // One thing done more than once in a turn (three memories saved) is one entry with its count: a text-only channel shows this
 // line as the reply's last line, where the same words three times read as a glitch. The typed items stay one per receipt.
@@ -52,9 +62,10 @@ export const receiptLine = (events: readonly LoopEventLike[]): string | null => 
   // A turn where every effect was accepted reads as plain words; any other state keeps every entry's state explicit.
   const explicit = !receipts.every(r => stateOf(r) === 'accepted');
   const entries = new Map<string, Entry>();
+  const applied = new Set(events.filter(event => event.applied).map(event => event.seq));
   for (const r of receipts) {
     const entry: Entry = explicit ? { part: 'receipts', label: label(r), note: ` (${stateOf(r)}${r.delegated ? ', via task' : ''})`, count: 1 }
-      : r.effect.endsWith(PROPOSED) ? { part: 'asked', label: label(r, r.effect.slice(0, -PROPOSED.length)), note: r.delegated ? ' (via task)' : '', count: 1 }
+      : r.effect.endsWith(PROPOSED) ? { part: applied.has(r.seq) ? 'done' : 'asked', label: label(r, r.effect.slice(0, -PROPOSED.length)), note: r.delegated ? ' (via task)' : '', count: 1 }
       : { part: 'done', label: label(r), note: r.delegated ? ' (via task)' : '', count: 1 };
     const key = stableJson([entry.part, entry.label, entry.note]);
     const seen = entries.get(key);

@@ -53,7 +53,7 @@ type OwnerInternals = {
   drainApp(alarmEnd?: number): Promise<void>; drainIMessage(alarmEnd?: number): Promise<void>;
   turn(update: unknown, channel: string, durable: boolean, scope?: RunEffectScope): Promise<void>;
   serial<T>(work: () => Promise<T>): Promise<T>;
-  setup(): { scheduler: { hasDue(): boolean; dispatchDue(executors: unknown, canStart?: () => boolean): Promise<readonly unknown[]> } };
+  setup(channel: string): { scheduler: { hasDue(): boolean; dispatchDue(executors: unknown, canStart?: () => boolean): Promise<readonly unknown[]> } };
 };
 const ownerIn = (state: DurableObjectState, name: string) => new OwnerDO(state, {
   ...env, TELEGRAM_BOT_TOKEN: '123456:fictional-telegram-token', TELEGRAM_WEBHOOK_SECRET: 'fictional-inbox-secret', OPENAI_API_KEY: 'fictional-model-key',
@@ -81,7 +81,7 @@ const alarmAfterAppTurn = async (name: string, appTurnMs: number, telegram = tru
         }));
         expect(response.status).toBe(200);
       } else {
-        const { scheduler } = owner.setup();
+        const { scheduler } = owner.setup('telegram');
         vi.spyOn(scheduler, 'hasDue').mockReturnValue(true);
         vi.spyOn(scheduler, 'dispatchDue').mockImplementation(async (_executors, canStart) => { jobMayStart = canStart?.(); return []; });
       }
