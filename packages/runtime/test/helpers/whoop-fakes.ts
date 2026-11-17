@@ -84,6 +84,8 @@ export const whoopFetch = (world: World, clock: { now: number }): typeof fetch =
 export type Stored = { revision: number; payload: Record<string, unknown> };
 export type Plane = {
   samples: Map<string, Stored>; requests: Map<string, { digest: string; response: unknown }>; ingests: number; consent: 'granted' | 'withdrawn' | 'none'; model: 'granted' | 'withdrawn' | 'none'; epoch: number;
+  // withdrawOnIngest: the owner withdraws storage as the first batch arrives. consentFails: the consent list cannot be read.
+  withdrawOnIngest?: boolean; consentFails?: boolean;
   sessions: string[]; handoffs: string[]; vault: VaultFake;
 };
 // Any owner name may link: the owner gate is the real function's job and is covered by the edge's own tests.
@@ -99,6 +101,7 @@ export const newPlane = (): Plane => ({ samples: new Map(), requests: new Map(),
 export const planeRpc = (plane: Plane, doName = 'owner-w', source = 'whoop') => async (fn: string, _message: string, args: Record<string, string | number>): Promise<unknown> => {
   // `consent` is the storage grant and `model` the model-use grant; the database refuses readings on storage alone.
   if (fn === 'health_consent_list') {
+    if (plane.consentFails) throw new Error('consent list unavailable');
     const rows = [['storage_compute', plane.consent], ['model_processing', plane.model]] as const;
     return { consents: rows.filter(([, status]) => status !== 'none').map(([purpose, status]) => ({ consent_class: 'health_processing', source, purpose, version: 3, status, epoch: plane.epoch, granted_at: '2026-10-01T00:00:00.000Z', withdrawn_at: null, deletion_state: 'not_required' })) };
   }
@@ -107,6 +110,7 @@ export const planeRpc = (plane: Plane, doName = 'owner-w', source = 'whoop') => 
     const parsed = healthIngestV1Schema.safeParse(body);
     if (!parsed.success) return { error: 'invalid_request' };
     const prior = plane.requests.get(parsed.data.request_id);
+    if (plane.withdrawOnIngest) plane.consent = 'withdrawn';
     if (plane.consent !== 'granted') return { error: plane.consent === 'withdrawn' ? 'consent_withdrawn' : 'consent_required' };
     if (parsed.data.consent_epoch !== plane.epoch) return { error: 'epoch_conflict' };
     if (prior) return { ...(prior.response as object), replayed: true };
