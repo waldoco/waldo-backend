@@ -35,6 +35,8 @@ export const healthReadSignalSchema = z.enum([
   'body_mass', 'body_fat', 'lean_body_mass', 'stand_hours',
   // Food the owner's own app logged to the phone's health store: energy and the three macros, each a day's sum.
   'food_energy', 'protein', 'carbs', 'fat',
+  // Heart rate variability through the waking day: the day's mean of the hourly readings, apart from the overnight one.
+  'daytime_hrv',
 ]);
 export type HealthReadSignal = z.infer<typeof healthReadSignalSchema>;
 const healthReadDaySchema = z.iso.date();
