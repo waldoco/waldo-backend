@@ -44,6 +44,9 @@ export type AppHealthInput = Readonly<{
   readDemand?: ProducerDeps['readDemand'];
   // Tells the owner's Durable Object that today's derived row moved zone, so the health trigger can look at it.
   notifyZoneChange?: ProducerDeps['onZoneChange'];
+  // Has the owner's object end a wearable provider's connection once the owner withdraws storage for that source, so the
+  // provider's token goes with the grant; the provider's own next sync ends it too if this call never lands.
+  providerWithdrawn?: (source: string) => Promise<unknown>;
 }>;
 
 export const APP_HEALTH_PATH = '/app/v1/health';
@@ -287,7 +290,11 @@ export const handleAppHealth = async (input: AppHealthInput): Promise<Response> 
   const [operation, requestSchema, responseSchema] = write;
   if (operation !== 'ingest') {
     const body = await readJson(request, requestSchema, readBody);
-    return 'response' in body ? body.response : settle(await invokeHealth(rpc, doName, operation, JSON.stringify(body.data)), responseSchema);
+    if ('response' in body) return body.response;
+    const response = settle(await invokeHealth(rpc, doName, operation, JSON.stringify(body.data)), responseSchema);
+    const { source, purpose } = body.data as { source: string; purpose: string };
+    if (operation === 'consent_withdraw' && response.status === 200 && purpose === 'storage_compute' && isHealthProviderSourceV1(source) && input.providerWithdrawn) input.defer?.(input.providerWithdrawn(source));
+    return response;
   }
   // A build that does not name health revision 3 keeps the all-or-nothing batch exactly.
   const perSample = appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'health') >= HEALTH_PER_SAMPLE_REVISION_V1;

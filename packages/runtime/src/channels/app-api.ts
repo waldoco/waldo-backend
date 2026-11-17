@@ -23,6 +23,7 @@ import type { ChartSeriesPart } from '../tools/live/show-chart';
 import { appDeviceMutationResultV1Schema, appDeviceRegisterV1Schema, appDeviceRevokeV1Schema, appDevicesResultV1Schema } from '../../../contracts/src/app/devices';
 import { APP_ONBOARDING_PATHS } from './app-onboarding';
 import { APP_PROVIDERS_PATH, handleAppHealthProviders } from '../health/providers/app-providers';
+import { callOwnerProvider } from '../health/providers/provider-route';
 import { fenceSession } from './session-fence';
 import { CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS, CONSOLE_OTP_SEND_LIMIT, CONSOLE_OTP_VERIFY_LIMIT } from './console-signin';
 import { publicOrigin, type PublicOriginEnv } from '../connectors/public-origin';
@@ -281,6 +282,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
       ...(env.WORKOUT_WAKE === '1' ? { workoutWake: true } : {}),
       ...(secret ? { readDemand: (range: { from: string; to: string; timezone: string }) => readOwnerDemand(owners, secret, doName, range),
         notifyZoneChange: (day: string) => notifyOwnerZoneChange(owners, secret, doName, day),
+        providerWithdrawn: (source: string) => callOwnerProvider(owners, secret, doName, 'disconnect', source === 'whoop' ? {} : { provider: source }),
         notifySamples: (woke?: boolean, workout?: boolean) => notifyOwnerHealthSamples(owners, secret, doName, 'readings', woke, workout),
         notifySettings: () => notifyOwnerHealthSamples(owners, secret, doName, 'settings') } : {}) });
   }
