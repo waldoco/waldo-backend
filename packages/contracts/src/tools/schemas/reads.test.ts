@@ -171,6 +171,8 @@ describe('getHealthArgsSchema', () => {
 
   it('asks for body composition and stand hours, and types kilograms', () => {
     expect(getHealthArgsSchema.safeParse({ signals: ['body_mass', 'body_fat', 'lean_body_mass', 'stand_hours'], from: '2026-10-01', to: '2026-10-07' }).success).toBe(true);
+    expect(getHealthArgsSchema.safeParse({ signals: ['daytime_hrv'], from: '2026-10-01', to: '2026-10-07' }).success).toBe(true);
+    expect(getHealthArgsSchema.safeParse({ signals: ['hrv_window'], from: '2026-10-01', to: '2026-10-07' }).success).toBe(false);
     expect(getHealthArgsSchema.safeParse({ signals: ['body_weight'], from: '2026-10-01', to: '2026-10-07' }).success).toBe(false);
   });
 

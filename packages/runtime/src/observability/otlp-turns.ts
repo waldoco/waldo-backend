@@ -87,7 +87,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
       attr('langfuse.observation.type', 'generation'),
       ...optional('langfuse.observation.metadata.cached_share', share(usage.cached, usage.input)),
       attr('langfuse.observation.model.name', usage.model),
-      attr('langfuse.observation.usage_details', JSON.stringify({ input: uncachedInput(usage), input_cached_tokens: usage.cached, ...(usage.cache_write ? { input_cache_write_tokens: usage.cache_write } : {}), output: usage.output })),
+      attr('langfuse.observation.usage_details', JSON.stringify({ input: uncachedInput(usage), input_cached_tokens: usage.cached, ...(usage.cache_write ? { input_cache_write_tokens: usage.cache_write } : {}), ...(usage.cache_write_1h ? { input_cache_write_1h_tokens: usage.cache_write_1h } : {}), output: usage.output })),
       attr('langfuse.observation.metadata.cost_kind', cost ? 'estimate' : 'unpriced'),
       ...(cost ? [attr('langfuse.observation.metadata.price_source', JSON.stringify({
         source: 'runtime:modelCost:standard-flat',
@@ -95,6 +95,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
           input: modelCost({ model: usage.model, input: 1_000_000, cached: 0, output: 0 })!.input,
           cached: modelCost({ model: usage.model, input: 1_000_000, cached: 1_000_000, output: 0 })!.input,
           cache_write: modelCost({ model: usage.model, input: 1_000_000, cached: 0, cache_write: 1_000_000, output: 0 })!.cache_write,
+          ...(usage.cache_write_1h ? { cache_write_1h: modelCost({ model: usage.model, input: 1_000_000, cached: 0, cache_write: 1_000_000, cache_write_1h: 1_000_000, output: 0 })!.cache_write } : {}),
           output: modelCost({ model: usage.model, input: 0, cached: 0, output: 1_000_000 })!.output,
         },
       }))] : []),

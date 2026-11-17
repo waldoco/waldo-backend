@@ -56,7 +56,9 @@ export type OwnerResponder = Readonly<{
   // `ownerModel` runs the job on the model the owner's own turn uses (still clamped past the spend ceiling): for a job that
   // answers the owner's own message late, never for one Waldo starts itself.
   // `attachments` reach the model with `said` on this turn only, as an owner turn's files do; they are never stored.
-  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string, sourceTaint?: 'external', ownerModel?: boolean, attachments?: readonly LLMAttachment[], directTools?: readonly ToolName[]): Promise<string>;
+  // `waldoFirst` marks a run Waldo starts on a schedule (a day card, a check-back, a sweep, an intervention), never one that
+  // answers the owner: with WALDO_LEAN_SCHEDULED it reads the lean scheduled view instead of the chat replay.
+  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string, sourceTaint?: 'external', ownerModel?: boolean, attachments?: readonly LLMAttachment[], directTools?: readonly ToolName[], waldoFirst?: boolean): Promise<string>;
   // done is false when the conversation was not consolidated and must be offered again.
   // policy.health false keeps no health notes from this pass, or from the migration.
   consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>, policy?: Readonly<{ health: boolean }>): Promise<Readonly<{ done: boolean; detail: string }>>;
