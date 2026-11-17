@@ -1220,12 +1220,17 @@ const iMessageOnly = async (w: Awaited<ReturnType<typeof world>>) => {
 const DAY = () => new Date().toISOString().slice(0, 10);
 // One alarm pass runs the due job; once the outbox's quarter-second hold on a new record passes, the next passes hand it to the
 // bridge. Answers what the host pulled.
+// The scripted reply holds until the bridge has pulled the message: on a slow runner the job's model call can land after
+// settle(), and a reply reset before it would send the default text instead.
 const scheduledOnIMessage = async (w: Awaited<ReturnType<typeof world>>, text: string) => {
   proof.reply = text;
-  try { await runDurableObjectAlarm(w.ownerStub); await w.settle(); } finally { proof.reply = 'Scripted owner reply.'; }
-  await new Promise(resolve => setTimeout(resolve, 300));
-  await w.pump();
-  const { delivery } = await w.host.pull();
+  let delivery: Delivery | null;
+  try {
+    await runDurableObjectAlarm(w.ownerStub); await w.settle();
+    await new Promise(resolve => setTimeout(resolve, 300));
+    await w.pump();
+    ({ delivery } = await w.host.pull());
+  } finally { proof.reply = 'Scripted owner reply.'; }
   expect(delivery, 'the message reached the bridge').not.toBeNull();
   expect(JSON.parse(delivery!.body)).toMatchObject({ operation: 'send', text, binding: { subject: SUBJECT, chatGuid: CHAT } });
   return delivery!;
