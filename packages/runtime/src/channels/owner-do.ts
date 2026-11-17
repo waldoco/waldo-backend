@@ -5203,7 +5203,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const armOwnJobs = (timezone: string, now: number, replanCards = false) => Promise.all([
       schedPrefs.enabled('nightly') && armable('nightly') ? armNightly(scheduler, timezone, now) : Promise.resolve(),
       sweepWanted(schedPrefs.all(), sweepCarriesUpdates) && armable('event_briefs')
-        ? accounts().then(all => briefSweepRuns(watchGrants(all)) ? armBriefSweep(scheduler, now) : scheduler.cancelReadable(BRIEF_SWEEP_ID).then(() => undefined)) : Promise.resolve(),
+        ? accounts().then(all => briefSweepRuns(watchGrants(all)) ? armBriefSweep(scheduler, now) : scheduler.cancelReadable(BRIEF_SWEEP_ID).then(() => {
+          // No connected account grants mail or calendar reads: Waldo's own look (meeting prep, update cards) has nothing to read.
+          log({ trace: 'own-jobs', hop: 'own_jobs', ms: 0, ok: false, code: 'brief_sweep_off_no_google_grant' });
+        })) : Promise.resolve(),
       schedPrefs.enabled('daily_brief') && armable('daily_brief') ? (replanCards ? replanDayCards(scheduler, plans, timezone, now).then(() => false) : armDayCards(scheduler, plans, timezone, now)) : Promise.resolve(false),
       schedPrefs.enabled('heartbeat') && armable('heartbeat') ? armHeartbeat(scheduler, now) : Promise.resolve(),
       interventions && schedPrefs.enabled('heartbeat') && armable('heartbeat') ? armLook(now) : dropLook(),
@@ -5224,9 +5227,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     // Native chat initialization cannot launch unrequested background model work. An owner whose only surface is iMessage is the
     // exception: their iMessage runtime runs their scheduled work, so it arms it, as a WhatsApp-only owner's runtime does.
+    // An app owner whose zone is not confirmed gets none of it (no nightly pass, look, heartbeat or day card) until they choose
+    // one; that wait is logged by its closed reason on every runtime build, so an account left without them is visible.
     const proactiveReady = channel === 'imessage' && !this.imessageOnly() ? this.browserReady : channel === 'app'
       ? (armable('nightly') ? Promise.all([backfillEpisodes(kv, episodes), armOwnJobs(clock.timezone, Date.now()), this.browserReady])
-        .then(() => reconcileSchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now: Date.now(), cancelMachine, alongHeartbeat: lookFollows, sweepCarriesUpdates })) : this.browserReady)
+        .then(() => reconcileSchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now: Date.now(), cancelMachine, alongHeartbeat: lookFollows, sweepCarriesUpdates }))
+        : (log({ trace: 'own-jobs', hop: 'own_jobs', ms: 0, ok: false, code: 'waiting_timezone_unconfirmed' }), this.browserReady))
       : Promise.all([backfillEpisodes(kv, episodes), armOwnJobs(clock.timezone, Date.now()), this.browserReady])
       .then(async ([, [, , seeded]]) => {
         await reconcileSchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now: Date.now(), cancelMachine, alongHeartbeat: lookFollows, sweepCarriesUpdates });
