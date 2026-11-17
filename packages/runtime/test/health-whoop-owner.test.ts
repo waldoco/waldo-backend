@@ -371,14 +371,30 @@ describe('WHOOP webhooks as hints', () => {
 });
 
 describe('WHOOP consent', () => {
-  it('stops and stores nothing once the owner\'s storage consent is withdrawn, and says so in the status', async () => {
+  it('disconnects once the owner\'s storage consent is withdrawn: revokes at WHOOP, deletes the saved access and stops the schedule', async () => {
     const h = await connected({}, 3);
     h.plane.consent = 'withdrawn';
     expect(await h.owner.sync()).toBe('consent_required');
-    expect(h.plane.ingests).toBe(0);
-    expect(h.produced.count).toBe(0);
-    expect((await h.owner.status()).state).toBe('consent_required');
-    expect(await h.owner.hint({ type: 'sleep.updated', id: night(0).sleep.id as string, trace: 'trace-eeee-0001' })).toBe('consent_required');
+    expect([h.plane.ingests, h.produced.count]).toEqual([0, 0]);
+    expect([h.plane.vault.rows.filter(row => row.status !== 'revoked').length, h.plane.vault.rows[0]!.secret, h.kv.has('whoop:conn'), h.kv.has('whoop:cursor'), h.disarmed.count]).toEqual([0, '', false, false, 1]);
+    expect(h.world.calls).toContain('DELETE /user/access');
+    expect(h.armed.filter(at => at > NOW)).toEqual([]);
+    expect(await h.owner.status()).toMatchObject({ state: 'not_connected' });
+    expect(await h.owner.sync()).toBe('idle');
+  });
+
+  it('disconnects when the withdrawal lands mid-run, after the database refuses a batch', async () => {
+    const h = await connected({}, 3);
+    h.plane.withdrawOnIngest = true;
+    expect(await h.owner.sync()).toBe('consent_required');
+    expect([h.plane.vault.rows.filter(row => row.status !== 'revoked').length, h.kv.has('whoop:conn')]).toEqual([0, false]);
+  });
+
+  it('keeps the connection when the consent list cannot be read, and tries again soon', async () => {
+    const h = await connected({}, 3);
+    h.plane.consentFails = true;
+    expect(await h.owner.sync()).toBe('failed');
+    expect([h.plane.vault.rows.filter(row => row.status !== 'revoked').length, h.kv.has('whoop:conn')]).toEqual([1, true]);
   });
 
   it('stops the same way when only model use is withdrawn, since WHOOP data may be stored only for AI use the owner allowed', async () => {

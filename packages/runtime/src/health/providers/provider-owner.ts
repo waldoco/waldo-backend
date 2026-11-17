@@ -251,6 +251,7 @@ export const providerOwner = <Config, Api, Source extends string>(deps: Provider
     try {
       const consent = await consents();
       if (!consent) return await finish('failed', 'consent_unreadable', started + RETRY_MS);
+      if (!consent.storage) return await withdrawn();
       if (missingGrants(consent).length > 0) return await finish('consent_required', 'consent_required', started + SYNC_EVERY_MS);
       const windows: [number, number][] = [];
       const first = progress.backfilled ? Math.min(started - RECONCILE_DAYS * DAY_MS, dirty ?? Infinity) : progress.next_from ?? started - BACKFILL_DAYS * DAY_MS;
@@ -268,6 +269,7 @@ export const providerOwner = <Config, Api, Source extends string>(deps: Provider
       return await finish('synced', 'synced', started + SYNC_EVERY_MS);
     } catch (error) {
       if (changed > 0) await deps.produce(pass.woke, pass.workout).catch(() => undefined);
+      if (error instanceof ConsentGone && (await consents().catch(() => null))?.storage === false) return withdrawn();
       const result = classify(error);
       // Committed pages stay committed; nothing is zero-filled for the rest. A reconnect or a consent waits for the owner.
       return finish(result, result === 'failed' ? 'failed' : result, result === 'rate_limited' ? started + (error as RateLimited).afterMs : result === 'failed' ? started + RETRY_MS : result === 'consent_required' ? started + SYNC_EVERY_MS : null);
@@ -333,7 +335,7 @@ export const providerOwner = <Config, Api, Source extends string>(deps: Provider
 
   // The saved access is removed whether or not the provider confirms. What it has already shared stays stored until the
   // owner withdraws storage consent for this source, as for every source.
-  const disconnect = async (): Promise<Readonly<{ revoked_at_provider: boolean }>> => {
+  const teardown = async (code: string): Promise<boolean> => {
     const conn = connection();
     let revoked = false;
     if (conn && proxy) {
@@ -343,9 +345,13 @@ export const providerOwner = <Config, Api, Source extends string>(deps: Provider
     for (const name of ['conn', 'cursor', 'reconnect', 'dirty_from']) kv.delete(key(name));
     for (const [seen] of [...kv.list<number>({ prefix: key('seen:') })]) kv.delete(seen);
     await deps.disarm();
-    log(true, 'disconnected');
-    return { revoked_at_provider: revoked };
+    log(true, code);
+    return revoked;
   };
+  const disconnect = async (): Promise<Readonly<{ revoked_at_provider: boolean }>> => ({ revoked_at_provider: await teardown('disconnected') });
+  // Storage consent is the owner's permission for Waldo to hold this provider's data at all, so its withdrawal ends the
+  // connection too: no token for the source outlives it. A withdrawn model-use grant alone pauses the sync instead.
+  const withdrawn = async (): Promise<SyncResult> => { await teardown('consent_withdrawn'); return 'consent_required'; };
 
   const connectedAt = (): number | null => connection()?.linked_at ?? null;
 

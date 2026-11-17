@@ -228,6 +228,16 @@ describe('Google Health owner: webhook hints', () => {
 });
 
 describe('Google Health owner: disconnecting', () => {
+  it('disconnects when the owner withdraws storage consent: the token is revoked at Google and the saved access deleted', async () => {
+    const h = await linked();
+    h.plane.consent = 'withdrawn';
+    expect(await h.owner.sync()).toBe('consent_required');
+    expect(h.world.revoked).toBeGreaterThan(0);
+    expect([...h.kv.keys()].filter(key => key.startsWith('google_health:'))).toEqual([]);
+    expect(h.plane.vault.rows.filter(row => row.status !== 'revoked')).toHaveLength(0);
+    expect(h.disarmed.count).toBe(1);
+  });
+
   it('has the edge revoke the token at Google, and forgets the connection, cursor and marks', async () => {
     const h = await linked();
     await h.owner.hint({ type: 'sleep', from: iso(NOW - 10 * DAY), trace: 'trace-0007' });
