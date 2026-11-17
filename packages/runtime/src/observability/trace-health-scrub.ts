@@ -17,9 +17,9 @@ const HEALTH_TOOLS: ReadonlySet<string> = new Set<string>(['get_health', 'show_c
 const TOOL_HOP = /^(?:subagent_|task_)?tool_(.+)$/;
 
 // The openings of the health blocks the prompt builders write: the composer's and the REASONS builder's derived health
-// context, the owner turn's shared-health label, the owner-logged meals and workouts and the capacity note a day card reads
-// (prompt/capacity.ts). Each block is one paragraph.
-const HEALTH_BLOCK = /^\s*(?:Form zone:|Recovery zone:|Shared health today\b|Recent health logs\b|Capacity note:)/;
+// context (full or partial), the owner turn's shared-health label, the owner-logged meals and workouts and the capacity note a
+// day card reads (prompt/capacity.ts). Each block is one paragraph.
+const HEALTH_BLOCK = /^\s*(?:Form zone:|Recovery zone:|Partial health context:|Shared health today\b|Recent health logs\b|Capacity note:)/;
 const PARAGRAPHS = /(\n[ \t]*\n)/;
 
 const scrubProse = (text: string): string => redactNumericHealth(

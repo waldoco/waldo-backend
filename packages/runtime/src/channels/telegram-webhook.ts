@@ -69,6 +69,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" lets the health trigger, on a day with nothing coming, send one short note as an update card when the model judges
   // it worth it; anything else keeps such a day silent.
   HEALTH_SOLO_NOTICE?: string;
+  // "1" gives the model a partial health block, in words, for a day whose body data made no Recovery score, and fills the
+  // block's missing lists from the stored row; anything else leaves such a day with no health block.
+  HEALTH_PARTIAL_CONTEXT?: string;
   HEALTH_TRAINING_LOAD?: string;
   // '1' has the health decision reason from the reviewed health protocols (skills/health-protocols), read through the
   // owner's next day, in the chat role. Anything else keeps the decision as it was.
@@ -242,6 +245,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_ASYNC_TOOLS?: string;
   // "1": a background job's request row keeps only a key, never the job's prompt (conversation/job-outcome.ts).
   WALDO_JOB_OUTCOME_ROWS?: string;
+  // "1": a Waldo-first scheduled run (day card, check-back, update sweep, intervention) reads a lean view: its own event, the
+  // composed context and the last few rows of the owner's exchange instead of the chat replay, under one tool menu and a
+  // 1-hour cached head shared by every scheduled job kind (channels/owner-turn.ts).
+  WALDO_LEAN_SCHEDULED?: string;
   // "1": the owner's WhatsApp turns read and write the owner's own chain, the one their app chat uses (conversation/one-timeline.ts).
   WALDO_ONE_TIMELINE?: string;
   // "1": the owner's own reply takes a light step that answers quick chat or hands the turn to the strong role, and every task
@@ -289,6 +296,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" with MEMORY_NIGHTLY_SOURCE_UPDATES also "1": mail and calendar changes reach memory the same day (memory/consolidator.ts).
   MEMORY_DAYTIME_CONSOLIDATOR?: string;
   MEMORY_VALIDITY?: string;
+  // "1": an owner turn also recalls notes learned from mail and calendar, shown as not the owner's words; a turn that recalls one is marked as carrying outside content (memory/claims.ts withOutsideNotes).
+  MEMORY_OUTSIDE_NOTES?: string;
   MEMORY_CLAIM_CONTROLS?: string;
   MEMORY_USED_SHOWN?: string;
   // Opt-in only after mixed-inbox privacy and live usefulness acceptance.
