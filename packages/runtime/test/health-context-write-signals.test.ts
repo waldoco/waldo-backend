@@ -1,19 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { produceHealthScores } from '../src/health/producer';
 import { dailyScoresFor } from '../src/health/scores';
-import { USED_SIGNALS } from '../src/health/scores/types';
+import { WRITER_USED_SIGNALS as ADMITTED } from './support/migration-lists';
 
 // waldo.health_context_write refuses a whole derived row when a pillar's used.signals names anything outside its closed list.
 // form.v10 began naming steps without the migration that admits it, and every Health Connect owner's recompute failed as
-// invalid_request. The engine's names are typed to USED_SIGNALS, so a new name cannot compile without joining it; these
-// tests keep USED_SIGNALS inside the list of the newest migration that defines the writer.
-
-// Vite replaces a literal import.meta.glob call at build time; this package carries no vite client types, hence the directive.
-// @ts-expect-error import.meta.glob is provided by vite at test time
-const migrations: Record<string, string> = import.meta.glob('../../../supabase/migrations/*.sql', { query: '?raw', import: 'default', eager: true });
-const [newest, definition] = Object.entries(migrations).filter(([, sql]) => /create or replace function waldo\.health_context_write\(/.test(sql)).sort(([a], [b]) => a.localeCompare(b)).at(-1) ?? ['', ''];
-const body = definition.slice(definition.indexOf('function waldo.health_context_write('));
-const ADMITTED = [...(/\(s #>> '\{\}'\) not in \(([^)]+)\)/.exec(body)?.[1] ?? '').matchAll(/'([a-z_0-9]+)'/g)].map(match => match[1]!);
+// invalid_request. The engine's names are typed to the registry's score inputs, so a new name cannot compile without joining
+// them; this test writes a Health Connect owner's row through a writer that answers as the newest migration's list does; the registry test
+// keeps that list equal to the registry's score inputs.
 
 // A Galaxy Watch through Health Connect: nights, heart-rate hours and hourly steps, and no movement minutes. Synthetic values.
 const TODAY = '2026-11-01', HOUR = 3_600_000;
@@ -46,16 +40,6 @@ const writer = () => {
 };
 
 describe('the signals a score names are ones the derived-row writer admits', () => {
-  it('reads the closed list from the newest migration that defines the writer', () => {
-    expect(newest).toMatch(/\d{14}_[a-z_0-9]+\.sql$/);
-    expect(ADMITTED.length).toBeGreaterThanOrEqual(11);
-    expect(new Set(ADMITTED).size).toBe(ADMITTED.length);
-  });
-
-  it('keeps every name the score engine can use inside that list', () => {
-    expect(USED_SIGNALS.filter(name => !ADMITTED.includes(name))).toEqual([]);
-  });
-
   it('writes a Health Connect owner\'s Form read on steps, so their recompute does not fail', async () => {
     const { named, write } = writer();
     const outcome = await produceHealthScores({

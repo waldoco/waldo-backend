@@ -153,8 +153,8 @@ const DAY_LABEL = String.raw`\b(?:yesterday|today|tonight|last\s+night|this\s+mo
 const reading = (source: string): RegExp => new RegExp(source, 'i');
 // REM the sleep stage is written in capitals; lowercase "rem" is usually "remaining".
 const casedReading = (source: string): RegExp => new RegExp(source);
-// HRV with the method get_health labels it by, or the method alone.
-const HRV = String.raw`(?:(?:hrv|heart\s+rate\s+variability)\b(?:\s*(?:\(\s*)?(?:rmssd|sdnn)\b(?:\s*\))?)?|(?:rmssd|sdnn)\b)`;
+// HRV with the method get_health labels it by, or the method alone; daytime HRV may be named for the day it spans.
+const HRV = String.raw`(?:(?:hrv|heart\s+rate\s+variability)\b(?:\s*(?:\(\s*)?(?:rmssd|sdnn)\b(?:\s*\))?)?(?:\s+(?:through|during|across)\s+the\s+day\b)?|(?:rmssd|sdnn)\b)`;
 const DURATION = String.raw`(?:h|hrs?|hours?|m|mins?|minutes?)\b`;
 // The minute signals get_health returns beside sleep.
 const MINUTE_SIGNAL = String.raw`(?:movement|daylight|workouts?|mindfulness)`;
