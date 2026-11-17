@@ -282,8 +282,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
       ...(env.WORKOUT_WAKE === '1' ? { workoutWake: true } : {}),
       ...(secret ? { readDemand: (range: { from: string; to: string; timezone: string }) => readOwnerDemand(owners, secret, doName, range),
         notifyZoneChange: (day: string) => notifyOwnerZoneChange(owners, secret, doName, day),
-        // The owner's object connects WHOOP only, so only a WHOOP withdrawal has a connection to end there.
-        providerWithdrawn: async (source: string) => { if (source === 'whoop') await callOwnerProvider(owners, secret, doName, 'disconnect', {}); },
+        providerWithdrawn: (source: string) => callOwnerProvider(owners, secret, doName, 'disconnect', source === 'whoop' ? {} : { provider: source }),
         notifySamples: (woke?: boolean, workout?: boolean) => notifyOwnerHealthSamples(owners, secret, doName, 'readings', woke, workout),
         notifySettings: () => notifyOwnerHealthSamples(owners, secret, doName, 'settings') } : {}) });
   }
