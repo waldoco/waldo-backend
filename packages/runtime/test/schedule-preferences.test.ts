@@ -224,3 +224,56 @@ describe('the owner sets the Brief or the Close time in chat', () => {
     });
   });
 });
+
+// SEPARATE_TOGGLES: each owner-facing toggle gates only what its label says. The brief sweep carries the update cards as well
+// as the notes before events, so turning those notes off stops meeting prep and leaves the sweep armed for the updates.
+describe('with the toggles separate, notes before events off leaves the update sweep running', () => {
+  const machine = () => { const cancelled: string[] = []; return { cancelled, cancelMachine: (job: string) => { cancelled.push(job); } }; };
+
+  it('golden: turning notes before events off cancels meeting prep only; the sweep stays armed', async () => {
+    await withOwner(async ({ prefs, ctx, ids }) => {
+      const jobs = machine();
+      const separate = { ...ctx, cancelMachine: jobs.cancelMachine, sweepCarriesUpdates: true } as Parameters<typeof applySchedulePreferences>[1];
+      await applySchedulePreferences(prefs.all(), separate);
+      prefs.set('event_briefs', false);
+      await applySchedulePreferences(prefs.all(), separate, 'event_briefs');
+      expect(ids()).toContain(BRIEF_SWEEP_ID);
+      expect(jobs.cancelled).toEqual(['meeting_prep']);
+      expect(schedulePreferencesLine(prefs.all())).toContain('event_briefs (prep notes before events) off');
+    });
+  });
+
+  it('a due sweep still runs with notes before events off, and startup reconcile keeps it', async () => {
+    await withOwner(async ({ scheduler, prefs, ctx }) => {
+      const jobs = machine();
+      prefs.set('event_briefs', false);
+      await scheduler.schedule({ id: BRIEF_SWEEP_ID, kind: 'pre_activity_spot', payloadRefs: { id: BRIEF_SWEEP_ID }, occurrenceAt: NOW, dueAt: NOW, recurrence: { type: 'interval', every_ms: 600_000, phase_ms: 0 } });
+      await reconcileSchedulePreferences(prefs.all(), { ...ctx, cancelMachine: jobs.cancelMachine, sweepCarriesUpdates: true } as Parameters<typeof reconcileSchedulePreferences>[1]);
+      expect(scheduler.read(BRIEF_SWEEP_ID)).not.toBeNull();
+      expect(jobs.cancelled).toEqual(['meeting_prep']);
+      const ran: string[] = [];
+      await scheduler.dispatchDue(gateScheduleExecutors({ pre_activity_spot: async (entry: { id: string }) => { ran.push(entry.id); } } as ScheduleExecutors, prefs, scheduler, undefined, undefined, true));
+      expect(ran).toEqual([BRIEF_SWEEP_ID]);
+    });
+  });
+
+  it('a zone not yet confirmed still drops the sweep, as before', async () => {
+    await withOwner(async ({ scheduler, prefs }) => {
+      await scheduler.schedule({ id: BRIEF_SWEEP_ID, kind: 'pre_activity_spot', payloadRefs: { id: BRIEF_SWEEP_ID }, occurrenceAt: NOW, dueAt: NOW, recurrence: { type: 'interval', every_ms: 600_000, phase_ms: 0 } });
+      const ran: string[] = [];
+      await scheduler.dispatchDue(gateScheduleExecutors({ pre_activity_spot: async (entry: { id: string }) => { ran.push(entry.id); } } as ScheduleExecutors, prefs, scheduler, kind => kind === 'event_briefs' ? 'drop' : false, undefined, true));
+      expect([ran, scheduler.read(BRIEF_SWEEP_ID)]).toEqual([[], null]);
+    });
+  });
+
+  it('with the switch off, notes before events off still cancels the whole sweep, as today', async () => {
+    await withOwner(async ({ prefs, ctx, ids }) => {
+      const jobs = machine();
+      await applySchedulePreferences(prefs.all(), ctx);
+      prefs.set('event_briefs', false);
+      await applySchedulePreferences(prefs.all(), { ...ctx, cancelMachine: jobs.cancelMachine } as Parameters<typeof applySchedulePreferences>[1], 'event_briefs');
+      expect(ids()).not.toContain(BRIEF_SWEEP_ID);
+      expect(jobs.cancelled).toEqual(['update_sweep', 'meeting_prep']);
+    });
+  });
+});

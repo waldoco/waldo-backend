@@ -64,6 +64,33 @@ describe('people map: memory', () => {
     expect(w.store.allClaims()).toHaveLength(before);
   }));
 
+  it('names a namesake only through a claim the turn may read: never a body person in a turn that read outside content, nor one known only from mail', () => runInDurableObject(stub('namesake-fence'), async (_instance, state) => {
+    const w = world(state);
+    const said = 'Dr Mehta did my knee surgery';
+    await w.data('remember', { kind: 'fact', text: 'Dr Mehta did the owner\'s knee surgery', evidence_quote: said, area: 'body', people: [{ name: 'Dr Mehta', role: 'subject', relation: 'surgeon' }] }, w.ctx(said));
+    w.store.add({ kind: 'fact', text: 'Dana sends the weekly invoices', source: 'inferred', evidence: 'mail', origin: 'untrusted', source_ref: 'mail:1' }, '2026-11-07T08:00:00Z');
+    w.store.people.link(2, [{ name: 'Dana', role: 'subject' }], '2026-11-07T08:00:00Z');
+    const outside = { toolArgSourceTaint: 'external', memoryOutside: true } as Partial<MemoryToolContext>;
+    const mehta = await w.data('remember', { kind: 'fact', text: 'Dr Mehta runs the book club', evidence_quote: 'Dr Mehta runs the book club', people: [{ name: 'Dr Mehta', role: 'subject' }] }, w.ctx('Dr Mehta runs the book club', outside));
+    expect(mehta).not.toHaveProperty('same_name');
+    expect(JSON.stringify(mehta)).not.toContain('surgeon');
+    const dana = await w.data('remember', { kind: 'fact', text: 'Dana is my accountant', evidence_quote: 'Dana is my accountant', people: [{ name: 'Dana', role: 'subject' }] }, w.ctx('Dana is my accountant'));
+    expect(dana).not.toHaveProperty('same_name');
+    // In the owner's own turn the body claim is readable, so the namesake is shown.
+    const own = await w.data('remember', { kind: 'fact', text: 'Dr Mehta is retiring', evidence_quote: 'Dr Mehta is retiring', people: [{ name: 'Dr Mehta', role: 'subject' }] }, w.ctx('Dr Mehta is retiring'));
+    expect(own).toMatchObject({ same_name: expect.arrayContaining([expect.objectContaining({ name: 'Dr Mehta', relations: ['surgeon'] })]) });
+  }));
+
+  it('stores no health reading in a person\'s name or relation from a turn that read outside content', () => runInDurableObject(stub('person-reading'), async (_instance, state) => {
+    const w = world(state);
+    const outside = { toolArgSourceTaint: 'external', memoryOutside: true } as Partial<MemoryToolContext>;
+    const said = 'Sam is my running coach';
+    for (const link of [{ name: 'Sam', role: 'subject', relation: 'resting heart rate 48' }, { name: 'Sam resting heart rate 48', role: 'subject' }])
+      expect(await w.call('remember', { kind: 'fact', text: 'Sam is the owner\'s running coach', evidence_quote: said, people: [link] }, w.ctx(said, outside))).toMatchObject({ ok: false, error: expect.stringContaining('health reading') });
+    expect(w.store.allClaims()).toHaveLength(0);
+    expect(w.store.people.all()).toHaveLength(0);
+  }));
+
   it('shows a person only through a claim the turn may read: never one known only from outside content, nor a body person in an outside turn', () => runInDurableObject(stub('fence'), async (_instance, state) => {
     const w = world(state);
     w.store.add({ kind: 'fact', text: 'Dana sends the weekly invoices', source: 'inferred', evidence: 'mail', origin: 'untrusted', source_ref: 'mail:1' }, '2026-11-07T08:00:00Z');

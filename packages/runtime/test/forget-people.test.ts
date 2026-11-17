@@ -26,6 +26,17 @@ describe('forget a person', () => {
     expect(await w.call('remember', { kind: 'fact', text: 'Met a new friend', evidence_quote: 'new friend', people: [{ name: 'Priya Shah', role: 'subject' }] }, w.ctx('a new friend'))).toMatchObject({ ok: false, error: expect.stringContaining('forget') });
     expect(await w.call('remember', { kind: 'fact', text: 'Met a new friend', evidence_quote: 'new friend', people: [{ name: 'Priya', role: 'subject' }] }, w.ctx('a new friend'))).toMatchObject({ ok: true });
   }));
+  it('forgets a person with a short name by their claims alone: the name is not barred or hidden in history, and the receipt says so', () => runInDurableObject(stub('short-name'), async (_instance, state) => {
+    const w = world(state);
+    const al = (await w.data('remember', { kind: 'fact', text: 'Al is my landlord', evidence_quote: 'Al is my landlord', people: [{ name: 'Al', role: 'subject' }] }, w.ctx('Al is my landlord'))).people as number[];
+    await w.data('remember', { kind: 'fact', text: 'Rent is due on the first', evidence_quote: 'Rent is due on the first' }, w.ctx('Rent is due on the first'));
+    const forgotten = await w.data('forget_memory', { person: al[0]!, scope_note: 'Al' }, w.ctx('forget Al'));
+    expect(forgotten).toMatchObject({ removed_ids: [1], history_swept: 'saved_wording_only' });
+    expect(w.hidden.flat()).not.toContain('Al');
+    expect(w.store.barred('Al')).toBe(false);
+    expect(w.store.people.all()).toEqual([]);
+    expect(w.store.claims().map(claim => claim.text)).toEqual(['Rent is due on the first']);
+  }));
   it('forgets a person named by a topic, with claims that never say their name', () => runInDurableObject(stub('topic'), async (_instance, state) => {
     const w = world(state);
     const sam = (await w.data('remember', { kind: 'fact', text: 'Sam Okafor is my mentor', evidence_quote: 'Sam Okafor is my mentor', people: [{ name: 'Sam Okafor', role: 'subject' }] }, w.ctx('Sam Okafor is my mentor'))).people as number[];

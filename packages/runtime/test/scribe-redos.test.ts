@@ -95,6 +95,10 @@ const NEAR_MISSES: Readonly<Record<string, (chars: number) => string>> = {
   'a WhatsApp link, then a long run of digits': n => 'wa.me/' + '9'.repeat(n),
   'WhatsApp links repeated': n => 'wa.me/9 '.repeat(n / 8),
   'national numbers with a hyphen, repeated': n => '098765-'.repeat(n / 7),
+  'a phone word and a national number with a hyphen one digit short, repeated': n => 'call 098765-4321 '.repeat(n / 17),
+  'a phone word and zero-led pairs, repeated': n => 'ph 06 '.repeat(n / 6),
+  'a phone word, a long run of blanks, then a national number with a hyphen': n => 'call' + ' '.repeat(n) + '098765-43210',
+  'a phone word cut short, a long run of blanks, then a national number with a hyphen': n => 'cal' + ' '.repeat(n) + '098765-43210',
   'a letter, a plus sign and a digit, repeated': n => 'x+1'.repeat(n / 3),
   'a country code and a date, repeated': n => '+1 2026-11-06 '.repeat(n / 14),
   'a reference word and ten digits, repeated': n => 'order #1234567890 '.repeat(n / 18),
@@ -145,6 +149,17 @@ describe('the patterns sanitise() runs stay linear on the near-miss and whitespa
     expectLinear('redactNumericHealth', 100_000, n => redactNumericHealth(`${word}${' '.repeat(n)}`, '[health]'));
   });
 
+  // A bare value is read only when no clock time or second number follows it, so the check after it reads the blanks that
+  // follow: once, not once for every way of splitting them.
+  it.each(['hrv 42', 'hr 61', 'resting hr 61', 'heart rate 61', 'spo2 97', 'blood pressure 120', 'weight: 72', '37.5', 'hrr 42', 'hr recovery 42', '0.3°', 'Yesterday:', 'Yesterday: 72', 'Protein: 61', 'Mon: 1,022 kcal,', 'wrist temp 36'])('numericHealthIn and redactNumericHealth read %s, a run of blanks, then a letter', word => {
+    expectLinear('numericHealthIn', 100_000, n => numericHealthIn(`${word}${' '.repeat(n)}x`));
+    expectLinear('redactNumericHealth', 100_000, n => redactNumericHealth(`${word}${' '.repeat(n)}x`, '[health]'));
+  });
+
+  it.each(['wrist temp 36', 'wrist temp up 36', 'wrist temp: 36', 'call', 'Ph.', 'contact: 098765-'])('sanitise reads %s, a run of blanks, then a letter', word => {
+    for (const destination of ['send_message', 'internal_context'] as const) expectLinear(destination, 100_000, n => scan(`${word}${' '.repeat(n)}x`, destination));
+  });
+
   it.each([['an arrow chain', (n: number) => `hrv 1${' → 1'.repeat(n / 4)}`], ['table cells', (n: number) => `| hrv | 1${' | 1'.repeat(n / 4)} |`], ['arrows with no value', (n: number) => `hrv ${'→ '.repeat(n / 2)}`]] as const)('a reading followed by %s stays linear', (_shape, make) => {
     expectLinear('numericHealthIn', 100_000, n => numericHealthIn(make(n)));
     expectLinear('redactNumericHealth', 100_000, n => redactNumericHealth(make(n), '[health]'));
@@ -177,6 +192,8 @@ describe('the patterns sanitise() runs stay linear on the near-miss and whitespa
     const tokens = ['7e2aa0c8', '91b3', '4c2e', '8a11', 'f0e023af605', '-', '-', '.', ' ', '1', 'a', '@', '%', ':', '4111', 'ms', 'eyJ', 'hrv', 'slept'];
     const nearMiss = fc.array(fc.constantFrom(...tokens), { minLength: 2, maxLength: 8 }).chain(pool =>
       fc.array(fc.constantFrom(...pool), { minLength: 48_000, maxLength: 64_000 }).map(parts => parts.join('')));
-    fc.assert(fc.property(nearMiss, text => { expectLinear('a random near miss', text.length, n => scan(text.slice(0, n))); }), { numRuns: 25 });
+    // A fixed seed keeps the inputs repeatable, and a failure ends the run there: shrinking would re-time inputs of tens of
+    // thousands of tokens synchronously, which no test timeout can interrupt.
+    fc.assert(fc.property(nearMiss, text => { expectLinear('a random near miss', text.length, n => scan(text.slice(0, n))); }), { numRuns: 25, seed: 2037, endOnFailure: true });
   });
 });

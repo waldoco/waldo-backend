@@ -137,7 +137,7 @@ export type TrustedGatewayExecution =
       execution_witness: TrustedRunV2ProviderExecutionWitness;
     }>;
 
-export type SpentTokens = Readonly<Pick<LLMResponse, 'input_tokens' | 'output_tokens' | 'cache_read_input_tokens' | 'cache_write_input_tokens'>>;
+export type SpentTokens = Readonly<Pick<LLMResponse, 'input_tokens' | 'output_tokens' | 'cache_read_input_tokens' | 'cache_write_input_tokens' | 'cache_write_1h_input_tokens'>>;
 
 // Replayed output items are provider-specific: OpenAI's reasoning items and Anthropic's content blocks mean nothing to the
 // other provider. OpenAI Responses items carry no mark; every other adapter stamps its items with this key, and each adapter
@@ -235,7 +235,7 @@ export type TrustedRuntimeLLMRequest = RuntimeLLMRequest & {
 
 export type LLMUsage = Pick<
   LLMResponse,
-  'model' | 'input_tokens' | 'output_tokens' | 'cache_read_input_tokens' | 'cache_write_input_tokens' | 'latency_ms'
+  'model' | 'input_tokens' | 'output_tokens' | 'cache_read_input_tokens' | 'cache_write_input_tokens' | 'cache_write_1h_input_tokens' | 'latency_ms'
 >;
 
 export type LLMAttempt =
@@ -1382,6 +1382,7 @@ const tokensOf = (response: LLMResponse): SpentTokens => ({
   output_tokens: response.output_tokens,
   cache_read_input_tokens: response.cache_read_input_tokens,
   ...(response.cache_write_input_tokens ? { cache_write_input_tokens: response.cache_write_input_tokens } : {}),
+  ...(response.cache_write_1h_input_tokens ? { cache_write_1h_input_tokens: response.cache_write_1h_input_tokens } : {}),
 });
 
 function usageFromResponse(response: LLMResponse): LLMUsage {
@@ -1391,6 +1392,7 @@ function usageFromResponse(response: LLMResponse): LLMUsage {
     output_tokens: response.output_tokens,
     cache_read_input_tokens: response.cache_read_input_tokens,
     ...(response.cache_write_input_tokens ? { cache_write_input_tokens: response.cache_write_input_tokens } : {}),
+    ...(response.cache_write_1h_input_tokens ? { cache_write_1h_input_tokens: response.cache_write_1h_input_tokens } : {}),
     latency_ms: response.latency_ms,
   };
 }
@@ -1399,11 +1401,13 @@ const NO_TOKENS: SpentTokens = { input_tokens: 0, output_tokens: 0, cache_read_i
 
 function addTokens(a: SpentTokens, b: SpentTokens): SpentTokens {
   const written = (a.cache_write_input_tokens ?? 0) + (b.cache_write_input_tokens ?? 0);
+  const writtenHour = (a.cache_write_1h_input_tokens ?? 0) + (b.cache_write_1h_input_tokens ?? 0);
   return {
     input_tokens: a.input_tokens + b.input_tokens,
     output_tokens: a.output_tokens + b.output_tokens,
     cache_read_input_tokens: a.cache_read_input_tokens + b.cache_read_input_tokens,
     ...(written > 0 ? { cache_write_input_tokens: written } : {}),
+    ...(writtenHour > 0 ? { cache_write_1h_input_tokens: writtenHour } : {}),
   };
 }
 

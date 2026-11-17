@@ -104,8 +104,9 @@ export const HEALTH_FREE_TEXT_NUMERIC: readonly RegExp[] = [
   /\b(?:hrv|heart[\s_-]*rate|spo2|blood[\s_-]*pressure|body[\s_-]*weight|steps|sleep[\s_-]*duration|body[\s_-]*temperature|respiratory[\s_-]*rate|glucose|crs|form|recovery|load)\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?[+-]?(?:\d+(?:\.\d*)?|\.\d+)[eE][+-]?\d+["']?(?=$|[^a-z0-9])/i,
   /\b(?:hrv|heart[\s_-]*rate|spo2|blood[\s_-]*pressure|body[\s_-]*(?:weight|temperature)|steps|sleep[\s_-]*(?:duration|efficiency)|respiratory[\s_-]*rate|glucose|crs|form|recovery|load)\b(?:\s+(?:\w+(?!\w)|\w*[A-Za-z_](?=\d))){0,3}?\s*(?:[:=,]\s*)?["']?-?\d+(?:\.\d+)?["']?(?:\s*(?:,\s*)?)(?:°[cf]|degrees?\s*[cf])(?=$|[^a-z0-9])/i,
   // A wrist temperature is a deviation from the owner's baseline: a signed number, a decimal or a number with a degree sign, after
-  // the few words a reading puts between ("wrist temp up 0.4°C"), so "wrist temperature feature in iOS 17" is not one.
-  /\bwrist[\s_-]*temp(?:erature)?\b(?:\s+(?:deviation|delta|change|is|was|of|at|about|around|up|down|by|rose|fell|dropped|climbed|to|from|reads?|reading)\b)*\s*(?:[:=,]\s*)?["']?(?:[+\-−]\s?\d+(?:\.\d+)?|\d+\.\d+|\d+(?=\s*(?:°|degrees?\b|[cf]\b|celsius|fahrenheit)))/i,
+  // the few words a reading puts between ("wrist temp up 0.4°C"), so "wrist temperature feature in iOS 17" is not one. A whole
+  // number with no unit counts only in the range a wrist reads in Celsius or Fahrenheit, and not as a count of days or times.
+  /\bwrist[\s_-]*temp(?:erature)?\b(?:\s+(?:deviation|delta|change|is|was|of|at|about|around|up|down|by|rose|fell|dropped|climbed|to|from|reads?|reading)\b)*\s*(?:[:=,]\s*)?["']?(?:[+\-−]\s?\d+(?:\.\d+)?|\d+\.\d+|\d+(?=\s*(?:°|degrees?\b|[cf]\b|celsius|fahrenheit))|(?:3\d|4[0-2]|8[6-9]|9\d|10[0-8])\b(?!\s*(?:hours?|hrs?|minutes?|mins?|seconds?|secs?|days?|nights?|weeks?|months?|times|percent)\b))/i,
   // Hours and minutes glued with no minute unit ("sleep 7h22"), right after the sleep word: with a word between it is as
   // often a clock time ("sleep at 10h30").
   /\b(?:sleep|slept|rem[\s_-]*sleep|deep[\s_-]*sleep|time[\s_-]*asleep)\b\s*(?:[:=,]\s*)?(?:~\s*)?\d{1,2}h[0-5]\d\b/i,
@@ -140,15 +141,20 @@ const READING_NUMBER = String.raw`\d+(?:[.,]\d+)?`;
 // The owner eating or logging, as a relayed food reading says it. Someone else's meal is not the owner's reading.
 const OWNER_ATE = String.raw`\b(?:you|i)(?:'ve|\s+have)?\s+(?:ate|eaten|had|logged|consumed)\b`;
 // A bare two- or three-digit value that is not a clock time ("10:30", "7am", "10h30") or the first group of a phone number.
-const BARE_VALUE = String.raw`\d{2,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|[-–]?\s*\d))`;
+const BARE_VALUE = String.raw`\d{2,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|\d|[-–]\s*\d))`;
 // A weight that follows a bag or a parcel is the luggage's.
 const CARRIED = String.raw`(?:bags?|baggage|luggage|suitcases?|parcel|package|box|cargo|carry-on)`;
 const NOT_CARRIED = String.raw`(?<!\b${CARRIED}\s+)`;
+// A labelled value ends its item: the end of the text or of its line, a separator or closing mark, or a word that says it is
+// a reading ("58 bpm resting").
+const LABEL_END = String.raw`(?=\s*(?:$|[\n,;.)!?:]|(?:resting|asleep|average|avg)\b))`;
+// A day named as a label, the way a reply lists what the owner's apps recorded for it.
+const DAY_LABEL = String.raw`\b(?:yesterday|today|tonight|last\s+night|this\s+morning|(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?)\s*:\s*`;
 const reading = (source: string): RegExp => new RegExp(source, 'i');
 // REM the sleep stage is written in capitals; lowercase "rem" is usually "remaining".
 const casedReading = (source: string): RegExp => new RegExp(source);
-// HRV with the method get_health labels it by, or the method alone.
-const HRV = String.raw`(?:(?:hrv|heart\s+rate\s+variability)\b(?:\s*(?:\(\s*)?(?:rmssd|sdnn)\b(?:\s*\))?)?|(?:rmssd|sdnn)\b)`;
+// HRV with the method get_health labels it by, or the method alone; daytime HRV may be named for the day it spans.
+const HRV = String.raw`(?:(?:hrv|heart\s+rate\s+variability)\b(?:\s*(?:\(\s*)?(?:rmssd|sdnn)\b(?:\s*\))?)?(?:\s+(?:through|during|across)\s+the\s+day\b)?|(?:rmssd|sdnn)\b)`;
 const DURATION = String.raw`(?:h|hrs?|hours?|m|mins?|minutes?)\b`;
 // The minute signals get_health returns beside sleep.
 const MINUTE_SIGNAL = String.raw`(?:movement|daylight|workouts?|mindfulness)`;
@@ -260,7 +266,7 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   // A plain "temperature" is as often the weather or an oven, so only a fever or a body temperature, or a value in the
   // range a body has, is a reading.
   reading(String.raw`\b(?:fever|body\s+temp(?:erature)?)\b${READING_GAP}${READING_NUMBER}\s*(?:°\s*[cf]?|degrees?|[cf]\b|celsius|fahrenheit)`),
-  reading(String.raw`\b(?:3[5-9]|4[0-2])[.,]\d\s*°?\s*c\b|\b(?:9[5-9]|10[0-8])[.,]\d\s*°?\s*f\b`),
+  reading(String.raw`\b(?:3[5-9]|4[0-2])[.,]\d\s*(?:°\s*)?c\b|\b(?:9[5-9]|10[0-8])[.,]\d\s*(?:°\s*)?f\b`),
   reading(String.raw`\b(?:glucose|blood\s+sugar|fasting\s+sugar|a1c|hba1c|cholesterol|ldl|hdl|triglycerides?)\b${BARE_GAP}\d+(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b))`),
   reading(String.raw`\b(?:respiratory|breathing|resp\.?|respiration)\s+rate\b${BARE_GAP}${BARE_VALUE}`),
   reading(String.raw`\brespiration\b${BARE_GAP}${READING_NUMBER}\s*(?:\/\s*min(?:ute)?\b|breaths?\b)`),
@@ -268,9 +274,9 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`\bbreathing\b${BARE_GAP}${READING_NUMBER}\s*(?:per|a|\/)\s*min(?:ute)?\b`),
   // A wrist temperature is read as a value or as its change from the owner's baseline, so a signed small number counts.
   reading(String.raw`\bwrist\s+temp(?:erature)?\b(?:\s+(?:deviation|delta|change))?${WRIST_GAP}[+\-−]?${READING_NUMBER}\b`),
-  reading(String.raw`(?<![\w.])[+\-−]?${READING_NUMBER}\s*(?:°\s*[cf]?|degrees?|[cf]\b)\s+(?:(?:above|below)\s+baseline\s+)?(?:on\s+)?wrist\s+temp(?:erature)?\b`),
+  reading(String.raw`(?<![\w.])[+\-−]?${READING_NUMBER}\s*(?:°(?:\s*[cf]\b)?|degrees?|[cf]\b)\s+(?:(?:above|below)\s+baseline\s+)?(?:on\s+)?wrist\s+temp(?:erature)?\b`),
   // Recovery a minute after exercise can be a single digit, and HRR is its usual short form.
-  reading(String.raw`\b(?:hrr|(?:hr|heart[\s-]+rate)\s+recovery)\b${BARE_GAP}\d{1,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|[-–]?\s*\d))`),
+  reading(String.raw`\b(?:hrr|(?:hr|heart[\s-]+rate)\s+recovery)\b${BARE_GAP}\d{1,3}(?:[.,]\d+)?\b(?!\s*(?::\d|[ap]\.?m\b|o'?clock\b|h\d|\d|[-–]\s*\d))`),
   reading(String.raw`\b(?:calories\s+burned|calorie\s+burn|active\s+(?:energy|kcal|cal(?:ories)?))\b${BARE_GAP}\d`),
   reading(String.raw`\b${READING_NUMBER}\s*(?:active\s+(?:kcal|cal(?:ories)?)|(?:kcal|cal(?:ories)?)\s+active)\b`),
   // Apple's Move ring counts active energy.
@@ -285,6 +291,13 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`(?:\b(?:protein|carbs?|carbohydrates?|fat)\s+intake\b|\byour\s+(?:protein|carbs?|carbohydrates?|fat)\b)${READING_GAP}${READING_NUMBER}\s*(?:g|grams?)\b`),
   reading(String.raw`${OWNER_ATE}${READING_GAP}${READING_NUMBER}\s*(?:g|grams?)\s+(?:of\s+)?(?:protein|carbs?|carbohydrates?|fat)\b`),
   reading(String.raw`\b(?:protein|carbs?|carbohydrates?|fat)\b${READING_GAP}${READING_NUMBER}\s*(?:g|grams?)\s+(?:today|yesterday|so\s+far|logged|eaten)\b|\b${READING_NUMBER}\s*(?:g|grams?)\s+(?:of\s+)?(?:protein|carbs?|carbohydrates?|fat)\s+(?:today|yesterday|so\s+far|logged|eaten|a\s+day|per\s+day|daily)\b`),
+  // A reply's label shapes: a day with a colon ("Yesterday: 72 kg", "Mon: 1,022 kcal, 61 g protein"), or a macro's own label
+  // ("Protein: 61 g"). The value must end the item, so a label that measures something else ("5 kg laundry", "500 ms latency",
+  // "100 kcal per bar", "10 g butter") is not the owner's reading.
+  reading(String.raw`${DAY_LABEL}${READING_NUMBER}\s*(?:kcal|cal(?:ories)?|kgs?|lbs?|bpm|ms)\b${LABEL_END}`),
+  reading(String.raw`${DAY_LABEL}(?:[^\n:]{0,40}?,\s*)?${READING_NUMBER}\s*(?:g|grams?)\s+(?:of\s+)?(?:protein|carbs?|carbohydrates?|fat)\b${LABEL_END}`),
+  reading(String.raw`${DAY_LABEL}${READING_NUMBER}\s*%\s*(?:spo2|sp\s*o2|oxygen|blood\s+oxygen)\b`),
+  reading(String.raw`\b(?:protein|carbs?|carbohydrates?|fat)\s*:\s*${READING_NUMBER}\s*(?:g|grams?)\b${LABEL_END}`),
   reading(String.raw`\bcrs\b${BARE_GAP}\d`),
   reading(String.raw`\b(?:form|recovery|load|strain|readiness|sleep|hrv)\s+score\b${BARE_GAP}\d`),
   ...LAB_READINGS,
@@ -590,7 +603,7 @@ function healthKeyIn(key: string, plainWords: boolean): boolean {
 function isNumeric(value: unknown): boolean {
   return (
     (typeof value === 'number' && Number.isFinite(value)) ||
-    (typeof value === 'string' && NUMERIC_VALUE.test(value))
+    (typeof value === 'string' && NUMERIC_VALUE.test(asciiDigits(value)))
   );
 }
 

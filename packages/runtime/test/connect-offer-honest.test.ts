@@ -3,6 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FINAL_OUTBOX_KEY } from '../src/channels/telegram-final-outbox';
 import { reconnectNoticeText } from '../src/connectors/google-reconnect';
+import { RECONNECT_NOTE } from '../src/connectors/mcp-connections';
 import { WHATSAPP_CONNECT_GUIDANCE } from '../src/channels/surfaces/app';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
@@ -188,6 +189,16 @@ describe('connecting Google from a chat turn', () => {
       expect(JSON.stringify(graph)).not.toMatch(/https?:\/\//);
       expect(traceHops(state).filter(hop => hop.startsWith('connect_offer') || hop.startsWith('oauth_link_sent'))).toEqual([]);
       expect(rpcs).not.toContain('connect_session_issue');
+    });
+  });
+
+  it('an owner turn hears which Google account is connected and that a failing one needs reconnecting', async () => {
+    await whatsappTurn('connect-whatsapp-fact', 'hello', async state => {
+      await state.storage.put('google:health', { 'local:owner@example.test': 'invalid_grant' });
+    }, async () => {
+      const said = JSON.stringify(model.requests.find(request => !request.response_format)?.messages);
+      expect(said).toContain('owner@example.test');
+      expect(said).toContain(RECONNECT_NOTE);
     });
   });
 

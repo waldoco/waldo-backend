@@ -18,17 +18,19 @@ export type ContextBudget = Readonly<{
   keepLatest: number;
   standingOrdersChars: number;
   questsChars: number;
+  // WHATS_NEW: the characters of quoted product copy an owner turn's "what's new" section reads.
+  whatsNewChars: number;
 }>;
 
 export const CONTEXT_BUDGET: ContextBudget = {
   historyTokens: 22_000, chatCeilingTokens: 40_000, jobCeilingTokens: 25_000, hardCeilingTokens: 80_000,
-  steppedTarget: 0.5, clearAtChars: 120_000, keepLatest: 3, standingOrdersChars: 3_000, questsChars: 3_000,
+  steppedTarget: 0.5, clearAtChars: 120_000, keepLatest: 3, standingOrdersChars: 3_000, questsChars: 3_000, whatsNewChars: 1_200,
 };
 
 export const CONTEXT_BUDGET_SETTINGS: Readonly<Record<keyof ContextBudget, string>> = {
   historyTokens: 'WALDO_HISTORY_BUDGET_TOKENS', chatCeilingTokens: 'WALDO_CHAT_CEILING_TOKENS', jobCeilingTokens: 'WALDO_JOB_CEILING_TOKENS',
   hardCeilingTokens: 'WALDO_HARD_CEILING_TOKENS', steppedTarget: 'WALDO_STEPPED_WINDOW_TARGET', clearAtChars: 'WALDO_TOOL_RESULTS_CLEAR_AT_CHARS',
-  keepLatest: 'WALDO_TOOL_RESULTS_KEEP_LATEST', standingOrdersChars: 'WALDO_STANDING_ORDERS_CHARS', questsChars: 'WALDO_QUESTS_CHARS',
+  keepLatest: 'WALDO_TOOL_RESULTS_KEEP_LATEST', standingOrdersChars: 'WALDO_STANDING_ORDERS_CHARS', questsChars: 'WALDO_QUESTS_CHARS', whatsNewChars: 'WALDO_WHATS_NEW_CHARS',
 };
 
 const valid = (key: keyof ContextBudget, value: number): boolean =>

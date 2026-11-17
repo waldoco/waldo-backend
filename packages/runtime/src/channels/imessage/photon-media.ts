@@ -4,6 +4,7 @@ import { normaliseHost } from '../../security/public-host';
 import type { InboundPart } from '../owner-inbound-turn';
 import { keptNote, type UploadKeeper } from '../upload-keeper';
 import { loadTelegramMedia, readableAs, toBase64, type Transcriber } from '../telegram-media';
+import { readableBytes, typeUndeclared } from '../readable-file';
 import { PHOTON_ID } from './photon';
 
 // Photos and files sent to Waldo on iMessage. A host forwards only Photon's metadata for each attachment; the owner's
@@ -194,8 +195,9 @@ export const openIMessageMedia = async (media: IMessageMedia, deps: OpenIMessage
   if (files.some(isVoice)) return deps.transcribe ? hear(media, deps, deps.transcribe, reply) : reply(IMESSAGE_MEDIA_REPLIES.voice, 'voice_note');
   if (!deps.enabled) return reply(IMESSAGE_MEDIA_REPLIES.unopened(files), 'media_off');
   if (files.length > LLM_ATTACHMENTS_MAX) return reply(IMESSAGE_MEDIA_REPLIES.tooMany(files), 'too_many');
-  const readable = files.map(file => readableAs({ kind: 'document', fileId: '', fileName: file.name, mimeType: file.mimeType, fileSize: file.size }));
-  if (!deps.keep && readable.some(kind => kind === null)) return reply(IMESSAGE_MEDIA_REPLIES.format(files), 'unreadable_type');
+  // A file that declares no type is fetched, so its bytes can say whether the model reads it.
+  const declared = files.map(file => readableAs({ kind: 'document', fileId: '', fileName: file.name, mimeType: file.mimeType, fileSize: file.size }));
+  if (!deps.keep && declared.some((kind, index) => kind === null && !typeUndeclared(files[index]!.mimeType))) return reply(IMESSAGE_MEDIA_REPLIES.format(files), 'unreadable_type');
   if (files.reduce((sum, file) => sum + file.size, 0) > IMESSAGE_MEDIA_MAX_BYTES) return reply(IMESSAGE_MEDIA_REPLIES.size(files), 'too_large');
   const ids = files.map(file => file.id);
   if (!deps.source || ids.some(fileId => fileId === undefined)) return reply(IMESSAGE_MEDIA_REPLIES.unopened(files), deps.source ? 'not_on_photon' : 'photon_unconfigured');
@@ -204,6 +206,8 @@ export const openIMessageMedia = async (media: IMessageMedia, deps: OpenIMessage
     maxBytes: IMESSAGE_MEDIA_MAX_BYTES, signal: AbortSignal.any([deps.signal, AbortSignal.timeout(IMESSAGE_MEDIA_TIMEOUT_MS)]) });
   deps.admit();
   if (!fetched.ok || fetched.bytes.length !== files.length) return reply(IMESSAGE_MEDIA_REPLIES.unopened(files), fetched.ok ? 'unexpected_response' : fetched.code);
+  const readable = files.map((file, index) => readableBytes(fetched.bytes[index]!, file.mimeType, file.name));
+  if (!deps.keep && readable.some(kind => kind === null)) return reply(IMESSAGE_MEDIA_REPLIES.format(files), 'unreadable_type');
   console.log(JSON.stringify({ hop: 'imessage_media', ok: true, files: files.length }));
   if (deps.keep) {
     const parts: InboundPart[] = [];
@@ -216,7 +220,7 @@ export const openIMessageMedia = async (media: IMessageMedia, deps: OpenIMessage
   }
   return {
     kind: 'opened',
-    parts: iMessageMediaNotes(files),
+    parts: iMessageMediaNotes(files.map((file, index) => ({ ...file, mimeType: readable[index]!.mime_type }))),
     attachments: readable.map((kind, index) => ({ ...kind!, data_base64: toBase64(fetched.bytes[index]!) })),
   };
 };
