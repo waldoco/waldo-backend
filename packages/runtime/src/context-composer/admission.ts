@@ -286,5 +286,5 @@ export function snapshotHealthMaterial(
     view: snapshotData(health.view) as DerivedHealthDestinationView,
     narrative: snapshotData(health.narrative) as NarrativeContext,
     source: snapshotContextSource(health.source, failure),
-  });
+  }) as ContextHealthMaterial;
 }
