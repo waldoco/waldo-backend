@@ -1,7 +1,8 @@
 import { signInHref } from './model';
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { CAPTION_MAX_CHARS, formatBytes, UPLOAD_MAX_BYTES } from './chat-attachments';
 import { CHAT_TEXT_MAX, visibleText, type ChatActivityKind, type ChatMessage, type ChatPart } from './chat-model';
-import { anyWorking, chatStore, subscribeAnyChat, type ChatStore, type LocalMessage } from './chat-store';
+import { anyWorking, chatStore, subscribeAnyChat, type ChatStore, type DraftAttachment, type LocalMessage, type SentAttachment } from './chat-store';
 import { ChatText } from './chat-text';
 import { greeting } from './greeting';
 import { Icon, WaldoMark } from './icons';
@@ -80,9 +81,19 @@ function WaldoMessage({ message, zone, arrived, replies, onReply, shown }: { mes
   </article>;
 }
 
-function OwnerMessage({ text, at, zone, channel, status }: { text: string; at: number | null; zone: string; channel?: string; status?: React.ReactNode }) {
+// What the owner attached, as sent from this page: an image as a thumbnail that opens full size, any other file as a chip.
+function Attached({ attachment }: { attachment: SentAttachment }) {
+  if (attachment.kind === 'photo' && attachment.preview)
+    return <a className="chat-attached-image" href={attachment.preview} target="_blank" rel="noopener noreferrer" aria-label={`Open the image you sent, ${attachment.name}`}>
+      <img src={attachment.preview} alt=""/></a>;
+  return <span className="chat-attached-file"><Icon name="document"/><span className="visually-hidden">File you sent: </span>
+    <span className="chat-attached-name" title={attachment.name}>{attachment.name}</span><span className="meta">{formatBytes(attachment.bytes)}</span></span>;
+}
+
+function OwnerMessage({ text, at, zone, channel, status, attachment }: { text: string; at: number | null; zone: string; channel?: string; status?: React.ReactNode; attachment?: SentAttachment }) {
   return <article className="chat-msg owner" aria-label="You">
-    <div className="chat-bubble"><ChatText text={text}/></div>
+    {attachment && <Attached attachment={attachment}/>}
+    {text && <div className="chat-bubble"><ChatText text={text}/></div>}
     <div className="chat-meta"><CopyButton text={text}/>{status}{channel && CHANNEL[channel] && <span>via {CHANNEL[channel]}</span>}
       {at !== null && <time className="time" dateTime={new Date(at).toISOString()} title={exact(at, zone)}>{clock(at, zone)}</time>}</div>
   </article>;
@@ -121,7 +132,7 @@ function Closure({ item, store }: { item: LocalMessage; store: ChatStore }) {
       <div className="chat-body"><div className="chat-prose"><ChatText text={item.draft}/></div></div>
     </article>}
     <div className="chat-closure" role="status"><Icon name="warning"/><div><p>{words}{item.effectsUnconfirmed ? ' Something Waldo had already started may have happened. Check before you rely on it.' : ''}</p>
-      <div className="chat-closure-actions">{!stopped && <button type="button" className="quiet-link" onClick={() => store.askAgain(item.clientId)}>Ask again</button>}<button type="button" className="quiet-link" onClick={() => store.dismiss(item.clientId)}>Dismiss</button></div></div></div>
+      <div className="chat-closure-actions">{!stopped && !item.attachment && <button type="button" className="quiet-link" onClick={() => store.askAgain(item.clientId)}>Ask again</button>}<button type="button" className="quiet-link" onClick={() => store.dismiss(item.clientId)}>Dismiss</button></div></div></div>
   </>;
 }
 
@@ -147,12 +158,29 @@ function Working({ item, queued, store, now }: { item: LocalMessage; queued: num
   </div>;
 }
 
+// The file attached to the message being written: its name, size and upload state, with Try again where retrying can help and Remove.
+function DraftChip({ attachment, store, onRemoved }: { attachment: DraftAttachment; store: ChatStore; onRemoved: () => void }) {
+  const state = attachment.state === 'uploading' ? 'Uploading…' : attachment.state === 'ready' ? 'Ready to send' : 'Not uploaded';
+  return <div className={`composer-attachment ${attachment.state}`} role="group" aria-label={`Attachment, ${attachment.name}`}>
+    {attachment.preview ? <img className="composer-thumb" src={attachment.preview} alt=""/> : <span className="composer-thumb file" aria-hidden="true"><Icon name="document"/></span>}
+    <span className="composer-attachment-text">
+      <span className="composer-attachment-name" title={attachment.name}>{attachment.name}</span>
+      <span className="meta" role="status">{formatBytes(attachment.bytes)} · <span className={attachment.state === 'uploading' ? 'shimmer' : undefined}>{state}</span></span>
+      {attachment.error && <span className="composer-attachment-error" role="alert">{attachment.error}</span>}
+    </span>
+    {attachment.state === 'failed' && attachment.retryable && <button type="button" className="quiet-link" onClick={() => store.retryAttachment()}>Try again</button>}
+    <button type="button" className="composer-attachment-remove" aria-label={`Remove ${attachment.name}`} title="Remove" onClick={() => { store.removeAttachment(); onRemoved(); }}><span aria-hidden="true">×</span></button>
+  </div>;
+}
+
 // One conversation: main, or a thread. `head` replaces the default heading; `locked` replaces the composer, as for an archived thread.
 export function ChatPanel({ zone: rawZone, thread = null, store = chatStore(thread), head, locked }: { zone?: string; thread?: string | null; store?: ChatStore; head?: ReactNode; locked?: ReactNode }) {
   const chat = useChat(store);
   const zone = zoneOr(rawZone);
   const [now, setNow] = useState(() => Date.now());
   const input = useRef<HTMLTextAreaElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
   const log = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const [behind, setBehind] = useState(false);
@@ -178,17 +206,28 @@ export function ChatPanel({ zone: rawZone, thread = null, store = chatStore(thre
   }, [count, loaded, first?.clientId, first?.state]);
   useLayoutEffect(() => { if (loaded) toBottom(false); }, [loaded]);
 
+  // A message with an attachment goes once the server holds the file; its words are then a caption, with their own cap.
+  const pending = chat.attachment;
+  const length = chat.draft.trim().length, cap = pending ? CAPTION_MAX_CHARS : CHAT_TEXT_MAX, over = length > cap;
+  const sendable = loaded && !over && (pending ? pending.state === 'ready' : length > 0);
+  const attachable = !locked && store.attachable();
   const submit = () => {
-    const text = chat.draft.trim();
-    if (!text || text.length > CHAT_TEXT_MAX) return;
+    if (!sendable) return;
     pinned.current = true;
-    if (store.send(text)) input.current?.focus();
+    if (store.send(chat.draft)) input.current?.focus();
+  };
+  const files = (event: DragEvent) => attachable && [...event.dataTransfer.types].includes('Files');
+  const drop = {
+    onDragEnter: (event: DragEvent) => { if (files(event)) { event.preventDefault(); setDragging(true); } },
+    onDragOver: (event: DragEvent) => { if (files(event)) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } },
+    onDragLeave: (event: DragEvent) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); },
+    onDrop: (event: DragEvent) => { setDragging(false); if (!files(event)) return; event.preventDefault(); store.attach([...event.dataTransfer.files]); input.current?.focus(); },
   };
   const onKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); submit(); }
     if (event.key === 'Escape' && first && !chat.draft) void store.stop(first.clientId);
   };
-  const reply = (text: string) => { pinned.current = true; store.send(text); };
+  const reply = (text: string) => { pinned.current = true; store.send(text, false); };
 
   if (chat.phase === 'signed-out') return <section className="tile notice" role="alert"><h1>Sign in to chat with Waldo.</h1><p>{chat.error}</p><a className="button-link" href={signInHref()}>Sign in</a></section>;
 
@@ -198,11 +237,11 @@ export function ChatPanel({ zone: rawZone, thread = null, store = chatStore(thre
   const holding = chat.local.filter(item => item.state === 'completed' && item.draft && !item.effectsUnconfirmed);
   const lastAssistant = [...chat.messages].reverse().find(message => message.role === 'assistant');
   const repliesOn = lastAssistant !== undefined && chat.messages.at(-1)?.id === lastAssistant.id && !chat.local.some(item => !item.landed || item.state === 'admitted' || item.state === 'running');
-  const length = chat.draft.trim().length, over = length > CHAT_TEXT_MAX;
   const empty = loaded && chat.messages.length === 0 && chat.local.length === 0;
   let lastDay = '';
 
-  return <div className="chat">
+  return <div className="chat" {...(attachable ? drop : {})}>
+    {dragging && <div className="chat-drop" aria-hidden="true"><div><Icon name="paperclip"/><p>Drop a file or image to attach it</p><p className="meta">One per message, up to {formatBytes(UPLOAD_MAX_BYTES)}</p></div></div>}
     {head ?? <div className="chat-head reveal"><h1>Chat</h1><p className="label">Same conversation as your Waldo app.</p></div>}
     <div ref={log} className="chat-log" role="log" aria-live="polite" aria-relevant="additions" aria-busy={chat.phase === 'loading'} aria-label="Conversation with Waldo">
       {chat.phase === 'loading' && <div className="chat-skeleton" role="status"><span className="visually-hidden">Loading your conversation…</span><i className="sk owner"/><i className="sk waldo"/><i className="sk waldo short"/></div>}
@@ -216,10 +255,10 @@ export function ChatPanel({ zone: rawZone, thread = null, store = chatStore(thre
         const divider = message.created_at !== null && day !== lastDay ? <div className="chat-day" role="separator"><span>{dayLabel(message.created_at, zone, now)}</span></div> : null;
         lastDay = day;
         return <div key={message.id} className="chat-row">{divider}{message.role === 'user'
-          ? <OwnerMessage text={message.text} at={message.created_at} zone={zone} channel={message.channel}/>
+          ? <OwnerMessage text={chat.attached.get(message.id)?.caption === '' ? '' : message.text} attachment={chat.attached.get(message.id)} at={message.created_at} zone={zone} channel={message.channel}/>
           : <WaldoMessage message={message} zone={zone} arrived={chat.arrived.has(message.id)} replies={repliesOn && message.id === lastAssistant!.id} onReply={reply} shown={chat.streamed.get(message.id)}/>}</div>;
       })}
-      {unlanded.map(item => <div key={item.clientId} className="chat-row local"><OwnerMessage text={item.text} at={item.sentAt} zone={zone} status={localStatus(item, store)}/>{item.state !== 'sending' && item.state !== 'failed' && <Closure item={item} store={store}/>}</div>)}
+      {unlanded.map(item => <div key={item.clientId} className="chat-row local"><OwnerMessage text={item.text} attachment={item.attachment} at={item.sentAt} zone={zone} status={localStatus(item, store)}/>{item.state !== 'sending' && item.state !== 'failed' && <Closure item={item} store={store}/>}</div>)}
       {closures.map(item => <Closure key={item.clientId} item={item} store={store}/>)}
       {holding.map(item => <Draft key={item.clientId} id={item.clientId} text={item.draft!}/>)}
       {first && <Working item={first} queued={working.length - 1} store={store} now={now}/>}
@@ -228,14 +267,20 @@ export function ChatPanel({ zone: rawZone, thread = null, store = chatStore(thre
       {behind && <button type="button" className="chat-jump" onClick={() => toBottom(true)}><Icon name="arrow"/>Latest</button>}
       {chat.notice && <p className="chat-notice" role="status">{chat.notice}</p>}
       {locked ?? <form className={`composer${over ? ' over' : ''}`} onSubmit={event => { event.preventDefault(); submit(); }}>
-        <label className="visually-hidden" htmlFor="chat-input">Message Waldo</label>
-        <textarea id="chat-input" ref={input} rows={1} value={chat.draft} placeholder="Message Waldo" aria-describedby="chat-hint" aria-invalid={over || undefined}
-          disabled={chat.phase === 'loading' || chat.phase === 'error'} onChange={event => store.setDraft(event.target.value)} onKeyDown={onKey}/>
+        {pending && <DraftChip attachment={pending} store={store} onRemoved={() => input.current?.focus()}/>}
+        <label className="visually-hidden" htmlFor="chat-input">{pending ? 'Caption for your attachment' : 'Message Waldo'}</label>
+        <textarea id="chat-input" ref={input} rows={1} value={chat.draft} placeholder={pending ? 'Add a message (optional)' : 'Message Waldo'} aria-describedby="chat-hint" aria-invalid={over || undefined}
+          disabled={chat.phase === 'loading' || chat.phase === 'error'} onChange={event => store.setDraft(event.target.value)} onKeyDown={onKey}
+          onPaste={event => { const pasted = [...event.clipboardData.files]; if (!attachable || !pasted.length) return; event.preventDefault(); store.attach(pasted); }}/>
         <div className="composer-bar">
-          <span id="chat-hint" className="meta">{over ? `${length.toLocaleString()} / ${CHAT_TEXT_MAX.toLocaleString()} characters. Shorten it to send.` : length > CHAT_TEXT_MAX - 400 ? `${(CHAT_TEXT_MAX - length).toLocaleString()} characters left` : 'Enter to send · Shift + Enter for a new line'}</span>
-          {!length && first
+          {attachable && <>
+            <input ref={picker} type="file" className="visually-hidden" tabIndex={-1} aria-hidden="true" onChange={event => { store.attach([...(event.target.files ?? [])]); event.target.value = ''; input.current?.focus(); }}/>
+            <button type="button" className="composer-attach" aria-label="Attach a file or image" title={pending ? 'One attachment per message' : 'Attach a file or image'} disabled={!loaded || !!pending} onClick={() => picker.current?.click()}><Icon name="paperclip"/></button>
+          </>}
+          <span id="chat-hint" className="meta">{over ? `${length.toLocaleString()} / ${cap.toLocaleString()} characters. Shorten it to send.` : pending?.state === 'uploading' ? 'Send is ready once the upload finishes' : length > cap - 400 ? `${(cap - length).toLocaleString()} characters left` : 'Enter to send · Shift + Enter for a new line'}</span>
+          {!length && !pending && first
             ? <button type="button" className="composer-send stop" aria-label="Stop Waldo" title="Stop · Esc" disabled={first.stopping} onClick={() => void store.stop(first.clientId)}><i aria-hidden="true"/></button>
-            : <button type="submit" className="composer-send" aria-label="Send message" title="Send · Enter" disabled={!length || over || !loaded}><Icon name="arrow"/></button>}
+            : <button type="submit" className="composer-send" aria-label={pending ? 'Send message with attachment' : 'Send message'} title={pending?.state === 'uploading' ? 'Waiting for the upload' : 'Send · Enter'} disabled={!sendable}><Icon name="arrow"/></button>}
         </div>
       </form>}
     </div>

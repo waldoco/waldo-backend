@@ -1,10 +1,13 @@
 import type {
   CanaryTokens,
-  DerivedHealthDestinationView,
+  FormHealthView,
   InvocationInputReference,
   NarrativeContext,
+  PartialHealthNarrative,
+  PartialHealthView,
   RecallKey,
   RecallResult,
+  RecoveryHealthView,
   RuntimeContextCheckpoint,
   RuntimeContextFailureReason,
   RuntimeContextSource,
@@ -72,11 +75,10 @@ export type LocalOwnerBinding = Readonly<{
   source: ContextSource;
 }>;
 
-export type ContextHealthMaterial = Readonly<{
-  view: DerivedHealthDestinationView;
-  narrative: NarrativeContext;
-  source: ContextSource;
-}>;
+// A Form or Recovery view rides with the zone narrative; a partial view, which carries neither zone, with its own.
+export type ZoneHealthMaterial = Readonly<{ view: FormHealthView | RecoveryHealthView; narrative: NarrativeContext; source: ContextSource }>;
+export type PartialHealthMaterial = Readonly<{ view: PartialHealthView; narrative: PartialHealthNarrative; source: ContextSource }>;
+export type ContextHealthMaterial = ZoneHealthMaterial | PartialHealthMaterial;
 
 export type RuntimeContextMaterials = Readonly<{
   principal_ref: string;

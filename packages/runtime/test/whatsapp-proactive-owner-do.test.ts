@@ -106,7 +106,7 @@ const drive = async (name: string, script: (steps: Readonly<{
     state.storage.kv.put('wa_last_inbound_ms', Date.now() - 30 * 60 * 60_000);
     const owner = new OwnerDO(state, { ...env, ...directory, ...whatsapp, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     const turn = vi.spyOn(owner as unknown as { turn(): Promise<void> }, 'turn').mockImplementation(async () => { wire.events.push('turn'); });
-    let seq = 0;
+    let seq = 0, lastInbound = 0;
     const draining: Promise<void>[] = [];
     try {
       await script({
@@ -115,9 +115,11 @@ const drive = async (name: string, script: (steps: Readonly<{
         alarms: async passes => { for (let pass = 0; pass < passes; pass++) { await owner.alarm(); await state.storage.deleteAlarm(); await new Promise(resolve => setTimeout(resolve, 300)); } },
         reply: async (from = SUBJECT) => {
           seq += 1;
+          // Meta stamps whole seconds; a later reply carries a later stamp even when the test runs within one second.
+          lastInbound = Math.max(Math.floor(Date.now() / 1000), lastInbound + 1);
           const response = await owner.fetch(new Request('https://telegram-owner/whatsapp-admit', {
             method: 'POST', headers: { 'x-waldo-whatsapp-subject': from },
-            body: JSON.stringify({ messages: [{ from, id: `wamid.in.${seq}`, timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: 'hi' } }] }),
+            body: JSON.stringify({ messages: [{ from, id: `wamid.in.${seq}`, timestamp: String(lastInbound), type: 'text', text: { body: 'hi' } }] }),
           }));
           expect(response.status).toBe(200);
           await drainWhatsAppTurns(owner);

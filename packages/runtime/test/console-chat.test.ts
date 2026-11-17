@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { CONSOLE_CHAT_HEADER, CONSOLE_CHAT_PATH, handleConsoleChat } from '../src/channels/console-chat';
 import type { ConsoleAuth } from '../src/identity/console-auth';
 import { linkCodeHash } from '../src/identity/owner-directory';
+import { APP_CHAT_UPLOAD_MAX_BYTES } from '../../contracts/src/app/core';
 
 const ORIGIN = 'https://w.test';
 const SESSION = 'b'.repeat(32);
@@ -266,5 +267,67 @@ describe('console chat', () => {
     const { env } = setup();
     expect((await handleConsoleChat(call(CONSOLE_CHAT_PATH), env, null))!.status).toBe(404);
     expect((await handleConsoleChat(call(CONSOLE_CHAT_PATH), {} as never, fakeAuth()))!.status).toBe(404);
+  });
+});
+
+// The console stages a chat attachment through the app's own upload handling (app-api forwardAppUpload), under the cookie session.
+describe('console chat attachment upload', () => {
+  const UPLOADS = `${CONSOLE_CHAT_PATH}/uploads`;
+  const upload = (headers: Record<string, string> = {}, body: BodyInit = new Uint8Array(1024).fill(7)) => new Request(`${ORIGIN}${UPLOADS}`, {
+    method: 'POST', body,
+    headers: { cookie: COOKIE, [CONSOLE_CHAT_HEADER]: '1', 'sec-fetch-site': 'same-origin', origin: ORIGIN, 'content-type': 'application/pdf', 'x-waldo-upload-kind': 'file', 'x-waldo-upload-name': encodeURIComponent('Lease – 2026.pdf'), ...headers },
+  });
+  const on = (env: unknown) => ({ ...(env as object), APP_CHAT_ATTACHMENTS: '1' }) as never;
+
+  it('hands the owner object the raw bytes, type, kind and name on the app upload path of the cookie owner and session, on the upload budget', async () => {
+    const { env, forwards, keys } = setup();
+    const response = (await handleConsoleChat(upload(), on(env), fakeAuth()))!;
+    expect(response.status).toBe(202);
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    const forwarded = forwards[0]!;
+    expect([new URL(forwarded.url).pathname, forwarded.method]).toEqual(['/app/v1/chat/uploads', 'POST']);
+    expect(forwarded.headers.get('x-waldo-do-name')).toBe('owner-1');
+    expect(forwarded.headers.get('x-waldo-app-session-hash')).toBe(await linkCodeHash(SESSION));
+    expect([forwarded.headers.get('content-type'), forwarded.headers.get('x-waldo-upload-kind'), decodeURIComponent(forwarded.headers.get('x-waldo-upload-name')!)]).toEqual(['application/pdf', 'file', 'Lease – 2026.pdf']);
+    expect([...new Uint8Array(await forwarded.arrayBuffer())]).toEqual(new Array(1024).fill(7));
+    expect(forwarded.headers.get('cookie')).toBeNull();
+    expect(keys).toEqual(['app-upload:owner-1']);
+  });
+
+  it('is not there with the switch off, and spends nothing', async () => {
+    const { env, forwards, keys } = setup();
+    expect((await handleConsoleChat(upload(), env, fakeAuth()))!.status).toBe(404);
+    expect([forwards.length, keys.length]).toEqual([0, 0]);
+  });
+
+  it('refuses what the app route refuses, with the same statuses, before the owner object sees it', async () => {
+    const { env, forwards } = setup();
+    const status = async (headers: Record<string, string>, body?: BodyInit) => {
+      const response = (await handleConsoleChat(upload(headers, body), on(env), fakeAuth()))!;
+      return [response.status, (await response.json() as { error: string }).error];
+    };
+    expect(await status({ 'x-waldo-upload-kind': 'sticker' })).toEqual([400, 'invalid_kind']);
+    expect(await status({ 'x-waldo-upload-kind': 'photo', 'content-type': 'image/heic' })).toEqual([415, 'unsupported_type']);
+    expect(await status({ 'x-waldo-upload-name': '' })).toEqual([400, 'invalid_name']);
+    expect(await status({ 'content-length': String(APP_CHAT_UPLOAD_MAX_BYTES + 1) })).toEqual([413, 'unavailable']);
+    expect(await status({}, new Uint8Array(APP_CHAT_UPLOAD_MAX_BYTES + 1))).toEqual([413, 'unavailable']);
+    expect(forwards).toHaveLength(0);
+  });
+
+  it('refuses another site, another method and a spent budget, and turns an ended session into a sign-in', async () => {
+    const { env, forwards } = setup();
+    const readOwnerCookie = vi.fn(async () => 'owner-1');
+    for (const headers of [{ [CONSOLE_CHAT_HEADER]: '' }, { origin: 'https://evil.test' }, { 'sec-fetch-site': 'cross-site' }] as Record<string, string>[])
+      expect((await handleConsoleChat(upload(headers), on(env), fakeAuth(readOwnerCookie)))!.status).toBe(403);
+    expect(readOwnerCookie).not.toHaveBeenCalled();
+    expect((await handleConsoleChat(call(UPLOADS), on(env), fakeAuth()))!.status).toBe(405);
+    expect((await handleConsoleChat(call(`${UPLOADS}/up_x`, { method: 'POST' }), on(env), fakeAuth()))!.status).toBe(404);
+    expect(forwards).toHaveLength(0);
+    const spent = setup(false);
+    const limited = (await handleConsoleChat(upload(), on(spent.env), fakeAuth()))!;
+    expect([limited.status, limited.headers.get('retry-after'), spent.forwards.length]).toEqual([429, '60', 0]);
+    const ended = on({ OWNER_DO: { idFromName: (name: string) => name, get: () => ({ fetch: async () => Response.json({ error: 'unavailable' }, { status: 403 }) }) }, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } });
+    const response = (await handleConsoleChat(upload(), ended, fakeAuth()))!;
+    expect([response.status, await response.json()]).toEqual([401, { error: 'sign_in_required' }]);
   });
 });

@@ -8,6 +8,8 @@ import type { ApprovalActionV1, ApprovalKindV1 } from '../../../contracts/src/ap
 // undoing within its window reaches only those the approved change reached. Approving one change to the owner's own things
 // stays one tap in chat; approving anything that reaches other people, or acts on a site, a tool or external content, is
 // handed to the app. A calendar change reaches other people when it has guests or is on a calendar other than the primary one.
+// With AUTONOMOUS_BY_DEFAULT on, chat hands nothing to the app: each card is decided where it is shown, and this table only
+// classifies the app's own fresh-check rule.
 export const STEP_UP_APPROVALS: Readonly<Record<ApprovalKindV1 | 'calendar_shared', Readonly<{ gated: boolean; why: string }>>> = {
   email_send: { gated: true, why: 'Sends one email as the owner to other people; it cannot be called back.' },
   message_send: { gated: true, why: 'Sends one message as the owner to another person; it cannot be called back.' },

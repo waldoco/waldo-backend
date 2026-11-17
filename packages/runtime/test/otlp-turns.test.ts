@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
+import { ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
 import { modelCost } from '../src/llm/pricing';
 import { hopFeature, langfuseOtlpConfig, otlpTurnExporter } from '../src/observability/otlp-turns';
 import { turnAbortedEntry } from '../src/observability/turn-aborted';
@@ -329,6 +329,16 @@ describe('otlpTurnExporter', () => {
     expect(cost.cache_write).toBeCloseTo((900 * 0.125) / 1e6, 12);
     expect(cost.total).toBeCloseTo((100 * 0.1 + 200 * 0.01 + 900 * 0.125 + 80 * 0.5) / 1e6, 12);
     expect(JSON.parse(gen['langfuse.observation.metadata.price_source'] as string).usd_per_million.cache_write).toBeCloseTo(0.125, 10);
+  });
+
+  it('names the one-hour write share and its rate where the call kept its head an hour', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
+    await log({ trace: 'tg-h', hop: 'llm_reply', ms: 900, ok: true, usage: { model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, input: 1200, output: 80, cached: 200, cache_write: 900, cache_write_1h: 800 } });
+    await log({ trace: 'tg-h', hop: 'turn', ms: 1000, ok: true });
+    const gen = attrs(spans(0)[1]!);
+    expect(JSON.parse(gen['langfuse.observation.usage_details'] as string)).toMatchObject({ input_cache_write_tokens: 900, input_cache_write_1h_tokens: 800 });
+    expect(JSON.parse(gen['langfuse.observation.metadata.price_source'] as string).usd_per_million).toMatchObject({ cache_write: 2.5, cache_write_1h: 4 });
   });
 
   it('carries input, output and reasoning only when text capture is on', async () => {
