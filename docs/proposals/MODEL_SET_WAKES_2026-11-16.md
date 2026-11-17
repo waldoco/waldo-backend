@@ -1,8 +1,9 @@
 # Model-set wakes: one wake run, follow-ups the model sets, events a model judges (16 November 2026)
 
-Status: **Proposed**, design only. No code under `packages/` or `supabase/` changes with this document. The build follows
-once `lean-scheduled-runs` (commit `d9d83dc1a` on `claude/lean-scheduled-runs`, not yet on `beta-mvp`) lands, because both
-touch `channels/owner-turn.ts` and `channels/owner-do.ts`. Code references are pinned to `beta-mvp` at `95acaa51`. Paths
+Status: **Questions answered** (owner's rulings of 16 Nov, waldoco/waldo-app#257 comment 6926736096; see §11). The first
+slices are built as drafts against `beta-mvp`; §12 lists them. The 17 Nov reasoning-and-action audit proposes changes on
+top of this design (§12); they wait for the owner's ruling. No code under `packages/` or `supabase/` changes with this
+document. `lean-scheduled-runs` landed on `beta-mvp` as #2156 (`f575d0b4`). Code references are pinned to `beta-mvp` at `95acaa51`. Paths
 are under `packages/runtime/src/` unless they say otherwise. Tags: [verified] read in source at `95acaa51`; [reported] from
 staging logs and Langfuse as written up in the launch doc tabs "Langfuse and harness, 16 Nov" and "Final ledger, 16 Nov",
 not re-read here; [inference] my reading; [proposed] this design.
@@ -489,37 +490,57 @@ notes. Because the Brief runs tainted today, the slice's wake runs at the outsid
 - **Rollback:** each step is a switch; turning it off restores today's path, whose code stays until its step has run a
   week on staging.
 
-## 11. Open questions
+## 11. Questions, answered
 
-For the owner:
+The owner ruled on 1 to 7 on 16 Nov ("Accept all"); 8 to 12 were Ark's to decide, and are answered by what was built.
 
-1. **Acting without a card.** Accept the ADR-0018 amendment in §3.6 (D1 made concrete: inward, undoable effects in a
-   Waldo-started wake run with no card, reported with undo, even after reading mail; what outside content asked for stays
-   a card)? Without it, "goes ahead and makes changes" stays cards except the own-calendar grant. My one reservation, for
-   the owner to weigh, not a change to D1: a wake started by a webhook from a source the owner has not used before is the
-   widest injection path, and a narrower first version would apply D1 only to wakes from the owner's own data, mail and
-   calendar.
-2. **Webhooks reach the model.** Reverse `/events/` "never fed to a turn", with the body fenced and every effect a card?
-3. **Budget.** A daily wake spend per owner, and the starting caps (12 follow-ups, 8 follow-up wakes, chain depth 3)?
-4. **Health patterns in memory.** Should the learning loop's health patterns ("short nights make afternoon runs slip")
-   get a bounded contract review now, or stay in the experiment path for beta?
-5. **Traces.** May eval and staging traces carry zone and driver words, so body reasoning can be checked?
-6. **"What I'm keeping an eye on"** in the app: yes, and on which screen?
+1. **Acting without a card:** accepted (ruling 2). Inward, undoable changes in Waldo-started runs need no card, even after
+   reading mail; what outside content asks for still gets a card. Written as the ADR-0018 amendment in #2168
+   (`AUTONOMY_WALDO_INWARD`). The reservation about webhooks is held by ruling 3: a run a webhook started is never
+   Waldo-started.
+2. **Webhooks reach the model:** yes (ruling 3), with the body as outside text and every effect a card until a source is
+   reviewed. #2173 (`EVENT_TURNS`).
+3. **Budget:** 12 follow-ups, 8 follow-up wakes, chain depth 3, on staging, to revisit after a week of cost data (ruling 4).
+   Kept as code bounds (#2165, #2174). No daily wake spend ceiling yet.
+4. **Health patterns in memory:** words-only patterns on staging behind a switch, under the owner's health consent;
+   production waits for the written amendment and consent wording (ruling 7, Ansh's lane).
+5. **Traces:** zone and driver words, no numbers, for the owner's and the team's accounts now; outside testers after the
+   consent line (ruling 8, Ansh's lane).
+6. **"What I'm keeping an eye on":** yes (ruling 6). The read is #2178; the app screen is waldo-app #294.
+7. **Background runs set Waldo's own follow-ups:** yes (ruling 5), as the bounded note-to-self that grants nothing. #2165.
+8. **The wake run:** it reuses `responder.prompt` with the lean shape. A run Waldo starts is marked Waldo-first by its
+   caller (#2156, #2165).
+9. **Due Waldo-set loops:** their own one-shot scheduler entry at the due minute, up to 8 a day; the rest stay on the
+   heartbeat (#2174).
+10. **The first look:** a direct `ask` on the owner's serial chain, on the auxiliary model, not a job in the sweep's lane
+    (#2176).
+11. **Outcome rows:** not built. This belongs to the one-run step (R2 in the 17 Nov list), which waits for the owner.
+12. **The standing-order fire:** a `confirm_first` order now fires with reads and `propose_action` only (#2165). A
+    quiet-hours check for it is not built.
 
-For Ark and the owner together:
+## 12. What is built, and what waits (17 Nov)
 
-7. **Background runs set Waldo's own follow-ups (§3.1a).** Admit a `self` loop kind without `source_ref` in background
-   runs, under the code bounds listed there. It carries its taint, grants nothing, and leaves `set_reminder` and the mail
-   path unchanged. This is the authority change the first slice needs.
+Built, as drafts against `beta-mvp`, each behind its switch (staging on, production off):
 
-For Ark (agent loop owner):
+| Step | Pull request | Switch |
+|---|---|---|
+| Lean scheduled runs (merged) | #2156 | `WALDO_LEAN_SCHEDULED` |
+| Waldo's own follow-ups, first slice (§9) | #2165 | `MODEL_SET_WAKES` |
+| Inward, undoable changes with no card (§3.6) | #2168 | `AUTONOMY_WALDO_INWARD` |
+| Webhooks to the model (§3.3) | #2173 | `EVENT_TURNS` |
+| Exact-time follow-up wakes (question 9) | #2174 | `MODEL_SET_WAKES` |
+| First look on webhooks (§3.3) | #2176 | `FIRST_LOOK` |
+| Multi-run eval case (§7.2, scenario 1) | #2177 | none |
+| "What I'm keeping an eye on" read (§3.4) | #2178 | none |
 
-8. Does the wake run reuse `responder.prompt` with the lean shape, or does it need its own entry beside `remind`?
-9. Should due Waldo-set loops get their own scheduler entries (exact time) or stay on the heartbeat with a finer grid?
-10. Confirm the first look runs as a direct `ask` on the owner's chain (§3.3), not as a job in the update sweep's lane.
-11. Is the outcome row a new table or columns on `background_runs`?
-12. The standing-order fire gets every non-owner-only tool and has no quiet-hours check that I found. Fold it into the wake
-    run's tool rules now or leave it?
+Not built: the general event inbox beyond webhooks (§3.3), the one wake run with outcome rows (§3.2), the running
+picture of the day (§4), the learning loop (§5), and the health folds (§6).
+
+The 17 Nov reasoning-and-action audit (waldoco/waldo-app#257 comment 6941339546, and comment 6941340115 on this pull
+request) proposes, on top of this design: outside content decided by what a run read, not by its kind; looking ahead as
+an explicit job of the morning run; one store for Waldo's work; the budget checked after every run; and the main model,
+not a reader worker, deciding whether to act. Those wait for the owner's ruling on its five decisions; nothing here
+starts before it.
 
 ## Evidence
 
