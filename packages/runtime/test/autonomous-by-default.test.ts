@@ -6,7 +6,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { approvalDesk, ownerAsked, reviewParts } from '../src/channels/approvals';
+import { approvalDesk, askedBy, ownerAsked, reviewParts } from '../src/channels/approvals';
 import { appApprovalV1Schema } from '../../contracts/src/app/approvals';
 import { ownerEffectLedger } from '../src/channels/owner-effect-ledger';
 import { appApprovalLink } from '../src/channels/surfaces/app';
@@ -649,6 +649,21 @@ describe('an inward, undoable change in a run Waldo started', () => {
       expect(f.created).toHaveLength(1);
       expect(f.status(id)).toBe('done');
       expect(f.desk.askedOutcome(id)).toMatchObject({ state: 'done', undo: true });
+    });
+  });
+
+  it('a Brief\'s own tool context (Waldo-first, run as outside content) reaches the desk as Waldo-started, and its block runs with no card', async () => {
+    // What the host sets on a day card's tool calls: the run is marked external because of what kind of run it is, it may have
+    // carried outside text, and its caller marked it Waldo-first.
+    const brief = { runOrigin: 'external', carriedOutside: true, waldoStarted: true } as const;
+    expect(askedBy(brief)).toEqual({ asked: false, waldoStarted: true });
+    // The owner's own turn never reads as Waldo-started, whatever the flag says.
+    expect(askedBy({ runOrigin: 'owner', ownerMessage: { words: 'add a block' }, waldoStarted: true })).not.toHaveProperty('waldoStarted');
+    await owner('waldo-inward-brief-context', async state => {
+      const f = harness(state, 'app', { waldoInward: true });
+      const id = await f.desk.propose(HOLD, 'run-1', 'op-1', { ...askedBy(brief), outside: true });
+      expect(f.status(id)).toBe('done');
+      expect(f.created).toHaveLength(1);
     });
   });
 
