@@ -67,10 +67,10 @@ const keepOne = async (open: () => Promise<WorkspaceStore>, ownerRef: string, pr
 };
 
 // The note's words for where the file went. `what` names the file with its article ("a photo", "an audio file …"); `opened`
-// says whether the model has it attached on this turn.
+// says whether the model has it attached on this turn; a later turn reads the same note with the file no longer attached.
 export const keptNote = (what: string, kept: KeptUpload, opened: boolean): string => {
   const head = `[Owner sent ${what}${opened ? ', attached' : ''}.`;
-  if (kept.status === 'saved') return `${head} Saved in their workspace as ${kept.path} (file_id ${kept.file_id}, revision ${kept.revision}).${opened ? '' : ' It is not attached here; open it with the workspace tools.'}]`;
+  if (kept.status === 'saved') return `${head} Saved in their workspace as ${kept.path} (file_id ${kept.file_id}, revision ${kept.revision}).${opened ? ' In a later message it is no longer attached; workspace_read opens it again.' : ' It is not attached here; open it with the workspace tools.'}]`;
   if (opened) return `${head} It could not be saved to their workspace.]`;
   if (kept.status === 'too_large') return `${head} It is larger than the ${LIMITS.fileBytes / (1024 * 1024)} MB a workspace file can hold, so it was not saved and cannot be opened here.]`;
   if (kept.status === 'workspace_full') return `${head} Their workspace is full, so it was not saved and cannot be opened here.]`;

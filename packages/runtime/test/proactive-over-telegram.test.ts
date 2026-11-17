@@ -8,6 +8,7 @@ import { appSubjectFor } from '../src/channels/app-api';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { traceBook } from '../src/channels/harness';
 import { PROACTIVE_SURFACE_KEY } from '../src/channels/proactive-surface';
+import { FINAL_OUTBOX_KEY } from '../src/channels/telegram-final-outbox';
 import { reminderBook } from '../src/channels/reminders';
 import { TelegramOwnerInbox } from '../src/channels/telegram-owner-inbox';
 import { persistInboxWake } from '../src/scheduler/alarm-slot';
@@ -176,12 +177,27 @@ describe('Waldo\'s own sends for an owner still linked on Telegram', { timeout: 
     });
   });
 
-  it('an owner who has not confirmed their timezone keeps today\'s path, so their reminders and Brief still fire', async () => {
+  it('an owner linked on Telegram who never confirmed a timezone in the app still moves off Telegram, and their Brief and reminders fire on the zone they had there', async () => {
     const name = 'choice-zone-unconfirmed';
     await ownerOn(name, { ...linked(name), timezone_confirmed: false }, ON, async (owner, state) => {
       const today = await day(owner, state);
       expect(dayPlanBook(state.storage.sql).read(today).find(card => card.card === 'card:brief')?.sent).toBe(true);
       expect(state.storage.sql.exec<{ status: string }>("SELECT status FROM schedule WHERE kind = 'reminder'").toArray().map(row => row.status)).not.toContain('armed');
+      expect(appRows(state)).toContain(REPLY);
+      expect(telegram.sends).toEqual([]);
+    });
+  });
+
+  // A Telegram runtime sends scheduled work straight away; what a Telegram turn leaves in the outbox is its notices.
+  it('a notice of Waldo\'s own a Telegram turn queued (the approvals desk, a reconnect) goes to the app, and nothing to Telegram', async () => {
+    const name = 'choice-left-notice';
+    await ownerOn(name, linked(name), ON, async (owner, state) => {
+      const left = 'Left for Telegram: the card you saw there was closed.';
+      state.storage.kv.put(FINAL_OUTBOX_KEY, [{ id: `left:${name}`, trace: `left:${name}`, payload: { chat_id: 7, text: left }, ownerSubject: '7', doName: name,
+        status: 'pending', dueAt: Date.now() - 1, createdAt: Date.now() - 60_000, attempts: 0, expiresAt: Date.now() + 86_400_000, notice: true }]);
+      for (let pass = 0; pass < 4; pass++) { await owner.alarm(); await state.storage.deleteAlarm(); await new Promise(resolve => setTimeout(resolve, 200)); }
+      expect(appRows(state)).toContain(left);
+      expect(telegram.sends).toEqual([]);
     });
   });
 

@@ -4,6 +4,7 @@
 import type { SanitiseDestination } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
 import { HEALTH_SPAN_MARKER, numericHealthIn, redactNumericHealth, sanitise } from '../src/scribe/sanitiser';
+import { asciiDigits } from '../src/security/decimal-digits';
 
 const CANARIES = ['a1b2c3d4e5f60718', '0f1e2d3c4b5a6978', '9a8b7c6d5e4f3021'];
 const run = (text: string, destination: SanitiseDestination, taint: 'external' | null = 'external') =>
@@ -23,6 +24,11 @@ describe('phone numbers the floor missed', () => {
     ['WA.ME/447911123456', 'WA.ME/[REDACTED_PHONE]'],
     ['call 098765-43210 now', 'call [REDACTED_PHONE] now'],
     ['call 098765-43210.', 'call [REDACTED_PHONE].'],
+    ['whatsapp me on 098765-43210', 'whatsapp me on [REDACTED_PHONE]'],
+    ['Contact: 098765-43210', 'Contact: [REDACTED_PHONE]'],
+    ['Ph. 098765-43210', 'Ph. [REDACTED_PHONE]'],
+    ['mob 098765-43210', 'mob [REDACTED_PHONE]'],
+    ['tel 098765-43210', 'tel [REDACTED_PHONE]'],
   ])('redacts the number in %j', (input, expected) => {
     for (const destination of ['send_message', 'memory_block'] as const) expect(bodyOf(run(input, destination)), destination).toBe(expected);
   });
@@ -94,6 +100,7 @@ describe('a phone number written in digits that are not ASCII', () => {
     ['Devanagari with a national 0', `call ${devanagari('09876543210')} now`],
     ['mathematical', `call +${mathematical('447911123456')} now`],
     ['a WhatsApp link in fullwidth', `wa.me/${fullwidth('919876543210')} now`],
+    ['a national number with a hyphen in fullwidth', `call ${fullwidth('098765-43210')} now`],
   ])('is redacted like an ASCII one: %s', (_script, input) => {
     for (const destination of ['send_message', 'memory_block'] as const) {
       const out = bodyOf(run(input, destination));
@@ -147,6 +154,25 @@ describe('a reading written in digits that are not ASCII', () => {
     expect(bodyOf(run(`today ${reading}.`, 'internal_context'))).toContain(HEALTH_SPAN_MARKER);
     expect(numericHealthIn(reading)).toBe(true);
     expect(redactNumericHealth(`today ${reading}.`, '[h]')).toBe('today [h].');
+  });
+
+  it.each([
+    ['fullwidth', { hrv: fullwidth('45') }],
+    ['Devanagari', { hrv: devanagari('45') }],
+    ['Devanagari, beside the metric name', { metric: 'hrv', value: devanagari('45') }],
+    ['mathematical', { resting_heart_rate: mathematical('58') }],
+  ])('is refused in a structured payload like an ASCII one: %s', (_script, payload) => {
+    const ascii = JSON.parse(asciiDigits(JSON.stringify(payload))) as Record<string, string>;
+    for (const destination of ['send_message', 'memory_block', 'internal_context'] as const) {
+      const send = (body: Record<string, string>) => sanitise({ payload: body, destination, canary_tokens: [...CANARIES], source_taint: 'external' });
+      expect(send(ascii), destination).toMatchObject({ ok: false, reason: 'health_value_leak' });
+      expect(send(payload), destination).toMatchObject({ ok: false, reason: 'health_value_leak' });
+    }
+  });
+
+  it('leaves a structured payload with non-ASCII digits and no health key alone', () => {
+    const payload = { room: fullwidth('12'), year: devanagari('2026') };
+    expect(sanitise({ payload, destination: 'send_message', canary_tokens: [...CANARIES], source_taint: 'external' })).toMatchObject({ ok: true, payload });
   });
 
   it('leaves words with non-ASCII digits and no reading alone', () => {

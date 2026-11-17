@@ -1,4 +1,5 @@
 import type { DerivedSleepDebtTrend, FormZone, LoadZone, RecoveryZone } from '../../../../contracts/src/health/crs';
+import { HEALTH_SCORE_INPUT_NAMES, type HealthScoreInput } from '../../../../contracts/src/health/signals';
 
 // Reasons come from the H1 contract's healthScoreUnavailableReasonV1Schema. Only those the math
 // itself can produce appear here; the producer decides link and consent state and passes it in.
@@ -23,6 +24,8 @@ export interface HourlyBucket {
   readonly daylightMinutes: number | null;
   readonly movementMinutes: number | null;
   readonly activeEnergyKcal: number | null;
+  // Steps the phone summed for the hour. Absent where the read carried none.
+  readonly steps?: number | null;
 }
 export interface Span { readonly startAt: string; readonly endAt: string }
 export interface SleepRecord extends Span {
@@ -72,8 +75,12 @@ export interface DailyScoresInput {
 }
 
 export interface Unavailable { readonly state: 'unavailable'; readonly reason: UnavailableReason }
+// Every name a pillar may list among the signals it used: the signal registry's score inputs. waldo.health_context_write admits
+// only its own closed list and refuses the whole row for any other name; a runtime test keeps that list equal to the registry's.
+export const USED_SIGNALS = HEALTH_SCORE_INPUT_NAMES;
+export type UsedSignal = HealthScoreInput;
 export interface UsedBasis {
-  readonly signals: readonly string[];
+  readonly signals: readonly UsedSignal[];
   readonly days: readonly string[];
 }
 // Whether the owner's own days carry the pillar yet. Present only on a pillar computed provisionally.

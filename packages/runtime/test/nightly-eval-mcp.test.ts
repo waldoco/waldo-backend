@@ -61,4 +61,22 @@ describe('a tool on a server the owner connected', () => {
     expect(outputOf(record, 'read_mcp_tool')).toContain('asks the owner first');
     expect(record.effects).toEqual([]);
   });
+
+  it('answers a question only a connected item holds, when the owner never names where it lives', async () => {
+    const asked = tracker.steps.map((step) => ('say' in step ? step.say : '')).join(' ');
+    expect(asked).not.toMatch(/tracker|issue|mcp/i);
+    const gateway = scriptedGateway({ rules: [{ match: /checkout bug/, rounds: [
+      { toolCalls: [{ name: 'search_mcp_tools', arguments: { query: 'checkout bug' } }] },
+      { toolCalls: [{ name: 'read_mcp_tool', arguments: { server: 'tracker', tool: 'find_issues', args: { query: 'checkout' } } }] },
+      { text: 'Meera Iyer has it; ISSUE-412 is in review, per your tracker.' },
+    ] }] });
+    const record = await runTrial(tracker, { gateway, budget: callBudget(20) });
+    expect(record.status).toBe('ran');
+    // The first request already tells the model the tracker is connected and how to look there.
+    const first = JSON.stringify(gateway.requests()[0]);
+    expect(first).toContain('tracker');
+    expect(first).toContain('search_mcp_tools');
+    expect(outputOf(record, 'read_mcp_tool')).toContain('ISSUE-412');
+    expect(record.effects).toEqual([]);
+  });
 });
