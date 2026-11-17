@@ -60,6 +60,11 @@ describe('device context routes', () => {
     expect(devicePlaceIngestV1Schema.safeParse({ ...ingest, place: [place] }).success).toBe(false);
     expect(devicePlaceIngestV1Schema.safeParse({ ...ingest, request_id: 'short' }).success).toBe(false);
   });
+  it('ingest may say the phone just arrived home or at the gym, the word only', () => {
+    for (const arrived of ['home', 'gym']) expect(devicePlaceIngestV1Schema.safeParse({ ...ingest, arrived }).success, arrived).toBe(true);
+    for (const arrived of ['office', 'Home', '', true, { place: 'home' }, null]) expect(devicePlaceIngestV1Schema.safeParse({ ...ingest, arrived }).success, String(arrived)).toBe(false);
+    expect(devicePlaceIngestV1Schema.safeParse({ ...ingest, place: { ...place, arrived: 'home' } }).success).toBe(false);
+  });
 
   it('a receipt says whether the place was kept or a later one already was', () => {
     expect(devicePlaceIngestReceiptV1Schema.safeParse({ request_id: 'dc-place-0001', replayed: false, status: 'superseded' }).success).toBe(true);

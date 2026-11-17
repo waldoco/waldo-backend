@@ -63,12 +63,19 @@ it('refuses a choice made against other wording, and reads a choice given under 
   });
 });
 
-it('is neither read nor changed by a build below revision 18', async () => {
+it('is neither read nor changed by a build declaring 24, and is both at 25', async () => {
+  expect(APP_CONTROLS_AGREEMENTS_REVISION).toBe(25);
   await app(async ({ read, act, storage }) => {
     expect((await read()).status).toBe(400);
     expect((await act(improve('given', 'f'.repeat(64), 'agree-0201'))).status).toBe(400);
     expect(improveWaldoGiven(storage.kv)).toBe(false);
-  }, APP_CONTROLS_AGREEMENTS_REVISION - 1);
+  }, 24);
+  await app(async ({ read, act, storage }) => {
+    const first = await read();
+    expect(first.status).toBe(200);
+    expect((await act(improve('given', first.body.revision, 'agree-0202'))).status).toBe(200);
+    expect(improveWaldoGiven(storage.kv)).toBe(true);
+  }, 25);
 });
 
 it('refuses an action that is not well formed', async () => {

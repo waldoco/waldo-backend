@@ -27,7 +27,9 @@ export const changeLines = (changes: readonly Change[]): string => changes.map((
 export type ChangeBefore = Readonly<{ start: string; end: string; all_day: boolean; title_changed: boolean; attendees?: number }>;
 // ref: the event or message a reader opens the change by.
 // read, archived, starred: what the owner did with a mail already seen. more: how many new mails one read left unopened.
-export type Change = Readonly<{ source: 'calendar' | 'mail'; kind: 'added' | 'changed' | 'cancelled' | 'new' | MailLabelChange['change'] | 'more'; detail: string; source_message_id?: string; source_ref?: string; ref?: string; before?: ChangeBefore }>;
+// uid: a calendar event's iCal UID, kept beside the detail (never shown), so a phone change and a Google change to the same
+// meeting in one batch are said once.
+export type Change = Readonly<{ source: 'calendar' | 'mail'; kind: 'added' | 'changed' | 'cancelled' | 'new' | MailLabelChange['change'] | 'more'; detail: string; source_message_id?: string; source_ref?: string; ref?: string; before?: ChangeBefore; uid?: string }>;
 // What the owner did with a mail is context for a judgment, never the reason for one.
 export const CONTEXT_KINDS: readonly Change['kind'][] = ['read', 'archived', 'starred'];
 // A cursor that moved between the read and its write: the write is rolled back and the next tick reads again.
@@ -35,6 +37,19 @@ export class CursorMovedError extends Error { constructor() { super('cursor_move
 const DELTA_SHOWN_KEPT_MS = 14 * DAY_MS;
 // An event as the sweep last saw it.
 type SeenEvent = Readonly<{ event_id: string; start: string; end: string; all_day: boolean; title_digest: string; attendees?: number }>;
+
+// Why a batch waited: the sweep's gate before any judgment, or the hold on the triage turn's tell. The owner turning follow-ups
+// off is a choice, not a wait, and is never held.
+export type HeldCode = 'quiet' | 'window' | 'closed' | 'volume' | 'budget' | 'cooldown' | 'question' | 'consent';
+const HELD_WORDS: Readonly<Record<HeldCode, string>> = {
+  quiet: 'quiet hours', window: 'the owner\'s chat could not take a message', closed: 'the owner\'s day had closed', volume: 'the owner chose low volume',
+  budget: 'the day\'s budget for unasked messages was spent', cooldown: 'too soon after the last unasked message', question: 'a question to the owner was waiting', consent: 'no consent to reach out',
+};
+export const heldWhen = (at: number, code: HeldCode | null, timezone: string): string => `held at ${localIso(at, timezone)}${code ? `, ${HELD_WORDS[code]}` : ''}`;
+export type HeldRow = Readonly<{ id: number; heldAt: number; code: HeldCode | null; changes: readonly Change[] }>;
+type HeldStored = { id: number; held_at: number; held_code: HeldCode | null; changes: string };
+const heldRows = (rows: readonly HeldStored[]): readonly HeldRow[] =>
+  rows.map(row => ({ id: row.id, heldAt: row.held_at, code: row.held_code, changes: JSON.parse(row.changes) as Change[] }));
 
 export const updateBook = (sql: Sql) => {
   sql.exec('CREATE TABLE IF NOT EXISTS observed_mail (source_ref TEXT PRIMARY KEY, thread_id TEXT NOT NULL, observed_at INTEGER NOT NULL, message_id TEXT NOT NULL, judged INTEGER NOT NULL DEFAULT 0, update_id INTEGER, attached INTEGER NOT NULL DEFAULT 0)');
@@ -51,6 +66,11 @@ export const updateBook = (sql: Sql) => {
   const columns = new Set(sql.exec<{ name: string }>('PRAGMA table_info(update_cards)').toArray().map(column => column.name));
   if (!columns.has('delivered_at')) sql.exec('ALTER TABLE update_cards ADD COLUMN delivered_at INTEGER');
   if (!columns.has('app_row')) sql.exec('ALTER TABLE update_cards ADD COLUMN app_row TEXT');
+  // HELD_RAISE: a batch that waited because Waldo could not reach the owner: when it was first held and why, as a code, never
+  // text; and the sweep record whose job took it to be judged again. A fold settles it, as it settles any row.
+  if (!columns.has('held_at')) sql.exec('ALTER TABLE update_cards ADD COLUMN held_at INTEGER');
+  if (!columns.has('held_code')) sql.exec('ALTER TABLE update_cards ADD COLUMN held_code TEXT');
+  if (!columns.has('raise_record')) sql.exec('ALTER TABLE update_cards ADD COLUMN raise_record INTEGER');
   for (const statement of CALENDAR_LAST_SEEN_TABLE_SCHEMA) sql.exec(statement);
   // What the delta reads last reported of each message and event: a message once, an event as the version last shown, so an
   // overlap is reported once and a change back to an earlier version is news again.
@@ -110,6 +130,13 @@ export const updateBook = (sql: Sql) => {
       setState(`cursor:${source}`, to);
     },
     readAt(source: string): number | null { const value = state(`read:${source}`); return value === null ? null : Number(value); },
+    // When any of an account's calendars was last read. With the delta reads each source keeps its own time, so an account with
+    // none is not read yet; without them the one shared watermark is every account's.
+    calendarReadAt(account: string): number | null {
+      const read = (prefix: string) => sql.exec<{ at: number | null }>('SELECT max(CAST(value AS INTEGER)) AS at FROM watch_state WHERE substr(key, 1, ?) = ?', prefix.length, prefix).one().at;
+      if (read('read:cal:') !== null) return read(`read:cal:${account}:`);
+      return state('calendar_since') === null ? null : Number(state('calendar_since'));
+    },
     pendingAt(source: string): string | null { return state(`pending:${source}`); },
     pend(source: string, at: number): void { setState(`pending:${source}`, String(at)); },
     sourceDue(source: string, now: number): boolean {
@@ -154,7 +181,11 @@ export const updateBook = (sql: Sql) => {
       for (const change of changes) if (change.source_ref) sql.exec('UPDATE observed_mail SET update_id = ? WHERE source_ref = ? AND message_id = ? AND update_id IS NULL', id, change.source_ref, change.source_message_id ?? change.source_ref);
       return id;
     },
-    pushed(id: number, text: string, at: number): void { sql.exec('UPDATE update_cards SET text = ?, pushed = 1, delivered_at = ? WHERE id = ?', text, at, id); },
+    // A raise's tell reached the owner: the held batches it carried are told, so the next day card does not carry them again.
+    pushed(id: number, text: string, at: number): void {
+      sql.exec('UPDATE update_cards SET text = ?, pushed = 1, delivered_at = ? WHERE id = ?', text, at, id);
+      sql.exec('UPDATE update_cards SET folded = 1 WHERE raise_record = ? AND held_at IS NULL', id);
+    },
     linked(id: number, appRow: string): void { sql.exec('UPDATE update_cards SET app_row = ? WHERE id = ?', appRow, id); },
     // The update cards delivered on one local day, newest first. A card delivered before delivery times were kept is not listed.
     delivered(day: string): readonly Readonly<{ app_row: string | null; delivered_at: number }>[] {
@@ -171,9 +202,29 @@ export const updateBook = (sql: Sql) => {
     },
     // A row a sweep job wrote with no new changes of its own (it judged earlier mail) and that sent nothing says nothing.
     unfolded(timezone: string): string {
-      return sql.exec<{ at: number; changes: string; text: string | null }>("SELECT at, changes, text FROM update_cards WHERE folded = 0 AND (text IS NOT NULL OR changes != '[]') ORDER BY at").toArray()
-        .map((row) => `[${localIso(row.at, timezone)}] ${row.text ? `sent as update: ${row.text.replace(/\n/g, ' ')}` : 'not sent'}\n${changeLines(JSON.parse(row.changes) as Change[])}`)
+      return sql.exec<{ at: number; changes: string; text: string | null; held_at: number | null; held_code: HeldCode | null }>("SELECT at, changes, text, held_at, held_code FROM update_cards WHERE folded = 0 AND (text IS NOT NULL OR changes != '[]') ORDER BY at").toArray()
+        .map((row) => `[${localIso(row.at, timezone)}] ${row.text ? `sent as update: ${row.text.replace(/\n/g, ' ')}` : row.held_at !== null ? `${heldWhen(row.held_at, row.held_code, timezone)}: not yet told` : 'not sent'}\n${changeLines(JSON.parse(row.changes) as Change[])}`)
         .join('\n');
+    },
+    // HELD_RAISE. Marks a recorded batch held, keeping the first time it was; a row with no changes of its own holds nothing.
+    hold(id: number, code: HeldCode, at: number): void {
+      sql.exec("UPDATE update_cards SET held_at = COALESCE(held_at, ?), held_code = ? WHERE id = ? AND changes != '[]'", at, code, id);
+    },
+    // The held batches still waiting, oldest first, and the sweep record whose job takes them: it names them until they settle.
+    held(limit: number): readonly HeldRow[] {
+      return heldRows(sql.exec<HeldStored>('SELECT id, held_at, held_code, changes FROM update_cards WHERE held_at IS NOT NULL AND folded = 0 ORDER BY at LIMIT ?', limit).toArray());
+    },
+    take(ids: readonly number[], recordId: number): void {
+      for (const id of ids) sql.exec('UPDATE update_cards SET raise_record = ? WHERE id = ?', recordId, id);
+    },
+    heldFor(recordId: number): readonly HeldRow[] {
+      return heldRows(sql.exec<HeldStored>('SELECT id, held_at, held_code, changes FROM update_cards WHERE raise_record = ? AND held_at IS NOT NULL AND folded = 0 ORDER BY at', recordId).toArray());
+    },
+    // The judgment ran: the batches it took wait no longer. fold: it reached the owner or was judged not worth it, so the next
+    // day card does not carry it either; otherwise it stays for that card, as any unsent change does. They keep the record that
+    // took them, so a tell from it folds them once delivered.
+    release(recordId: number, fold: boolean): void {
+      sql.exec('UPDATE update_cards SET held_at = NULL, held_code = NULL, folded = CASE WHEN ? THEN 1 ELSE folded END WHERE raise_record = ? AND held_at IS NOT NULL', fold ? 1 : 0, recordId);
     },
     // The rows recorded after `at`, oldest first, read without folding them: the nightly source pass keeps its own mark.
     recordedAfter(at: number, limit: number): readonly Readonly<{ at: number; changes: readonly Change[] }>[] {
@@ -225,7 +276,7 @@ export type UpdateBook = ReturnType<typeof updateBook>;
 const toChange = (item: CalendarChange, since: number): Change => {
   const { status, created, ...event } = item;
   const kind = status === 'cancelled' ? 'cancelled' : Date.parse(created) >= since ? 'added' : 'changed';
-  return { source: 'calendar', kind, detail: JSON.stringify(calendarPromptProjection(event)), ref: `event:${event.id}` };
+  return { source: 'calendar', kind, detail: JSON.stringify(calendarPromptProjection(event)), ref: `event:${event.id}`, ...(event.ical_uid ? { uid: event.ical_uid } : {}) };
 };
 
 // Whether a change can move the owner's load on one local day: a calendar event that overlaps that day, or one Google

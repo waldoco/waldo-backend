@@ -240,6 +240,37 @@ describe('welcome build: admission', () => {
     });
   });
 
+  it('keeps a number that is not about the body, and still drops one that is', async () => {
+    await withSql(async (sql, transaction) => {
+      const { build, claims, deps: d } = deps(sql, transaction, { answers: {
+        health: answer(healthNode({ domain: 'routines', label: 'Up by 6 most days', summary: 'An early riser.', observation: 'Wakes early on weekdays.' })),
+        calendar: answer(
+          calendarNode({ label: 'Q3 planning', summary: 'Leads planning for Q3.', observation: 'Q3 planning blocks recur through the month.' }),
+          calendarNode({ label: 'Weekly 1:1s', summary: 'Holds a 1:1 with each report.', observation: 'Five 1:1 meetings recur weekly.', pointers: ['evt_b'] }),
+          calendarNode({ label: 'Short sleeper', summary: 'Sleeps 6 hours before early calls.', observation: 'Early calls follow short nights.' }),
+          calendarNode({ domain: 'health', label: 'Gym at 7', summary: 'Trains before work.', observation: 'A morning gym block recurs.' }),
+        ),
+      } });
+      build.start();
+      await runWelcome(d);
+      expect(claims.nodes().map((node) => node.label)).toEqual(['Q3 planning', 'Weekly 1:1s']);
+    });
+  });
+
+  // What the narrowed rule lets through: the shared health floor reads units and health words, so a body number
+  // with neither, filed outside health from calendar or mail text, is stored as written.
+  it('keeps a body number that has no unit or health word when the node is filed under work or routines', async () => {
+    await withSql(async (sql, transaction) => {
+      const { build, claims, deps: d } = deps(sql, transaction, { answers: {
+        calendar: answer(calendarNode({ domain: 'routines', label: 'Down to 82 by spring', summary: 'Checks in with a coach every month.', observation: 'A monthly check-in recurs.' })),
+        mail: answer(mailNode({ domain: 'work', label: 'Clinic follow-ups', summary: 'Came back at 118 over 76 last time.', observation: 'A clinic thread recurs each quarter.' })),
+      } });
+      build.start();
+      await runWelcome(d);
+      expect(claims.nodes().map((node) => node.label)).toEqual(['Down to 82 by spring', 'Clinic follow-ups']);
+    });
+  });
+
   it('caps a stage at five nodes and the build at fifteen', async () => {
     await withSql(async (sql, transaction) => {
       const many = (make: (over: Partial<Node>) => Node) => answer(...Array.from({ length: 7 }, (_, index) => make({ label: `Pattern ${'abcdefg'[index]}` })));

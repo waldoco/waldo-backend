@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { armNightly, backfillEpisodes, episodeIndex, ftsQuery, indexedConversationStore, NIGHTLY_ID, speakerOf, speakerOfEntry, transcript } from '../src/channels/episodes';
+import { armNightly, backfillEpisodes, episodeIndex, ftsQuery, OWNER_ANSWERED_OUTSIDE, OWNER_SAID, recentExchange, WALDO_READ_OUTSIDE, indexedConversationStore, NIGHTLY_ID, speakerOf, speakerOfEntry, transcript } from '../src/channels/episodes';
 import { durableConversationStore } from '../src/channels/conversation-store';
 import { ensureSchema } from '../src/tracer/schema';
 import { Scheduler } from '../src/scheduler/multiplexer';
@@ -140,6 +140,33 @@ describe('episode history', () => {
       const ids = index.search('flight options', 3).map((hit) => hit.entry_id);
       expect(ids[0]).not.toBe('tg-3');
       expect(ids).toContain('tg-3');
+    });
+  });
+});
+
+describe('the recent exchange a task report reads', () => {
+  it('is the owner\'s own words and Waldo\'s replies since a time, oldest first, never quotes or machine notes', async () => {
+    await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`recent-exchange-${crypto.randomUUID()}`)), async (_instance, state) => {
+      const index = episodeIndex(state.storage.sql);
+      index.add('before', OWNER_SAID, 'Earlier words.', 100);
+      index.add('m1', OWNER_SAID, 'How is the research going?', 200);
+      index.add('m1', 'quoted', 'Forwarded vendor text.', 200);
+      index.add('n1', 'system', 'Brief due at 08:00.', 250);
+      index.add('m1-reply', 'waldo', 'Vendor A is cheaper.', 300);
+      expect(recentExchange(index, 150)).toEqual({ text: 'Owner: How is the research going?\nWaldo: Vendor A is cheaper.', outside: false });
+      expect(recentExchange(index, 400)).toEqual({ text: '', outside: false });
+    });
+  });
+
+  it('says when any of it carried outside text: a reply that read it, or the owner answering one', async () => {
+    await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`recent-exchange-${crypto.randomUUID()}`)), async (_instance, state) => {
+      const index = episodeIndex(state.storage.sql);
+      index.add('m1-reply', WALDO_READ_OUTSIDE, 'The vendor says yes.', 200);
+      expect(recentExchange(index, 100).outside).toBe(true);
+      const other = episodeIndex(state.storage.sql);
+      expect(recentExchange(other, 250).outside).toBe(false);
+      index.add('m2', OWNER_ANSWERED_OUTSIDE, 'ok, go with them', 300);
+      expect(recentExchange(index, 250)).toEqual({ text: 'Owner: ok, go with them', outside: true });
     });
   });
 });

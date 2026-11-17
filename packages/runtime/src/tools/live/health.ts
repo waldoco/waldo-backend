@@ -1,6 +1,6 @@
 import {
   getHealthArgsSchema, HEALTH_READ_MAX_SESSIONS, healthWorkoutSessionParts, healthWorkoutSessionSchema, TOOL_PERMISSIONS, triggerTypeSchema,
-  type GetHealthArgs, type GetHealthResult, type HealthReadSignal, type ToolHandler,
+  type GetHealthArgs, type GetHealthResult, type HealthReadSignal, type HealthSignal, type ToolHandler,
 } from '@waldo/contracts';
 import type { z } from 'zod';
 import { md5Hex } from '../../channels/md5';
@@ -66,7 +66,10 @@ export const healthReadBook = (call: SignedCall | null, doName: string | null): 
   },
   async series(range) {
     if (!call || !doName) return null;
-    const payload = JSON.stringify(range);
+    // Each stored name goes once. Several read signals share one (sleep and its four stages all read sleep_duration), and the
+    // plane refuses a list longer than its known signals before it removes repeats, so a caller asking for every signal would
+    // otherwise be refused outright.
+    const payload = JSON.stringify({ ...range, signals: [...new Set(range.signals)] });
     return call('health_series_read', `health.series_read.${doName}.${md5Hex(payload)}`, { p_do_name: doName, p_payload: payload });
   },
 });
@@ -76,7 +79,7 @@ type Method = NonNullable<Available['method']>;
 type Fold = 'newest' | 'sum' | 'mean';
 // stored: the plane's signal. asleep: only time asleep is read, never time in bed. methods: a signal read one method at a
 // time, never blended. value: what the signal reads from the stored reading, when it is not the reading's own value.
-type Spec = Readonly<{ stored: string; unit: Available['unit']; fold: Fold; asleep?: true; methods?: readonly Method[]; value?: (reading: Reading) => number | null }>;
+type Spec = Readonly<{ stored: HealthSignal; unit: Available['unit']; fold: Fold; asleep?: true; methods?: readonly Method[]; value?: (reading: Reading) => number | null }>;
 const stage = (key: keyof SleepStages): Spec => ({ stored: 'sleep_duration', unit: 'minutes', fold: 'newest', asleep: true, value: reading => reading.stages?.[key] ?? null });
 export const SIGNALS: Record<HealthReadSignal, Spec> = {
   sleep: { stored: 'sleep_duration', unit: 'minutes', fold: 'newest', asleep: true },
@@ -102,6 +105,11 @@ export const SIGNALS: Record<HealthReadSignal, Spec> = {
   body_fat: { stored: 'body_fat_percentage', unit: 'percent', fold: 'newest' },
   lean_body_mass: { stored: 'lean_body_mass', unit: 'kg', fold: 'newest' },
   stand_hours: { stored: 'stand_hour', unit: 'count', fold: 'sum' },
+  food_energy: { stored: 'nutrition', unit: 'kcal', fold: 'sum' },
+  protein: { stored: 'nutrition', unit: 'g', fold: 'sum', value: reading => reading.nutrition?.protein_g ?? null },
+  carbs: { stored: 'nutrition', unit: 'g', fold: 'sum', value: reading => reading.nutrition?.carbohydrate_g ?? null },
+  fat: { stored: 'nutrition', unit: 'g', fold: 'sum', value: reading => reading.nutrition?.fat_g ?? null },
+  daytime_hrv: { stored: 'hrv_window', unit: 'ms', fold: 'mean', methods: ['rmssd', 'sdnn'] },
 };
 type Session = z.infer<typeof healthWorkoutSessionSchema>;
 // One session as the tool shows it: each stored part kept only when it is the shape the result admits, and an average heart
@@ -133,9 +141,13 @@ export const localDayOf = (now: Date, timeZone: string): string => {
 
 type Group = Readonly<{ source: string; method: Method | null; readings: readonly Reading[] }>;
 // One source per signal, the one with the most readings; for a signal with methods one method as well, so they never blend.
+// For a signal summed over a day, a part of a reading (a food entry's protein) is given for that day only when every reading
+// that day carries it, so a day's sum is never a partial one. A signal that takes one reading (a night's deep sleep) is
+// unaffected by another reading that lacks the part.
 export const chooseGroup = (signal: HealthReadSignal, sources: readonly Readonly<{ source: string; readings: readonly Reading[] }>[]): Group | null => {
   const spec = SIGNALS[signal];
   const groups = new Map<string, { source: string; method: Method | null; readings: Reading[] }>();
+  const partial = new Set<string>();
   for (const source of sources) {
     for (const reading of source.readings) {
       if (reading.signal !== spec.stored) continue;
@@ -143,14 +155,15 @@ export const chooseGroup = (signal: HealthReadSignal, sources: readonly Readonly
       const method = spec.methods?.find(known => known === reading.method) ?? null;
       if (spec.methods && method === null) continue;
       const value = spec.value ? spec.value(reading) : reading.value;
-      if (value === null) continue;
+      if (value === null) { if (spec.fold === 'sum') partial.add(`${source.source}\u0000${reading.day}`); continue; }
       const key = `${source.source}\u0000${method ?? ''}`;
       const group = groups.get(key) ?? { source: source.source, method, readings: [] };
       group.readings.push({ ...reading, value });
       groups.set(key, group);
     }
   }
-  return [...groups.values()].sort((a, b) => b.readings.length - a.readings.length || a.source.localeCompare(b.source) || (a.method ?? '').localeCompare(b.method ?? ''))[0] ?? null;
+  const whole = [...groups.values()].map(group => ({ ...group, readings: group.readings.filter(reading => !partial.has(`${group.source}\u0000${reading.day}`)) })).filter(group => group.readings.length > 0);
+  return whole.sort((a, b) => b.readings.length - a.readings.length || a.source.localeCompare(b.source) || (a.method ?? '').localeCompare(b.method ?? ''))[0] ?? null;
 };
 
 export const foldDay = (fold: Fold, readings: readonly Reading[], timezone: string): number | null => {
@@ -167,7 +180,7 @@ const allowlist = triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS
 export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolHandler<GetHealthArgs, GetHealthResult, ToolDispatcherContext> => ({
   name: 'get_health',
   description:
-    "The owner's own health readings by local day, up to 31 days ending today, as daily values or a summary; one source per signal. Sleep is time asleep, never time in bed. HRV and wrist temperature carry their method, never blended. heart_rate, respiratory_rate, spo2 and hr_recovery are day means. The numbers stay in this turn and are never stored or logged.",
+    "The owner's own health readings by local day, up to 31 days ending today, as daily values or a summary; one source per signal. Sleep is time asleep, never time in bed. HRV, daytime_hrv and wrist temperature carry their method, never blended. heart_rate, daytime_hrv, respiratory_rate, spo2 and hr_recovery are day means. food_energy, protein, carbs and fat are what the owner's own food app logged that day; a macro is missing on a day an entry lacked it. They are context for a plan, never a judgement of what the owner ate. The numbers stay in this turn and are never stored or logged.",
   schema: getHealthArgsSchema,
   trigger_allowlist: allowlist,
   autonomy_gated: false,

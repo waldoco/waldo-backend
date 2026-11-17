@@ -1,5 +1,6 @@
 import type { ApprovalItem } from '../channels/approvals';
 import { fence } from '../memory/claims';
+import { RESTORES_DRAINS_PLANNING_RULE } from '../memory/restores-drains';
 import { fenced } from './turn-prompt';
 import { updatesSection } from './update-cards';
 import { CAPACITY_LINES } from './capacity';
@@ -140,6 +141,7 @@ export const dayCardPrompt = (card: DayCard, localNow: string, context: Readonly
   planningCard(card, planning) ? PLANNING_BRIEF_INSTRUCTION : instructionFor(card, dayShape),
   ...closeLines(card, planning, capacity, tomorrow),
   "The owner's own goals are in their profile in memory, health and training goals included: where today's plan bears on one, say how the day moves it forward or holds it back. Never invent a goal they have not stated.",
+  RESTORES_DRAINS_PLANNING_RULE,
   planningCard(card, planning) ? PLANNING_BODY_RULE : BODY_RULE[card.body],
   `Format it as a compact card for chat: a first line naming "${card.name}", then a few short sentences, the way a person would say it. ${PROSE_RULE} Keep it tight enough to read in 20 seconds.`,
   ...(layout && card.id === 'card:brief' ? [SCHEDULE_RULE] : []),

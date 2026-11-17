@@ -20,7 +20,7 @@ const BRIDGE = /^imb_[0-9a-f]{32}$/;
 const field = (v: unknown, max = 512): string | null =>
   typeof v === 'string' && v.length > 0 && v.length <= max && v.trim() === v && !/[\u0000-\u001f\u007f]/.test(v) ? v : null;
 
-export type IMessagePageOptions = { admin?: boolean; address?: string; linkedHint?: string | null; enrollable?: boolean; phone?: string | null; photon?: 'connected' | 'disconnected' | null; media?: boolean };
+export type IMessagePageOptions = { admin?: boolean; address?: string; linkedHint?: string | null; enrollable?: boolean; phone?: string | null; photon?: 'connected' | 'disconnected' | null; media?: boolean; voice?: boolean };
 export function renderIMessage(rows: readonly (BridgeListing & { online?: boolean; textReady?: boolean; tapbacksReady?: boolean; quarantine?: string | null })[], csrf: string, o: IMessagePageOptions = {}): string {
   const hidden = `<input type="hidden" name="csrf" value="${escape(csrf)}">`;
   const form = (action: string, body: string, label: string) => `<form method="post" action="/console/action">${hidden}<input type="hidden" name="action" value="${action}">${body}<button>${label}</button></form>`;
@@ -47,7 +47,7 @@ export function renderIMessage(rows: readonly (BridgeListing & { online?: boolea
   const number = o.enrollable && o.address ? `<p>Your Waldo number: <b>${escape(o.address)}</b></p>` : '';
   const photon = o.admin && o.photon ? `<h2>Photon (operator)</h2><p>${o.photon === 'connected' ? 'Connected. New owners get their Waldo number automatically.' : 'Not connected. Owners cannot get a Waldo number until an operator connects Photon.'}</p><p><a href="${CONSOLE_PHOTON_START_PATH}">${o.photon === 'connected' ? 'Reconnect Photon' : 'Connect Photon'}</a></p>` : '';
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Waldo on iMessage</title></head><body><a href="/console">Back to console</a><h1>iMessage</h1>`
-    + `<p>${o.media ? 'Direct iMessages: text, and photos and documents sent to your Waldo number.' : 'Direct iMessage text only. Photos and files get a reply asking you to send them in the app.'} Groups, SMS and voice notes are not supported. Waldo sends a tapback only from a host whose row says tapbacks verified.</p>`
+    + `<p>${o.media ? `Direct iMessages: text, ${o.voice ? 'voice notes, ' : ''}and photos and documents sent to your Waldo number.` : `Direct iMessage text${o.voice ? ' and voice notes' : ' only'}. Photos and files get a reply asking you to send them in the app.`} ${o.voice ? 'Groups and SMS are' : 'Groups, SMS and voice notes are'} not supported. Waldo sends a tapback only from a host whose row says tapbacks verified.</p>`
     + `<h2>Text your Waldo from your iPhone</h2>${number}${enroll}${photon}`
     + `<h2>Your own Mac host</h2>${form('imessage.pair', '', 'Pair a Mac host')}`
     + (o.admin ? `<h2>Shared Waldo number (operator)</h2><p>Pairs the host that runs the shared Waldo number for everyone. Each sender still reaches only their own Waldo.</p>${form('imessage.pair_shared', '', 'Pair the shared Waldo number host')}` : '')
@@ -88,7 +88,7 @@ export async function iMessageConsolePage(env: IMessageEnv, owner: string, csrf:
     const admin = await auth?.adminOverview(owner).then((v) => v !== null).catch(() => false) ?? false;
     const linkedHint = await auth?.iMessageHandleHint?.(owner) ?? null;
     const view = await iMessageNumberView(env, owner), photon = admin ? await photonConnection(env) : null;
-    return new Response(renderIMessage(withStatus, csrf, { admin, linkedHint, enrollable: view.enrollable, phone: view.phone, photon, media: env.IMESSAGE_MEDIA === '1', ...(view.number ? { address: view.number } : {}) }), { headers: HEADERS });
+    return new Response(renderIMessage(withStatus, csrf, { admin, linkedHint, enrollable: view.enrollable, phone: view.phone, photon, media: env.IMESSAGE_MEDIA === '1', voice: env.IMESSAGE_VOICE === '1', ...(view.number ? { address: view.number } : {}) }), { headers: HEADERS });
   } catch { return new Response('iMessage status unavailable.', { status: 503, headers: HEADERS }); }
 }
 

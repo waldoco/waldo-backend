@@ -51,7 +51,7 @@ Background work
 // hands long work to start_task (WALDO_ASYNC_TOOLS, channels/async-tools.ts) climbs to a background task instead of a page.
 const tasks = (webSearch: boolean, background = false) => `Working on a task
 For anything that needs looking up or doing, see it through:
-- Look before you ask: their calendars (all of them, not just the main one), mail, memory (including what was recalled with their message), the owner profile and the chat. Never ask for a fact you could find there.
+- Look before you ask or say you don't know: their calendars (all of them, not just the main one), mail, connected sources, memory (and what was recalled), the owner profile and the chat. Never ask for a fact you could find there.
 - Ask only for what is still unknown and would change the result, once, in one message that also confirms what you inferred, after doing what doesn't depend on the answer. Otherwise go ahead and say what you assumed.
 - Before answering, check every option against every explicit constraint independently, use the latest stated values, and do not carry over the verdict from an earlier example. Verify arithmetic and time comparisons before answering.
 - Answer every part of the ask: each option with every field they asked for (price, distance, times, availability), the site and dates its price is for, a link to the page you read and any catch that matters. One site is not a comparison. If a field is still missing after another source, say which; if figures disagree, settle it on the page or say which you trust and why.
@@ -250,11 +250,14 @@ export function surfacePresentationPrompt(presentation: SurfacePresentation, too
   ].join('\n');
 }
 
-export type MessagingClock = Readonly<{ timezone: string; now: () => Date }>;
+// confirmed: whether the owner chose this zone themselves; absent where the turn is not told.
+export type MessagingClock = Readonly<{ timezone: string; now: () => Date; confirmed?: () => boolean }>;
+export const ZONE_UNCONFIRMED = 'The owner has not confirmed this time zone yet; set_schedule_preference (action timezone) saves the one they name.';
 
 // The owner's local time as a bare fact for the turn context; TURN_CONTEXT_RULE says how to use it. Without a time signal
 // the reply model greeted "Morning" at 5pm. A malformed stored timezone must not fail the turn: fall back to UTC.
-export function ownerClockLine(clock: MessagingClock): string {
+// ownerTurn: only a turn with the owner on the other side says the zone is unconfirmed; a job's card cannot ask them.
+export function ownerClockLine(clock: MessagingClock, ownerTurn = false): string {
   let zone = clock.timezone;
   let local: string;
   try {
@@ -265,7 +268,7 @@ export function ownerClockLine(clock: MessagingClock): string {
   }
   const parts = new Intl.DateTimeFormat('en-GB', { timeZone: zone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit' }).formatToParts(clock.now());
   const sinceMidnight = `${Number(parts.find((part) => part.type === 'hour')?.value ?? 0)}h ${Number(parts.find((part) => part.type === 'minute')?.value ?? 0)}m`;
-  return `The owner's current local time: ${local} (${zone}). The local day began ${sinceMidnight} ago.`;
+  return `The owner's current local time: ${local} (${zone}). The local day began ${sinceMidnight} ago.${ownerTurn && clock.confirmed?.() === false ? ` ${ZONE_UNCONFIRMED}` : ''}`;
 }
 
 // A provider fact, not the owner's word: the name on the owner's Google account, its values quoted as data. The owner's own words win.

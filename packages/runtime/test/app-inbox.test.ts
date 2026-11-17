@@ -176,3 +176,18 @@ it('serves a running message its activity on the draft receipt only, for its own
     await state.storage.deleteAlarm();
   });
 });
+
+it('recovery returns each running app turn it cut off, and leaves a live one running',async()=>{
+  const name=`app-inbox-aborted-${crypto.randomUUID()}`,stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
+  await runInDurableObject(stub,async(_instance,state)=>{
+    const inbox=new AppInbox(state.storage);
+    expect(inbox.recover(new Set())).toEqual([]);
+    await inbox.admit(name,'d'.repeat(64),'aborted-client-0001','hello','owner:prn_fixture');
+    await inbox.admit(name,'e'.repeat(64),'aborted-client-0002','again','owner:prn_fixture');
+    const [first,second]=inbox.records();
+    const cut=inbox.claim(first!.id,true)!,live=inbox.claim(second!.id,true)!;
+    expect(inbox.recover(new Set([live.attempt!]))).toEqual([{updateId:cut.updateId,phase:'running'}]);
+    expect(inbox.recover(new Set([live.attempt!]))).toEqual([]);
+    await state.storage.deleteAlarm();
+  });
+});

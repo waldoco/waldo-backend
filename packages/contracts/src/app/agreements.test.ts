@@ -7,8 +7,8 @@ const view = (data: object) => ({ version: 1, state: 'available', revision, view
 const data = { improve_waldo: { given: false, version: APP_IMPROVE_WALDO_AGREEMENT_V1.version, changed_at: null }, actions: ['improve_waldo.set'] };
 
 describe('the agreements view', () => {
-  it('comes at revision 18, after the earlier controls revisions', () => {
-    expect(APP_CONTROLS_AGREEMENTS_REVISION).toBe(18);
+  it('comes at revision 25, after the earlier controls revisions', () => {
+    expect(APP_CONTROLS_AGREEMENTS_REVISION).toBe(25);
     expect(APP_CONTROLS_AGREEMENTS_REVISION).toBeGreaterThan(Math.max(APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_AGENT_MAIL_REVISION));
   });
 

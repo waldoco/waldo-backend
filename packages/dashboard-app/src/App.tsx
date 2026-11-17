@@ -12,11 +12,13 @@ import {OwnerControlsPanel} from './OwnerControls';
 import {ControlsPanel} from './Controls';
 import { MemoryPanel } from './Memory';
 import { ChatLink } from './Chat';
+import { ThemeToggle } from './Appearance';
 import { ChatWorkspace, isThreadRoute } from './ChatThreads';
 import { AdminPanel, type AdminState } from './Admin';
 import { AdminHealthPanel, HealthPanel } from './Health';
 import { VaultPanel } from './Vault';
 import { AccessLogPanel } from './AccessLog';
+import { OperatorCommandsPanel } from './OperatorCommands';
 import { fetchAdmin } from './admin-model';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { exactTime, relativeTime } from './time';
@@ -89,7 +91,7 @@ export function Dashboard({ data, route, now = new Date(), isAdmin = false }: { 
   if(route==='connections/imessage'||route==='connections/devices'||route==='connections/phone'||route==='connections/agent_mail'){const view=route==='connections/imessage'?'imessage':route==='connections/phone'?'phone':route==='connections/agent_mail'?'agent_mail':'devices';return <><SettingsHead selected="connections" isAdmin={isAdmin}/><nav className="crumbs" aria-label="Breadcrumb"><a href="#/connections">Connections</a><span aria-current="page">{view==='imessage'?'iMessage':view==='phone'?'Your phone':view==='agent_mail'?'Your Waldo address':'Devices'}</span></nav><ControlsPanel key={route} view={view} embedded/></>;}
   if(route==='files'||route==='files/workspace')return <><SettingsHead selected="files" isAdmin={isAdmin}/><nav className="segmented small" aria-label="File storage views"><a href="#/files" aria-current={route==='files'?'page':undefined}>Telegram references</a><a href="#/files/workspace" aria-current={route==='files/workspace'?'page':undefined}>Private workspace</a></nav>{route==='files/workspace'?<WorkspacePanel/>:<ControlsPanel key="files" view="files" embedded/>}</>;
   if(route==='waiting')return <ControlsPanel key={route} view="waiting"/>;
-  if(route==='patrol')return <><ControlsPanel key={route} view="activity"/><AccessLogPanel/></>;
+  if(route==='patrol')return <><ControlsPanel key={route} view="activity"/><AccessLogPanel/><OperatorCommandsPanel/></>;
   if(route==='invites')return <><SettingsHead selected="invites" isAdmin={isAdmin}/><OwnerControlsPanel view={route} embedded/></>;
   if(route==='settings'||route.startsWith('settings/')||['day','usage','account','setup'].includes(route)){const section=(route==='settings'?'day':route.startsWith('settings/')?route.slice(9):route) as SettingsSection;return <SettingsPanel section={section} isAdmin={isAdmin}/>;}
   if (route === 'health') return <><SettingsHead selected="health" isAdmin={isAdmin}/><HealthPanel/></>;
@@ -231,7 +233,7 @@ export function App() {
     <header className="topbar"><div className="topbar-inner">
       <a className="brand" href="#/today" aria-label="Waldo dashboard home"><WaldoMark/><span aria-hidden="true">Waldo</span></a>
       <DashboardNavigation route={route} waitingCount={ready?.waiting.count}/>
-      <div className="topbar-actions"><ChatLink current={route.startsWith('chat')}/><a className="settings-link" href="#/settings" aria-label="Settings" aria-current={isSettingsRoute(route) ? 'page' : undefined}><Icon name="settings"/></a></div>
+      <div className="topbar-actions"><ThemeToggle/><ChatLink current={route.startsWith('chat')}/><a className="settings-link" href="#/settings" aria-label="Settings" aria-current={isSettingsRoute(route) ? 'page' : undefined}><Icon name="settings"/></a></div>
     </div></header>
     <main id="main" tabIndex={-1} className={route.startsWith('chat') ? 'chat-main' : undefined}>{route.startsWith('chat') ? <ChatWorkspace thread={route === 'chat' ? null : route.slice(5)} zone={ready?.timezone}/> : route === 'admin' ? <><SettingsHead selected="admin" isAdmin={isAdmin}/><AdminPanel state={adminState} onRefresh={refreshAdmin}/></>
       : state.kind !== 'ready' ? <DashboardFeedback state={state} onRetry={() => setRetry((n) => n + 1)}/>

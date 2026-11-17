@@ -196,7 +196,7 @@ it('a worker\'s browser step that needs the owner stops the task as a proposal, 
   const applied = await until(() => runInDurableObject(stub, (_instance, state) => jobs(state.storage.sql)[0]!), job => job.status === 'applied');
   expect(applied).toMatchObject({ id: jobId, status: 'applied', outcome: 'blocked' });
   const applyBody = seen.bodies.find(body => body.includes('A background task you started has finished'))!;
-  expect(applyBody).toContain('propose it with propose_action');
+  expect(applyBody).toContain('any other change you propose with propose_action');
   expect(applyBody).toContain('fixture.invalid/book');
   // The card was refused before it was made: the next round of the apply turn carries the refusal.
   expect(seen.bodies.some(body => body.includes('browse_act cannot run from an approval on this Waldo, so no card was made'))).toBe(true);

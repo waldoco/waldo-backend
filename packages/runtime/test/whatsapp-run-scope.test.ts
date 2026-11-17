@@ -171,6 +171,8 @@ it('a WhatsApp turn cut off by eviction yields one notice and is never replayed'
     await cold.alarm();
     expect(h.sent.filter(s => s.text === WHATSAPP_PARTIAL_NOTICE)).toEqual([{ to: `+${SUBJECT}`, text: WHATSAPP_PARTIAL_NOTICE }]);
     expect(inbox.records().map(row => [row.wamid, row.state])).toEqual([['wamid.evict.1', 'interrupted']]);
+    expect(h.state.storage.sql.exec("SELECT trace, ok, note FROM trace_log WHERE hop = 'turn_aborted'").toArray())
+      .toEqual([{ trace: `whatsapp-${inbox.records()[0]!.updateId}`, ok: 0, note: 'running' }]);
     expect((await h.admit(['wamid.evict.1'])).status).toBe(200);
     await h.settle();
     expect(turns).not.toHaveBeenCalled();

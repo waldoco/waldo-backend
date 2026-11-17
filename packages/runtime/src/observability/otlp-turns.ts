@@ -33,7 +33,8 @@ export const hopFeature = (hop: string) => HOPS[hop]?.feature ?? 'other';
 
 // Machine turns (reminder fires, heartbeat ticks, nightly, standing orders) close their trace
 // with a machine_turn root instead of turn; without a root the spans never leave `pending`.
-const ROOT_NAMES: Readonly<Record<string, string>> = { turn: 'turn', machine_turn: 'machine' };
+// A turn recovery found cut off closes its trace with turn_aborted (turn-aborted.ts).
+const ROOT_NAMES: Readonly<Record<string, string>> = { turn: 'turn', machine_turn: 'machine', turn_aborted: 'turn_aborted' };
 
 export const langfuseOtlpConfig = (env: Env): OtlpConfig | null => {
   const { LANGFUSE_PUBLIC_KEY: pk, LANGFUSE_SECRET_KEY: sk, LANGFUSE_BASE_URL: base } = env;
@@ -84,7 +85,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
       attr('langfuse.observation.type', 'generation'),
       ...optional('langfuse.observation.metadata.cached_share', share(usage.cached, usage.input)),
       attr('langfuse.observation.model.name', usage.model),
-      attr('langfuse.observation.usage_details', JSON.stringify({ input: uncachedInput(usage), input_cached_tokens: usage.cached, ...(usage.cache_write ? { input_cache_write_tokens: usage.cache_write } : {}), output: usage.output })),
+      attr('langfuse.observation.usage_details', JSON.stringify({ input: uncachedInput(usage), input_cached_tokens: usage.cached, ...(usage.cache_write ? { input_cache_write_tokens: usage.cache_write } : {}), ...(usage.cache_write_1h ? { input_cache_write_1h_tokens: usage.cache_write_1h } : {}), output: usage.output })),
       attr('langfuse.observation.metadata.cost_kind', cost ? 'estimate' : 'unpriced'),
       ...(cost ? [attr('langfuse.observation.metadata.price_source', JSON.stringify({
         source: 'runtime:modelCost:standard-flat',
@@ -92,6 +93,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
           input: modelCost({ model: usage.model, input: 1_000_000, cached: 0, output: 0 })!.input,
           cached: modelCost({ model: usage.model, input: 1_000_000, cached: 1_000_000, output: 0 })!.input,
           cache_write: modelCost({ model: usage.model, input: 1_000_000, cached: 0, cache_write: 1_000_000, output: 0 })!.cache_write,
+          ...(usage.cache_write_1h ? { cache_write_1h: modelCost({ model: usage.model, input: 1_000_000, cached: 0, cache_write: 1_000_000, cache_write_1h: 1_000_000, output: 0 })!.cache_write } : {}),
           output: modelCost({ model: usage.model, input: 0, cached: 0, output: 1_000_000 })!.output,
         },
       }))] : []),
@@ -287,7 +289,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
     const item = { entry: { ...gated, text: context.captureText && gated.text ? { ...gated.text } : undefined, usage: gated.usage ? { ...gated.usage } : undefined }, endMs: now(), arrival: nextArrival++ };
     const done = exported.get(entry.trace);
     if (done) return post([span(done.traceId, hex(8), done.rootId, item, [list('langfuse.trace.tags', tagsFor(context, [item]))], done.rootHop)], done.delivery);
-    if (entry.hop !== 'turn' && entry.hop !== 'machine_turn') {
+    if (!Object.hasOwn(ROOT_NAMES, entry.hop)) {
       const overflow = bufferedHops >= MAX_BUFFERED_HOPS;
       if (overflow) {
         let oldest = pending.keys().next().value!;

@@ -999,7 +999,13 @@ it('an iMessage owner turn carries the host fact about a Gmail watch that failed
   // The fact is current for this message, so it rides the owner's message as turn context, never the system prompt.
   expect(proof.systems[0]).not.toContain('New emails are not pushed to Waldo');
   expect(proof.turns[0]!.split('New emails are not pushed to Waldo').length - 1).toBe(1);
-  for (const sent of [proof.systems[0]!, proof.turns[0]!]) expect(sent).not.toContain('mail-owner@example.invalid');
+  // The model is told which accounts the owner connected, by address; the watch fact itself names no
+  // address it has no need of.
+  expect(proof.systems[0]).not.toContain('mail-owner@example.invalid');
+  const turn = proof.turns[0]!.startsWith('"') ? JSON.parse(proof.turns[0]!) as string : proof.turns[0]!;
+  const watchFact = turn.split('\n\n').find(part => part.includes('New emails are not pushed to Waldo')) ?? '';
+  expect(watchFact).toContain('New emails are not pushed to Waldo');
+  expect(watchFact).not.toContain('mail-owner@example.invalid');
   expect(forbiddenEgress).toEqual([]);
 });
 
@@ -2031,6 +2037,56 @@ it('an iMessage-only owner\'s background task reports on iMessage, and its worke
     const owners = state.storage.sql.exec<{ hop: string; owner: string | null }>("SELECT hop, owner FROM trace_log WHERE hop IN ('task_reported', 'task_applied') ORDER BY id").toArray();
     expect(owners.map(row => row.hop)).toEqual(['task_reported', 'task_applied']);
     expect(owners[0]!.owner).toBe(owners[1]!.owner);
+  });
+});
+
+// The task finishes, the owner's next iMessage turn already tells them the result, and then the jobs lane applies the report.
+// The report turn reads that iMessage exchange from the episode index, so the model can see the owner was told and send nothing.
+it('with WALDO_TASK_PICKUP on, an iMessage task report reads the iMessage exchange since the task finished, and its SKIP sends nothing more', async () => {
+  const w = await world();
+  await iMessageOnly(w);
+  type Rpc = { env: Record<string, unknown>; taskClaim(...args: unknown[]): Promise<unknown>; taskReport(...args: unknown[]): Promise<string> };
+  const jobId = await runInDurableObject(w.ownerStub, async (instance, state) => {
+    (instance as unknown as Rpc).env.WALDO_TASK_PICKUP = '1';
+    const book = jobBook(state.storage.sql, { now: Date.now, newId: () => 'imsgtask0002', newToken: () => 'tok-imsg-2' });
+    const { job } = book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'imsg-turn:call-2', origin: 'imsg-turn', surface: 'imessage',
+      brief: { title: 'Inbox since Monday', goal: 'Find client mail that waits on a reply.', context: '', done_when: 'Who waits.', effort: 'standard', timezone: 'UTC', started_at: Date.now() },
+      dueAt: Date.now(), deadlineAt: Date.now() + 3_600_000 });
+    const ticket = book.startAttempt(job.id)!;
+    expect(await (instance as unknown as Rpc).taskClaim(ticket)).not.toBe('fenced');
+    expect(await (instance as unknown as Rpc).taskReport(ticket, { kind: 'result', result: { status: 'done', summary: 'Asha waits on the quote.', findings: [], proposals: [], left: [] } }, [], { rounds: 1, costUsd: 0 })).toBe('accepted');
+    // The lane waits until the owner's turn below has run.
+    state.storage.sql.exec('UPDATE task_jobs SET due_at = ? WHERE id = ?', Date.now() + 3_600_000, job.id);
+    await state.storage.delete(TASK_JOBS_DUE_KEY);
+    return job.id;
+  });
+  await new Promise(resolve => setTimeout(resolve, 5));
+  const told = 'Your inbox check is back: Asha is still waiting on the quote.';
+  proof.reply = told;
+  try { await replyFor(w, 'Anything back from the inbox check?'); await sendNext(w); } finally { proof.reply = 'Scripted owner reply.'; }
+  await w.pump(2);
+  expect(sentTexts(w).filter(text => text === told)).toHaveLength(1);
+
+  const before = proof.turns.length, sent = w.host.nativeSends.length;
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    state.storage.sql.exec('UPDATE task_jobs SET due_at = ? WHERE id = ?', Date.now(), jobId);
+    await armTaskJobsWake(state.storage, Date.now());
+  });
+  proof.reply = 'SKIP';
+  try { await runDurableObjectAlarm(w.ownerStub); await w.settle(); } finally { proof.reply = 'Scripted owner reply.'; }
+  await new Promise(resolve => setTimeout(resolve, 300));
+  await w.pump();
+
+  const report = proof.turns.slice(before).find(turn => turn.includes('A background task you started has finished'));
+  expect(report, 'the lane ran the report turn').toBeDefined();
+  expect(report).toContain('Anything back from the inbox check?');
+  expect(report).toContain(told);
+  expect((await w.host.pull()).delivery).toBeNull();
+  expect(w.host.nativeSends).toHaveLength(sent);
+  await runInDurableObject(w.ownerStub, async (_i, state) => {
+    expect(jobBook(state.storage.sql, { now: Date.now, newId: () => 'unused', newToken: () => 'unused' }).get(jobId)).toMatchObject({ status: 'applied' });
+    const hops = state.storage.sql.exec<{ hop: string }>("SELECT hop FROM trace_log WHERE hop IN ('task_reported', 'task_applied') ORDER BY id").toArray().map(row => row.hop);
+    expect(hops.slice(-2)).toEqual(['task_reported', 'task_applied']);
   });
 });
 

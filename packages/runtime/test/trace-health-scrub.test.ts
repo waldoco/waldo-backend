@@ -3,7 +3,7 @@ import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { narrativeContextSchema } from '@waldo/contracts';
 import type { TurnLogEntry } from '../src/channels/telegram-listener';
-import type { ContextHealthMaterial } from '../src/context-composer/types';
+import type { ZoneHealthMaterial } from '../src/context-composer/types';
 
 // Synthetic values only. Every number and zone word below is invented for this test.
 const seen = vi.hoisted(() => ({ outputs: [] as unknown[][], texts: [] as string[] }));
@@ -54,16 +54,16 @@ const sinks = async (entries: readonly TurnLogEntry[], captureText = true) => {
   return { gated, otlp: await exportBodies(gated, captureText), notes: traceNotes(gated), console: gated.map((entry) => JSON.stringify({ ...entry, text: undefined })).join('\n') };
 };
 
-const material: ContextHealthMaterial = {
+const material: ZoneHealthMaterial = {
   view: {
     authority: 'backend', algorithm_version: 'form.safte-fast.v1', form_zone: 'flagging', trend: 'declining', freshness: 'fresh',
     missing_components: [], confidence_band: 'high', provenance_refs: ['hpr_88888888888888888888888888888888'], destination_eligibility: ['trigger_prompt'],
-  } as ContextHealthMaterial['view'],
+  } as ZoneHealthMaterial['view'],
   narrative: narrativeContextSchema.parse({
     zone: 'flagging', recovery_descriptor: 'compromised', load_descriptor: 'heavy',
     day_summary: 'Quokkaday: keep the afternoon light.', active_goals: [], upcoming_high_stakes: [], compiled_at: '2026-10-13T05:00:00.000Z',
   }),
-  source: { source_kind: 'derived_health_view' } as ContextHealthMaterial['source'],
+  source: { source_kind: 'derived_health_view' } as ZoneHealthMaterial['source'],
 };
 
 const getHealthOutput = JSON.stringify({ ok: true, data: { state: 'available', timezone: 'Asia/Kolkata', from: '2026-10-12', to: '2026-10-12', read_at: '2026-10-13T06:00:00.000Z',
@@ -121,11 +121,29 @@ describe('trace health scrub at the gate, capture on', () => {
     expect(console).not.toContain('61.7');
   });
 
+  it('withholds a quest hop whole: an owner-stated target or progress never reaches a trace', () => {
+    const input = '{"title":"Resting HR down to 55","progress":"Walked twice this week"}';
+    for (const hop of ['tool_set_quest', 'task_tool_set_quest', 'tool_set_experiment', 'tool_review_experiment']) {
+      const gated = gateTraceEntry({ trace: 'tg-4', hop, ms: 1, ok: true, text: { input, output: '{"status":"started"}' } }, true);
+      expect(gated.text).toEqual({ input: HEALTH_WITHHELD, output: HEALTH_WITHHELD });
+    }
+  });
+
   it('withholds a device-context or weather tool hop whole: no phone zone, city or forecast reaches a trace', () => {
     const output = '{"state":"available","devices":[{"device":1,"timezone":"Asia/Dubai","place":{"locality":"Testville"}}]}';
     for (const hop of ['tool_get_device_context', 'task_tool_get_device_context', 'tool_get_weather', 'task_tool_get_weather']) {
       const gated = gateTraceEntry({ trace: 'tg-3', hop, ms: 1, ok: true, text: { input: '{}', output } }, true);
       expect(gated.text).toEqual({ input: HEALTH_WITHHELD, output: HEALTH_WITHHELD });
+    }
+  });
+
+  it('withholds a medicine tool hop whole: no medicine name, time or dose status reaches a trace', () => {
+    const output = '{"ok":true,"data":{"id":"med-1","name":"Testolin 5 mg","times":["13:00"],"today":[{"at":"13:00","status":"taken"}]}}';
+    for (const tool of ['track_medication', 'log_medication', 'list_medications', 'stop_medication']) {
+      for (const hop of [`tool_${tool}`, `task_tool_${tool}`]) {
+        const gated = gateTraceEntry({ trace: 'tg-med', hop, ms: 1, ok: true, text: { input: '{"name":"Testolin 5 mg"}', output } }, true);
+        expect(gated.text).toEqual({ input: HEALTH_WITHHELD, output: HEALTH_WITHHELD });
+      }
     }
   });
 
@@ -150,10 +168,10 @@ describe('trace health scrub at the gate, capture on', () => {
   });
 
   it('withholds the composer health block as a bare paragraph, Form-first and Recovery-first', () => {
-    const recoveryFirst: ContextHealthMaterial = {
+    const recoveryFirst: ZoneHealthMaterial = {
       ...material,
       view: { authority: 'backend', algorithm_version: 'recovery.v1', recovery_zone: 'compromised', trend: 'declining', freshness: 'fresh', missing_components: [], confidence_band: 'high',
-        provenance_refs: ['hpr_88888888888888888888888888888888'], destination_eligibility: ['trigger_prompt'] } as unknown as ContextHealthMaterial['view'],
+        provenance_refs: ['hpr_88888888888888888888888888888888'], destination_eligibility: ['trigger_prompt'] } as unknown as ZoneHealthMaterial['view'],
     };
     for (const health of [material, recoveryFirst]) {
       const block = renderHealth(health);

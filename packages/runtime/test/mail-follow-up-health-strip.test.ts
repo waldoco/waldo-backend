@@ -5,6 +5,7 @@ import type { LLMGatewayAdapter } from '../src/llm/provider';
 import { loopBook } from '../src/channels/loops';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
+import { FIRE_SPACING_MS } from '../src/channels/dashboard-harness';
 import { presenceAuthority } from './helpers/directory-presence';
 import { reportMachineJobs } from './helpers/heartbeat-job';
 const fixture = vi.hoisted(() => ({ mail: false, loopId: '', sent: [] as string[], prompts: [] as string[] }));
@@ -72,7 +73,8 @@ it('a mail follow-up is written with the owner\'s health logs, but no stored cop
       await incoming('/fire fetch');
       const loops = loopBook(state.storage.sql, { now: () => now, newId: () => 'test-only' });
       loops.setProactivity({ quiet_start: '20:00', quiet_end: '08:00', volume: 'normal' });
-      fixture.mail = true; now += 61_000;
+      // Each step waits out the spacing between fires of one job.
+      fixture.mail = true; now += FIRE_SPACING_MS;
       await incoming('/fire fetch');
       fixture.mail = false; now = Date.parse('2026-10-03T09:00:00Z');
       dayPlanBook(state.storage.sql).sent('2026-10-03', 'card:brief');
@@ -82,7 +84,7 @@ it('a mail follow-up is written with the owner\'s health logs, but no stored cop
       expect(reportMachineJobs(state.storage.sql)).toHaveLength(1);
       await (owner as unknown as { drainJobs(channel: string): Promise<void> }).drainJobs('telegram');
       expect(loops.list()[0]?.source_ref).toBe('mail:mail-thread-1');
-      now += 300_000;
+      now += FIRE_SPACING_MS;
       await incoming('/fire fetch');
       expect(state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)!.filter(r => r.mailFollowup)).toHaveLength(1);
       const followup = fixture.prompts.find(text => text.includes('Mail follow-up check'));
