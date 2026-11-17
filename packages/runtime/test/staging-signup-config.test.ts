@@ -3,6 +3,7 @@ import config from '../wrangler.jsonc?raw';
 import { parseJsonc } from '../../../scripts/jsonc.mjs';
 import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
 import { openOwnerCeilingUsd, openSignupCaps } from '../src/identity/open-signup';
+import { ownerCeilingUsd } from '../src/llm/cost-ledger';
 import { phoneSms } from '../src/identity/phone-sms';
 import { phoneControls, type WhatsAppProof } from '../src/channels/dashboard-phone';
 import { whatsappProactiveTemplateConfig, whatsappTemplateConfig } from '../src/channels/whatsapp-window';
@@ -22,8 +23,12 @@ describe('open sign-up on staging', () => {
   it('is on with its caps and ceiling, and off in production', () => {
     expect(STAGING.OPEN_SIGNUP).toBe('1');
     expect(openSignupCaps(STAGING)).toEqual({ dailyCap: 10, totalCap: 80 });
-    expect(openOwnerCeilingUsd(STAGING)).toBe(5);
     expect(openSignupCaps(PRODUCTION)).toBeNull();
+  });
+
+  it('gives every owner a 50 USD monthly ceiling on staging, and leaves production at 25 invited and 5 open', () => {
+    expect([ownerCeilingUsd(STAGING), openOwnerCeilingUsd(STAGING)]).toEqual([50, 50]);
+    expect([ownerCeilingUsd(PRODUCTION), openOwnerCeilingUsd(PRODUCTION)]).toEqual([25, 5]);
   });
 
   it('turns itself off, and says so, when the agreements or the cost ledger are not on', () => {

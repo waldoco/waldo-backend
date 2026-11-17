@@ -133,7 +133,7 @@ export const taintedActionReplay = (input: Readonly<{
   context: () => ToolDispatcherContext;
 }>) => async (proposal: TaintedActionProposal, approvalRef: string): Promise<TaintedActionOutcome> => {
   const tool = toolNameSchema.safeParse(proposal.tool);
-  if (!tool.success) return { status: 'rejected', message: `No tool is named ${proposal.tool}.` };
+  if (!tool.success) return { status: 'rejected', message: 'It was refused before it ran.', code: 'unknown_tool' };
   let ran = false;
   const handlers = input.handlers().map((handler) => handler.name !== tool.data ? handler : {
     ...handler,

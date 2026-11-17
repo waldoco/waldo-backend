@@ -11,7 +11,11 @@ import {
 } from '@waldo/contracts';
 import { retryTurnText } from '../src/tasks/retry-turn';
 import { createOwnerResponder, spendHold, type OwnerSpend } from '../src/channels/owner-turn';
-import { MONTHLY_SPEND_CEILING_USD } from '../src/llm/cost-ledger';
+import { MONTHLY_SPEND_CEILING_USD, ownerCeilingUsd } from '../src/llm/cost-ledger';
+import { openOwnerCeilingUsd } from '../src/identity/open-signup';
+import config from '../wrangler.jsonc?raw';
+import { parseJsonc } from '../../../scripts/jsonc.mjs';
+import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
 import { modelCost } from '../src/llm/pricing';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { costRollup, costRollupDelta } from '../src/observability/cost-rollup';
@@ -60,9 +64,37 @@ const memoryKv = () => {
   return { get: <T>(key: string) => rows.get(key) as T | undefined, put: <T>(key: string, value: T) => { rows.set(key, structuredClone(value)); }, delete: (key: string) => rows.delete(key) };
 };
 
-it('the ceiling is a code value of 25 USD per owner per month', () => {
+it('an invited owner\'s ceiling is the OWNER_SPEND_CEILING_USD setting, and 25 USD when it is unset or not a positive amount', () => {
+  expect(ownerCeilingUsd({ OWNER_SPEND_CEILING_USD: '50' })).toBe(50);
+  expect(ownerCeilingUsd({ OWNER_SPEND_CEILING_USD: '12.5' })).toBe(12.5);
+  for (const bad of [undefined, '', '0', '-3', 'fifty', 'Infinity', '1e3']) expect(ownerCeilingUsd({ OWNER_SPEND_CEILING_USD: bad })).toBe(MONTHLY_SPEND_CEILING_USD);
   expect(MONTHLY_SPEND_CEILING_USD).toBe(25);
 });
+
+// Each owner kind, under the ceiling its environment configures: just under it the turn keeps the chat model and a paid
+// tool runs; at it the turn drops to the auxiliary model and the paid tool is held.
+const flat = flatConfig(parseJsonc(config)) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
+const STAGING = flat.env.staging.vars;
+for (const [kind, ceilingOf] of [['invited', ownerCeilingUsd], ['open sign-up', openOwnerCeilingUsd]] as const) {
+  it(`an ${kind} owner on staging keeps the chat model under its configured ceiling and degrades at it, paid tools held`, async () => {
+    const ceilingUsd = ceilingOf(STAGING);
+    let browsed = 0;
+    const browse = { name: 'browse_page', description: 'fixture browser', schema: browsePageArgsSchema, autonomy_gated: false, trigger_allowlist: allowlist('browse_page'),
+      handle: async () => { browsed += 1; return { ok: true, data: { text: 'page' }, source_taint: 'external' as const }; } };
+    const steps: Step[] = [{ tool: 'browse_page', args: { url: 'https://example.com/hotels', instruction: 'list hotels' } }, { text: 'Done.' }];
+    const spentAt = (spentUsd: number) => () => ({ spentUsd, ceilingUsd });
+
+    const under = scripted(steps);
+    await responder(under.gateway, spentAt(ceilingUsd - 0.01), [browse] as never).respond(turn(`${kind}-under`, 'find me a hotel'), time);
+    expect(under.models()[0]).toBe(OPENAI_GPT_6_1_TERRA_MODEL);
+    expect(browsed).toBe(1);
+
+    const at = scripted(steps);
+    await responder(at.gateway, spentAt(ceilingUsd), [browse] as never).respond(turn(`${kind}-at`, 'find me a hotel'), time);
+    expect(at.models()).toEqual(at.models().map(() => OPENAI_GPT_6_LUNA_MODEL));
+    expect(browsed).toBe(1);
+  });
+}
 
 it('under the ceiling an owner turn runs on the chat model, as before', async () => {
   const { gateway, models } = scripted([{ text: 'Your day is clear.' }]);

@@ -1,6 +1,6 @@
 import type { ConversationEntry, ToolHandler } from '@waldo/contracts';
-import { claimTag, fence, type Claim, type ClaimStore } from './claims';
-import { ftsTerms, speakerOfEntry, type EpisodeHit } from '../channels/episodes';
+import { claimTag, fence, OUTSIDE_REF, type Claim, type ClaimStore } from './claims';
+import { ftsTerms, linksCarryOthersWords, speakerOfEntry, type EpisodeHit } from '../channels/episodes';
 import { cutLine as cutLinkLine } from '../history/recall-chain';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 
@@ -18,7 +18,8 @@ const RECALL_EPISODES = 8;
 // A follow-up as short as "and that?" has too few words to match on, so the previous owner message's words join it.
 const RECALL_MIN_TERMS = 3;
 
-export type RecalledEpisode = Readonly<{ entry_id: string; speaker: string; text: string }>;
+// othersWords: whether the row may carry someone else's words (channels/episodes.ts carriesOthersWords); unknown counts as yes.
+export type RecalledEpisode = Readonly<{ entry_id: string; speaker: string; text: string; othersWords?: boolean }>;
 export type RecallEpisodes = Readonly<{
   search(query: string, limit: number): Promise<readonly EpisodeHit[]>;
   get(ref: string): Promise<RecalledEpisode | null>;
@@ -27,7 +28,10 @@ export type RecallLeg = 'claims' | 'episodes' | 'semantic';
 // Claim ids nearest in meaning to the text, best first (semantic-recall.ts).
 export type RecallNear = (text: string) => Promise<readonly number[]>;
 // used: the claims this recall showed in full, which is what the turn had in front of it for this message.
-export type TurnRecall = Readonly<{ text: string; failed: readonly RecallLeg[]; used?: readonly number[] }>;
+// outside: a line shown may carry someone else's words: a note saved from outside content (origin agent), or a past message
+// that is not the owner's own (Waldo's reply, which may have read outside content, or a quote).
+// waiting: how many notes learned from outside content matched and were shown to a clean turn only as a number.
+export type TurnRecall = Readonly<{ text: string; failed: readonly RecallLeg[]; used?: readonly number[]; outside?: boolean; waiting?: number }>;
 type Holds = (...values: readonly (string | null | undefined)[]) => boolean;
 
 export const recallTerms = (question: string, previous?: string): readonly string[] => {
@@ -87,7 +91,11 @@ const cutLine = (count: number) => `(${count} more matches did not fit here; rea
 const oneLine = (text: string) => fence(text).replace(/\s+/g, ' ').trim();
 // An earlier version: it says when it stopped holding, so it is read as history, never as how things stand.
 const replacedLine = (claim: Claim) => `- [c${claim.id} · NO LONGER TRUE, held until ${claim.valid_to?.slice(0, 10) ?? 'an unknown date'}${claim.valid_from ? `, since ${claim.valid_from.slice(0, 10)}` : ''}] ${oneLine(claim.text)}`;
-const claimLine = (claim: Claim) => `- [${claimTag(claim)} · ${claim.kind}, ${claim.source}, ${claim.last_seen_at.slice(0, 10)}] ${oneLine(claim.text)}`;
+const outsideWaitingLine = (count: number) => `(${count} more ${count === 1 ? 'note matches that was' : 'notes match that were'} learned from mail, calendar or other outside content, not the owner's words. read_memory, where it is offered, opens them with these words; a turn that reads them is treated as having read outside content.)`;
+// A note learned from outside content says so in its tag, where the owner's own notes say stated or inferred, and names the
+// mail or calendar change it came from when the source pass stored one. The sender's name is outside text: it cannot close the tag.
+const outsideSource = (claim: Claim) => claim.source_ref?.startsWith(OUTSIDE_REF) ? `from a ${oneLine(claim.source_ref.slice(OUTSIDE_REF.length).replace(/[[\]]/g, ' '))}` : 'from outside content';
+const claimLine = (claim: Claim) => `- [${claimTag(claim)} · ${claim.kind}, ${claim.origin === 'untrusted' ? `${outsideSource(claim)}, not the owner's words` : claim.source}, ${claim.last_seen_at.slice(0, 10)}] ${oneLine(claim.text)}`;
 // Code points, so a cut never splits a character, and never inside a word, so a number is shown whole or not at all. One
 // word longer than the stub keeps what precedes its digits.
 const stubLine = (claim: Claim) => {
@@ -115,8 +123,8 @@ const sourceEntry = (claim: Claim) => claim.source_ref?.startsWith(OWNER_REF) ? 
 // turn goes on with what the other leg found, and failed names the leg; a row that cannot be read back is left out. The
 // block, cut line included, stays within room and RECALL_MAX_CHARS; '' when nothing matched or nothing honest fits. With stubs,
 // recall reaches further: matches past the full lines, and a full line that does not fit, come as stubs the model can open.
-export const recallForTurn = async ({ claims, episodes, question, previous, room, holds, current, semantic, stubs = false, replaced = false }: Readonly<{
-  claims: Pick<ClaimStore, 'recall'> & Partial<Pick<ClaimStore, 'recallReplaced'>>;
+export const recallForTurn = async ({ claims, episodes, question, previous, room, holds, current, semantic, stubs = false, replaced = false, marked = false }: Readonly<{
+  claims: Pick<ClaimStore, 'recall'> & Partial<Pick<ClaimStore, 'recallReplaced' | 'builtFromOutside'>>;
   episodes?: RecallEpisodes;
   question: string;
   previous?: string;
@@ -129,6 +137,8 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
   stubs?: boolean;
   // MEMORY_VALIDITY: facts a later one replaced that match these words join, dated and marked as no longer true.
   replaced?: boolean;
+  // The turn has already read outside content some other way (an earlier message in its chat, a quote, a forward).
+  marked?: boolean;
 }>): Promise<TurnRecall> => {
   const followed = previous !== undefined && !holds(previous) ? previous : undefined;
   const terms = recallTerms(question, followed);
@@ -156,6 +166,7 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
   const sources = new Set(recalled.map(sourceEntry));
   let episodesFailed = false;
   let hits: readonly EpisodeHit[] = [];
+  const outsideRefs = new Set<string>();
   if (episodes) {
     try {
       // Machine-written rows (reminder and job prompts) are instructions to Waldo from another moment, not something said.
@@ -163,6 +174,15 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
       const rows = await Promise.all(found.map(async (hit) => {
         try { return await episodes.get(hit.ref); } catch { episodesFailed = true; return null; }
       }));
+      // A line may carry someone else's words through its row or through a link its longer form shows.
+      const carries = new Map(found.map((hit, index) => [hit.ref, rows[index]?.othersWords !== false] as const));
+      const linkedRows = [...new Set(found.flatMap((hit) => (hit.links ?? []).map((link) => link.ref)))].filter((ref) => /^[1-9][0-9]*$/.test(ref) && !carries.has(ref));
+      await Promise.all(linkedRows.map(async (ref) => {
+        let row: RecalledEpisode | null = null;
+        try { row = await episodes.get(ref); } catch { /* an unreadable row counts as carrying */ }
+        carries.set(ref, row?.othersWords !== false);
+      }));
+      for (const hit of found) if (carries.get(hit.ref) !== false || linksCarryOthersWords(hit.links, (ref) => carries.get(ref) !== false)) outsideRefs.add(hit.ref);
       // A link is judged by its own line, which the chain built from a row it already checked; one that holds is dropped alone.
       hits = found.filter((hit, index) => { const row = rows[index]; return row !== null && row !== undefined && !holds(row.text, row.entry_id, row.speaker, hit.snippet); })
         .map((hit, _index, kept) => {
@@ -177,11 +197,20 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
   if (episodesFailed) failed.push('episodes');
   // Each line with the stub that may stand in for it; a stub-only line is a match past the full lines. upgrades are a hit's
   // longer lines, longest first, which only take the room left once every line is placed, so they never cost a match its place.
-  const lines: readonly Readonly<{ full?: string; stub?: string; upgrades?: readonly string[]; claim?: number }>[] = [
-    ...recalled.slice(0, RECALL_CLAIMS).map((claim) => ({ full: claimLine(claim), claim: claim.id, ...(stubs ? { stub: stubLine(claim) } : {}) })),
-    ...hits.map((hit) => ({ full: plainLine(hit), upgrades: upgradesOf(hit) })),
-    ...past.map((claim) => ({ full: replacedLine(claim) })),
-    ...recalled.slice(RECALL_CLAIMS).map((claim) => ({ stub: stubLine(claim) })),
+  // Only a note the grounding gate stamped as the owner's is theirs; an agent or unrecorded origin may quote someone else.
+  const fromOutside = (claim: Readonly<{ origin?: string | null }>) => claim.origin !== 'owner';
+  // A note learned from outside content is shown in full only to a turn already marked as built from outside content. A clean
+  // turn gets their number, where read_memory can open them: showing one would mark the turn, and recall matches on any shared word.
+  const learnedOutside = (claim: Claim) => claim.origin === 'untrusted';
+  const waiting = claims.builtFromOutside === true || marked ? 0 : [...recalled, ...past].filter(learnedOutside).length;
+  if (waiting) { recalled = recalled.filter((claim) => !learnedOutside(claim)); past = past.filter((claim) => !learnedOutside(claim)); }
+  const waitingLine = waiting ? outsideWaitingLine(waiting) : undefined;
+  const lines: readonly Readonly<{ full?: string; stub?: string; upgrades?: readonly string[]; claim?: number; outside: boolean }>[] = [
+    ...recalled.slice(0, RECALL_CLAIMS).map((claim) => ({ full: claimLine(claim), claim: claim.id, outside: fromOutside(claim), ...(stubs ? { stub: stubLine(claim) } : {}) })),
+    ...hits.map((hit) => ({ full: plainLine(hit), upgrades: upgradesOf(hit), outside: outsideRefs.has(hit.ref) })),
+    ...past.map((claim) => ({ full: replacedLine(claim), outside: fromOutside(claim) })),
+    ...recalled.slice(RECALL_CLAIMS).map((claim) => ({ stub: stubLine(claim), outside: fromOutside(claim) })),
+    ...(waitingLine ? [{ full: waitingLine, outside: false }] : []),
   ];
   const budget = Math.min(RECALL_MAX_CHARS, room);
   const reserve = cutLine(lines.length).length + 1;
@@ -190,10 +219,12 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
   if (!lines.length || used + reserve > budget) return { text: '', failed };
   // A line that does not fit is skipped, not cut, and a shorter one after it may still fit.
   const kept: string[] = [], upgradesOfKept: (readonly string[] | undefined)[] = [], shown: number[] = [];
-  for (const { full, stub, upgrades, claim } of lines) {
+  let outside = false;
+  for (const { full, stub, upgrades, claim, outside: lineOutside } of lines) {
     const line = [full, stub].find((text) => text !== undefined && used + text.length + 1 + reserve <= budget);
     if (line === undefined) continue;
     if (line === full && claim !== undefined) shown.push(claim);
+    outside ||= lineOutside;
     kept.push(line); upgradesOfKept.push(line === full ? upgrades : undefined); used += line.length + 1;
   }
   kept.forEach((line, index) => {
@@ -202,5 +233,5 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
     kept[index] = upgrade; used += upgrade.length - line.length;
   });
   const cut = lines.length - kept.length;
-  return { text: ['<recalled>', HEADER, ...kept, ...(cut > 0 ? [cutLine(cut)] : []), '</recalled>'].join('\n'), failed, used: shown };
+  return { text: ['<recalled>', HEADER, ...kept, ...(cut > 0 ? [cutLine(cut)] : []), '</recalled>'].join('\n'), failed, used: shown, ...(outside ? { outside } : {}), ...(waitingLine && kept.includes(waitingLine) ? { waiting } : {}) };
 };

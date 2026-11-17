@@ -168,6 +168,16 @@ it('claims plain texts in a row as one turn under the newest message; the joined
   expect(inbox.records().map(row => [row.wamid, row.state])).toEqual([['wamid.card', 'running'], ['wamid.card', 'completed']]);
 }));
 
+it('plain texts whose joined length would pass one message\'s limit are not joined: the newest runs, the others ride with it whole', () => withInbox((inbox, storage, clock) => {
+  const long = (mark: string) => `${mark} ${'x'.repeat(3_000)}`;
+  admit(inbox, storage, [{ wamid: 'w1', body: long('one') }, { wamid: 'w2', body: long('two') }, { wamid: 'w3', body: 'short close' }]);
+  const record = inbox.claimNext(clock.now + WHATSAPP_TURN_DEADLINE_MS)!;
+  expect(record.wamid).toBe('w3');
+  expect(textOf(record)).toBe('short close');
+  expect((record.earlier ?? []).map(update => (update as { message: { text: string } }).message.text)).toEqual([long('one'), long('two')]);
+  expect(inbox.next()).toBeNull();
+}));
+
 const forwarded = (body: string) => (seq: number) => text(seq, body, { forward_origin: { type: 'hidden_user', date: 0 } });
 const fileFrom = (name: string, extra: object = {}) => (seq: number) => ({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: Number(SUBJECT), is_bot: false }, chat: { id: Number(SUBJECT), type: 'private' }, document: { file_id: `m${seq}`, file_name: name }, ...extra } });
 const earlierOf = (record: WhatsAppInboxRecord | null) => (record?.earlier ?? []).map(update => (update as { update_id: number }).update_id - WA_UPDATE_BASE);
