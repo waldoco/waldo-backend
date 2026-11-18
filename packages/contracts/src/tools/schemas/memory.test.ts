@@ -15,6 +15,12 @@ describe('owner memory tool contracts', () => {
       expect(rememberArgsSchema.safeParse({ kind: 'fact', text: 'x', evidence_quote: 'x', replaces_id: id }).success, id).toBe(false);
     }
   });
+  it('names a replaced claim by its text as a non-empty string of bounded length', () => {
+    expect(rememberArgsSchema.parse({ kind: 'event', text: 'x', evidence_quote: 'x', replaces_text: '  Interview on Friday ' }).replaces_text).toBe('Interview on Friday');
+    for (const replaces_text of ['', '   ', 'x'.repeat(501), 12, null]) {
+      expect(rememberArgsSchema.safeParse({ kind: 'event', text: 'x', evidence_quote: 'x', replaces_text }).success, String(replaces_text)).toBe(false);
+    }
+  });
   it('requires a real forget selector and UTF-16 integer span', () => {
     expect(forgetMemoryArgsSchema.safeParse({ source: { message_ref: 'tg-1', start: 2, end: 5 }, scope_note: 'this span' }).success).toBe(true);
     for (const args of [{ scope_note: 'none' }, { claim_ids: [], scope_note: 'none' }, { source: { message_ref: 'tg-1', start: 5, end: 2 }, scope_note: 'bad' }, { source: { message_ref: 'tg-1', start: 0.5, end: 2 }, scope_note: 'bad' }]) expect(forgetMemoryArgsSchema.safeParse(args).success).toBe(false);
