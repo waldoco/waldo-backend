@@ -25,11 +25,13 @@ export const liveRunPlan = (spec: string | undefined, scenarios: readonly Nightl
   const picked = selectScenarios(subset, scenarios);
   const run = subset === 'all' ? LIVE_RUNS.all : LIVE_RUNS.subset;
   const label = (index: number) => `${index}/${run.shards}`;
-  const needs = Array.from({ length: run.shards }, (_, at) => { const plan = callPlan(shardOf(picked, label(at + 1)), run.trials); return plan.candidate_calls.high + plan.judge_calls; });
-  const total = needs.reduce((sum, need) => sum + need, 0);
+  const plans = Array.from({ length: run.shards }, (_, at) => callPlan(shardOf(picked, label(at + 1)), run.trials));
+  const total = plans.reduce((sum, plan) => sum + plan.candidate_calls.high + plan.judge_calls, 0);
   if (total > run.total_cap) throw new Error(`the plan needs ${total} calls and the run may spend ${run.total_cap}`);
-  // The total is shared out in proportion to each shard's own estimate, so no shard's cap is under its plan and the caps sum to no more than the total.
-  return { subset, trials: run.trials, shards: needs.map((need, at) => ({ index: at + 1, shard: label(at + 1), cap: Math.floor((need * run.total_cap) / total) })) };
+  // The total is shared out in proportion to each shard's rounded plan (its suggested maximum), so while those fit under the
+  // total no shard's cap is under its own; the caps never sum to more than the total.
+  const rounded = plans.reduce((sum, plan) => sum + plan.suggested_max_calls, 0), share = Math.max(rounded, run.total_cap);
+  return { subset, trials: run.trials, shards: plans.map((plan, at) => ({ index: at + 1, shard: label(at + 1), cap: Math.floor((plan.suggested_max_calls * run.total_cap) / share) })) };
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {

@@ -413,3 +413,15 @@ describe('the outcome the owner reads after approving a carded write', () => {
     });
   });
 });
+
+// MODEL_SET_WAKES: Waldo's own follow-up in a run it started passes the tainted gate; nothing else about open_loop moves.
+describe('Waldo\'s own follow-up after outside text', () => {
+  const own = { title: 'Check the gym block', due: '2030-03-04T19:20', note: 'Did it happen?' };
+  it('runs without a card only while the host says the run may leave itself one, and never with a mail source it did not observe', async () => {
+    expect(await taintedCallNeedsOwnerApproval('open_loop', 'external', own, {})).toBe(true);
+    expect(await taintedCallNeedsOwnerApproval('open_loop', 'external', own, { waldoOwnFollowUp: () => false })).toBe(true);
+    expect(await taintedCallNeedsOwnerApproval('open_loop', 'external', own, { waldoOwnFollowUp: () => true })).toBe(false);
+    expect(await taintedCallNeedsOwnerApproval('open_loop', 'external', { ...own, source_ref: 7 }, { waldoOwnFollowUp: () => true })).toBe(true);
+    expect(await taintedCallNeedsOwnerApproval('close_loop', 'external', { id: 'o1', outcome: 'done' }, { waldoOwnFollowUp: () => true })).toBe(true);
+  });
+});

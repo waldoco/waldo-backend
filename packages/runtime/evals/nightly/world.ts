@@ -8,7 +8,8 @@ import { IsolatedSourceWorld } from '../../scenarios/isolated-source-world';
 import { isolatedGoogleClient } from '../../scenarios/isolated-google-client';
 import { localIso, reminderHandlers, type ReminderBook } from '../../src/channels/reminders';
 import { standingOrderHandlers, type StandingOrder, type StandingOrderBook } from '../../src/channels/standing-orders';
-import { loopBook, loopHandlers } from '../../src/channels/loops';
+import { loopBook, loopHandlers, type Loop } from '../../src/channels/loops';
+import { dueLoops, holdCooldown } from '../../src/channels/heartbeat';
 import { episodeIndex, indexedConversationStore, scrubEpisodeTexts } from '../../src/channels/episodes';
 import { durableConversationStore } from '../../src/channels/conversation-store';
 import { toContextHealthMaterial, type HealthContextRow } from '../../src/channels/health-context';
@@ -200,7 +201,9 @@ const item = (mail: SeedMail): MailItem => ({ id: mail.id, thread_id: mail.threa
 const message = (mail: SeedMail): ThreadMessage => ({ id: mail.id, from: mail.from, subject: mail.subject, at: mail.at, body: mail.body });
 
 // embeddings: semantic recall on, over this runner, built as the owner object builds it.
-export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode = 'claims', embeddings?: EmbeddingRunner) => {
+// modelSetWakes (MODEL_SET_WAKES): a run Waldo starts may leave itself a follow-up, under the loop book's bounds, as the owner
+// object's do.
+export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode = 'claims', embeddings?: EmbeddingRunner, modelSetWakes = false) => {
   const events = (seed.events ?? []).map((event) => ({ owner_id: OWNER, ...event, all_day: event.all_day ?? false }));
   const mail = [...(seed.mail ?? [])].sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   // Health sharing: null before any step shares it; 'withdrawn' after one withdraws it.
@@ -314,6 +317,9 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   const semantic = memory && embeddings ? semanticRecall({ sql, transaction: transactionSync, embedder: workersAiEmbedder(embeddings) }) : undefined;
   const loops = loopBook(sql, { newId: () => nextId('loop'), now });
   for (const seeded of seed.loops ?? []) loops.open(seeded);
+  // A check-back turn may close only the loops it was given, as the owner object scopes it.
+  const checkBacks = new Map<string, ReadonlySet<string>>();
+  sql.exec('CREATE TABLE IF NOT EXISTS heartbeat_notified (loop_id TEXT NOT NULL, due TEXT NOT NULL, notified_at INTEGER NOT NULL, PRIMARY KEY (loop_id, due))');
   const episodes = episodeIndex(sql);
   const chat = evalConversation(seed, CHAT_REF, start, () => durableConversationStore(keyValueStorage()));
   // The seeded cards are app cards, raised in seed order (pcard1, pcard2, ...) at their own times; nothing on this desk can
@@ -405,7 +411,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     ...(store ? workspaceToolHandlers(() => store, { origin: async () => null, durable: false }, undefined, { fileTools: true }) : []),
     ...taskToolHandlers({ book: jobs, now, timezone: () => TIMEZONE, surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined }),
     ...googleHandlers(google, desk, clock), connectServiceHandler(google), ...reminderHandlers(reminderBook), ...standingOrderHandlers(standingOrders),
-    ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async (texts) => scrubEpisodeTexts(sql, texts, FORGOTTEN), ...(semantic ? { semantic } : {}), validity: true }) : []),
+    ...loopHandlers(loops, (turnId) => (turnId === undefined ? undefined : checkBacks.get(turnId)) ?? null, false, modelSetWakes), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async (texts) => scrubEpisodeTexts(sql, texts, FORGOTTEN), ...(semantic ? { semantic } : {}), validity: true }) : []),
     searchEpisodesHandler(episodes), ...search,
     getHealthHandler(healthReadBook(async (fn) => {
       if (fn === 'health_consent_list') return { consents: sharing === null ? [] : consentRows(sharing === 'shared' ? 'granted' : 'withdrawn') };
@@ -467,6 +473,13 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
 
   return {
     clock, conversation, memory, handlers, healthChange, sql, semantic,
+    // The heartbeat's check-back, as the owner object runs it: the loops past due and out of their cooldown, scoped to the turn
+    // that checks them, and held in cooldown once it has.
+    checkBack: Object.freeze({
+      due: () => dueLoops(sql, now(), TIMEZONE),
+      scope: (turn: string, due: readonly Loop[]) => { checkBacks.set(turn, new Set(due.map((loop) => loop.id))); },
+      done: (turn: string, due: readonly Loop[]) => { checkBacks.delete(turn); holdCooldown(sql, due.map((loop) => loops.get(loop.id) ?? loop), now()); },
+    }),
     // The owner sends a file: kept through the production keeper, and the note the turn carries, as the surfaces write it.
     upload: async (file: SeedUpload, key: string): Promise<string> => {
       if (!keepUpload) throw new Error('an upload step needs world.files');
@@ -503,7 +516,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
       sent_mail: 0,
       reminders: reminders.map(({ id: _id, ...reminder }) => reminder),
       standing_orders: orders.map(({ id: _id, created_at: _created, ...order }) => order),
-      open_loops: loops.list().map((loop) => ({ title: loop.title, due: loop.due })),
+      open_loops: loops.list().map((loop) => ({ title: loop.title, due: loop.due, by: loop.origin ?? 'owner' })),
       // Every claim whatever its status, so a superseded or forgotten one is seen to be retired, not merely missing.
       // seeded tells a claim the world started with from one the model wrote; supersedes_id is the correction link.
       memory: claims.allClaims().map((claim) => ({ id: claim.id, kind: claim.kind, text: claim.text, status: claim.status, origin: claim.origin, pinned: claim.pinned ?? null, supersedes_id: claim.supersedes_id ?? null, valid_to: claim.valid_to ?? null, bring_up_less: Boolean(claim.bring_up_less_at), created_at: claim.created_at, seeded: claim.source_ref?.startsWith('seed:') ?? false })),
