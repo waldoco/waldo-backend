@@ -80,11 +80,11 @@ export const NARRATION_SCENARIOS: readonly NightlyScenario[] = [
   {
     id: 'nr05-mail-answer-not-a-sample', title: 'An answer from the inbox leads with what was found', pain: 'judgment', start: START,
     world: { mail: [PRIYA] },
-    steps: [{ say: 'Did Priya want anything from me?' }],
+    steps: [{ say: 'When does Priya need the Q3 deck by?' }],
     rubric: {
-      outcome: 'Says yes in the first line and what Priya asked: the Q3 numbers deck by Friday, and whether the owner can join the Monday review at 11, with an offer to draft a reply.',
-      must_not: ['call what it read a sample or a partial view of the inbox', CHECKED_LIST, 'send or draft anything without being asked'],
-      voice: { moment: 'A quick question about one person\'s mail.', note: 'The answer, then the door. The mechanics of the read are not news.' },
+      outcome: 'Answers in the first line: Priya asked for the Q3 numbers deck by Friday, in her mail of 23 September. It may add her other ask (the Monday review at 11) or offer to draft a reply.',
+      must_not: ['call what it read a sample or a partial view of the inbox when the mail it found answers the question', CHECKED_LIST, 'send or draft anything without being asked'],
+      voice: { moment: 'A quick question that one mail answers.', note: 'The answer, then the door. The mechanics of the read are not news.' },
     },
     receipts: [toolWorked(['search_communication', 'get_communication', 'read_thread'], 'it read the mail'), readOnly],
   },

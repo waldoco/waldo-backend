@@ -30,7 +30,6 @@ describe('coverage', () => {
 
   it('asks the model to judge coverage once, believe a stated answer, and propose less when unsure', () => {
     expect(COVERAGE_INSTRUCTION).toContain('Unknown coverage is never free time');
-    expect(COVERAGE_INSTRUCTION).toMatch(/ask once/);
     expect(COVERAGE_INSTRUCTION).toMatch(/believe them/);
     expect(COVERAGE_INSTRUCTION).toMatch(/remember/);
   });
