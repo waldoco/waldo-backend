@@ -31,6 +31,9 @@ export type HealthRecomputeDeps = Readonly<{
     // go to the trigger with the run's own, once today's row is there to read, even when the run changed no row.
     noted?(runStartedAt: number): readonly HealthWakeReason[];
   }>;
+  // Told once a run has written the owner's first row for today, so a Brief already sent can be revised with the body data
+  // that landed after it. Today's row is read before and after a run only when this is given.
+  firstRowToday?(day: string): Promise<void>;
 }>;
 
 // A failed run names the step that failed and the database's closed answer, as one typed code such as
@@ -46,6 +49,8 @@ export class HealthRecomputeFailed extends Error {
 const record = (value: unknown): Record<string, unknown> | null => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null);
 
 const read = async (readContext: () => Promise<unknown>): Promise<HealthSnapshot | null> => healthSnapshot(await readContext());
+// Whether the owner's derived row for a day is stored, read under the storage consent the recompute writes under.
+const holdsRow = async (readScores: ProducerDeps['readScores'], day: string): Promise<boolean> => record(record(await readScores?.(day))?.scores)?.day === day;
 
 export const healthRecompute = (deps: HealthRecomputeDeps) => {
   // A wake that cannot be read or noted never fails the recompute: a retry would only run the producer again.
@@ -76,7 +81,7 @@ export const healthRecompute = (deps: HealthRecomputeDeps) => {
     // nothing, and no row is begun from the calendar alone. Today's busy minutes are cached, so they are dropped first.
     async calendarChanged(): Promise<'asked' | 'no_row'> {
       const today = localIso(deps.now(), deps.ownerZone()).slice(0, 10);
-      if (record(record(await deps.producer.readScores?.(today))?.scores)?.day !== today) return 'no_row';
+      if (!await holdsRow(deps.producer.readScores, today)) return 'no_row';
       deps.forgetDemand?.(today);
       await ask();
       return 'asked';
@@ -85,10 +90,16 @@ export const healthRecompute = (deps: HealthRecomputeDeps) => {
     async run(): Promise<ProducerOutcome> {
       const now = deps.now(), timezone = deps.ownerZone(), today = localIso(now, timezone).slice(0, 10), wakes = deps.wakes?.enabled() ? deps.wakes : null;
       const before = wakes ? await read(wakes.readContext).catch((): null => null) : null;
+      // A read that fails is taken as a row already there, so a failed read never announces a first row.
+      const first = deps.firstRowToday;
+      const hadToday = first ? await holdsRow(deps.producer.readScores, today).catch(() => true) : true;
       const failures: ProducerFailure[] = [];
       const outcome = await produceHealthScores({ ...deps.producer, onFailure: failure => failures.push(failure) }, { now, timezone });
       if (outcome === 'failed') throw new HealthRecomputeFailed(failures[0]);
       if (wakes && (outcome === 'written' || (wakes.noted?.(now).length ?? 0) > 0)) await wake(wakes, before, today, now);
+      if (first && !hadToday && outcome === 'written') {
+        try { if (await holdsRow(deps.producer.readScores, today)) await first(today); } catch { console.error('health first row notice failed'); }
+      }
       return outcome;
     },
   };
