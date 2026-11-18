@@ -1,6 +1,6 @@
 import { PULSE_PRIOR, VARIABILITY_PRIOR, sleepNeed, standing, type Prior } from './baseline';
 import { BASELINE_DAYS, higherIsBetter, logZScore, lowerIsBetter, zScore, clampScore, type Component } from './stats';
-import type { DayRecord, HrvMethod, MethodReading, RestingMethod, UnavailableReason } from './types';
+import type { DayRecord, HrvMethod, MethodReading, RestingMethod, UnavailableReason, UsedSignal } from './types';
 
 // Form v2 and Weight v2 leave out days holding an overlapping hour window (Form's hours, Weight's physical load). Form v3
 // reads an hour or day with no daylight or movement reading as missing, not zero; Weight v3 counts every day the calendar
@@ -24,7 +24,7 @@ const RESTING_ORDER: readonly RestingMethod[] = ['overnight_resting', 'provider_
 
 export interface RecoveryBasis {
   readonly components: readonly Component[];
-  readonly signals: readonly string[];
+  readonly signals: readonly UsedSignal[];
   readonly days: readonly string[];
   readonly hrvMethod: HrvMethod | null;
   // Provisional only: the own-day count of each used component that stands on the owner's history, and whether a prior took part.
@@ -63,7 +63,7 @@ export const recoveryBasis = (target: DayRecord, prior: readonly DayRecord[], sl
   if (!target.overnightHrv.length && !target.restingHeartRate.length) return { reason: 'missing_resting_signal' };
 
   const components: Component[] = [{ name: 'sleep', score: clampScore(target.sleep.asleepMinutes / need * 100), weight: RECOVERY_SHARES.sleep }];
-  const signals = ['sleep'];
+  const signals: UsedSignal[] = ['sleep'];
   const days = new Set<string>([target.day]);
   let hrvMethod: HrvMethod | null = null;
 
@@ -115,7 +115,7 @@ export const provisionalRecoveryBasis = (target: DayRecord, prior: readonly DayR
   if (!target.overnightHrv.length && !target.restingHeartRate.length) return { reason: 'missing_resting_signal' };
 
   const components: Component[] = [{ name: 'sleep', score: clampScore(target.sleep.asleepMinutes / need * 100), weight: RECOVERY_SHARES.sleep }];
-  const signals = ['sleep'];
+  const signals: UsedSignal[] = ['sleep'];
   const days = new Set<string>([target.day]);
   // A need the owner confirmed stands on no history. One taken from the owner's nights is shrunk toward a prior of eight hours.
   const own: number[] = sleepNeedMinutes === null ? [nights.length] : [];

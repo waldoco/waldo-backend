@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { acceptTrustedInvocation } from '@waldo/contracts';
 import { localTrustedBriefScheduleInput, resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
 import { JoinedConversationPath } from '../src/conversation/joined-path';
+import { CONVERSATION_HISTORY_WIRE_CEILING_TOKENS } from '../src/conversation/window';
 
 const fixture = localTrustedBriefScheduleInput();
 const accepted = acceptTrustedInvocation(fixture.admission);
@@ -59,7 +60,7 @@ describe('JoinedConversationPath', () => {
     await path.submit({ ...second, userEntry: { ...second.userEntry, parentId: 'assistant-user-w1' } });
 
     expect(statsSeen).toHaveLength(2);
-    expect(statsSeen[0]).toMatchObject({ kept: 1, dropped: 0, budget_tokens: 100_000 });
+    expect(statsSeen[0]).toMatchObject({ kept: 1, dropped: 0, budget_tokens: CONVERSATION_HISTORY_WIRE_CEILING_TOKENS });
     // Second submit: full ancestor path (user1, assistant1, user2) fits, nothing dropped.
     expect(statsSeen[1]).toMatchObject({ kept: 3, dropped: 0 });
     expect(observed?.messages.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);

@@ -40,7 +40,7 @@ it('with WALDO_CALL_CEILINGS a long owner turn clears every tool result but the 
   expect(plain.firstCleared).toBeGreaterThan(1);
   expect(ceiling.at!).toBeLessThan(plain.at!);
   // The hard ceiling is a setting: a lower one clears sooner.
-  const lower = await clearingIn({ ...CONTEXT_BUDGET, hardCeilingTokens: CONTEXT_BUDGET.hardCeilingTokens - 20_000 });
+  const lower = await clearingIn({ ...CONTEXT_BUDGET, hardCeilingTokens: CONTEXT_BUDGET.hardCeilingTokens - 28_571 });
   expect(lower.firstCleared).toBe(1);
   expect(lower.at!).toBeLessThan(ceiling.at!);
 });
