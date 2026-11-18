@@ -1,4 +1,4 @@
-import { BUDGET_CHARS_PER_TOKEN, MODEL_CONTEXT_MAX_CHARS, MODEL_CONTEXT_SPECS, WALDO_CHAT_MODEL, type ConversationModelMessage, type ModelName } from '@waldo/contracts';
+import { MODEL_CONTEXT_MAX_CHARS, MODEL_CONTEXT_SPECS, WALDO_CHAT_MODEL, type ConversationModelMessage, type ModelName } from '@waldo/contracts';
 
 // F1 (paper audit, arXiv 2609.20804): the chat turn path had NO input-context bound - the full
 // conversation ancestor path went to the model every turn, so overflow terminated the turn with a
@@ -9,10 +9,17 @@ import { BUDGET_CHARS_PER_TOKEN, MODEL_CONTEXT_MAX_CHARS, MODEL_CONTEXT_SPECS, W
 // (OpenAI/Azure model docs, verified 2026-09-27). 100k bounds the conversation-history
 // share, leaving headroom for the composed system prompt, in-turn tool turns and the 4096-token
 // output pin, and caps per-turn input cost under the cheapest-passing routing rule.
+// UTF-8 bytes per input token, for every count of a request: the history cuts, the call ceilings and the logged estimate, so
+// a budget means the tokens it names. 2.8, not 4: the request is mostly JSON, tool schemas, ids and markup, and on staging a
+// fixed 4 read 24k where the provider counted 34k. A constant on purpose: a cut point that moved between turns would break
+// the cached prefix. No tokenizer in the hot path; each message adds a small framing overhead.
+export const BYTES_PER_TOKEN_EST = 2.8;
+export const estimatedTokens = (bytes: number): number => Math.ceil(bytes / BYTES_PER_TOKEN_EST);
+
 // Wire ceiling for the conversation-history share of the input, in the ADR/owner-decision
 // (2026-09-26) pattern: fixed ceilings stay as hard caps and the per-model derivation may only
 // TIGHTEN below them (same construction as deriveContextBudgetChars in contracts/model/context-budget).
-export const CONVERSATION_HISTORY_WIRE_CEILING_TOKENS = MODEL_CONTEXT_MAX_CHARS / BUDGET_CHARS_PER_TOKEN;
+export const CONVERSATION_HISTORY_WIRE_CEILING_TOKENS = Math.floor(MODEL_CONTEXT_MAX_CHARS / BYTES_PER_TOKEN_EST);
 
 // Effective history budget for the active model: the model's usable window (context minus output
 // reserve minus safety margin, from the verified roster specs) tightened to the wire ceiling.
@@ -26,10 +33,8 @@ export const conversationInputBudgetTokens = (model: ModelName = WALDO_CHAT_MODE
 // ceiling today, so the ceiling is the effective budget; a smaller-window model tightens instead).
 export const CONVERSATION_INPUT_BUDGET_TOKENS = conversationInputBudgetTokens();
 
-// Heuristic estimator: 4 bytes per token (UTF-8) plus a small per-message framing overhead.
-// Deliberately conservative-simple; no tokenizer dependency in the hot path.
 export const estimateMessageTokens = (message: ConversationModelMessage): number =>
-  Math.ceil(new TextEncoder().encode(message.content).byteLength / 4) + 8;
+  estimatedTokens(new TextEncoder().encode(message.content).byteLength) + 8;
 
 export type ConversationWindowStats = Readonly<{
   kept: number;

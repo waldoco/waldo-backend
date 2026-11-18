@@ -6,7 +6,8 @@ const msg = (chars: number, role: 'user' | 'assistant' = 'user') => ({ role, con
 describe('conversation input window (F1)', () => {
   it('estimates tokens from UTF-8 bytes with framing overhead', () => {
     expect(estimateMessageTokens({ role: 'user', content: '' })).toBe(8);
-    expect(estimateMessageTokens(msg(400))).toBe(108);
+    // 400 bytes at 2.8 bytes per token is 143 tokens, plus 8 of framing.
+    expect(estimateMessageTokens(msg(400))).toBe(151);
     expect(estimateMessageTokens(msg(100))).toBeLessThan(estimateMessageTokens(msg(400)));
   });
 
@@ -14,12 +15,12 @@ describe('conversation input window (F1)', () => {
     const messages = [msg(100), msg(200, 'assistant'), msg(300)];
     const { messages: kept, stats } = windowModelMessages(messages, 10_000);
     expect(kept).toEqual(messages);
-    expect(stats).toEqual({ kept: 3, dropped: 0, estimated_tokens: 8 + 25 + 8 + 50 + 8 + 75, budget_tokens: 10_000 });
+    expect(stats).toEqual({ kept: 3, dropped: 0, estimated_tokens: 8 + 36 + 8 + 72 + 8 + 108, budget_tokens: 10_000 });
   });
 
   it('drops oldest entries first when over budget and reports the drop', () => {
     const messages = [msg(4000), msg(4000, 'assistant'), msg(400)];
-    // 4000 chars ~= 1008 tokens each; budget 2100 fits the newest two only.
+    // 4000 bytes ~= 1437 tokens each; budget 2100 fits the newest two only.
     const { messages: kept, stats } = windowModelMessages(messages, 2_100);
     expect(kept).toEqual(messages.slice(1));
     expect(stats.dropped).toBe(1);
@@ -39,8 +40,8 @@ describe('conversation input window (F1)', () => {
   });
 
   it('ships a deliberate default budget far under the chat model window', () => {
-    // Wire ceiling 100k with tighten-only per-model derivation (contracts/model/context-budget pattern);
-    // for history; headroom covers system prompt, tool turns and the 4096 output pin.
-    expect(CONVERSATION_INPUT_BUDGET_TOKENS).toBe(100_000);
+    // The 400,000-byte wire ceiling, counted at 2.8 bytes per token, with tighten-only per-model derivation
+    // (contracts/model/context-budget pattern); headroom covers system prompt, tool turns and the output pin.
+    expect(CONVERSATION_INPUT_BUDGET_TOKENS).toBe(142_857);
   });
 });
