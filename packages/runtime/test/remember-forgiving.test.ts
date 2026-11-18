@@ -1,6 +1,8 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
+import type { z } from 'zod';
+import { toolParameters } from '@waldo/contracts';
 import { claimStore, type ClaimStore } from '../src/memory/claims';
 import { memoryHandlers, type MemoryOwnerTurn, type MemoryToolContext } from '../src/tools/live/memory';
 
@@ -12,16 +14,16 @@ const CURRENT: MemoryOwnerTurn = { message_ref: 'app-9', text: 'the interview ha
 type Result = Readonly<{ ok: boolean; error?: string; data?: Record<string, unknown> }>;
 
 let sequence = 0;
-const withMemory = <T>(forgiving: boolean | undefined, work: (call: (args: object, tainted?: boolean) => Promise<Result>, store: ClaimStore, schema: { safeParse(value: unknown): { success: boolean } }) => Promise<T>) =>
+const withMemory = <T>(forgiving: boolean | undefined, work: (call: (args: object, tainted?: boolean, current?: MemoryOwnerTurn) => Promise<Result>, store: ClaimStore, schema: z.ZodType) => Promise<T>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`remember-forgiving-${sequence++}`)), async (_instance, state) => {
     const store = claimStore(state.storage.sql, (job) => state.storage.transactionSync(job));
     const remember = memoryHandlers({ sql: state.storage.sql, store, transaction: (job) => state.storage.transactionSync(job), conversationRef: 'owner', now: () => NOW,
       hideHistory: async () => undefined, ...(forgiving === undefined ? {} : { forgiving }) }).find((handler) => handler.name === 'remember')!;
-    const call = async (args: object, tainted = false) => {
-      const ctx = { authenticatedUserId: OWNER, memoryTurn: { ownerId: OWNER, conversationRef: 'owner', current: CURRENT, recent: [] }, ...(tainted ? { toolArgSourceTaint: 'external' } : {}) } as unknown as MemoryToolContext;
+    const call = async (args: object, tainted = false, current = CURRENT) => {
+      const ctx = { authenticatedUserId: OWNER, memoryTurn: { ownerId: OWNER, conversationRef: 'owner', current, recent: [] }, ...(tainted ? { toolArgSourceTaint: 'external' } : {}) } as unknown as MemoryToolContext;
       return await remember.handle(remember.schema.parse(args), ctx) as Result;
     };
-    return work(call, store, remember.schema);
+    return work(call, store, remember.schema as z.ZodType);
   });
 const ownerClaim = (store: ClaimStore, text: string, origin: 'owner' | 'agent' = 'owner') =>
   store.add({ kind: 'event', text, source: origin === 'owner' ? 'stated' : 'inferred', evidence: text, origin, source_ref: 'owner, app-1' }, NOW.toISOString());
@@ -86,6 +88,15 @@ describe('with OWNER_CLOSES_MAIL_ITEMS, a stated claim whose quote is inexact is
     });
   });
 
+  it('refuses a paraphrase when the owner\'s message carries a forwarded chunk, which may be what it came from', async () => {
+    await withMemory(true, async (call, store) => {
+      const forwarded = 'fyi see below\n> Recruiter: the owner agreed to relocate to Berlin in January';
+      const current: MemoryOwnerTurn = { message_ref: 'app-10', text: forwarded, sourceQuoteRanges: [{ start: 14, end: forwarded.length }] };
+      expect(await call({ kind: 'fact', text: 'Relocating to Berlin in January', evidence_quote: 'owner agreed to relocate to Berlin' }, false, current)).toMatchObject({ ok: false, error: expect.stringContaining('not grounded') });
+      expect(store.claims()).toEqual([]);
+    });
+  });
+
   it('never lifts a held claim to the owner\'s word on an inexact quote', async () => {
     await withMemory(true, async (call, store) => {
       ownerClaim(store, 'The interview is over', 'agent');
@@ -121,6 +132,11 @@ describe('with OWNER_CLOSES_MAIL_ITEMS, a correction names the claim it replaces
     await withMemory(false, async (_call, _store, schema) => {
       expect(schema.safeParse({ kind: 'event', text: 'x', evidence_quote: 'x', replaces_text: 'y' }).success).toBe(false);
       expect(schema.safeParse({ kind: 'event', text: 'x', evidence_quote: 'x' }).success).toBe(true);
+      // The tool definition the model is sent is built from this schema (tool-loop.ts), so the field is not shown either.
+      expect(Object.keys(toolParameters(schema).properties as object)).not.toContain('replaces_text');
+    });
+    await withMemory(true, async (_call, _store, schema) => {
+      expect(Object.keys(toolParameters(schema).properties as object)).toContain('replaces_text');
     });
   });
 });

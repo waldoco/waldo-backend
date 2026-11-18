@@ -95,8 +95,9 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         if (!turn) return fail('Authenticated owner memory context is unavailable.');
         const grounded = [turn.current, ...turn.recent].find(message => ownerParts(message).some(part => quotesWords(part, args.evidence_quote) && ground(args.evidence_quote, { owner: part }) === 'owner'));
         // The model's paraphrase of what the owner just wrote is still worth keeping, as its own read of their current message.
-        // Only in a turn that read no outside content: there, the words could be someone else's.
-        const inexact = !grounded && deps.forgiving === true && ctx.toolArgSourceTaint !== 'external';
+        // Only in a turn that read no outside content and from a message wholly the owner's: a forwarded or quoted chunk in it,
+        // or anything the turn read, could be what the paraphrase came from.
+        const inexact = !grounded && deps.forgiving === true && ctx.toolArgSourceTaint !== 'external' && !turn.current.sourceQuoteRanges?.length;
         const source = grounded ?? (inexact ? turn.current : undefined);
         if (!source) {
           // A note needs a source. With outside notes recalled, a turn that read outside content may save what it read: the
