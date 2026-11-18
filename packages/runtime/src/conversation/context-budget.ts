@@ -23,7 +23,7 @@ export type ContextBudget = Readonly<{
 }>;
 
 export const CONTEXT_BUDGET: ContextBudget = {
-  historyTokens: 22_000, chatCeilingTokens: 40_000, jobCeilingTokens: 25_000, hardCeilingTokens: 80_000,
+  historyTokens: 31_429, chatCeilingTokens: 57_143, jobCeilingTokens: 35_714, hardCeilingTokens: 114_286,
   steppedTarget: 0.5, clearAtChars: 120_000, keepLatest: 3, standingOrdersChars: 3_000, questsChars: 3_000, whatsNewChars: 1_200,
 };
 

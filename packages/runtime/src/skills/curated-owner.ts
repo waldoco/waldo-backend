@@ -95,14 +95,16 @@ export class CuratedOwnerSkills {
    VALUES(?,?,'system',1,0,?,?,?,?,1,0,NULL,?,?,?,'active',1,NULL,NULL) ${conflict}`,s.name,s.version,JSON.stringify(s.trigger_types),s.trigger_condition,JSON.stringify(s.required_tools),JSON.stringify(s.required_connectors),s.body_markdown,this.createdBy(s),s.created_at);
  }
  // Defaults: every reviewed catalog name the owner has no row for (new owners, partial owners, later catalog additions).
- // Upgrade rewrites only an older reviewed row of this owner to the catalog text; status is kept.
+ // Re-sync rewrites a reviewed row of this owner to the catalog text when it is older, or the same version with other text
+ // (a reviewed edit shipped without a version bump, which would otherwise read as disabled for every existing owner);
+ // a row from a newer catalog is left alone. Status is kept, so an owner's disable stands.
  private ensureDefaults(): void {
   // Per-name admission: a reviewed name with no row at all is inserted active. Any existing row
   // (active, archived, hostile) is untouched here, so a disabled skill is never brought back.
   for (const s of this.catalog) if (!this.stored(s.name)) this.insert(s, 'ON CONFLICT(name) DO NOTHING');
   for (const s of this.catalog) {
    const row = this.stored(s.name);
-   if (!row || row.admitted !== 1 || row.version === null || row.version >= s.version || row.provenance !== 'system' || row.identity_locked !== 1
+   if (!row || row.admitted !== 1 || row.version === null || row.version > s.version || (row.version === s.version && this.current(row, s)) || row.provenance !== 'system' || row.identity_locked !== 1
     || !row.created_by.startsWith(`reviewed-builtin:${s.name}@`) || !row.created_by.endsWith(`:owner:${this.custodyKey}`)
     || !['[]', JSON.stringify(s.required_tools)].includes(row.required_tools_json) || row.required_connectors_json !== '[]') continue;
    this.sql.exec('UPDATE skills SET version=?,trigger_types_json=?,trigger_condition=?,required_tools_json=?,required_connectors_json=?,body_markdown=?,created_by=?,created_at=? WHERE name=?',
@@ -171,6 +173,11 @@ export class CuratedOwnerSkills {
    && row.required_tools_json===JSON.stringify(s.required_tools) && row.required_connectors_json===JSON.stringify(s.required_connectors) && row.body_markdown===s.body_markdown
    && row.created_by===this.createdBy(s) && row.created_at===s.created_at && row.effectiveness===1 && row.pinned===1 && row.invocations===0
    && row.last_used===null && row.last_curated_at===null && row.archived_at===null && ['active','archived'].includes(row.status);
+ }
+ // The row already holds this catalog entry's reviewed text.
+ private current(row:Stored,s:Skill):boolean {
+  return row.trigger_types_json===JSON.stringify(s.trigger_types) && row.trigger_condition===s.trigger_condition && row.required_tools_json===JSON.stringify(s.required_tools)
+   && row.required_connectors_json===JSON.stringify(s.required_connectors) && row.body_markdown===s.body_markdown && row.created_by===this.createdBy(s) && row.created_at===s.created_at;
  }
  private active(name:string):boolean {const s=this.skillFor(name); const row=this.stored(name); return s!==undefined && row!==undefined && this.authentic(row,s)&&row.status==='active';}
 }
