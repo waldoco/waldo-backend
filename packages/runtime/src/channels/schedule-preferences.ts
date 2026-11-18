@@ -9,7 +9,7 @@ import { localIso } from './reminders';
 import { armBriefSweep, BRIEF_SWEEP_ID } from './event-briefs';
 import { armNightly, NIGHTLY_CATCH_UP_ID, NIGHTLY_ID } from './episodes';
 import { armHeartbeat, HEARTBEAT_ID } from './heartbeat';
-import type { LoopBook } from './loops';
+import { FOLLOWUP_WAKE_PREFIX, type LoopBook } from './loops';
 import type { MachineJob } from '../tasks/jobs';
 import { HEALTH_TRIGGER_ID, type HealthTriggerSetting } from '../health/trigger';
 import { MEMORY_DAYTIME_ID } from '../memory/consolidator';
@@ -123,7 +123,7 @@ export const reconcileSchedulePreferences = async (prefs: SchedulePreferences, c
 const scheduleKindOf = (entry: ScheduleEntry): ScheduleKind | null => {
   // The daytime memory pass is part of the memory pass the owner can turn off.
   if (entry.kind === 'dreaming' && (entry.id === NIGHTLY_ID || entry.id === NIGHTLY_CATCH_UP_ID || entry.id === MEMORY_DAYTIME_ID)) return 'nightly';
-  if (entry.kind === 'heartbeat' && entry.id === HEARTBEAT_ID) return 'heartbeat';
+  if (entry.kind === 'heartbeat' && (entry.id === HEARTBEAT_ID || entry.id.startsWith(FOLLOWUP_WAKE_PREFIX))) return 'heartbeat';
   if (entry.kind === 'pre_activity_spot' && entry.id === BRIEF_SWEEP_ID) return 'event_briefs';
   if (entry.kind === 'patrol' && entry.id === HEALTH_TRIGGER_ID) return 'health_proposals';
   if (entry.kind === 'brief' && DAY_CARDS.some((card) => card.id === entry.id)) return 'daily_brief';

@@ -2,7 +2,7 @@ import type { ScheduleEntry } from '@waldo/contracts';
 import { nextOccurrence, type Scheduler, type ScheduleExecutor } from '../scheduler/multiplexer';
 import type { MachineEnqueued } from '../tasks/machine';
 import type { DayPlanBook } from './day-cards';
-import { isQuiet, type Loop, type LoopBook, type Proactivity } from './loops';
+import { FOLLOWUP_WAKE_PREFIX, isQuiet, type Loop, type LoopBook, type Proactivity } from './loops';
 import { localIso, localToEpoch } from './reminders';
 import type { FinalRecord, HeartbeatReceipt } from './telegram-final-outbox';
 
@@ -50,6 +50,27 @@ export const armHeartbeat = async (scheduler: Scheduler, now: number): Promise<v
 };
 
 export type Sql = Pick<SqlStorage, 'exec'>;
+
+// MODEL_SET_WAKES: one of Waldo's own follow-ups due at a minute gets a one-shot heartbeat entry at that minute, up to
+// SELF_LOOP_WAKES_PER_DAY a day, so it is checked on time rather than at the grid's next tick; that tick scans every due loop,
+// as the grid's does. A date-only, past or capped one, or one while check-backs are off, waits for the grid. A failed arm never
+// fails the follow-up, which the grid still reaches. Each outcome is a closed code for the caller's log.
+export type FollowupWakeCode = 'armed' | 'date_only' | 'past' | 'check_backs_off' | 'capped' | 'arm_failed';
+export const armFollowupWake = async (deps: Readonly<{ scheduler: Pick<Scheduler, 'schedule'>; loops: Pick<LoopBook, 'wakeRoom' | 'markWake'>; timezone: string; now: number;
+  checkBacks: boolean }>, loop: Loop): Promise<FollowupWakeCode> => {
+  try {
+    const at = loop.due?.length === 16 ? localToEpoch(loop.due, deps.timezone) : NaN;
+    if (!Number.isFinite(at)) return 'date_only';
+    if (at <= deps.now) return 'past';
+    if (!deps.checkBacks) return 'check_backs_off';
+    if (!deps.loops.wakeRoom()) return 'capped';
+    await deps.scheduler.schedule({ id: `${FOLLOWUP_WAKE_PREFIX}${loop.id}`, kind: 'heartbeat', payloadRefs: { id: loop.id }, occurrenceAt: at, dueAt: at, recurrence: null });
+    deps.loops.markWake(loop.id, at);
+    return 'armed';
+  } catch {
+    return 'arm_failed';
+  }
+};
 
 // The heartbeat's next tick worth running, on its own grid: the first slot at or after the earliest of a held card, a past-due
 // loop out of its cooldown (both now), a cooldown's end, or a future loop's due time; past quiet hours. It still ticks a day
