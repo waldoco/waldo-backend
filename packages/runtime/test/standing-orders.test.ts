@@ -219,3 +219,14 @@ describe('standing order recurrence', () => {
     expect(standingOrdersPrompt(book)).toContain(`runs ${trigger}`);
   });
 });
+
+describe('the tools a standing order\'s fire may call', () => {
+  it('a confirm_first order holds the reads and the owner\'s card; an act order keeps the whole set', async () => {
+    const { standingOrderFireTools } = await import('../src/channels/standing-orders');
+    const { CHECK_BACK_TOOLS } = await import('../src/channels/check-back');
+    const held = standingOrderFireTools({ gate: 'confirm_first' })!;
+    expect(held).toEqual([...CHECK_BACK_TOOLS, 'propose_action']);
+    for (const write of ['send_email', 'propose_calendar_change', 'set_reminder', 'remember', 'open_loop', 'close_loop']) expect(held).not.toContain(write);
+    expect(standingOrderFireTools({ gate: 'act' } as never)).toBeUndefined();
+  });
+});
