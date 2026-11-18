@@ -17,6 +17,13 @@ const MAPPED = new Set(['sleep', 'daily-heart-rate-variability', 'daily-resting-
   'daily-sleep-temperature-derivations', 'exercise', 'weight', 'body-fat', 'steps', 'active-energy-burned']);
 
 export type GoogleHealthLog = ProviderLog<'google_health'>;
+
+// Google's Limited Use rules forbid people reading this data, so an owner who has linked Google Health has no conversation
+// text captured in traces from then on. The mark outlives a disconnect: what Google shared stays stored, and readable in a
+// turn, until the owner withdraws storage consent for the source.
+const HELD_KEY = 'google_health:held';
+export const holdsGoogleHealthData = (kv: Readonly<{ get<T>(key: string): T | undefined }>): boolean =>
+  kv.get<boolean>(HELD_KEY) === true || kv.get('google_health:conn') !== undefined;
 export type GoogleHealthOwnerDeps = ProviderOwnerDeps<GoogleHealthConfig, 'google_health'>;
 
 const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -93,12 +100,19 @@ export const googleHealthOwner = (deps: GoogleHealthOwnerDeps) => {
     }
   };
 
+  // Marked as the link is kept, before any sync can bring Google data into a turn.
+  const exchange: typeof owner.exchange = async (input) => {
+    const outcome = await owner.exchange(input);
+    if (outcome === 'linked') kv.put(HELD_KEY, true);
+    return outcome;
+  };
+
   const disconnect = async () => {
     const result = await owner.disconnect();
     kv.delete(kit.key('hint_due'));
     return result;
   };
 
-  return { ...owner, disconnect, hint };
+  return { ...owner, exchange, disconnect, hint };
 };
 export type GoogleHealthOwner = ReturnType<typeof googleHealthOwner>;
