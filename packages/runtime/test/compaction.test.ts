@@ -63,17 +63,18 @@ describe('compaction', () => {
   });
 
   it('plans the span as everything older than the tail, bounded to the input budget, with covers naming original rows', () => {
-    const settings = { ...COMPACTION, budgetTokens: 120, summaryInputTokens: 120 };
+    // 171 tokens: the 120 this case was written for at 4 bytes per token, counted at 2.8.
+    const settings = { ...COMPACTION, budgetTokens: 171, summaryInputTokens: 171 };
     const tree = chain(8);
     const first = compactionPlan(tree, leafOf(8), null, settings)!;
-    // the tail holds at most half the budget: the newest round (about 72 tokens) is always kept, a second round does not fit
+    // the tail holds at most half the budget: the newest round (about 102 tokens) is always kept, a second round does not fit
     expect(first.covers.to_id).toBe('a7');
     expect(first.gap).toBeGreaterThan(0);
     expect(first.covers.rows).toBe(first.input.length);
     // over the input budget the owner's messages go in first, so the span starts at the oldest owner message that fits
     expect(first.input.map((message) => message.content.split(' ').slice(0, 2).join(' '))).toEqual(['question 5', 'question 6', 'question 7']);
     expect(first.covers.from_id).toBe('u5');
-    expect(first.input.reduce((sum, message) => sum + estimateMessageTokens(message), 0)).toBeLessThanOrEqual(120);
+    expect(first.input.reduce((sum, message) => sum + estimateMessageTokens(message), 0)).toBeLessThanOrEqual(171);
     // a later compaction carries the live summary first and its coverage forward
     const live = compactionRow(first, 'earlier summary', 'owner', 99);
     tree.append(live);
