@@ -10,7 +10,7 @@ const row = (id: string, parentId: string | null, role: 'user' | 'assistant', te
   id, ownerId: 'owner', chatId: 'owner', parentId, threadAnchorId: null, surface: 'whatsapp', modelPayload: text, appPayload: text,
   modelProjection: { mode: 'include' }, role, ...(role === 'user' ? { inputOrigin: 'owner' as const } : {}),
 });
-// Rounds of owner message and reply, about 110 tokens a row; ids u1, a1, u2, a2, ...
+// Rounds of owner message and reply, about 155 tokens a row; ids u1, a1, u2, a2, ...
 const grow = (tree: ConversationTree, from: number, to: number) => {
   for (let round = from; round <= to; round += 1) {
     tree.append(row(`u${round}`, round === 1 ? null : `a${round - 1}`, 'user', `question ${round} ${'q'.repeat(400)}`));
@@ -18,9 +18,9 @@ const grow = (tree: ConversationTree, from: number, to: number) => {
   }
   return tree;
 };
-const stepped: CompactionSettings = { ...COMPACTION, budgetTokens: 1_000, steppedWindow: true };
-// A cut keeps the newest row (about 110 tokens here) and the rows before it within half the budget.
-const afterCut = stepped.budgetTokens / 2 + 120;
+const stepped: CompactionSettings = { ...COMPACTION, budgetTokens: 1_400, steppedWindow: true };
+// A cut keeps the newest row (about 155 tokens here) and the rows before it within half the budget.
+const afterCut = stepped.budgetTokens / 2 + 170;
 // A turn's view of the chain, reading the start the last turn kept.
 const turn = (tree: ConversationTree, leaf: string, from?: string, settings = stepped) => compactedHistory(tree, leaf, undefined, settings, from);
 
@@ -36,7 +36,7 @@ describe('the stepped window', () => {
     const half = turn(tree, 'a6'), most = turn(tree, 'a6', undefined, { ...stepped, steppedTarget: 0.8 });
     expect(half.stats.estimated_tokens).toBeLessThanOrEqual(afterCut);
     expect(most.stats.estimated_tokens).toBeGreaterThan(afterCut);
-    expect(most.stats.estimated_tokens).toBeLessThanOrEqual(stepped.budgetTokens * 0.8 + 120);
+    expect(most.stats.estimated_tokens).toBeLessThanOrEqual(stepped.budgetTokens * 0.8 + 170);
   });
 
   it('keeps the whole chain while it fits, and names no start', () => {

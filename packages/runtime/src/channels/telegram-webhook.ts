@@ -69,6 +69,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" lets the health trigger, on a day with nothing coming, send one short note as an update card when the model judges
   // it worth it; anything else keeps such a day silent.
   HEALTH_SOLO_NOTICE?: string;
+  // "1" gives the model a partial health block, in words, for a day whose body data made no Recovery score, and fills the
+  // block's missing lists from the stored row; anything else leaves such a day with no health block.
+  HEALTH_PARTIAL_CONTEXT?: string;
   HEALTH_TRAINING_LOAD?: string;
   // '1' has the health producer write today's Form curve, measured and then projected, on today's derived row, for the app's
   // calendar day; anything else writes none.
@@ -258,11 +261,20 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_ASYNC_TOOLS?: string;
   // "1": a background job's request row keeps only a key, never the job's prompt (conversation/job-outcome.ts).
   WALDO_JOB_OUTCOME_ROWS?: string;
+  // "1": a Waldo-first scheduled run (day card, check-back, update sweep, intervention) reads a lean view: its own event, the
+  // composed context and the last few rows of the owner's exchange instead of the chat replay, under one tool menu and a
+  // 1-hour cached head shared by every scheduled job kind (channels/owner-turn.ts).
+  WALDO_LEAN_SCHEDULED?: string;
   // "1": the owner's WhatsApp turns read and write the owner's own chain, the one their app chat uses (conversation/one-timeline.ts).
   WALDO_ONE_TIMELINE?: string;
   // "1": the owner's own reply takes a light step that answers quick chat or hands the turn to the strong role, and every task
   // worker runs on the chat model (async-tools.ts).
   WALDO_LIGHT_CHAT?: string;
+  // "1": Claude's thinking is replayed through a turn's tool loop, and the loop keeps one tool list to its close (llm/anthropic.ts).
+  WALDO_THINKING_REPLAY?: string;
+  // "1": the runs that decide something or write the owner's memory, and the reader worker, run on the chat model; planning
+  // runs ask for PLANNING_EFFORT (owner-turn.ts).
+  WALDO_STRONG_ROLES?: string;
   // The light chat roles' models (roster ids) and the light step's output cap; unset, each is its default (async-tools.ts lightChatRoles).
   WALDO_LIGHT_ROLE_MODEL?: string;
   WALDO_STRONG_ROLE_MODEL?: string;
@@ -305,6 +317,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" with MEMORY_NIGHTLY_SOURCE_UPDATES also "1": mail and calendar changes reach memory the same day (memory/consolidator.ts).
   MEMORY_DAYTIME_CONSOLIDATOR?: string;
   MEMORY_VALIDITY?: string;
+  // "1": an owner turn also recalls notes learned from mail and calendar, shown as not the owner's words; a turn that recalls one is marked as carrying outside content (memory/claims.ts withOutsideNotes).
+  MEMORY_OUTSIDE_NOTES?: string;
   MEMORY_CLAIM_CONTROLS?: string;
   MEMORY_USED_SHOWN?: string;
   // Opt-in only after mixed-inbox privacy and live usefulness acceptance.
@@ -340,6 +354,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   PROACTIVE_BOTH_DEFAULT?: string;
   // '1' has an event notice that reaches the app chat raise one push, under quiet hours and the owner's own limits.
   EVENT_PUSH?: string;
+  // "1": when today's first health row is written after the Daily Brief reached the owner, one turn reads it against the Brief
+  // and may revise it (in place where cards can be edited). Once a day. Off unless "1".
+  BRIEF_BODY_REVISION?: string;
   // The most event pushes in an owner's day, a backstop under the owner's limits (default 3).
   EVENT_PUSH_PER_DAY?: string;
   // "1": Waldo's own sends follow the owner's choice among their other surfaces even while Telegram is linked.

@@ -5,6 +5,7 @@ import {
   executionRungSchema,
   rungBlockedReasonSchema,
   turnEventSchema,
+  turnModelUsageSchema,
   turnOutcomeSchema,
   turnTelemetryFreeOfText,
 } from './turn-event';
@@ -99,5 +100,14 @@ describe('turn event schema v16', () => {
   it('names the fields that may carry free text, so sinks know what to gate', () => {
     expect(turnTelemetryFreeOfText({ ...minimal, error: 'x', detail: 'y', text: { input: 'z' }, guard: 'g', owner_email: 'e' })).toEqual({ ...minimal });
     expect(turnTelemetryFreeOfText({ ...minimal, rung: 'mac', tools_called: 1 })).toEqual({ ...minimal, rung: 'mac', tools_called: 1 });
+  });
+});
+
+describe('a model call\'s one-hour cache writes', () => {
+  it('may be named as a whole, non-negative count, and need not be', () => {
+    const usage = { model: 'm', input: 10, output: 1, cached: 0, cache_write: 9 };
+    expect(turnModelUsageSchema.safeParse(usage).success).toBe(true);
+    expect(turnModelUsageSchema.safeParse({ ...usage, cache_write_1h: 8 }).success).toBe(true);
+    for (const cache_write_1h of [-1, 1.5, '8', null]) expect(turnModelUsageSchema.safeParse({ ...usage, cache_write_1h }).success, String(cache_write_1h)).toBe(false);
   });
 });

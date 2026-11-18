@@ -1,4 +1,5 @@
 import type { DerivedSleepDebtTrend, FormZone, LoadZone, RecoveryZone } from '../../../../contracts/src/health/crs';
+import { HEALTH_SCORE_INPUT_NAMES, type HealthScoreInput } from '../../../../contracts/src/health/signals';
 
 // Reasons come from the H1 contract's healthScoreUnavailableReasonV1Schema. Only those the math
 // itself can produce appear here; the producer decides link and consent state and passes it in.
@@ -78,12 +79,10 @@ export interface DailyScoresInput {
 }
 
 export interface Unavailable { readonly state: 'unavailable'; readonly reason: UnavailableReason }
-// Every name a pillar may list among the signals it used. waldo.health_context_write admits only its own closed list and
-// refuses the whole row for any other name, so a name joins this tuple and that list together; a runtime test compares them.
-export const USED_SIGNALS = [
-  'sleep', 'hrv', 'resting_heart_rate', 'sleep_midpoint', 'daylight', 'movement', 'steps', 'stress', 'calendar', 'tasks', 'messages', 'physical_load',
-] as const;
-export type UsedSignal = (typeof USED_SIGNALS)[number];
+// Every name a pillar may list among the signals it used: the signal registry's score inputs. waldo.health_context_write admits
+// only its own closed list and refuses the whole row for any other name; a runtime test keeps that list equal to the registry's.
+export const USED_SIGNALS = HEALTH_SCORE_INPUT_NAMES;
+export type UsedSignal = HealthScoreInput;
 export interface UsedBasis {
   readonly signals: readonly UsedSignal[];
   readonly days: readonly string[];

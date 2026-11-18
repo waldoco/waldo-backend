@@ -1,5 +1,6 @@
 import { fromRowZone, toRowZone } from '../../../contracts/src/health/zone-bridge';
 import { healthApiErrorV1Schema, healthSleepNeedMinutesV1Schema } from '../../../contracts/src/app/health-ingest';
+import type { HealthSignal } from '../../../contracts/src/health/signals';
 import { dayLoad } from './scores/day-load';
 import { dayLoadV2, type PassiveInput } from './scores/passive-load';
 import { ENERGY_WINDOWS_VERSION } from './scores/energy-windows';
@@ -97,13 +98,13 @@ const WINDOW_DAYS = 30;
 const HOUR_MS = 3_600_000;
 const MAX_BUSY_MINUTES = 1500;
 const DEMAND_GRACE_MS = 5_000;
-const SIGNALS = ['sleep_duration', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'active_energy_window', 'steps_window', 'workout'];
+const SIGNALS: readonly string[] = ['sleep_duration', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'active_energy_window', 'steps_window', 'workout'] satisfies readonly HealthSignal[];
 // The night's vital signals feed only the drivers. They are read on their own, beside the scores' read: a point signal
 // such as breathing rate can be dense, and a read that reached its row cap would shorten the scores' baseline.
-const VITAL_SIGNALS = ['respiratory_rate', 'spo2', 'wrist_temperature', 'walking_heart_rate_average'];
-const NIGHT_SIGNALS = ['respiratory_rate', 'spo2', 'wrist_temperature'];
+const VITAL_SIGNALS: readonly string[] = ['respiratory_rate', 'spo2', 'wrist_temperature', 'walking_heart_rate_average'] satisfies readonly HealthSignal[];
+const NIGHT_SIGNALS: readonly string[] = ['respiratory_rate', 'spo2', 'wrist_temperature'] satisfies readonly HealthSignal[];
 // The passive load's readings are read on their own too: 24 bins and 24 step windows a day would otherwise eat the scores' row cap.
-const PASSIVE_SIGNALS = ['heart_rate_bins_window', 'steps_window'];
+const PASSIVE_SIGNALS: readonly string[] = ['heart_rate_bins_window', 'steps_window'] satisfies readonly HealthSignal[];
 // Only the phone's own transports send heart-rate bins.
 const PASSIVE_SOURCES: readonly string[] = ['apple', 'health_connect', 'samsung'];
 // HEALTH_PASSIVE_LOAD: "0", or a comma list of the sources passive load is on for. Anything not a phone transport is ignored.
@@ -246,7 +247,7 @@ const sleepOf = (readings: readonly Reading[]): DayRecord['sleep'] => {
   return asleep && midpoint && when ? { ...when, asleepMinutes: asleep.value, midpointMinute: midpoint.value } : null;
 };
 
-const SCORED_WINDOW_SIGNALS = ['heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'active_energy_window', 'steps_window'];
+const SCORED_WINDOW_SIGNALS: readonly string[] = ['heart_rate_window', 'hrv_window', 'daylight_duration', 'movement_duration', 'active_energy_window', 'steps_window'] satisfies readonly HealthSignal[];
 
 const hourlyOf = (readings: readonly Reading[]): HourlyBucket[] => {
   const buckets = new Map<string, { -readonly [K in keyof HourlyBucket]: HourlyBucket[K] }>();
@@ -436,7 +437,7 @@ const windowsOf = (scores: DailyScores, basis: RowSource, forToday: boolean): ob
 
 // Signals only a body-worn sensor makes. A day the phone alone saw (movement, daylight) shows the phone was about, not that
 // a session would have been recorded, so it is not an observed day.
-const WORN_SIGNALS = new Set(['heart_rate_window', 'resting_heart_rate', 'overnight_hrv', 'hrv_window']);
+const WORN_SIGNALS = new Set<string>(['heart_rate_window', 'resting_heart_rate', 'overnight_hrv', 'hrv_window'] satisfies HealthSignal[]);
 // A phone's store holds every app's copy of a session: the watch's, and the one Strava or Garmin wrote back. Two workouts
 // that share more than half of the shorter one's span are one session, and the copy with the most detail stands for it
 // (zones, then effort). On a tie the first in the read's order stands: day, start, then sample id. Each workout is matched

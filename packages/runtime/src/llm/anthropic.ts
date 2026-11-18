@@ -14,6 +14,8 @@ export type AnthropicAdapterOptions = Readonly<{
   client?: AnthropicMessagesClient;
   onResponseMetadata?: (metadata: AnthropicResponseMetadata) => void;
   firstTokenTimeoutMs?: number;
+  // WALDO_THINKING_REPLAY: replay each round's thinking blocks within a turn's tool loop.
+  replayThinking?: boolean;
 }>;
 
 export type AnthropicResponseMetadata = Readonly<{
@@ -26,20 +28,28 @@ export type AnthropicResponseMetadata = Readonly<{
 }>;
 
 // Claude at the LLMGatewayAdapter seam (Messages API), primary or fallback as WALDO_MODEL_PROVIDER decides. Sampling parameters stay off the wire: current Claude
-// models reject them. Thinking runs at the model's default and is never replayed: a replayed thinking block is bound to
-// an unchanged prefix, and a turn changes its prefix when it withdraws the tools for the closing round, so the adapter
-// replays only text and tool calls (the documented always-valid shape) and the next round reasons afresh.
+// models reject them.
+// Thinking (Anthropic's thinking guide): when a request returns tool results, the thinking blocks of that assistant turn go
+// back complete and unmodified, and a dropped block loses its reasoning without an error. Preserved thinking binds each block
+// to the `system`, `tools` and earlier messages that came before it; `tool_choice`, effort and cache markers are outside that
+// check. With replayThinking the adapter replays every round's thinking as produced, and the tool loop keeps the same tools
+// through its closing round. Each request sends the same thinking setting, with prefix_mismatch_behavior "drop_block": a
+// turn that still edits its own prefix (a steer folded into the owner's message, cleared results, a skill appended to the
+// system prompt) loses the reasoning after the edit for that request instead of failing it with a 400, and every drop is
+// logged by reason. Without it, thinking is never replayed and the next round reasons afresh.
 export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
   private readonly client: AnthropicMessagesClient | undefined;
   private readonly timeoutMs: number;
   private readonly missingKey: boolean;
   private readonly onResponseMetadata: ((metadata: AnthropicResponseMetadata) => void) | undefined;
   private readonly firstTokenTimeoutMs: number;
+  private readonly replayThinking: boolean;
 
   constructor(options: AnthropicAdapterOptions) {
     this.timeoutMs = options.timeoutMs ?? MODEL_CALL_TIMEOUT_MS;
     this.firstTokenTimeoutMs = options.firstTokenTimeoutMs ?? FIRST_TOKEN_TIMEOUT_MS;
     this.onResponseMetadata = options.onResponseMetadata;
+    this.replayThinking = options.replayThinking === true;
     this.missingKey = options.apiKey !== undefined ? !validModelCredential(options.apiKey) : options.client === undefined;
     // The provider's attempt plan is the one retry owner; see OpenAIResponsesAdapter.
     this.client = this.missingKey ? undefined : options.client ?? new Anthropic({
@@ -56,13 +66,14 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
     if (this.missingKey || this.client === undefined) {
       return { ok: false, code: 'auth_failed', error: 'ANTHROPIC_API_KEY is unavailable' };
     }
-    const rendered = messagesInput(input.request);
+    const rendered = messagesInput(input.request, this.replayThinking);
     // Not a bad request: another provider may have a wire for the file, so the route can move on to it.
     if (rendered === null) {
       return { ok: false, code: 'invalid_args', error: 'Anthropic adapter received an attachment type it cannot send', unsendable: true };
     }
     const cached = input.step.cache === 'anthropic_native';
-    const messages = cached ? withMessageBreakpoints(rendered) : rendered;
+    const scheduled = input.request.cache_profile === 'scheduled';
+    const messages = cached && !(scheduled && !input.request.tool_turns?.length) ? withMessageBreakpoints(rendered) : rendered;
 
     input.runScope?.admit();
     const controller = new AbortController();
@@ -72,25 +83,32 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
     const startedAt = Date.now();
     // Declared outside the try: a search-only response was billed even when its continuation then fails.
     const searched: Anthropic.ContentBlock[] = [];
-    const searchSpent = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_write_input_tokens: 0 };
+    const searchSpent = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_write_input_tokens: 0, cache_write_1h_input_tokens: 0 };
     try {
       const body: Anthropic.MessageCreateParamsNonStreaming = {
         model: input.request.model,
         max_tokens: input.request.max_tokens,
-        ...(input.request.system ? { system: systemPrompt(input.request.system, cached) } : {}),
+        ...(input.request.system ? { system: systemPrompt(input.request.system, cached, scheduled) } : {}),
         messages,
         ...toolsParams(input.request),
         ...outputConfig(input.request),
+        ...(this.replayThinking ? { thinking: BOUND_THINKING } : {}),
       };
       const client = this.client;
+      const headers = this.replayThinking ? { 'anthropic-beta': THINKING_BINDING_BETA } : undefined;
       let ttftMs: number | undefined;
       const send = async (params: Anthropic.MessageCreateParamsNonStreaming) => {
-        if (!input.stream) return client.messages.create(params, { signal: controller.signal });
-        // Only a call with a usable provider ahead (the provider decides) has somewhere to go when the first token is late;
-        // without one the call keeps its whole limit, as an unstreamed call does.
-        const streamed = await streamedMessage(client, params, controller, input.stream, input.failoverAhead ? this.firstTokenTimeoutMs : undefined);
-        ttftMs ??= streamed.ttftMs;
-        return streamed.message;
+        let message: Anthropic.Message;
+        if (!input.stream) message = await client.messages.create(params, { signal: controller.signal, ...(headers ? { headers } : {}) });
+        else {
+          // Only a call with a usable provider ahead (the provider decides) has somewhere to go when the first token is late;
+          // without one the call keeps its whole limit, as an unstreamed call does.
+          const streamed = await streamedMessage(client, params, controller, input.stream, input.failoverAhead ? this.firstTokenTimeoutMs : undefined, headers);
+          ttftMs ??= streamed.ttftMs;
+          message = streamed.message;
+        }
+        if (this.replayThinking) logDroppedThinking(message, input.request.model);
+        return message;
       };
       let response = await send(body);
       // A response that only searched for tools (the server paused its turn) has not answered yet. The tool search guide
@@ -102,6 +120,7 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
         searchSpent.output_tokens += response.usage.output_tokens;
         searchSpent.cache_read_input_tokens += response.usage.cache_read_input_tokens ?? 0;
         searchSpent.cache_write_input_tokens += response.usage.cache_creation_input_tokens ?? 0;
+        searchSpent.cache_write_1h_input_tokens += response.usage.cache_creation?.ephemeral_1h_input_tokens ?? 0;
         response = await send({ ...body, messages: [...messages, { role: 'assistant', content: searched as Anthropic.ContentBlockParam[] }] });
       }
       const text = response.content.flatMap((block) => block.type === 'text' ? [block.text] : []).join('\n').trim();
@@ -110,11 +129,13 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
         : []);
       // Anthropic's input_tokens excludes cached tokens; the seam reports the whole prompt, cache reads and writes inside it.
       const written = searchSpent.cache_write_input_tokens + (response.usage.cache_creation_input_tokens ?? 0);
+      const writtenHour = searchSpent.cache_write_1h_input_tokens + (response.usage.cache_creation?.ephemeral_1h_input_tokens ?? 0);
       const spent = {
         input_tokens: searchSpent.input_tokens + response.usage.input_tokens + (response.usage.cache_read_input_tokens ?? 0) + (response.usage.cache_creation_input_tokens ?? 0),
         output_tokens: searchSpent.output_tokens + response.usage.output_tokens,
         cache_read_input_tokens: searchSpent.cache_read_input_tokens + (response.usage.cache_read_input_tokens ?? 0),
         ...(written > 0 ? { cache_write_input_tokens: written } : {}),
+        ...(writtenHour > 0 ? { cache_write_1h_input_tokens: writtenHour } : {}),
       };
       const truncated = response.stop_reason === 'max_tokens' || response.stop_reason === 'model_context_window_exceeded';
       // A refusal fails whatever it wrote before declining, so the route moves on. Only the policy category crosses into
@@ -166,12 +187,12 @@ class FirstTokenTimeout extends Error {}
 // text takes it back. The final message is the one the unstreamed call returns, so everything after this reads one shape.
 // With `firstTokenMs`, a model that has opened no content block by then (a thinking block counts) is abandoned; `ttftMs`
 // is the time to that first block.
-async function streamedMessage(client: AnthropicMessagesClient, body: Anthropic.MessageCreateParamsNonStreaming, controller: AbortController, sink: ReplyDeltaSink, firstTokenMs?: number): Promise<Readonly<{ message: Anthropic.Message; ttftMs?: number }>> {
+async function streamedMessage(client: AnthropicMessagesClient, body: Anthropic.MessageCreateParamsNonStreaming, controller: AbortController, sink: ReplyDeltaSink, firstTokenMs?: number, headers?: Record<string, string>): Promise<Readonly<{ message: Anthropic.Message; ttftMs?: number }>> {
   const sentAt = Date.now();
   let ttftMs: number | undefined, late = false;
   const watchdog = firstTokenMs === undefined ? undefined : setTimeout(() => { late = true; controller.abort(); }, firstTokenMs);
   try {
-    const stream = client.messages.stream(body, { signal: controller.signal });
+    const stream = client.messages.stream(body, { signal: controller.signal, ...(headers ? { headers } : {}) });
     let textBlock: number | null = null, streamed = false;
     for await (const event of stream) {
       if (event.type === 'content_block_start') {
@@ -202,6 +223,24 @@ async function streamedMessage(client: AnthropicMessagesClient, body: Anthropic.
   }
 }
 
+// The preserved-thinking controls (Anthropic's prefix-check guide): the beta header adds block_binding and the response's
+// input_transformations. block_binding is accepted with adaptive thinking only, which every roster Claude model runs.
+const THINKING_BINDING_BETA = 'thinking-binding-controls-2026-08-01';
+const BOUND_THINKING = { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } } as unknown as Anthropic.ThinkingConfigParam;
+
+// One content-free line per response that dropped replayed thinking, by the API's reason: a share that stays high means the
+// turn still edits its own prefix, and replay buys nothing there.
+function logDroppedThinking(message: Anthropic.Message, model: ModelName): void {
+  const entries = (message as { input_transformations?: ReadonlyArray<{ type?: unknown; reason?: unknown }> }).input_transformations ?? [];
+  const reasons = new Map<string, number>();
+  for (const entry of entries) {
+    if (entry.type !== 'thinking_dropped') continue;
+    const reason = typeof entry.reason === 'string' ? entry.reason : 'unknown';
+    reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
+  }
+  for (const [reason, count] of reasons) console.log(JSON.stringify({ hop: 'anthropic_thinking_dropped', ok: false, code: reason, model, count }));
+}
+
 // Each continuation is a billed call; past this many a response that keeps only searching fails as an empty one does, and
 // the provider's attempt plan decides what follows.
 const SEARCH_CONTINUATIONS = 2;
@@ -212,11 +251,14 @@ const onlySearched = (response: Anthropic.Message): boolean => response.stop_rea
 // A skill loaded mid-turn appends its procedures after the stable head, so the breakpoint stays on the head: the tools and
 // the head remain a cached prefix on the next round, and the procedures are read through the rolling message breakpoints.
 // The two blocks join to the exact system text; anything that is not the head plus the procedures stays one block.
-function systemPrompt(system: string, cached: boolean): Anthropic.MessageCreateParams['system'] {
+// A scheduled run's head is kept an hour: the next run that shares it starts minutes to hours later, past a five-minute entry.
+// The API wants a longer-lived marker ahead of shorter ones, and the head comes before every message marker.
+function systemPrompt(system: string, cached: boolean, scheduled: boolean): Anthropic.MessageCreateParams['system'] {
   if (!cached) return system;
+  const cache_control: Anthropic.CacheControlEphemeral = scheduled ? { type: 'ephemeral', ttl: '1h' } : { type: 'ephemeral' };
   const split = system.endsWith(OWNER_SKILL_SAFEGUARDS) ? system.indexOf(`\n\n${OWNER_SKILL_PROCEDURES_LEAD}`) : -1;
-  if (split <= 0) return [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }];
-  return [{ type: 'text', text: system.slice(0, split), cache_control: { type: 'ephemeral' } }, { type: 'text', text: system.slice(split) }];
+  if (split <= 0) return [{ type: 'text', text: system, cache_control }];
+  return [{ type: 'text', text: system.slice(0, split), cache_control }, { type: 'text', text: system.slice(split) }];
 }
 
 // Rolling breakpoints beside the system one, four in all as the API allows. A round appends two messages, so the last
@@ -258,7 +300,7 @@ function attachmentBlock(file: LLMAttachment): Anthropic.ContentBlockParam | nul
 }
 
 // Null when an attachment has no Messages API block; the caller refuses the request before any call.
-function messagesInput(request: LLMRequest): Anthropic.MessageParam[] | null {
+function messagesInput(request: LLMRequest, replayThinking: boolean): Anthropic.MessageParam[] | null {
   const history: Array<{ role: 'user' | 'assistant'; content: Anthropic.ContentBlockParam[] }> = [];
   for (const message of request.messages) {
     // The Messages API refuses an empty text block, so an empty entry is left out rather than sent (or cache-marked).
@@ -285,12 +327,14 @@ function messagesInput(request: LLMRequest): Anthropic.MessageParam[] | null {
     // ran, or one recorded without them, is rebuilt from its call records.
     // With tool search on and tools offered, the search call and its result go back unchanged, as the tool search guide
     // requires; a closing round declares no deferred tools, so it leaves them out and its calls stay plain tool_use.
+    // With replayThinking the round's thinking blocks go back in place and unmodified, empty ones included.
     const searchReplay = request.tool_search !== undefined && request.tools !== undefined;
     const replayed = round.prior.flatMap((item): Anthropic.ContentBlockParam[] => {
       if (outputItemProvider(item) !== ANTHROPIC_PROVIDER) return [];
       const block = item.block as Anthropic.ContentBlock | undefined;
       const kind = block?.type as string | undefined;
-      return kind === 'tool_use' || kind === 'text' || (searchReplay && (kind === 'server_tool_use' || kind === 'tool_search_tool_result')) ? [block as Anthropic.ContentBlockParam] : [];
+      return kind === 'tool_use' || kind === 'text' || (searchReplay && (kind === 'server_tool_use' || kind === 'tool_search_tool_result'))
+        || (replayThinking && (kind === 'thinking' || kind === 'redacted_thinking')) ? [block as Anthropic.ContentBlockParam] : [];
     });
     const covered = new Set(replayed.flatMap((block) => block.type === 'tool_use' ? [block.id] : []));
     history.push({

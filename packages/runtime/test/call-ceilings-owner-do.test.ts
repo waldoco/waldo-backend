@@ -59,9 +59,9 @@ it.each([['1'], [undefined]] as const)('a long WhatsApp chat with WALDO_CALL_CEI
       if (ceilings) {
         for (const shape of shapes) {
           expect(shape.history_tokens_est!).toBeLessThanOrEqual(CONTEXT_BUDGET.historyTokens * 1.1);
-          expect(shape.ceiling_tokens).toBe(40_000);
+          expect(shape.ceiling_tokens).toBe(CONTEXT_BUDGET.chatCeilingTokens);
           const whole = shape.tools_tokens_est! + shape.system_tokens_est! + shape.history_tokens_est! + shape.current_tokens_est!;
-          expect(shape.over_ceiling).toBe(whole > 40_000);
+          expect(shape.over_ceiling).toBe(whole > CONTEXT_BUDGET.chatCeilingTokens);
         }
         expect(last.history_tokens_est!).toBeGreaterThan(CONTEXT_BUDGET.historyTokens * 0.6);
       } else {
@@ -80,7 +80,7 @@ it('the history budget and chat ceiling come from their settings, and a stepped 
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName)), async (_instance, state) => {
     const net = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ messages: [{ id: 'wamid.out' }] }));
     const logs = vi.spyOn(console, 'log');
-    const instance = new OwnerDO(state, { ...env, WALDO_CALL_CEILINGS: '1', WALDO_STEPPED_WINDOW: '1', WALDO_HISTORY_BUDGET_TOKENS: '8000', WALDO_CHAT_CEILING_TOKENS: '36000',
+    const instance = new OwnerDO(state, { ...env, WALDO_CALL_CEILINGS: '1', WALDO_STEPPED_WINDOW: '1', WALDO_HISTORY_BUDGET_TOKENS: '11429', WALDO_CHAT_CEILING_TOKENS: '51429',
       OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' });
     try {
       const said = Array.from({ length: 12 }, (_, index) => `Note ${index}: ${'the venue changed again and the caterer needs the final count by Thursday. '.repeat(51).trim()}`);
@@ -88,10 +88,10 @@ it('the history budget and chat ceiling come from their settings, and a stepped 
       const shapes = replyShapes(logs);
       expect(shapes).toHaveLength(said.length);
       for (const shape of shapes) {
-        expect(shape.history_tokens_est!).toBeLessThanOrEqual(8_000 * 1.1);
-        expect(shape.ceiling_tokens).toBe(36_000);
+        expect(shape.history_tokens_est!).toBeLessThanOrEqual(11_429 * 1.1);
+        expect(shape.ceiling_tokens).toBe(51_429);
       }
-      expect(shapes.at(-1)!.history_tokens_est!).toBeGreaterThan(8_000 * 0.3);
+      expect(shapes.at(-1)!.history_tokens_est!).toBeGreaterThan(11_429 * 0.3);
       const replies = calls.filter((body) => JSON.stringify(body.input).includes('Note '));
       expect(replies).toHaveLength(said.length);
       for (const [index, body] of replies.entries()) {

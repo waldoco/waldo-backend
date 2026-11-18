@@ -32,6 +32,7 @@ const TABLES: Record<string, Row> = {
   memory_revision: exempt('one counter of how many times the owner\'s memory changed; no owner text'),
   model_auth_incidents: exempt('a provider name and the time its key was first refused; no owner text'),
   claim_recall_ready: exempt('claim ids'),
+  claim_rests_on: exempt('claim ids only: a merged or rewritten note and the notes it replaced; a row goes when either claim is deleted'),
   node_statement_backfill: exempt('an empty marker that the one-time node statement backfill ran'),
   claim_vectors: purged('forget-semantic-recall.test.ts'),
   owner_findings: purged('forget-owner-findings.test.ts'),

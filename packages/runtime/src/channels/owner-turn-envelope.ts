@@ -48,15 +48,22 @@ export type OwnerTurnEnvelope = Readonly<{
 }>;
 // When a reminder was due and when it fires, in the owner's local time, for the model to judge: one that fires hours late says so.
 export type ReminderTiming = Readonly<{ due: string; now: string; timezone: string }>;
+// What a background job runs on (OwnerResponder.prompt's ownerModel).
+export type OwnerJobModel = boolean | 'decides' | 'plans';
 export type OwnerResponder = Readonly<{
   respond(turn: OwnerTurnEnvelope, time: TurnTimer): Promise<string>;
   chooseReaction(turn: OwnerTurnEnvelope): Promise<string | null>;
   remind(id: string, conversationRef: string, note: string, time: TurnTimer, surface?: string, timing?: ReminderTiming): Promise<string>;
   // `turnContext` reaches the model with `said` on this turn only; it is never stored with the conversation.
-  // `ownerModel` runs the job on the model the owner's own turn uses (still clamped past the spend ceiling): for a job that
-  // answers the owner's own message late, never for one Waldo starts itself.
+  // `ownerModel` runs the job on the model the owner's own turn uses (still clamped past the spend ceiling): true for a job
+  // that answers the owner's own message late. 'decides' is a job that decides something for the owner (meeting prep, a
+  // check-back, a mail follow-up, a standing order): on the chat model with WALDO_STRONG_ROLES, else the auxiliary one.
+  // 'plans' is a planning run (a day card's plan, the intervention look, triage): on the chat model, at PLANNING_EFFORT
+  // with WALDO_STRONG_ROLES.
   // `attachments` reach the model with `said` on this turn only, as an owner turn's files do; they are never stored.
-  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string, sourceTaint?: 'external', ownerModel?: boolean, attachments?: readonly LLMAttachment[], directTools?: readonly ToolName[]): Promise<string>;
+  // `waldoFirst` marks a run Waldo starts on a schedule (a day card, a check-back, a sweep, an intervention), never one that
+  // answers the owner: with WALDO_LEAN_SCHEDULED it reads the lean scheduled view instead of the chat replay.
+  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string, sourceTaint?: 'external', ownerModel?: OwnerJobModel, attachments?: readonly LLMAttachment[], directTools?: readonly ToolName[], waldoFirst?: boolean): Promise<string>;
   // done is false when the conversation was not consolidated and must be offered again.
   // policy.health false keeps no health notes from this pass, or from the migration.
   consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>, policy?: Readonly<{ health: boolean }>): Promise<Readonly<{ done: boolean; detail: string }>>;
