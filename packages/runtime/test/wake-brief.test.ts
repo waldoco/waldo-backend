@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { applyDayPlan, applyWake, armDayCards, dayPlanBook, parseWakeReply, SET_FOR_TODAY, takeWakeTurn, wakeTarget, wakeTurnsPerDay, MOVED_EARLIER } from '../src/channels/day-cards';
 import { reopensAt } from '../src/channels/interruptions';
 import { sleepJustEnded, wakeFreshMs } from '../src/health/wake-notice';
-import { DAY_CARDS, dayCardPrompt, dayPlanInput, PROSE_RULE, SCHEDULE_HEADING, SCHEDULE_RULE } from '../src/prompt/day-cards';
+import { DAY_CARDS, dayCardPrompt, dayPlanInput, PROSE_RULE, SCHEDULE_RULE } from '../src/prompt/day-cards';
 import { sanitise } from '../src/scribe/sanitiser';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
@@ -199,7 +199,7 @@ describe('the Brief lays out the day (BRIEF_DAY_PLAN)', () => {
   });
 
   it('a laid-out Brief passes the owner-reply and outbox policies, so its times are not taken for readings', () => {
-    const text = ['The Daily Brief', 'A focused day with one big moment: the investor call at three.', '', SCHEDULE_HEADING,
+    const text = ['The Daily Brief', 'A focused day with one big moment: the investor call at three.', '',
       '8–10:30am Deep work: finish the Q3 deck', '12:30–1:15pm Lunch and a walk', '3–3:45pm Investor call', '11am–1pm Offsite prep'].join('\n');
     for (const destination of ['owner_reply', 'outbox'] as const) {
       const result = sanitise({ payload: [{ role: 'assistant', content: text }], destination, source_taint: null, canary_tokens: ['1111111111111111', '2222222222222222', '3333333333333333'] });
