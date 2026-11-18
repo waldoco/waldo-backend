@@ -1348,7 +1348,7 @@ export const createOwnerResponder = (
     async importDoc(trace, input) {
       const asOwner = await asOwnerJob(trace, job => job.importDoc!(trace, input));
       if (asOwner !== undefined) return asOwner;
-      return ask(trace, 'memory_import_doc', DOC_IMPORT_INSTRUCTION, input, { name: 'doc_import', schema: DOC_IMPORT_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+      return ask(trace, 'memory_import_doc', DOC_IMPORT_INSTRUCTION, input, { name: 'doc_import', schema: DOC_IMPORT_SCHEMA }, undefined, undefined, undefined, roleModel);
     },
     // The capacity note's input carries the owner's body as zone words: the memory_ purpose keeps it out of every trace. It runs
     // on the chat model, as the owner's health planning does.
