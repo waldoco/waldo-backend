@@ -214,10 +214,19 @@ describe('the numeric health floor', () => {
     protein: ['protein intake 120 g', 'you had 120 g of protein', 'your protein was 61 g', '61 g protein yesterday', 'protein 120 g today', 'I logged 120g protein'],
     carbs: ['carb intake 250 g', '250 g of carbs today', 'your carbs were 250g', 'you had 250 grams of carbohydrate'],
     fat: ['fat intake was 70 g', '70 g fat yesterday', 'your fat was 70 grams', 'you logged 70g fat'],
+    water: ['water intake 1,800 ml', 'you drank 1.8 litres', 'your water was 1800 ml', 'water: 1800 ml', '1,800 ml of water today', 'water 2 L yesterday'],
+    caffeine: ['caffeine 240 mg today', 'caffeine: 240 mg', 'your caffeine was 240 mg', 'caffeine intake was 240 mg', '240 mg of caffeine yesterday'],
+    alcohol: ['alcohol 3 drinks', 'alcoholic drinks: 2', '3 alcoholic drinks', 'you had 3 drinks last night', 'alcohol was 2'],
+    mood: ['mood -0.4', 'mood was 0.6', 'valence -0.42', 'mood averaged +0.3', 'state of mind -0.5', '-0.4 mood'],
+    breathing_disturbances: ['breathing disturbances 3.2 per hour', '3.2 breathing disturbances per hour', 'breathing disturbances: 3', 'breathing disturbances were 4.1'],
+    sound_level: ['sound level 71.5 dB', 'noise exposure 85 dB', 'headphone audio level 80 dB', 'environmental sound levels averaged 71 dB', '85 dB of noise'],
+    walking_steadiness: ['walking steadiness 88%', 'walking steadiness was 88', '88% walking steadiness'],
   };
   // A label, a recipe or someone else's meal is not the owner's reading: a false match would drop a whole task result.
   it.each(['the recipe needs 120 g of flour', 'carbs are fine before a run', 'fat chance by 3pm', 'protein bar at 4', 'ate at 8 with the team', 'ate 3 apples', 'intake form 2', 'body fat jokes', '500 calories of work emails',
-    'Each serving: 25 g protein', 'the recipe calls for 70 g of fat', 'this bar has 20g protein', 'nutrition label: carbs 45 g', 'Sale: protein 500 g tub', 'the dog ate 200 calories of kibble', 'Team ate 3,000 calories of pizza'])('leaves an ordinary food sentence alone: %s', (text) => {
+    'Each serving: 25 g protein', 'the recipe calls for 70 g of fat',
+    'add 500 ml of water to the pan', 'a 750 ml water bottle', 'this espresso has 64 mg of caffeine', 'drinks at 7 with the team', 'alcohol-free menu from 6', 'mood board 2',
+    'mood: 3 slides left', 'the speaker reaches 90 dB', 'the meeting room is 40 dB quieter', 'this bar has 20g protein', 'nutrition label: carbs 45 g', 'Sale: protein 500 g tub', 'the dog ate 200 calories of kibble', 'Team ate 3,000 calories of pizza'])('leaves an ordinary food sentence alone: %s', (text) => {
     expect(numericHealthIn(text)).toBe(false);
   });
   // A workout session as get_health lists it, relayed: its heart rate and its minutes in each zone.

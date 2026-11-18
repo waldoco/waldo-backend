@@ -86,7 +86,7 @@ export const goldenProducerCases: Readonly<Record<string, GoldenProducerCase>> =
 };
 
 // The exact payloads written to the derived-row writer, as the strings the signed call carries.
-export const producerPayloads = async (compute: ProducerDeps['compute'], spec: GoldenProducerCase): Promise<string[]> => {
+export const producerPayloads = async (compute: ProducerDeps['compute'], spec: GoldenProducerCase, extra: Partial<ProducerDeps> = {}): Promise<string[]> => {
   const written: string[] = [];
   const series = seriesOf(spec);
   await produceHealthScores({
@@ -94,6 +94,10 @@ export const producerPayloads = async (compute: ProducerDeps['compute'], spec: G
     writeContext: async payload => { written.push(payload); return { written: true }; },
     compute,
     ...(spec.calendar ? { readDemand: async () => ({ state: 'available', days: busy }) } : {}),
+    ...extra,
   }, { now: PRODUCER_NOW, timezone: 'UTC' });
   return written;
 };
+
+// The same builders for tests that need an owner of their own shape.
+export { run as syntheticRun, day as syntheticDay, input as syntheticInput, addDays as syntheticAddDays, wobble as syntheticWobble, TARGET as SYNTHETIC_TARGET };

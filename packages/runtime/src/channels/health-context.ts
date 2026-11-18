@@ -4,6 +4,7 @@ import {
   derivedHealthDestinationViewSchema,
   derivedMissingPillarReasonSchema,
   HEALTH_SIGNAL_NAMES,
+  HEALTH_ENGINE_ONLY_SIGNALS,
   HEALTH_SIGNALS,
   healthInventorySchema,
   derivedSleepDebtTrendSchema,
@@ -360,7 +361,7 @@ export const toHealthInventory = (raw: unknown, clock: OwnerClock): HealthInvent
   const now = clock.now().getTime();
   const merged = new Map<string, { newestAt: number; days: number; sources: Set<PartialHealthView['sources'][number]> }>();
   for (const { source, kind } of kinds) {
-    if (!(HEALTH_SIGNAL_NAMES as readonly string[]).includes(kind.signal)) continue;
+    if (!(HEALTH_SIGNAL_NAMES as readonly string[]).includes(kind.signal) || (HEALTH_ENGINE_ONLY_SIGNALS as readonly string[]).includes(kind.signal)) continue;
     const at = Math.min(Date.parse(kind.newest_at), now);
     const held = merged.get(kind.signal) ?? { newestAt: at, days: 0, sources: new Set() };
     merged.set(kind.signal, { newestAt: Math.max(held.newestAt, at), days: Math.max(held.days, kind.days), sources: held.sources.add(source as PartialHealthView['sources'][number]) });

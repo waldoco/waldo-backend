@@ -390,3 +390,44 @@ describe('get_health food from the owner\'s app', () => {
     ]);
   });
 });
+
+describe('get_health wellbeing', () => {
+  // A day of wellbeing readings in Kolkata: two glasses of water, two sound hours (one loud), and two states of mind.
+  const day = '2026-10-12';
+  const at = (hour: number) => `2026-10-12T${String(hour - 6).padStart(2, '0')}:30:00Z`;
+  const point = (signal: string, hour: number, value: number, extra: Record<string, unknown> = {}) => reading(signal, day, value, { start_at: at(hour), end_at: at(hour), ...extra });
+  const sound = (hour: number, value: number, method: string) => reading('audio_exposure_window', day, value, { method, start_at: `2026-10-12T${String(hour - 6).padStart(2, '0')}:30:00Z`, end_at: `2026-10-12T${String(hour - 5).padStart(2, '0')}:30:00Z` });
+  const samples = [
+    point('hydration', 9, 300), point('hydration', 13, 450),
+    sound(10, 60, 'environmental'), sound(11, 90, 'environmental'), sound(12, 75, 'headphone'),
+    point('state_of_mind', 9, -0.4, { mood: { kind: 'momentary_emotion', labels: ['stressed', 'drained'], associations: ['work'] } }),
+    point('state_of_mind', 21, 0.6, { mood: { kind: 'daily_mood' } }),
+    point('state_of_mind', 22, 0.2, { mood: { kind: 'momentary_emotion', labels: ['elated'] } }),
+    reading('sleep_breathing_disturbances', day, 3.2, { start_at: '2026-10-11T18:00:00Z', end_at: '2026-10-12T00:45:00Z' }),
+  ];
+  const wellbeing = { access: 'granted', read_at: '2026-10-13T06:00:00.000Z', sources: [{ source: 'apple', consent_epoch: 3, samples }] };
+  const read = (signals: string[], aggregation = 'daily', from = day) =>
+    fake({ series: wellbeing }).handler.handle({ signals, from, to: day, aggregation } as never, ctx).then(result => (result.ok ? getHealthResultSchema.parse(result.data) : result));
+
+  it('sums the day\'s water, and gives sound as the energy mean of one method, so the loud hour is not averaged away', async () => {
+    const result = await read(['water', 'sound_level']);
+    expect(result).toMatchObject({ state: 'available', signals: [
+      { signal: 'water', unit: 'ml', method: null, days: [{ day, value: 750 }] },
+      { signal: 'sound_level', unit: 'dba', method: 'environmental', days: [{ day, value: 87 }] },
+    ] });
+  });
+
+  it('gives the day\'s mean mood, and lists each state of mind with its kind and words, dropping one with a word outside Apple\'s list', async () => {
+    const result = await read(['mood']);
+    expect(result).toMatchObject({ signals: [{ signal: 'mood', unit: 'valence', days: [{ day, value: 0.1 }] }], moods: [
+      { at: '2026-10-12T09:00', kind: 'momentary_emotion', valence: -0.4, labels: ['stressed', 'drained'], associations: ['work'] },
+      { at: '2026-10-12T21:00', kind: 'daily_mood', valence: 0.6 },
+    ] });
+  });
+
+  it('reads sound by the hour and breathing disturbances by the night, as the registry grains them', async () => {
+    expect(await read(['sound_level'], 'hourly', '2026-10-11')).toMatchObject({ signals: [{ signal: 'sound_level', hours: [{ at: '2026-10-12T10:00', value: 60 }, { at: '2026-10-12T11:00', value: 90 }] }] });
+    expect(await read(['breathing_disturbances'], 'nightly')).toMatchObject({ signals: [{ signal: 'breathing_disturbances', unit: 'events_per_hour', nights: [{ day, value: 3.2 }] }] });
+    expect(await read(['water'], 'hourly', '2026-10-11')).toMatchObject({ ok: false, code: 'invalid_args' });
+  });
+});
