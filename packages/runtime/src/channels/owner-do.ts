@@ -874,6 +874,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const kv = this.ctx.storage.kv;
     return kv.get<boolean>('timezone_confirmed') === true || (this.proactiveOverTelegram() && telegramLinked(kv));
   }
+  // OWN_LOOK_ANY_ZONE: Waldo's own look (meeting prep, update cards) and its heartbeat need no confirmed zone. Prep is timed
+  // off the meeting's own start, and a check-back compares a loop's due with the clock in the same zone the owner's turns
+  // wrote it in. Only the day cards and the nightly pass, pinned to local clock times, still wait for the owner's own choice.
+  private zoneFree(kind: ScheduleKind): boolean { return this.env.OWN_LOOK_ANY_ZONE === '1' && (kind === 'event_briefs' || kind === 'heartbeat'); }
   // REENGAGE_PROACTIVE: a copy of an app message that WhatsApp's closed window keeps raises a push, unless an app push already
   // reached the owner in this closed window (the Brief's own push, or this push for an earlier copy) or the owner set Waldo's
   // volume low. The sender holds quiet hours, and a push that reached no device leaves the next copy to try.
@@ -3708,7 +3712,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         try {
           // An app owner's jobs wait for a confirmed zone. The event-brief sweep, which a Telegram runtime build can arm, is
           // cancelled instead of held, so it does not wake every ten minutes; confirming the zone arms it again.
-          const held = (kind: ScheduleKind): ScheduleHold => channel !== 'app' || this.zoneSettled() ? false : kind === 'event_briefs' ? 'drop' : 'hold';
+          const held = (kind: ScheduleKind): ScheduleHold => channel !== 'app' || this.zoneSettled() || this.zoneFree(kind) ? false : kind === 'event_briefs' ? 'drop' : 'hold';
           const onHeld = (kind: ScheduleKind, outcome: 'hold' | 'drop') => {
             const code = `${kind}_timezone_unconfirmed`;
             log({ trace: `alarm:${started}`, hop: outcome === 'drop' ? 'scheduled_drop' : 'scheduled_hold', ms: 0, ok: true, code, detail: code });
@@ -5202,13 +5206,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         phone: this.env.DEVICE_CALENDAR === '1' ? this.deviceCalendar() : null }) : null }) + (lifecycle ? `\n\n${lifecycle}` : '');
     };
     // App-only owners get no proactive work on a fallback zone: only the owner's own time-zone choice confirms one.
-    const armable = (_kind: ScheduleKind) => channel !== 'app' || this.zoneSettled();
+    const armable = (kind: ScheduleKind) => channel !== 'app' || this.zoneSettled() || this.zoneFree(kind);
     // Turning a kind on arms it only where `armable` holds, and the brief sweep only while a Google grant exists.
     const armableNow = async () => { const sweeps = briefSweepRuns(watchGrants(await accounts())); return (kind: ScheduleKind) => armable(kind) && (kind !== 'event_briefs' || sweeps); };
     const armOwnJobs = (timezone: string, now: number, replanCards = false) => Promise.all([
       schedPrefs.enabled('nightly') && armable('nightly') ? armNightly(scheduler, timezone, now) : Promise.resolve(),
       sweepWanted(schedPrefs.all(), sweepCarriesUpdates) && armable('event_briefs')
-        ? accounts().then(all => briefSweepRuns(watchGrants(all)) ? armBriefSweep(scheduler, now) : scheduler.cancelReadable(BRIEF_SWEEP_ID).then(() => undefined)) : Promise.resolve(),
+        ? accounts().then(all => briefSweepRuns(watchGrants(all)) ? armBriefSweep(scheduler, now) : scheduler.cancelReadable(BRIEF_SWEEP_ID).then(() => {
+          // No connected account grants mail or calendar reads: Waldo's own look (meeting prep, update cards) has nothing to read.
+          log({ trace: 'own-jobs', hop: 'own_jobs', ms: 0, ok: false, code: 'brief_sweep_off_no_google_grant' });
+        })) : Promise.resolve(),
       schedPrefs.enabled('daily_brief') && armable('daily_brief') ? (replanCards ? replanDayCards(scheduler, plans, timezone, now).then(() => false) : armDayCards(scheduler, plans, timezone, now)) : Promise.resolve(false),
       schedPrefs.enabled('heartbeat') && armable('heartbeat') ? armHeartbeat(scheduler, now) : Promise.resolve(),
       interventions && schedPrefs.enabled('heartbeat') && armable('heartbeat') ? armLook(now) : dropLook(),
@@ -5229,9 +5236,25 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     // Native chat initialization cannot launch unrequested background model work. An owner whose only surface is iMessage is the
     // exception: their iMessage runtime runs their scheduled work, so it arms it, as a WhatsApp-only owner's runtime does.
+    // An app owner whose zone is not confirmed gets no day card or nightly pass until they choose one, and, with
+    // OWN_LOOK_ANY_ZONE off, no look or heartbeat either. That wait is logged by its closed reason on every runtime build, so an
+    // account left without them is visible. armOwnJobs arms each kind only where `armable` lets it.
+    // The nightly pass is never zone-free, so it is held exactly when an app owner's zone is unconfirmed.
+    const zoneWait = !armable('nightly');
+    if (zoneWait) log({ trace: 'own-jobs', hop: 'own_jobs', ms: 0, ok: false, code: armable('event_briefs') ? 'day_cards_waiting_timezone_unconfirmed' : 'waiting_timezone_unconfirmed' });
+    // Arming leaves a look or heartbeat row that exists as it is, so a row that never fires is never replaced. Each build logs
+    // both rows as it found them and as it left them: lookup state, status, minutes to due and to a pause's end, attempts.
+    const rowState = (id: string, now: number): string => {
+      const found = scheduler.lookup(id);
+      if (found.state !== 'entry') return found.state;
+      const { status, due_at, attempts, quarantined_until } = found.entry, minutes = (at: number) => Math.round((at - now) / 60_000);
+      return `${status}:due_in_min=${minutes(due_at)}:attempts=${attempts}${quarantined_until === null ? '' : `:paused_min=${minutes(quarantined_until)}`}`;
+    };
+    const rowsFound = { sweep: rowState(BRIEF_SWEEP_ID, Date.now()), heartbeat: rowState(HEARTBEAT_ID, Date.now()) };
     const proactiveReady = channel === 'imessage' && !this.imessageOnly() ? this.browserReady : channel === 'app'
-      ? (armable('nightly') ? Promise.all([backfillEpisodes(kv, episodes), armOwnJobs(clock.timezone, Date.now()), this.browserReady])
-        .then(() => reconcileSchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now: Date.now(), cancelMachine, alongHeartbeat: lookFollows, sweepCarriesUpdates })) : this.browserReady)
+      ? (armable('nightly') || armable('event_briefs') ? Promise.all([backfillEpisodes(kv, episodes), armOwnJobs(clock.timezone, Date.now()), this.browserReady])
+        .then(() => reconcileSchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now: Date.now(), cancelMachine, alongHeartbeat: lookFollows, sweepCarriesUpdates }))
+        : this.browserReady)
       : Promise.all([backfillEpisodes(kv, episodes), armOwnJobs(clock.timezone, Date.now()), this.browserReady])
       .then(async ([, [, , seeded]]) => {
         await reconcileSchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now: Date.now(), cancelMachine, alongHeartbeat: lookFollows, sweepCarriesUpdates });
@@ -5242,7 +5265,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (seeded) void this.serial(() => this.asOwnerJob('brief', `day-plan:boot:${Date.now()}`, () => planToday('day-plan:boot')));
       });
     // Watch upkeep is infrastructure, not proactive work: every runtime arms it, whatever the owner's preferences and zone state.
-    const ready = Promise.all([proactiveReady, accounts().then(all => armWatchUpkeep(scheduler, watchGrants(all), Date.now()))]).then(() => undefined);
+    const ready = Promise.all([proactiveReady, accounts().then(all => armWatchUpkeep(scheduler, watchGrants(all), Date.now()))]).then(() => {
+      const now = Date.now(), sweep = rowState(BRIEF_SWEEP_ID, now), armed = sweep.startsWith('armed:');
+      log({ trace: 'own-jobs', hop: 'own_jobs_rows', ms: 0, ok: armed, code: armed ? 'sweep_armed' : 'sweep_not_armed',
+        detail: `sweep=${rowsFound.sweep}>${sweep};heartbeat=${rowsFound.heartbeat}>${rowState(HEARTBEAT_ID, now)}` });
+    });
     // A model call opens the store under its live turn's run scope. An approved card replays after that turn has ended, as
     // the owner's own decision, so it opens the store as the owner's console does, without one.
     const openWorkspace = (ctx?: Readonly<{ runScope?: RunEffectScope; assertTaskSourceCurrent?: () => Promise<void>; approvedTaintedAction?: unknown }>) => {
@@ -6404,8 +6431,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return read;
     };
     const updateCheck = async (trace: string) => {
-      const client = await google.client();
-      if (client === null) return;
       const started = Date.now();
       // Close each trace with a machine_turn root like every other machine run, so the trace exporter flushes it.
       let followupPrompted = false;
@@ -6413,6 +6438,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok, detail: 'update_card' });
         if (followupPrompted) log({ trace: `${trace}:mail-followup`, hop: 'machine_turn', ms: Date.now() - started, ok, detail: 'mail_followup' });
       };
+      const client = await google.client();
+      // No account the look can read with (no app config, every grant failing, none with the scope): a look that never ran
+      // must still show in the trace, or it reads as a look that was never scheduled.
+      if (client === null) { log({ trace, hop: 'update_card', ms: Date.now() - started, ok: false, code: 'no_google_client', detail: 'no_google_client' }); closeMachineTraces(false); return; }
       try {
         const now = Date.now();
         const sourceFollowups = sweepSourceFollowups();

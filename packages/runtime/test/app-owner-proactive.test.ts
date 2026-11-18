@@ -58,7 +58,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 
 type Runtime = Readonly<{ ready: Promise<unknown>; timezone: string; view(session: { token: string; csrf: string; expires: number }, notice: null): Promise<{ timezoneConfirmed: boolean }>; act(action: { action: string; id?: string; value?: string }): Promise<boolean | string> }>;
 type Owner = Readonly<{ setup(channel: string): Runtime; fetch(request: Request): Promise<Response>; alarm(): Promise<void> }>;
-type Stored = Readonly<{ zone?: string; confirmed?: boolean; pins?: Record<string, string>; capture?: boolean }>;
+type Stored = Readonly<{ zone?: string; confirmed?: boolean; pins?: Record<string, string>; capture?: boolean; google?: false; anyZone?: true }>;
 
 const withAppOwner = async <T>(name: string, stored: Stored, run: (owner: Owner, state: DurableObjectState) => Promise<T>): Promise<T> => {
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
@@ -70,9 +70,9 @@ const withAppOwner = async <T>(name: string, stored: Stored, run: (owner: Owner,
     state.storage.kv.put('app_subject', String(appSubjectFor(name)));
     if (stored.zone) state.storage.kv.put('timezone', stored.zone);
     if (stored.confirmed) state.storage.kv.put('timezone_confirmed', true);
-    await state.storage.put('google:accounts', MAIL_ONLY_GOOGLE);
+    if (stored.google !== false) await state.storage.put('google:accounts', MAIL_ONLY_GOOGLE);
     for (const [card, time] of Object.entries(stored.pins ?? {})) dayPlanBook(state.storage.sql).pin(card as never, time);
-    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: FALLBACK, WALDO_OWNER_TELEGRAM_ID: undefined, ...(stored.capture ? { LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'staging' } : {}) }) as unknown as Owner;
+    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', ...(stored.anyZone ? { OWN_LOOK_ANY_ZONE: '1' } : {}), WALDO_OWNER_TIMEZONE: FALLBACK, WALDO_OWNER_TELEGRAM_ID: undefined, ...(stored.capture ? { LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'staging' } : {}) }) as unknown as Owner;
     try { return await run(owner, state); } finally { await state.storage.deleteAlarm(); poolAlarm.mockRestore(); }
   });
 };
@@ -101,6 +101,70 @@ describe('proactive work for an owner who only uses the app', () => {
         expect(ownJobs(state)).toEqual([]);
       });
     }
+    expect(model.calls).toBe(0);
+  });
+
+  it('says why it arms nothing: the wait for a confirmed zone is logged by its closed reason, never silent', async () => {
+    const lines = vi.spyOn(console, 'log');
+    try {
+      await withAppOwner('proactive-unconfirmed-logged', { zone: 'UTC' }, async (owner) => { await owner.setup('app').ready; });
+      expect(lines.mock.calls.map(call => String(call[0])).filter(line => line.includes('"hop":"own_jobs"'))).toEqual([expect.stringContaining('"code":"waiting_timezone_unconfirmed"')]);
+    } finally { lines.mockRestore(); }
+  });
+
+  it('with OWN_LOOK_ANY_ZONE, an owner with no confirmed zone gets the look and the heartbeat, and no day card or nightly pass', async () => {
+    const lines = vi.spyOn(console, 'log');
+    try {
+      await withAppOwner('proactive-any-zone', { zone: 'UTC', anyZone: true }, async (owner, state) => {
+        await owner.setup('app').ready;
+        expect(ownJobs(state)).toEqual([BRIEF_SWEEP_ID, HEARTBEAT_ID].sort());
+      });
+      expect(lines.mock.calls.map(call => String(call[0])).filter(line => line.includes('"hop":"own_jobs"'))).toEqual([expect.stringContaining('"code":"day_cards_waiting_timezone_unconfirmed"')]);
+    } finally { lines.mockRestore(); }
+    expect(model.calls).toBe(0);
+  });
+
+  it('with a confirmed zone and no Google connected, Waldo\'s own look is off and says so; the heartbeat still arms', async () => {
+    const lines = vi.spyOn(console, 'log');
+    try {
+      await withAppOwner('proactive-no-google', { zone: 'Europe/London', confirmed: true, google: false }, async (owner, state) => {
+        await owner.setup('app').ready;
+        expect(schedule(state)[HEARTBEAT_ID]?.status).toBe('armed');
+        expect(schedule(state)[BRIEF_SWEEP_ID]).toBeUndefined();
+      });
+      expect(lines.mock.calls.map(call => String(call[0])).filter(line => line.includes('"hop":"own_jobs"'))).toEqual([expect.stringContaining('"code":"brief_sweep_off_no_google_grant"')]);
+    } finally { lines.mockRestore(); }
+  });
+
+  it('logs the look\'s and the heartbeat\'s rows as each runtime build finds and leaves them, so a row that never fires is visible', async () => {
+    const lines = vi.spyOn(console, 'log');
+    try {
+      await withAppOwner('proactive-rows-logged', { zone: 'Europe/London', confirmed: true }, async (owner, state) => {
+        const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps()), now = Date.now();
+        await scheduler.schedule({ id: BRIEF_SWEEP_ID, kind: 'pre_activity_spot', payloadRefs: { id: BRIEF_SWEEP_ID }, occurrenceAt: now + 600_000, dueAt: now + 600_000,
+          recurrence: { type: 'interval', every_ms: 600_000, phase_ms: 0 } });
+        state.storage.sql.exec("UPDATE schedule SET status = 'quarantined', attempts = 3, quarantined_until = ? WHERE id = ?", now + 20 * 3_600_000, BRIEF_SWEEP_ID);
+        await owner.setup('app').ready;
+        expect(schedule(state)[BRIEF_SWEEP_ID]?.status).toBe('quarantined');
+      });
+      const rows = lines.mock.calls.map(call => String(call[0])).filter(line => line.includes('"hop":"own_jobs_rows"')).map(line => JSON.parse(line) as { code: string; detail: string });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.code).toBe('sweep_not_armed');
+      expect(rows[0]!.detail).toMatch(/^sweep=quarantined:due_in_min=10:attempts=3:paused_min=1200>quarantined:due_in_min=10:attempts=3:paused_min=1200;heartbeat=absent>armed:due_in_min=30:attempts=0$/);
+    } finally { lines.mockRestore(); }
+  });
+
+  it('a look that finds no Google client to read with ends on a closed reason in its own trace, never silently', async () => {
+    const lines = vi.spyOn(console, 'log');
+    try {
+      await withAppOwner('proactive-look-no-client', { zone: 'Europe/London', confirmed: true }, async (owner) => {
+        const runtime = owner.setup('app') as Runtime & Readonly<{ updateCheck(trace: string): Promise<void> }>;
+        await runtime.ready;
+        await runtime.updateCheck('update:1');
+      });
+      const look = lines.mock.calls.map(call => String(call[0])).filter(line => line.includes('"trace":"update:1"')).map(line => JSON.parse(line) as { hop: string; ok: boolean; code?: string; detail?: string });
+      expect(look).toEqual([expect.objectContaining({ hop: 'update_card', ok: false, code: 'no_google_client' }), expect.objectContaining({ hop: 'machine_turn', ok: false })]);
+    } finally { lines.mockRestore(); }
     expect(model.calls).toBe(0);
   });
 

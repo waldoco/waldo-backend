@@ -337,6 +337,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   PROACTIVE_BOTH_DEFAULT?: string;
   // '1' has an event notice that reaches the app chat raise one push, under quiet hours and the owner's own limits.
   EVENT_PUSH?: string;
+  // "1": an app owner's Waldo look (meeting prep, update cards) and heartbeat arm whether or not they have confirmed a time
+  // zone; the day cards and the nightly pass still wait for their own choice. Off unless "1".
+  OWN_LOOK_ANY_ZONE?: string;
   // "1": when today's first health row is written after the Daily Brief reached the owner, one turn reads it against the Brief
   // and may revise it (in place where cards can be edited). Once a day. Off unless "1".
   BRIEF_BODY_REVISION?: string;

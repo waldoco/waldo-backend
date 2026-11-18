@@ -93,6 +93,18 @@ describe('trace privacy canary', () => {
     }
   });
 
+  it('keeps the own-job rows line with capture off only while it is states, minutes and attempts', () => {
+    const detail = 'sweep=quarantined:due_in_min=10:attempts=3:paused_min=1200>quarantined:due_in_min=10:attempts=3:paused_min=1200;heartbeat=absent>armed:due_in_min=30:attempts=0';
+    expect(gateTraceEntry({ trace: 'own-jobs', hop: 'own_jobs_rows', ms: 0, ok: false, code: 'sweep_not_armed', detail }, false).detail).toBe(detail);
+    for (const forged of [`${detail} ${MARKER}`, detail.replace('absent', MARKER), 'sweep=armed:due_in_min=1:attempts=0>absent', MARKER]) {
+      const gated = gateTraceEntry({ trace: 'own-jobs', hop: 'own_jobs_rows', ms: 0, ok: false, code: 'sweep_not_armed', detail: forged }, false);
+      expect(gated.detail).toBe('sweep_not_armed');
+      expect(JSON.stringify(gated)).not.toContain(MARKER);
+    }
+    // A hop named like an object member has no pattern and keeps only its code.
+    expect(gateTraceEntry({ trace: 't', hop: 'toString', ms: 0, ok: true, code: 'c', detail: MARKER }, false).detail).toBe('c');
+  });
+
   it('rejects forged safe-hop codes that carry a private marker', () => {
     const bad = gateTraceEntry({ trace: 't', hop: 'constellation_evidence', ms: 0, ok: false, detail: `held:same_day:owner_observation_pattern:1 ${MARKER}`, code: MARKER }, false);
     expect(bad.detail).toBeUndefined();
