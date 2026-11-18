@@ -2,7 +2,7 @@
 // what Waldo checked, repeated a gap it had already named ("I don't know your best focus hours yet"), and asked about a
 // calendar it could not see after the owner had said that was all of it. Each case grades the outcome a person would
 // notice; no case pins wording. Two cases hold the other side: a gap that does change the answer is still said
-// (n06 here, e3-one-calendar-unreadable in scenarios.ts). Every person, place and note is synthetic.
+// (nr06 here, e3-one-calendar-unreadable in scenarios.ts). Every person, place and note is synthetic.
 import { calendarUnchanged } from './brief-health-scenarios';
 import { modelSaw } from './health-scenarios';
 import { effects, none, readOnly, toolWorked, type Receipt, type TrialEvidence } from './receipts';
@@ -34,7 +34,7 @@ const noLeaveTime: Receipt = { why: 'no Waldo message gives a time to leave', ho
 
 export const NARRATION_SCENARIOS: readonly NightlyScenario[] = [
   {
-    id: 'n01-brief-no-checked-list', title: 'The planning Brief leads with the plan and leaves out what it checked', pain: 'judgment', start: at('24', '08:00'),
+    id: 'nr01-brief-no-checked-list', title: 'The planning Brief leads with the plan and leaves out what it checked', pain: 'judgment', start: at('24', '08:00'),
     world: { events: THURSDAY },
     steps: [{ card: 'card:brief', capacity: NOTE, budget: true }],
     rubric: {
@@ -45,7 +45,7 @@ export const NARRATION_SCENARIOS: readonly NightlyScenario[] = [
     receipts: [SAW_NOTE, effects('calendar.change.proposed', { max: 3 }, 'at most three cards'), calendarUnchanged(THURSDAY), none(['mail.send.proposed', 'mail.draft'], 'the Brief drafts nothing')],
   },
   {
-    id: 'n02-brief-known-gap-not-repeated', title: 'A gap written into the capacity note does not reach the Brief', pain: 'judgment', start: at('24', '08:00'),
+    id: 'nr02-brief-known-gap-not-repeated', title: 'A gap written into the capacity note does not reach the Brief', pain: 'judgment', start: at('24', '08:00'),
     world: { events: THURSDAY },
     steps: [{ card: 'card:brief', capacity: NOTE_WITH_GAP }],
     rubric: {
@@ -56,7 +56,7 @@ export const NARRATION_SCENARIOS: readonly NightlyScenario[] = [
     receipts: [modelSaw([NOTE_WITH_GAP], 'the card request carried the note with its gap'), readOnly],
   },
   {
-    id: 'n03-close-no-checked-list', title: 'The Close wraps the day without a list of what Waldo looked at', pain: 'judgment', start: at('24', '21:30'),
+    id: 'nr03-close-no-checked-list', title: 'The Close wraps the day without a list of what Waldo looked at', pain: 'judgment', start: at('24', '21:30'),
     world: { events: THURSDAY },
     steps: [{ card: 'card:close', capacity: NOTE, tomorrow: true }],
     rubric: {
@@ -67,7 +67,7 @@ export const NARRATION_SCENARIOS: readonly NightlyScenario[] = [
     receipts: [SAW_NOTE, effects('calendar.change.proposed', { max: 1 }, 'at most one card'), calendarUnchanged(THURSDAY)],
   },
   {
-    id: 'n04-plan-after-all-of-it', title: 'Planning the afternoon after the owner said this calendar is all of it', pain: 'judgment', start: at('24', '12:30'),
+    id: 'nr04-plan-after-all-of-it', title: 'Planning the afternoon after the owner said this calendar is all of it', pain: 'judgment', start: at('24', '12:30'),
     world: { events: CALENDAR, memory: [ALL_OF_IT] },
     steps: [{ say: 'Plan my afternoon.' }],
     rubric: {
@@ -78,7 +78,7 @@ export const NARRATION_SCENARIOS: readonly NightlyScenario[] = [
     receipts: [toolWorked(['query_calendar', 'query_availability'], 'it read the calendar before planning'), none(['mail.send.proposed', 'mail.draft'], 'nothing drafted or sent')],
   },
   {
-    id: 'n05-mail-answer-not-a-sample', title: 'An answer from the inbox leads with what was found', pain: 'judgment', start: START,
+    id: 'nr05-mail-answer-not-a-sample', title: 'An answer from the inbox leads with what was found', pain: 'judgment', start: START,
     world: { mail: [PRIYA] },
     steps: [{ say: 'Did Priya want anything from me?' }],
     rubric: {
@@ -89,7 +89,7 @@ export const NARRATION_SCENARIOS: readonly NightlyScenario[] = [
     receipts: [toolWorked(['search_communication', 'get_communication', 'read_thread'], 'it read the mail'), readOnly],
   },
   {
-    id: 'n06-honest-unknown-that-matters', title: 'A missing fact that decides the answer is said plainly', pain: 'judgment', start: at('24', '17:00'),
+    id: 'nr06-honest-unknown-that-matters', title: 'A missing fact that decides the answer is said plainly', pain: 'judgment', start: at('24', '17:00'),
     world: { events: [...CALENDAR, event('nr-dinner', "Dinner at Kavya's", '24', '20:30', '22:30')] },
     steps: [{ say: "When should I leave for dinner at Kavya's tonight?" }],
     rubric: {
@@ -100,7 +100,7 @@ export const NARRATION_SCENARIOS: readonly NightlyScenario[] = [
     receipts: [noLeaveTime, none(['calendar.change.proposed', 'mail.send.proposed', 'mail.draft'], 'nothing raised or drafted')],
   },
   {
-    id: 'n07-goal-without-health-no-forced-line', title: 'A training goal with no shared health: no guessing and no forced disclaimer', pain: 'judgment', start: at('24', '08:00'),
+    id: 'nr07-goal-without-health-no-forced-line', title: 'A training goal with no shared health: no guessing and no forced disclaimer', pain: 'judgment', start: at('24', '08:00'),
     world: { events: THURSDAY, memory: [{ id: 3102, kind: 'goal', text: 'Training for the city half marathon on 18 October: four runs a week.', pinned: 'profile' }] },
     steps: [{ card: 'card:brief' }],
     rubric: {

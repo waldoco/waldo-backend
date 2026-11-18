@@ -89,7 +89,7 @@ export const RULE_COVERAGE: readonly RuleCoverage[] = [
   { anchor: 'For deeper owner recall, use read_memory', scenarios: ['r1-recall-across-day'] },
 ];
 
-const NARRATION = ['n04-plan-after-all-of-it', 'n05-mail-answer-not-a-sample', 'n06-honest-unknown-that-matters'];
+const NARRATION = ['nr04-plan-after-all-of-it', 'nr05-mail-answer-not-a-sample', 'nr06-honest-unknown-that-matters'];
 const TONE = ['d1-brief-good-day-one-line', 'tn01-go-friday-loose-saturday', 'tn02-protect-holiday', 'tn03-oxygen-quiet-then-loop'];
 
 // Version 2 of the behavior prompt (WALDO_PROMPT_V2) keeps the version-1 rules that still read the same and carries the voice
@@ -108,7 +108,7 @@ export const RULE_COVERAGE_V2: readonly RuleCoverage[] = [
   { anchor: 'Whether to write at all is your judgment', scenarios: ['tn03-oxygen-quiet-then-loop', 'd1-brief-good-day-one-line'] },
   { anchor: 'When they bring a feeling, lower the energy', scenarios: ['v08-stressed-owner', 'p06-kind-before-clever'] },
   // Working on a task: the version 2 failure ladder names a gap only when it changes the answer
-  { anchor: 'When one source fails and others worked', scenarios: ['e3-one-calendar-unreadable', 'n06-honest-unknown-that-matters'] },
+  { anchor: 'When one source fails and others worked', scenarios: ['e3-one-calendar-unreadable', 'nr06-honest-unknown-that-matters'] },
   { anchor: 'Stop only after several genuinely different attempts', scenarios: ['e3-one-calendar-unreadable'] },
   // Tone follows their day
   { anchor: 'You talk differently on their deadline', scenarios: TONE },

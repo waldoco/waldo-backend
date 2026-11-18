@@ -72,7 +72,7 @@ export const PROSE_RULE = 'Plain sentences only: no headings, labels, bullet poi
 
 // The Brief's one shape, the voice's two or three sentences, whatever switches add to its request: each added input is
 // weighed, not reported, so the Brief does not grow a section per switch.
-export const BRIEF_BODY = 'two or three sentences, the way a person would say it: the read of the day, the one move that matters most with its reason, and the door. The rest of this request (their goals, body, capacity, free windows, the week ahead, what you can see of their calendars) is what you weigh to find that move, not a list to report: a piece of it reaches the Brief only when it changes what they should do today. When nothing needs changing, a calm line says so.';
+const BRIEF_SHAPE = 'two or three sentences, the way a person would say it: the read of the day, the one move that matters most with its reason, and the door. The rest of this request (their goals, body, capacity, free windows, the week ahead, what you can see of their calendars) is what you weigh to find that move, not a list to report: a piece of it reaches the Brief only when it changes what they should do today. When nothing needs changing, a calm line says so.';
 
 // BRIEF_DAY_PLAN: the owner asked (4 November 2026) for the morning Brief to lay out their day, not only describe it. The spoken
 // paragraph stays prose, as the app reads it aloud, and a time-blocked plan follows it. Which work goes where is the model's
@@ -146,7 +146,7 @@ export const dayCardPrompt = (card: DayCard, localNow: string, context: Readonly
   "The owner's own goals are in their profile in memory, health and training goals included: where today's plan bears on one, let it shape the plan, and say how the day moves it only when that changes what they do today. Never invent a goal they have not stated.",
   RESTORES_DRAINS_PLANNING_RULE,
   planningCard(card, planning) ? PLANNING_BODY_RULE : BODY_RULE[card.body],
-  `Format it as a compact card for chat: a first line naming "${card.name}", then ${card.id === 'card:brief' ? BRIEF_BODY : 'a few short sentences, the way a person would say it.'} ${PROSE_RULE} Keep it tight enough to read in 20 seconds.`,
+  `Format it as a compact card for chat: a first line naming "${card.name}", then ${card.id === 'card:brief' ? BRIEF_SHAPE : 'a few short sentences, the way a person would say it.'} ${PROSE_RULE} Keep it tight enough to read in 20 seconds.`,
   ...(layout && card.id === 'card:brief' ? [SCHEDULE_RULE] : []),
   ...(planCard && planningCard(card, planning) ? [PLAN_CARD_RULE] : []),
 ].join('\n\n');
