@@ -117,6 +117,19 @@ export const IMESSAGE_COPY_PREFIX = 'imessage-copy:';
 // evicts a pending record, so a month of copies could leave no room for the owner's own messages.
 export const WHATSAPP_COPY_FRESH_MS = 24 * 60 * 60 * 1000;
 
+// What held a record that expired unsent, read when it expired: a closed WhatsApp window (for a record bound there), quiet
+// hours, low volume or follow-ups off; `waited` when none of those holds now, as with the owner's limits or a long queue.
+export type ExpiryFacts = Readonly<{ windowClosed: boolean; quiet: boolean; volumeLow: boolean; followupsOff: boolean }>;
+const recordKind = (record: FinalRecord): string =>
+  record.id.startsWith(WHATSAPP_COPY_PREFIX) ? 'whatsapp_copy' : record.dayCard ? 'day_card' : record.revision ? 'revision'
+    : record.update ? 'update_card' : record.calendarPrep ? 'meeting_prep' : record.mailFollowup ? 'mail_followup'
+      : record.heartbeat ? 'check_back' : record.reminder ? 'reminder' : record.standingOrder ? 'standing_order'
+        : record.announcement ? 'announcement' : record.scheduleNotice ? 'schedule_notice' : record.healthNotice ? 'health_notice'
+          : record.answersOwner ? 'answer' : record.notice ? 'notice' : 'message';
+// A closed code for an expired record, so the expired deliveries can be told apart by kind and by hold.
+export const expiredCode = (record: FinalRecord, facts: ExpiryFacts): string => `expired:${recordKind(record)}:${
+  facts.windowClosed ? 'window_closed' : facts.quiet ? 'quiet' : facts.volumeLow ? 'volume_low' : facts.followupsOff ? 'followups_off' : 'waited'}`;
+
 // Delivers to the app first, and only a message the app took is copied, under that app message's id. A send worth delivering
 // only now (a one-time code, a short-lived link) is never queued for a chat surface, which may hold it for days. A copy that
 // cannot be queued is reported by its code alone and never fails or repeats the app delivery.
