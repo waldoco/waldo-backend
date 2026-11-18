@@ -20,10 +20,15 @@ const TOOL_HOP = /^(?:subagent_|task_)?tool_(.+)$/;
 // context (full or partial), the owner turn's shared-health label, the owner-logged meals and workouts and the capacity note a
 // day card reads (prompt/capacity.ts). Each block is one paragraph.
 const HEALTH_BLOCK = /^\s*(?:Form zone:|Recovery zone:|Partial health context:|Shared health today\b|Recent health logs\b|Capacity note:)/;
+// The blocks of derived zone and driver words. For an account whose traces keep health words, these stay, with every number
+// still redacted; the owner-logged meals and workouts do not. A block that names a menstrual cycle is withheld for every account.
+const WORDS_BLOCK = /^\s*(?:Form zone:|Recovery zone:|Partial health context:|Shared health today\b|Capacity note:)/;
+const CYCLE = /\b(?:menstrua\w*|periods?|cycle\s+(?:day|phase)|ovulat\w*|luteal|follicular|fertile|pms)\b/i;
 const PARAGRAPHS = /(\n[ \t]*\n)/;
 
-const scrubProse = (text: string): string => redactNumericHealth(
-  text.split(PARAGRAPHS).map((part) => (HEALTH_BLOCK.test(part) ? HEALTH_WITHHELD : part)).join(''),
+const keptBlock = (part: string, words: boolean): boolean => words && WORDS_BLOCK.test(part) && !CYCLE.test(part);
+const scrubProse = (text: string, words = false): string => redactNumericHealth(
+  text.split(PARAGRAPHS).map((part) => (HEALTH_BLOCK.test(part) && !keptBlock(part, words) ? HEALTH_WITHHELD : part)).join(''),
   HEALTH_WITHHELD,
 );
 
@@ -60,38 +65,39 @@ const readsStoredHealth = (call: unknown, stored: ReturnType<typeof storedIdsByS
 
 // A model call's input and output are serialized messages, tool calls and tool turns: a health tool's arguments, its
 // turn's output and a read of its stored output are withheld whole, and every other string is scrubbed as prose.
-const scrubValue = (value: unknown, stored: ReturnType<typeof storedIdsBySource>): unknown => {
-  if (typeof value === 'string') return scrubProse(value);
-  if (Array.isArray(value)) return value.map((item) => scrubValue(item, stored));
+const scrubValue = (value: unknown, stored: ReturnType<typeof storedIdsBySource>, words: boolean): unknown => {
+  if (typeof value === 'string') return scrubProse(value, words);
+  if (Array.isArray(value)) return value.map((item) => scrubValue(item, stored, words));
   if (!isRecord(value)) return value;
   const withheld = new Set<string>([
     ...(healthTool(value) ? ['arguments'] : []),
     ...(healthTool(value['call']) || readsStoredHealth(value['call'], stored) ? ['output'] : []),
   ]);
-  return Object.fromEntries(Object.entries(value).map(([key, field]) => [key, withheld.has(key) ? HEALTH_WITHHELD : scrubValue(field, stored)]));
+  return Object.fromEntries(Object.entries(value).map(([key, field]) => [key, withheld.has(key) ? HEALTH_WITHHELD : scrubValue(field, stored, words)]));
 };
 
-const scrubText = (text: string): string => {
+const scrubText = (text: string, words: boolean): string => {
   let parsed: unknown;
-  try { parsed = JSON.parse(text); } catch { return scrubProse(text); }
-  return typeof parsed === 'object' && parsed !== null ? JSON.stringify(scrubValue(parsed, storedIdsBySource(parsed))) : scrubProse(text);
+  try { parsed = JSON.parse(text); } catch { return scrubProse(text, words); }
+  return typeof parsed === 'object' && parsed !== null ? JSON.stringify(scrubValue(parsed, storedIdsBySource(parsed), words)) : scrubProse(text, words);
 };
 
 const scrubbed = <T extends string | undefined>(value: T): T => (value === undefined ? value : scrubProse(value) as T);
 
-// Throws on malformed input; the caller fails closed.
-export const scrubTraceHealth = (entry: TurnLogEntry): TurnLogEntry => {
+// Throws on malformed input; the caller fails closed. words: this account's traces keep the health block's zone and driver
+// words; health tools' calls and outputs are withheld either way.
+export const scrubTraceHealth = (entry: TurnLogEntry, words = false): TurnLogEntry => {
   const tool = TOOL_HOP.exec(entry.hop)?.[1];
   const text = entry.text === undefined ? undefined
     : tool !== undefined && HEALTH_TOOLS.has(tool)
       ? { input: HEALTH_WITHHELD, ...(entry.text.output === undefined ? {} : { output: HEALTH_WITHHELD }) }
       // A read hop alone cannot tell whose output it reads; the next model call's input carries the same text when it may.
       : tool === READ_STORED
-        ? { input: scrubText(entry.text.input), ...(entry.text.output === undefined ? {} : { output: HEALTH_WITHHELD }) }
+        ? { input: scrubText(entry.text.input, words), ...(entry.text.output === undefined ? {} : { output: HEALTH_WITHHELD }) }
       : {
-        input: scrubText(entry.text.input),
-        ...(entry.text.output === undefined ? {} : { output: scrubText(entry.text.output) }),
-        ...(entry.text.reasoning === undefined ? {} : { reasoning: scrubText(entry.text.reasoning) }),
+        input: scrubText(entry.text.input, words),
+        ...(entry.text.output === undefined ? {} : { output: scrubText(entry.text.output, words) }),
+        ...(entry.text.reasoning === undefined ? {} : { reasoning: scrubText(entry.text.reasoning, words) }),
       };
   return { ...entry, ...(text === undefined ? {} : { text }), error: scrubbed(entry.error), detail: scrubbed(entry.detail), code: scrubbed(entry.code) };
 };
