@@ -77,7 +77,8 @@ const baseConfig = (env: Env, stagingVars: () => StagingVars): NightlyRun => {
   if (![undefined, 'on', 'off'].includes(env.WALDO_EVAL_PROMPT_V2)) throw new Error('WALDO_EVAL_PROMPT_V2 must be on or off');
   const promptV2 = env.WALDO_EVAL_PROMPT_V2 === undefined ? profile?.promptV2 === true : env.WALDO_EVAL_PROMPT_V2 === 'on';
   const menu = {
-    ...(profile ? { ...(profile.toolSearch ? { toolSearch: true } : {}), ...(profile.toolLoader ? { toolLoader: profile.toolLoader } : {}), forgetBarrier: profile.forgetBarrier, profile: profile.label }
+    ...(profile ? { ...(profile.toolSearch ? { toolSearch: true } : {}), ...(profile.toolLoader ? { toolLoader: profile.toolLoader } : {}), forgetBarrier: profile.forgetBarrier, profile: profile.label,
+      ...(profile.leanScheduled ? { leanScheduled: true as const } : {}), ...(profile.modelSetWakes ? { modelSetWakes: true as const } : {}) }
       : toolSearch ? { toolSearch: true } : {}),
     ...(promptV2 ? { promptV2: true } : {}),
   };

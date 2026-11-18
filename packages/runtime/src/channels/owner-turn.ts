@@ -162,11 +162,13 @@ export type OwnerContextIntegration = Readonly<{ skills?: OwnerSkillCapability; 
   // The tools this owner's runs offer in the function list beyond the core ones (tools/loaded.ts and the owner's sources), read
   // once per call so every round offers the same list; and where a tool the model loaded or reached by name is noted.
   promotedTools?: () => readonly string[]; noteLoaded?: (names: readonly string[]) => void;
+  // MODEL_SET_WAKES: a run Waldo starts may leave itself a follow-up (open_loop with no mail source; channels/loops.ts bounds it).
+  modelSetWakes?: boolean;
   // The messages the owner's outbox delivered to the owner lately, oldest first: what a lean scheduled run reads of what Waldo said.
   waldoSent?: () => readonly Readonly<{ at: number; text: string }>[] }>;
 // This owner's spend so far this month and the ceiling it is held to, read once when a turn starts.
 export type OwnerSpend = Readonly<{ spentUsd: number; ceilingUsd: number }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; finishedTasks?: (since: number) => string; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; turnCharts?: (turnId: string) => readonly ConversationChart[]; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; jobOutcomeRows?: boolean; timelineSeed?: TimelineSeed; machineTime?: OwnerContextIntegration['machineTime']; leanScheduled?: boolean; promotedTools?: OwnerContextIntegration['promotedTools']; noteLoaded?: OwnerContextIntegration['noteLoaded']; waldoSent?: OwnerContextIntegration['waldoSent'] }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; finishedTasks?: (since: number) => string; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; turnCharts?: (turnId: string) => readonly ConversationChart[]; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; jobOutcomeRows?: boolean; timelineSeed?: TimelineSeed; machineTime?: OwnerContextIntegration['machineTime']; leanScheduled?: boolean; promotedTools?: OwnerContextIntegration['promotedTools']; noteLoaded?: OwnerContextIntegration['noteLoaded']; modelSetWakes?: boolean; waldoSent?: OwnerContextIntegration['waldoSent'] }>;
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 // The typed failure on a tool hop: the ToolError code when the tool returned one, else the loop's coarse code.
@@ -288,6 +290,7 @@ export const createOwnerResponder = (
     sourceTaint: null, toolArgSourceTaint: null, egressAllowlist,
     hasApproval: ownerToolApproval,
     ...(privateOwner?.loopIsSourceBound ? { loopIsSourceBound: privateOwner.loopIsSourceBound } : {}),
+    waldoOwnFollowUp: () => waldoFirstRun && privateOwner?.modelSetWakes === true,
     heldTool: (tool: string) => {
       // A lean scheduled run is offered the shared menu but calls only its own job's list.
       if (leanRun && backgroundToolNames !== undefined && tool !== 'skills_load' && !backgroundToolNames.includes(tool)) {
@@ -589,7 +592,8 @@ export const createOwnerResponder = (
         return { ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
           await assertFresh();
           const retainedRead = ['read_memory', 'search_episodes', 'search_history', 'read_tool_output'].includes(handler.name);
-                  if (backgroundToolNames !== undefined && handler.name === 'open_loop' && (args === null || typeof args !== 'object' || !('source_ref' in args) || typeof args.source_ref !== 'string')) {
+                  // Without a mail source, a run's open_loop is outside text's word unless it is Waldo's own follow-up in a run Waldo started.
+                  if (backgroundToolNames !== undefined && handler.name === 'open_loop' && !(waldoFirstRun && privateOwner?.modelSetWakes) && (args === null || typeof args !== 'object' || !('source_ref' in args) || typeof args.source_ref !== 'string')) {
             return { ok: false, code: 'invalid_args', error: 'Background mail follow-up requires an observed source_ref.', source_taint: null };
           }
           const removal = handler.name === 'forget_memory' && args && typeof args === 'object' ? args as { topic?: string; claim_ids?: number[] } : undefined;
@@ -939,6 +943,7 @@ export const createOwnerResponder = (
   let backgroundToolNames: readonly string[] | undefined;
   // A Waldo-first scheduled run reading the lean view, and the bytes of the recent exchange its last call carried.
   let leanRun = false;
+  let waldoFirstRun = false;
   let leanRecentBytes = 0;
   // Tools a job's prompt names to be offered directly under the harness loader; none for any other turn.
   let backgroundDirect: ReadonlySet<string> = NO_DIRECT;
@@ -1028,7 +1033,7 @@ export const createOwnerResponder = (
       onPhase: (phase, previousMs) => log({ trace, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }),
     });
     const jobSkills = jobHost.skills?.(jobContext.invocation.verified_authority.principal_ref, trace, () => jobContext.assertCurrent());
-    const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, privateRunScope, privateSystemSkills, { context: jobContext, ...(jobSkills ? { skills: jobSkills } : {}), ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}), ...(privateOwner?.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner?.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}), ...(privateOwner?.loopIsSourceBound ? { loopIsSourceBound: privateOwner.loopIsSourceBound } : {}), ...(privateOwner?.profileView ? { profileView: true } : {}), ...(privateOwner?.semanticRecall ? { semanticRecall: privateOwner.semanticRecall } : {}), ...(privateOwner?.memorySelection ? { memorySelection: privateOwner.memorySelection } : {}), ...(privateOwner?.memoryUsed ? { memoryUsed: privateOwner.memoryUsed } : {}), ...(privateOwner?.turnCharts ? { turnCharts: privateOwner.turnCharts } : {}), ...(privateOwner?.memoryValidity ? { memoryValidity: true } : {}), ...(privateOwner?.machineTime ? { machineTime: privateOwner.machineTime } : {}), ...(privateOwner?.jobOutcomeRows ? { jobOutcomeRows: true } : {}), ...(privateOwner?.leanScheduled ? { leanScheduled: true } : {}), ...(privateOwner?.dayCards ? { dayCards: privateOwner.dayCards } : {}), ...(privateOwner?.promotedTools ? { promotedTools: privateOwner.promotedTools } : {}), ...(privateOwner?.noteLoaded ? { noteLoaded: privateOwner.noteLoaded } : {}), ...(privateOwner?.waldoSent ? { waldoSent: privateOwner.waldoSent } : {}) });
+    const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, privateRunScope, privateSystemSkills, { context: jobContext, ...(jobSkills ? { skills: jobSkills } : {}), ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}), ...(privateOwner?.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner?.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}), ...(privateOwner?.loopIsSourceBound ? { loopIsSourceBound: privateOwner.loopIsSourceBound } : {}), ...(privateOwner?.profileView ? { profileView: true } : {}), ...(privateOwner?.semanticRecall ? { semanticRecall: privateOwner.semanticRecall } : {}), ...(privateOwner?.memorySelection ? { memorySelection: privateOwner.memorySelection } : {}), ...(privateOwner?.memoryUsed ? { memoryUsed: privateOwner.memoryUsed } : {}), ...(privateOwner?.turnCharts ? { turnCharts: privateOwner.turnCharts } : {}), ...(privateOwner?.memoryValidity ? { memoryValidity: true } : {}), ...(privateOwner?.machineTime ? { machineTime: privateOwner.machineTime } : {}), ...(privateOwner?.jobOutcomeRows ? { jobOutcomeRows: true } : {}), ...(privateOwner?.leanScheduled ? { leanScheduled: true } : {}), ...(privateOwner?.dayCards ? { dayCards: privateOwner.dayCards } : {}), ...(privateOwner?.promotedTools ? { promotedTools: privateOwner.promotedTools } : {}), ...(privateOwner?.noteLoaded ? { noteLoaded: privateOwner.noteLoaded } : {}), ...(privateOwner?.modelSetWakes ? { modelSetWakes: true } : {}), ...(privateOwner?.waldoSent ? { waldoSent: privateOwner.waldoSent } : {}) });
     control.route(scoped.control);
     try { return await work(scoped); }
     finally { control.unroute(scoped.control); }
@@ -1309,12 +1314,15 @@ export const createOwnerResponder = (
         }
         promptContext = turnContext ?? '';
         // Default-deny for a job over outside text: with no tools named, it gets the read-and-card ceiling, never every tool.
-        const jobTools = toolNames ?? (sourceTaint === 'external' ? OUTSIDE_TEXT_JOB_TOOLS : undefined);
+        const listed = toolNames ?? (sourceTaint === 'external' ? OUTSIDE_TEXT_JOB_TOOLS : undefined);
+        // A run Waldo starts may leave itself a follow-up; its bounds are the loop book's.
+        waldoFirstRun = waldoFirst === true;
+        const jobTools = waldoFirstRun && privateOwner?.modelSetWakes && listed !== undefined && !listed.includes('open_loop') ? [...listed, 'open_loop' as const] : listed;
         // Lean only where the caller marked the run Waldo-first and its own tools sit inside the shared menu.
         leanRun = waldoFirst === true && privateOwner?.leanScheduled === true && fitsScheduledMenu(jobTools);
         backgroundDirect = new Set(leanRun ? SCHEDULED_DIRECT : directTools ?? []);
         return await converse(id, conversationRef, said, time, false, surface, jobTools);
-      } finally { backgroundCurrent = undefined; transientDecision = false; promptContext = ''; backgroundSourceTaint = null; backgroundOwnerModel = false; planningRun = false; pending = undefined; backgroundDirect = NO_DIRECT; leanRun = false; leanRecentBytes = 0; }
+      } finally { backgroundCurrent = undefined; transientDecision = false; promptContext = ''; backgroundSourceTaint = null; backgroundOwnerModel = false; planningRun = false; pending = undefined; backgroundDirect = NO_DIRECT; leanRun = false; waldoFirstRun = false; leanRecentBytes = 0; }
     },
     async consolidate(trace, day, sides, policy) {
       const asOwner = await asOwnerJob(trace, job => job.consolidate(trace, day, sides, policy));
