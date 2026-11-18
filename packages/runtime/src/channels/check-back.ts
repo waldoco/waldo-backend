@@ -16,7 +16,7 @@ export const LOOP_CHECK_BACK_TOOLS: readonly ToolName[] = [...OUTSIDE_TEXT_READS
 // card for any change it thinks is wanted; it changes nothing itself. A job that needs more names its tools.
 export const OUTSIDE_TEXT_JOB_TOOLS: readonly ToolName[] = [...OUTSIDE_TEXT_READS, 'propose_action'];
 
-const LOOK = 'Look at the current state with your read tools before you write anything (mail, drafts, calendar, memory, earlier conversation, whatever this is about). Say what you checked and what you found, and ask at most one question.';
+const LOOK = 'Look at the current state with your read tools before you write anything (mail, drafts, calendar, memory, earlier conversation, whatever this is about). Then say what matters now, from what you found, and ask at most one question; the owner wants the result, not the list of what you looked at.';
 const SILENT = `If what you found means the owner gains nothing from hearing from you now, reply with exactly ${SKIP_UPDATE}.`;
 
 // The note is the owner's own words from when they set it; it says what to look at, it is not the message. The timing is
