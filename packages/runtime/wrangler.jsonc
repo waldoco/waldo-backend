@@ -42,7 +42,7 @@
   // clears a turn's tool results down to the latest few past a size (the context budget below); "0" is the rollback.
   // WALDO_COMPACTION_WAKE: "1" runs a compaction in its own alarm pass after the one that ran the owner's turns; "0" runs
   // it at the end of that pass, and is the rollback.
-  // WALDO_CALL_CEILINGS: "1" holds every chat's history to the history budget (22k tokens by default), the conversation
+  // WALDO_CALL_CEILINGS: "1" holds every chat's history to the history budget (31,429 tokens by default), the conversation
   // layer of a chat call, clears a turn's earlier tool results once its tool turns would carry the call past the hard
   // ceiling, and logs each call against its class's ceiling; "0" is the rollback.
   // The context budget's sizes (src/conversation/context-budget.ts), read while those switches are on: the history budget,
@@ -130,10 +130,10 @@
       "WALDO_CONTEXT_CAPS": "0",
       "WALDO_COMPACTION_WAKE": "0",
       "WALDO_CALL_CEILINGS": "0",
-      "WALDO_HISTORY_BUDGET_TOKENS": "22000",
-      "WALDO_CHAT_CEILING_TOKENS": "40000",
-      "WALDO_JOB_CEILING_TOKENS": "25000",
-      "WALDO_HARD_CEILING_TOKENS": "80000",
+      "WALDO_HISTORY_BUDGET_TOKENS": "31429",
+      "WALDO_CHAT_CEILING_TOKENS": "57143",
+      "WALDO_JOB_CEILING_TOKENS": "35714",
+      "WALDO_HARD_CEILING_TOKENS": "114286",
       "WALDO_STEPPED_WINDOW_TARGET": "0.5",
       "WALDO_TOOL_RESULTS_CLEAR_AT_CHARS": "120000",
       "WALDO_TOOL_RESULTS_KEEP_LATEST": "3",
@@ -197,6 +197,8 @@
       "WALDO_LEAN_SCHEDULED": "0",
       "WALDO_ONE_TIMELINE": "0",
       "WALDO_LIGHT_CHAT": "0",
+      "WALDO_THINKING_REPLAY": "0",
+      "WALDO_STRONG_ROLES": "0",
       "GOOGLE_REALTIME_TRIAGE": "0",
       "HELD_RAISE": "0",
       "WALDO_WATCHDOG": "0",
@@ -208,6 +210,7 @@
       "PROACTIVE_ACT_AHEAD": "0",
       "PROACTIVE_BOTH_DEFAULT": "0",
       "EVENT_PUSH": "0",
+      "BRIEF_BODY_REVISION": "0",
       "EVENT_PUSH_PER_DAY": "3",
       "PROACTIVE_OVER_TELEGRAM": "0",
       "REENGAGE_PROACTIVE": "0",
@@ -380,10 +383,10 @@
           "WALDO_CONTEXT_CAPS": "1",
           "WALDO_COMPACTION_WAKE": "1",
           "WALDO_CALL_CEILINGS": "1",
-          "WALDO_HISTORY_BUDGET_TOKENS": "22000",
-          "WALDO_CHAT_CEILING_TOKENS": "40000",
-          "WALDO_JOB_CEILING_TOKENS": "25000",
-          "WALDO_HARD_CEILING_TOKENS": "80000",
+          "WALDO_HISTORY_BUDGET_TOKENS": "31429",
+          "WALDO_CHAT_CEILING_TOKENS": "57143",
+          "WALDO_JOB_CEILING_TOKENS": "35714",
+          "WALDO_HARD_CEILING_TOKENS": "114286",
           "WALDO_STEPPED_WINDOW_TARGET": "0.5",
           "WALDO_TOOL_RESULTS_CLEAR_AT_CHARS": "120000",
           "WALDO_TOOL_RESULTS_KEEP_LATEST": "3",
@@ -447,6 +450,8 @@
           "WALDO_LEAN_SCHEDULED": "1",
           "WALDO_ONE_TIMELINE": "1",
           "WALDO_LIGHT_CHAT": "0",
+          "WALDO_THINKING_REPLAY": "1",
+          "WALDO_STRONG_ROLES": "1",
           "GOOGLE_REALTIME_TRIAGE": "1",
           "HELD_RAISE": "1",
           "WALDO_WATCHDOG": "1",
@@ -458,6 +463,7 @@
           "PROACTIVE_ACT_AHEAD": "1",
           "PROACTIVE_BOTH_DEFAULT": "1",
           "EVENT_PUSH": "1",
+          "BRIEF_BODY_REVISION": "1",
           "EVENT_PUSH_PER_DAY": "3",
           "PROACTIVE_OVER_TELEGRAM": "1",
           "REENGAGE_PROACTIVE": "1",
