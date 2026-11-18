@@ -8,6 +8,7 @@ import { handleWhatsAppWebhook, WHATSAPP_WEBHOOK_PATH } from './channels/whatsap
 import { EVENT_INGRESS_PREFIX, handleEventIngress } from './channels/event-ingress';
 import { handleGoogleCallback } from './channels/google-oauth';
 import { handleWhoopCallback, handleWhoopStart, WHOOP_CALLBACK_PATH, WHOOP_START_PATH } from './health/providers/whoop-routes';
+import { GOOGLE_HEALTH_CALLBACK_PATH, GOOGLE_HEALTH_START_PATH, handleGoogleHealthCallback, handleGoogleHealthStart } from './health/providers/google-health-routes';
 import { handleMcpCallback, handleMcpClientMetadata } from './channels/mcp-oauth-routes';
 import { oauthStateSecret } from './connectors/oauth-state-secret';
 import { MCP_CALLBACK_PATH, MCP_CLIENT_METADATA_PATH } from './connectors/mcp-oauth';
@@ -82,6 +83,9 @@ declare global {
       WHOOP_CLIENT_ID?: string;
       WHOOP_CLIENT_SECRET?: string;
       WHOOP_REDIRECT_URI?: string;
+      GOOGLE_HEALTH_CLIENT_ID?: string;
+      GOOGLE_HEALTH_REDIRECT_URI?: string;
+      GOOGLE_HEALTH_WEBHOOK_SECRET?: string;
       WALDO_OWNER_TELEGRAM_ID?: string;
       OPENAI_API_KEY?: string;
       ANTHROPIC_API_KEY?: string;
@@ -217,6 +221,8 @@ const worker = {
       return handleWhoopCallback(request, env);
     }
     if (new URL(request.url).pathname.startsWith(WHOOP_START_PATH)) return handleWhoopStart(request, env);
+    if (new URL(request.url).pathname === GOOGLE_HEALTH_CALLBACK_PATH) return handleGoogleHealthCallback(request, env);
+    if (new URL(request.url).pathname.startsWith(GOOGLE_HEALTH_START_PATH)) return handleGoogleHealthStart(request, env);
     if (new URL(request.url).pathname === GOOGLE_CALLBACK_PATH) {
       return handleGoogleCallback(request, env);
     }

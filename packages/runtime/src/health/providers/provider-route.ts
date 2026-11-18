@@ -1,5 +1,6 @@
 import { md5Hex } from '../../channels/md5';
 import { routerSignature } from '../../identity/owner-directory';
+import type { GoogleHealthOwner } from './google-health-owner';
 import type { WhoopOwner } from './whoop-owner';
 
 // Worker-to-owner-DO only: the cloud-provider operations that need the owner's object (it holds the cursor and refreshes
@@ -45,17 +46,32 @@ export const verifiedProviderCall = async (request: Request, secret: string | un
 
 const text = (value: unknown, max: number): string | null => (typeof value === 'string' && value.length > 0 && value.length <= max ? value : null);
 
-// What the owner object does for each operation. Answers carry codes and ids, never a token or a reading.
-export const dispatchProviderCall = async (owner: WhoopOwner, op: ProviderOp, body: Record<string, unknown>): Promise<ProviderAnswer> => {
+// What the owner object does for each operation. The signed body names the provider; none names WHOOP. Answers carry
+// codes and ids, never a token or a reading.
+export const dispatchProviderCall = async (whoop: WhoopOwner, op: ProviderOp, body: Record<string, unknown>, googleHealth?: GoogleHealthOwner): Promise<ProviderAnswer> => {
+  if (body.provider !== undefined && body.provider !== 'whoop' && body.provider !== 'google_health') return { status: 400, json: { error: 'invalid_request' } };
+  if (op === 'status') {
+    const rows: unknown[] = [await whoop.status()];
+    // Google Health is listed where this Worker can connect it, or where the owner still holds a connection.
+    if (googleHealth) { const google = await googleHealth.status(); if (googleHealth.configured() || google.state !== 'not_connected') rows.push(google); }
+    return { status: 200, json: { providers: rows } };
+  }
+  const provider = body.provider === 'google_health' ? 'google_health' : 'whoop';
+  const owner = provider === 'whoop' ? whoop : googleHealth;
+  if (!owner) return op === 'exchange' ? { status: 200, json: { outcome: 'failed' } } : { status: 503, json: { error: 'not_configured' } };
   if (op === 'connect') {
     const result = await owner.connect();
-    if (!('error' in result)) return { status: 200, json: { provider: 'whoop', ...result } };
+    if (!('error' in result)) return { status: 200, json: { provider, ...result } };
     if (result.error === 'consent_required') return { status: 403, json: { error: result.error, missing: result.missing } };
     return { status: 503, json: { error: result.error } };
   }
   if (op === 'exchange') return { status: 200, json: { outcome: await owner.exchange({ code: text(body.code, 2_048), denied: body.denied === true }) } };
-  if (op === 'status') return { status: 200, json: { providers: [await owner.status()] } };
-  if (op === 'disconnect') return { status: 200, json: { provider: 'whoop', state: 'not_connected', ...(await owner.disconnect()) } };
-  const type = text(body.type, 64), id = text(body.id, 64), trace = text(body.trace, 64);
-  return type && id && trace ? { status: 200, json: { result: await owner.hint({ type, id, trace }) } } : { status: 400, json: { error: 'invalid_request' } };
+  if (op === 'disconnect') return { status: 200, json: { provider, state: 'not_connected', ...(await owner.disconnect()) } };
+  const type = text(body.type, 64), trace = text(body.trace, 64);
+  if (provider === 'google_health') {
+    const from = text(body.from, 64);
+    return type && from && trace && googleHealth ? { status: 200, json: { result: await googleHealth.hint({ type, from, trace }) } } : { status: 400, json: { error: 'invalid_request' } };
+  }
+  const id = text(body.id, 64);
+  return type && id && trace ? { status: 200, json: { result: await whoop.hint({ type, id, trace }) } } : { status: 400, json: { error: 'invalid_request' } };
 };
