@@ -256,6 +256,11 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1": the owner's own reply takes a light step that answers quick chat or hands the turn to the strong role, and every task
   // worker runs on the chat model (async-tools.ts).
   WALDO_LIGHT_CHAT?: string;
+  // "1": Claude's thinking is replayed through a turn's tool loop, and the loop keeps one tool list to its close (llm/anthropic.ts).
+  WALDO_THINKING_REPLAY?: string;
+  // "1": the runs that decide something or write the owner's memory, and the reader worker, run on the chat model; planning
+  // runs ask for PLANNING_EFFORT (owner-turn.ts).
+  WALDO_STRONG_ROLES?: string;
   // The light chat roles' models (roster ids) and the light step's output cap; unset, each is its default (async-tools.ts lightChatRoles).
   WALDO_LIGHT_ROLE_MODEL?: string;
   WALDO_STRONG_ROLE_MODEL?: string;
@@ -335,6 +340,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   PROACTIVE_BOTH_DEFAULT?: string;
   // '1' has an event notice that reaches the app chat raise one push, under quiet hours and the owner's own limits.
   EVENT_PUSH?: string;
+  // "1": when today's first health row is written after the Daily Brief reached the owner, one turn reads it against the Brief
+  // and may revise it (in place where cards can be edited). Once a day. Off unless "1".
+  BRIEF_BODY_REVISION?: string;
   // The most event pushes in an owner's day, a backstop under the owner's limits (default 3).
   EVENT_PUSH_PER_DAY?: string;
   // "1": Waldo's own sends follow the owner's choice among their other surfaces even while Telegram is linked.
