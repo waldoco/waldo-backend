@@ -41,42 +41,24 @@ export const telegramReplyDraft = (call: (method: string, body: object) => Promi
   maxChars: TELEGRAM_MESSAGE_MAX_CHARS,
 });
 
-// Telegram caps one message at 4,096 chars. Long outbound text splits on paragraph, then
-// sentence, boundaries into sequential messages; a single sentence longer than the cap is
-// hard-cut so the content still goes out.
+// Telegram caps one message at 4,096 chars, and WhatsApp a text at the same. Long outbound text goes as sequential messages,
+// each cut at its latest paragraph break, line break or sentence end that leaves the part at least half full, else at its
+// latest space. The break itself is dropped and every other character kept, so a list keeps its lines and a word arrives
+// whole; only a run with no space in a whole part is cut mid-run, never inside a surrogate pair.
+const BREAKS: readonly RegExp[] = [/\n{2,}/g, /\n/g, /(?<=[.!?\u2026])\s+/g];
 export const splitTelegramText = (text: string, limit: number = TELEGRAM_MESSAGE_MAX_CHARS): string[] => {
   if (text.length <= limit) return [text];
   const parts: string[] = [];
-  let current = '';
-  const flush = (): void => {
-    if (current !== '') {
-      parts.push(current);
-      current = '';
-    }
-  };
-  const append = (piece: string, separator: string): void => {
-    if (piece === '') return;
-    if (piece.length > limit) {
-      flush();
-      for (let index = 0; index < piece.length; index += limit) parts.push(piece.slice(index, index + limit));
-      return;
-    }
-    if (current !== '' && current.length + separator.length + piece.length > limit) flush();
-    current = current === '' ? piece : current + separator + piece;
-  };
-  const segments = text.split(/(\n{2,})/);
-  for (let index = 0; index < segments.length; index += 2) {
-    const paragraph = segments[index]!;
-    const separator = index === 0 ? '' : segments[index - 1]!;
-    if (paragraph.length > limit) {
-      flush();
-      for (const sentence of paragraph.split(/(?<=[.!?…])\s+/)) append(sentence, ' ');
-      flush();
-      continue;
-    }
-    append(paragraph, separator);
+  let rest = text;
+  while (rest.length > limit) {
+    const window = rest.slice(0, limit + 1);
+    const latest = (pattern: RegExp, from: number) => [...window.matchAll(pattern)].filter(match => match.index > 0 && match.index >= from).at(-1);
+    const found = BREAKS.map(pattern => latest(pattern, limit / 2)).find(Boolean) ?? latest(/\s+/g, 0);
+    const start = found ? found.index : /[\uD800-\uDBFF]/.test(rest[limit - 1]!) ? limit - 1 : limit;
+    parts.push(rest.slice(0, start));
+    rest = rest.slice(found ? start + found[0].length : start).replace(/^\n+/, '');
   }
-  flush();
+  if (rest !== '') parts.push(rest);
   return parts;
 };
 

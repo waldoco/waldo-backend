@@ -3,6 +3,7 @@
 // sent; one turn answers them all. Forwards and files ride in that turn too. A turn that acted keeps its reply.
 import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
+import { OWNER_TEXT_INBOUND_MAX_CHARS } from '@waldo/contracts';
 import { OwnerDO } from '../src/channels/owner-do';
 import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
@@ -267,4 +268,46 @@ it('with the merge switch off, a reply the owner\'s newer text arrives behind is
     expect(turns()).toHaveLength(2);
     expect(replies(graph)).toHaveLength(2);
   }, '0', '0');
+}, 60_000);
+
+it('one message longer than WhatsApp\'s 4,096-character send limit reaches the model whole, in one turn', async () => {
+  await whatsappOwner('wa-long-single', async (admit, drain, graph) => {
+    const long = `Start. ${'Notes on the quarterly plan and what needs doing next week. '.repeat(170)}END-LONG`;
+    expect(long.length).toBeGreaterThan(10_000);
+    await admit(text(long, 'wamid.long'));
+    await drain();
+    expect(turns()).toHaveLength(1);
+    const read = JSON.stringify(turns()[0]!.input);
+    expect(read).toContain(JSON.stringify(long).slice(1, -1));
+    expect(read).not.toContain('were cut and not read');
+    expect(replies(graph)).toEqual(['Reply 1.']);
+  });
+}, 60_000);
+
+it('a long paste the phone split into three messages joins into one text in one turn', async () => {
+  await whatsappOwner('wa-long-burst', async (admit, drain, graph) => {
+    const part = (label: string) => `${label} ${'The supplier wants a decision on the revised delivery terms. '.repeat(48)}END-${label}`;
+    const parts = ['ONE', 'TWO', 'THREE'].map(part);
+    const total = parts.join('\n').length;
+    expect(parts.every(one => one.length <= 4096) && total > 8_500 && total < 9_500).toBe(true);
+    await admit(text(parts[0]!, 'wamid.p1'), text(parts[1]!, 'wamid.p2'), text(parts[2]!, 'wamid.p3'));
+    await drain();
+    expect(turns()).toHaveLength(1);
+    // Joined as one text, in order, not three separate parts.
+    expect(lastMessage()).toContain(JSON.stringify(parts.join('\n')).slice(1, -1));
+    expect(replies(graph)).toEqual(['Reply 1.']);
+  });
+}, 60_000);
+
+it('a message at the inbound bound, in characters stored as two bytes each, is admitted, stored and read whole', async () => {
+  await whatsappOwner('wa-long-bound', async (admit, drain, graph) => {
+    const unit = 'Résumé notes für das Treffen — ';
+    const long = `${unit.repeat(Math.floor((OWNER_TEXT_INBOUND_MAX_CHARS - 4) / unit.length))}END`.padEnd(OWNER_TEXT_INBOUND_MAX_CHARS, 'é');
+    expect(long.length).toBe(OWNER_TEXT_INBOUND_MAX_CHARS);
+    await admit(text(long, 'wamid.bound'));
+    await drain();
+    expect(turns()).toHaveLength(1);
+    expect(JSON.stringify(turns()[0]!.input)).toContain(JSON.stringify(long).slice(1, -1));
+    expect(replies(graph)).toEqual(['Reply 1.']);
+  });
 }, 60_000);

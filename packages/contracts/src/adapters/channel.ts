@@ -220,6 +220,11 @@ const telegramFileSchema = z.looseObject({
 // (tdlib/telegram-bot-api Client.cpp). They are accepted only beside it and never read.
 const LEGACY_FORWARD_KEYS = ['forward_from', 'forward_from_chat', 'forward_from_message_id', 'forward_signature', 'forward_sender_name', 'forward_date'] as const;
 
+// The longest owner text one update carries. WhatsApp ingress shares this schema, and Meta documents no limit on the text a
+// user sends (its webhook reference says only "Text body of the message"), so the bound is the 65,536 characters commonly
+// cited for the WhatsApp app rather than Telegram's own 4,096, which Telegram enforces before an update exists.
+export const OWNER_TEXT_INBOUND_MAX_CHARS = 65_536;
+
 // A message is text, a photo, a document, a voice note or an audio file; media may carry a caption.
 // A forward is any of these with its origin. Video and stickers stay unparseable and get the honest static reply.
 export const telegramMessageUpdateSchema = z.strictObject({
@@ -229,7 +234,7 @@ export const telegramMessageUpdateSchema = z.strictObject({
     date: z.int().positive().optional(),
     from: telegramSenderSchema,
     chat: telegramPrivateChatSchema,
-    text: z.string().min(1).max(4096).optional(),
+    text: z.string().min(1).max(OWNER_TEXT_INBOUND_MAX_CHARS).optional(),
     entities: z.array(telegramTextEntitySchema).max(100).optional(),
     caption: z.string().min(1).max(1024).optional(),
     caption_entities: z.array(telegramTextEntitySchema).max(100).optional(),
