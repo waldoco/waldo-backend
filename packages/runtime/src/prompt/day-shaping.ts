@@ -33,9 +33,9 @@ export const coverageSection = (facts: CoverageFacts): string => fenced('what Wa
 
 export const COVERAGE_INSTRUCTION = [
   'Before you plan their time, ask yourself whether what you can see looks like this person\'s whole day. Reason from the facts above, from what their memory says about their job and routine (and any answer they already gave about their calendar), and from their mail when it suggests meetings no calendar shows (an invite, "see you at 3"); search it when that would change your read.',
-  'If it probably is not their whole day, say so at most once, plainly, and offer the fix: for example "Your work calendar might live somewhere I can\'t see. Want to share your phone\'s calendar, or connect another account?"',
-  'If their memory holds their answer, believe them and never ask again: "this is all of it" means it is. When they answer, remember it, so the question is never asked twice.',
-  'Unknown coverage is never free time: when you are unsure what you can see, propose less and say why.',
+  'If it probably is not their whole day and they have not told you otherwise, ask once, in a line, with the fix (sharing their phone\'s calendar, or connecting another account).',
+  'If their memory holds their answer, believe them: "this is all of it" means it is, so plan on what you see as their whole day and never raise coverage again. When they answer, remember it, so the question is never asked twice.',
+  'Unknown coverage is never free time: when you are unsure what you can see and they have not answered, propose less.',
 ].join(' ');
 // Outside the morning Brief the coverage question is not asked: one place asks, so the owner is asked once.
 export const COVERAGE_NOT_HERE = 'Do not ask about their calendar coverage here: the morning Brief asks when it needs to. Here, only let it make you propose less.';
