@@ -44,6 +44,11 @@ export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?
   // WALDO_CALL_CEILINGS: each call is measured against its class's ceiling, and an owner turn clears earlier tool results
   // once they would carry the call past the hard ceiling.
   callCeilings?: Pick<ContextBudget, 'chatCeilingTokens' | 'jobCeilingTokens' | 'hardCeilingTokens'>;
+  // WALDO_THINKING_REPLAY: Claude's thinking is replayed through a turn's tool loop, which keeps one tool list to its close.
+  thinkingReplay?: boolean;
+  // WALDO_STRONG_ROLES: the runs that decide something or write memory run on the chat model, planning runs at
+  // PLANNING_EFFORT (owner-turn.ts names which).
+  strongRoles?: boolean;
   onAttempts?: (attempts: readonly LLMAttempt[]) => void; held?: () => Promise<boolean> }>;
 
 export const ownerModelAccess = (access: string | OwnerModelAccess): OwnerModelAccess =>
@@ -135,6 +140,6 @@ export const ownerModelGateway = (access: OwnerModelAccess, options: Readonly<{
   const timeout = options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs };
   return routedGateway({
     [OPENAI_PROVIDER]: new OpenAIResponsesAdapter({ apiKey: access.openaiApiKey, ...timeout, ...(options.onOpenAIMetadata ? { onResponseMetadata: options.onOpenAIMetadata } : {}) }),
-    [ANTHROPIC_PROVIDER]: new AnthropicMessagesAdapter({ ...(access.anthropicApiKey === undefined ? {} : { apiKey: access.anthropicApiKey }), ...timeout }),
+    [ANTHROPIC_PROVIDER]: new AnthropicMessagesAdapter({ ...(access.anthropicApiKey === undefined ? {} : { apiKey: access.anthropicApiKey }), ...timeout, ...(access.thinkingReplay ? { replayThinking: true } : {}) }),
   });
 };

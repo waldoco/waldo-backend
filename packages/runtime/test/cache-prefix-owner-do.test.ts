@@ -81,7 +81,7 @@ it('each WhatsApp chat turn starts with the tools, system prompt and history the
 it.each([['1', 2], [undefined, 9]] as const)('past its budget, a WhatsApp chat with WALDO_STEPPED_WINDOW=%s breaks the prefix on at most %i of 9 turns', async (stepped, most) => {
   const doName = `cache-prefix-long-${stepped ?? 'off'}`;
   const budget = COMPACTION.budgetTokens;
-  Object.assign(COMPACTION, { budgetTokens: 3_000 });
+  Object.assign(COMPACTION, { budgetTokens: 4_286 });
   calls.length = 0;
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName)), async (_instance, state) => {
     const net = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ messages: [{ id: 'wamid.out' }] }));
