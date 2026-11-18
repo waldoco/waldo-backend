@@ -452,7 +452,13 @@ describe('the app and WhatsApp', { timeout: 20_000 }, () => {
       expect([copy!.status, copy!.expiresAt]).toEqual(['pending', Date.parse('2026-10-04T00:00:00Z')]);
       expect(copy!.expiresAt!).toBeLessThan(AT + WHATSAPP_COPY_FRESH_MS);
       ctx.now = copy!.expiresAt!;
-      for (let pass = 0; pass < 2; pass += 1) await outboxPass(owner, state, ctx);
+      const lines = vi.spyOn(console, 'log');
+      try {
+        for (let pass = 0; pass < 2; pass += 1) await outboxPass(owner, state, ctx);
+        // The expiry says what expired and what held it: a copy behind WhatsApp's closed window.
+        expect(lines.mock.calls.map(call => String(call[0])).filter(line => line.includes('"hop":"outbox_expired"')))
+          .toEqual([expect.stringContaining('"code":"expired:whatsapp_copy:window_closed"')]);
+      } finally { lines.mockRestore(); }
       // Expired and settled, the copy is a terminal record the outbox evicts when it needs room; a pending one is never evicted.
       expect(copies(state).map(record => [record.status, record.reason, record.settled])).toEqual([['blocked', 'expired', true]]);
       expect(wire.whatsapp).toEqual(['template:waldo_proactive_update']);
