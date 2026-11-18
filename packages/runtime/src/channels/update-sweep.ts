@@ -1,7 +1,8 @@
 import type { ToolName } from '@waldo/contracts';
 import { z } from 'zod';
 import type { GoogleClient } from '../connectors/google';
-import { machineResultText, UPDATE_SWEEP_ACT_AHEAD_TEXT, UPDATE_SWEEP_JOB_TEXT } from '../prompt/machine-jobs';
+import { carriesWebhook } from './webhook-changes';
+import { machineResultText, UPDATE_SWEEP_ACT_AHEAD_TEXT, UPDATE_SWEEP_JOB_TEXT, UPDATE_SWEEP_WEBHOOK_LINE } from '../prompt/machine-jobs';
 import { SKIP_UPDATE, triagePrompt, updateCardPrompt, updateEffectsPrompt, type TriageHold } from '../prompt/update-cards';
 import { taskBrief, type JobBook, type JobRow } from '../tasks/jobs';
 import { enqueueMachine, type MachineEnqueued, type MachineHandler, type MachineSpec } from '../tasks/machine';
@@ -60,6 +61,8 @@ export type SweepCheckDeps = Readonly<{
   // DEVICE_CALENDAR: the changes between the owner's phone-calendar snapshots, taken once inside the transaction, judged with
   // the rest.
   phone?: Readonly<{ takeChanges(): readonly Change[] }>;
+  // EVENT_TURNS: admitted webhooks waiting to be judged (webhook-changes.ts).
+  webhooks?: Readonly<{ take(): readonly Change[] }>;
   // BLOCK_LIFECYCLE: notes, in the same transaction, which of Waldo's blocks the owner just changed themselves.
   blocks?: Readonly<{ observe(changes: readonly Change[]): void }>;
   // HELD_RAISE: a batch the gate holds waits on its record, and with the gate open this says whether Waldo may reach the owner
@@ -89,7 +92,7 @@ export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepCheck
   let checked: SweepChecked;
   let changes = read.changes;
   try { checked = deps.transaction((): SweepChecked => {
-    changes = withPhoneChanges(writeChanges(updates, read), deps.phone?.takeChanges() ?? []);
+    changes = [...withPhoneChanges(writeChanges(updates, read), deps.phone?.takeChanges() ?? []), ...deps.webhooks?.take() ?? []];
     deps.blocks?.observe(changes);
     let recordId = changes.length ? updates.record(deps.day, deps.now, changes, null) : null;
     updates.pruneMail(deps.now);
@@ -137,14 +140,17 @@ export const withPhoneChanges = (google: readonly Change[], phone: readonly Chan
 // consolidator (WALDO_MEMORY_REDESIGN_2026-10-30.md §6.3).
 export type ObservedEvent = Readonly<{ kind: 'chat' | 'mail' | 'calendar' | 'health' | 'connector'; refs: readonly string[]; taint: 'owner' | 'external'; at: number; localDay: string }>;
 export const observedEvents = (checked: SweepChecked, localDay: string, at: number): readonly ObservedEvent[] =>
-  (checked.recorded?.sources ?? []).map(kind => ({ kind, refs: [`update:${checked.recorded!.id}`], taint: 'external', at, localDay }));
+  // A webhook is a connected source's event in the shape memory reads, so it keeps the agreed kinds.
+  (checked.recorded?.sources ?? []).map(source => ({ kind: source === 'webhook' ? 'connector' as const : source, refs: [`update:${checked.recorded!.id}`], taint: 'external', at, localDay }));
 export type ObservedSubscriber = (event: ObservedEvent) => void;
 export const emitObserved = (subscribers: readonly ObservedSubscriber[], events: readonly ObservedEvent[]): void => {
   for (const event of events) for (const subscriber of subscribers) subscriber(event);
 };
 
+const withWebhookLine = <T extends Readonly<{ goal: string }>>(text: T, analysis: readonly Change[]): T =>
+  analysis.some(change => change.source === 'webhook') ? { ...text, goal: `${text.goal} ${UPDATE_SWEEP_WEBHOOK_LINE}` } : text;
 const updateSweepSpec = (analysis: readonly Change[], job: Readonly<{ key: string; recordId: number; surface: string; timezone: string; now: number; actAhead: boolean }>): MachineSpec => ({
-  job: 'update_sweep', scope: 'owner', key: job.key, surface: job.surface, text: job.actAhead ? UPDATE_SWEEP_ACT_AHEAD_TEXT : UPDATE_SWEEP_JOB_TEXT,
+  job: 'update_sweep', scope: 'owner', key: job.key, surface: job.surface, text: withWebhookLine(job.actAhead ? UPDATE_SWEEP_ACT_AHEAD_TEXT : UPDATE_SWEEP_JOB_TEXT, analysis),
   // Mail with a source is named by its thread ref, which the apply turn's own prompt already carries; the rest by the event
   // or message a reader opens it by, and a change recorded before those were kept by position.
   items: analysis.map((change, index) => ({ ref: change.source_ref ?? change.ref ?? `${change.source}-${index + 1}`, detail: `${change.source} ${change.kind}: ${changeDetail(change)}` })),
@@ -284,7 +290,8 @@ export type UpdateSweepApplyDeps = Readonly<{
   transaction(work: () => void): void;
   context(): Promise<Readonly<{ ledger: string; feedback: string; volume: 'normal' | 'high' }>>;
   // The update-card turn on the owner's chain, with updateSweepTools (or the tools given) and the job's taint: its raw reply.
-  turn(trace: string, text: string, current: () => Promise<void>, tools?: readonly ToolName[]): Promise<string>;
+  // byOutside: the batch carries a webhook's change, so the run it starts is not one Waldo started (its effects stay cards).
+  turn(trace: string, text: string, current: () => Promise<void>, tools?: readonly ToolName[], byOutside?: boolean): Promise<string>;
   // Queues the card under its key for the update record, `commit` in the same transaction; a key already queued only commits.
   // With the day state it may be a revision of a day card, and carry the push line to raise once it is delivered.
   deliver(id: string, trace: string, text: string, recordId: number, commit: () => void, effect?: Readonly<{ revision?: string; push?: string; inPlace?: true }>): Promise<void>;
@@ -341,20 +348,23 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
       const heldRefs = new Set(held.flatMap(row => row.changes.flatMap(change => change.source_ref ? [change.source_ref] : [])));
       const fresh = heldRefs.size ? changes.filter(change => !(change.source_ref && heldRefs.has(change.source_ref))) : changes;
       if (!changes.length && !held.length) { deps.transaction(io.settle); return { held: 'held_stale' }; }
+      // Read from the job's own refs as well as its record, so a held webhook folded before this apply still counts.
+      const byOutside = carriesWebhook(refs) || [...changes, ...held.flatMap(row => row.changes)].some(change => change.source === 'webhook');
+      const outsideLine = byOutside ? `\n\n${UPDATE_SWEEP_WEBHOOK_LINE}` : '';
       const sourceFollowups = deps.sourceFollowups();
       const commit = () => { deps.updates.judgedJob(recordId!, refs); io.settle(); };
       const day = deps.dayState;
       if (!day) {
         const text = updateSweepApplyText(localIso(deps.now(), deps.timezone), changes, { ...await deps.context(), sourceFollowups }, result, withheld);
-        const reply = (await deps.turn(io.trace, text, io.current)).trim();
+        const reply = (await deps.turn(io.trace, `${text}${outsideLine}`, io.current, undefined, byOutside)).trim();
         if (!reply || reply === SKIP_UPDATE) { judged(row, io.settle); return 'skipped'; }
         await deps.deliver(`update:${row.id}`, io.trace, reply, recordId!, commit);
         return 'delivered';
       }
-      if (deps.triage) return triage(row, result, io, day, deps.triage, fresh, held, recordId!, withheld, sourceFollowups, commit);
+      if (deps.triage) return triage(row, result, io, day, deps.triage, fresh, held, recordId!, withheld, sourceFollowups, commit, byOutside);
       const quiet = day.quiet();
       const prompt = updateEffectsPrompt(localIso(deps.now(), deps.timezone), { changes: changeLines(changes), ...await deps.context(), sourceFollowups, cards: day.cards(), quiet, revisesCards: day.revisesCards });
-      const chosen = parseUpdateEffects(await deps.turn(io.trace, `${prompt}\n\n${machineResultText(result, withheld)}`, io.current));
+      const chosen = parseUpdateEffects(await deps.turn(io.trace, `${prompt}${outsideLine}\n\n${machineResultText(result, withheld)}`, io.current, undefined, byOutside));
       const skip = (code: UpdateEffectCode) => { day.chose(io.trace, code); judged(row, io.settle); return 'skipped' as const; };
       if (chosen === 'invalid') return skip('effects_invalid');
       if (chosen.revise && !day.delivered(chosen.revise.card)) return skip('revise_undelivered');
@@ -371,7 +381,7 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
   // The triage outcome is what the turn did, held to the owner's limits by code: a card it raised is the act, whatever it
   // answered; a tell that would interrupt them waits while quiet hours, the budget or the cooldown hold.
   const triage = async (row: JobRow, result: Parameters<MachineHandler['apply']>[1], io: Parameters<MachineHandler['apply']>[2], day: NonNullable<UpdateSweepApplyDeps['dayState']>,
-    sense: NonNullable<UpdateSweepApplyDeps['triage']>, changes: readonly Change[], held: readonly HeldRow[], recordId: number, withheld: readonly string[] | undefined, sourceFollowups: boolean, commit: () => void) => {
+    sense: NonNullable<UpdateSweepApplyDeps['triage']>, changes: readonly Change[], held: readonly HeldRow[], recordId: number, withheld: readonly string[] | undefined, sourceFollowups: boolean, commit: () => void, byOutside: boolean) => {
     const started = deps.now();
     const localDay = localIso(started, deps.timezone).slice(0, 10);
     const limits = deps.interruptions?.limits();
@@ -385,7 +395,8 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
       cards: day.cards(), revisesCards: day.revisesCards, hold, left: TRIAGE_INTERRUPTS_PER_DAY - deps.updates.interrupts(localDay).count, ...(own ? { limits: own.book.line(own.limits) } : {}),
       ...(sense.actAhead ? { actAhead: { style: sense.actAhead.style() } } : {}) });
     const heldText = held.length ? `\n\n${heldSection(held, changes, deps.timezone)}` : '';
-    const reply = await deps.turn(io.trace, `${prompt}${heldText}\n\n${machineResultText(result, withheld)}`, io.current, triageTools(sourceFollowups, canAct));
+    const outsideLine = byOutside ? `\n\n${UPDATE_SWEEP_WEBHOOK_LINE}` : '';
+    const reply = await deps.turn(io.trace, `${prompt}${heldText}${outsideLine}\n\n${machineResultText(result, withheld)}`, io.current, triageTools(sourceFollowups, canAct), byOutside);
     const chosen = parseTriage(reply);
     const asks = chosen !== 'invalid' && chosen.asks === true;
     const urgent = chosen !== 'invalid' && chosen.urgent === true;

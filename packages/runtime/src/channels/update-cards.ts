@@ -29,7 +29,7 @@ export type ChangeBefore = Readonly<{ start: string; end: string; all_day: boole
 // read, archived, starred: what the owner did with a mail already seen. more: how many new mails one read left unopened.
 // uid: a calendar event's iCal UID, kept beside the detail (never shown), so a phone change and a Google change to the same
 // meeting in one batch are said once.
-export type Change = Readonly<{ source: 'calendar' | 'mail'; kind: 'added' | 'changed' | 'cancelled' | 'new' | MailLabelChange['change'] | 'more'; detail: string; source_message_id?: string; source_ref?: string; ref?: string; before?: ChangeBefore; uid?: string }>;
+export type Change = Readonly<{ source: 'calendar' | 'mail' | 'webhook'; kind: 'added' | 'changed' | 'cancelled' | 'new' | MailLabelChange['change'] | 'more'; detail: string; source_message_id?: string; source_ref?: string; ref?: string; before?: ChangeBefore; uid?: string }>;
 // What the owner did with a mail is context for a judgment, never the reason for one.
 export const CONTEXT_KINDS: readonly Change['kind'][] = ['read', 'archived', 'starred'];
 // A cursor that moved between the read and its write: the write is rolled back and the next tick reads again.
@@ -200,6 +200,10 @@ export const updateBook = (sql: Sql) => {
       return sql.exec<{ text: string; feedback: string }>('SELECT text, feedback FROM update_cards WHERE feedback IS NOT NULL ORDER BY at DESC LIMIT ?', limit).toArray()
         .map((row) => `- ${row.feedback}: ${row.text.replace(/\n/g, ' ')}`).join('\n');
     },
+    // Whether the next day card's updates carry a webhook's text (ruling 3: such a card is not a run Waldo started).
+    unfoldedWebhook(): boolean {
+      return sql.exec("SELECT 1 FROM update_cards c, json_each(c.changes) j WHERE c.folded = 0 AND json_extract(j.value, '$.source') = 'webhook' LIMIT 1").toArray().length > 0;
+    },
     // A row a sweep job wrote with no new changes of its own (it judged earlier mail) and that sent nothing says nothing.
     unfolded(timezone: string): string {
       return sql.exec<{ at: number; changes: string; text: string | null; held_at: number | null; held_code: HeldCode | null }>("SELECT at, changes, text, held_at, held_code FROM update_cards WHERE folded = 0 AND (text IS NOT NULL OR changes != '[]') ORDER BY at").toArray()
@@ -226,10 +230,11 @@ export const updateBook = (sql: Sql) => {
     release(recordId: number, fold: boolean): void {
       sql.exec('UPDATE update_cards SET held_at = NULL, held_code = NULL, folded = CASE WHEN ? THEN 1 ELSE folded END WHERE raise_record = ? AND held_at IS NOT NULL', fold ? 1 : 0, recordId);
     },
-    // The rows recorded after `at`, oldest first, read without folding them: the nightly source pass keeps its own mark.
+    // The rows recorded after `at`, oldest first, read without folding them: the nightly source pass keeps its own mark. A
+    // webhook's change is left out: someone else's notice is not the owner's calendar or mail, and no ruling lets it into memory.
     recordedAfter(at: number, limit: number): readonly Readonly<{ at: number; changes: readonly Change[] }>[] {
       return sql.exec<{ at: number; changes: string }>("SELECT at, changes FROM update_cards WHERE at > ? AND changes != '[]' ORDER BY at LIMIT ?", at, limit).toArray()
-        .map((row) => ({ at: row.at, changes: JSON.parse(row.changes) as Change[] }));
+        .map((row) => ({ at: row.at, changes: (JSON.parse(row.changes) as Change[]).filter(change => change.source !== 'webhook') }));
     },
     // Whether the owner's day moved after `at` for a meeting with `people`: a calendar change that touches `day`, or new mail
     // from one of them. Other mail leaves the meeting as it was judged.

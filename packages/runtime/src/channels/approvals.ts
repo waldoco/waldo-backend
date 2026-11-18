@@ -261,9 +261,14 @@ export type Replacement = Readonly<{ approval_id: string; replaced: boolean; sta
 // ownerTurn: the owner started this turn with their own message, whatever it read since (ownerStartedTurn). With the owner's
 // "Just do it" choice on and AUTONOMY_OWNER_TURNS, such a request runs with no card too, unless it reaches a party named only in
 // outside text (the recipient guard in runAsked).
-export type ProposeOptions = Readonly<{ replaces?: string; outside?: boolean; origin?: RunOrigin; why?: readonly TrailStep[]; asked?: boolean; ownerTurn?: OwnerTurn }>;
+// waldoStarted: the host marked this run as one Waldo started itself (a card, a check-back, a sweep, an intervention), never one
+// that answers the owner or that someone else's words started. With AUTONOMY_WALDO_INWARD and the owner's "Just do it" choice, an
+// inward change it can undo runs with no card, even after the run read outside text (inwardUndoable).
+export type ProposeOptions = Readonly<{ replaces?: string; outside?: boolean; origin?: RunOrigin; why?: readonly TrailStep[]; asked?: boolean; ownerTurn?: OwnerTurn; waldoStarted?: true }>;
 // What a call's provenance lets it do without a card, as askedBy reads it off the turn.
-export type AskedOptions = Pick<ProposeOptions, 'asked' | 'ownerTurn'>;
+// series: the event a calendar change names was read as part of a recurring series. It travels with the proposal only, never in
+// the stored change, whose keys stay as a card always had them; nothing decides unasked after the proposal returns.
+export type AskedOptions = Pick<ProposeOptions, 'asked' | 'ownerTurn' | 'waldoStarted'> & Readonly<{ series?: true }>;
 // What the MCP handler knows of the tool a call names, from the owner's connection and the server's definition: a catalogue
 // app (one the console offers, whose writes that speak as the owner are named), a tool its server marks destructive, and a
 // write that speaks as the owner to other people, whose recipients code cannot list.
@@ -304,9 +309,9 @@ export const ownerAsked = (ctx: Readonly<{ ownerMessage?: Readonly<{ ownWordsOnl
 export type OwnerTurn = Readonly<{ words: string; ref?: string }>;
 export const ownerStartedTurn = (ctx: Readonly<{ ownerMessage?: Readonly<{ words?: string; messageRef?: string }>; runOrigin?: unknown }> | undefined): OwnerTurn | undefined =>
   ctx?.runOrigin === 'owner' && ctx.ownerMessage ? { words: ctx.ownerMessage.words ?? '', ...(ctx.ownerMessage.messageRef ? { ref: ctx.ownerMessage.messageRef } : {}) } : undefined;
-export const askedBy = (ctx: Parameters<typeof ownerAsked>[0] & Parameters<typeof ownerStartedTurn>[0]): AskedOptions => {
+export const askedBy = (ctx: (Parameters<typeof ownerAsked>[0] & Parameters<typeof ownerStartedTurn>[0] & Readonly<{ waldoStarted?: boolean }>) | undefined): AskedOptions => {
   const turn = ownerStartedTurn(ctx);
-  return { asked: ownerAsked(ctx), ...(turn ? { ownerTurn: turn } : {}) };
+  return { asked: ownerAsked(ctx), ...(turn ? { ownerTurn: turn } : {}), ...(ctx?.waldoStarted === true && !turn ? { waldoStarted: true as const } : {}) };
 };
 // The steps the host kept for the proposing call itself, never another call's.
 export const callWhy = (ctx: Readonly<{ whySteps?: readonly TrailStep[] }> | undefined): readonly TrailStep[] | undefined => ctx?.whySteps;
@@ -855,6 +860,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // AUTONOMY_OWNER_TURNS: with autonomous() on, a turn the owner started runs their work with no card even after it read outside
   // text, an MCP call, a standing grant and an undoable calendar cancel included (runAsked).
   ownerTurns?: () => boolean;
+  // AUTONOMY_WALDO_INWARD: with autonomous() on, an inward change Waldo can undo runs with no card in a run Waldo started.
+  waldoInward?: () => boolean;
   // Whether the owner already knows a party from their own Google account (known-parties.ts): someone they mailed, or a saved
   // contact. Absent, or false on any failure, the party is unknown.
   knownParty?: (address: string, account?: string) => Promise<boolean>;
@@ -2102,8 +2109,24 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // AUTONOMY_OWNER_TURNS. A tool its server marks destructive keeps its card (a permanent deletion), and so does a standing
   // grant asked for after an outside read.
   const WIDE_KINDS: readonly string[] = ['mcp_call', 'standing_grant'];
-  const askedRule = async (entry: LedgerRow, how: AskedOptions, reach?: McpReach): Promise<'asked' | 'owner' | null> => {
+  // Inward and undoable, as code can check it: a day plan's blocks (they carry no guests and Undo removes them), or a calendar
+  // change on the owner's own primary calendar that invites, emails or links no one, and, for a move or a cancel, an event read
+  // before the change with no guests. Whether the change serves the owner is the model's judgment; this only bounds what may run
+  // unasked. A cancel also needs Waldo to be able to put it back (runAsked).
+  // It carries no text beyond a title, since a shared calendar shows a description or a place to others; it touches no series,
+  // whose change reaches every instance; and it replaces no card, so it can never withdraw one the owner has not seen decided.
+  const inwardUndoable = (entry: LedgerRow, series: boolean): boolean => {
+    if (entry.replaces) return false;
+    if (entry.kind === 'calendar_plan') return true;
+    if (entry.kind !== 'calendar_change') return false;
+    const p = JSON.parse(entry.payload_json) as Stored;
+    const primary = p.calendar_id === undefined || p.calendar_id === 'primary' || (p.account !== undefined && p.calendar_id.toLowerCase() === p.account.toLowerCase());
+    const reachesNoOne = !p.attendees?.length && p.send_updates !== 'all' && !p.add_meet_link && p.description === undefined && p.location === undefined && p.rename_to === undefined;
+    return primary && reachesNoOne && !series && (p.action === 'create' || (p.seen_etag !== undefined && (p.seen_guests ?? 0) === 0));
+  };
+  const askedRule = async (entry: LedgerRow, how: AskedOptions, reach?: McpReach): Promise<'asked' | 'owner' | 'waldo' | null> => {
     if (!autonomous()) return null;
+    if (how.waldoStarted && deps.waldoInward?.() === true) return inwardUndoable(entry, how.series === true) ? 'waldo' : null;
     const wide = deps.ownerTurns?.() === true;
     if (WIDE_KINDS.includes(entry.kind) ? !wide : !ASKED_RUN_KINDS.includes(entry.kind)) return null;
     if (entry.kind === 'mcp_call' && reach?.destructive !== false) return null;
@@ -2119,7 +2142,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     // A cancel runs unasked only where Waldo can put it back: an event read before the change. Under the asked rule it also has
     // no guests, whom a cancel emails at once and no undo reaches; under the owner rule the owner's request to cancel covers
     // that notice. One Waldo cannot put back is a permanent deletion and keeps its card.
-    if (entry.kind === 'calendar_change' && p.action === 'cancel' && (!deps.undoCancels || !p.seen_etag || (rule === 'asked' && (p.seen_guests ?? 0) > 0))) return false;
+    if (entry.kind === 'calendar_change' && p.action === 'cancel' && (!deps.undoCancels || !p.seen_etag || (rule !== 'owner' && (p.seen_guests ?? 0) > 0))) return false;
     if (earlierUnknown(entry)) return false;
     const digest = `sha256:${await sha256Hex(entry.payload_json)}`;
     // The card this revises closes in the commit that opens the run, as present() closes it when the new card is shown, so the
@@ -2143,6 +2166,12 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     });
     askedOutcomes.set(id, decision);
     if (askedOutcomes.size > ASKED_OUTCOMES_KEPT) askedOutcomes.delete(askedOutcomes.keys().next().value!);
+    // Waldo's own run made this unasked, so the owner hears of it from the desk, with its Undo, whatever the run goes on to say.
+    if (rule === 'waldo' && row(id)?.status === 'done') {
+      if (!decision.message.includes('Undo is available')) deps.log({ trace: id, hop: 'approval_waldo_run', ms: 0, ok: false, code: 'no_undo' });
+      await say(`Done without asking: ${entry.summary} ${decision.message}`, undoButton(id, decision))
+        .then(() => deps.log({ trace: id, hop: 'approval_waldo_notice', ms: 0, ok: true }), () => deps.log({ trace: id, hop: 'approval_waldo_notice', ms: 0, ok: false, code: 'unsent' }));
+    }
     return true;
   };
   const raising = new Set<string>();
@@ -2484,7 +2513,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         bindOrigin(id, originRunRef);
         bindWhy(id, options.why);
         bindOptions(id, options);
-        if (await runAsked(id, options)) return id;
+        if (await runAsked(id, { ...options, ...(before?.recurring_event_id !== undefined || before?.series ? { series: true as const } : {}) })) return id;
         if (client && await granted(id, stored, client, options.origin, before)) return id;
         await present(id);
         return id;

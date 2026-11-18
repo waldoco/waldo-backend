@@ -146,6 +146,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // a party reached only through outside text, a payment, a password, a browser submit and permanent deletion keep their cards.
   // Off unless "1"; it does nothing where AUTONOMOUS_BY_DEFAULT is not "1".
   AUTONOMY_OWNER_TURNS?: string;
+  // "1": for an owner whose "Just do it" choice is on, a run Waldo started (a card, a check-back, a sweep, an intervention) makes an
+  // inward change it can undo with no card, even after reading mail: a guest-free block on the owner's own primary calendar, a day
+  // plan, a cancel Waldo can put back. Anything that reaches someone else keeps its card. Does nothing where AUTONOMOUS_BY_DEFAULT is not "1".
+  AUTONOMY_WALDO_INWARD?: string;
   // "1" offers track/log/list/stop_medication on owner turns and words medicine reminders in the harness from a health-plane
   // read. Off unless "1".
   MEDICATIONS?: string;
@@ -248,6 +252,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // composed context and the last few rows of the owner's exchange instead of the chat replay, under one tool menu and a
   // 1-hour cached head shared by every scheduled job kind (channels/owner-turn.ts).
   WALDO_LEAN_SCHEDULED?: string;
+  // "1": a run Waldo starts (a day card, a check-back, a sweep, an intervention) may leave itself a bounded follow-up with a
+  // note to its future self, which wakes a later check-back and grants nothing (channels/loops.ts).
+  MODEL_SET_WAKES?: string;
   // "1": the owner's WhatsApp turns read and write the owner's own chain, the one their app chat uses (conversation/one-timeline.ts).
   WALDO_ONE_TIMELINE?: string;
   // "1": the owner's own reply takes a light step that answers quick chat or hands the turn to the strong role, and every task
@@ -337,6 +344,12 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   PROACTIVE_BOTH_DEFAULT?: string;
   // '1' has an event notice that reaches the app chat raise one push, under quiet hours and the owner's own limits.
   EVENT_PUSH?: string;
+  // "1" hands a verified webhook from a source that notifies to the update sweep's model as outside text, in place of the
+  // fixed "Event - …" note, where that sweep runs. Its effects keep their cards. Off unless "1".
+  EVENT_TURNS?: string;
+  // "1", with EVENT_TURNS: a cheap first look on the auxiliary model judges each queued webhook (wake the sweep, keep it for the
+  // next day card, or ignore it) before any full run. Off unless "1"; off, every queued webhook goes to the sweep.
+  FIRST_LOOK?: string;
   // "1": when today's first health row is written after the Daily Brief reached the owner, one turn reads it against the Brief
   // and may revise it (in place where cards can be edited). Once a day. Off unless "1".
   BRIEF_BODY_REVISION?: string;

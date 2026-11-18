@@ -89,6 +89,8 @@ export type OwnerResponder = Readonly<{
   threadTitle(trace: string, exchange: string, scope: RunEffectScope): Promise<string>;
   // The model's raw answer writing one progress note for a turn still running; the scope is the note's own, as above.
   progressNote(trace: string, input: string, scope: RunEffectScope): Promise<string>;
+  // FIRST_LOOK: the model's raw answer judging waiting webhooks (first-look.ts); the caller reads it against the schema.
+  firstLook?(trace: string, input: string): Promise<string>;
   control: ReturnType<typeof turnControl>;
 }>;
 

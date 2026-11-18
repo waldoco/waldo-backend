@@ -56,6 +56,11 @@ type SweepScheduler = Readonly<{
 }>;
 
 // No sweep means the owner turned these updates off or their zone is not confirmed yet: a push changes nothing then.
+// The sweep runs on its own: armed, not paused, retrying or quarantined.
+export const sweepArmed = (scheduler: Pick<SweepScheduler, 'lookup'>): boolean => {
+  const found = scheduler.lookup(BRIEF_SWEEP_ID);
+  return found.state === 'entry' && found.entry.status === 'armed';
+};
 export const wakeBriefSweep = async (scheduler: SweepScheduler, now: number): Promise<boolean> => {
   const found = scheduler.lookup(BRIEF_SWEEP_ID);
   if (found.state !== 'entry' || found.entry.status !== 'armed') return false;
