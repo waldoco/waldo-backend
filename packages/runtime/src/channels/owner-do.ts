@@ -5238,6 +5238,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // The nightly pass is never zone-free, so it is held exactly when an app owner's zone is unconfirmed.
     const zoneWait = !armable('nightly');
     if (zoneWait) log({ trace: 'own-jobs', hop: 'own_jobs', ms: 0, ok: false, code: armable('event_briefs') ? 'day_cards_waiting_timezone_unconfirmed' : 'waiting_timezone_unconfirmed' });
+    // Arming leaves a look or heartbeat row that exists as it is, so a row that never fires is never replaced. Each build logs
+    // both rows as it found them and as it left them: lookup state, status, minutes to due and to a pause's end, attempts.
+    const rowState = (id: string, now: number): string => {
+      const found = scheduler.lookup(id);
+      if (found.state !== 'entry') return found.state;
+      const { status, due_at, attempts, quarantined_until } = found.entry, minutes = (at: number) => Math.round((at - now) / 60_000);
+      return `${status}:due_in_min=${minutes(due_at)}:attempts=${attempts}${quarantined_until === null ? '' : `:paused_min=${minutes(quarantined_until)}`}`;
+    };
+    const rowsFound = { sweep: rowState(BRIEF_SWEEP_ID, Date.now()), heartbeat: rowState(HEARTBEAT_ID, Date.now()) };
     const proactiveReady = channel === 'imessage' && !this.imessageOnly() ? this.browserReady : channel === 'app'
       ? (armable('nightly') || armable('event_briefs') ? Promise.all([backfillEpisodes(kv, episodes), armOwnJobs(clock.timezone, Date.now()), this.browserReady])
         .then(() => reconcileSchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now: Date.now(), cancelMachine, alongHeartbeat: lookFollows, sweepCarriesUpdates }))
@@ -5252,7 +5261,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (seeded) void this.serial(() => this.asOwnerJob('brief', `day-plan:boot:${Date.now()}`, () => planToday('day-plan:boot')));
       });
     // Watch upkeep is infrastructure, not proactive work: every runtime arms it, whatever the owner's preferences and zone state.
-    const ready = Promise.all([proactiveReady, accounts().then(all => armWatchUpkeep(scheduler, watchGrants(all), Date.now()))]).then(() => undefined);
+    const ready = Promise.all([proactiveReady, accounts().then(all => armWatchUpkeep(scheduler, watchGrants(all), Date.now()))]).then(() => {
+      const now = Date.now(), sweep = rowState(BRIEF_SWEEP_ID, now), armed = sweep.startsWith('armed:');
+      log({ trace: 'own-jobs', hop: 'own_jobs_rows', ms: 0, ok: armed, code: armed ? 'sweep_armed' : 'sweep_not_armed',
+        detail: `sweep=${rowsFound.sweep}>${sweep};heartbeat=${rowsFound.heartbeat}>${rowState(HEARTBEAT_ID, now)}` });
+    });
     // A model call opens the store under its live turn's run scope. An approved card replays after that turn has ended, as
     // the owner's own decision, so it opens the store as the owner's console does, without one.
     const openWorkspace = (ctx?: Readonly<{ runScope?: RunEffectScope; assertTaskSourceCurrent?: () => Promise<void>; approvedTaintedAction?: unknown }>) => {

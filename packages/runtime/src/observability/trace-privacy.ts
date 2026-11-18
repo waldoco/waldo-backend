@@ -38,7 +38,11 @@ const MEMORY_EVIDENCE = /^(?:admitted:supported|held:(?:same_day|too_few_claims|
 const HEALTH_READ = /^(?:present|absent|partial|read_failed)$/;
 // Semantic recall's details are counts and its leg name (semantic-recall.ts), checked here rather than trusted.
 const SEMANTIC_COUNTS = /^(?:sweep texts=\d{1,9}|query rows=\d{1,9} scan_ms=\d{1,9}|embedded=\d{1,9} withheld=\d{1,9}|sweep|query)$/;
-const SEMANTIC_HOPS = new Set(['memory_embedding', 'memory_embed']);
+// The owner object's look and heartbeat rows at each runtime build (owner-do.ts): lookup states, statuses, minutes and attempts.
+const ROW_STATE = '(?:absent|unreadable|(?:armed|quarantined):due_in_min=-?\\d{1,7}:attempts=\\d{1,4}(?::paused_min=-?\\d{1,7})?)';
+const OWN_JOB_ROWS = new RegExp(`^sweep=${ROW_STATE}>${ROW_STATE};heartbeat=${ROW_STATE}>${ROW_STATE}$`);
+// Hops whose detail passes only when it matches its hop's pattern, checked here rather than trusted.
+const CHECKED_DETAIL_HOPS: ReadonlyMap<string, RegExp> = new Map([['memory_embedding', SEMANTIC_COUNTS], ['memory_embed', SEMANTIC_COUNTS], ['own_jobs_rows', OWN_JOB_ROWS]]);
 
 // Gates one turn-log entry for every sink that consumes it (the DO trace table, the wrangler
 // console JSON line and the OTLP exporter): with capture off, detail survives only for hops
@@ -87,7 +91,7 @@ const gateWithoutCapture = (entry: TurnLogEntry): TurnLogEntry => {
   }
   return {
     ...entry,
-    detail: SAFE_DETAIL_HOPS.has(entry.hop) || (SEMANTIC_HOPS.has(entry.hop) && typeof entry.detail === 'string' && SEMANTIC_COUNTS.test(entry.detail)) ? entry.detail : entry.code,
+    detail: SAFE_DETAIL_HOPS.has(entry.hop) || (typeof entry.detail === 'string' && CHECKED_DETAIL_HOPS.get(entry.hop)?.test(entry.detail) === true) ? entry.detail : entry.code,
     error: undefined,
     // The guard diagnostic is enum-only and validated HERE at the gate, not trusted from the
     // producer: an invalid value is dropped before any sink sees it.

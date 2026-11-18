@@ -136,6 +136,24 @@ describe('proactive work for an owner who only uses the app', () => {
     } finally { lines.mockRestore(); }
   });
 
+  it('logs the look\'s and the heartbeat\'s rows as each runtime build finds and leaves them, so a row that never fires is visible', async () => {
+    const lines = vi.spyOn(console, 'log');
+    try {
+      await withAppOwner('proactive-rows-logged', { zone: 'Europe/London', confirmed: true }, async (owner, state) => {
+        const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps()), now = Date.now();
+        await scheduler.schedule({ id: BRIEF_SWEEP_ID, kind: 'pre_activity_spot', payloadRefs: { id: BRIEF_SWEEP_ID }, occurrenceAt: now + 600_000, dueAt: now + 600_000,
+          recurrence: { type: 'interval', every_ms: 600_000, phase_ms: 0 } });
+        state.storage.sql.exec("UPDATE schedule SET status = 'quarantined', attempts = 3, quarantined_until = ? WHERE id = ?", now + 20 * 3_600_000, BRIEF_SWEEP_ID);
+        await owner.setup('app').ready;
+        expect(schedule(state)[BRIEF_SWEEP_ID]?.status).toBe('quarantined');
+      });
+      const rows = lines.mock.calls.map(call => String(call[0])).filter(line => line.includes('"hop":"own_jobs_rows"')).map(line => JSON.parse(line) as { code: string; detail: string });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.code).toBe('sweep_not_armed');
+      expect(rows[0]!.detail).toMatch(/^sweep=quarantined:due_in_min=10:attempts=3:paused_min=1200>quarantined:due_in_min=10:attempts=3:paused_min=1200;heartbeat=absent>armed:due_in_min=30:attempts=0$/);
+    } finally { lines.mockRestore(); }
+  });
+
   it('arms nightly, heartbeat, the event-brief sweep and today\'s day cards in a confirmed zone on first app use', async () => {
     await withAppOwner('proactive-confirmed-boot', { zone: 'Europe/London', confirmed: true }, async (owner, state) => {
       await owner.setup('app').ready;
