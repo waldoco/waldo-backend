@@ -42,6 +42,8 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_LEAN_SCHEDULED: mapped('the trial\'s day cards and triage turns run as the Waldo-first scheduled runs the owner object marks them, on the lean view and its shared menu'),
   MODEL_SET_WAKES: mapped('the trial\'s day cards and triage turns may leave themselves a follow-up, as the owner object\'s do; no trial step fires its check-back yet'),
   WALDO_LIGHT_CHAT: gap("the owner's reply takes a light step on the auxiliary model that answers quick chat or hands the turn to the chat model, and task workers run on the chat model; the profile's trials stay on the chat model, and the lc- scenarios run with it on"),
+  WALDO_THINKING_REPLAY: gap("a Claude turn replays its thinking across tool rounds, and every turn's closing round keeps its tool list; the live profile runs on OpenAI (a Claude staging is refused), so a trial sees only the kept tool list at a close"),
+  WALDO_STRONG_ROLES: gap('memory writes, background decisions, the day plan and planning runs move to the chat model; the trial runs owner turns, which it leaves unchanged'),
   WALDO_COMPACTION: mapped('the trial\'s chat runs on the canonical store with these compaction settings'),
   WALDO_STEPPED_WINDOW: mapped('the trial\'s chat history is windowed in steps under the same compaction settings'),
   WALDO_CONTEXT_CAPS: gap('caps the standing orders and quests a turn reads and clears tool results down to the latest few past a size (the context budget\'s settings); no trial holds that many orders or quests or runs that long a tool loop, so the trials read as they would with it on'),

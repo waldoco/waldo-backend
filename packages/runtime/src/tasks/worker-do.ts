@@ -57,8 +57,8 @@ export class TaskWorkerDO extends DurableObject<TelegramWebhookEnv> {
         heartbeat: (ticket) => owner.taskHeartbeat(ticket),
         spent: (ticket, events) => owner.taskSpent(ticket, events),
       };
-      const access = { openaiApiKey: this.env.OPENAI_API_KEY ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), primary: modelProviderSetting(this.env.WALDO_MODEL_PROVIDER), health: this.health };
-      outcome = await runTaskAttempt(held.ticket, { brain, model: taskModel(access, undefined, lightChatEnabled(this.env)), health: this.health, sliceEnd: Date.now() + TASK_ALARM_SLICE_MS });
+      const access = { openaiApiKey: this.env.OPENAI_API_KEY ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), primary: modelProviderSetting(this.env.WALDO_MODEL_PROVIDER), health: this.health, ...(this.env.WALDO_THINKING_REPLAY === '1' ? { thinkingReplay: true } : {}) };
+      outcome = await runTaskAttempt(held.ticket, { brain, model: taskModel(access, undefined, lightChatEnabled(this.env) || this.env.WALDO_STRONG_ROLES === '1'), health: this.health, sliceEnd: Date.now() + TASK_ALARM_SLICE_MS });
     } catch {
       outcome = 'lost';
     }
