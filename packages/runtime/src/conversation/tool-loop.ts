@@ -82,6 +82,9 @@ export const BROWSING_UNAVAILABLE = 'Browsing is unavailable on this Waldo for t
 // provider unavailable, a rejected key), so after one both are withheld until the turn ends. Keyed on the typed code.
 const BROWSE_TOOLS: ReadonlySet<string> = new Set(['browse_page', 'browse_act']);
 const TIME_UP_NOTE = `\n[budget: turn time is up - no more tool calls; ${CLOSING}]`;
+const BUDGET_UP_NOTE = `\n[budget: tool budget exhausted this turn - no more tool calls; ${CLOSING}]`;
+// A closing round that keeps the tool list hears that it closes from the newest result, which no request has sent yet.
+const CLOSE_NOTE = `\n[budget: no more tool calls this turn; ${CLOSING}]`;
 
 // Every round resends the turn's tool results. Past this many characters of result text the oldest results are cleared
 // (the call stays, its result becomes a short note), down to half of it at once, so a long turn stays inside the model's
@@ -177,6 +180,12 @@ export async function runToolLoop(input: Readonly<{
   // A machine turn's check, before each round after the first: true when the owner's own message is waiting, so the turn
   // closes as if its time were up (no more tools, one last answer) and the owner's turn takes the chain.
   yieldNow?: () => boolean;
+  // WALDO_THINKING_REPLAY: the closing round offers the same tool list as every round before it, so the request's prefix, and
+  // the thinking bound to it, stay as sent; the newest result says no more tools, and a call made anyway is not run.
+  // Not for a task worker's remote loop, whose report is itself a tool call.
+  keepMenuToClose?: boolean;
+  // Told how many calls a closing round made that were not run, with the menu kept.
+  onCloseCalls?: (calls: number) => void;
 }>): Promise<string> {
   const loader = input.loader && !input.remote ? input.loader(toolDefinitions(input.handlers)) : undefined;
   const tools = input.remote ? [...input.remote.tools] : loader ? [...loader.offered] : toolDefinitions(input.handlers);
@@ -310,6 +319,10 @@ export async function runToolLoop(input: Readonly<{
     }
     if ((offer || repairEmptyCeiling) && input.budget !== undefined) input.budget.remaining -= 1;
     input.ctx.runScope?.admit();
+    // Rounds before this one offered the list, and this round's newest result has not been sent.
+    const closeOnMenu = input.keepMenuToClose === true && !input.remote && !offer && !repairEmptyCeiling && round > 0 && roundTools.length > 0;
+    const newest = closeOnMenu ? turns.at(-1) : undefined;
+    if (newest && !newest.output.endsWith(TIME_UP_NOTE) && !newest.output.endsWith(BUDGET_UP_NOTE)) turns[turns.length - 1] = { ...newest, output: newest.output + CLOSE_NOTE };
     let response: Awaited<ReturnType<ToolLoopStep>>;
     const shown = shownTurns();
     for (const turn of healthShown ? [] : shown) {
@@ -317,7 +330,7 @@ export async function runToolLoop(input: Readonly<{
       if (await healthTurns.get(turn)) { healthShown = true; input.ctx.healthShown = true; break; }
     }
     try {
-      response = await withCallDeadline(runScope, deadline, () => input.step(offer ? roundTools : undefined, shown, { healthShown, tainted }));
+      response = await withCallDeadline(runScope, deadline, () => input.step(offer || closeOnMenu ? roundTools : undefined, shown, { healthShown, tainted }));
     } catch (error) {
       // A model step that fails once the turn's time is gone ends the turn plainly; a closed or stopped run never does.
       if (error instanceof ClosedRunError || runScope?.signal?.aborted || Date.now() < deadline) throw error;
@@ -333,6 +346,7 @@ export async function runToolLoop(input: Readonly<{
       taintedBy('*');
     }
     if (response.tool_calls === undefined || (!offer && !repairEmptyCeiling)) {
+      if (closeOnMenu && response.tool_calls?.length) input.onCloseCalls?.(response.tool_calls.length);
       input.onSettle?.(exit);
       return withInwardReceipts(guardArtifactLinks(response.text || (exit === 'budget_exhausted' || exit === 'time_exhausted'
         ? unfinishedReply(exit, done)
@@ -477,7 +491,7 @@ export async function runToolLoop(input: Readonly<{
       const budgetNote = toolTimeLeft < 0
         ? TIME_UP_NOTE
         : input.maxSteps > WARN_WINDOW_ROUNDS && roundsLeft === 0
-          ? `\n[budget: tool budget exhausted this turn - no more tool calls; ${CLOSING}]`
+          ? BUDGET_UP_NOTE
           : input.maxSteps > WARN_WINDOW_ROUNDS && roundsLeft > 0 && roundsLeft < WARN_WINDOW_ROUNDS
             ? `\n[budget: ${roundsLeft} tool round${roundsLeft === 1 ? '' : 's'} left this turn - finish the step you are on, then answer with what is done and what is left]`
             : toolTimeLeft < TOOL_TIME_WARN_MS
