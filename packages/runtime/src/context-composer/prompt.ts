@@ -246,7 +246,10 @@ function renderPartialHealth(view: PartialHealthView, daySummary: string, highSt
   return [
     view.no_score_row === true
       ? 'Partial health context: no Recovery, Form or Load reading is stored for this owner yet, so there is no recovery or readiness reading to give.'
-      : 'Partial health context: Recovery and Form were not computed for this day, so there is no recovery or readiness reading to give.',
+      : view.form_without_recovery !== undefined
+        ? 'Partial health context: Recovery was not computed for this day, so there is no reading on the night; Form stands on the day alone.'
+        : 'Partial health context: Recovery and Form were not computed for this day, so there is no recovery or readiness reading to give.',
+    ...renderFormWithoutRecovery(view.form_without_recovery),
     `Freshness: ${view.freshness}. Latest body data: ${AS_OF_WORDS[view.as_of_day]}${sources}.`,
     ...(view.inventory === undefined
       ? [`In the row: ${view.present.length === 0 ? 'none of the inputs these scores use' : view.present.map((item) => (item === 'last_night_sleep' ? NIGHT_WORDS[view.as_of_day] : PRESENT_WORDS[item])).join('; ')}.`]
@@ -275,6 +278,11 @@ function renderInventory(inventory: readonly HealthInventoryEntry[] | undefined)
     return `${HEALTH_SIGNALS[entry.signal].words} (${GRAIN_WORDS[entry.grain]}; ${NEWEST_WORDS[entry.newest]}; ${REGULARITY_WORDS[entry.regularity]}${from})`;
   });
   return [`Body data on hand this month: ${kinds.join('; ')}.`];
+}
+
+const FORM_BASIS_WORDS = { sleep_timing: 'sleep timing', daylight: 'daylight', movement: 'movement', steps: 'steps', stress: 'heart rate through the day' } as const;
+function renderFormWithoutRecovery(form: PartialHealthView['form_without_recovery']): string[] {
+  return form === undefined ? [] : [`Form: ${form.zone}, from ${form.basis.map((part) => FORM_BASIS_WORDS[part]).join(', ')} without last night; confidence ${form.confidence_band}.`];
 }
 
 // Each stored reason in words, and the one step that supplies what it lacks. Facts about inputs, never advice on the body.

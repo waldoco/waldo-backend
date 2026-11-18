@@ -15,6 +15,8 @@ export const ALGORITHM = { recovery: 'recovery.candidate.v4', form: 'form.candid
 // Provisional scores (recovery.v5 and the versions on it) read every component against the shared baseline from the
 // owner's first day; the versions above stay as they were for the switch that keeps them.
 export const PROVISIONAL_ALGORITHM = { recovery: 'recovery.v5', form: 'form.v10', weight: 'weight.v5', sleepDebt: 'sleep-debt.v2' } as const;
+// A pillar the degraded rule computed where the provisional one gave none: its own version, written as a candidate.
+export const DEGRADED_ALGORITHM = { recovery: 'recovery.v6', form: 'form.v11' } as const;
 // Shares of the Recovery score. Keys name the component's role, not a reading.
 export const RECOVERY_SHARES = { sleep: 0.5, variability: 0.3, pulse: 0.2 } as const;
 // RMSSD is the canonical HRV method and SDNN its labelled fallback. A nightly minimum is the closest resting measure, then a
@@ -30,6 +32,8 @@ export interface RecoveryBasis {
   // Provisional only: the own-day count of each used component that stands on the owner's history, and whether a prior took part.
   readonly own?: readonly number[];
   readonly usedPrior?: boolean;
+  // The degraded rule only: the night's sleep alone, with no overnight heart signal that stands on a baseline.
+  readonly sleepOnly?: true;
 }
 export type RecoveryOutcome = RecoveryBasis | Readonly<{ reason: UnavailableReason }>;
 
@@ -107,12 +111,12 @@ const matchedStanding = <Method extends string>(
   return null;
 };
 
-export const provisionalRecoveryBasis = (target: DayRecord, prior: readonly DayRecord[], sleepNeedMinutes: number | null): RecoveryOutcome => {
+export const provisionalRecoveryBasis = (target: DayRecord, prior: readonly DayRecord[], sleepNeedMinutes: number | null, degrade = false): RecoveryOutcome => {
   if (!target.sleep) return { reason: 'missing_sleep' };
   const nights = prior.flatMap(day => (day.sleep ? [day.sleep.asleepMinutes] : []));
   const need = sleepNeedMinutes ?? sleepNeed(nights);
   if (need <= 0) return { reason: 'baseline_immature' };
-  if (!target.overnightHrv.length && !target.restingHeartRate.length) return { reason: 'missing_resting_signal' };
+  if (!degrade && !target.overnightHrv.length && !target.restingHeartRate.length) return { reason: 'missing_resting_signal' };
 
   const components: Component[] = [{ name: 'sleep', score: clampScore(target.sleep.asleepMinutes / need * 100), weight: RECOVERY_SHARES.sleep }];
   const signals: UsedSignal[] = ['sleep'];
@@ -139,6 +143,6 @@ export const provisionalRecoveryBasis = (target: DayRecord, prior: readonly DayR
     own.push(resting.at.own);
     usedPrior ||= resting.at.prior;
   }
-  if (!hrv && !resting) return { reason: 'baseline_immature' };
+  if (!hrv && !resting) return degrade ? { components, signals, days: [...days].sort(), hrvMethod, own, usedPrior, sleepOnly: true } : { reason: 'baseline_immature' };
   return { components, signals, days: [...days].sort(), hrvMethod, own, usedPrior };
 };

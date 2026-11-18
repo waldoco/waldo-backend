@@ -1,5 +1,5 @@
 import { circularStanding, labelOf, standing } from './baseline';
-import { ALGORITHM, PROVISIONAL_ALGORITHM, provisionalRecoveryBasis, recoveryBasis } from './recovery';
+import { ALGORITHM, DEGRADED_ALGORITHM, PROVISIONAL_ALGORITHM, provisionalRecoveryBasis, recoveryBasis, type RecoveryBasis } from './recovery';
 import { BASELINE_DAYS, circularZScore, combine, higherIsBetter, lowerIsBetter, mean, nearUsual, zScore, logZScore, type Component } from './stats';
 import { localDayWindow, wallMinute } from './time';
 import { formZone } from './zones';
@@ -62,10 +62,13 @@ const throughMinute = (day: DayRecord, minute: number | null): DayRecord =>
 const formHours = (day: DayRecord, provisional: boolean): DayRecord =>
   ({ ...day, hourly: day.hourly.filter(bucket => bucket.heartRate !== null || bucket.hrvReadings.length > 0 || bucket.daylightMinutes !== null || bucket.movementMinutes !== null || (provisional && (bucket.steps ?? null) !== null)) });
 
-export const formScore = (record: DayRecord, earlier: readonly DayRecord[], sleepNeedMinutes: number | null, asOf: string | null, provisional = false): FormResult => {
+export const formScore = (record: DayRecord, earlier: readonly DayRecord[], sleepNeedMinutes: number | null, asOf: string | null, provisional = false, degrade = false): FormResult => {
   const target = formHours(record, provisional), prior = earlier.map(day => formHours(day, provisional));
-  const recovery = provisional ? provisionalRecoveryBasis(target, prior, sleepNeedMinutes) : recoveryBasis(target, prior, sleepNeedMinutes);
-  if ('reason' in recovery) return { state: 'unavailable', reason: recovery.reason };
+  const outcome = provisional ? provisionalRecoveryBasis(target, prior, sleepNeedMinutes, degrade) : recoveryBasis(target, prior, sleepNeedMinutes);
+  // The degraded rule reads the day's own parts when Recovery has none; Recovery's reason stands only if they add nothing either.
+  if ('reason' in outcome && !degrade) return { state: 'unavailable', reason: outcome.reason };
+  const recovery: RecoveryBasis = 'reason' in outcome ? { components: [], signals: [], days: [], hrvMethod: null } : outcome;
+  const degraded = 'reason' in outcome || outcome.sleepOnly === true;
   if (target.hourly.length === 0) return { state: 'unavailable', reason: 'intraday_inputs_unavailable' };
   // The day's data horizon: the end of its newest hour. A day still running needs that horizon recent; a finished day is
   // judged on the hours it has, so a recompute the next morning does not turn it stale.
@@ -145,10 +148,11 @@ export const formScore = (record: DayRecord, earlier: readonly DayRecord[], slee
       add('stress', mean(parts), FORM_WEIGHTS.stress, stressHistory.map(entry => entry.day));
     }
   }
-  if (!signals.some(name => name === 'daylight' || name === 'movement' || name === 'steps' || name === 'stress')) return { state: 'unavailable', reason: 'baseline_immature' };
+  if (!signals.some(name => name === 'daylight' || name === 'movement' || name === 'steps' || name === 'stress')) return { state: 'unavailable', reason: 'reason' in outcome ? outcome.reason : 'baseline_immature' };
 
   const { score, coverage } = combine(components);
   const used = { signals, days: [...days].sort() };
-  if (provisional) return { state: 'available', score, zone: formZone(score), algorithm_version: PROVISIONAL_ALGORITHM.form, activation: 'accepted', coverage, hrv_method: recovery.hrvMethod, used, baseline: labelOf(own, usedPrior) };
+  if (provisional) return { state: 'available', score, zone: formZone(score), coverage, hrv_method: recovery.hrvMethod, used, baseline: labelOf(own, usedPrior),
+    ...(degraded ? { algorithm_version: DEGRADED_ALGORITHM.form, activation: 'candidate_unaccepted' as const } : { algorithm_version: PROVISIONAL_ALGORITHM.form, activation: 'accepted' as const }) };
   return { state: 'available', score, zone: formZone(score), algorithm_version: ALGORITHM.form, activation: 'candidate_unaccepted', coverage, hrv_method: recovery.hrvMethod, used };
 };
