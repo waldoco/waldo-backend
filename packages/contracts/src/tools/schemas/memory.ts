@@ -11,6 +11,8 @@ export const rememberArgsSchema = z.strictObject({
   text: z.string().trim().min(1),
   evidence_quote: z.string().min(1),
   replaces_id: claimIdSchema.optional(),
+  // The active claim this one corrects, by its text as memory shows it, when the id is not to hand. One of the two, not both.
+  replaces_text: z.string().trim().min(1).max(500).optional(),
   aliases: z.array(z.string().trim().min(1)).max(5).optional(),
   area: lifeAreaSchema.optional(),
   // Who the claim is about or names, so the people it concerns are one person each across memory.

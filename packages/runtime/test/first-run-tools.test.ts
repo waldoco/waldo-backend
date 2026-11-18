@@ -45,3 +45,35 @@ describe('first-run tools are one find_tools hop away on an owner\'s first turn'
     });
   }
 });
+
+describe('a tool the model loaded is offered directly on the owner\'s next turn', () => {
+  it('find_tools then use_tool on one turn; the next turn lists it in the function list, with no catalogue hop', async () => {
+    const { loadedToolsBook } = await import('../src/tools/loaded');
+    const map = new Map<string, unknown>();
+    const book = loadedToolsBook({ get: <T,>(key: string) => map.get(key) as T | undefined, put: (key: string, value: unknown) => { map.set(key, value); } });
+    const tool = FIRST_RUN[2]!;
+    const requests: LLMGatewayRequest['request'][] = [];
+    const steps = [{ name: FIND_TOOLS, arguments: JSON.stringify({ names: [tool.name] }) }, { name: USE_TOOL, arguments: JSON.stringify({ name: tool.name, arguments: tool.args }) }];
+    const gateway: LLMGatewayAdapter = { async complete(request) {
+      requests.push(request.request);
+      const reply = (text: string, call?: { name: string; arguments: string }) => ({ ok: true as const, data: { model: request.request.model, text, ...(call ? { tool_calls: [{ call_id: `c${requests.length}`, ...call }] } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
+      if (request.request.response_format) return reply('{}');
+      const next = steps.shift();
+      return next ? reply('', next) : reply('Done.');
+    } };
+    const handler = { name: tool.name, description: `fixture ${tool.name}`, schema: tool.schema, trigger_allowlist: allowed(tool.name), autonomy_gated: false,
+      handle: async () => ({ ok: true as const, data: { done: true }, source_taint: null }) };
+    const owner = { promotedTools: () => book.names(Date.now()), noteLoaded: (names: readonly string[]) => book.note(names, Date.now()) };
+    const responder = createOwnerResponder({ openaiApiKey: 'fixture-openai', primary: 'openai', toolLoader: 'harness' }, undefined, undefined, undefined, undefined, [handler] as never, undefined, false, undefined, undefined, gateway,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, owner);
+    const say = (id: string) => responder.respond(ownerTyped({ traceId: `owner-${id}`, conversationRef: 'owner', surface: 'whatsapp', text: 'hello', messageRef: { id: `wamid.${id}`, conversationRef: 'owner' } }), timer);
+    await say('one');
+    const firstOffer = requests.find((request) => !request.response_format)!.tools!.map((offered) => offered.name);
+    expect(firstOffer).not.toContain(tool.name);
+    expect(book.names(Date.now())).toEqual([tool.name]);
+    const before = requests.length;
+    await say('two');
+    const second = requests.slice(before).find((request) => !request.response_format)!;
+    expect(second.tools!.map((offered) => offered.name)).toContain(tool.name);
+  });
+});

@@ -9,9 +9,11 @@ import { compactionSettings } from '../src/conversation/compaction';
 import { steppedWindowStart } from '../src/conversation/window';
 
 describe('contextBudget', () => {
-  it('defaults to the sizes the turn used before they were settings', () => {
+  // The sizes the turn used before they were settings (22k, 40k, 25k and 80k at 4 bytes per token), counted at 2.8 bytes per
+  // token: the same bytes, so the same cuts.
+  it('defaults to the sizes the turn used before they were settings, in honest tokens', () => {
     expect(CONTEXT_BUDGET).toEqual({
-      historyTokens: 22_000, chatCeilingTokens: 40_000, jobCeilingTokens: 25_000, hardCeilingTokens: 80_000,
+      historyTokens: 31_429, chatCeilingTokens: 57_143, jobCeilingTokens: 35_714, hardCeilingTokens: 114_286,
       steppedTarget: 0.5, clearAtChars: 120_000, keepLatest: 3, standingOrdersChars: 3_000, questsChars: 3_000, whatsNewChars: 1_200,
     });
     expect(contextBudget({})).toEqual(CONTEXT_BUDGET);
@@ -53,7 +55,7 @@ describe('contextBudget', () => {
 describe('where the turn reads them', () => {
   it('the chat history budget under WALDO_CALL_CEILINGS is the history setting', () => {
     expect(compactionSettings({ WALDO_CALL_CEILINGS: '1', WALDO_HISTORY_BUDGET_TOKENS: '14000' }).budgetTokens).toBe(14_000);
-    expect(compactionSettings({ WALDO_CALL_CEILINGS: '1' }).budgetTokens).toBe(22_000);
+    expect(compactionSettings({ WALDO_CALL_CEILINGS: '1' }).budgetTokens).toBe(31_429);
     expect(compactionSettings({ WALDO_HISTORY_BUDGET_TOKENS: '14000' }).budgetTokens).toBe(compactionSettings({}).budgetTokens);
   });
 
