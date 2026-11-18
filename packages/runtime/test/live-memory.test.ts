@@ -38,10 +38,11 @@ describe('live owner memory', () => {
     expect(await s.call('remember', args, context)).toMatchObject({ ok: false });
     expect(s.store.claims()).toHaveLength(0);
   });
-  it('cannot join owner evidence across a quoted chunk and requires a literal quote', async () => {
+  it('cannot join owner evidence across a quoted chunk, and quotes whole words, case aside', async () => {
     const s = setup();
     expect(await s.call('remember', { kind: 'fact', text: 'a b', evidence_quote: 'a b' }, s.ctx('a QUOTE b', [{ start: 1, end: 8 }]))).toMatchObject({ ok: false });
-    expect(await s.call('remember', { kind: 'fact', text: 'Tea', evidence_quote: 'TEA' }, s.ctx('tea'))).toMatchObject({ ok: false });
+    expect(await s.call('remember', { kind: 'fact', text: 'Tea', evidence_quote: 'ea' }, s.ctx('tea'))).toMatchObject({ ok: false });
+    expect(await s.call('remember', { kind: 'fact', text: 'Tea', evidence_quote: 'TEA' }, s.ctx('tea'))).toMatchObject({ ok: true, data: { status: 'stored' } });
   });
   it('corrects atomically and rejects unknown or inactive ids', async () => {
     const s = setup();
