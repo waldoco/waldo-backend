@@ -356,8 +356,9 @@ export function prepareHealth(
   if (!preparedView.ok) throw new FailClosed(`sanitisation_failed:${preparedView.reason}:narrative`);
   const preparedNarrative = {
     ...narrative.data,
-    // A partial view's summary is empty on a day with no drivers or tags; empty text carries nothing to sanitise.
-    day_summary: narrative.data.day_summary.length === 0 ? '' : preparePromptSourceText(narrative.data.day_summary, null, canaries, 'narrative'),
+    // A partial view's summary is empty on a day with no drivers or tags; empty text carries nothing to sanitise. A zone view's
+    // summary takes the path it always took.
+    day_summary: 'availability' in view.data && narrative.data.day_summary.length === 0 ? '' : preparePromptSourceText(narrative.data.day_summary, null, canaries, 'narrative'),
     active_goals: narrative.data.active_goals.map((item) => preparePromptSourceText(item, null, canaries, 'narrative')),
     upcoming_high_stakes: narrative.data.upcoming_high_stakes.map((item) =>
       preparePromptSourceText(item, null, canaries, 'narrative'),

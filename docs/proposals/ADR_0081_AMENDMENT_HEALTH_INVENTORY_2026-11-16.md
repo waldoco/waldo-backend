@@ -357,3 +357,20 @@ Built behind `HEALTH_SCORES_DEGRADE` (staging on, production off), on the provis
 - **The model** reads a Form without Recovery inside the partial block: its zone, the parts it stood on and its confidence
   band, never a reading on the night. A sleep-only Recovery reads as a Recovery view whose missing components name HRV.
 - **The writer** needs no migration: versions are checked by pattern, and the used names are unchanged.
+
+## The gate's notes at `e24b9009`, and what became of each
+
+The blocker (yesterday's row said "last night's sleep") is fixed on #2158 at `d5ab9299`.
+
+1. **The consent guard.** It is now tested where it alone decides: a readable Recovery reason beside a withdrawn Load or sleep debt gives no block. Without the guard, that test fails.
+2. **`partial` with capture off.** Kept by the trace gate (#2158).
+3. **The never-failing steps assertion.** It reads `In the row:` (#2158).
+4. **What a partial block carries.** Besides the rows above, it carries the day summary (drivers, tags, the training-load sentence) and today's energy windows. Each is honest without Recovery: drivers are deviations from the owner's usual in words, and energy windows are clock ranges. A composer test sends both through the Scribe pass.
+5. **Fix words.**
+   - Missing sleep reads "no sleep has arrived for the night, either unrecorded or not synced yet".
+   - The fixes name "the wearable" and no phone setting.
+   - A missing calendar demand says what to do whether or not a calendar is connected.
+   - Every distinct fix is given, once each.
+6. **`healthZoneWords`' partial branch.** It stays. With scores that degrade (#2163), a partial view can carry a Form zone that the health trigger compares.
+7. **"Missing components: none" on a row with no used list.** This is accepted for now. Only a non-provisional row lacks a used list, and the view cannot say "unknown" without a contract change. The provisional engine, on in staging, always names its signals.
+8. **The empty-summary bypass.** It now applies to partial views only. A zone view's summary takes the path it always took.

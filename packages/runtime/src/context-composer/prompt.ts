@@ -289,7 +289,7 @@ function renderFormWithoutRecovery(form: PartialHealthView['form_without_recover
 const MISSING_WORDS: Readonly<Record<DerivedMissingPillarReason, string>> = {
   no_readings: 'nothing arrived for it',
   baseline_immature: "too few days yet to compare with the owner's usual",
-  missing_sleep: 'no sleep was recorded for the night',
+  missing_sleep: 'no sleep has arrived for the night, either unrecorded or not synced yet',
   missing_resting_signal: 'sleep arrived but no overnight heart rate or heart rate variability',
   stale_inputs: "today's readings stopped arriving",
   conflicting_inputs: 'the readings disagreed, so nothing was scored',
@@ -297,14 +297,14 @@ const MISSING_WORDS: Readonly<Record<DerivedMissingPillarReason, string>> = {
   calendar_demand_unavailable: 'no calendar or activity reading',
 };
 const MISSING_FIX: Readonly<Record<DerivedMissingPillarReason, string>> = {
-  no_readings: 'opening the Waldo app so the phone can send new readings, and checking the watch or ring is syncing',
+  no_readings: 'opening the Waldo app so the phone can send new readings, and checking the wearable is syncing',
   baseline_immature: 'nothing but time: it fills in after a few more days of sharing',
-  missing_sleep: "wearing the watch or ring overnight, and letting Waldo read sleep in the phone's health settings",
-  missing_resting_signal: "wearing the watch or ring overnight, and letting Waldo read heart rate in the phone's health settings",
+  missing_sleep: 'wearing the wearable overnight and letting it sync, and letting Waldo read sleep',
+  missing_resting_signal: 'wearing the wearable overnight and letting it sync, and letting Waldo read heart rate',
   stale_inputs: "opening the Waldo app so the phone sends today's readings",
   conflicting_inputs: 'none the owner can take: Waldo scores again when the next readings arrive',
-  intraday_inputs_unavailable: "letting Waldo read heart rate, steps or movement in the phone's health settings",
-  calendar_demand_unavailable: 'connecting a calendar',
+  intraday_inputs_unavailable: 'letting Waldo read heart rate, steps or movement',
+  calendar_demand_unavailable: 'connecting a calendar if none is connected; one already connected is read again on the next run',
 };
 const MISSING_PILLAR_NAMES = { recovery: 'Recovery', form: 'Form', load: 'Load', sleep_debt: 'Sleep debt' } as const;
 function renderMissingPillars(missing: DerivedMissingPillars | undefined): string[] {
@@ -313,7 +313,7 @@ function renderMissingPillars(missing: DerivedMissingPillars | undefined): strin
   if (named.length === 0) return [];
   return [
     `Not computed: ${named.map(([pillar, reason]) => `${MISSING_PILLAR_NAMES[pillar]} (${MISSING_WORDS[reason]})`).join('; ')}.`,
-    `Would fix it: ${MISSING_FIX[named[0]![1]]}.`,
+    `Would fix it: ${[...new Set(named.map(([, reason]) => MISSING_FIX[reason]))].join('; ')}.`,
   ];
 }
 
