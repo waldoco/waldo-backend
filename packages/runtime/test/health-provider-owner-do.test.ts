@@ -5,6 +5,8 @@ import { HEALTH_RECOMPUTE_ID, HEALTH_RECOMPUTE_WINDOW_MS } from '../src/health/r
 import { HEALTH_TRIGGER_ID } from '../src/health/trigger';
 import { callOwnerProvider } from '../src/health/providers/provider-route';
 import { WHOOP_SYNC_ID } from '../src/health/providers/whoop-owner';
+import { GOOGLE_HEALTH_START_PATH } from '../src/health/providers/google-health-client';
+import { GOOGLE_HEALTH_SYNC_ID } from '../src/health/providers/google-health-owner';
 import { armAlarm } from '../src/scheduler/alarm-slot';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
@@ -182,4 +184,41 @@ describe('WHOOP on the owner object', () => {
       }, over);
     });
   }
+});
+
+// The owner object's dispatch by provider and its scheduled sync, on the real object: a call that names Google Health reaches
+// the Google Health owner, and the Google Health sync entry runs that owner, never WHOOP's.
+describe('Google Health on the owner object', () => {
+  const GOOGLE = { GOOGLE_HEALTH_CLIENT_ID: 'gh-client-fixture', GOOGLE_HEALTH_REDIRECT_URI: 'https://worker.example.invalid/oauth/google-health/callback' };
+  const consents: Record<string, 'granted' | 'withdrawn'> = {};
+  beforeEach(() => {
+    consents.whoop = 'granted'; consents.google_health = 'granted';
+    const base = globalThis.fetch;
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input instanceof Request ? input.url : input).endsWith('/rest/v1/rpc/health_consent_list')) return base(input, init);
+      return Response.json({ consents: Object.entries(consents).flatMap(([source, status]) => ['storage_compute', 'model_processing'].map(purpose => ({
+        consent_class: 'health_processing', source, purpose, version: 3, status, epoch: 1, granted_at: '2026-10-01T00:00:00.000Z', withdrawn_at: status === 'withdrawn' ? '2026-10-21T08:00:00.000Z' : null }))) });
+    });
+  });
+
+  it('starts a Google Health connection, not a WHOOP one, when the signed call names Google Health', async () => {
+    await withOwner(async ({ call }) => {
+      const response = await call('connect', { provider: 'google_health' });
+      const body = await response.json() as { provider: string; authorize_url: string };
+      expect([response.status, body.provider, new URL(body.authorize_url).pathname.startsWith(GOOGLE_HEALTH_START_PATH)]).toEqual([200, 'google_health', true]);
+    }, GOOGLE);
+  });
+
+  it('runs the Google Health owner when its sync entry falls due: a withdrawn storage grant disconnects Google Health and leaves WHOOP alone', async () => {
+    await withOwner(async ({ owner, state, call, row }) => {
+      state.storage.kv.put('google_health:conn', { id: 'gh-conn-fixture', account: 'HuId-Fixture7', version: '1', expires_at: null });
+      const hinted = await call('hint', { provider: 'google_health', type: 'sleep', from: '2026-10-20T22:00:00Z', trace: 'trace-gh-0001' });
+      expect(await hinted.json()).toEqual({ result: 'handled' });
+      expect(row(GOOGLE_HEALTH_SYNC_ID)).toMatchObject({ kind: 'provider_sync' });
+      consents.google_health = 'withdrawn';
+      vi.setSystemTime(row(GOOGLE_HEALTH_SYNC_ID)!.due_at);
+      await armAlarm(state.storage, Date.now()); await state.storage.deleteAlarm(); await owner.alarm();
+      expect([state.storage.kv.get('google_health:conn'), row(GOOGLE_HEALTH_SYNC_ID), row(WHOOP_SYNC_ID)]).toEqual([undefined, null, null]);
+    }, GOOGLE);
+  });
 });
