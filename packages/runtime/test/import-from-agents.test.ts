@@ -56,7 +56,7 @@ const setup = async (storage: DurableObjectStorage) => {
   const claims = claimStore(storage.sql, transaction);
   const hidden: string[] = [];
   const handlers: ToolHandler<any, unknown, MemoryToolContext>[] = [
-    ...importHandlers({ open: async () => workspace, store: claims, sql: storage.sql, transaction }),
+    ...importHandlers({ open: async () => workspace, store: claims, transaction }),
     ...memoryHandlers({ sql: storage.sql, store: claims, transaction, conversationRef: 'app:main', hideHistory: async texts => { hidden.push(...texts); } }),
   ];
   const runScope = { runId: `run-${sequence}`, attempt: 'a1', deadline: Date.now() + 60_000, signal: new AbortController().signal, admit: () => {}, commit: <T>(work: () => T) => storage.transactionSync(work) };
@@ -126,7 +126,7 @@ describe('reading another assistant\'s chat export', () => {
     const parts = dataOf<{ messages: { text: string; part?: string }[]; next_cursor: number | null }>(await t.run('read_import', { source: 'claude', file_id: huge.file_id, revision: 1, conversation_ids: ['h'] }));
     expect(parts.messages.map(m => [m.part, m.text.length])).toEqual([['1/2', 12_000]]);
     expect(parts.next_cursor).toBe(1);
-    const [reader] = importHandlers({ open: async () => t.workspace, store: t.claims, sql: storage.sql });
+    const [reader] = importHandlers({ open: async () => t.workspace, store: t.claims });
     expect(reader!.turn_only_output).toBe(true);
   }));
 
@@ -201,7 +201,7 @@ describe('importing memories from the export', () => {
   it('refuses outside an owner turn', () => withStorage(async storage => {
     const t = await setup(storage);
     const file = await t.upload('uploads/x/conversations.json', bytes(chatgptExport));
-    const [, importer] = importHandlers({ open: async () => t.workspace, store: t.claims, sql: storage.sql });
+    const [, importer] = importHandlers({ open: async () => t.workspace, store: t.claims });
     const result = await importer!.handle({ source: 'chatgpt', file_id: file.file_id, revision: 1, claims: [run] }, { authenticatedUserId: OWNER } as MemoryToolContext);
     expect(result).toMatchObject({ ok: false, code: 'forbidden' });
     expect(t.claims.claims()).toHaveLength(0);

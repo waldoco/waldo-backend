@@ -3,6 +3,7 @@ import { CONSOLE_CHAT_HEADER, CONSOLE_CHAT_PATH, handleConsoleChat } from '../sr
 import type { ConsoleAuth } from '../src/identity/console-auth';
 import { linkCodeHash } from '../src/identity/owner-directory';
 import { APP_CHAT_UPLOAD_MAX_BYTES } from '../../contracts/src/app/core';
+import { APP_MEMORY_IMPORT_MAX_REQUEST_BYTES_V1 } from '../../contracts/src/app/memory-import';
 
 const ORIGIN = 'https://w.test';
 const SESSION = 'b'.repeat(32);
@@ -329,5 +330,39 @@ describe('console chat attachment upload', () => {
     const ended = on({ OWNER_DO: { idFromName: (name: string) => name, get: () => ({ fetch: async () => Response.json({ error: 'unavailable' }, { status: 403 }) }) }, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const response = (await handleConsoleChat(upload(), ended, fakeAuth()))!;
     expect([response.status, await response.json()]).toEqual([401, { error: 'sign_in_required' }]);
+  });
+});
+
+// The console brings memories in through the app's own memory import route (app-api forwardMemoryImport), under the cookie session.
+describe('console memory import', () => {
+  const IMPORT = `${CONSOLE_CHAT_PATH}/memory-import`;
+  const body = { request_id: 'import-0001', source: 'chatgpt', text: 'Meera lives in Pune and runs a small design studio.' };
+
+  it('hands the owner object the body on the app import path of the cookie owner and session, on the import budget', async () => {
+    const { env, forwards, keys } = setup();
+    const response = await handleConsoleChat(call(IMPORT, { method: 'POST', body }), env, fakeAuth());
+    expect(response!.status).toBe(202);
+    const forwarded = forwards[0]!;
+    expect([new URL(forwarded.url).pathname, forwarded.method]).toEqual(['/app/v1/memory/import', 'POST']);
+    expect(forwarded.headers.get('x-waldo-do-name')).toBe('owner-1');
+    expect(forwarded.headers.get('x-waldo-app-session-hash')).toBe(await linkCodeHash(SESSION));
+    expect(JSON.parse(await forwarded.text())).toEqual(body);
+    expect(keys).toEqual(['app-memory-import:owner-1']);
+  });
+
+  it('asks whether imports are on with a read, on the read budget', async () => {
+    const { env, forwards, keys } = setup();
+    await handleConsoleChat(call(IMPORT), env, fakeAuth());
+    expect([new URL(forwards[0]!.url).pathname, forwards[0]!.method]).toEqual(['/app/v1/memory/import', 'GET']);
+    expect(keys).toEqual(['app-read:owner-1']);
+  });
+
+  it('refuses another site, a body over the cap, a spent budget and any other path, before the owner object sees it', async () => {
+    const { env, forwards } = setup();
+    expect((await handleConsoleChat(call(IMPORT, { method: 'POST', body, headers: { 'sec-fetch-site': 'cross-site' } }), env, fakeAuth()))!.status).toBe(403);
+    expect((await handleConsoleChat(call(IMPORT, { method: 'POST', body: { ...body, text: 'x'.repeat(APP_MEMORY_IMPORT_MAX_REQUEST_BYTES_V1) } }), env, fakeAuth()))!.status).toBe(413);
+    expect((await handleConsoleChat(call(`${IMPORT}/extra`, { method: 'POST', body }), env, fakeAuth()))!.status).toBe(404);
+    expect((await handleConsoleChat(call(IMPORT, { method: 'POST', body }), setup(false).env, fakeAuth()))!.status).toBe(429);
+    expect(forwards).toHaveLength(0);
   });
 });

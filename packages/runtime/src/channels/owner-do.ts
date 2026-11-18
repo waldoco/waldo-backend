@@ -4,6 +4,9 @@ import { deliveredLately } from './scheduled-run';
 import { appGooglePicture, googlePictures } from './app-google-picture';
 import { wearablesCatalogue } from '../health/wearables';
 import { APP_ONBOARDING_PATHS, appOnboardingRequest, ownerOnboardingHost } from './app-onboarding';
+import { appMemoryImportRequest } from './app-memory-import';
+import { APP_MEMORY_IMPORT_PATH_V1, type AppMemoryImportSourceV1 } from '../../../contracts/src/app/memory-import';
+import { importDoc, type DocImportCounts } from '../memory/doc-import';
 import { APP_RATING_SUFFIX, appRatingRequest, replyRatings } from './app-rating';
 import { memoryUsedBook, memoryUsedFor } from './app-memory-used';
 import { outsideSafe } from '../memory/outside-view';
@@ -357,6 +360,8 @@ type OwnerRuntime = Readonly<{
   listener: TelegramOwnerListener | null;
   control: TurnControl;
   welcome: OwnerWelcome;
+  // Claims from a summary of the owner another assistant wrote, read once by the model as an owner job.
+  importDoc(source: AppMemoryImportSourceV1, text: string): Promise<DocImportCounts>;
   // The owner look-up the owner's yes starts: written or stopped as the yes stands, and let start once the first reply is out.
   lookup: Readonly<{ reconcile(): Promise<void>; afterReply(): Promise<void> }>;
   api: ReturnType<typeof createTelegramOwnerApi>;
@@ -514,7 +519,7 @@ export const resolveOwnerTelegramId = (
 type ChannelKind = 'telegram' | 'whatsapp' | 'app' | 'imessage';
 // A failed app read answers a generic 503. The log names only which step failed, or the canonical-history fault code, never
 // the error text: a canonical-history fault message can name nothing, but other errors may carry content.
-const logAppReadFailure = (hop: 'app_history_read' | 'app_controls_read' | 'app_onboarding' | 'app_rating' | 'app_calendar_day' | 'app_calendar_proposal' | 'app_google_picture', step: string, error: unknown): void => {
+const logAppReadFailure = (hop: 'app_history_read' | 'app_controls_read' | 'app_onboarding' | 'app_rating' | 'app_calendar_day' | 'app_calendar_proposal' | 'app_google_picture' | 'app_memory_import', step: string, error: unknown): void => {
   const code = error instanceof ClosedRunError ? `${step}_closed` : canonicalHistoryFault(error) ?? step;
   console.error(JSON.stringify({ hop, ok: false, code }));
 };
@@ -2086,6 +2091,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if(path===APP_CHAT_SEND_PATH&&request.method==='POST')return this.appSend(request,authority.ownerId);
     if(path===APP_DEVICE_CALENDAR_PATH||path.startsWith(APP_DEVICE_CALENDAR_PATH+'/'))return this.env.DEVICE_CALENDAR==='1'?deviceCalendarRequest(request,this.deviceCalendar(),work=>this.ctx.storage.transactionSync(work)):fail(404);
     if(path===APP_CHAT_UPLOAD_PATH&&request.method==='POST')return this.appUpload(request,name);
+    if(path===APP_MEMORY_IMPORT_PATH_V1){
+      const host={on:this.env.MEMORY_IMPORT_DOC==='1',requests:requestBook(this.ctx.storage.sql,Date.now),importDoc:(source:AppMemoryImportSourceV1,text:string)=>{this.bindAppSubject(name);return this.setup('app').importDoc(source,text);}};
+      if(request.method==='GET')return appMemoryImportRequest(request,host);
+      return this.serial(async()=>{try{return await appMemoryImportRequest(request,host);}catch(error){logAppReadFailure('app_memory_import',path,error);return fail(503);}});
+    }
     if(path===APP_THREADS_PATH||path.startsWith(APP_THREADS_PATH+'/')){
       try{return await appThreadsRequest(request,this.threadsHost(name,hash,authority.ownerId,appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'approvals')));}catch{return fail(503);}
     }
@@ -5498,7 +5508,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           context.runScope?.admit();
           return this.forgetPurgeJob().track(texts);
         },
-      }), ...ownerLookupHandlers({ store: findingStore(storage.sql, memory, consentLedger(storage.sql, consentSwitches(this.env)), deps.now), pages: this.lookupPages, transaction: work => storage.transactionSync(work) }), ...(this.env.WALDO_FILE_TOOLS === '1' ? importHandlers({ open: openWorkspace, store: memory, sql: storage.sql, transaction: work => storage.transactionSync(work), ...(semantic ? { semantic } : {}) }) : []), ...(webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? [observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch, () => clock.timezone), this.lookupPages)] : []), observeReads(this.ownerBrowser.read(browsePageHandler(undefined, undefined, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))), this.lookupPages), this.ownerBrowser.act(this.ownerBrowser.guard(browserTaskHandler({ legacy: browseActHandler(undefined, undefined, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
+      }), ...ownerLookupHandlers({ store: findingStore(storage.sql, memory, consentLedger(storage.sql, consentSwitches(this.env)), deps.now), pages: this.lookupPages, transaction: work => storage.transactionSync(work) }), ...(this.env.WALDO_FILE_TOOLS === '1' ? importHandlers({ open: openWorkspace, store: memory, transaction: work => storage.transactionSync(work), ...(semantic ? { semantic } : {}) }) : []), ...(webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? [observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch, () => clock.timezone), this.lookupPages)] : []), observeReads(this.ownerBrowser.read(browsePageHandler(undefined, undefined, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))), this.lookupPages), this.ownerBrowser.act(this.ownerBrowser.guard(browserTaskHandler({ legacy: browseActHandler(undefined, undefined, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
         if (!context.assertTaskSourceCurrent) throw Error('browser task source unavailable');
         await context.assertTaskSourceCurrent();
         const [ownerKey] = await currentTaskOwnerKeys(); await context.assertTaskSourceCurrent();
@@ -6823,6 +6833,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (delivered && record.reaction) await api.setMessageReaction({ chat_id: record.payload.chat_id,
         message_id: record.reaction.message_id, reaction: [{ type: 'emoji', emoji: record.reaction.emoji }] }).catch(() => undefined);
     };
+    const importMemoryDoc = (source: AppMemoryImportSourceV1, text: string) => importDoc({ store: memory, transaction: (work) => storage.transactionSync(work), now: Date.now,
+      health: healthMemoryOn(identity), kick: () => semantic?.kick(), ask: (input) => {
+        const started = Date.now(), trace = `memory_import:${started}`;
+        let answered = false;
+        return this.asOwnerJob('dreaming', trace, () => responder.importDoc!(trace, input)).then((said) => { answered = true; return said; })
+          .finally(() => log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: answered, detail: 'memory_import' }));
+      } }, source, text);
     // The welcome build's model calls run on the queue as an owner job, like the nightly pass; its reads run beside it.
     const welcome = ownerWelcome({ sql: storage.sql, transaction: (work) => storage.transactionSync(work), claims: memory, now: Date.now, timezone: () => clock.timezone, healthMemory: () => healthMemoryOn(identity), healthRead, google,
       findings: () => findingStore(storage.sql, memory, consentLedger(storage.sql, consentSwitches(this.env)), Date.now),
@@ -6889,7 +6906,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           doName: identity.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] }, work => storage.transactionSync(() => { work(); commit(); }));
       },
       ended: grant => { welcome.lateWeb(grant); this.continueWelcome(runtime); } });
-    const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, push, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, reviseBriefForBody, healthChanged, healthTrigger, interventionReview, announcementPass, announcementsCurrent, placeMoved, placeArrived, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    const runtime: OwnerRuntime = { welcome, importDoc: importMemoryDoc, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, push, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, reviseBriefForBody, healthChanged, healthTrigger, interventionReview, announcementPass, announcementsCurrent, placeMoved, placeArrived, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       lookupToolHandlers: () => {
         const unlocated = webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch), this.lookupPages) : null;
