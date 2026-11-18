@@ -27,7 +27,12 @@ export const fitsScheduledMenu = (tools: readonly string[] | undefined): tools i
 // - What Waldo sent: the messages the owner object's outbox delivered to the owner (host-supplied).
 // Counted apart, so neither crowds the other out.
 export const RECENT_OWNER_MESSAGES = 3;
-export const RECENT_SENT_MESSAGES = 3;
+// The most of Waldo's sent messages a run reads: a day's worth (the day cards, the looks, the follow-ups), so a look can see
+// what it already said hours ago behind the cards that went since.
+export const RECENT_SENT_MESSAGES = 8;
+// The newest are read whole; older ones of the day only by their opening, enough to know it was said.
+export const WHOLE_SENT_MESSAGES = 3;
+export const OLDER_SENT_MAX_CHARS = 300;
 // Enough of each row for its gist, so one long Brief does not fill the run. Rows are cut as they are rendered, after the forget
 // barrier has judged them whole, so a cut can never split a held topic past it.
 export const RECENT_ROW_MAX_CHARS = 1_500;
@@ -45,9 +50,9 @@ export const recentExchange = (tree: ConversationTree, currentId: string): Reado
 };
 
 // Cut on a whole code point, so a cut never leaves half a surrogate pair.
-const gist = (text: string): string => {
-  if (text.length <= RECENT_ROW_MAX_CHARS) return text;
-  const end = /[\uD800-\uDBFF]/.test(text[RECENT_ROW_MAX_CHARS - 1]!) ? RECENT_ROW_MAX_CHARS - 1 : RECENT_ROW_MAX_CHARS;
+const gist = (text: string, max = RECENT_ROW_MAX_CHARS): string => {
+  if (text.length <= max) return text;
+  const end = /[\uD800-\uDBFF]/.test(text[max - 1]!) ? max - 1 : max;
   return `${text.slice(0, end)}…`;
 };
 
@@ -61,9 +66,17 @@ export const sentText = (sent: readonly Readonly<{ at: string; text: string; con
 // acceptance where it confirms arrival later (WhatsApp), which is marked not yet confirmed. A reply to the owner's own message
 // is left out, since the recent exchange already shows it; a notice of Waldo's own stays, whatever turn queued it. A record a
 // forget reached is not read.
+// day (OWNER_CLOSES_MAIL_ITEMS): the whole day's sends, so a look does not say again what it said before the cards that went
+// since, and also a send whose arrival is unknown (a part went out but no confirmation came): the owner may have read it, so it
+// counts as said, not yet confirmed. Without it, the newest whole messages only, confirmed or accepted.
 const SENT_WITHIN_MS = 24 * 3_600_000;
-export const deliveredLately = (records: readonly FinalRecord[], now: number): readonly Readonly<{ at: number; text: string; confirmed: boolean }>[] =>
-  records.filter((record) => (record.status === 'delivered' || record.status === 'accepted') && !record.forgotten && record.payload.text.trim() !== ''
-    && (record.notice === true || surfaceOfTrace(record.trace) === null) && now - (record.deliveredAt ?? record.createdAt) < SENT_WITHIN_MS)
+export const deliveredLately = (records: readonly FinalRecord[], now: number, day = false): readonly Readonly<{ at: number; text: string; confirmed: boolean }>[] => {
+  const said = records.filter((record) => (record.status === 'delivered' || record.status === 'accepted' || (day && record.status === 'quarantined'))
+    && !record.forgotten && record.payload.text.trim() !== '' && (record.notice === true || surfaceOfTrace(record.trace) === null)
+    && now - (record.deliveredAt ?? record.createdAt) < SENT_WITHIN_MS)
     .map((record) => ({ at: record.deliveredAt ?? record.createdAt, text: record.payload.text, confirmed: record.status === 'delivered' }))
-    .sort((a, b) => a.at - b.at).slice(-RECENT_SENT_MESSAGES);
+    .sort((a, b) => a.at - b.at);
+  if (!day) return said.slice(-WHOLE_SENT_MESSAGES);
+  const kept = said.slice(-RECENT_SENT_MESSAGES);
+  return kept.map((message, index) => index < kept.length - WHOLE_SENT_MESSAGES ? { ...message, text: gist(message.text, OLDER_SENT_MAX_CHARS) } : message);
+};

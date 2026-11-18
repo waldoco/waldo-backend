@@ -16,7 +16,7 @@ import {
   TOOL_ERRORS, toolError, type ConnectIntent, type ConversationChart, type ConversationEntry, type LLMTool, type LLMToolTurn, type ModelName, type ToolError,
 } from '@waldo/contracts';
 import type { ConversationModelMessage, RunOrigin } from '@waldo/contracts';
-import { BUDGET_CHARS_PER_TOKEN, MODEL_CONTEXT_MAX_CHARS } from '@waldo/contracts';
+import { BUDGET_CHARS_PER_TOKEN, MODEL_CONTEXT_MAX_CHARS, PLANNING_EFFORT } from '@waldo/contracts';
 import { PROBE_STRIPPED_TOOLS } from './probe-turn';
 import { runToolLoop, type ToolLoopEvent } from '../conversation/tool-loop';
 import { healthInContext } from '../conversation/health-fence';
@@ -241,6 +241,8 @@ export const createOwnerResponder = (
   let transientDecision = false;
   let backgroundSourceTaint: 'external' | null = null;
   let backgroundOwnerModel = false;
+  // The running job is a planning run (its ownerModel is 'plans').
+  let planningRun = false;
   const assertCurrent = async () => { privateRunScope?.admit(); await context?.assertCurrent(); await skills?.admission?.assertCurrent(); await backgroundCurrent?.(); privateRunScope?.admit(); };
   // Before an effect or a published reply: authority read now, never a recent match.
   const assertFresh = async () => { privateRunScope?.admit(); await context?.assertFresh(); await skills?.admission?.assertFresh(); await backgroundCurrent?.(); privateRunScope?.admit(); };
@@ -269,6 +271,12 @@ export const createOwnerResponder = (
   const promptV2 = access.promptV2 === true;
   const circuitBreaker = access.health ?? new InMemoryCircuitBreaker();
   const policy = ownerRoutePolicy(model, model, access);
+  // WALDO_STRONG_ROLES: every run that writes the owner's memory (flush, nightly, sources, migration, welcome, constellation)
+  // runs on the chat model, and the day plan does too, at PLANNING_EFFORT. A background job's caller says which of its runs
+  // decide or plan (prompt's ownerModel). Thread titles, progress notes, reactions and compaction stay on the auxiliary
+  // model: they word or summarise, and decide nothing the owner's memory or day keeps.
+  const strongRoles = access.strongRoles === true;
+  const roleModel: ModelName = strongRoles ? model : auxiliaryModel;
   // WALDO_LIGHT_CHAT: the light step's route and the strong role's, which is the chat route unless the environment sets it.
   const lightRoles = privateOwner?.lightRoles ?? {};
   const lightCap = lightRoles.lightMaxTokens ?? LIGHT_ROLE_MAX_TOKENS;
@@ -336,6 +344,7 @@ export const createOwnerResponder = (
     mark('enter');
     let reasoning: string | undefined;
     const strong = privateOwner?.lightChat === true && ownerTurnActive && purpose === 'reply' && modelOverride === undefined;
+    const planning = strongRoles && !light && (purpose === 'day_plan' || (planningRun && (purpose === 'reply' || purpose === 'background_decision')));
     const effectivePolicy = light ? lightPolicy : strong ? strongPolicy
       : modelOverride === undefined || modelOverride === model ? policy : ownerRoutePolicy(modelOverride, model, access);
     // Entries stay separate typed messages so the provider's degrade path can actually reduce:
@@ -377,8 +386,10 @@ export const createOwnerResponder = (
       policy: effectivePolicy,
       ...(turnSpend ? { spend: turnSpend } : {}),
       renderRequest: ({ step }) => {
-        // The effort follows the model this attempt runs on, not the responder's chat model.
-        const { effort, outputTokens } = MODEL_REASONING[step.model] ?? {};
+        // The effort follows the model this attempt runs on, not the responder's chat model; a planning run on the chat model
+        // asks for PLANNING_EFFORT.
+        const { effort: modelEffort, outputTokens } = MODEL_REASONING[step.model] ?? {};
+        const effort = planning && step.model === model ? PLANNING_EFFORT : modelEffort;
         return {
           cache_key: cacheKey,
           ...(leanRun && purpose === 'reply' ? { cache_profile: 'scheduled' as const } : {}),
@@ -694,6 +705,7 @@ export const createOwnerResponder = (
         handlers: turnHandlers,
         // The menu leads the provider's cache prefix, so the owner's turn offers the same one every round, with or without tool search.
         stableMenu: true,
+        ...(access.thinkingReplay ? { keepMenuToClose: true, onCloseCalls: (calls: number) => log({ trace, hop: 'close_calls_not_run', ms: 0, ok: false, detail: `calls=${calls}` }) } : {}),
         ...(harnessLoader ? { loader: (tools: readonly LLMTool[]) => harnessToolLoader(tools, turnDirect) } : {}),
         ...(access.contextCaps ? { clearToLatest: { atChars: access.contextCaps.clearAtChars, keep: access.contextCaps.keepLatest } } : {}),
         ...(access.callCeilings ? { resultRoomBytes: () => replyBaseTokens === undefined ? undefined : Math.max(0, access.callCeilings!.hardCeilingTokens - replyBaseTokens) * BYTES_PER_TOKEN_EST } : {}),
@@ -1115,7 +1127,7 @@ export const createOwnerResponder = (
     if (barrier().holds(span)) { log({ trace: traceId, hop: 'memory_flush', ms: 0, ok: true, code: 'held_topic' }); return []; }
     const before = new Set(memory.allClaims().map(claim => claim.id));
     const started = Date.now();
-    const raw = await ask(traceId, 'memory_flush', FLUSH_INSTRUCTION, flushInput(promptMemory()!, span, policy.health), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+    const raw = await ask(traceId, 'memory_flush', FLUSH_INSTRUCTION, flushInput(promptMemory()!, span, policy.health), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, roleModel);
     await assertFresh();
     // A forget the owner started during the model call holds its topic from here on.
     if (barrier().holds(span)) { log({ trace: traceId, hop: 'memory_flush', ms: 0, ok: true, code: 'held_topic' }); return []; }
@@ -1261,7 +1273,8 @@ export const createOwnerResponder = (
       const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments, directTools, waldoFirst), conversationRef);
       if (asOwner !== undefined) return asOwner;
       backgroundSourceTaint = sourceTaint ?? null;
-      backgroundOwnerModel = ownerModel === true;
+      backgroundOwnerModel = ownerModel === true || ownerModel === 'plans' || (ownerModel === 'decides' && strongRoles);
+      planningRun = ownerModel === 'plans';
       // Cards read in seconds, so a job's prompt gets half the provider budget; the guard keeps the opening and closing and cuts the data between.
       const messageChars = deriveContextBudgetChars(auxiliaryModel, SANITISE_DESTINATION_POLICIES.internal_context.max_chars);
       const said = fitPromptToBudget(jobText, Math.floor(messageChars / 2));
@@ -1301,13 +1314,13 @@ export const createOwnerResponder = (
         leanRun = waldoFirst === true && privateOwner?.leanScheduled === true && fitsScheduledMenu(jobTools);
         backgroundDirect = new Set(leanRun ? SCHEDULED_DIRECT : directTools ?? []);
         return await converse(id, conversationRef, said, time, false, surface, jobTools);
-      } finally { backgroundCurrent = undefined; transientDecision = false; promptContext = ''; backgroundSourceTaint = null; backgroundOwnerModel = false; pending = undefined; backgroundDirect = NO_DIRECT; leanRun = false; leanRecentBytes = 0; }
+      } finally { backgroundCurrent = undefined; transientDecision = false; promptContext = ''; backgroundSourceTaint = null; backgroundOwnerModel = false; planningRun = false; pending = undefined; backgroundDirect = NO_DIRECT; leanRun = false; leanRecentBytes = 0; }
     },
     async consolidate(trace, day, sides, policy) {
       const asOwner = await asOwnerJob(trace, job => job.consolidate(trace, day, sides, policy));
       if (asOwner !== undefined) return asOwner;
       if (!memory) return { done: true, detail: 'no memory' };
-      const raw = await ask(trace, 'nightly_memory', privateOwner?.memoryValidity ? [NIGHTLY_MEMORY_INSTRUCTION, ...RETIRE_RULES].join('\n') : NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(promptMemory()!, day, policy?.health !== false), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+      const raw = await ask(trace, 'nightly_memory', privateOwner?.memoryValidity ? [NIGHTLY_MEMORY_INSTRUCTION, ...RETIRE_RULES].join('\n') : NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(promptMemory()!, day, policy?.health !== false), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, roleModel);
       await assertFresh();
       // The nightly pass is where the pinned blocks are curated.
       return { done: true, detail: applyClaimOps(memory, policy?.health === false ? withoutHealthClaims(raw) : raw, new Date().toISOString(), `owner, day of ${trace}`, undefined, sides ?? { owner: day }, false, undefined, true, privateOwner?.memoryValidity === true) };
@@ -1323,7 +1336,7 @@ export const createOwnerResponder = (
       const people = policy?.people === true;
       const input = sourceUpdatesInput(outsideView(promptMemory()!), updates, policy?.health !== false);
       const raw = await ask(trace, 'memory_nightly_sources', people ? `${SOURCE_MEMORY_INSTRUCTION}\n${SOURCE_PEOPLE_RULE}` : SOURCE_MEMORY_INSTRUCTION,
-        people ? `${input}\n\n${knownPeopleBlock(memory)}` : input, { name: 'source_claims', schema: people ? SOURCE_PEOPLE_CLAIMS_SCHEMA : SOURCE_CLAIMS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+        people ? `${input}\n\n${knownPeopleBlock(memory)}` : input, { name: 'source_claims', schema: people ? SOURCE_PEOPLE_CLAIMS_SCHEMA : SOURCE_CLAIMS_SCHEMA }, undefined, undefined, undefined, roleModel);
       await assertFresh();
       return raw;
     },
@@ -1343,7 +1356,7 @@ export const createOwnerResponder = (
       if (!memory) return 'no memory';
       if (barrier().active) throw new Error('historical memory migration deferred: forgetting coverage incomplete');
       const off = policy?.health === false;
-      const raw = await ask(trace, 'memory_migration', MIGRATION_INSTRUCTION, off ? `${HEALTH_NOTES_OFF}\n\n${input}` : input, { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+      const raw = await ask(trace, 'memory_migration', MIGRATION_INSTRUCTION, off ? `${HEALTH_NOTES_OFF}\n\n${input}` : input, { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, roleModel);
       await assertFresh();
       return applyClaimOps(memory, off ? withoutHealthClaims(raw) : raw, new Date().toISOString(), 'owner agreed', undefined, { owner: input }, false);
     },
@@ -1352,7 +1365,7 @@ export const createOwnerResponder = (
     async welcome(trace, stage, input, version) {
       const asOwner = await asOwnerJob(trace, job => job.welcome!(trace, stage, input, version));
       if (asOwner !== undefined) return asOwner;
-      return ask(trace, `memory_welcome_${stage}`, version === 2 ? WELCOME_INSTRUCTION_V2 : WELCOME_INSTRUCTION, input, { name: 'welcome_nodes', schema: version === 2 ? WELCOME_SCHEMA_V2 : WELCOME_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+      return ask(trace, `memory_welcome_${stage}`, version === 2 ? WELCOME_INSTRUCTION_V2 : WELCOME_INSTRUCTION, input, { name: 'welcome_nodes', schema: version === 2 ? WELCOME_SCHEMA_V2 : WELCOME_SCHEMA }, undefined, undefined, undefined, roleModel);
     },
     async promote(trace, gate) {
       const asOwner = await asOwnerJob(trace, job => job.promote(trace, gate));
@@ -1362,7 +1375,7 @@ export const createOwnerResponder = (
       const visible = promptMemory()!;
       const input = promotionInput(visible);
       if (gate && await sha256Hex(input) === gate.last) return 'unchanged';
-      const raw = await ask(trace, 'constellation', promotionInstruction(visible), input, { name: 'promotion', schema: PROMOTION_SCHEMA }, undefined, undefined, undefined, auxiliaryModel);
+      const raw = await ask(trace, 'constellation', promotionInstruction(visible), input, { name: 'promotion', schema: PROMOTION_SCHEMA }, undefined, undefined, undefined, roleModel);
       await assertFresh();
       const detail = applyPromotion(visible, raw, new Date().toISOString(), (receipt) => log({
         trace, hop: 'constellation_evidence', ms: 0, ok: true,
@@ -1379,7 +1392,7 @@ export const createOwnerResponder = (
     // The day plan and the wake decision place the owner's cards around their day, so with the lean scheduled view on they read
     // the owner's shared health as an owner turn does: the derived block, or the plain line that none is available.
     planDay: async (trace, input) => await asOwnerJob(trace, job => job.planDay(trace, input))
-      ?? ask(trace, 'day_plan', DAY_PLAN_INSTRUCTION, composeDayPlanInput(privateOwner?.leanScheduled ? `${await dayPlanHealth(trace)}\n\n${input}` : input, memory ? memoryFor(promptMemory()!) : undefined, auxiliaryModel), { name: 'day_plan', schema: DAY_PLAN_SCHEMA }, undefined, undefined, undefined, auxiliaryModel),
+      ?? ask(trace, 'day_plan', DAY_PLAN_INSTRUCTION, composeDayPlanInput(privateOwner?.leanScheduled ? `${await dayPlanHealth(trace)}\n\n${input}` : input, memory ? memoryFor(promptMemory()!) : undefined, roleModel), { name: 'day_plan', schema: DAY_PLAN_SCHEMA }, undefined, undefined, undefined, roleModel),
     chooseReaction: async (turn) => {
       if (turn.runScope && privateRunScope !== turn.runScope) {
         return createOwnerResponder(modelAccess, undefined, undefined, log, clock, [], model, false, undefined, undefined, gateway, undefined, probeGuard, undefined, undefined, auxiliaryModel, egressAllowlist, undefined, reactionChoices, turn.runScope).chooseReaction(turn);
