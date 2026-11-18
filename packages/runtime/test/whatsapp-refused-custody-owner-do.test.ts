@@ -99,7 +99,7 @@ const owned = async (name: string, script: (steps: Readonly<{
   planned(): { sent: boolean; state?: string } | undefined;
   runs(): Run[];
   outbox(): Record[];
-}>) => Promise<void>, wrote = HOUR) => {
+}>) => Promise<void>, wrote = HOUR, switches: Readonly<{ [name: string]: string }> = {}) => {
   // Each start gets its own owner, since every scenario runs once per start.
   const doName = `${name}-${startedAt}`;
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName)), async (_instance, state) => {
@@ -112,7 +112,7 @@ const owned = async (name: string, script: (steps: Readonly<{
     const plans = dayPlanBook(state.storage.sql);
     for (const card of ['card:brief', 'card:midday', 'card:close'] as const) plans.save(today(), { card, time: null, reason: 'planned by the fixture' });
     const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
-    const owner = new OwnerDO(state, { ...env, ...directory, ...whatsapp, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const owner = new OwnerDO(state, { ...env, ...directory, ...whatsapp, ...switches, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     const turn = vi.spyOn(owner as unknown as { turn(): Promise<void> }, 'turn').mockImplementation(async () => { wire.events.push('turn'); });
     const records = () => state.storage.kv.get<Record[]>('telegram_final_outbox_v1') ?? [];
     const settled = async () => {
@@ -382,6 +382,26 @@ describe.each([['just after midnight', '2026-10-22T00:30:00Z'], ['just before mi
       expect(outbox()[0]).toMatchObject({ status: 'blocked', reason: 'lapsed' });
       expect(runs()).toEqual([{ status: 'stopped', summary: 'order ran; its report waited 30 days for your WhatsApp window and was not sent' }]);
     }, 30 * HOUR);
+  });
+
+  it('with the daily knock a report waiting for a closed window knocks again a day later, not before, and a knock Meta then fails is logged', async () => {
+    const lines = vi.spyOn(console, 'log');
+    try {
+      await owned('wa-daily-knock', async ({ alarms, later, order, endOrder, status, outbox }) => {
+        await order();
+        await alarms(3);
+        endOrder();
+        expect(outbox()).toEqual([{ id: expect.stringMatching(/^standing-order:/), status: 'pending' }]);
+        expect(wire.events).toEqual([REPLY_KNOCK]);
+        await later(2 * HOUR, () => alarms(2));
+        expect(wire.events).toEqual([REPLY_KNOCK]);
+        await later(24 * HOUR + 60_000, () => alarms(2));
+        expect(wire.events).toEqual([REPLY_KNOCK, REPLY_KNOCK]);
+        expect(outbox()).toEqual([{ id: expect.stringMatching(/^standing-order:/), status: 'pending' }]);
+        await status('failed', [`wamid.out.${wire.wamid}`]);
+        expect(lines.mock.calls.map(call => String(call[0])).filter(line => line.includes('"code":"knock_failed_after_accept"'))).toHaveLength(1);
+      }, 30 * HOUR, { WHATSAPP_DAILY_KNOCK: '1' });
+    } finally { lines.mockRestore(); }
   });
 
   // The same order runs for an owner on iMessage, so the line names no surface.

@@ -22,6 +22,13 @@ export const WHATSAPP_HELD_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 export const WA_LAST_INBOUND_KEY = 'wa_last_inbound_ms';
 const KNOCKED_KEY = 'wa_knocked_for';
+// The daily knock (WHATSAPP_DAILY_KNOCK): when Waldo last knocked, so it knocks at most once in WHATSAPP_KNOCK_EVERY_MS while
+// something waits, whatever the owner wrote between. Spacing by the last knock keeps each knock at the same time of day.
+const KNOCK_AT_KEY = 'wa_knock_at';
+export const WHATSAPP_KNOCK_EVERY_MS = 24 * 60 * 60 * 1000;
+// The message id Meta gave the last knock it accepted: Meta can still fail it by a later status (131042 with no payment
+// method), and only that status says the knock never reached the owner.
+const KNOCK_ID_KEY = 'wa_knock_id';
 // Meta stamps a message in whole seconds, so the owner's messages at the latest stamp are told apart by id.
 const LAST_INBOUND_IDS_KEY = 'wa_last_inbound_ids';
 // Meta can refuse a send for the window after accepting it (a failed status with 131047). The marker is the inbound time
@@ -139,21 +146,35 @@ const holdBody = (kv: Kv, body: object, now: number): void => {
 // With no template there is no knock to mark, so a template configured later still knocks for this window.
 // The marker goes down before the send, so a second send during this one cannot knock again. Only a definite refusal
 // takes it back for a retry; a timed-out knock may have gone out, so it stays marked.
-export const whatsappKnock = async (kv: Kv, knock: (template: WhatsAppTemplate) => Promise<unknown>, template: WhatsAppTemplate | null, log: Log): Promise<void> => {
-  const opening = kv.get<number>(WA_LAST_INBOUND_KEY) ?? 0;
-  if (kv.get<number>(KNOCKED_KEY) === opening) { log({ hop: 'whatsapp_window', ok: true, held: true, knocked: false }); return; }
+// daily: the daily knock, at `now`; the marker is then the knock's time, and a reply re-arms nothing.
+export type KnockPolicy = Readonly<{ daily: boolean; now: number }>;
+export const whatsappKnock = async (kv: Kv, knock: (template: WhatsAppTemplate) => Promise<unknown>, template: WhatsAppTemplate | null, log: Log, policy?: KnockPolicy): Promise<void> => {
+  const daily = policy?.daily === true, key = daily ? KNOCK_AT_KEY : KNOCKED_KEY;
+  const previous = kv.get<number>(key), opening = kv.get<number>(WA_LAST_INBOUND_KEY) ?? 0;
+  const knocked = daily ? previous !== undefined && policy!.now - previous < WHATSAPP_KNOCK_EVERY_MS : previous === opening;
+  if (knocked) { log({ hop: 'whatsapp_window', ok: true, held: true, knocked: false }); return; }
   if (!template) { log({ hop: 'whatsapp_window', ok: false, held: true, code: 'template_unconfigured' }); return; }
-  const previous = kv.get<number>(KNOCKED_KEY);
-  kv.put(KNOCKED_KEY, opening);
+  kv.put(key, daily ? policy!.now : opening);
   try {
-    await knock(template);
+    const id = ((await knock(template)) as { messages?: { id?: unknown }[] } | undefined)?.messages?.[0]?.id;
+    if (typeof id === 'string' && id !== '') kv.put(KNOCK_ID_KEY, id);
     log({ hop: 'whatsapp_window', ok: true, held: true, knocked: true });
   } catch (error) {
     // Only a definite refusal (a 4xx) takes the marker back for a retry; a 5xx or a timeout may have sent the knock.
-    if (error instanceof WhatsAppApiError && error.status < 500) { if (previous === undefined) kv.delete(KNOCKED_KEY); else kv.put(KNOCKED_KEY, previous); }
+    if (error instanceof WhatsAppApiError && error.status < 500) { if (previous === undefined) kv.delete(key); else kv.put(key, previous); }
     log({ hop: 'whatsapp_window', ok: false, held: true, code: error instanceof WhatsAppApiError && error.code !== null ? error.code : 'knock_failed' });
   }
 };
+// Meta failed a knock it had accepted: the knock never reached the owner, so it is logged by its closed reason, once. The
+// next knock still waits its turn: a failure such as a missing payment method would fail it again.
+export const whatsappKnockFailed = (kv: Kv, failedIds: readonly string[], log: Log): void => {
+  const id = kv.get<string>(KNOCK_ID_KEY);
+  if (id === undefined || !failedIds.includes(id)) return;
+  kv.delete(KNOCK_ID_KEY);
+  log({ hop: 'whatsapp_window', ok: false, held: true, code: 'knock_failed_after_accept' });
+};
+// With the daily knock, when a record still waiting for the window is next looked at: the next time a knock is allowed.
+export const knockRevisitAt = (kv: Kv, now: number): number => (kv.get<number>(KNOCK_AT_KEY) ?? now) + WHATSAPP_KNOCK_EVERY_MS;
 const reengagement = (error: unknown): boolean => error instanceof WhatsAppApiError && error.code === WHATSAPP_REENGAGEMENT_ERROR;
 
 // Wraps the WhatsApp shim beneath the owner's egress gate, so a held message and the knock have already
@@ -163,9 +184,9 @@ const reengagement = (error: unknown): boolean => error instanceof WhatsAppApiEr
 // the window it answers nothing (not sent), and the owner still gets the knock, so a reply lets Waldo offer it afresh. A
 // SEND_BEHIND_HELD send is held after what is already held, even inside the window, and answers WHATSAPP_HELD. An
 // OUTBOX_CUSTODY send is never held either: refused, it answers WHATSAPP_REFUSED and the owner gets the knock.
-export const whatsappWindowCaller = (inner: Caller, options: Readonly<{ kv: Kv; template: WhatsAppTemplate | null; proactiveTemplate?: WhatsAppTemplate | null; now?: () => number; log: Log }>): Caller => {
+export const whatsappWindowCaller = (inner: Caller, options: Readonly<{ kv: Kv; template: WhatsAppTemplate | null; proactiveTemplate?: WhatsAppTemplate | null; now?: () => number; log: Log; dailyKnock?: boolean }>): Caller => {
   const { kv, log } = options, templates = { reply: options.template, proactive: options.proactiveTemplate ?? null };
-  const now = options.now ?? Date.now;
+  const now = options.now ?? Date.now, policy = () => ({ daily: options.dailyKnock === true, now: now() });
   return async (method, body) => {
     if (method !== 'sendMessage') return inner(method, body);
     const nowOnly = (body as { [SEND_NOW_ONLY]?: unknown })[SEND_NOW_ONLY] === true;
@@ -190,12 +211,12 @@ export const whatsappWindowCaller = (inner: Caller, options: Readonly<{ kv: Kv; 
     }
     if (nowOnly || custody) {
       log({ hop: 'whatsapp_window', ok: false, held: false, code: nowOnly ? 'now_only_window_closed' : 'outbox_window_refused' });
-      await whatsappKnock(kv, t => inner('sendTemplate', t), template, log);
+      await whatsappKnock(kv, t => inner('sendTemplate', t), template, log, policy());
       return nowOnly ? undefined : WHATSAPP_REFUSED;
     }
     for (const part of held) holdBody(kv, part, now());
     // Held behind earlier messages in an open window, there is nothing to knock for: the next delivery of held messages sends it.
-    if (!whatsappWindowOpen(kv, now())) await whatsappKnock(kv, t => inner('sendTemplate', t), template, log);
+    if (!whatsappWindowOpen(kv, now())) await whatsappKnock(kv, t => inner('sendTemplate', t), template, log, policy());
     return receipt;
   };
 };
@@ -221,7 +242,7 @@ export const whatsappReceipt = (ack: unknown, subject: string, now: number = Dat
 // Meta's 30-day retention ends as lapsed, blocked if nothing went out and quarantined if any part did. releaseWhatsAppOutbox sends what waited once the owner writes again.
 // `held` hears of each record the closed window keeps that the route would otherwise send, before the knock.
 export const whatsappWindowRoute = (route: OutboxRoute, options: Readonly<{ kv: Kv; subject: string; template: WhatsAppTemplate | null; proactiveTemplate?: WhatsAppTemplate | null;
-  knock: (template: WhatsAppTemplate) => Promise<unknown>; held?: (record: FinalRecord) => Promise<void>; now?: () => number; log: Log }>): OutboxRoute => {
+  knock: (template: WhatsAppTemplate) => Promise<unknown>; held?: (record: FinalRecord) => Promise<void>; now?: () => number; log: Log; dailyKnock?: boolean }>): OutboxRoute => {
   const { kv, subject, knock, log } = options, templates = { reply: options.template, proactive: options.proactiveTemplate ?? null };
   const now = options.now ?? Date.now;
   const lapsed = (record: { createdAt: number }) => !whatsappWindowOpen(kv, now()) && now() - record.createdAt >= WHATSAPP_HELD_RETENTION_MS;
@@ -233,8 +254,9 @@ export const whatsappWindowRoute = (route: OutboxRoute, options: Readonly<{ kv: 
       if (own !== null && own > now()) return own;
       if (!(await route.allowed(record))) return null;
       await options.held?.(record);
-      await whatsappKnock(kv, knock, templateFor(templates, unaskedRecord(record)), log);
-      return record.createdAt + WHATSAPP_HELD_RETENTION_MS;
+      await whatsappKnock(kv, knock, templateFor(templates, unaskedRecord(record)), log, { daily: options.dailyKnock === true, now: now() });
+      // With the daily knock the record comes back when the next knock is allowed, so a window still closed then knocks again.
+      return Math.min(record.createdAt + WHATSAPP_HELD_RETENTION_MS, options.dailyKnock ? knockRevisitAt(kv, now()) : Infinity);
     },
     lapsed: record => lapsed(record) || (route.lapsed?.(record) ?? false),
     allowed: async record => !lapsed(record) && route.allowed(record),
@@ -296,7 +318,7 @@ export const clearWhatsAppNumber = (kv: Kv, appFallback = false): readonly strin
   const retired = old ? retireSurfaceRecords(kv, record => record.ownerSubject === old && String(record.payload.chat_id) === old && !kept(record)) : [];
   if (old && appFallback) rememberWhatsAppSubject(kv, old);
   for (const prefix of [WA_HELD_PREFIX, REHELD_PREFIX]) for (const [key] of [...kv.list<unknown>({ prefix })]) kv.delete(key);
-  for (const key of [WA_LAST_INBOUND_KEY, LAST_INBOUND_IDS_KEY, KNOCKED_KEY, REFUSED_KEY, REFUSED_IDS_KEY, PUSHED_KEY]) kv.delete(key);
+  for (const key of [WA_LAST_INBOUND_KEY, LAST_INBOUND_IDS_KEY, KNOCKED_KEY, KNOCK_AT_KEY, KNOCK_ID_KEY, REFUSED_KEY, REFUSED_IDS_KEY, PUSHED_KEY]) kv.delete(key);
   clearWhatsAppContext(kv);
   return retired;
 };

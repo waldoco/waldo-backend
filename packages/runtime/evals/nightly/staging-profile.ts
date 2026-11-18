@@ -76,6 +76,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   BRIEF_BODY_REVISION: gap('the world writes no health row after the Brief, so a Brief revised for late body data is not modelled; staging has it on'),
   EVENT_PUSH: inert('the app push raised after an event notice reaches the app chat; no model turn runs for it'),
   EVENT_PUSH_PER_DAY: inert('the most event pushes in an owner\'s day; no model turn runs for them'),
+  WHATSAPP_DAILY_KNOCK: inert('how often a closed WhatsApp window is knocked on; no model turn runs for it'),
   PROACTIVE_ACT_AHEAD: gap('the sweep worker and triage are not run in a trial, and the day-card cases run the Check-in and Close as before'),
   PROACTIVE_INTERVENTIONS: gap('Waldo\'s own look runs on the scheduler and the job lane, which a trial does not run; no case judges the look yet'),
   WHATS_NEW: gap('the what\'s new pass runs on the release wake and folds into day cards, neither of which a trial runs; with no announcement decided, an owner turn carries no what\'s new section'),
