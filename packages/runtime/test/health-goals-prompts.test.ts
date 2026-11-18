@@ -26,10 +26,10 @@ describe('stated goals in the day\'s runs', () => {
     }
   });
 
-  it('without shared health, a card names a health goal as not readable today rather than staying silent or guessing', () => {
+  it('without shared health, a card never guesses how the day moves a health goal', () => {
     for (const card of DAY_CARDS) {
       const prompt = dayCardPrompt(card, '2026-10-21T09:00', { calendar: '[]', ledger: '', today: '', updates: '' });
-      expect(prompt, card.id).toContain('When it has none, or says none is available, say nothing about sleep, recovery or energy, and never guess or make up a score; when they stated a health goal, say in one plain clause that today cannot be read against it.');
+      expect(prompt, card.id).toContain('never guess or make up a score or how the day moves a health goal');
     }
   });
 

@@ -89,12 +89,13 @@ export const RULE_COVERAGE: readonly RuleCoverage[] = [
   { anchor: 'For deeper owner recall, use read_memory', scenarios: ['r1-recall-across-day'] },
 ];
 
+const NARRATION = ['n04-plan-after-all-of-it', 'n05-mail-answer-not-a-sample', 'n06-honest-unknown-that-matters'];
 const TONE = ['d1-brief-good-day-one-line', 'tn01-go-friday-loose-saturday', 'tn02-protect-holiday', 'tn03-oxygen-quiet-then-loop'];
 
 // Version 2 of the behavior prompt (WALDO_PROMPT_V2) keeps the version-1 rules that still read the same and carries the voice
 // guide's character, tone, words and health gate in its own lines; each new rule names the scenarios that exercise it, or
 // the hard line it holds.
-const V2_DROPPED = new Set(['Short, with someone there', 'Ask almost nothing', 'You are Alfred in a modern register', 'Plain words and contractions', 'Wit is dry and once',
+const V2_DROPPED = new Set(['Every message passes six tests', 'When one source fails and others worked', 'Stop only after several genuinely different attempts', 'Short, with someone there', 'Ask almost nothing', 'You are Alfred in a modern register', 'Plain words and contractions', 'Wit is dry and once',
   'Lead with what you noticed', 'Give the reason when you suggest', 'offer the door', 'Never congratulate yourself', 'Their body: zone words']);
 export const RULE_COVERAGE_V2: readonly RuleCoverage[] = [
   ...RULE_COVERAGE.filter((entry) => !V2_DROPPED.has(entry.anchor)),
@@ -103,8 +104,12 @@ export const RULE_COVERAGE_V2: readonly RuleCoverage[] = [
   { anchor: 'Lead with what you did or found, then why, then the door', scenarios: ['t03-reminder', 'v03-week-one-preference', 'v04-unwise-late-call', 'h01-low-day-with-wearable'] },
   { anchor: 'Open as Waldo, settle into Alfred, close dry', scenarios: ['v05-small-fall', 'v08-stressed-owner', 'tn01-go-friday-loose-saturday', 'tn02-protect-holiday', 'h01-low-day-with-wearable'] },
   { anchor: 'When you advise, give one suggestion, not a menu', scenarios: ['tn01-go-friday-loose-saturday', 'v09-plan-not-interview', 't10-compare-flights'] },
-  { anchor: 'Silence is the default', scenarios: ['tn03-oxygen-quiet-then-loop'] },
+  { anchor: 'Every message passes six tests', scenarios: [...VOICE, ...NARRATION] },
+  { anchor: 'Whether to write at all is your judgment', scenarios: ['tn03-oxygen-quiet-then-loop', 'd1-brief-good-day-one-line'] },
   { anchor: 'When they bring a feeling, lower the energy', scenarios: ['v08-stressed-owner', 'p06-kind-before-clever'] },
+  // Working on a task: the version 2 failure ladder names a gap only when it changes the answer
+  { anchor: 'When one source fails and others worked', scenarios: ['e3-one-calendar-unreadable', 'n06-honest-unknown-that-matters'] },
+  { anchor: 'Stop only after several genuinely different attempts', scenarios: ['e3-one-calendar-unreadable'] },
   // Tone follows their day
   { anchor: 'You talk differently on their deadline', scenarios: TONE },
   { anchor: 'Protect: a low body', scenarios: ['h01-low-day-with-wearable', 'tn02-protect-holiday', 'h23-brief-heavy-day-low-form', 'v08-stressed-owner'] },
