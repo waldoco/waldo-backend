@@ -5479,7 +5479,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const modelAccess: OwnerModelAccess = { openaiApiKey: key ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), primary: modelProviderSetting(this.env.WALDO_MODEL_PROVIDER), health: this.providerHealth, onAttempts, held: () => this.openHold().held() };
     const responder = createTelegramResponder(
-      { ...modelAccess, floorReply: retryFloor, ...(this.env.WALDO_TOOL_LOADER === 'harness' ? { toolLoader: 'harness' as const } : this.env.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true } : {}), ...(this.env.WALDO_PROMPT_V2 === '1' ? { promptV2: true } : {}), ...(contextCaps ? { contextCaps: budget } : {}), ...(callCeilings ? { callCeilings: budget } : {}) }, legacyStore, memory, log,
+      { ...modelAccess, floorReply: retryFloor, ...(this.env.WALDO_TOOL_LOADER === 'harness' ? { toolLoader: 'harness' as const } : this.env.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true } : {}), ...(this.env.WALDO_PROMPT_V2 === '1' ? { promptV2: true } : {}), ...(this.env.WALDO_THINKING_REPLAY === '1' ? { thinkingReplay: true } : {}), ...(this.env.WALDO_STRONG_ROLES === '1' ? { strongRoles: true } : {}), ...(contextCaps ? { contextCaps: budget } : {}), ...(callCeilings ? { callCeilings: budget } : {}) }, legacyStore, memory, log,
       { download, transcribe: selectTranscriber(this.env)?.transcribe, ...(this.env.WALDO_FILE_TOOLS === '1' ? { keeper: (runScope: RunEffectScope) => uploadKeeper(() => openWorkspace({ runScope }), identity.get<string>('do_name') ?? String(owner)) } : {}) }, clock, replayHandlers = surfaceHandlers([...workspaceTools, ...reminderHandlers(book), ...(meds ? medicationHandlers(meds) : []), ...healthLogHandlers(healthLogs), ...(this.env.HEALTH_COACHING === '1' ? [sleepNeedHandler(payload => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', 'settings_write', payload), () => this.setup('app').healthSamples('settings'))] : []), getHealthHandler(healthRead, clock), ...(this.env.SCREEN_TIME === '1' ? [getScreenTimeHandler(screenTimeReadBook(signedRpc(this.env), identity.get<string>('do_name') ?? null), clock)] : []), ...(this.env.DEVICE_PLACE === '1' ? [getDeviceContextHandler(deviceContextReadBook(signedRpc(this.env), identity.get<string>('do_name') ?? null), clock)] : []), ...(this.env.DEVICE_CALENDAR === '1' ? [queryPhoneCalendarHandler(phoneCalendarReader(this.deviceCalendar(), google), clock)] : []), ...weatherTools(this.env, signedRpc(this.env), identity.get<string>('do_name') ?? null, clock, typeof caches === 'undefined' ? null : cacheApiWeatherCache(caches.default)), ...standingOrderHandlers(orders), questHandler(quests), ...experimentHandlers(quests, readZones), ...(this.env.AUTONOMY_OWN_CALENDAR === '1' ? autonomyHandlers(grants, desk, { now: () => deps.now(), timezone: () => clock.timezone, surface: channel,
         account: async requested => (await google.client('calendar', undefined, undefined, requested).catch(() => null))?.account?.email ?? null }) : []), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...(this.env.APPROVE_IN_CHAT === '1' || this.env.AUTONOMOUS_BY_DEFAULT === '1' ? [approveShownHandler(desk)] : []), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
         // Owner-ruled OTP parity (September 27, 2026): the extracted artifact goes to the owner
@@ -5551,7 +5551,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // A job prompt built on the ledger: the owner's health logs reach the model as this turn's context.
     // Every job here reads calendar or mail text someone else wrote, so it runs tainted: an action or a standing change it
     // wants goes to the owner's card, as in an owner turn that read the same text.
-    const ledgerJob = async (trace: string, said: string, toolNames?: Parameters<typeof responder.prompt>[4], directTools?: Parameters<typeof responder.prompt>[11], strong?: boolean, context?: string, waldoFirst?: boolean) =>
+    const ledgerJob = async (trace: string, said: string, toolNames?: Parameters<typeof responder.prompt>[4], directTools?: Parameters<typeof responder.prompt>[11], strong?: Parameters<typeof responder.prompt>[9], context?: string, waldoFirst?: boolean) =>
       responder.prompt(trace, owner, said, async (_hop, work) => work(), toolNames, undefined, undefined, [await healthLogLines(), context ?? ''].filter(Boolean).join('\n\n'), 'external', strong, undefined, directTools, waldoFirst);
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);
@@ -5738,7 +5738,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             log({ trace, hop, ms: Date.now() - at, ok: false, error: String(error) });
             throw error;
           }
-        })).trim();
+        }, undefined, undefined, undefined, undefined, undefined, 'decides')).trim();
         if (text && outboxed) {
           // The run finishes when the report is delivered or ends unsent. A report is current until the order reports again:
           // queuing this one supersedes an earlier report of the order still waiting, so the owner gets the latest one, and a run
@@ -5882,7 +5882,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
               log({ trace: turn, hop, ms: Date.now() - hopAt, ok: false, error: String(error), code: turnFailureCode(error) });
               throw error;
             }
-          }, LOOP_CHECK_BACK_TOOLS, current, undefined, undefined, 'external', undefined, undefined, undefined, true));
+          }, LOOP_CHECK_BACK_TOOLS, current, undefined, undefined, 'external', 'decides', undefined, undefined, true));
         } finally { checkBackLoops.delete(turn); }
       },
       deliver: async (id, trace, text, heartbeat, commit) => {
@@ -6293,7 +6293,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           return notes ? [{ notetaker, notes }] : [];
         }))).flat();
       },
-      decide: (turn, prompt, current) => this.asOwnerJob('pre_activity_spot', turn, () => responder.prompt(turn, owner, prompt, async (_hop, work) => work(), [], current, CALENDAR_PREP_FORMAT)),
+      decide: (turn, prompt, current) => this.asOwnerJob('pre_activity_spot', turn, () => responder.prompt(turn, owner, prompt, async (_hop, work) => work(), [], current, CALENDAR_PREP_FORMAT, undefined, undefined, 'decides')),
       enqueue: (id, text, receipt, commit) => prepEnqueue(receipt.connectionId, clock.timezone, () => calendarOwnerCurrent(receipt.connectionId, clock.timezone))(id, text, receipt, commit),
     });
     // A pass closes its trace with a machine_turn root that carries why it ended, so every send or skip reaches the exporter;
@@ -6333,7 +6333,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             },
             dayChangedSince: (at, event) => updates.changedSince(at, localIso(Date.parse(event.start), timezone).slice(0, 10), timezone,
               (event.attendee_emails ?? []).filter(email => email.toLowerCase() !== client.account?.email?.toLowerCase())),
-            decide: (id, prompt) => responder.prompt(id, owner, prompt, async (_hop, work) => work(), [], current, CALENDAR_PREP_FORMAT),
+            decide: (id, prompt) => responder.prompt(id, owner, prompt, async (_hop, work) => work(), [], current, CALENDAR_PREP_FORMAT, undefined, undefined, 'decides'),
             enqueue: prepEnqueue(connectionId, timezone, current),
           });
           if (jobs) await armTaskJobsWake(storage, Date.now());
@@ -6436,7 +6436,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const gate = sweepGate(day);
         const canSend = gate === null || gate === 'held_window';
         await reviewMailFollowup({ loops, now, timezone: clock.timezone, allowed: sourceFollowups && canSend && check.analysis === 0 && check.code !== 'held_open_job',
-          ledger: promptLedger, prompt: said => { followupPrompted = true; return ledgerJob(`${trace}:mail-followup`, said, ['get_context', 'read_memory', 'search_episodes']); },
+          ledger: promptLedger, prompt: said => { followupPrompted = true; return ledgerJob(`${trace}:mail-followup`, said, ['get_context', 'read_memory', 'search_episodes'], undefined, 'decides'); },
           enqueue: async (text, mailFollowup) => {
             const id = `mail-followup:${mailFollowup.loopId}:${mailFollowup.due}:${mailFollowup.timezone}:${mailFollowup.messageId}`;
             const known = finalOutbox.records().find(record => record.id === id);
@@ -6470,7 +6470,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       transaction: work => storage.transactionSync(work),
       context: async () => ({ ledger: await promptLedger(), feedback: updates.feedback(), volume: loops.proactivity().volume === 'high' ? 'high' : 'normal' }),
       turn: async (turn, text, current, tools) => this.asOwnerJob('heartbeat', turn, async () =>
-        responder.prompt(turn, owner, text, async (_hop, work) => work(), tools ?? updateSweepTools(sweepSourceFollowups()), current, undefined, await healthLogLines(), 'external', interrupts !== null || actAhead, undefined, undefined, true)),
+        responder.prompt(turn, owner, text, async (_hop, work) => work(), tools ?? updateSweepTools(sweepSourceFollowups()), current, undefined, await healthLogLines(), 'external', interrupts !== null || actAhead ? 'plans' : undefined, undefined, undefined, true)),
       ...(interrupts ? { interruptions: interrupts } : {}), ...(heldRaise ? { holds: true as const } : {}),
       ...(realtime ? { triage: {
         // The owner's goals as their memory holds them; the turn recalls people and the rest of memory as every job does.
@@ -6506,7 +6506,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       context: async () => ({ goals: claimStore(storage.sql).claims().filter(claim => claim.kind === 'goal').slice(-12).map(claim => `- ${claim.text}`).join('\n'),
         cards: dayCards(), style: channelStyle(PROACTIVE_READS[channel](storage.kv, proactiveBothDefault(this.env))), shaping: await dayShaping('intervention') }),
       turn: async (turn, text, current, tools) => this.asOwnerJob('heartbeat', turn, async () =>
-        responder.prompt(turn, owner, text, async (_hop, work) => work(), tools, current, undefined, await healthLogLines(), 'external', true, undefined, undefined, true)),
+        responder.prompt(turn, owner, text, async (_hop, work) => work(), tools, current, undefined, await healthLogLines(), 'external', 'plans', undefined, undefined, true)),
       cardsSince: (at: number) => storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM ledger WHERE created_at >= ? AND status != 'done'", at).one().n,
       deliver: async (id, trace, text, commit) => {
         if (finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
@@ -6676,7 +6676,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const shaping = planning ? await dayShaping(trace, 'brief') : card.id === 'card:close' ? await dayShaping(trace, 'close') : '';
           const capacityText = capacity ? [capacityContext(cardCapacityNote(memory, storage.kv, healthMemoryOn(identity), await healthContext.read(trace).then(read => read === 'unknown' ? read : read !== null)), recentBlocks(storage.sql, now, clock.timezone)),
             ...(budget ? [await capacityBudgetContext(now, clock.timezone, client, !client && google.configured(), recentMoves(storage.sql, now, clock.timezone))] : [])].join('\n\n') : undefined;
-          text = (await ledgerJob(trace, said, proposing ? [...OUTSIDE_TEXT_JOB_TOOLS, ...proposes] : undefined, proposing ? proposes : undefined, actAhead || capacity || tomorrow || questText !== null || shaping !== '',
+          text = (await ledgerJob(trace, said, proposing ? [...OUTSIDE_TEXT_JOB_TOOLS, ...proposes] : undefined, proposing ? proposes : undefined, actAhead || capacity || tomorrow || questText !== null || shaping !== '' ? 'plans' : undefined,
             [shaping, capacityText, questText, announcementText].filter(Boolean).join('\n\n') || undefined, true)).trim();
         } finally {
           raised = this.whyHolder.collected ?? []; this.whyHolder.collected = undefined;

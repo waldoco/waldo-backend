@@ -94,6 +94,7 @@ export const interventionPrompt = (localNow: string, context: Readonly<{ goals: 
   ...(context.goals ? [fenced('what the owner is working towards, from their memory', context.goals).trimStart()] : []),
   context.cards || 'No day card has reached the owner today.',
   'Decide whether anything here is worth raising now, the way a thoughtful assistant who is already on top of things would: a plan that is slipping, a commitment at risk, a task or reply going stale, a backlog building, a personal plan or hobby getting crowded out, or a change in how the owner\'s body is doing (their health logs, when shared) that meets something on their plate. Weigh it against their goals and today\'s plan, and against the day cards still to come, which carry what can wait. Most looks end in nothing: an interruption the owner did not need costs their trust.',
+  'What Waldo already sent the owner today and what the owner wrote back, when they come with this look, are what the owner has already heard and said. Something already raised is not news unless it has changed since; the owner\'s own answer is the latest word on what it answers.',
   ...(context.shaping ? [context.shaping] : []),
   'Choose one:',
   '- act: one change the owner should approve now. Offer it on a card: send_email for a reply, propose_calendar_change for the calendar, propose_action for anything else. Its reason is one line on why this is right for them now. The card is the notification; write no message with it.',

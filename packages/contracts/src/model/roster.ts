@@ -52,9 +52,13 @@ export const OWNER_MODELS: Readonly<Record<ModelProvider, Readonly<{ chat: Model
   [OPENAI_PROVIDER]: { chat: WALDO_CHAT_MODEL, auxiliary: WALDO_AUXILIARY_MODEL },
 };
 
-// The reasoning efforts Waldo asks for. Every OpenAI roster model accepts both.
-export const reasoningEffortSchema = z.enum(['low', 'medium']);
+// The reasoning efforts Waldo asks for. Every OpenAI and Claude roster model accepts all three.
+export const reasoningEffortSchema = z.enum(['low', 'medium', 'high']);
 export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>;
+// The effort a planning run (the day plan, a day card's planning turn, the intervention look, triage) asks of the chat
+// model under WALDO_STRONG_ROLES, in place of the model's own. Anthropic's effort guide puts intelligence-sensitive work at
+// high or above; each run keeps one effort for all its rounds, since an effort change re-bills the request's cache.
+export const PLANNING_EFFORT: ReasoningEffort = 'high';
 
 // Per OpenAI model: the efforts its OpenAI model page lists, and the effort Waldo asks for. The effort follows the
 // model rather than the call, so a Luna call stays at low wherever it runs. outputTokens is the output cap a call on
