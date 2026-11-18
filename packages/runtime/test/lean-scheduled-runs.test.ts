@@ -7,7 +7,7 @@ import type { ConversationStore } from '../src/channels/conversation-store';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { LOOP_CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS } from '../src/channels/check-back';
 import { triageTools, updateSweepTools } from '../src/channels/update-sweep';
-import { deliveredLately, fitsScheduledMenu, recentExchange, recentExchangeText, RECENT_OWNER_MESSAGES, RECENT_ROW_MAX_CHARS, RECENT_SENT_MESSAGES, SCHEDULED_DIRECT, SCHEDULED_MENU } from '../src/channels/scheduled-run';
+import { deliveredLately, fitsScheduledMenu, OLDER_SENT_MAX_CHARS, recentExchange, recentExchangeText, RECENT_OWNER_MESSAGES, RECENT_ROW_MAX_CHARS, RECENT_SENT_MESSAGES, SCHEDULED_DIRECT, SCHEDULED_MENU, UNCONFIRMED_MARK, WHOLE_SENT_MESSAGES } from '../src/channels/scheduled-run';
 import { toContextHealthMaterial, type HealthContextRow } from '../src/channels/health-context';
 import { ownerJobAdmission } from '../src/identity/surface-owner-admission';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
@@ -249,9 +249,56 @@ describe('what the outbox delivered lately', () => {
     ];
     expect(deliveredLately(records, now).map((message) => message.text)).toEqual(['text brief', 'text checkin', 'text whatsapp']);
   });
-  it(`keeps the newest ${RECENT_SENT_MESSAGES}`, () => {
+  it(`keeps the newest ${WHOLE_SENT_MESSAGES} with the day view off`, () => {
     const records = Array.from({ length: 6 }, (_, i) => record(`m${i}`, 'delivered', now - (6 - i) * 60_000));
     expect(deliveredLately(records, now).map((message) => message.text)).toEqual(['text m3', 'text m4', 'text m5']);
+    expect(deliveredLately([record('unsure', 'quarantined', now - 60_000)], now)).toEqual([]);
+  });
+  it(`with the day view, keeps the day's newest ${RECENT_SENT_MESSAGES}, the older ones by their opening, and a send of unknown arrival as said`, () => {
+    const long = (id: string) => ({ payload: { chat_id: 7, text: `text ${id} ${'more of the message '.repeat(40)}` } });
+    const records = [
+      ...Array.from({ length: 10 }, (_, i) => record(`m${i}`, 'delivered', now - (10 - i) * 60_000, long(`m${i}`))),
+      record('unsure', 'quarantined', now - 30_000, { reason: 'delivery_unconfirmed' }), record('never', 'blocked', now - 20_000, { reason: 'expired' }),
+      record('yesterday', 'delivered', now - 25 * 3_600_000),
+    ];
+    const day = deliveredLately(records, now, true);
+    expect(day).toHaveLength(RECENT_SENT_MESSAGES);
+    expect(day.slice(0, -1).map((message) => message.text.split(' ').slice(0, 2).join(' '))).toEqual(['text m3', 'text m4', 'text m5', 'text m6', 'text m7', 'text m8', 'text m9']);
+    expect(day.at(-1)!.text).toBe(`${UNCONFIRMED_MARK}text unsure`);
+    for (const message of day.slice(0, -WHOLE_SENT_MESSAGES)) expect(message.text.length).toBeLessThanOrEqual(OLDER_SENT_MAX_CHARS + 1);
+    for (const message of day.slice(-WHOLE_SENT_MESSAGES, -1)) expect(message.text.length).toBeGreaterThan(OLDER_SENT_MAX_CHARS);
+  });
+});
+
+describe('a look an hour and a half after a nudge', () => {
+  const now = Date.parse('2026-11-17T12:30:00Z');
+  const NUDGE = 'You have not replied on LinkedIn to the recruiter yet; a short yes keeps the Thursday slot.';
+  const sentRecord = (id: string, minutesAgo: number, text: string): FinalRecord => ({ id, trace: id, payload: { chat_id: 7, text }, digest: id, ownerSubject: '7', doName: 'owner',
+    status: 'delivered', dueAt: now, createdAt: now - minutesAgo * 60_000, deliveredAt: now - minutesAgo * 60_000, attempts: 1 }) as FinalRecord;
+  // The nudge went 90 minutes ago; three update cards and a check-in went since; the owner answered the nudge.
+  const outbox = [sentRecord('nudge', 90, NUDGE), sentRecord('u1', 70, 'Update: the deck review moved to 15:00.'), sentRecord('u2', 50, 'Update: Priya replied about the venue.'),
+    sentRecord('checkin', 40, 'Check-in: two things left before 17:00.'), sentRecord('u3', 20, 'Update: invoice from the studio arrived.')];
+  const answered = (): ConversationEntry[] => {
+    const rows = chain();
+    const said = 'already replied to the recruiter on LinkedIn, it is sorted';
+    return [...rows, { id: 'owner-answer', ownerId: PRINCIPAL, chatId: CHAIN, parentId: rows.at(-1)!.id, threadAnchorId: null, surface: 'telegram', role: 'user', inputOrigin: 'owner',
+      modelPayload: said, appPayload: said, modelProjection: { mode: 'include' }, createdAt: now - 80 * 60_000 }];
+  };
+  const look = async (day: boolean) => {
+    const { owner, requests } = await harness({ lean: true, entries: answered(), sent: deliveredLately(outbox, now, day) });
+    await run(owner, 'machine:intervention:2026-11-17T12', triageTools(false, true), undefined);
+    return lastReply(requests).messages.at(-1)!.content;
+  };
+  it('with the day view, sees its own nudge and the owner\'s answer to it', async () => {
+    const told = await look(true);
+    expect(told).toContain('messages Waldo sent the owner lately');
+    expect(told).toContain('You have not replied on LinkedIn to the recruiter yet');
+    expect(told).toContain('already replied to the recruiter on LinkedIn');
+  });
+  it('without it, the cards since push the nudge out of view (the 17 Nov repeat)', async () => {
+    const told = await look(false);
+    expect(told).not.toContain('You have not replied on LinkedIn');
+    expect(told).toContain('already replied to the recruiter on LinkedIn');
   });
 });
 
