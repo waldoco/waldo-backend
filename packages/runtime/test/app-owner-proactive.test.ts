@@ -154,6 +154,20 @@ describe('proactive work for an owner who only uses the app', () => {
     } finally { lines.mockRestore(); }
   });
 
+  it('a look that finds no Google client to read with ends on a closed reason in its own trace, never silently', async () => {
+    const lines = vi.spyOn(console, 'log');
+    try {
+      await withAppOwner('proactive-look-no-client', { zone: 'Europe/London', confirmed: true }, async (owner) => {
+        const runtime = owner.setup('app') as Runtime & Readonly<{ updateCheck(trace: string): Promise<void> }>;
+        await runtime.ready;
+        await runtime.updateCheck('update:1');
+      });
+      const look = lines.mock.calls.map(call => String(call[0])).filter(line => line.includes('"trace":"update:1"')).map(line => JSON.parse(line) as { hop: string; ok: boolean; code?: string; detail?: string });
+      expect(look).toEqual([expect.objectContaining({ hop: 'update_card', ok: false, code: 'no_google_client' }), expect.objectContaining({ hop: 'machine_turn', ok: false })]);
+    } finally { lines.mockRestore(); }
+    expect(model.calls).toBe(0);
+  });
+
   it('arms nightly, heartbeat, the event-brief sweep and today\'s day cards in a confirmed zone on first app use', async () => {
     await withAppOwner('proactive-confirmed-boot', { zone: 'Europe/London', confirmed: true }, async (owner, state) => {
       await owner.setup('app').ready;

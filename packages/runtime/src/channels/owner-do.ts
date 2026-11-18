@@ -6431,8 +6431,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return read;
     };
     const updateCheck = async (trace: string) => {
-      const client = await google.client();
-      if (client === null) return;
       const started = Date.now();
       // Close each trace with a machine_turn root like every other machine run, so the trace exporter flushes it.
       let followupPrompted = false;
@@ -6440,6 +6438,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok, detail: 'update_card' });
         if (followupPrompted) log({ trace: `${trace}:mail-followup`, hop: 'machine_turn', ms: Date.now() - started, ok, detail: 'mail_followup' });
       };
+      const client = await google.client();
+      // No account the look can read with (no app config, every grant failing, none with the scope): a look that never ran
+      // must still show in the trace, or it reads as a look that was never scheduled.
+      if (client === null) { log({ trace, hop: 'update_card', ms: Date.now() - started, ok: false, code: 'no_google_client', detail: 'no_google_client' }); closeMachineTraces(false); return; }
       try {
         const now = Date.now();
         const sourceFollowups = sweepSourceFollowups();
