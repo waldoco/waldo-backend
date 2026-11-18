@@ -1,4 +1,5 @@
 import { appControlsRequest } from './app-controls';
+import { HEALTH_READ_TOOLS, healthSharedLately, loadedToolsBook, noteHealthShared, PHONE_TOOLS } from '../tools/loaded';
 import { deliveredLately } from './scheduled-run';
 import { appGooglePicture, googlePictures } from './app-google-picture';
 import { wearablesCatalogue } from '../health/wearables';
@@ -186,6 +187,7 @@ import { calendarSource, mailSource, reviewMailFollowup, titleDigester, updateBo
 import { meetingPrepApplier, meetingPrepSpec } from './meeting-prep';
 import { prepGranola } from './meeting-prep-granola';
 import { prepFireflies } from './meeting-prep-fireflies';
+import { briefBodyAfter, briefBodyBefore, BRIEF_BODY_KEY, briefBodyPrompt, briefBodyRevision, type BriefBodyCode } from './brief-revision';
 import { emitObserved, observedEvents, triageHold, UPDATE_CARD_FRESH_MS, UPDATE_JUDGE_WAKE_KEY, updateSweepApplier, updateSweepCheck, updateSweepTools, type ObservedSubscriber, type SweepGate } from './update-sweep';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { recallChain, recallChainOn } from '../history/recall-chain';
@@ -387,6 +389,8 @@ type OwnerRuntime = Readonly<{
   // carry a workout that just ended (WORKOUT_WAKE), which may reshape the rest of the day.
   healthSamples(cause?: HealthRecomputeCause, woke?: boolean, workout?: boolean): Promise<void>;
   healthRecompute(): Promise<void>;
+  // BRIEF_BODY_REVISION: today's body data landed after the Brief reached the owner; one turn decides whether it now reads differently.
+  reviseBriefForBody(trace: string): Promise<BriefBodyCode>;
   // The health trigger: a day marked by a zone change, and the scheduled evaluation of it.
   healthChanged(day: string): Promise<void>;
   // PROACTIVE_INTERVENTIONS: Waldo's own look across the owner's plate, a patrol entry beside the health trigger's.
@@ -4448,7 +4452,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // failures degrade to absence and log; they never block the turn.
     const healthContext = healthContextBook(signedRpc(this.env), identity.get<string>('do_name') ?? null, clock,
       (error, trace) => log({ trace: trace ?? `health:${channel}`, hop: 'health_context', ms: 0, ok: false, error: String(error), code: 'read_failed' }),
-      (present, trace, partial) => log({ trace: trace ?? `health:${channel}`, hop: 'health_context', ms: 0, ok: true, code: partial ? 'partial' : present ? 'present' : 'absent' }),
+      (present, trace, partial) => { if (present) noteHealthShared(identity, Date.now()); log({ trace: trace ?? `health:${channel}`, hop: 'health_context', ms: 0, ok: true, code: partial ? 'partial' : present ? 'present' : 'absent' }); },
       { partial: this.env.HEALTH_PARTIAL_CONTEXT === '1' },
     );
     const baseCall = channel === 'app'
@@ -5456,7 +5460,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const newerOwnerMessages = () => this.secondMessages.round();
     const finishedTasks = this.env.WALDO_TASK_PICKUP === '1' ? (since: number) => finishedTasksNote(this.jobs(), since) : undefined;
     // The owner's chat turn as a router (async-tools.ts): long work goes to tasks, and the reply may start on the light role.
+    // Tools offered in the function list per owner: what the model loaded lately, the phone tools when the app is bound (it is
+    // their source), and the health reads while the owner shares body data.
+    const loadedTools = loadedToolsBook(storage.kv);
+    const promotedTools = () => [...loadedTools.names(Date.now()), ...(this.appBound() ? PHONE_TOOLS : []), ...(healthSharedLately(storage.kv, Date.now()) ? HEALTH_READ_TOOLS : [])];
     const router = { asyncTools: asyncToolsEnabled(this.env), lightChat: lightChatEnabled(this.env), lightRoles: lightChatRoles(this.env), jobOutcomeRows: jobOutcomeRowsEnabled(this.env), machineTime: () => this.machineTime(), leanScheduled: this.env.WALDO_LEAN_SCHEDULED === '1',
+      promotedTools, noteLoaded: (names: readonly string[]) => loadedTools.note(names, Date.now()),
       waldoSent: () => deliveredLately(finalOutbox.records(), Date.now()) };
     const forgetPass = () => this.forgetPurgeJob().run();
     // An owner who joined openly runs under open sign-up's ceiling; every other owner under the invited one.
@@ -6057,9 +6066,38 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (woke && this.env.WAKE_BRIEF === '1') await wakeNoticed();
       if (cause === 'readings' && runtime.welcome.lateHealth()) this.continueWelcome(runtime);
     };
+    // BRIEF_BODY_REVISION (brief-revision.ts): today's first row written after the Brief went out has the Brief looked at again
+    // once, on the surface that took it.
+    const ownerDay = () => localIso(Date.now(), clock.timezone).slice(0, 10);
+    const briefBodyStart = () => this.env.BRIEF_BODY_REVISION !== '1' ? Promise.resolve(null) : briefBodyBefore({ day: ownerDay(), reached: plans.reached(ownerDay(), 'card:brief'),
+      doneOn: storage.kv.get<string>(BRIEF_BODY_KEY), todayRow: async () => ((await healthRpc('scores_read', JSON.stringify({ day: ownerDay() })) as { scores?: { day?: unknown } } | null)?.scores?.day) === ownerDay() });
+    const briefBodyFinish = async (trace: string, before: boolean | 'unread' | null, outcome: string): Promise<void> => {
+      const day = ownerDay(), decided = await briefBodyAfter(before, outcome, async () => healthSnapshot(await readModelHealth())?.day ?? null, day);
+      if (decided === null) return;
+      if (decided !== 'go') { log({ trace, hop: 'brief_body', ms: 0, ok: decided !== 'row_unread', code: decided }); return; }
+      storage.kv.put(BRIEF_BODY_KEY, day);
+      const turn = `brief-body:${day}`;
+      this.ctx.waitUntil(this.serial(() => this.asOwnerJob('brief', turn, () => this.setup(this.taskChannel()).reviseBriefForBody(turn)))
+        .then(done => log({ trace: turn, hop: 'brief_body', ms: 0, ok: done !== 'invalid' && done !== 'failed', code: done }),
+          () => log({ trace: turn, hop: 'brief_body', ms: 0, ok: false, code: 'failed' })));
+    };
+    const reviseBriefForBody = async (trace: string): Promise<BriefBodyCode> => {
+      const revises = REVISES_CARDS[channel] === true;
+      if (!revises && quiet()) return 'quiet';
+      if (!revises && !reachesOut()) return 'not_reaching_out';
+      const now = Date.now(), day = localIso(now, clock.timezone).slice(0, 10);
+      const chosen = briefBodyRevision(await ledgerJob(trace, briefBodyPrompt(localIso(now, clock.timezone).replace('T', ' '), dayCards(), revises), HEALTH_READ_TOOLS as ToolName[],
+        undefined, true, undefined, true));
+      if (typeof chosen === 'string') return chosen;
+      await finalOutbox.enqueueFenced({ id: trace, trace, payload: { chat_id: owner, text: redactSecretUrls(chosen.text).text }, ownerSubject: String(owner),
+        doName: storage.kv.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], expiresAt: now + UPDATE_CARD_FRESH_MS,
+        revision: { day, card: 'card:brief' }, ...(revises ? { inPlace: true as const } : {}) }, work => storage.transactionSync(work));
+      return 'revised';
+    };
     const healthRecomputeRun = async () => {
       const started = Date.now(), trace = `${HEALTH_RECOMPUTE_ID}:${started}`;
       let outcome: string;
+      const briefBody = await briefBodyStart();
       // Each run closes its trace with a machine_turn root, so the trace exporter flushes it.
       try { outcome = await recompute.run(); }
       catch (error) {
@@ -6070,6 +6108,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       log({ trace, hop: 'health_recompute', ms: Date.now() - started, ok: true, code: outcome });
       log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'health_recompute' });
+      await briefBodyFinish(trace, briefBody, outcome);
     };
     const healthTrigger = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`, doName = identity.get<string>('do_name'), rpc = signedRpc(this.env), timezone = clock.timezone;
@@ -6877,7 +6916,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           doName: identity.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] }, work => storage.transactionSync(() => { work(); commit(); }));
       },
       ended: grant => { welcome.lateWeb(grant); this.continueWelcome(runtime); } });
-    const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, push, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, healthChanged, healthTrigger, interventionReview, announcementPass, announcementsCurrent, placeMoved, placeArrived, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, push, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, reviseBriefForBody, healthChanged, healthTrigger, interventionReview, announcementPass, announcementsCurrent, placeMoved, placeArrived, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       lookupToolHandlers: () => {
         const unlocated = webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch), this.lookupPages) : null;

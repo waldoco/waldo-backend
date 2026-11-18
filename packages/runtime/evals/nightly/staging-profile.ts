@@ -74,6 +74,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   PROACTIVE_OVER_TELEGRAM: gap('where unasked messages go for an owner still linked on Telegram; no trial runs an unasked message or a Telegram owner'),
   PROACTIVE_BOTH_DEFAULT: gap('where unasked messages go for an owner with WhatsApp bound; no trial runs an unasked message'),
   OWN_LOOK_ANY_ZONE: inert('which jobs an app owner\'s unconfirmed zone holds; the trial runs its scheduled steps directly'),
+  BRIEF_BODY_REVISION: gap('the world writes no health row after the Brief, so a Brief revised for late body data is not modelled; staging has it on'),
   EVENT_PUSH: inert('the app push raised after an event notice reaches the app chat; no model turn runs for it'),
   EVENT_PUSH_PER_DAY: inert('the most event pushes in an owner\'s day; no model turn runs for them'),
   PROACTIVE_ACT_AHEAD: gap('the sweep worker and triage are not run in a trial, and the day-card cases run the Check-in and Close as before'),
