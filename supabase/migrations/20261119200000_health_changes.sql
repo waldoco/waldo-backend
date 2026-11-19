@@ -1,4 +1,4 @@
--- Health contract revision 18 (number pending the gate's allocation): what changed today, stored on the owner's derived row for the
+-- Health contract revision 18: what changed today, stored on the owner's derived row for the
 -- app's Body card and Waldo's words alike (HEY-484). A derived value: it is kept on the derived row under that row's retention,
 -- withdrawal purge and account deletion, and no other store holds it.
 -- - public.health_context_daily gains changes (jsonb), nullable: a row written without it holds none.

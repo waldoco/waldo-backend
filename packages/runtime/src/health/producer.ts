@@ -644,7 +644,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     // One read of the stored days a run, with their parts when the day's changes need them. A read that fails is null.
     let historyRead: Promise<unknown> | undefined;
     const history = (readHistory: NonNullable<ProducerDeps['readHistory']>): Promise<unknown> =>
-      (historyRead ??= readHistory(HISTORY_WINDOW_DAYS, deps.changes === true ? true : undefined).catch(() => null));
+      (historyRead ??= (deps.changes === true ? readHistory(HISTORY_WINDOW_DAYS, true) : readHistory(HISTORY_WINDOW_DAYS)).catch(() => null));
     const backfill = async (readHistory: NonNullable<ProducerDeps['readHistory']>): Promise<void> => {
       const newestBackfilled = shiftDay(today, -2);
       const candidates = [...new Set(present.flatMap(s => s.readings.filter(r => r.signal === 'sleep_duration' && r.day <= newestBackfilled).map(r => r.day)))].sort();
