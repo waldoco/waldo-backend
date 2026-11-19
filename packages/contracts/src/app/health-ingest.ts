@@ -744,9 +744,14 @@ export const healthScoresResponseV1Schema = z.union([healthScoresV1Schema, healt
 // label, and nothing else of the day: no reading, driver, window or sleep debt. A day with no row is left out, so the chart
 // shows a gap and never a zero. backfilled is present only on a day recomputed from history that arrived late.
 export const HEALTH_SCORES_HISTORY_REVISION_V1 = HEALTH_BASELINE_REVISION_V1;
-export const HEALTH_SCORES_HISTORY_WINDOWS_V1 = [7, 30, 90] as const;
-export const healthScoresHistoryQueryV1Schema = z.strictObject({ days: z.enum(['7', '30', '90']) });
-const historyWindowDays = z.union([z.literal(7), z.literal(30), z.literal(90)]);
+// The Body screen's six months and year (180 and 365 days) are served from the revision the screen's other additions name, so a
+// build that cannot draw them never asks; they are daily rows like the shorter windows, and the app draws its weekly and monthly
+// bars from them. A day's parts ride the 90-day windows and shorter only, so a year's answer stays the size of its scores.
+export const HEALTH_LONG_HISTORY_REVISION_V1 = HEALTH_CHANGES_REVISION_V1;
+export const HEALTH_SCORES_HISTORY_WINDOWS_V1 = [7, 30, 90, 180, 365] as const;
+export const HEALTH_SCORES_HISTORY_PARTS_MAX_DAYS_V1 = 90;
+export const healthScoresHistoryQueryV1Schema = z.strictObject({ days: z.enum(['7', '30', '90', '180', '365']) });
+const historyWindowDays = z.union([z.literal(7), z.literal(30), z.literal(90), z.literal(180), z.literal(365)]);
 const dayNumber = (day: string): number => Date.parse(`${day}T00:00:00Z`) / 86_400_000;
 export const healthScoresHistoryDayV1Schema = z.strictObject({
   day: healthDayV1Schema,
@@ -762,7 +767,7 @@ export const healthScoresHistoryV1Schema = z.strictObject({
   window_days: historyWindowDays,
   from: healthDayV1Schema,
   to: healthDayV1Schema,
-  days: z.array(healthScoresHistoryDayV1Schema).max(90),
+  days: z.array(healthScoresHistoryDayV1Schema).max(365),
 }).refine(history => dayNumber(history.to) - dayNumber(history.from) + 1 === history.window_days, { error: 'from to to spans the window', path: ['to'] })
   .refine(history => history.days.every((row, i) => row.day >= history.from && row.day <= history.to && (i === 0 || history.days[i - 1]!.day < row.day)),
     { error: 'days fall inside the window, oldest first, once each', path: ['days'] });
