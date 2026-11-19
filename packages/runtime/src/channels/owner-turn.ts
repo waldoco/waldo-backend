@@ -98,7 +98,7 @@ const SHARED_HEALTH_LABEL = "Shared health today (derived by the app from the ow
 const NO_DIRECT: ReadonlySet<string> = new Set();
 // Tools a run holds whatever its job names: a reviewed procedure reaches nothing, and read_tool_output pages only this run's
 // own stored results, which its other tools' answers point at.
-const EVERY_RUN_TOOLS: readonly string[] = ['skills_load', 'read_tool_output'];
+export const EVERY_RUN_TOOLS: readonly string[] = ['skills_load', 'read_tool_output'];
 const EXTERNAL_REACH_TOOLS = new Set(['execute_action', 'delete_message', 'restore_message']);
 export const ownerToolApproval = ({ tool }: { tool: string }): boolean => !EXTERNAL_REACH_TOOLS.has(tool);
 export const OWNER_TURN_ONLY_TOOLS: ReadonlySet<string> = toolsWhere((record) => record.ownerTurnOnly);
