@@ -30,7 +30,8 @@ vi.mock('../src/channels/telegram-turn', async load => {
     // remember's check outside the turn's model: it finds the owner said a note unless the note is the planted one.
     if (request.response_format?.name === 'owner_words_check') {
       model.checks.push(JSON.stringify(request));
-      return done(JSON.stringify({ states: !JSON.stringify(request.messages).includes(PLANTED) }));
+      const planted = JSON.stringify(request.messages).includes(PLANTED);
+      return done(JSON.stringify({ states: !planted, same_subject: !planted }));
     }
     if (request.response_format) return done(request.response_format.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}');
     const asked = String(request.messages.at(-1)?.content ?? '');

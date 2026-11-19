@@ -79,13 +79,16 @@ const overlapsEvidence = (text: string, evidence: string, start: number, end: nu
   return false;
 };
 
-const ownerSaid = async (ctx: MemoryToolContext, current: MemoryOwnerTurn, note: string, previous: Claim | undefined): Promise<boolean> => {
+const ownerSaid = async (ctx: MemoryToolContext, current: MemoryOwnerTurn, args: RememberArgs, previous: Claim | undefined): Promise<boolean> => {
   const check = ctx.ownerWordsCheck;
   if (!check) return false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      check({ ownerWords: ownerParts(current).filter(part => part.trim()).join('\n'), note, ...(previous ? { replacing: previous.text } : {}) }),
+      // Only the owner's own words reach the check. A replaced claim is shown only when it is the owner's too: a note Waldo
+      // inferred or learned from outside content carries words outside content may have written, and it needs no yes to change.
+      check({ ownerWords: ownerParts(current).filter(part => part.trim()).join('\n'), note: args.text, kind: args.kind, ...(args.aliases?.length ? { aliases: args.aliases } : {}),
+        ...(previous && previous.origin !== 'agent' && previous.origin !== 'untrusted' ? { replacing: previous.text } : {}) }),
       new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), OWNER_WORDS_CHECK_MS); }),
     ]);
   } catch (error) {
@@ -116,9 +119,9 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         if (!turn) return fail('Authenticated owner memory context is unavailable.');
         const grounded = [turn.current, ...turn.recent].find(message => ownerParts(message).some(part => quotesWords(part, args.evidence_quote) && ground(args.evidence_quote, { owner: part }) === 'owner'));
         // The model's paraphrase of what the owner just wrote is still worth keeping, as its own read of their current message.
-        // Only in a turn that read no outside content and from a message wholly the owner's: a forwarded or quoted chunk in it,
-        // or anything the turn read, could be what the paraphrase came from.
-        const inexact = !grounded && deps.forgiving === true && ctx.toolArgSourceTaint !== 'external' && !turn.current.sourceQuoteRanges?.length;
+        // Only in a turn that read no outside content, from messages of this turn wholly the owner's: a forwarded or quoted chunk
+        // in the message or in one sent while the turn ran, or anything the turn read, could be what the paraphrase came from.
+        const inexact = !grounded && deps.forgiving === true && ctx.toolArgSourceTaint !== 'external' && ![turn.current, ...turn.recent.filter(message => message.steer)].some(message => message.sourceQuoteRanges?.length);
         const source = grounded ?? (inexact ? turn.current : undefined);
         if (!source) {
           // A note needs a source. With outside notes recalled, a turn that read outside content may save what it read: the
@@ -166,7 +169,9 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         // reads as the owner's). The one way past: its quote sits in the owner's own words of the message that started this turn,
         // and the check outside the turn's model, shown only those words, the note and the claim it replaces, finds that the
         // owner said it. Which people a note names is the model's choice, so a note naming anyone keeps the rule.
-        const ownWords = outside && grounded === turn.current && ctx.ownerInitiated === true && !links.length && await ownerSaid(ctx, turn.current, args.text, previous);
+        const ownWords = outside && grounded === turn.current && ctx.ownerInitiated === true && !links.length && await ownerSaid(ctx, turn.current, args, previous);
+        // A forget the owner started while the check ran holds its words from here on.
+        if (ownWords && [args.text, args.evidence_quote, ...(args.aliases ?? [])].some(blocked)) return fail('This memory matches a forget barrier.');
         const tainted = outside && !ownWords;
         if (previous && tainted && previous.origin !== 'agent' && previous.origin !== 'untrusted') return fail('This turn read outside content (mail, a web page or a connected tool), so it cannot change what the owner told Waldo from words outside their current message. Ask the owner; their own reply can correct it.');
         // Correcting a held row (Waldo's read, or shared content) makes it the owner's only when their current message says it:

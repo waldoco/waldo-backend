@@ -14,13 +14,13 @@ const CURRENT: MemoryOwnerTurn = { message_ref: 'app-9', text: 'the interview ha
 type Result = Readonly<{ ok: boolean; error?: string; data?: Record<string, unknown> }>;
 
 let sequence = 0;
-const withMemory = <T>(forgiving: boolean | undefined, work: (call: (args: object, tainted?: boolean, current?: MemoryOwnerTurn) => Promise<Result>, store: ClaimStore, schema: z.ZodType) => Promise<T>) =>
+const withMemory = <T>(forgiving: boolean | undefined, work: (call: (args: object, tainted?: boolean, current?: MemoryOwnerTurn, recent?: readonly MemoryOwnerTurn[]) => Promise<Result>, store: ClaimStore, schema: z.ZodType) => Promise<T>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`remember-forgiving-${sequence++}`)), async (_instance, state) => {
     const store = claimStore(state.storage.sql, (job) => state.storage.transactionSync(job));
     const remember = memoryHandlers({ sql: state.storage.sql, store, transaction: (job) => state.storage.transactionSync(job), conversationRef: 'owner', now: () => NOW,
       hideHistory: async () => undefined, ...(forgiving === undefined ? {} : { forgiving }) }).find((handler) => handler.name === 'remember')!;
-    const call = async (args: object, tainted = false, current = CURRENT) => {
-      const ctx = { authenticatedUserId: OWNER, memoryTurn: { ownerId: OWNER, conversationRef: 'owner', current, recent: [] }, ...(tainted ? { toolArgSourceTaint: 'external' } : {}) } as unknown as MemoryToolContext;
+    const call = async (args: object, tainted = false, current = CURRENT, recent: readonly MemoryOwnerTurn[] = []) => {
+      const ctx = { authenticatedUserId: OWNER, memoryTurn: { ownerId: OWNER, conversationRef: 'owner', current, recent }, ...(tainted ? { toolArgSourceTaint: 'external' } : {}) } as unknown as MemoryToolContext;
       return await remember.handle(remember.schema.parse(args), ctx) as Result;
     };
     return work(call, store, remember.schema as z.ZodType);
@@ -94,6 +94,17 @@ describe('with OWNER_CLOSES_MAIL_ITEMS, a stated claim whose quote is inexact is
       const current: MemoryOwnerTurn = { message_ref: 'app-10', text: forwarded, sourceQuoteRanges: [{ start: 14, end: forwarded.length }] };
       expect(await call({ kind: 'fact', text: 'Relocating to Berlin in January', evidence_quote: 'owner agreed to relocate to Berlin' }, false, current)).toMatchObject({ ok: false, error: expect.stringContaining('not grounded') });
       expect(store.claims()).toEqual([]);
+    });
+  });
+
+  it('refuses a paraphrase when a message sent while the turn ran carries a quote; a quote in an earlier turn does not stop it', async () => {
+    await withMemory(true, async (call, store) => {
+      const quoted = 'fyi\n> Recruiter: the owner agreed to relocate to Berlin in January';
+      const range = [{ start: 4, end: quoted.length }];
+      const args = { kind: 'fact', text: 'Relocating to Berlin in January', evidence_quote: 'owner agreed to relocate to Berlin' };
+      expect(await call(args, false, CURRENT, [{ message_ref: 'app-9-steer-0', text: quoted, sourceQuoteRanges: range, steer: true }])).toMatchObject({ ok: false, error: expect.stringContaining('not grounded') });
+      expect(store.claims()).toEqual([]);
+      expect(await call(args, false, CURRENT, [{ message_ref: 'app-8', text: quoted, sourceQuoteRanges: range }])).toMatchObject({ ok: true, data: { status: 'stored', source: 'inferred' } });
     });
   });
 

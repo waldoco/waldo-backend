@@ -331,11 +331,12 @@ export const createOwnerResponder = (
   // Memory checks a span against the text the model read, so it gets that text and the spans the owner did not write.
   const memoryView = (parts: readonly InboundPart[]) => { const shown = renderForModel(parts); return { text: shown.text, sourceQuoteRanges: shown.foreignRanges }; };
   // remember's check outside the turn's model: it is sent only what remember hands it (memory/owner-words-check).
-  const ownerWordsCheck: OwnerWordsCheck = async (input) => ownerWordsStated(await ask(traceId, 'owner_words_check', OWNER_WORDS_CHECK_INSTRUCTION, ownerWordsCheckInput(input), OWNER_WORDS_CHECK_FORMAT, undefined, undefined, undefined, roleModel));
+  // A memory purpose, so its trace keeps metadata only: the input is the owner's message.
+  const ownerWordsCheck: OwnerWordsCheck = async (input) => ownerWordsStated(await ask(traceId, 'memory_owner_words_check', OWNER_WORDS_CHECK_INSTRUCTION, ownerWordsCheckInput(input), OWNER_WORDS_CHECK_FORMAT, undefined, undefined, undefined, roleModel), input.replacing !== undefined);
   const memoryContext = () => ({ ...(backgroundSourceTaint === 'external' ? { memoryOutside: true } : {}), ...(activeOwnerTurn ? { ownerInitiated:true, ownerWordsCheck, askedIn: { surface: activeOwnerTurn.surface, conversation_ref: activeOwnerTurn.conversationRef }, memoryTurn: {
     ownerId: safety.authenticatedUserId, conversationRef: activeOwnerTurn.conversationRef,
     current: { message_ref: activeOwnerTurn.messageRef?.id ?? activeOwnerTurn.traceId, ...memoryView(activeOwnerTurn.parts) },
-    recent: [...recentOwnerTurns.values()].filter(turn => !barrier().holds(turn.text)).concat(control.heard().map((steer, index) => ({ message_ref: `${traceId}-steer-${index}`, text: steer.text, sourceQuoteRanges: steer.foreignRanges }))),
+    recent: [...recentOwnerTurns.values()].filter(turn => !barrier().holds(turn.text)).concat(control.heard().map((steer, index) => ({ message_ref: `${traceId}-steer-${index}`, text: steer.text, sourceQuoteRanges: steer.foreignRanges, steer: true as const }))),
   } } : {}) });
   let expectedProcedure: string | undefined;
   const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, callScope?: RunEffectScope, light = false, hostedSearch = true) => {

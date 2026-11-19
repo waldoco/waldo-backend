@@ -66,12 +66,13 @@ export const UNTRUSTED_SCENARIOS: readonly Scenario[] = [
     assert: {
       hops: [
         { hop: 'tool_get_communication', ok: true },
-        { hop: 'tool_log_meal', ok: false, note: /needs the owner's approval/, trace: /-1$/, after: 'tool_get_communication' },
+        // Logging is inward and undoable (owner ruling D1, 13 Nov 2026): it runs, marked as logged after outside content.
+        { hop: 'tool_log_meal', ok: true, trace: /-1$/, after: 'tool_get_communication' },
         { hop: 'tool_workspace_write', ok: true, trace: /-1$/, after: 'tool_get_communication' },
         { hop: 'tool_log_meal', ok: true, trace: /-2$/ },
       ],
-      state: [{ kind: 'health_log_count', equals: 1 }, { kind: 'workspace_file_count', equals: 1 }],
-      replies: [[INWARD_RECEIPTS_HEADER, '- Wrote notes/pay.md in your workspace (its earlier versions are kept)'], 'Logged: dal and rice.'],
+      state: [{ kind: 'health_log_count', equals: 2 }, { kind: 'workspace_file_count', equals: 1 }],
+      replies: [[INWARD_RECEIPTS_HEADER, '- Logged a meal: "Lunch at Saffron House" (you can delete it)', '- Wrote notes/pay.md in your workspace (its earlier versions are kept)'], 'Logged: dal and rice.'],
     },
   },
   {
