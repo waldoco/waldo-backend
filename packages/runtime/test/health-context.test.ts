@@ -300,7 +300,8 @@ describe('healthContextBook', () => {
     expect(book.linked()).toBe(true);
     const material = await book.latest();
     expect(material).not.toBeNull();
-    expect(formZoneOf(material!)).toBe('steady');
+    expect(material).not.toBe('unreadable');
+    expect(formZoneOf(material as Exclude<typeof material, 'unreadable' | null>)).toBe('steady');
     expect(calls[0]).toEqual({ fn: 'health_context_read', message: 'healthctx.read.do-health', args: { p_do_name: 'do-health' } });
   });
 
@@ -321,7 +322,7 @@ describe('healthContextBook', () => {
     expect(calls.length).toBe(before);
   });
 
-  it('degrades to null and reports when the rail fails or the owner has no rows', async () => {
+  it('is unreadable and reports when the rail fails, and null when the owner has no rows', async () => {
     const errors: unknown[] = [];
     const failing = healthContextBook(
       async () => {
@@ -331,7 +332,7 @@ describe('healthContextBook', () => {
       clock,
       (error) => errors.push(error),
     );
-    expect(await failing.latest()).toBeNull();
+    expect(await failing.latest()).toBe('unreadable');
     expect(errors).toHaveLength(1);
     expect(String(errors[0])).toContain('owner directory 500');
     const empty = healthContextBook(async () => null, 'do-health', clock);

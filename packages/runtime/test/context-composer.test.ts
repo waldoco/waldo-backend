@@ -1154,6 +1154,24 @@ describe('ContextComposer', () => {
     expect(result.prompt).toContain('No derived health context is available for this invocation.');
   });
 
+  it('says a failed health read failed, apart from health that is absent, and carries it into healthPrompt', async () => {
+    const base = dependencies();
+    const compose = (flag: Record<string, unknown>) => createContextComposer({
+      ...base,
+      materials: { async load(request) { return { ...(await base.materials.load(request)), health: null, ...flag }; } },
+    }).compose(trustedEnvelope(), RUNTIME_INPUTS);
+    const absent = await compose({});
+    const failed = await compose({ health_unreadable: true });
+    expect(failed.ok, failed.ok ? undefined : failed.failure.code).toBe(true);
+    expect(absent.ok).toBe(true);
+    if (!absent.ok || !failed.ok) return;
+    expect(absent.prompt).toContain('No derived health context is available for this invocation.');
+    expect(failed.prompt).not.toContain('No derived health context is available');
+    expect(failed.prompt).toContain('could not be read just now');
+    expect(failed.healthPrompt).toContain('could not be read just now');
+    expect(absent.healthPrompt).toBe('No derived health context is available for this invocation.');
+  });
+
   it('applies only explicitly-attested headless skill state and does not treat persisted curator pinning as invocation priority', async () => {
     const base = dependencies();
     const result = await createContextComposer({
