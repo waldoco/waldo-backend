@@ -40,12 +40,13 @@ import { APP_CALENDAR_DAY_PATH, appCalendarDayRequest } from './app-calendar-day
 import { APP_CALENDAR_PROPOSALS_PATH, appCalendarProposalRequest } from './app-calendar-proposal';
 import { HEALTH_SAMPLES_PATH, HEALTH_ZONE_CHANGE_PATH, PLACE_ARRIVED_PATH, PLACE_MOVED_PATH, verifiedHealthSamples, verifiedPlaceArrived, verifiedPlaceMoved, verifiedZoneChange, type ArrivalPlace, type HealthRecomputeCause } from '../health/zone-change-route';
 import { HealthRecomputeFailed, healthRecompute, HEALTH_RECOMPUTE_ID } from '../health/recompute';
-import { healthSnapshot, type HealthWakeReason } from '../health/wakes';
-import { wakeFreshMs, workoutStillFresh } from '../health/wake-notice';
+import { healthSnapshot, nightScoredToday, type HealthWakeReason } from '../health/wakes';
+import { wakeFreshMs, wakeNoteStillFresh, workoutStillFresh } from '../health/wake-notice';
 import { dispatchProviderCall, HEALTH_PROVIDER_PATH, verifiedProviderCall } from '../health/providers/provider-route';
 import { whoopOwner, WHOOP_SYNC_EVERY_MS, WHOOP_SYNC_ID, type WhoopOwner } from '../health/providers/whoop-owner';
 import { whoopConfig } from '../health/providers/whoop-routes';
 import { dailyScoresFor } from '../health/scores';
+import { passiveLoadSources } from '../health/producer';
 import { invokeHealth } from './app-health';
 import { calendarEgressRuns, comingItemsFrom, healthCardBudget, healthTriggerBook, healthTriggerDueAt, healthTriggerView, healthWordsOf, runHealthTrigger, healthNoticeCurrent, HEALTH_TRIGGER_ID, type HealthTriggerOutcome } from '../health/trigger';
 import { ownerJobAdmission, surfaceOwnerAdmission, type SurfaceOwnerBinding } from '../identity/surface-owner-admission';
@@ -562,6 +563,7 @@ const whatsappQuietMs = (value: string | undefined): number => {
 // When an upload last said a workout just ended (WORKOUT_WAKE): held until a recompute hands it to the trigger, and ignored
 // once it is no longer fresh.
 const WORKOUT_NOTED_KEY = 'health_workout_noted_v1';
+const NIGHT_NOTED_KEY = 'health_night_noted_v1';
 
 // What an app chain's compaction needs from the turn that made it due, and the chains a drain asked to compact in a later
 // pass, each with when it was asked.
@@ -5490,7 +5492,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
       }, effects, () => ownerName(memory), briefEgress.screen), ...(this.env.CALENDAR_PLAN === '1' ? [calendarPlanHandler(google, desk, clock, briefEgress.screen)] : []), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, connectAppTool, ...progressNoteTools, ...secondMessageTools, ...attachTools, ...chartTools, ...tapbackTools, ...replyOfferTools, ...this.recallTools(episodes, memory), ...memoryHandlers({
-        sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner), ...(semantic ? { semantic } : {}), ...(this.env.MEMORY_VALIDITY === '1' ? { validity: true } : {}), ...(this.env.PEOPLE_MAP === '1' ? { people: true } : {}),
+        sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner), forgiving: true, ...(semantic ? { semantic } : {}), ...(this.env.MEMORY_VALIDITY === '1' ? { validity: true } : {}), ...(this.env.PEOPLE_MAP === '1' ? { people: true } : {}),
         // The tool has already deleted the claims and taken custody of the texts. One cleaning pass runs now, so a card waiting
         // to send loses the text before the turn ends; what it cannot clean, the forget purge job retries, and the forget
         // itself never fails on a store.
@@ -6015,15 +6017,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const healthRpc = (operation: string, payload: string) => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', operation, payload);
     // The newest derived row under model-use consent: with that consent withdrawn it returns nothing.
     const readModelHealth = async () => { const rpc = signedRpc(this.env), doName = identity.get<string>('do_name'); return rpc && doName ? rpc('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName }) : null; };
-    // A night just ended. The wake reaches the model only while the owner's daily Brief is on and their health may reach the
-    // model now: consent withdrawn after the upload, or never given, keeps the Brief at its planned time.
+    // A night just ended and the recompute that read it has run. The wake reaches the model only while the owner's daily Brief is
+    // on and today's row holds a scored Recovery they may share with the model now: consent withdrawn after the upload, a read
+    // that fails, or a night that could not be scored keeps the Brief at its planned time.
     const wakeNoticed = async () => {
-      if (schedPrefs.enabled('daily_brief') && healthSnapshot(await readModelHealth().catch(() => null)) !== null) wakeToday(`day-plan:${crypto.randomUUID()}`);
+      if (schedPrefs.enabled('daily_brief') && nightScoredToday(await readModelHealth().catch(() => null), ownerDay())) wakeToday(`day-plan:${crypto.randomUUID()}`);
     };
     const recompute = healthRecompute({ scheduler, now: Date.now, ownerZone: () => clock.timezone, producer: {
       readSeries: range => healthRpc('series_read', JSON.stringify(range)), writeContext: payload => healthRpc('context_write', payload),
       readScores: day => healthRpc('scores_read', JSON.stringify({ day })), readHistory: days => healthRpc('scores_history', JSON.stringify({ days })),
-      compute: dailyScoresFor(this.env.HEALTH_PROVISIONAL_SCORES), trainingLoad: this.env.HEALTH_TRAINING_LOAD === '1',
+      compute: dailyScoresFor(this.env.HEALTH_PROVISIONAL_SCORES), trainingLoad: this.env.HEALTH_TRAINING_LOAD === '1', scoreParts: this.env.HEALTH_SCORE_PARTS === '1', usual: this.env.HEALTH_USUAL === '1', dayLoad: this.env.HEALTH_DAY_LOAD === '1', passiveLoad: passiveLoadSources(this.env.HEALTH_PASSIVE_LOAD), stressCurve: this.env.HEALTH_STRESS_CURVE === '1', formCurve: this.env.HEALTH_FORM_CURVE === '1', readCurves: () => healthRpc('form_curves_read', '{}'),
       ...(this.env.HEALTH_COACHING === '1' ? { readSettings: () => healthRpc('settings_read', '{}') } : {}), readDemand: range => this.setup('app').calendarDemand(range), onZoneChange: healthChanged,
     }, forgetDemand: day => forgetDemandDay(storage.sql, day, Date.now()),
       wakes: { enabled: () => schedPrefs.enabled('health_proposals'), woken: healthWoken,
@@ -6035,8 +6038,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // still finds it; the first one that starts after it and finds today's row hands it to the health trigger, so the
       // trigger never reads the day before the workout.
       if (workout && this.env.WORKOUT_WAKE === '1') storage.kv.put(WORKOUT_NOTED_KEY, Date.now());
+      // WAKE_BRIEF: the night is noted now and the wake waits for the recompute this upload arms, since the Brief moved to now
+      // would otherwise be written from the rows as they were before the upload.
+      if (woke && this.env.WAKE_BRIEF === '1') storage.kv.put(NIGHT_NOTED_KEY, Date.now());
       await recompute.ask();
-      if (woke && this.env.WAKE_BRIEF === '1') await wakeNoticed();
       if (cause === 'readings' && runtime.welcome.lateHealth()) this.continueWelcome(runtime);
     };
     // BRIEF_BODY_REVISION (brief-revision.ts): today's first row written after the Brief went out has the Brief looked at again
@@ -6067,6 +6072,17 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         revision: { day, card: 'card:brief' }, ...(revises ? { inPlace: true as const } : {}) }, work => storage.transactionSync(work));
       return 'revised';
     };
+    // The wake an upload noted, taken by the first recompute that started after it. An older note is dropped: its night is no
+    // longer one that just ended.
+    const nightWake = async (runStartedAt: number) => {
+      const noted = storage.kv.get<number>(NIGHT_NOTED_KEY);
+      if (noted === undefined) return;
+      const freshMs = wakeFreshMs(this.env.WAKE_BRIEF_FRESH_MIN);
+      if (Date.now() - noted > freshMs) { storage.kv.delete(NIGHT_NOTED_KEY); return; }
+      if (this.env.WAKE_BRIEF !== '1' || !wakeNoteStillFresh(noted, runStartedAt, freshMs)) return;
+      storage.kv.delete(NIGHT_NOTED_KEY);
+      await wakeNoticed();
+    };
     const healthRecomputeRun = async () => {
       const started = Date.now(), trace = `${HEALTH_RECOMPUTE_ID}:${started}`;
       let outcome: string;
@@ -6082,6 +6098,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       log({ trace, hop: 'health_recompute', ms: Date.now() - started, ok: true, code: outcome });
       log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'health_recompute' });
       await briefBodyFinish(trace, briefBody, outcome);
+      await nightWake(started);
     };
     const healthTrigger = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`, doName = identity.get<string>('do_name'), rpc = signedRpc(this.env), timezone = clock.timezone;
@@ -7114,7 +7131,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         } catch (error) { log({ trace, hop: 'calendar_demand', ms: Date.now() - started, ok: false, code: 'read_failed' }); throw error; }
       },
       calendarDay: (request) => appCalendarDayRequest(request, { now: Date.now, timezone: () => clock.timezone, google,
-        readScores: day => healthRpc('scores_read', JSON.stringify({ day })) }),
+        readScores: day => healthRpc('scores_read', JSON.stringify({ day })), formCurve: this.env.HEALTH_FORM_CURVE === '1' }),
       calendarProposal: (request, assertCurrent) => appCalendarProposalRequest(request, { now: Date.now, timezone: () => clock.timezone, google, sql: storage.sql, desk, assertCurrent }),
       openFile: async (id) => {
         const file = Number.isInteger(id) ? files.get(id) : null;
