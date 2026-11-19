@@ -30,7 +30,7 @@ import { inMemoryToolOutputStore } from '../conversation/tool-output-store';
 import { readToolOutputHandler } from '../tools/read-tool-output';
 import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
 import { localTrustedBriefContextComposer, localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, type LocalSystemSkillBinding } from '../llm/run-loop-adapters';
-import type { ContextHealthMaterial } from '../context-composer/types';
+import type { HealthRead } from '../context-composer/types';
 import { renderHealth } from '../context-composer/prompt';
 import { BYTES_PER_TOKEN_EST, estimatedTokens } from '../conversation/window';
 import { JoinedConversationPath } from '../conversation/joined-path';
@@ -221,7 +221,7 @@ export const createOwnerResponder = (
   egressAllowlist?: readonly string[],
   // D5: derived health context (zones only) for the system prompt's health material. The
   // owner DO wires the signed-rail book; undefined composes with no health material.
-  health?: (trace?: string) => Promise<ContextHealthMaterial | null>,
+  health?: (trace?: string) => Promise<HealthRead>,
   reactionChoices: readonly string[] = [],
   privateRunScope?: RunEffectScope,
   // Private host dependency only. No channel/env/request repository selection or seed.
@@ -484,7 +484,7 @@ export const createOwnerResponder = (
   const ask = async (...args: Parameters<typeof complete>) => (await complete(...args)).text;
   const dayPlanHealth = async (trace: string): Promise<string> => {
     const shared = await health?.(trace) ?? null;
-    return shared ? `${SHARED_HEALTH_LABEL}\n${renderHealth(shared)}` : renderHealth(null);
+    return shared === 'unreadable' ? renderHealth(null, true) : shared ? `${SHARED_HEALTH_LABEL}\n${renderHealth(shared)}` : renderHealth(null);
   };
   const control = turnControl();
   const tree = new ConversationTree();
@@ -1030,7 +1030,7 @@ export const createOwnerResponder = (
     if (!jobHost) return undefined;
     const admission = await jobHost.admit();
     if (!admission) return undefined;
-    let healthRead: Promise<ContextHealthMaterial | null> | undefined;
+    let healthRead: Promise<HealthRead> | undefined;
     const jobContext = createOwnerTurnContext(admission, {
       ...(surfaceChain === undefined ? {} : { conversationRef: jobHost.chain(admission, surfaceChain) }),
       ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}),
