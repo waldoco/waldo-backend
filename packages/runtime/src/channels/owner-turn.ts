@@ -25,7 +25,7 @@ import { THREAD_TITLE_FORMAT, THREAD_TITLE_INSTRUCTION, threadOfChain } from './
 import { PROGRESS_NOTE_FORMAT, PROGRESS_NOTE_INSTRUCTION } from './progress-pacer';
 import type { LoopEventLike } from '../hooks/claim-hook';
 import { delegateTaskHandler, runChildLoop, SUBAGENT_SYSTEM_PROMPT, withDelegation } from '../conversation/subagent';
-import { CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS, reminderCheckBackText } from './check-back';
+import { OUTSIDE_TEXT_JOB_TOOLS, reminderCheckBackText } from './check-back';
 import { inMemoryToolOutputStore } from '../conversation/tool-output-store';
 import { readToolOutputHandler } from '../tools/read-tool-output';
 import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
@@ -1278,7 +1278,13 @@ export const createOwnerResponder = (
       if (asOwner !== undefined) return asOwner;
       await restored();
       pending = undefined;
-      return converse(id, conversationRef, reminderCheckBackText(note, timing), time, false, surface, CHECK_BACK_TOOLS);
+      // A reminder the owner set carries what they asked for at this time ("at 6, send Sam the deck"), so it runs on the chat
+      // model with every tool a Waldo-started run may hold: anything that reaches another person goes on the owner's card, and
+      // once it reads outside content the taint gate holds as in any turn. Its note is Waldo's wording of the request, not the
+      // owner's own words, so it grounds no memory as theirs. A reminder set while reading outside content runs elsewhere.
+      backgroundOwnerModel = true;
+      try { return await converse(id, conversationRef, reminderCheckBackText(note, timing), time, false, surface); }
+      finally { backgroundOwnerModel = false; }
     },
     async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments, directTools, waldoFirst, lateOwner) {
       const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments, directTools, waldoFirst, lateOwner), conversationRef);
