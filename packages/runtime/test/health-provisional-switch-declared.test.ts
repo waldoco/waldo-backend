@@ -32,6 +32,13 @@ describe('HEALTH_SOLO_NOTICE in the Worker config', () => {
   });
 });
 
+describe('HEALTH_FORM_CURVE in the Worker config', () => {
+  it('is declared off for staging and production, until the privacy review ADR-0081 asks for has passed', () => {
+    expect(parsed.vars.HEALTH_FORM_CURVE).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_FORM_CURVE).toBe('0');
+  });
+});
+
 describe('HEALTH_TRAINING_LOAD in the Worker config', () => {
   it('is on for staging, which deploys with migration 20261031170000, and off for production', () => {
     expect(parsed.vars.HEALTH_TRAINING_LOAD).toBe('0');
@@ -120,6 +127,22 @@ describe('WAKE_BRIEF, BRIEF_DAY_PLAN and CALENDAR_PLAN in the Worker config', ()
 describe('WORKOUT_WAKE in the Worker config', () => {
   it('is off in production until a judged trial uploads a finished workout, and on in staging', () => {
     expect([parsed.vars.WORKOUT_WAKE, parsed.env.staging.vars.WORKOUT_WAKE]).toEqual(['0', '1']);
+  });
+});
+
+describe('HEALTH_PASSIVE_LOAD in the Worker config', () => {
+  it('is off in production and lists the phone sources whose cadence is known in staging, where it acts only once HEALTH_DAY_LOAD is on', () => {
+    expect(parsed.vars.HEALTH_PASSIVE_LOAD).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_PASSIVE_LOAD).toBe('apple,health_connect');
+  });
+});
+
+describe('HEALTH_DAY_LOAD and HEALTH_STRESS_CURVE in the Worker config', () => {
+  it('keeps the day load off in both blocks until migration 20261116110000 is applied and the gate turns it on at a named deploy', () => {
+    expect([parsed.vars.HEALTH_DAY_LOAD, parsed.env.staging.vars.HEALTH_DAY_LOAD]).toEqual(['0', '0']);
+  });
+  it('keeps the stress curve off in both blocks until the gate turns it on at a named deploy with migration 20261116110100', () => {
+    expect([parsed.vars.HEALTH_STRESS_CURVE, parsed.env.staging.vars.HEALTH_STRESS_CURVE]).toEqual(['0', '0']);
   });
 });
 

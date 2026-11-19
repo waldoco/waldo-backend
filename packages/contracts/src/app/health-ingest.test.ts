@@ -9,6 +9,8 @@ import {
   HEALTH_PARTS_REVISION_V1, healthPartKeysV1, healthPartsV1Schema, healthScoresHistoryV1Schema, healthUsualListV1Schema, healthUsualSignalV1Schema, healthUsualV1Schema,
   healthFormPartV1Schema, healthPartBaselineV1Schema, healthPartDirectionV1Schema, healthPartUnavailableReasonV1Schema, healthRecoveryPartV1Schema, healthSleepPartV1Schema,
   healthUsualMethodV1Schema, healthWeightPartV1Schema, healthGroupKeyV1Schema, healthPartGroupV1Schema, healthGroupKeysV1,
+  HEALTH_PASSIVE_LOAD_REVISION_V1, HEALTH_DAY_LOAD_V2_VERSION_V1, healthDayLoadPassiveReasonV1Schema, healthSignalV1Schema,
+  HEALTH_BODY_DAY_REVISION_V1, healthDayLoadBandV1Schema, healthDayLoadMethodV1Schema, healthDayLoadV1Schema, healthStressBandV1Schema, healthStressCurveV1Schema, healthStressHourReasonV1Schema, stressBandOf,
 } from './health-ingest';
 
 const grant = { request_id: 'health-consent-001', source: 'apple', purpose: 'storage_compute', version: HEALTH_CONSENT_VERSION_V1, expected_epoch: 0, age_attested_18_plus: true };
@@ -800,5 +802,152 @@ describe('health revision 13: days left and grouped rows', async () => {
       parts({ groups: [{ key: 'circadian', pillar: 'recovery', state: 'unavailable', reason: 'no_reading' }] }), parts({ groups: [{ key: 'circadian', pillar: 'form', state: 'unavailable', reason: 'no_data' }] }),
       parts({ groups: [{ key: 'circadian', pillar: 'form', state: 'unavailable', reason: 'no_reading', score: 0 }] }), parts({ groups: 'resting_state' }),
     ]);
+  });
+});
+
+describe('health revision 14: the day load and the hourly stress curve', async () => {
+  const { scores } = (await import('./fixtures/health-body-day.v14.json')).default as unknown as { scores: Record<string, any> };
+  const load = scores.day_load, band = load.band, stress = scores.stress_curve;
+  it('is health revision 14, after the parts revision', () => {
+    expect(HEALTH_BODY_DAY_REVISION_V1).toBe(14);
+    expect(HEALTH_BODY_DAY_REVISION_V1).toBeGreaterThan(HEALTH_PARTS_REVISION_V1);
+  });
+  it('reads the fixture, and the same body without the three keys', () => {
+    expect(healthScoresV1Schema.safeParse(scores).success).toBe(true);
+    expect(healthScoresResponseV1Schema.safeParse(scores).success).toBe(true);
+    const { day_load: _l, stress_curve: _s, ...before } = scores;
+    expect(healthScoresV1Schema.safeParse(before).success).toBe(true);
+  });
+  it('keeps the closed lists the producer draws from', () => {
+    expect([...healthDayLoadMethodV1Schema.options]).toEqual(['hr_zones', 'hr_zones_observed_peak', 'effort', 'minutes']);
+    expect([...healthStressBandV1Schema.options]).toEqual(['low', 'medium', 'high']);
+    expect([...healthStressHourReasonV1Schema.options]).toEqual(['workout', 'moving', 'no_reading', 'baseline_immature']);
+  });
+
+  describe('day_load', () => {
+    it('reads a load with a personal band, a provisional one with none, and an unobserved day with its reason', () => {
+      expect(healthDayLoadV1Schema.safeParse(load).success).toBe(true);
+      expect(healthDayLoadV1Schema.safeParse({ ...load, band: { state: 'provisional', own_days: 9, days_until_personal: 5 } }).success).toBe(true);
+      expect(healthDayLoadV1Schema.safeParse({ ...load, method: 'hr_zones_observed_peak', approximate: true }).success).toBe(true);
+      expect(healthDayLoadV1Schema.safeParse({ ...load, score: 0 }).success).toBe(true);
+      expect(healthDayLoadV1Schema.safeParse({ state: 'unavailable', reason: 'no_readings' }).success).toBe(true);
+      expect(healthDayLoadBandV1Schema.safeParse(band).success).toBe(true);
+    });
+    it('serves no direction of the score against the band, because today\'s score is the load so far', () => {
+      rejected(healthDayLoadV1Schema, [{ ...load, direction: 'usual' }, { ...load, direction: null }, { ...load, direction: 'above_usual' }]);
+      expect(healthDayLoadV1Schema.safeParse({ ...load, score: 5 }).success).toBe(true);
+      expect(healthDayLoadV1Schema.safeParse({ ...load, score: 99 }).success).toBe(true);
+    });
+    it('refuses a load that is out of range, an unnamed method or version, a mislabelled approximation, and extra keys', () => {
+      rejected(healthDayLoadV1Schema, [
+        { ...load, score: 101 }, { ...load, score: -1 }, { ...load, score: NaN }, { ...load, score: null }, { ...load, method: 'passive' }, { ...load, method: null },
+        { ...load, version: 'day-load.v1' }, { ...load, activation: 'accepted' }, { ...load, approximate: true }, { ...load, method: 'hr_zones_observed_peak' },
+        { ...load, window_days: 30 }, { ...load, target: 70 }, { ...load, trimp: 310 }, { ...load, band: undefined },
+        { state: 'unavailable', reason: 'baseline_immature' }, { state: 'unavailable', reason: 'no_readings', score: 0 }, { state: 'unavailable' }, 'day_load', null,
+      ]);
+    });
+    it('has a band that is the owner\'s own from fourteen days, in order, with the days left counted for the client', () => {
+      for (const bad of [
+        { ...band, low: 50 }, { ...band, high: 40 }, { ...band, high: 101 }, { ...band, low: -1 }, { ...band, own_days: 13 }, { ...band, own_days: 29 }, { ...band, days_until_personal: 1 },
+        { state: 'provisional', own_days: 14, days_until_personal: 0 }, { state: 'provisional', own_days: 9, days_until_personal: 4 }, { state: 'provisional', own_days: 9 },
+        { state: 'provisional', low: 10, centre: 20, high: 30, own_days: 9, days_until_personal: 5 }, { ...band, estimator: 'own_mean_sd' }, { state: 'learning', own_days: 3, days_until_personal: 11 },
+      ]) expect(healthDayLoadBandV1Schema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    });
+  });
+
+  describe('stress_curve', () => {
+    const [first, second, third] = stress.hours;
+    it('reads hours that hold a value with its band, and hours that hold none with their reason', () => {
+      expect(healthStressCurveV1Schema.safeParse(stress).success).toBe(true);
+      expect(healthStressCurveV1Schema.safeParse({ ...stress, hours: stress.hours.slice(2, 3) }).success).toBe(true);
+      expect(stress.hours.some((hour: { value: number | null }) => hour.value === null)).toBe(true);
+      expect([stressBandOf(70), stressBandOf(69.9), stressBandOf(30), stressBandOf(30.1), stressBandOf(0), stressBandOf(100)]).toEqual(['high', 'medium', 'low', 'medium', 'low', 'high']);
+    });
+    it('refuses a band that is not the value\'s, a value with a reason or a gap with a value, and an hour that says nothing', () => {
+      const valued = stress.hours.find((hour: { value: number | null }) => hour.value !== null);
+      rejected(healthStressCurveV1Schema, [
+        { ...stress, hours: [{ ...valued, band: 'low' }] }, { ...stress, hours: [{ ...valued, band: null }] }, { ...stress, hours: [{ ...valued, reason: 'workout' }] },
+        { ...stress, hours: [valued, { ...first, band: 'high' }] }, { ...stress, hours: [valued, { ...first, value: 0 }] }, { ...stress, hours: [valued, { ...first, reason: 'asleep' }] },
+        { ...stress, hours: [valued, { ...first, reason: undefined }] }, { ...stress, hours: [{ ...valued, value: 100.5, band: 'high' }] }, { ...stress, hours: [{ ...valued, value: -1, band: 'low' }] },
+        { ...stress, hours: [{ ...valued, value: NaN, band: 'medium' }] },
+      ]);
+    });
+    it('refuses no hours, more than a day of them, hours out of order, none with a value, another version, and extra keys', () => {
+      const valued = stress.hours.find((hour: { value: number | null }) => hour.value !== null);
+      const day = Array.from({ length: 25 }, (_, i) => ({ ...valued, at: new Date(Date.parse('2026-11-02T00:00:00Z') + i * 3_600_000).toISOString() }));
+      rejected(healthStressCurveV1Schema, [
+        { ...stress, hours: [] }, { ...stress, hours: day }, { ...stress, hours: [third, second] }, { ...stress, hours: [second, second] }, { ...stress, hours: [first] },
+        { ...stress, version: 'stress-curve.v1' }, { ...stress, version: undefined }, { ...stress, trend: 'rising' }, stress.hours, null,
+      ]);
+      expect(healthStressCurveV1Schema.safeParse({ ...stress, hours: day.slice(0, 24) }).success).toBe(true);
+    });
+    it('is served on a score and nowhere else is a key added', () => {
+      rejected(healthScoresV1Schema, [
+        { ...scores, day_load: { state: 'unavailable' } }, { ...scores, stress_curve: { ...stress, hours: [] } },
+        { ...scores, stress_trend: 'rising' }, { ...scores, day_load: null }, { ...scores, form_curve: null }, { ...scores, stress_curve: null },
+      ]);
+      const { history } = (scores as { history?: unknown });
+      expect(history).toBeUndefined();
+    });
+  });
+});
+
+describe('health revision 15: an hour\'s heart-rate bins and the day\'s load counting every observed minute', async () => {
+  const fixture = (await import('./fixtures/health-passive-load.v15.json')).default as unknown as { sample: Record<string, any>; scores: Record<string, any>; v1_with_parts: Record<string, any> };
+  const { sample, scores, v1_with_parts: v1 } = fixture;
+  const load = scores.day_load;
+  it('is health revision 15, after the day load\'s revision, and names the second load version', () => {
+    expect(HEALTH_PASSIVE_LOAD_REVISION_V1).toBe(15);
+    expect(HEALTH_PASSIVE_LOAD_REVISION_V1).toBeGreaterThan(HEALTH_BODY_DAY_REVISION_V1);
+    expect(HEALTH_DAY_LOAD_V2_VERSION_V1).toBe('day-load.candidate.v2');
+    expect([...healthDayLoadPassiveReasonV1Schema.options]).toEqual(['no_bins', 'sparse', 'no_zone_basis', 'zone_basis_low']);
+  });
+
+  describe('heart_rate_bins_window', () => {
+    it('reads an hour\'s bins, one bin, and the top bin at 225, and checks each as its own change', () => {
+      expect(healthSampleV1Schema.safeParse(sample).success).toBe(true);
+      expect(healthSampleV1Schema.safeParse({ ...sample, value: 60, from_bpm: 225, outside_workouts: [60], in_workouts: [0] }).success).toBe(true);
+      expect(healthSampleV1Schema.safeParse({ ...sample, value: 3600, from_bpm: 30, outside_workouts: [...Array(39).fill(0), 3600], in_workouts: Array(40).fill(0) }).success).toBe(true);
+      expect(checkHealthChangeV1('sample', 0, sample)).toMatchObject({ ok: true });
+      expect(healthSignalV1Schema.safeParse('heart_rate_bins_window').success).toBe(true);
+    });
+    it('refuses arrays of two lengths, seconds that do not add up to value, bins past 225, a start off the 5 bpm grid, no seconds, and extra keys', () => {
+      rejected(healthSampleV1Schema, [
+        { ...sample, in_workouts: sample.in_workouts.slice(1) }, { ...sample, value: 3599 }, { ...sample, value: 0, outside_workouts: [0], in_workouts: [0] },
+        { ...sample, from_bpm: 72 }, { ...sample, from_bpm: 25 }, { ...sample, from_bpm: 230 }, { ...sample, from_bpm: 195 },
+        { ...sample, value: 3600, outside_workouts: [...Array(40).fill(0), 3600], in_workouts: Array(41).fill(0) }, { ...sample, outside_workouts: [], in_workouts: [] },
+        { ...sample, outside_workouts: sample.outside_workouts.map((s: number, i: number) => (i === 0 ? s + 0.5 : s)), value: 3600.5 },
+        { ...sample, outside_workouts: [-600, 2400, ...sample.outside_workouts.slice(2)] }, { ...sample, bin_bpm: 10 }, { ...sample, unit: 'beats_per_minute' },
+        { ...sample, value: 3601, outside_workouts: [601, 1200, 0, 0, 0, 0, 0, 0] }, { ...sample, beats: [72, 74] }, { ...sample, end_at: '2026-11-02T09:30:00.000Z' },
+      ]);
+    });
+  });
+
+  describe('day_load', () => {
+    it('reads the fixture\'s v2 load, and a v1 load with parts that says why passive is missing', () => {
+      expect(healthScoresV1Schema.safeParse(scores).success).toBe(true);
+      expect(healthScoresResponseV1Schema.safeParse(scores).success).toBe(true);
+      expect(healthDayLoadV1Schema.safeParse(load).success).toBe(true);
+      expect(healthDayLoadV1Schema.safeParse({ ...load, score: 0, parts: { workouts: { share: 0 }, passive: { state: 'available', share: 0, observed_hours: 12 } } }).success).toBe(true);
+      expect(healthDayLoadV1Schema.safeParse(v1).success).toBe(true);
+      for (const reason of healthDayLoadPassiveReasonV1Schema.options) expect(healthDayLoadV1Schema.safeParse({ ...v1, parts: { ...v1.parts, passive: { state: 'unavailable', reason } } }).success).toBe(true);
+      expect(healthDayLoadV1Schema.safeParse({ ...v1, parts: { ...v1.parts, workouts: { share: 0 } } }).success).toBe(true);
+    });
+    it('refuses a v2 load without parts or with a missing passive part, shares that do not add up, another method or no approximate label, a direction, and the stored v1 beside it', () => {
+      const { parts, ...bare } = load;
+      rejected(healthDayLoadV1Schema, [
+        bare, { ...load, parts: { ...parts, passive: { state: 'unavailable', reason: 'sparse' } } },
+        { ...load, parts: { workouts: { share: 0.5 }, passive: { ...parts.passive, share: 0.4 } } }, { ...load, parts: { ...parts, passive: { ...parts.passive, observed_hours: 11 } } },
+        { ...load, parts: { ...parts, passive: { ...parts.passive, observed_hours: 26 } } }, { ...load, parts: { ...parts, passive: { ...parts.passive, share: 1.2 } } },
+        { ...load, method: 'hr_zones', approximate: false }, { ...load, approximate: false }, { ...load, direction: 'above_usual' }, { ...load, v1 }, { ...load, version: 'day-load.candidate.v3' },
+        { ...load, parts: { ...parts, trimp: 194 } }, { ...load, parts: { ...parts, workouts: { share: 0, load: 0 } } },
+      ]);
+    });
+    it('refuses a v1 load whose parts claim a passive share, a split workouts share, or an unnamed reason', () => {
+      rejected(healthDayLoadV1Schema, [
+        { ...v1, parts: { workouts: { share: 0.7 }, passive: { state: 'available', share: 0.3, observed_hours: 20 } } }, { ...v1, parts: { ...v1.parts, workouts: { share: 0.5 } } },
+        { ...v1, parts: { ...v1.parts, passive: { state: 'unavailable', reason: 'watch_off' } } }, { ...v1, parts: { ...v1.parts, passive: { state: 'unavailable' } } }, { ...v1, parts: null },
+      ]);
+    });
   });
 });
