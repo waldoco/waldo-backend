@@ -68,16 +68,16 @@ export type InvocationInputReference = z.infer<typeof invocationInputReferenceSc
 // no model could answer at the time, and the turn on mail sent to the owner's Waldo address. No schedule entry carries the
 // last four.
 const SCHEDULED_OWNER_JOBS = scheduleKindSchema.extract(['brief', 'pre_activity_spot', 'dreaming', 'reminder', 'heartbeat', 'standing_order', 'patrol']).options;
-export const ownerJobSchema = z.enum([...SCHEDULED_OWNER_JOBS, 'device_followup', 'task_report', 'retry_turn', 'agent_mail']);
+export const ownerJobSchema = z.enum([...SCHEDULED_OWNER_JOBS, 'device_followup', 'task_report', 'retry_turn', 'agent_mail', 'connect_first_look']);
 export type OwnerJob = z.infer<typeof ownerJobSchema>;
 
-// A reminder, heartbeat, standing-order fire, device follow-up, task report or agent mail turn reaches out to the owner without an owner
-// message, which is what the intervention trigger names; a retried turn answers the owner's own message; the other jobs keep
-// the trigger their schedule kind already carries.
+// A reminder, heartbeat, standing-order fire, device follow-up, task report, agent mail or connect first-look turn reaches out
+// to the owner without an owner message, which is what the intervention trigger names; a retried turn answers the owner's own
+// message; the other jobs keep the trigger their schedule kind already carries.
 const OWNER_JOB_TRIGGER: Readonly<Record<OwnerJob, TriggerType>> = {
   brief: 'brief', pre_activity_spot: 'pre_activity_spot', dreaming: 'dreaming_mode',
   reminder: 'intervention', heartbeat: 'intervention', standing_order: 'intervention', device_followup: 'intervention', patrol: 'patrol',
-  task_report: 'intervention', retry_turn: 'user_message', agent_mail: 'intervention',
+  task_report: 'intervention', retry_turn: 'user_message', agent_mail: 'intervention', connect_first_look: 'intervention',
 };
 
 export const invocationIntentSchema = z.discriminatedUnion('kind', [
