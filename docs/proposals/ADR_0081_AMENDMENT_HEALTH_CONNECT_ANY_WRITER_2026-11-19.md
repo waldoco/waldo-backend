@@ -1,7 +1,6 @@
 # ADR-0081 amendment: Health Connect scores from whichever app wrote the reading
 
-Status: **proposed. Needs the owner's accept before this ships on staging.** It changes the 27 October rule that a Health
-Connect reading enters a canonical score only from Samsung Health. It is not an ordinary fix to ride the release train.
+Status: **accepted by the owner on 19 November 2026.** The owner's words, as relayed by the Waldo reliability audit session: "I accept the ADR-0081 amendment for #2192". It changes the 27 October rule that a Health Connect reading enters a canonical score only from Samsung Health. Acceptance covers the amendment; the merge goes through the gate, and a deploy needs the owner's separate go.
 
 ## The problem
 
