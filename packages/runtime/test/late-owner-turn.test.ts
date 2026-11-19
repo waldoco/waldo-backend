@@ -45,7 +45,14 @@ describe('a late answer to the owner\'s own message runs as that owner turn', ()
     const late = await run(LATE);
     expect(late.offered).toEqual(expect.arrayContaining(['remember', 'forget_memory', 'track_medication', 'search_history']));
     const job = await run(undefined);
-    for (const name of ['remember', 'forget_memory', 'track_medication', 'search_history']) expect(job.offered).not.toContain(name);
+    for (const name of ['forget_memory', 'track_medication', 'search_history']) expect(job.offered).not.toContain(name);
+  });
+
+  it('a plain job holding remember keeps only Waldo\'s own note, never the owner\'s words', async () => {
+    const { seen } = await run(undefined, { name: 'remember', args: { kind: 'fact', text: 'The board call is on Thursdays.', evidence_quote: 'calendar' } });
+    const ctx = seen.find((call) => call.name === 'remember')!.ctx as { memoryTurn?: unknown; memoryRun?: { ownerId: string }; authenticatedUserId: string };
+    expect(ctx.memoryTurn).toBeUndefined();
+    expect(ctx.memoryRun?.ownerId).toBe(ctx.authenticatedUserId);
   });
 
   it('remember is grounded in the owner\'s own words of that message, with the owner\'s say-so', async () => {

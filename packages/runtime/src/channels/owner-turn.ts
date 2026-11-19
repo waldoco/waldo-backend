@@ -340,7 +340,7 @@ export const createOwnerResponder = (
     ownerId: safety.authenticatedUserId, conversationRef: activeOwnerTurn.conversationRef,
     current: { message_ref: activeOwnerTurn.messageRef?.id ?? activeOwnerTurn.traceId, ...memoryView(activeOwnerTurn.parts) },
     recent: [...recentOwnerTurns.values()].filter(turn => !barrier().holds(turn.text)).concat(control.heard().map((steer, index) => ({ message_ref: `${traceId}-steer-${index}`, text: steer.text, sourceQuoteRanges: steer.foreignRanges, steer: true as const }))),
-  } } : {}) });
+  } } : !ownerTurnActive ? { memoryRun: { ownerId: safety.authenticatedUserId, conversationRef: windowingRef, runId: traceId } } : {}) });
   let expectedProcedure: string | undefined;
   const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, callScope?: RunEffectScope, light = false, hostedSearch = true) => {
     await assertCurrent();
@@ -576,7 +576,7 @@ export const createOwnerResponder = (
       const offered: readonly string[] | undefined = leanRun ? SCHEDULED_MENU : backgroundToolNames;
       // A run that holds any tool can get a result too long to show, which points at read_tool_output, so it holds that too.
       const pointsBack = offered === undefined || offered.length > 0;
-      const { handlers: admittedHandlers, report: eligibility } = await eligibleHandlers(handlers.filter(handler => (offered === undefined || offered.includes(handler.name) || handler.name === 'skills_load' || (handler.name === 'read_tool_output' && pointsBack)) && (!OWNER_TURN_ONLY_TOOLS.has(handler.name) || activeOwnerTurn !== undefined) && !(asyncTools() && OWNER_TURN_LONG_TOOLS.has(handler.name)) && (!['remember', 'forget_memory'].includes(handler.name) || (activeOwnerTurn && activeOwnerTurn.memoryWrites !== false && !probeGuard?.suppressMemory))));
+      const { handlers: admittedHandlers, report: eligibility } = await eligibleHandlers(handlers.filter(handler => (offered === undefined || offered.includes(handler.name) || handler.name === 'skills_load' || (handler.name === 'read_tool_output' && pointsBack)) && (!OWNER_TURN_ONLY_TOOLS.has(handler.name) || activeOwnerTurn !== undefined) && !(asyncTools() && OWNER_TURN_LONG_TOOLS.has(handler.name)) && (!['remember', 'forget_memory'].includes(handler.name) || (activeOwnerTurn ? activeOwnerTurn.memoryWrites !== false : handler.name === 'remember' && !ownerTurnActive && backgroundToolNames !== undefined) && !probeGuard?.suppressMemory)));
       await assertCurrent();
       const turnDirect: ReadonlySet<string> = new Set([...backgroundDirect, ...(privateOwner?.promotedTools?.() ?? [])]);
       if (eligibility.not_connected + eligibility.not_configured + eligibility.check_failed > 0) log({ trace, hop: 'tool_eligibility', ms: Date.now() - eligibilityStarted, ok: true, detail: `not_connected=${eligibility.not_connected} not_configured=${eligibility.not_configured} check_failed=${eligibility.check_failed}` });

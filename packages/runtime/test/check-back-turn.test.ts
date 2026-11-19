@@ -313,7 +313,8 @@ describe('a past-due loop Waldo took on runs a fresh check-back turn from the he
       expect(first!.messages.at(-1)!.content).toContain(loop.id);
       expect(first!.messages.at(-1)!.content).toContain('due 2026-10-03 08:30, passed less than an hour ago');
       expect(offered(first!)).toEqual(expect.arrayContaining(['get_context', 'read_memory', 'close_loop', 'propose_action']));
-      for (const effect of ['send_email', 'set_reminder', 'open_loop', 'remember', 'start_task', 'cancel_task']) expect(offered(first!)).not.toContain(effect);
+      // remember is held: what the check-back learned is kept as Waldo's own note (waldo-run-memory.test.ts).
+      for (const effect of ['send_email', 'set_reminder', 'open_loop', 'forget_memory', 'start_task', 'cancel_task']) expect(offered(first!)).not.toContain(effect);
       expect(checkBackRequests()[1]!.tool_turns!.find(turn => turn.call.call_id === 'close')!.output).toContain('"closed":true');
       expect(state.storage.sql.exec('SELECT status FROM loops WHERE id = ?', loop.id).toArray()).toEqual([{ status: 'done' }]);
       expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM ledger WHERE kind = 'tainted_action'").one()).toEqual({ n: 0 });

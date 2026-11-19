@@ -25,7 +25,7 @@ describe('unattended turns on outside text hold no egress reads', () => {
     const reads = CHILD_READ_TOOLS.filter((name) => !EGRESS_READ_TOOLS.includes(name));
     expect(reads).toEqual(expect.arrayContaining(['read_thread', 'query_calendar', 'read_memory']));
     expect(OUTSIDE_TEXT_JOB_TOOLS).toEqual([...reads, 'propose_action']);
-    expect(LOOP_CHECK_BACK_TOOLS).toEqual([...reads, 'close_loop', 'propose_action']);
+    expect(LOOP_CHECK_BACK_TOOLS).toEqual([...reads, 'close_loop', 'propose_action', 'remember']);
   });
 
   it('leaves page reads to the owner\'s own reminders (owner-reminder-tools.test.ts), never to a job over outside text', () => {

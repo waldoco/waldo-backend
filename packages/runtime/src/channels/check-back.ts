@@ -12,13 +12,15 @@ import type { ReminderTiming } from './owner-turn-envelope';
 // a Waldo-started run may hold: owner-turn.ts remind.)
 // Turns that start on outside text hold no egress reads (tasks/profiles EGRESS_READ_TOOLS).
 export const OUTSIDE_TEXT_READS: readonly ToolName[] = CHILD_READ_TOOLS.filter((name) => !EGRESS_READ_TOOLS.includes(name));
-export const LOOP_CHECK_BACK_TOOLS: readonly ToolName[] = [...OUTSIDE_TEXT_READS, 'close_loop', 'propose_action'];
+// It may also keep what it learned (remember), as Waldo's own note: tools/live/memory.ts ranByWaldo.
+export const LOOP_CHECK_BACK_TOOLS: readonly ToolName[] = [...OUTSIDE_TEXT_READS, 'close_loop', 'propose_action', 'remember'];
 // A job that starts on text someone else wrote (a day card, an update card, an event brief) reads, and asks the owner on a
 // card for any change it thinks is wanted; it changes nothing itself. A job that needs more names its tools.
 export const OUTSIDE_TEXT_JOB_TOOLS: readonly ToolName[] = [...OUTSIDE_TEXT_READS, 'propose_action'];
-// A day card (the Brief among them) also closes a loop of the owner's that its day shows is over: once the loop's time has
+// A day card (the Brief among them) keeps what it learned as Waldo's own note, and closes a loop of the owner's that its day
+// shows is over: once the loop's time has
 // passed the close runs and the card lists it (hooks/registry.ts); a loop still ahead goes on the owner's card.
-export const DAY_CARD_TOOLS: readonly ToolName[] = [...OUTSIDE_TEXT_JOB_TOOLS, 'close_loop'];
+export const DAY_CARD_TOOLS: readonly ToolName[] = [...OUTSIDE_TEXT_JOB_TOOLS, 'close_loop', 'remember'];
 
 const LOOK = 'Look at the current state with your read tools before you write anything (mail, drafts, calendar, memory, earlier conversation, whatever this is about). Then say what matters now, from what you found, and ask at most one question; the owner wants the result, not the list of what you looked at.';
 const SILENT = `If what you found means the owner gains nothing from hearing from you now, reply with exactly ${SKIP_UPDATE}.`;
