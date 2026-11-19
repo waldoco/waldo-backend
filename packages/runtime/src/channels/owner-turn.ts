@@ -74,7 +74,7 @@ import { toolOutputLedger } from '../conversation/tool-output-ledger';
 import { replyGate, withReplyStream } from '../conversation/reply-gate';
 import { recordSharedHealth, type TrailRead } from '../tools/why-trail';
 import { localIso } from './reminders';
-import { fitsScheduledMenu, RECENT_SENT_MESSAGES, recentExchange, recentExchangeText, SCHEDULED_DIRECT, SCHEDULED_MENU, sentText } from './scheduled-run';
+import { fitsScheduledMenu, LOOK_BACK, RECENT_SENT_MESSAGES, recentExchange, recentExchangeText, SCHEDULED_DIRECT, SCHEDULED_MENU, sentText } from './scheduled-run';
 
 const TURN_ONLY_OUTPUT = JSON.stringify({ retained: false, reason: 'turn_only_output' });
 // What find_tools returned, or a tool outside the core list the model reached by name: either stays offered next turn.
@@ -96,6 +96,9 @@ const SHARED_HEALTH_LABEL = "Shared health today (derived by the app from the ow
 // delete/restore_message still halt. The taint gate still runs before this and blocks
 // external-tainted privileged calls outright.
 const NO_DIRECT: ReadonlySet<string> = new Set();
+// Tools a run holds whatever its job names: a reviewed procedure reaches nothing, and read_tool_output pages only this run's
+// own stored results, which its other tools' answers point at.
+const EVERY_RUN_TOOLS: readonly string[] = ['skills_load', 'read_tool_output'];
 const EXTERNAL_REACH_TOOLS = new Set(['execute_action', 'delete_message', 'restore_message']);
 export const ownerToolApproval = ({ tool }: { tool: string }): boolean => !EXTERNAL_REACH_TOOLS.has(tool);
 export const OWNER_TURN_ONLY_TOOLS: ReadonlySet<string> = toolsWhere((record) => record.ownerTurnOnly);
@@ -291,7 +294,7 @@ export const createOwnerResponder = (
     ...(privateOwner?.loopIsSourceBound ? { loopIsSourceBound: privateOwner.loopIsSourceBound } : {}),
     heldTool: (tool: string) => {
       // A lean scheduled run is offered the shared menu but calls only its own job's list.
-      if (leanRun && backgroundToolNames !== undefined && tool !== 'skills_load' && !backgroundToolNames.includes(tool)) {
+      if (leanRun && backgroundToolNames !== undefined && !EVERY_RUN_TOOLS.includes(tool) && !backgroundToolNames.includes(tool)) {
         return { ...toolError('forbidden'), fix: `Do not call it again; this run may call only: ${[...backgroundToolNames].sort().join(', ')}.` };
       }
       if (!turnCapped() || !PAID_RUNG_TOOLS.has(tool)) return null;
@@ -571,7 +574,9 @@ export const createOwnerResponder = (
       // A lean scheduled run is offered the shared menu; its own list is held at dispatch (safety.heldTool).
       const eligibilityStarted = Date.now();
       const offered: readonly string[] | undefined = leanRun ? SCHEDULED_MENU : backgroundToolNames;
-      const { handlers: admittedHandlers, report: eligibility } = await eligibleHandlers(handlers.filter(handler => (offered === undefined || offered.includes(handler.name) || handler.name === 'skills_load') && (!OWNER_TURN_ONLY_TOOLS.has(handler.name) || activeOwnerTurn !== undefined) && !(asyncTools() && OWNER_TURN_LONG_TOOLS.has(handler.name)) && (!['remember', 'forget_memory'].includes(handler.name) || (activeOwnerTurn && activeOwnerTurn.memoryWrites !== false && !probeGuard?.suppressMemory))));
+      // A run that holds any tool can get a result too long to show, which points at read_tool_output, so it holds that too.
+      const pointsBack = offered === undefined || offered.length > 0;
+      const { handlers: admittedHandlers, report: eligibility } = await eligibleHandlers(handlers.filter(handler => (offered === undefined || offered.includes(handler.name) || handler.name === 'skills_load' || (handler.name === 'read_tool_output' && pointsBack)) && (!OWNER_TURN_ONLY_TOOLS.has(handler.name) || activeOwnerTurn !== undefined) && !(asyncTools() && OWNER_TURN_LONG_TOOLS.has(handler.name)) && (!['remember', 'forget_memory'].includes(handler.name) || (activeOwnerTurn && activeOwnerTurn.memoryWrites !== false && !probeGuard?.suppressMemory))));
       await assertCurrent();
       const turnDirect: ReadonlySet<string> = new Set([...backgroundDirect, ...(privateOwner?.promotedTools?.() ?? [])]);
       if (eligibility.not_connected + eligibility.not_configured + eligibility.check_failed > 0) log({ trace, hop: 'tool_eligibility', ms: Date.now() - eligibilityStarted, ok: true, detail: `not_connected=${eligibility.not_connected} not_configured=${eligibility.not_configured} check_failed=${eligibility.check_failed}` });
@@ -861,7 +866,9 @@ export const createOwnerResponder = (
           const recentBlock = (recentRows.length ? fenced('recent conversation with the owner, oldest first', recentExchangeText(recentRows)) : '')
             + (sentRows.length ? fenced('messages Waldo sent the owner lately, oldest first, as delivered', sentText(sentRows)) : '');
           leanRecentBytes = utf8Bytes(recentBlock);
-          entries[entries.length - 1] = { ...current, content: ownTail + recentBlock + built.suffix.text };
+          // A run Waldo started reads only the newest of the owner's conversation, so it is told where the rest is.
+          const lookBack = !ownerTurnActive && turnHandlers.some((handler) => handler.name === 'search_episodes') ? `\n\n${LOOK_BACK}` : '';
+          entries[entries.length - 1] = { ...current, content: ownTail + recentBlock + lookBack + built.suffix.text };
           const browserImages = privateOwner?.skillHost?.browserAttachments?.(privateRunScope) ?? [];
           const attachments = openedFiles.with([...(pending ?? []), ...browserImages]);
           const system = { text: turnPrompt.system, sections: turnPrompt.sections, contextSections: built.suffix.sections };

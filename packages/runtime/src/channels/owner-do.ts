@@ -127,7 +127,7 @@ import { ownerAccountEmail } from '../identity/owner-account-email';
 import { DEFAULT_PROACTIVITY, isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine, storedProactivity } from './loops';
 import { armHeartbeat, HEARTBEAT_EVERY_MS, HEARTBEAT_ID, heartbeatTick, heartbeatEligible, heartbeatWake, settleHeartbeat } from './heartbeat';
 import { heartbeatApplier, heartbeatJobSpec } from './heartbeat-job';
-import { checkBackReply, LOOP_CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS, outsideReminderCheckBackText, reminderFloorText } from './check-back';
+import { checkBackReply, LOOP_CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS, OUTSIDE_TEXT_READS, outsideReminderCheckBackText, reminderFloorText } from './check-back';
 import { dueFailureNotices, failurePauseHolds, markFailureNoticed, pausedJobs } from '../scheduler/failure-notice';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
@@ -6059,7 +6059,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (!revises && quiet()) return 'quiet';
       if (!revises && !reachesOut()) return 'not_reaching_out';
       const now = Date.now(), day = localIso(now, clock.timezone).slice(0, 10);
-      const chosen = briefBodyRevision(await ledgerJob(trace, briefBodyPrompt(localIso(now, clock.timezone).replace('T', ' '), dayCards(), revises), HEALTH_READ_TOOLS as ToolName[],
+      const chosen = briefBodyRevision(await ledgerJob(trace, briefBodyPrompt(localIso(now, clock.timezone).replace('T', ' '), dayCards(), revises), OUTSIDE_TEXT_READS,
         undefined, true, undefined, true));
       if (typeof chosen === 'string') return chosen;
       await finalOutbox.enqueueFenced({ id: trace, trace, payload: { chat_id: owner, text: redactSecretUrls(chosen.text).text }, ownerSubject: String(owner),

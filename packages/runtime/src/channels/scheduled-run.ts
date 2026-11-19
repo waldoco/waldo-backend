@@ -35,6 +35,9 @@ export const OLDER_SENT_MAX_CHARS = 300;
 // Enough of each row for its gist, so one long Brief does not fill the run. Rows are cut as they are rendered, after the forget
 // barrier has judged them whole, so a cut can never split a held topic past it.
 export const RECENT_ROW_MAX_CHARS = 1_500;
+// What a run Waldo started is told about the rest of the owner's history, which it reads with its own tools when the work
+// needs it: whether to look, and for what, is the model's call.
+export const LOOK_BACK = 'Only the newest of your conversation with the owner is shown here. Everything they said before, on every surface (the app, WhatsApp, email, iMessage), is in search_episodes, and what you know about them is in read_memory. When this work touches something the owner may have talked about before (a project, a person, a plan, a promise), search for it before you write, and use what you find.';
 
 const shown = (entry: ConversationEntry) => entry.role !== 'compaction' && entry.modelProjection.mode !== 'omit';
 // Rows written before roles were stored name their reply by id.
