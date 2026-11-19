@@ -102,6 +102,7 @@ export const EVERY_RUN_TOOLS: readonly string[] = ['skills_load', 'read_tool_out
 const EXTERNAL_REACH_TOOLS = new Set(['execute_action', 'delete_message', 'restore_message']);
 export const ownerToolApproval = ({ tool }: { tool: string }): boolean => !EXTERNAL_REACH_TOOLS.has(tool);
 export const OWNER_TURN_ONLY_TOOLS: ReadonlySet<string> = toolsWhere((record) => record.ownerTurnOnly);
+const WORKSPACE_TOOLS: ReadonlySet<string> = toolsWhere((record) => record.brain === 'workspace');
 // Past the owner's monthly spend ceiling these are held: each bills browser or sandbox time on top of the model call.
 export const PAID_RUNG_TOOLS: ReadonlySet<string> = toolsWhere((record) => record.paid);
 // The refusal a held paid tool returns: what still works comes from the catalogue, the reset day from the clock.
@@ -576,7 +577,10 @@ export const createOwnerResponder = (
       const offered: readonly string[] | undefined = leanRun ? SCHEDULED_MENU : backgroundToolNames;
       // A run that holds any tool can get a result too long to show, which points at read_tool_output, so it holds that too.
       const pointsBack = offered === undefined || offered.length > 0;
-      const { handlers: admittedHandlers, report: eligibility } = await eligibleHandlers(handlers.filter(handler => (offered === undefined || offered.includes(handler.name) || handler.name === 'skills_load' || (handler.name === 'read_tool_output' && pointsBack)) && (!OWNER_TURN_ONLY_TOOLS.has(handler.name) || activeOwnerTurn !== undefined) && !(asyncTools() && OWNER_TURN_LONG_TOOLS.has(handler.name)) && (!['remember', 'forget_memory'].includes(handler.name) || (activeOwnerTurn ? activeOwnerTurn.memoryWrites !== false : handler.name === 'remember' && !ownerTurnActive && backgroundToolNames !== undefined) && !probeGuard?.suppressMemory)));
+      // The owner's workspace opens only inside a live owner run's scope (owner-do openWorkspace), so a run that holds every tool
+      // without one (the owner's reminder) is not offered workspace tools it could never run.
+      const workspaceShut = offered === undefined && !ownerTurnActive && activeOwnerTurn === undefined && privateRunScope === undefined;
+      const { handlers: admittedHandlers, report: eligibility } = await eligibleHandlers(handlers.filter(handler => (offered === undefined || offered.includes(handler.name) || handler.name === 'skills_load' || (handler.name === 'read_tool_output' && pointsBack)) && (!OWNER_TURN_ONLY_TOOLS.has(handler.name) || activeOwnerTurn !== undefined) && !(workspaceShut && WORKSPACE_TOOLS.has(handler.name)) && !(asyncTools() && OWNER_TURN_LONG_TOOLS.has(handler.name)) && (!['remember', 'forget_memory'].includes(handler.name) || (activeOwnerTurn ? activeOwnerTurn.memoryWrites !== false : handler.name === 'remember' && !ownerTurnActive && backgroundToolNames !== undefined) && !probeGuard?.suppressMemory)));
       await assertCurrent();
       const turnDirect: ReadonlySet<string> = new Set([...backgroundDirect, ...(privateOwner?.promotedTools?.() ?? [])]);
       if (eligibility.not_connected + eligibility.not_configured + eligibility.check_failed > 0) log({ trace, hop: 'tool_eligibility', ms: Date.now() - eligibilityStarted, ok: true, detail: `not_connected=${eligibility.not_connected} not_configured=${eligibility.not_configured} check_failed=${eligibility.check_failed}` });
