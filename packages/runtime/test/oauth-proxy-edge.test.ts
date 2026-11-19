@@ -237,6 +237,16 @@ describe('oauth-proxy edge, any registered provider', () => {
     expect(JSON.stringify([exchanged, calls])).not.toMatch(/pat_|prt_|fixture-client-secret/);
   });
 
+  it('keeps a Google Health account id in its own case, in the vault and in its answer; every other account is lowered', async () => {
+    const vault = vaultFake(['owner-a', 'owner-b'], { custody: { ...custody, google_health: 'oauth-proxy' }, uniqueAccounts: ['fixture_health', 'google_health'] });
+    vault.clients.set(`${PROVIDER_ORIGIN} ${REDIRECT_H}`, { client_id: PROVIDER_CLIENT.id, client_auth: 'client_secret_post', client_secret: PROVIDER_CLIENT.secret });
+    routeEdgeFetch(vault, fakeOAuthProvider({ account: 'HuId-Fixture7' }));
+    const proxy = oauthProxy(WORKER_ENV, workerToEdge(serve), () => Date.now())!;
+    expect((await proxy.exchange('owner-a', 'google_health', healthPins, 'fixture-code')).account).toBe('HuId-Fixture7');
+    expect((await proxy.exchange('owner-b', 'fixture_health', healthPins, 'fixture-code')).account).toBe('huid-fixture7');
+    expect(vault.rows.map(row => [row.provider, row.account])).toEqual([['google_health', 'HuId-Fixture7'], ['fixture_health', 'huid-fixture7']]);
+  });
+
   it('fetches under the pinned API base with the stored token, returning status, body and rate headers only', async () => {
     const { provider, proxy, connection } = await linked();
     const first = await proxy.fetch('owner-a', connection, 'GET', 'activity/sleep', { start: '2026-10-01T00:00:00Z' });

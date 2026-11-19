@@ -15,7 +15,8 @@ export const healthProviderStatusV1Schema = z.strictObject({
   // The last time a sync committed readings, or null. Never a reading.
   last_sync_at: healthInstantV1Schema.nullable(),
 });
-export const healthProviderListV1Schema = z.strictObject({ providers: z.array(healthProviderStatusV1Schema).max(HEALTH_PROVIDER_SOURCES_V1.length) });
+export const healthProviderListV1Schema = z.strictObject({ providers: z.array(healthProviderStatusV1Schema).max(HEALTH_PROVIDER_SOURCES_V1.length) })
+  .refine(list => new Set(list.providers.map(row => row.provider)).size === list.providers.length, { error: 'one row per provider' });
 
 export const healthProviderConnectV1Schema = z.strictObject({ request_id: healthRequestIdV1Schema, provider: healthProviderV1Schema });
 // The address is Waldo's own start link, and it carries a one-time code (?handoff=) only this response holds. The app

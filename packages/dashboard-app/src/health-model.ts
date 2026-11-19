@@ -6,7 +6,7 @@ import { SignInRequired } from './model';
 export const HEALTH_URL = '/console/dashboard/api/v1/health';
 export const ADMIN_HEALTH_URL = '/console/dashboard/api/v1/admin/health';
 
-const SOURCES = ['apple', 'samsung', 'health_connect', 'whoop'] as const;
+const SOURCES = ['apple', 'samsung', 'health_connect', 'whoop', 'google_health'] as const;
 const PURPOSES = ['storage_compute', 'model_processing'] as const;
 const REASONS = {
   not_linked: 'Your account isn’t linked to the health service yet.',
@@ -36,7 +36,7 @@ export type HealthRecord = { as_of: string; scores: Scores | null; consents: Con
 export type AdminHealthOwner = { id: string; email: string | null; state: string; created_at: string; consents: Consent[]; freshness: Uploads };
 export type AdminHealthRecord = { as_of: string; owners: AdminHealthOwner[] };
 
-export const SOURCE_LABEL: Record<Source, string> = { apple: 'Apple Health', samsung: 'Samsung Health', health_connect: 'Health Connect', whoop: 'WHOOP' };
+export const SOURCE_LABEL: Record<Source, string> = { apple: 'Apple Health', samsung: 'Samsung Health', health_connect: 'Health Connect', whoop: 'WHOOP', google_health: 'Google Health' };
 export const PURPOSE_LABEL: Record<Purpose, string> = { storage_compute: 'Storage and computing', model_processing: 'Model processing' };
 export const reasonText = (reason: Reason) => REASONS[reason];
 

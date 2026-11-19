@@ -15,7 +15,7 @@ export const HEALTH_AGGREGATE_RETENTION_MONTHS_V1 = 24;
 // Device sources arrive from the app's uploads. A provider source is a cloud API Waldo syncs for the owner, so it never
 // arrives through the app's ingest route; its consent rows and requests are health contract revision 2, and an older build
 // never sees them (it parses the consent list strictly).
-export const HEALTH_PROVIDER_SOURCES_V1 = ['whoop'] as const;
+export const HEALTH_PROVIDER_SOURCES_V1 = ['whoop', 'google_health'] as const;
 export const HEALTH_PROVIDER_REVISION_V1 = 2;
 export const healthSourceV1Schema = z.enum(['apple', 'samsung', 'health_connect', ...HEALTH_PROVIDER_SOURCES_V1]);
 export const isHealthProviderSourceV1 = (source: string): boolean => (HEALTH_PROVIDER_SOURCES_V1 as readonly string[]).includes(source);
@@ -27,12 +27,16 @@ export const isHealthProviderSourceV1 = (source: string): boolean => (HEALTH_PRO
 // rested on. A stored grant keeps the version it was written on, so reading one back accepts every version its source has
 // had (WHOOP's grants were written on copies 2 and 3 before). The app owns the wording; a changed notice takes the next number.
 export const HEALTH_PROVIDER_CONSENT_VERSION_V1 = 4;
+// Copy 5 is Google Health's (Fitbit, Pixel Watch): it carries the disclosure Google's Limited Use terms ask for immediately
+// before consent, names the AI model providers that process the data as third parties, and links the Limited Use statement.
+export const GOOGLE_HEALTH_CONSENT_VERSION_V1 = 5;
 type HealthSourceV1 = z.infer<typeof healthSourceV1Schema>;
 const CONSENT_COPY_V1: Readonly<Record<HealthSourceV1, Readonly<{ current: number; had: readonly number[] }>>> = {
   apple: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
   samsung: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
   health_connect: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
   whoop: { current: HEALTH_PROVIDER_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1, 3, HEALTH_PROVIDER_CONSENT_VERSION_V1] },
+  google_health: { current: GOOGLE_HEALTH_CONSENT_VERSION_V1, had: [GOOGLE_HEALTH_CONSENT_VERSION_V1] },
 };
 export const healthConsentVersionV1 = (source: HealthSourceV1): number => CONSENT_COPY_V1[source].current;
 const currentCopyOfItsSource = (row: { source: HealthSourceV1; version: number }) => row.version === CONSENT_COPY_V1[row.source].current;
@@ -81,9 +85,11 @@ export const healthConsentStateV1Schema = z.strictObject({
   deletion_state: z.enum(['not_required', 'completed']),
 }).refine(copyItsSourceHad, { message: 'a stored grant carries a copy version its source has had', path: ['version'] });
 export const healthConsentListV1Schema = z.strictObject({ consents: z.array(healthConsentStateV1Schema).max(12) });
-// What a client at an older health revision may be shown: no provider rows, since it cannot parse them.
+// What a client at an older health revision may be shown: no row whose source it cannot parse. Provider rows came in revision 2,
+// Google Health's in HEALTH_GOOGLE_HEALTH_REVISION_V1; a build before either parses the list strictly and would refuse it whole.
 export const healthConsentListAtRevisionV1 = <Row extends { source: string }>(consents: readonly Row[], revision: number): Row[] =>
-  revision >= HEALTH_PROVIDER_REVISION_V1 ? [...consents] : consents.filter(row => !isHealthProviderSourceV1(row.source));
+  consents.filter(row => !isHealthProviderSourceV1(row.source) ? true
+    : row.source === 'google_health' ? revision >= HEALTH_GOOGLE_HEALTH_REVISION_V1 : revision >= HEALTH_PROVIDER_REVISION_V1);
 export const healthConsentChangeV1Schema = z.strictObject({ consent: healthConsentStateV1Schema, replayed: z.boolean(), deletion_routed: z.boolean() });
 
 // The permission API is not the physiological producer: keep the observed read origin and
@@ -220,6 +226,8 @@ export const HEALTH_OBSERVED_PEAK_REVISION_V1 = 6;
 // its grams and meal are kept when the store has them. A food's name is another app's text, so it never travels. An older
 // build never sends one, and a backend that does not know it rejects that reading alone.
 export const HEALTH_NUTRITION_REVISION_V1 = 7;
+// Health revision 8: a build that knows Google Health as a consent source. Below it, its rows are left out of the consent list.
+export const HEALTH_GOOGLE_HEALTH_REVISION_V1 = 8;
 const grams = z.number().finite().min(0).max(1_000);
 // Time in five heart-rate zones. The phone reads the beats and buckets them on the bounds it names, so the backend never sees a
 // beat series: lower_bounds_bpm are where zones 2 to 5 start, rising, on the named basis. A provider that reports only zone

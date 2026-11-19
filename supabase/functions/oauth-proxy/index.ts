@@ -134,10 +134,11 @@ const keep = async (body: Readonly<{ do_name: string; provider: string; pins: Cl
   const stored = JSON.stringify(bundleOf(tokens, body.pins));
   // RFC 6749 §5.1: without a scope in the response, the grant covers what was requested.
   const scopes = (tokens.scope ?? body.scope)?.split(/\s+/).filter(Boolean) ?? [];
-  const out = await db('oauth_store', { p_do_name: body.do_name, p_provider: body.provider, p_account: account, p_scopes: scopes.join(' '), p_pins: body.pins, p_secret: stored }) as { id?: unknown; error?: unknown } | null;
+  const out = await db('oauth_store', { p_do_name: body.do_name, p_provider: body.provider, p_account: account, p_scopes: scopes.join(' '), p_pins: body.pins, p_secret: stored }) as { id?: unknown; account?: unknown; error?: unknown } | null;
   if (out?.error === 'account_linked') return refuse('account_linked');
   if (typeof out?.id !== 'string') return refuse('connection_unavailable');
-  return { id: out.id, account: account.toLowerCase(), scopes, ...(tokens.expires_at === undefined ? {} : { expires_at: tokens.expires_at }), ...(tokens.workspace ? { workspace: tokens.workspace } : {}), version: await version(stored) };
+  // The account as the database stored it; a database that does not name it stored it lowered.
+  return { id: out.id, account: typeof out.account === 'string' ? out.account : account.toLowerCase(), scopes, ...(tokens.expires_at === undefined ? {} : { expires_at: tokens.expires_at }), ...(tokens.workspace ? { workspace: tokens.workspace } : {}), version: await version(stored) };
 };
 const DEVICE_REFUSAL: Readonly<Record<DeviceFlowError['kind'], OAuthProxyCode>> = {
   pending: 'authorization_pending', slow_down: 'slow_down', expired: 'expired_token', denied: 'access_denied', transient: 'unavailable', failed: 'token_failed', unsupported: 'device_unsupported',

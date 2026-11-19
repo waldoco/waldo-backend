@@ -178,8 +178,8 @@ export const healthScoresView = (result: unknown, day: string | null, now: numbe
   return { error: 'unavailable' };
 };
 
-// The owner's consents as a client at this health revision may be shown them: a build that does not name revision 2 parses
-// the list strictly and cannot read a provider's rows, so it is shown none.
+// The owner's consents as a client at this health revision may be shown them: a build parses the list strictly, so it is
+// shown no row whose source it cannot read.
 export const healthConsentView = (listed: unknown, revision: number): View => {
   const rows = asObject(listed)?.consents;
   return parse(Array.isArray(rows) ? { consents: healthConsentListAtRevisionV1(rows.filter((row): row is { source: string } => typeof asObject(row)?.source === 'string'), revision) } : listed, healthConsentListV1Schema);

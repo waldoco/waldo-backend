@@ -47,6 +47,14 @@ describe('the app provider routes', () => {
     expect([response.status, json]).toEqual([200, answer]);
   });
 
+  it('answers not_configured for Google Health, which this Worker cannot connect yet, without calling the owner object', async () => {
+    const google = { request_id: 'provider-connect-g1', provider: 'google_health' };
+    for (const route of ['/connect', '/disconnect']) {
+      const { response, json, sent } = await run('POST', route, { body: google, headers: { 'idempotency-key': google.request_id } });
+      expect([route, response.status, json, sent]).toEqual([route, 503, { error: 'not_configured' }, []]);
+    }
+  });
+
   it('names the reason a connection cannot start, in closed codes', async () => {
     const refused = (error: string, status: number) => () => Response.json({ error }, { status });
     expect((await run('POST', '/connect', { body: connect, answer: refused('consent_required', 403) })).json).toEqual({ error: 'consent_required' });
