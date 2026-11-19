@@ -151,7 +151,14 @@ describe('an injected request in the owner\'s turn can set an owner-inward write
 
   it('every owner-inward, narrowing and owner-stated record has a receipt line, and nothing else does', () => {
     const listed = (Object.entries(TOOL_RECORDS) as [ToolName, ToolRecord][]).filter(([, { tainted }]) => tainted !== undefined
-      && ('exempt' in tainted ? tainted.exempt === 'owner_inward' || tainted.exempt === 'narrows' : tainted.unless_owner_stated !== undefined)).map(([tool]) => tool).sort();
-    expect(Object.keys(INWARD_RECEIPT_LINES).sort()).toEqual(listed);
+      && ('exempt' in tainted ? tainted.exempt === 'owner_inward' || tainted.exempt === 'narrows' : tainted.unless_owner_stated !== undefined)).map(([tool]) => tool);
+    // close_loop is source_bound, and also closes an owner's loop whose time has passed, which the reply lists.
+    expect(Object.keys(INWARD_RECEIPT_LINES).sort()).toEqual([...listed, 'close_loop'].sort());
+  });
+
+  it('a passed owner loop closed after outside text is listed with its title; a mail follow-up, whose title is someone else\'s text, is not', () => {
+    expect(inwardReceipt('close_loop', JSON.stringify({ id: 'o1', outcome: 'done' }), { id: 'o1', closed: true, title: 'Send the deck', due: '2026-11-16T09:00' }))
+      .toBe('Closed "Send the deck" (due 2026-11-16 09:00) as its time had passed (tell me if you still want it and I will open it again)');
+    expect(inwardReceipt('close_loop', JSON.stringify({ id: 'o2', outcome: 'done' }), { id: 'o2', closed: true })).toBeNull();
   });
 });

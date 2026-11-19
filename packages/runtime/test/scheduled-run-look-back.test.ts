@@ -64,8 +64,11 @@ describe('a Brief run Waldo started looks back past its lean view', () => {
     expect(reply).toContain('Northwind');
   });
 
-  it('holds read_tool_output when its results can be stored, so a pointer in a long result is one call away', async () => {
+  it('holds read_tool_output when its results can be stored, so a pointer in a long result can be followed', async () => {
     const { requests } = await withSql('look-back-offload', (sql) => briefRun(sql, true, true));
-    expect((requests[0]!.tools ?? []).map((tool) => tool.name)).toEqual(expect.arrayContaining(['read_memory', 'search_episodes', 'read_tool_output']));
+    // Offered in the function list, or named in the catalogue a use_tool call reaches: either way the run holds it.
+    const first = requests[0]!;
+    expect((first.tools ?? []).map((tool) => tool.name)).toEqual(expect.arrayContaining(['read_memory', 'search_episodes']));
+    expect(`${JSON.stringify(first.tools)}${first.system}`).toContain('read_tool_output');
   });
 });

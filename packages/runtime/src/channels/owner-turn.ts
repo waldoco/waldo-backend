@@ -74,7 +74,7 @@ import { toolOutputLedger } from '../conversation/tool-output-ledger';
 import { replyGate, withReplyStream } from '../conversation/reply-gate';
 import { recordSharedHealth, type TrailRead } from '../tools/why-trail';
 import { localIso } from './reminders';
-import { fitsScheduledMenu, LOOK_BACK, RECENT_SENT_MESSAGES, recentExchange, recentExchangeText, SCHEDULED_DIRECT, SCHEDULED_MENU, sentText } from './scheduled-run';
+import { fitsScheduledMenu, LOOK_BACK, LOOK_BACK_DIRECT, RECENT_SENT_MESSAGES, recentExchange, recentExchangeText, SCHEDULED_DIRECT, SCHEDULED_MENU, sentText } from './scheduled-run';
 
 const TURN_ONLY_OUTPUT = JSON.stringify({ retained: false, reason: 'turn_only_output' });
 // What find_tools returned, or a tool outside the core list the model reached by name: either stays offered next turn.
@@ -1323,7 +1323,7 @@ export const createOwnerResponder = (
         const jobTools = toolNames ?? (sourceTaint === 'external' ? OUTSIDE_TEXT_JOB_TOOLS : undefined);
         // Lean only where the caller marked the run Waldo-first and its own tools sit inside the shared menu.
         leanRun = waldoFirst === true && privateOwner?.leanScheduled === true && fitsScheduledMenu(jobTools);
-        backgroundDirect = new Set(leanRun ? SCHEDULED_DIRECT : directTools ?? []);
+        backgroundDirect = new Set(leanRun ? SCHEDULED_DIRECT : [...(directTools ?? []), ...LOOK_BACK_DIRECT]);
         return await converse(id, conversationRef, said, time, false, surface, jobTools);
       } finally { backgroundCurrent = undefined; transientDecision = false; promptContext = ''; backgroundSourceTaint = null; backgroundOwnerModel = false; planningRun = false; pending = undefined; backgroundDirect = NO_DIRECT; leanRun = false; leanRecentBytes = 0; }
     },

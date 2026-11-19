@@ -9,7 +9,10 @@ import type { FinalRecord } from './telegram-final-outbox';
 // raise a card. Each run may still call only its own list (the dispatcher refuses the rest), so seeing the menu grants nothing.
 // Tools only the owner's own turn holds are never offered to a machine turn, so they are not part of it.
 const OWNER_TURN_ONLY = toolsWhere((record) => record.ownerTurnOnly);
-export const SCHEDULED_DIRECT: readonly ToolName[] = ['offer_replies', 'propose_action', 'propose_calendar_change', 'propose_calendar_plan'];
+// Every run Waldo starts is offered these in its function list when it holds them, not one find_tools hop away: the owner's
+// past conversation, which its lean view leaves out, and closing a loop whose time has passed.
+export const LOOK_BACK_DIRECT: readonly ToolName[] = ['search_episodes', 'close_loop'];
+export const SCHEDULED_DIRECT: readonly ToolName[] = ['offer_replies', 'propose_action', 'propose_calendar_change', 'propose_calendar_plan', ...LOOK_BACK_DIRECT];
 // The update sweep's and triage's tools beyond the outside-text reads (update-sweep.ts; a test holds the two in step).
 const SWEEP_TOOLS: readonly ToolName[] = ['get_context', 'read_memory', 'search_episodes', 'open_loop', 'send_email', 'propose_calendar_change', 'propose_action'];
 export const SCHEDULED_MENU: readonly ToolName[] = [...new Set<ToolName>([...LOOP_CHECK_BACK_TOOLS, ...OUTSIDE_TEXT_JOB_TOOLS, ...SWEEP_TOOLS, ...SCHEDULED_DIRECT])]
