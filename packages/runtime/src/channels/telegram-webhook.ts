@@ -76,6 +76,11 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // '1' has the health decision reason from the reviewed health protocols (skills/health-protocols), read through the
   // owner's next day, in the chat role. Anything else keeps the decision as it was.
   HEALTH_ACTIONS?: string;
+  // "1" writes the parts of each score (HEALTH_SCORE_PARTS) and the owner's usual band for each reading (HEALTH_USUAL) on the
+  // derived row, and shows them to a build that names health revision 13; anything else writes and shows neither. Apply migration
+  // 20261116100000, which admits the two new columns, before turning either on. Both need HEALTH_PROVISIONAL_SCORES "1".
+  HEALTH_SCORE_PARTS?: string;
+  HEALTH_USUAL?: string;
   HEALTH_COACHING?: string;
   // "1" lets a health proposal, and a chat card, swap an event for another in its slot (a hard workout for an easy one) by
   // renaming it; the connector-proxy function must be deployed with the rename first.

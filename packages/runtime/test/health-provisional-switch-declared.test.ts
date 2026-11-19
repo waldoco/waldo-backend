@@ -123,6 +123,15 @@ describe('WORKOUT_WAKE in the Worker config', () => {
   });
 });
 
+describe('HEALTH_SCORE_PARTS and HEALTH_USUAL in the Worker config', () => {
+  it('are off in both blocks until the gate turns them on at a named deploy with migration 20261116100000', () => {
+    for (const name of ['HEALTH_SCORE_PARTS', 'HEALTH_USUAL']) {
+      expect(parsed.vars[name], name).toBe('0');
+      expect(parsed.env.staging.vars[name], name).toBe('0');
+    }
+  });
+});
+
 describe('SCREEN_TIME in the Worker config', () => {
   it('is on in staging, where migration 20261103120000 is applied (4 Nov 2026), and off in production', () => {
     expect(parsed.vars.SCREEN_TIME).toBe('0');

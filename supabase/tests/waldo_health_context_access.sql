@@ -10,8 +10,9 @@ select is(
     'tier2:jsonb:YES:<null>', 'drivers:jsonb:NO:''[]''::jsonb', 'confidence:numeric:YES:<null>',
     'freshness:text:YES:<null>', 'tags:_text:NO:''{}''::text[]', 'evidence:jsonb:NO:''[]''::jsonb',
     'created_at:timestamptz:NO:now()', 'updated_at:timestamptz:NO:now()', 'sleep_debt:jsonb:YES:<null>',
-    'windows:jsonb:YES:<null>', 'windows_version:text:YES:<null>', 'backfilled:bool:YES:<null>', 'training_load:jsonb:YES:<null>']::text[],
-  'the fourteen historical columns, sleep_debt, the energy windows with their version, backfilled and the training load, with exact types, nullability and defaults');
+    'windows:jsonb:YES:<null>', 'windows_version:text:YES:<null>', 'backfilled:bool:YES:<null>', 'training_load:jsonb:YES:<null>',
+    'components:jsonb:YES:<null>', 'usual:jsonb:YES:<null>']::text[],
+  'the fourteen historical columns, sleep_debt, the energy windows with their version, backfilled, the training load, and the parts and usual bands, with exact types, nullability and defaults');
 select is(
   (select array_agg(conname::text || ':' || pg_get_constraintdef(oid) order by conname)
    from pg_constraint where conrelid='public.health_context_daily'::regclass),
