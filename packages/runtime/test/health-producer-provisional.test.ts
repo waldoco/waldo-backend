@@ -13,8 +13,6 @@ const rowsOff = (spec: GoldenProducerCase) => rowsWith(spec, undefined);
 const round3 = (value: number) => Math.round(value * 1000) / 1000;
 const SOURCE_CONFIDENCE = { apple: 1, oura: 0.85, whoop: 0.8, health_connect: 0.6, samsung: 0.6 } as const;
 const PILLARS = ['recovery', 'form', 'weight'] as const;
-// Health Connect is a transport: its readings count as a source's only from Samsung Health.
-const writerFor = (source: string): { writer?: 'samsung_health' } => (source === 'health_connect' ? { writer: 'samsung_health' } : {});
 
 describe('provisional rows: pillars', () => {
   it('carry the baseline label and the signals and days each used, in new trailing keys', async () => {
@@ -37,7 +35,7 @@ describe('provisional rows: pillars', () => {
     for (const [source, factor] of Object.entries(SOURCE_CONFIDENCE)) {
       const computed = new Map<string, DailyScores>();
       const base = dailyScoresFor('1');
-      const payloads = await producerPayloads(input => { const out = base(input); computed.set(input.targetDay, out); return out; }, { nights: 25, source, calendar: true, ...writerFor(source) });
+      const payloads = await producerPayloads(input => { const out = base(input); computed.set(input.targetDay, out); return out; }, { nights: 25, source, calendar: true });
       expect(payloads.length).toBeGreaterThan(0);
       for (const row of payloads.map(payload => JSON.parse(payload) as Row)) {
         expect(row.basis[0]!.source).toBe(source);
@@ -51,7 +49,7 @@ describe('provisional rows: pillars', () => {
   });
   it('write Recovery\'s full coverage as exactly the source confidence', async () => {
     for (const [source, factor] of Object.entries(SOURCE_CONFIDENCE)) {
-      const row = (await rows({ nights: 25, source, calendar: false, ...writerFor(source) })).at(-1)!;
+      const row = (await rows({ nights: 25, source, calendar: false })).at(-1)!;
       expect(row.recovery!.confidence).toBe(factor);
       expect((row as unknown as { confidence: number }).confidence).toBe(factor);
     }
@@ -76,8 +74,8 @@ describe('provisional rows: which sources may be accepted', () => {
     const payloads = await producerPayloads(input => { const out = base(input); computed.set(input.targetDay, out); return out; }, spec);
     return { rows: payloads.map(payload => JSON.parse(payload) as Row), computed };
   };
-  it('accepts Health Connect readings only when every writer is Samsung Health, at the Samsung confidence', async () => {
-    const { rows: written, computed } = await captured({ nights: 25, source: 'health_connect', calendar: true, writer: 'samsung_health' });
+  it('accepts Health Connect readings whichever app wrote them, at the Health Connect confidence', async () => {
+    const { rows: written, computed } = await captured({ nights: 25, source: 'health_connect', calendar: true });
     expect(written.length).toBeGreaterThan(0);
     for (const row of written) {
       expect(pillarsOf(row).length).toBeGreaterThan(0);
@@ -90,28 +88,10 @@ describe('provisional rows: which sources may be accepted', () => {
       expect((row.sleep_debt as { activation: string }).activation).toBe('accepted');
     }
   });
-  // A candidate is computed the same, but from a source or writer nothing has validated, so it never reads as more confident
-  // than an accepted row from the lowest source: its confidence is its coverage times the lowest source factor.
-  it.each([
-    ['no Samsung Health writer recorded', {}],
-    ['one reading not from Samsung Health among Samsung Health ones', { writer: 'samsung_health', stray: true }],
-  ] as const)('computes Health Connect readings from %s the same, but never accepts them', async (_name, extra) => {
-    const { rows: written, computed } = await captured({ nights: 25, source: 'health_connect', calendar: true, ...extra });
-    const accepted = await captured({ nights: 25, source: 'health_connect', calendar: true, writer: 'samsung_health' });
-    expect(written.length).toBeGreaterThan(0);
-    for (const row of written) {
-      for (const pillar of ['recovery', 'form', 'weight'] as const) {
-        const stored = row[pillar]!, result = computed.get(row.day)![pillar];
-        if (result.state === 'unavailable') { expect(stored).toEqual({ reason: result.reason }); continue; }
-        expect(stored.activation).toBe('candidate_unaccepted');
-        expect(stored.confidence).toBe(round3(result.coverage * 0.6));
-        expect(stored.baseline).toBeDefined();
-        const same = accepted.rows.find(r => r.day === row.day)![pillar]!;
-        expect([stored.score, stored.zone, stored.algorithm_version]).toEqual([same.score, same.zone, same.algorithm_version]);
-        expect(stored.confidence).toBeLessThanOrEqual(same.confidence as number);
-      }
-      expect((row.sleep_debt as { activation: string }).activation).toBe('candidate_unaccepted');
-    }
+  it('writes the same rows for readings Samsung Health wrote as for another app\'s', async () => {
+    const [other, samsung] = [await captured({ nights: 25, source: 'health_connect', calendar: true }), await captured({ nights: 25, source: 'health_connect', calendar: true, writer: 'samsung_health' })];
+    expect(other.rows.length).toBeGreaterThan(0);
+    expect(other.rows).toEqual(samsung.rows);
   });
   it('does not look at the writer of an Apple, Samsung or WHOOP reading', async () => {
     for (const source of ['apple', 'samsung', 'whoop']) {
