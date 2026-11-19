@@ -31,6 +31,10 @@ import { openSignupCaps, openSignupFor, type OpenSignupEnv } from '../identity/o
 import { markOpenOwner } from '../identity/open-owner-hold';
 import { APP_DEVICE_CALENDAR_PATH } from './device-calendar';
 import { DEVICE_CALENDAR_MAX_REQUEST_BYTES_V1 } from '../../../contracts/src/app/device-context';
+import { APP_WEATHER_PATH_V1 } from '../../../contracts/src/app/weather';
+import { cacheApiWeatherCache, weatherKit, weatherKitCredentials, type WeatherKitEnv } from '../connectors/weatherkit';
+import { weatherPlaceBook } from '../tools/live/weather';
+import { handleAppWeather } from './app-weather';
 
 export const APP_PATH = '/app/v1';
 const APP_IMESSAGE_LINK_CODE_PATH = `${APP_PATH}/channels/imessage/link-code`;
@@ -45,7 +49,7 @@ export const APP_DEVICES_PATH = `${APP_PATH}/devices`;
 const MAX_BODY_BYTES = 8192;
 
 // APP_ID_TOKEN_SIGNIN "1" serves Sign in with Apple and Google; otherwise the route answers 404 and the app offers the email code.
-type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string; DEVICE_PLACE?: string; DEVICE_CALENDAR?: string; WAKE_BRIEF?: string; WAKE_BRIEF_FRESH_MIN?: string; APP_CHAT_ATTACHMENTS?: string; WORKOUT_WAKE?: string; ARRIVAL_LOOK?: string }>;
+type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & WeatherKitEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string; DEVICE_PLACE?: string; DEVICE_WEATHER?: string; DEVICE_CALENDAR?: string; WAKE_BRIEF?: string; WAKE_BRIEF_FRESH_MIN?: string; APP_CHAT_ATTACHMENTS?: string; WORKOUT_WAKE?: string; ARRIVAL_LOOK?: string }>;
 
 const UPLOAD_READ_MS = 60_000;
 // Errors before authentication share one shape so the app cannot learn who is invited.
@@ -296,6 +300,15 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-device-context:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
     const secret = env.WALDO_ROUTER_HMAC_SECRET;
     return handleAppDeviceContext({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody, ...(secret ? { moved: () => notifyOwnerPlaceMoved(owners, secret, who.doName) } : {}), ...(secret && env.ARRIVAL_LOOK === '1' ? { arrived: (place: ArrivalPlace) => notifyOwnerPlaceArrived(owners, secret, who.doName, place) } : {}), ...(defer ? { defer } : {}) });
+  }
+  // The date card's weather spends its own per-owner budget. Without the place and weather switches and the WeatherKit key the
+  // route is not there, as get_weather is not offered.
+  if (url.pathname === APP_WEATHER_PATH_V1) {
+    const credentials = env.DEVICE_PLACE === '1' && env.DEVICE_WEATHER === '1' ? weatherKitCredentials(env) : null;
+    if (!credentials) return fail(404);
+    if (request.method !== 'GET') return fail(405);
+    try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-weather:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
+    return handleAppWeather({ book: weatherPlaceBook(signedRpc(env), who.doName), provider: weatherKit(credentials, typeof caches === 'undefined' ? null : cacheApiWeatherCache(caches.default)), now: () => Date.now() });
   }
   if (url.pathname === APP_CHAT_UPLOAD_PATH) return forwardAppUpload(request, { owners, limiter: env.RESPONSIBILITY_RATE_LIMITER, on: env.APP_CHAT_ATTACHMENTS === '1' }, who.doName, await linkCodeHash(sessionIdOf(who.credential)!));
   // The phone's calendar spends its own per-owner budget and is answered by the owner's object, which holds its consent and
