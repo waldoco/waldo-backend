@@ -18,8 +18,8 @@ beforeEach(() => {
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
-    if (fn === 'admin_overview') return wire.admin === 'outage' ? new Response('upstream unavailable', { status: 503 })
-      : Response.json(wire.admins.has((JSON.parse(String(init?.body)) as { p_do_name: string }).p_do_name) ? { owners: [], invites: [] } : null);
+    if (fn === 'admin_check') return wire.admin === 'outage' ? new Response('upstream unavailable', { status: 503 })
+      : Response.json(wire.admins.has((JSON.parse(String(init?.body)) as { p_do_name: string }).p_do_name));
     if (fn === 'common_owner_authority') return presenceAuthority(OWNER_ID, init?.body);
     if (fn === 'assert_channel_presence') return Response.json(true);
     if (url === 'https://graph.facebook.com/v26.0/fictional-phone-id/messages') {
