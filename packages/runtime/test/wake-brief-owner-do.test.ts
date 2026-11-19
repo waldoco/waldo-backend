@@ -26,7 +26,7 @@ const at = (hhmm: string) => Date.parse(`${TODAY}T${hhmm}:00Z`);
 // recompute can score today's Recovery. contextFails: the model-use read errors. recoveryAtWake: whether today's stored row held
 // a Recovery when each wake turn was asked.
 const world = vi.hoisted(() => ({ consent: true, wakes: [] as string[], replans: [] as string[], wakeReply: '', wakeFails: false,
-  rows: new Map<string, Record<string, unknown>>(), night: true, contextFails: false, seriesFails: false, recoveryAtWake: [] as boolean[] }));
+  rows: new Map<string, Record<string, unknown>>(), requests: [] as string[], night: true, contextFails: false, seriesFails: false, recoveryAtWake: [] as boolean[] }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
   return { ...original, googleClient: (_app: unknown, _tokens: unknown, _fetch: unknown, _health: unknown, account: unknown) => ({
@@ -39,6 +39,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway: LLMGatewayAdapter = { async complete(request) {
     const content = String(request.request.messages.at(-1)?.content ?? '');
+    world.requests.push(JSON.stringify(request.request));
     const wake = content.includes('a night that just ended');
     if (wake) { world.wakes.push(content); world.recoveryAtWake.push(typeof (world.rows.get('2026-10-20')?.recovery as { zone?: unknown } | undefined)?.zone === 'string'); }
     if (wake && world.wakeFails) return { ok: false as const, code: 'rejected' as const, error: 'synthetic refusal' };
@@ -74,7 +75,7 @@ const unscoredToday = () => ({ recovery: { reason: 'missing_sleep' }, form: { re
 let sequence = 0;
 beforeEach(() => {
   world.consent = true; world.wakes = []; world.replans = []; world.wakeReply = reply('now'); world.wakeFails = false;
-  world.rows = new Map([[TODAY, unscoredToday()]]); world.night = true; world.contextFails = false; world.seriesFails = false; world.recoveryAtWake = [];
+  world.rows = new Map([[TODAY, unscoredToday()]]); world.night = true; world.contextFails = false; world.seriesFails = false; world.recoveryAtWake = []; world.requests = [];
   vi.useFakeTimers({ toFake: ['Date'], now: at('07:05') });
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
@@ -204,6 +205,12 @@ describe('the wake Brief waits for the night to be scored', () => {
       expect(world.wakes).toHaveLength(1);
       expect(world.recoveryAtWake).toEqual([true]);
       expect(brief(state)).toMatchObject({ time: '07:06', reason: MOVED_EARLIER });
+      // The Brief that goes out at that time is written from the scored row, not the one from before the upload.
+      await recompute();
+      const written = world.requests.at(-1)!;
+      expect(world.requests).toHaveLength(2);
+      expect(written).toMatch(/Form zone|Recovery zone/);
+      expect(written).not.toMatch(/Partial health context|No derived health context/);
     });
   });
 
