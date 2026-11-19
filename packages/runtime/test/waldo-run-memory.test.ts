@@ -44,6 +44,7 @@ describe('remember in a run Waldo started', () => {
 
   it.each([
     ['a health note', { ...NOTE, kind: 'health', text: 'Sleep was short this week.' }],
+    ['a reading filed as a fact', { ...NOTE, text: 'Resting heart rate was 58 bpm this morning.' }],
     ['a correction of what the owner said', { ...NOTE, replaces_id: 1 }],
     ['a note naming a person', { ...NOTE, people: [{ name: 'Priya' }] }],
   ])('refuses %s', async (_name, args) => {
@@ -86,5 +87,28 @@ describe('which runs Waldo starts hold remember', () => {
     expect(checkBack).not.toContain('forget_memory');
     const outside = await offeredTo(OUTSIDE_TEXT_JOB_TOOLS);
     for (const name of ['remember', 'forget_memory']) expect(outside).not.toContain(name);
+  });
+});
+
+describe('a run that read outside content', () => {
+  it('reaches remember marked as having read it, so the note is kept as outside content or not at all', async () => {
+    const seen: Record<string, unknown>[] = [];
+    const fake = (name: string, source_taint: 'external' | null) => ({ name: name as ToolName, description: `The ${name} tool.`, schema: z.object({}).passthrough(), trigger_allowlist: allowed(name),
+      handle: async (_args: unknown, ctx: Record<string, unknown>) => { if (name === 'remember') seen.push({ ...ctx }); return { ok: true as const, data: { done: name }, source_taint }; } });
+    const script = [{ name: 'search_communication', args: { query: 'Northwind' } }, { name: 'remember', args: NOTE }];
+    let round = 0;
+    const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {
+      const step = request.response_format ? undefined : script[round++];
+      const tool_calls = step ? [{ call_id: `c${round}`, name: step.name, arguments: JSON.stringify(step.args) }] : undefined;
+      return { ok: true, data: { model: request.model, text: request.response_format ? '{}' : tool_calls ? '' : 'SKIP', ...(tool_calls ? { tool_calls } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
+    } };
+    const saved: Parameters<ConversationStore['save']>[0][number][] = [];
+    const store: ConversationStore = { load: async () => ({ entries: [...saved], leafId: saved.at(-1)?.id ?? null }), save: async (rows) => { saved.push(...rows); } };
+    const args: Parameters<typeof createOwnerResponder> = ['fixture'];
+    args[1] = store; args[3] = () => undefined; args[5] = [fake('search_communication', 'external'), fake('remember', null)] as never; args[7] = false; args[10] = gateway;
+    await createOwnerResponder(...args).prompt('heartbeat:2', 'telegram-1', 'Check-back due now.', async (_hop, work) => work(), 'telegram', ['search_communication', 'remember']);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ toolArgSourceTaint: 'external', memoryRun: { runId: expect.any(String) } });
+    expect(seen[0]!.memoryTurn).toBeUndefined();
   });
 });
