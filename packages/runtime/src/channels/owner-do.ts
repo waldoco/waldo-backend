@@ -127,7 +127,7 @@ import { ownerAccountEmail } from '../identity/owner-account-email';
 import { DEFAULT_PROACTIVITY, isQuiet, loopBook, loopHandlers, loopsSection, openLoopsPrompt, proactivityLine, storedProactivity } from './loops';
 import { armHeartbeat, HEARTBEAT_EVERY_MS, HEARTBEAT_ID, heartbeatTick, heartbeatEligible, heartbeatWake, settleHeartbeat } from './heartbeat';
 import { heartbeatApplier, heartbeatJobSpec } from './heartbeat-job';
-import { checkBackReply, LOOP_CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS, OUTSIDE_TEXT_READS, outsideReminderCheckBackText, reminderFloorText } from './check-back';
+import { checkBackReply, DAY_CARD_TOOLS, LOOP_CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS, OUTSIDE_TEXT_READS, outsideReminderCheckBackText, reminderFloorText } from './check-back';
 import { dueFailureNotices, failurePauseHolds, markFailureNoticed, pausedJobs } from '../scheduler/failure-notice';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
@@ -6675,7 +6675,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const shaping = planning ? await dayShaping(trace, 'brief') : card.id === 'card:close' ? await dayShaping(trace, 'close') : '';
           const capacityText = capacity ? [capacityContext(cardCapacityNote(memory, storage.kv, healthMemoryOn(identity), await healthContext.read(trace).then(read => read === 'unknown' ? read : read !== null)), recentBlocks(storage.sql, now, clock.timezone)),
             ...(budget ? [await capacityBudgetContext(now, clock.timezone, client, !client && google.configured(), recentMoves(storage.sql, now, clock.timezone))] : [])].join('\n\n') : undefined;
-          text = (await ledgerJob(trace, said, proposing ? [...OUTSIDE_TEXT_JOB_TOOLS, ...proposes] : undefined, proposing ? proposes : undefined, actAhead || capacity || tomorrow || questText !== null || shaping !== '' ? 'plans' : undefined,
+          text = (await ledgerJob(trace, said, proposing ? [...DAY_CARD_TOOLS, ...proposes] : DAY_CARD_TOOLS, proposing ? proposes : undefined, actAhead || capacity || tomorrow || questText !== null || shaping !== '' ? 'plans' : undefined,
             [shaping, capacityText, questText, announcementText].filter(Boolean).join('\n\n') || undefined, true)).trim();
         } finally {
           raised = this.whyHolder.collected ?? []; this.whyHolder.collected = undefined;

@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { TOOL_PERMISSIONS, triggerTypeSchema, type LLMRequest, type ToolName } from '@waldo/contracts';
 import { createOwnerResponder } from '../src/channels/owner-turn';
 import type { ConversationStore } from '../src/channels/conversation-store';
-import { checkBackReply, LOOP_CHECK_BACK_TOOLS, loopCheckBackText } from '../src/channels/check-back';
+import { checkBackReply, DAY_CARD_TOOLS, LOOP_CHECK_BACK_TOOLS, loopCheckBackText } from '../src/channels/check-back';
 import { dueLoops } from '../src/channels/heartbeat';
 import { loopBook, loopHandlers, openLoopsPrompt } from '../src/channels/loops';
 import { passedLocal, passedSince } from '../src/channels/past-date';
@@ -48,14 +48,16 @@ const fake = (name: string) => ({ name: name as ToolName, description: `The ${na
   handle: async () => ({ ok: true as const, data: { done: name }, source_taint: null }) });
 
 // The heartbeat's check-back turn, as owner-do runs it: tainted by the reader worker's result, lean, with the check-back tools.
-const checkBack = async (sql: SqlStorage, closeId: (ids: Readonly<{ passed: string; ahead: string }>) => string) => {
+// The Brief runs the same way with the day card's tools and its own message; its reply is plain text, so the close is listed.
+const BRIEF = { tools: [...DAY_CARD_TOOLS, 'propose_calendar_change', 'propose_action'] as readonly ToolName[], message: 'Write the Daily Brief for today.' };
+const checkBack = async (sql: SqlStorage, closeId: (ids: Readonly<{ passed: string; ahead: string }>) => string, run?: typeof BRIEF) => {
   const now = Date.now();
   let n = 0;
   const book = loopBook(sql, { newId: () => String(++n), now: () => now });
   const passed = book.open({ title: 'Send the Northwind deck to Priya', due: localIso(now - 3 * DAY, 'UTC').slice(0, 16) });
   const ahead = book.open({ title: 'Renew the passport', due: localIso(now + 20 * DAY, 'UTC').slice(0, 16) });
   const id = closeId({ passed: passed.id, ahead: ahead.id });
-  const tools = [...loopHandlers(book), ...LOOP_CHECK_BACK_TOOLS.filter((name) => name !== 'close_loop' && name !== 'get_context').map(fake)];
+  const tools = [...loopHandlers(book), ...[...new Set([...LOOP_CHECK_BACK_TOOLS, ...(run?.tools ?? [])])].filter((name) => name !== 'close_loop' && name !== 'get_context').map(fake)];
   const requests: LLMRequest[] = [];
   const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {
     requests.push(request);
@@ -73,8 +75,11 @@ const checkBack = async (sql: SqlStorage, closeId: (ids: Readonly<{ passed: stri
     loopIsSourceBound: (loop) => book.sourceBound(loop), loopHasPassed: (loop) => book.passed(loop, localIso(Date.now(), 'UTC')) };
   const owner = createOwnerResponder(...args);
   const due = dueLoops(sql, now, 'UTC');
-  const text = `${loopCheckBackText(due, now, 'UTC')}\n\n[What the reader found, outside content:]\nPriya replied on Monday: "Got the deck, thanks."`;
-  const raw = await owner.prompt('heartbeat:1', 'telegram-7', text, async (_hop, work) => work(), 'telegram', LOOP_CHECK_BACK_TOOLS, undefined, undefined, undefined, 'external', 'decides', undefined, undefined, true);
+  const text = run ? `${run.message}\n\n${openLoopsPrompt(book, 'UTC', 10_000, false, now)}\n\nCalendar: Priya replied on Monday: "Got the deck, thanks."`
+    : `${loopCheckBackText(due, now, 'UTC')}\n\n[What the reader found, outside content:]\nPriya replied on Monday: "Got the deck, thanks."`;
+  const raw = run
+    ? await owner.prompt('card:brief:1', 'telegram-7', text, async (_hop, work) => work(), 'telegram', run.tools, undefined, undefined, undefined, 'external', 'plans', undefined, ['propose_calendar_change', 'propose_action'], true)
+    : await owner.prompt('heartbeat:1', 'telegram-7', text, async (_hop, work) => work(), 'telegram', LOOP_CHECK_BACK_TOOLS, undefined, undefined, undefined, 'external', 'decides', undefined, undefined, true);
   // Read inside the object's own context: storage cannot be touched once the callback returns.
   return { status: (loop: string) => book.get(loop)?.status, passed, ahead, now, text, reply: checkBackReply(raw), requests: requests.filter((request) => !request.response_format),
     stillDue: dueLoops(sql, now + DAY, 'UTC').map((loop) => loop.id) };
@@ -95,6 +100,16 @@ describe('a scheduled run that read outside content closes the owner\'s loop onc
     expect(reply).toContain(INWARD_RECEIPTS_HEADER);
     expect(reply).toContain('Closed "Send the Northwind deck to Priya"');
     expect(stillDue).not.toContain(passed.id);
+  });
+
+  it('a Brief that read the owner\'s calendar closes a passed loop it is shown and lists the close in the Brief', async () => {
+    const { status, reply, requests } = await withSql('brief-closes-passed', async (sql) => {
+      const run = await checkBack(sql, (ids) => ids.passed, BRIEF);
+      return { ...run, status: run.status(run.passed.id) };
+    });
+    expect((requests[0]!.tools ?? []).map((tool) => tool.name)).toContain('close_loop');
+    expect(status).toBe('done');
+    expect(reply).toContain('Closed "Send the Northwind deck to Priya"');
   });
 
   it('a loop still ahead stays open: closing it under outside content still needs the owner\'s card', async () => {
