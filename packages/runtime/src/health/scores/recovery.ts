@@ -1,5 +1,5 @@
 import { PULSE_PRIOR, VARIABILITY_PRIOR, sleepNeed, sleepNeedOwnShare, standing, type Prior } from './baseline';
-import { BASELINE_DAYS, higherIsBetter, logZScore, lowerIsBetter, zScore, clampScore, type Component } from './stats';
+import { BASELINE_DAYS, higherIsBetter, logZScore, lowerIsBetter, SCORE_OF, zScore, clampScore, type Component } from './stats';
 import { usualOfStanding } from './usual';
 import type { Absent, DayRecord, HrvMethod, MethodReading, RestingMethod, UnavailableReason, UsedSignal } from './types';
 
@@ -131,7 +131,7 @@ export const provisionalRecoveryBasis = (target: DayRecord, prior: readonly DayR
   const hrv = matchedStanding(HRV_ORDER, target.overnightHrv, prior, day => day.overnightHrv, HRV_PRIORS, 'ln');
   if (hrv) {
     components.push({
-      name: 'hrv', score: higherIsBetter(hrv.at.z), weight: RECOVERY_SHARES.variability,
+      name: 'hrv', score: SCORE_OF.higher(hrv.at.z), weight: RECOVERY_SHARES.variability, today: { value: hrv.reading.value, sense: 'higher' },
       basis: { z: hrv.at.z, own: hrv.at.own, ownShare: hrv.at.ownShare, signals: ['overnight_hrv'] }, usual: usualOfStanding('overnight_hrv', hrv.reading.method, hrv.at) ?? undefined,
     });
     signals.push('hrv');
@@ -143,7 +143,7 @@ export const provisionalRecoveryBasis = (target: DayRecord, prior: readonly DayR
   const resting = matchedStanding(RESTING_ORDER, target.restingHeartRate, prior, day => day.restingHeartRate, RESTING_PRIORS, 'linear');
   if (resting) {
     components.push({
-      name: 'resting_heart_rate', score: lowerIsBetter(resting.at.z), weight: RECOVERY_SHARES.pulse,
+      name: 'resting_heart_rate', score: SCORE_OF.lower(resting.at.z), weight: RECOVERY_SHARES.pulse, today: { value: resting.reading.value, sense: 'lower' },
       basis: { z: resting.at.z, own: resting.at.own, ownShare: resting.at.ownShare, signals: ['resting_heart_rate'] }, usual: usualOfStanding('resting_heart_rate', resting.reading.method, resting.at) ?? undefined,
     });
     signals.push('resting_heart_rate');

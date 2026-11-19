@@ -1,4 +1,4 @@
-import type { PartBasis, UsualRow } from './types';
+import type { PartBasis, TodayReading, UsualRow } from './types';
 
 export const BASELINE_DAYS = 14;
 export const BASELINE_WINDOW_DAYS = 30;
@@ -36,7 +36,16 @@ export const lowerIsBetter = (z: number): number => clampScore(50 - 20 * z);
 // Closer to the owner's usual scores higher, in either direction.
 export const nearUsual = (z: number): number => clampScore(100 - 20 * Math.abs(z));
 
-export interface Component { readonly name: string; readonly score: number; readonly weight: number; readonly basis?: PartBasis; readonly usual?: UsualRow }
+// Which way a reading scores: up (higher is better), down (lower is better), or nearer the owner's usual in either direction.
+// A component scores its reading with SCORE_OF[sense], and a change in that reading is judged by the same sense, so the verdict
+// on a change can never disagree with the score it moves.
+export type Sense = 'higher' | 'lower' | 'near';
+export const SCORE_OF: Readonly<Record<Sense, (z: number) => number>> = { higher: higherIsBetter, lower: lowerIsBetter, near: nearUsual };
+// A component that read one reading against a usual band: the reading in the band's own unit, and the sense that scored it.
+export type ReadToday = Readonly<{ value: number; sense: Sense }>;
+export interface Component { readonly name: string; readonly score: number; readonly weight: number; readonly basis?: PartBasis; readonly usual?: UsualRow; readonly today?: ReadToday }
+export const readingsOf = (components: readonly Component[]): TodayReading[] =>
+  components.flatMap(component => (component.usual && component.today ? [{ signal: component.usual.signal, method: component.usual.method, ...component.today }] : []));
 // Components that had usable inputs, renormalised; coverage is the share of weight present.
 export const combine = (components: readonly Component[]): { score: number; coverage: number } => {
   const weight = components.reduce((sum, component) => sum + component.weight, 0);

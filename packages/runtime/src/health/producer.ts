@@ -1,6 +1,7 @@
 import { fromRowZone, toRowZone } from '../../../contracts/src/health/zone-bridge';
 import { healthApiErrorV1Schema, healthSleepNeedMinutesV1Schema } from '../../../contracts/src/app/health-ingest';
 import type { HealthSignal } from '../../../contracts/src/health/signals';
+import { changesOf } from './scores/changes';
 import { dayLoad } from './scores/day-load';
 import { dayLoadV2, type PassiveInput } from './scores/passive-load';
 import { ENERGY_WINDOWS_VERSION } from './scores/energy-windows';
@@ -28,8 +29,9 @@ export type ProducerDeps = Readonly<{
   // The stored row for one day (waldo.health_scores_read). Each zone holds through a steady move from it; without it every
   // zone is the score's own band.
   readScores?: (day: string) => Promise<unknown>;
-  // Which days in the last `days` local days hold a row (waldo.health_scores_history). The backfill asks it once a run.
-  readHistory?: (days: number) => Promise<unknown>;
+  // The owner's stored days in the last `days` local days (waldo.health_scores_history), with each day's parts when asked.
+  // Read at most once a run: the backfill takes which days hold a row, and the day's changes the owner's own day-to-day moves.
+  readHistory?: (days: number, parts?: boolean) => Promise<unknown>;
   // How many past days one run may backfill; the rest wait for the next run.
   backfillLimit?: number;
   // Off unless true. On, today's and yesterday's rows carry the candidate training load, which the row writer must admit.
@@ -55,6 +57,10 @@ export type ProducerDeps = Readonly<{
   // heart-rate bins; empty or absent, every day is v1. It applies only beside dayLoad. A day v2 cannot read is v1 with the reason.
   passiveLoad?: readonly string[];
   stressCurve?: boolean;
+  // Off unless true. On, today's row carries what changed today (changes): each pillar and part against yesterday's from this
+  // same run, and each reading against its usual band, judged in the owner's own terms (scores/changes.ts). The row writer must
+  // admit it. It is computed from the same pass as the scores, changes none of them, and is never on a backfilled row.
+  changes?: boolean;
   // The owner's health settings (waldo.health_settings_read), given only while the coaching switch is on. With it, every row
   // is computed on the sleep need the owner stated, and a read that fails writes nothing rather than a row on another need.
   readSettings?: () => Promise<unknown>;
@@ -534,16 +540,16 @@ const storedBefore = async (read: ProducerDeps['readScores'], day: string): Prom
 // days covers the thirty-day series with room at a zone edge. Nothing stored (no_readings) is an empty set. Any other answer,
 // a consent refusal included, or a read that fails, is unknown, and the run backfills nothing rather than write blind.
 const HISTORY_WINDOW_DAYS = 90;
-const heldDays = async (read: NonNullable<ProducerDeps['readHistory']>): Promise<ReadonlySet<string> | null> => {
-  try {
-    const answer = asRecord(await read(HISTORY_WINDOW_DAYS));
-    if (answer?.unavailable === 'no_readings') return new Set();
-    const days = asRecord(answer?.history)?.days;
-    if (!Array.isArray(days)) return null;
-    const held = days.map(day => asRecord(day)?.day);
-    return held.every((day): day is string => typeof day === 'string' && DAY.test(day)) ? new Set(held) : null;
-  } catch { return null; }
+const heldDays = (history: unknown): ReadonlySet<string> | null => {
+  const answer = asRecord(history);
+  if (answer?.unavailable === 'no_readings') return new Set();
+  const days = asRecord(answer?.history)?.days;
+  if (!Array.isArray(days)) return null;
+  const held = days.map(day => asRecord(day)?.day);
+  return held.every((day): day is string => typeof day === 'string' && DAY.test(day)) ? new Set(held) : null;
 };
+// The stored days themselves, for the owner's own moves; none when the read failed or holds none.
+const storedDaysOf = (history: unknown): readonly unknown[] => { const days = asRecord(asRecord(history)?.history)?.days; return Array.isArray(days) ? days : []; };
 // Within one day, each pillar's zone holds through a steady move from the zone its stored row had, so the uploads of a day
 // report a change only on a real crossing. A day's first row is its own band, so the word never drifts from a fresh night's
 // score for longer than that day. A zone another algorithm version wrote is not the same state and holds nothing.
@@ -635,11 +641,15 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     // for past days), no windows, and no zone notice, since a late row is not a change the owner lived through. A day that
     // already holds a row of any kind is left alone, and the database refuses a backfilled row over a live one regardless.
     const recordsBySource = new Map<string, ReturnType<typeof recordsOf>>();
+    // One read of the stored days a run, with their parts when the day's changes need them. A read that fails is null.
+    let historyRead: Promise<unknown> | undefined;
+    const history = (readHistory: NonNullable<ProducerDeps['readHistory']>): Promise<unknown> =>
+      (historyRead ??= readHistory(HISTORY_WINDOW_DAYS, deps.changes === true ? true : undefined).catch(() => null));
     const backfill = async (readHistory: NonNullable<ProducerDeps['readHistory']>): Promise<void> => {
       const newestBackfilled = shiftDay(today, -2);
       const candidates = [...new Set(present.flatMap(s => s.readings.filter(r => r.signal === 'sleep_duration' && r.day <= newestBackfilled).map(r => r.day)))].sort();
       if (!candidates.length) return;
-      const held = await heldDays(readHistory);
+      const held = heldDays(await history(readHistory));
       if (!held) return;
       const missing = candidates.filter(day => !held.has(day)).slice(0, deps.backfillLimit ?? BACKFILL_DAYS_PER_RUN);
       for (const day of missing) {
@@ -658,6 +668,9 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       }
     };
     const ask = { parts: deps.scoreParts === true, usual: deps.usual === true };
+    // The day's changes read the parts, bands and readings, so the engine is asked for them; only the switched-on ones are written.
+    const detail = ask.parts || ask.usual || deps.changes === true;
+    let yesterdayRun: Readonly<{ scores: DailyScores; source: string }> | null = null;
     const outcomes: ReturnType<typeof writeOutcome>[] = [];
     // Only the provisional engine names its windows, even when there are none; the earlier engine never backfills.
     let provisional = false, needMoved = false;
@@ -665,8 +678,9 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       const chosen = chooseFor(targetDay);
       const { readingDays, travelled, days } = recordsOf(chosen);
       const input: DailyScoresInput = { access: 'granted', targetDay, days, sleepNeedMinutes: stated.minutes, asOf: series.readAt };
-      const scores = deps.compute({ ...input, ...(ask.parts ? { parts: true } : {}), ...(ask.usual ? { usual: true } : {}) });
+      const scores = deps.compute({ ...input, ...(detail ? { parts: true, usual: true } : {}) });
       provisional ||= scores.windows !== undefined;
+      if (targetDay !== today) yesterdayRun = { scores, source: chosen.source };
       const nothingToShow = [scores.recovery, scores.form, scores.weight].every(p => p.state === 'unavailable');
       if (nothingToShow && !readingDays.some(d => d.day === targetDay)) continue;
       // A day read without a calendar Google reported gone says so, since its Weight saw less than every calendar.
@@ -689,6 +703,11 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       const curve = forToday && deps.formCurve ? orNothing('form curve', () => formCurve(input, scores.form)) : null;
       const held = curve && deps.readCurves ? storedCurvesOf(await deps.readCurves().catch(() => null)) : [];
       const projected: readonly FormCurvePoint[] = curve && held.length > 0 ? orNothing('form projection', () => formProjection({ targetDay, days, measured: curve.points, stored: held })) ?? [] : [];
+      // Without the stored days nothing is compared against the owner's own moves, so no score change is significant; the
+      // readings against their bands still are.
+      const stored = forToday && deps.changes && deps.readHistory ? storedDaysOf(await history(deps.readHistory)) : [];
+      const changes = forToday && deps.changes
+        ? orNothing('changes', () => changesOf({ day: today, today: scores, yesterday: yesterdayRun?.scores ?? null, sameSource: yesterdayRun?.source === chosen.source, history: stored })) : null;
       const row = {
         ...rowOf(targetDay, steadied(scores, before), { source: chosen.source, epoch: chosen.epoch, accepted: acceptable(chosen) }, series.readAt, at.timezone, tags, forToday),
         ...(deps.trainingLoad ? { training_load: trainingLoadOf(chosen, shiftDay(today, -1)) } : {}),
@@ -696,6 +715,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
         ...(deps.dayLoad ? orNothing('day load', () => ({ day_load: dayLoadOf(chosen, targetDay) })) : {}),
         ...(forToday && deps.stressCurve ? orNothing('stress curve', () => { const curve = stressCurve({ targetDay, days, asOf: series.readAt }); return curve && { stress_curve: curve }; }) : {}),
         ...(curve ? { form_curve: withProjection(curve, projected) } : {}),
+        ...(changes && changes.length > 0 ? { changes } : {}),
       };
       const answer = await deps.writeContext(JSON.stringify(row));
       const written = writeOutcome(answer);
