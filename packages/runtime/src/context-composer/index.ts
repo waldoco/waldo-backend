@@ -19,6 +19,7 @@ export type {
   ContextLayer,
   ContextFragment,
   ContextHealthMaterial,
+  HealthRead,
   ContextRecallGateway,
   ContextRecallRequest,
   ContextRecallSnapshot,

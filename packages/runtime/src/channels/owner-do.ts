@@ -187,7 +187,7 @@ import { calendarSource, mailSource, reviewMailFollowup, titleDigester, updateBo
 import { meetingPrepApplier, meetingPrepSpec } from './meeting-prep';
 import { prepGranola } from './meeting-prep-granola';
 import { prepFireflies } from './meeting-prep-fireflies';
-import { briefBodyAfter, briefBodyBefore, BRIEF_BODY_KEY, briefBodyPrompt, briefBodyRevision, type BriefBodyCode } from './brief-revision';
+import { briefBodyAfter, briefBodyBefore, BRIEF_BODY_KEY, BRIEF_BODY_TOOLS, briefBodyPrompt, briefBodyRevision, recoveryScored, type BriefBodyCode } from './brief-revision';
 import { emitObserved, observedEvents, triageHold, UPDATE_CARD_FRESH_MS, UPDATE_JUDGE_WAKE_KEY, updateSweepApplier, updateSweepCheck, updateSweepTools, type ObservedSubscriber, type SweepGate } from './update-sweep';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { recallChain, recallChainOn } from '../history/recall-chain';
@@ -6043,9 +6043,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // once, on the surface that took it.
     const ownerDay = () => localIso(Date.now(), clock.timezone).slice(0, 10);
     const briefBodyStart = () => this.env.BRIEF_BODY_REVISION !== '1' ? Promise.resolve(null) : briefBodyBefore({ day: ownerDay(), reached: plans.reached(ownerDay(), 'card:brief'),
-      doneOn: storage.kv.get<string>(BRIEF_BODY_KEY), todayRow: async () => ((await healthRpc('scores_read', JSON.stringify({ day: ownerDay() })) as { scores?: { day?: unknown } } | null)?.scores?.day) === ownerDay() });
+      doneOn: storage.kv.get<string>(BRIEF_BODY_KEY), todayScored: async () => { const scores = (await healthRpc('scores_read', JSON.stringify({ day: ownerDay() })) as { scores?: { day?: unknown; recovery?: unknown } } | null)?.scores; return scores?.day === ownerDay() && recoveryScored(scores.recovery); } });
     const briefBodyFinish = async (trace: string, before: boolean | 'unread' | null, outcome: string): Promise<void> => {
-      const day = ownerDay(), decided = await briefBodyAfter(before, outcome, async () => healthSnapshot(await readModelHealth())?.day ?? null, day);
+      const day = ownerDay(), decided = await briefBodyAfter(before, outcome, async () => { const seen = healthSnapshot(await readModelHealth()); return seen === null ? null : { day: seen.day, scored: seen.zones.recovery !== null }; }, day);
       if (decided === null) return;
       if (decided !== 'go') { log({ trace, hop: 'brief_body', ms: 0, ok: decided !== 'row_unread', code: decided }); return; }
       storage.kv.put(BRIEF_BODY_KEY, day);
@@ -6059,7 +6059,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (!revises && quiet()) return 'quiet';
       if (!revises && !reachesOut()) return 'not_reaching_out';
       const now = Date.now(), day = localIso(now, clock.timezone).slice(0, 10);
-      const chosen = briefBodyRevision(await ledgerJob(trace, briefBodyPrompt(localIso(now, clock.timezone).replace('T', ' '), dayCards(), revises), HEALTH_READ_TOOLS as ToolName[],
+      const chosen = briefBodyRevision(await ledgerJob(trace, briefBodyPrompt(localIso(now, clock.timezone).replace('T', ' '), dayCards(), revises), [...BRIEF_BODY_TOOLS],
         undefined, true, undefined, true));
       if (typeof chosen === 'string') return chosen;
       await finalOutbox.enqueueFenced({ id: trace, trace, payload: { chat_id: owner, text: redactSecretUrls(chosen.text).text }, ownerSubject: String(owner),

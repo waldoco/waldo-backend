@@ -129,6 +129,7 @@ export function assembleReasonsPrompt(
   selected: readonly Skill[],
   recall: ContextRecallSnapshot,
   health: ContextHealthMaterial | null,
+  healthUnreadable = false,
 ): ReasonsPrompt {
   const invocationLabel = invocation.runtime_binding.variant === null
     ? invocation.runtime_binding.trigger
@@ -148,7 +149,7 @@ export function assembleReasonsPrompt(
     .join(REASONS_LAYER_JOIN);
   const operations = [
     renderMemoryContext(recall.status === 'partial' ? renderRecall(recall.result, [], NO_CONFLICT_AUTHORITY) : RECALL_NOT_RUN),
-    renderHealth(health),
+    renderHealth(health, healthUnreadable),
     renderWorkspace(materials.workspace),
     renderToolOutputs(materials.tool_outputs, materials.tool_outputs_omitted),
   ].join(REASONS_LAYER_JOIN);
@@ -189,7 +190,10 @@ function renderMemoryContext(recall: string): string {
 // Which material a health block is: a partial view carries no zone, and its narrative none either.
 export const isPartialHealth = (health: ContextHealthMaterial): health is PartialHealthMaterial => 'availability' in health.view;
 
-export function renderHealth(health: ContextHealthMaterial | null): string {
+export function renderHealth(health: ContextHealthMaterial | null, unreadable = false): string {
+  if (health === null && unreadable) {
+    return 'Derived health context could not be read just now: the read failed. That says nothing about whether the owner shares health data, so do not tell them you cannot see it or that they share none. If get_health is in your function list, call it before saying anything about their body; if it fails too, say the read failed.';
+  }
   if (health === null) return 'No derived health context is available for this invocation.';
   if (isPartialHealth(health)) return renderPartialHealth(health.view, health.narrative.day_summary, health.narrative.upcoming_high_stakes);
   const missing = health.view.missing_components.length === 0
