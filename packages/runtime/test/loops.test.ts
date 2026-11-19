@@ -23,7 +23,7 @@ describe('open loops', () => {
       const closed = await run(close!, { id: (later as { data: { id: string } }).data.id, outcome: 'done' });
       expect(closed).toMatchObject({ ok: true, data: { closed: true } });
       expect(book.close('o1', 'done')).toBe(false);
-      expect(loopsSection(book, 'Asia/Kolkata')).toBe('Waldo is on\n- Check how the late call went (due 2026-09-24 18:00) [o2]\n- done: Find a physio near Indiranagar (2026-09-24)');
+      expect(loopsSection(book, 'Asia/Kolkata', Date.parse('2026-09-24T00:00:00Z'))).toBe('Waldo is on\n- Check how the late call went (due 2026-09-24 18:00) [o2]\n- done: Find a physio near Indiranagar (2026-09-24)');
     });
   });
 
