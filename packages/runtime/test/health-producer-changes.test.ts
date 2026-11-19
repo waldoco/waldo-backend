@@ -26,7 +26,9 @@ describe('producer: what changed today', () => {
     const plain = await run({ changes: false });
     expect(plain.written).toEqual(off.written);
     expect(JSON.stringify(off.written)).not.toContain('"changes"');
-    expect(off.asked.every(args => args[1] === undefined)).toBe(true);
+    // With the switch off the history read is called exactly as before this list existed: the window alone.
+    expect(off.asked.length).toBeGreaterThan(0);
+    expect(off.asked.every(args => args.length === 1)).toBe(true);
   });
   it('writes the list on today\'s row only, in the contract\'s shape, and the rest of each row as it was', async () => {
     const off = (await run({})).written, { written, asked } = await run({ changes: true });

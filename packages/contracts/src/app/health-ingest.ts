@@ -644,7 +644,7 @@ export const healthStressCurveV1Schema = z.strictObject({
 }).refine(curve => curve.hours.every((hour, i) => i === 0 || Date.parse(curve.hours[i - 1]!.at) < Date.parse(hour.at)), { error: 'hours run forward in time', path: ['hours'] })
   .refine(curve => curve.hours.some(hour => hour.value !== null), { error: 'a curve with no hour that has a value is no curve', path: ['hours'] });
 
-// Health revision 18 (number pending the gate's allocation): what changed today, one list the app's Body card and Waldo's words
+// Health revision 18: what changed today, one list the app's Body card and Waldo's words
 // both read, so the two never disagree. Each change is decided on the server, never on the phone:
 // - tier 1 is a pillar's score and tier 2 a part or group of one, each against yesterday's, only when both days were scored by
 //   the same source and the same algorithm version. A Weight (load) score or Weight part that rose is declined, one that fell is
