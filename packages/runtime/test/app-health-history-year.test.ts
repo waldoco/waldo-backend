@@ -22,7 +22,7 @@ const read = async (days: string, revision: string) => {
   const response = await handleApp(new Request(`https://w.test/app/v1/health/scores/history?days=${days}`, {
     headers: { authorization: `Bearer ${CREDENTIAL}`, 'x-waldo-app-contract': revision },
   }), env, auth) as Response;
-  return [response.status, await response.json()] as const;
+  return [response.status, await response.json() as Record<string, any>] as const;
 };
 const pillar = { score: 62, zone: 'good', algorithm_version: 'recovery.v5', activation: 'accepted', confidence: 0.8, hrv_method: null };
 const day = (at: string) => ({ day: at, recovery: pillar, form: { reason: 'stale_inputs' }, weight: { reason: 'calendar_demand_unavailable' } });
