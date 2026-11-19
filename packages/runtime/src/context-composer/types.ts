@@ -79,6 +79,9 @@ export type LocalOwnerBinding = Readonly<{
 export type ZoneHealthMaterial = Readonly<{ view: FormHealthView | RecoveryHealthView; narrative: NarrativeContext; source: ContextSource }>;
 export type PartialHealthMaterial = Readonly<{ view: PartialHealthView; narrative: PartialHealthNarrative; source: ContextSource }>;
 export type ContextHealthMaterial = ZoneHealthMaterial | PartialHealthMaterial;
+// What a health source answers: the material, none (no row, or health not shared), or a read that failed. A failed read is
+// never none, so the model is not led to tell an owner who shares health that they share nothing.
+export type HealthRead = ContextHealthMaterial | null | 'unreadable';
 
 export type RuntimeContextMaterials = Readonly<{
   principal_ref: string;
@@ -91,6 +94,8 @@ export type RuntimeContextMaterials = Readonly<{
   soul_base: ContextFragment;
   safety_rules: ContextFragment;
   health: ContextHealthMaterial | null;
+  // The health read failed: health is null and the prompt says the read failed, not that nothing is shared.
+  health_unreadable?: true;
   workspace: readonly ContextFragment[];
   // Recent tool outputs, staged as tool_result sources. Each fragment carries its own taint.
   tool_outputs: readonly ContextFragment[];
