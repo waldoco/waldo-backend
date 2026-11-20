@@ -359,6 +359,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   BRIEF_BODY_REVISION?: string;
   // The most event pushes in an owner's day, a backstop under the owner's limits (default 3).
   EVENT_PUSH_PER_DAY?: string;
+  // "1": Waldo knocks on a closed WhatsApp window at most once in 24 hours while something waits, and looks again each day
+  // instead of once per closed window. Off unless "1".
+  WHATSAPP_DAILY_KNOCK?: string;
   // "1": Waldo's own sends follow the owner's choice among their other surfaces even while Telegram is linked.
   PROACTIVE_OVER_TELEGRAM?: string;
   // '1': with no proactive template approved, Waldo's own work outside WhatsApp's window knocks with the re-engage template;
