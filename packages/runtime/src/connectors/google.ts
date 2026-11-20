@@ -200,7 +200,7 @@ export type CalendarBlock = 'rest' | 'deep_work';
 // events keep their dates.
 export type RestBlocks = Readonly<{ blocks: readonly Readonly<{ start: string; end: string }>[]; others: readonly Readonly<{ start: string; end: string; all_day: boolean }>[] }>;
 export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number; etag?: string; operation_marker?: string;
-  status?: 'confirmed' | 'tentative' | 'cancelled'; updated?: string; recurring_event_id?: string; original_start?: string; source_url?: string; attendee_names?: readonly string[];
+  status?: 'confirmed' | 'tentative' | 'cancelled'; updated?: string; recurring_event_id?: string; series?: true; original_start?: string; source_url?: string; attendee_names?: readonly string[];
   attendee_emails?: readonly string[]; conference_url?: string; attachments?: readonly CalendarAttachment[]; owner_status?: 'organizer' | 'accepted';
   // The event carries the private mark Waldo writes on the events it creates.
   waldo_made?: true;
@@ -1245,6 +1245,8 @@ const toItem = (event: GoogleEvent, details: boolean, ownerStatus: boolean): Cal
   ...(['confirmed', 'tentative', 'cancelled'].includes(event.status ?? '') ? { status: event.status as CalendarItem['status'] } : {}),
   ...(typeof event.updated === 'string' && validCalendarInstant(event.updated) ? { updated: event.updated } : {}),
   ...(typeof event.recurringEventId === 'string' ? { recurring_event_id: event.recurringEventId.slice(0, 1024) } : {}),
+  // A series' own event (its master) carries the rule that makes the instances; a change to it reaches all of them.
+  ...(Array.isArray(event.recurrence) && event.recurrence.length ? { series: true as const } : {}),
   ...(typeof event.originalStartTime?.dateTime === 'string' && validCalendarInstant(event.originalStartTime.dateTime) ? { original_start: event.originalStartTime.dateTime } : {}),
   ...(calendarSourceUrl(event.htmlLink) ? { source_url: calendarSourceUrl(event.htmlLink) } : {}),
   // The other people in the meeting, like attendee_emails: the owner's own entry (self) is never one of them.

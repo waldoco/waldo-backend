@@ -53,6 +53,9 @@
   // intervention) its own event, the composed context and the last six rows of the owner's exchange instead of the chat
   // replay, offers every such run one tool menu (each still calls only its own) so the cached head is shared, keeps that
   // head an hour, and gives the day plan and wake decision the shared health block; "0" is the rollback.
+  // MODEL_SET_WAKES: "1" lets a run Waldo starts leave itself a follow-up (open_loop with no mail source): a due time, a note
+  // to its future self and what to watch for, which wakes a later check-back and grants nothing; bounded in code to 12 a day,
+  // two weeks ahead and a chain of 3. "0" is the rollback.
   // WALDO_TIMEZONE_ASK: "1" tells a turn whose time zone the owner has not confirmed to ask for it when it fits; "0" is the
   // rollback.
   // WALDO_SWITCHES: every feature switch and tuning knob, one JSON var, because Cloudflare caps a Worker at 128 vars and
@@ -175,6 +178,7 @@
       "APPROVE_IN_CHAT": "0",
       "AUTONOMOUS_BY_DEFAULT": "0",
       "AUTONOMY_OWNER_TURNS": "0",
+      "AUTONOMY_WALDO_INWARD": "0",
       "MEMORY_NIGHTLY_SOURCE_UPDATES": "0",
       "MEMORY_DAYTIME_CONSOLIDATOR": "0",
       "MEMORY_VALIDITY": "0",
@@ -199,6 +203,7 @@
       "WALDO_ASYNC_TOOLS": "0",
       "WALDO_JOB_OUTCOME_ROWS": "0",
       "WALDO_LEAN_SCHEDULED": "0",
+      "MODEL_SET_WAKES": "0",
       "WALDO_ONE_TIMELINE": "0",
       "WALDO_LIGHT_CHAT": "0",
       "WALDO_THINKING_REPLAY": "0",
@@ -432,6 +437,7 @@
           "APPROVE_IN_CHAT": "1",
           "AUTONOMOUS_BY_DEFAULT": "1",
           "AUTONOMY_OWNER_TURNS": "1",
+          "AUTONOMY_WALDO_INWARD": "1",
           "MEMORY_NIGHTLY_SOURCE_UPDATES": "1",
           "MEMORY_DAYTIME_CONSOLIDATOR": "1",
           "MEMORY_VALIDITY": "1",
@@ -456,6 +462,7 @@
           "WALDO_ASYNC_TOOLS": "1",
           "WALDO_JOB_OUTCOME_ROWS": "1",
           "WALDO_LEAN_SCHEDULED": "1",
+          "MODEL_SET_WAKES": "1",
           "WALDO_ONE_TIMELINE": "1",
           "WALDO_LIGHT_CHAT": "0",
           "WALDO_THINKING_REPLAY": "1",
