@@ -14,6 +14,7 @@ import {
   partialHealthSourceSchema,
   recoveryHealthViewSchema,
   type DerivedBaselineState,
+  type DerivedBody,
   type DerivedHealthDestinationView,
   type DerivedMissingPillars,
   type DerivedSleepDebt,
@@ -24,6 +25,7 @@ import {
   type RecoveryHealthView,
 } from '@waldo/contracts';
 import { isPartialHealth } from '../context-composer/prompt';
+import { bodyViewOf } from './health-body';
 import { healthChangesV1Schema } from '../../../contracts/src/app/health-ingest';
 import type { ContextHealthMaterial, ZoneHealthMaterial } from '../context-composer/types';
 import { TRAINING_LOAD_PHRASES } from '../health/scores/training-load';
@@ -441,7 +443,16 @@ export const withInventory = (material: ContextHealthMaterial | null, inventory:
 // lists from the row. Off, the reader is as it was.
 // inventory: with partial, also read which body data exists and put it in the block, and give an owner who has readings but no
 // score row a block made of that alone.
-export type HealthContextOptions = Readonly<{ partial?: boolean; inventory?: boolean }>;
+// body: also read today's readings, the parts of each score, the day's load and the hours of strain at rest against the owner's
+// usual (health-body.ts), and put them in the block as words.
+export type HealthContextOptions = Readonly<{ partial?: boolean; inventory?: boolean; body?: boolean }>;
+
+// The body words beside a view the row gave, re-checked whole; a view that cannot carry them is given without them.
+const withBody = (material: ContextHealthMaterial | null, body: DerivedBody | null): ContextHealthMaterial | null => {
+  if (material === null || body === null) return material;
+  const parsed = derivedHealthDestinationViewSchema.safeParse({ ...material.view, body });
+  return parsed.success ? ({ ...material, view: parsed.data } as ContextHealthMaterial) : material;
+};
 
 // Without the partial switch the material is always a zone one.
 export function toContextHealthMaterial(row: HealthContextRow, clock: OwnerClock, onError?: (error: unknown) => void, options?: Readonly<{ partial?: false }>): ZoneHealthMaterial | null;
@@ -600,9 +611,22 @@ export const healthContextBook = (
       return null;
     }
   };
+  // A failed body read leaves the block without its body words, and says so in the log; it never fails the turn.
+  const readBody = async (trace?: string): Promise<DerivedBody | null> => {
+    if (!call || !doName || options.body !== true) return null;
+    const today = localIso(clock.now().getTime(), clock.timezone).slice(0, 10);
+    try {
+      const answer = await call('health_body_read', `health.body_read.${doName}.${md5Hex('{}')}`, { p_do_name: doName, p_payload: '{}' });
+      return bodyViewOf(answer, today, clock.timezone, (error) => onReadError?.(error, trace));
+    } catch (error) {
+      onReadError?.(new Error(`health body read failed: ${String(error)}`), trace);
+      return null;
+    }
+  };
   const read: HealthContextBook['read'] = async (trace) => {
     if (!call || !doName) return null;
     const inventoryRead = readInventory(trace);
+    const bodyRead = readBody(trace);
     let row: unknown;
     try {
       row = await call('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName });
@@ -614,7 +638,7 @@ export const healthContextBook = (
     const fromRow = row === null || typeof row !== 'object' ? null
       : toContextHealthMaterial(row as HealthContextRow, clock, (error) => { invalid = true; onReadError?.(error, trace); }, options);
     if (invalid) return 'unknown';
-    const material = withInventory(fromRow, await inventoryRead, clock);
+    const material = withBody(withInventory(fromRow, await inventoryRead, clock), await bodyRead);
     onReadSuccess?.(material !== null, trace, material !== null && isPartialHealth(material));
     return material;
   };

@@ -99,6 +99,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   HEALTH_SOLO_NOTICE: gap('the solo-owner health notice is not run in a trial'),
   HEALTH_PARTIAL_CONTEXT: gap('the world serves a full synthetic health row, so no trial reads a partial health block'),
   HEALTH_INVENTORY: gap('the world serves no inventory read, so no trial reads the body data on hand'),
+  HEALTH_BODY_CONTEXT: gap('the world serves no body read, so no trial gives the model its readings, parts, load or strain hours against usual'),
   CALENDAR_UNDO_CANCEL: gap('no trial undoes a cancel; staging has it on'),
   NEXT_DUE_ALARM: inert('decides only whether an owner alarm with nothing due runs its pass; a trial turn is not an alarm pass'),
   WHY_TRAIL: gap('no trial reads the steps behind a card; staging has it on'),
