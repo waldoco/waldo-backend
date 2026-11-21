@@ -96,6 +96,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // migration 20261116110200 first.
   HEALTH_PASSIVE_LOAD?: string;
   HEALTH_STRESS_CURVE?: string;
+  // "1" lets the night's RMSSD from Waldo's own watch app count toward Recovery, like any other Health Connect reading;
+  // anything else leaves those readings out of every score. Apply migration 20261121100000 first.
+  HEALTH_WEAR_HRV?: string;
   HEALTH_COACHING?: string;
   // "1" lets a health proposal, and a chat card, swap an event for another in its slot (a hard workout for an easy one) by
   // renaming it; the connector-proxy function must be deployed with the rename first.

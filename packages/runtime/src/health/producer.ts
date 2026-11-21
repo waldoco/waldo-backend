@@ -61,6 +61,9 @@ export type ProducerDeps = Readonly<{
   // Told which step failed a run that ends failed, and the database's closed answer to it: no owner, day, value or payload.
   // A run calls it at most once, for the first failure; a late day's backfill never fails a run, so it is never told.
   onFailure?: (failure: ProducerFailure) => void;
+  // Off unless true. Off, a reading the read marks as the night's RMSSD from Waldo's own watch app is left out before any
+  // compute, so every row is as if it was never sent. On, it counts like any other Health Connect reading.
+  wearHrv?: boolean;
 }>;
 
 // A database answer is its closed error code, or a fixed word: no_answer when the call threw or returned nothing, malformed
@@ -122,8 +125,9 @@ const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/;
 export type SleepStages = Readonly<Record<(typeof STAGES)[number], number>>;
 // A workout's activity, and its zones and effort as the read returns them; detail is the rest of what it stored, unchecked,
 // for a reader that checks it. Null for any other signal. A food entry's grams likewise, each null when not a finite number.
+// waldoWear is whether the read marked it as the night's RMSSD from Waldo's own watch app; false for every other reading.
 // max is an hourly heart-rate window's highest; bins an hour's heart-rate bins. Each is null for any other signal.
-export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; workout?: WorkoutDetail | null; nutrition?: NutritionGrams | null; max?: number | null; bins?: HeartRateBins | null }>;
+export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; waldoWear?: boolean; workout?: WorkoutDetail | null; nutrition?: NutritionGrams | null; max?: number | null; bins?: HeartRateBins | null }>;
 const MACROS = ['protein_g', 'carbohydrate_g', 'fat_g'] as const;
 export type NutritionGrams = Readonly<Record<(typeof MACROS)[number], number | null>>;
 export type HeartRateBins = Readonly<{ fromBpm: number; outside: readonly number[]; inside: readonly number[] }>;
@@ -173,6 +177,7 @@ const reading = (raw: unknown): Reading | null => {
     signal: r.signal, day: r.day, value: r.value, startAt: instant(r.start_at), endAt: instant(r.end_at),
     timezone: typeof r.timezone === 'string' ? r.timezone : null, method: typeof r.method === 'string' ? r.method : null,
     stages: r.signal === 'sleep_duration' ? stagesOf(r.stages) : null,
+    waldoWear: r.waldo_wear === true,
     workout: r.signal === 'workout' ? workoutDetailOf(r.activity, r.workout) : null,
     nutrition: r.signal === 'nutrition' ? nutritionOf(r.nutrition) : null,
     max: r.signal === 'heart_rate_window' && typeof r.max === 'number' && Number.isFinite(r.max) ? r.max : null,
@@ -219,6 +224,9 @@ const withVitals = (series: Series, vitals: Series | null): Series => (!vitals ?
     return same ? { ...source, readings: [...source.readings, ...same.readings.filter(r => VITAL_SIGNALS.includes(r.signal))] } : source;
   }),
 });
+
+// The series with every reading the read marked as the watch app's left out, as the wear-HRV switch off has it everywhere.
+export const withoutWear = (series: Series): Series => ({ ...series, sources: series.sources.map(source => ({ ...source, readings: source.readings.filter(r => r.waldoWear !== true) })) });
 
 const newest = <T extends Reading>(readings: readonly T[]): T | undefined =>
   readings.reduce<T | undefined>((best, r) => (!best || (r.startAt ?? '') >= (best.startAt ?? '') ? r : best), undefined);
@@ -402,7 +410,8 @@ const round3 = (value: number) => Math.round(value * 1000) / 1000;
 // Whether a row computed from this source may carry activation accepted. An unknown source never may. A Health Connect row
 // may when it holds a scored reading. The series read carries no writer for it: the phone names one writer per kind and slot
 // and a window's id names its hour, so a second app's hour replaces the first at ingest and the producer keeps one reading
-// per hour and one asleep reading per night. A merged total (steps or energy several apps made) names no writer at all.
+// per hour and one asleep reading per night. A merged total (steps or energy several apps made) names no writer at all. The
+// watch app's readings reach here only while the wear-HRV switch is on, and count as any other Health Connect reading does.
 const acceptable = (source: Source): boolean =>
   source.source === 'health_connect' ? source.readings.some(r => SIGNALS.includes(r.signal)) : Object.hasOwn(SOURCE_CONFIDENCE, source.source);
 
@@ -595,7 +604,8 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     // Without its vital readings a day still scores exactly as it would with them; only those drivers are missing.
     const vitals = await vitalsRead;
     if (vitals.kind !== 'series') console.log(JSON.stringify({ hop: 'health_series', ok: false, code: 'vitals_unread' }));
-    const series = withVitals(untruncated(parsed.series, 'series_truncated'), vitals.kind === 'series' ? untruncated(vitals.series, 'vitals_truncated') : null);
+    const scoredSeries = deps.wearHrv === true ? parsed.series : withoutWear(parsed.series);
+    const series = withVitals(untruncated(scoredSeries, 'series_truncated'), vitals.kind === 'series' ? untruncated(vitals.series, 'vitals_truncated') : null);
     // Without its bins read a day's load is v1, as with the switch off: nothing is claimed about a passive part it could not read.
     const passiveParsed = passiveRead && await passiveRead;
     if (passiveParsed && passiveParsed.kind !== 'series') console.log(JSON.stringify({ hop: 'health_series', ok: false, code: 'passive_unread' }));

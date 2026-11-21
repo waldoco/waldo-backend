@@ -136,6 +136,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WELCOME_V2: gap('one trial asks a single second-build stage (w1); the build\'s order, admission and caps are held by their own tests; staging has it on'),
   HEALTH_ACTIONS: gap('the health trigger\'s decision is not run in a trial; the trial\'s skill book always offers health-protocols, as staging does'),
   HEALTH_COACHING: gap('the trial offers no set_sleep_need, and the world serves synthetic health with no stated sleep need'),
+  HEALTH_WEAR_HRV: gap('the world serves no watch beat intervals; staging has it off until the validation nights the ADR-0081 writer amendment requires are recorded'),
   HEALTH_TRAINING_LOAD: gap('the world serves synthetic health, not the candidate training load the producer writes'),
   HEALTH_SCORE_PARTS: gap('the parts of each score are served to the app only; the model never reads them and the world serves synthetic health; staging has it on since migration 20261116100000 was applied (19 Nov 2026)'),
   HEALTH_USUAL: gap('the usual bands are served to the app only; the model never reads them and the world serves synthetic health; staging has it on since migration 20261116100000 was applied (19 Nov 2026)'),

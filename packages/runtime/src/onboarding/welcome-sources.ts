@@ -1,7 +1,7 @@
 import type { AppNodeSourceV13 } from '../../../contracts/src/app/controls';
 import type { HealthReadSignal } from '@waldo/contracts';
 import { GoogleError, type CalendarItem, type GoogleClient, type MailItem, type TaskItem } from '../connectors/google';
-import { parseSeries, type Reading } from '../health/producer';
+import { parseSeries, withoutWear, type Reading } from '../health/producer';
 import { shiftDay } from '../health/scores/time';
 import { chooseGroup, foldDay, localDayOf, SIGNALS, type HealthReadBook } from '../tools/live/health';
 import type { GoogleAccess } from '../tools/live/google';
@@ -46,7 +46,8 @@ export const healthStage = (book: HealthReadBook, timezone: () => string, now: (
   const lines: string[] = [], sources: AppNodeSourceV13[] = [], pointers: string[] = [], readDays = new Set<string>();
   // The same read get_health makes: time asleep only, a sleep stage from its own share of the night, one source and one
   // method per signal, so methods never blend.
-  const live = parsed.series.sources.filter((source) => HEALTH_SOURCES[source.source] !== undefined && consent.sources.has(source.source));
+  // The watch app's night is left out here as with its switch off: the welcome build never reads a reading no score counts.
+  const live = withoutWear(parsed.series).sources.filter((source) => HEALTH_SOURCES[source.source] !== undefined && consent.sources.has(source.source));
   for (const signal of signals) {
     const group = chooseGroup(signal, live);
     if (!group) continue;
