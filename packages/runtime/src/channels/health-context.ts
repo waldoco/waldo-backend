@@ -3,6 +3,9 @@ import {
   derivedEnergyWindowsSchema,
   derivedHealthDestinationViewSchema,
   derivedMissingPillarReasonSchema,
+  HEALTH_SIGNAL_NAMES,
+  HEALTH_SIGNALS,
+  healthInventorySchema,
   derivedSleepDebtTrendSchema,
   formHealthViewSchema,
   fromRowZone,
@@ -15,6 +18,7 @@ import {
   type DerivedMissingPillars,
   type DerivedSleepDebt,
   type FormHealthView,
+  type HealthInventoryEntry,
   type PartialHealthPresent,
   type PartialHealthView,
   type RecoveryHealthView,
@@ -24,6 +28,7 @@ import { healthChangesV1Schema } from '../../../contracts/src/app/health-ingest'
 import type { ContextHealthMaterial, ZoneHealthMaterial } from '../context-composer/types';
 import { TRAINING_LOAD_PHRASES } from '../health/scores/training-load';
 import { circularDelta } from '../health/scores/stats';
+import { shiftDay } from '../health/scores/time';
 import { STEADY_SCORE_MOVE } from '../health/scores/zones';
 import type { OwnerClock } from '../tools/live/get-context';
 import { localIso } from './reminders';
@@ -358,9 +363,89 @@ const partialMaterial = (context: RowContext, previous: HealthContextRow['previo
   return { view: viewParsed.data, narrative: narrativeParsed.data, source: sourceOf(context, stamp.compiledAt) };
 };
 
+// The inventory: each kind of body data the owner's live sources sent in the last thirty local days, merged across sources, in
+// words. The read answers each source's kinds with their newest reading time and their days; a source or kind this side does not
+// know is left out, and an answer of any other shape is no inventory.
+export const INVENTORY_DAYS = 30;
+type InventoryKind = Readonly<{ signal: string; newest_at: string; days: number }>;
+const inventoryKinds = (raw: unknown): { source: string; kind: InventoryKind }[] | null => {
+  const sources = isRecord(raw) ? raw['sources'] : undefined;
+  if (!Array.isArray(sources)) return null;
+  return sources.flatMap((entry) => {
+    const source = partialHealthSourceSchema.safeParse(isRecord(entry) ? entry['source'] : undefined);
+    const kinds = isRecord(entry) ? entry['kinds'] : undefined;
+    if (!source.success || !Array.isArray(kinds)) return [];
+    return kinds.flatMap((kind) => isRecord(kind) && typeof kind['signal'] === 'string' && typeof kind['newest_at'] === 'string'
+      && Number.isSafeInteger(Date.parse(kind['newest_at'])) && Number.isInteger(kind['days']) && (kind['days'] as number) > 0
+      ? [{ source: source.data, kind: kind as InventoryKind }] : []);
+  });
+};
+const newestWord = (at: number, now: number, timezone: string): HealthInventoryEntry['newest'] => {
+  const day = (ms: number) => localIso(ms, timezone).slice(0, 10);
+  if (now - at <= 3 * HOUR_MS) return 'within_hours';
+  if (day(at) === day(now)) return 'today';
+  if (day(at) === day(now - 24 * HOUR_MS)) return 'yesterday';
+  return now - at <= 7 * 24 * HOUR_MS ? 'this_week' : 'this_month';
+};
+const regularityWord = (days: number): HealthInventoryEntry['regularity'] =>
+  days >= 26 ? 'nearly_every_day' : days >= 15 ? 'most_days' : days >= 4 ? 'some_days' : 'a_few_days';
+export type HealthInventory = Readonly<{ entries: readonly HealthInventoryEntry[]; newestAt: number }>;
+export const toHealthInventory = (raw: unknown, clock: OwnerClock): HealthInventory | null => {
+  const kinds = inventoryKinds(raw);
+  if (kinds === null) return null;
+  const now = clock.now().getTime();
+  const merged = new Map<string, { newestAt: number; days: number; sources: Set<PartialHealthView['sources'][number]> }>();
+  for (const { source, kind } of kinds) {
+    if (!(HEALTH_SIGNAL_NAMES as readonly string[]).includes(kind.signal)) continue;
+    const at = Math.min(Date.parse(kind.newest_at), now);
+    const held = merged.get(kind.signal) ?? { newestAt: at, days: 0, sources: new Set() };
+    merged.set(kind.signal, { newestAt: Math.max(held.newestAt, at), days: Math.max(held.days, kind.days), sources: held.sources.add(source as PartialHealthView['sources'][number]) });
+  }
+  const entries = HEALTH_SIGNAL_NAMES.flatMap((signal) => {
+    const held = merged.get(signal);
+    return held === undefined ? [] : [{ signal, grain: HEALTH_SIGNALS[signal].grain, newest: newestWord(held.newestAt, now, clock.timezone), regularity: regularityWord(held.days), sources: [...held.sources].sort() }];
+  });
+  const parsed = healthInventorySchema.safeParse(entries);
+  return parsed.success ? { entries: parsed.data, newestAt: Math.max(...[...merged.values()].map((held) => held.newestAt), Number.NEGATIVE_INFINITY) } : null;
+};
+
+// The view for an owner with readings and no score row at all: the inventory alone, aged by its newest reading.
+const inventoryMaterial = (inventory: HealthInventory, clock: OwnerClock): ContextHealthMaterial | null => {
+  if (inventory.entries.length === 0) return null;
+  const now = clock.now().getTime();
+  const age = now - inventory.newestAt;
+  const compiledAt = new Date(inventory.newestAt).toISOString();
+  const day = localIso(inventory.newestAt, clock.timezone).slice(0, 10);
+  const view = {
+    authority: 'backend' as const, availability: 'partial' as const, no_score_row: true as const,
+    freshness: age <= 36 * HOUR_MS ? 'fresh' as const : age <= 72 * HOUR_MS ? 'stale' as const : 'expired' as const,
+    as_of_day: day === localIso(now, clock.timezone).slice(0, 10) ? 'today' as const : day === localIso(now - 24 * HOUR_MS, clock.timezone).slice(0, 10) ? 'yesterday' as const : 'earlier' as const,
+    sources: [...new Set(inventory.entries.flatMap((entry) => entry.sources))].sort(), present: [], missing_pillars: {}, inventory: inventory.entries,
+    provenance_refs: [`hpr_${md5Hex(`health-inventory.${compiledAt}`)}`], destination_eligibility: ['trigger_prompt' as const],
+  };
+  const viewParsed = derivedHealthDestinationViewSchema.safeParse(view);
+  const narrativeParsed = partialHealthNarrativeSchema.safeParse({ day_summary: '', active_goals: [], upcoming_high_stakes: [], compiled_at: compiledAt });
+  if (!viewParsed.success || !('availability' in viewParsed.data) || !narrativeParsed.success) return null;
+  return {
+    view: viewParsed.data, narrative: narrativeParsed.data,
+    source: { source_key: `health-inventory:${day}`, source_kind: 'derived_health_view', scope: 'principal', source_taint: null, produced_at: inventory.newestAt },
+  };
+};
+
+// The inventory beside a view the row gave, re-checked whole; a view that cannot carry it is given without it.
+export const withInventory = (material: ContextHealthMaterial | null, inventory: HealthInventory | null, clock: OwnerClock): ContextHealthMaterial | null => {
+  if (inventory === null) return material;
+  if (material === null) return inventoryMaterial(inventory, clock);
+  if (inventory.entries.length === 0) return material;
+  const parsed = derivedHealthDestinationViewSchema.safeParse({ ...material.view, inventory: inventory.entries });
+  return parsed.success ? ({ ...material, view: parsed.data } as ContextHealthMaterial) : material;
+};
+
 // partial: the switch that gives the model a block for a row without Recovery, or too old to score, and fills the missing
 // lists from the row. Off, the reader is as it was.
-export type HealthContextOptions = Readonly<{ partial?: boolean }>;
+// inventory: with partial, also read which body data exists and put it in the block, and give an owner who has readings but no
+// score row a block made of that alone.
+export type HealthContextOptions = Readonly<{ partial?: boolean; inventory?: boolean }>;
 
 // Without the partial switch the material is always a zone one.
 export function toContextHealthMaterial(row: HealthContextRow, clock: OwnerClock, onError?: (error: unknown) => void, options?: Readonly<{ partial?: false }>): ZoneHealthMaterial | null;
@@ -503,8 +588,25 @@ export const healthContextBook = (
   onReadSuccess?: (present: boolean, trace?: string, partial?: boolean) => void,
   options: HealthContextOptions = {},
 ): HealthContextBook => {
+  // A failed inventory read leaves the block as the row alone makes it, and says so in the log; it never fails the turn.
+  const readInventory = async (trace?: string): Promise<HealthInventory | null> => {
+    if (!call || !doName || options.partial !== true || options.inventory !== true) return null;
+    const today = localIso(clock.now().getTime(), clock.timezone).slice(0, 10);
+    const payload = JSON.stringify({ from: shiftDay(today, -(INVENTORY_DAYS - 1)), to: today });
+    try {
+      const answer = await call('health_inventory_read', `health.inventory_read.${doName}.${md5Hex(payload)}`, { p_do_name: doName, p_payload: payload });
+      if (isRecord(answer) && answer['error'] === 'not_linked') return null;
+      const inventory = toHealthInventory(answer, clock);
+      if (inventory === null) onReadError?.(new Error('health inventory read answered an unknown shape'), trace);
+      return inventory;
+    } catch (error) {
+      onReadError?.(new Error(`health inventory read failed: ${String(error)}`), trace);
+      return null;
+    }
+  };
   const read: HealthContextBook['read'] = async (trace) => {
     if (!call || !doName) return null;
+    const inventoryRead = readInventory(trace);
     let row: unknown;
     try {
       row = await call('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName });
@@ -512,11 +614,13 @@ export const healthContextBook = (
       onReadError?.(error, trace);
       return 'unknown';
     }
-    if (row === null || typeof row !== 'object') { onReadSuccess?.(false, trace, false); return null; }
     let invalid = false;
-    const material = toContextHealthMaterial(row as HealthContextRow, clock, (error) => { invalid = true; onReadError?.(error, trace); }, options);
-    if (!invalid) onReadSuccess?.(material !== null, trace, material !== null && isPartialHealth(material));
-    return invalid ? 'unknown' : material;
+    const fromRow = row === null || typeof row !== 'object' ? null
+      : toContextHealthMaterial(row as HealthContextRow, clock, (error) => { invalid = true; onReadError?.(error, trace); }, options);
+    if (invalid) return 'unknown';
+    const material = withInventory(fromRow, await inventoryRead, clock);
+    onReadSuccess?.(material !== null, trace, material !== null && isPartialHealth(material));
+    return material;
   };
   return {
     linked: () => call !== null && doName !== null,
