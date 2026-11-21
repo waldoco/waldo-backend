@@ -1,5 +1,5 @@
 import {
-  healthApiErrorV1Schema, healthDayV1Schema, healthScoresHistoryQueryV1Schema, healthScoresHistoryResponseV1Schema, healthScoresHistoryUnavailableV1Schema,
+  HEALTH_SCORES_HISTORY_WINDOWS_V1, healthApiErrorV1Schema, healthDayV1Schema, healthScoresHistoryQueryV1Schema, healthScoresHistoryResponseV1Schema, healthScoresHistoryUnavailableV1Schema,
 } from '../../../contracts/src/app/health-ingest';
 
 // The view behind GET /app/v1/health/scores/history: what the signed database read answered, as the contract's body or a closed
@@ -29,14 +29,15 @@ export const partsOfShownPillars = (parts: PartsOfPillars, shown: Readonly<Recor
 
 const record = (value: unknown): Record<string, unknown> | null => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null);
 
-// Exactly one `days`, one of the three windows, and nothing else on the query.
-export const historyWindowOf = (url: URL): 7 | 30 | 90 | null => {
+export type HistoryWindow = (typeof HEALTH_SCORES_HISTORY_WINDOWS_V1)[number];
+// Exactly one `days`, one of the windows, and nothing else on the query.
+export const historyWindowOf = (url: URL): HistoryWindow | null => {
   if ([...url.searchParams.keys()].some(key => key !== 'days') || url.searchParams.getAll('days').length !== 1) return null;
   const query = healthScoresHistoryQueryV1Schema.safeParse({ days: url.searchParams.get('days') });
-  return query.success ? Number(query.data.days) as 7 | 30 | 90 : null;
+  return query.success ? Number(query.data.days) as HistoryWindow : null;
 };
 
-export const healthHistoryView = (result: unknown, windowDays: 7 | 30 | 90, readers: HistoryReaders): View => {
+export const healthHistoryView = (result: unknown, windowDays: HistoryWindow, readers: HistoryReaders): View => {
   const nothing = (reason: unknown): View => {
     const body = healthScoresHistoryUnavailableV1Schema.safeParse({ state: 'unavailable', day: null, reason });
     if (body.success) return { body: body.data };

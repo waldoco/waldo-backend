@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(40);
+select plan(43);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -72,8 +72,12 @@ select is((pg_temp.listed('full-owner',90))[1] || ' ' || (pg_temp.listed('full-o
 select is(cardinality(pg_temp.listed('full-owner',30)) || '/' || cardinality(pg_temp.listed('full-owner',7)),'30/7','thirty and seven days return thirty and seven');
 
 select is((select count(*)::int from unnest(array[
-  '{}'::jsonb, '{"days":14}', '{"days":"7"}', '{"days":7,"owner":"other-owner"}', '"week"', '{"days":null}', '{"days":90.5}', '{"days":0}', '{"days":7.0}', '{"days":[7]}', '{"days":true}', '{"days":365}', '{"days":91}'
-]) bad where pg_temp.h('scores_history','history-owner',bad)->>'error' = 'invalid_request'),13,'every window but 7, 30 and 90, and every malformed body, is refused');
+  '{}'::jsonb, '{"days":14}', '{"days":"7"}', '{"days":7,"owner":"other-owner"}', '"week"', '{"days":null}', '{"days":90.5}', '{"days":0}', '{"days":7.0}', '{"days":[7]}', '{"days":true}', '{"days":366}', '{"days":91}', '{"days":180,"parts":true}', '{"days":365,"parts":true}'
+]) bad where pg_temp.h('scores_history','history-owner',bad)->>'error' = 'invalid_request'),15,'every window but 7, 30, 90, 180 and 365, a long window with parts, and every malformed body, is refused');
+-- The Body screen's six months and year: the same rows, further back; the window is the cap and a gap is left out.
+select is(pg_temp.h('context_write','full-owner',pg_temp.ctx(300,40))->>'written','true','the third owner also has a row three hundred days ago');
+select is(cardinality(pg_temp.listed('full-owner',180)) || '/' || cardinality(pg_temp.listed('full-owner',365)),'100/101','six months returns the hundred stored days, a year the hundred and one');
+select is((pg_temp.listed('full-owner',365))[1] || ' ' || (pg_temp.hist('full-owner',365)->'history'->>'from'),pg_temp.d(300) || ' ' || pg_temp.d(364),'a year reaches the oldest row and starts three hundred and sixty-four days back');
 select is(pg_temp.hist('nobody',7),'{"error":"not_linked"}'::jsonb,'an unknown owner object is not linked');
 
 -- The window ends on the owner's own today. One of these two zones is on a different date from UTC at any moment.
