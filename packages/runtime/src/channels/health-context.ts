@@ -5,6 +5,7 @@ import {
   derivedMissingPillarReasonSchema,
   HEALTH_SIGNAL_NAMES,
   HEALTH_SIGNALS,
+  HEALTH_USUAL_WORDS,
   healthInventorySchema,
   derivedSleepDebtTrendSchema,
   formHealthViewSchema,
@@ -247,10 +248,8 @@ const CHANGE_SUBJECT_WORDS: Readonly<Record<string, string>> = {
   'tier2.sleep_midpoint': 'sleep timing', 'tier2.daylight': 'daylight', 'tier2.movement': 'movement', 'tier2.stress': 'daytime stress',
   'tier2.calendar': 'calendar load', 'tier2.tasks': 'task load', 'tier2.messages': 'message load', 'tier2.physical_load': 'physical load',
   'tier2.resting_state': 'resting state', 'tier2.circadian': 'circadian rhythm',
-  'tier3.overnight_hrv': 'overnight heart rate variability', 'tier3.resting_heart_rate': 'resting heart rate', 'tier3.sleep_midpoint': 'sleep timing',
-  'tier3.daylight': 'daylight', 'tier3.movement': 'movement minutes', 'tier3.stress_heart_rate': 'daytime heart rate at rest', 'tier3.breathing_rate': 'breathing rate',
-  'tier3.spo2': 'blood oxygen', 'tier3.wrist_temperature': 'wrist temperature', 'tier3.awake_time': 'awake time in the night', 'tier3.walking_heart_rate': 'walking heart rate',
-  'tier3.steps': 'steps', 'tier3.active_energy': 'active energy', 'tier3.vo2_max': 'cardio fitness',
+  // A reading is named in the registry's words, as the body read names it.
+  ...Object.fromEntries(Object.entries(HEALTH_USUAL_WORDS).map(([signal, words]) => [`tier3.${signal}`, words])),
 };
 const VERDICT_WORDS: Readonly<Record<string, string>> = { improved: ' (better)', declined: ' (worse)', neutral: '' };
 const MAX_CHANGE_PHRASES = 6;
