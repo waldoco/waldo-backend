@@ -1,10 +1,11 @@
 import {
-  getHealthArgsSchema, HEALTH_READ_MAX_SESSIONS, healthWorkoutSessionParts, healthWorkoutSessionSchema, TOOL_PERMISSIONS, triggerTypeSchema,
+  getHealthArgsSchema, HEALTH_READ_MAX_HOURLY_DAYS, HEALTH_READ_MAX_SESSIONS, HEALTH_SIGNALS, healthWorkoutSessionParts, healthWorkoutSessionSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type GetHealthArgs, type GetHealthResult, type HealthReadSignal, type HealthSignal, type ToolHandler,
 } from '@waldo/contracts';
 import type { z } from 'zod';
 import { md5Hex } from '../../channels/md5';
 import { parseSeries, untruncated, type Reading, type SleepStages } from '../../health/producer';
+import { localIso } from '../../channels/reminders';
 import { daysBetween, localDayWindow, shiftDay } from '../../health/scores/time';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
@@ -175,12 +176,30 @@ export const foldDay = (fold: Fold, readings: readonly Reading[], timezone: stri
 
 const methodOf = (signal: HealthReadSignal, group: Group): Method | null => (signal === 'sleep' ? 'asleep' : group.method);
 
+// The read names an hourly or a nightly read takes: those whose stored kind carries a value each hour, or once a night.
+const readsOfGrain = (grain: 'hour' | 'night'): HealthReadSignal[] => (Object.keys(SIGNALS) as HealthReadSignal[]).filter((signal) => HEALTH_SIGNALS[SIGNALS[signal].stored].grain === grain);
+const GRAIN_OF = { hourly: 'hour', nightly: 'night' } as const;
+// Each hour of a day's readings that carries a start, folded within the hour, oldest first.
+const byHour = (signal: HealthReadSignal, readings: readonly Reading[], timezone: string) => {
+  const hours = new Map<number, Reading[]>();
+  for (const reading of readings) if (reading.startAt) { const at = Date.parse(reading.startAt); hours.set(at, [...(hours.get(at) ?? []), reading]); }
+  return [...hours.entries()].sort(([a], [b]) => a - b).flatMap(([at, held]) => {
+    const value = foldDay(SIGNALS[signal].fold, held, timezone);
+    return value === null ? [] : [{ at: localIso(at, timezone), value }];
+  });
+};
+// A day's night: its newest reading with a start and an end, and when it began and ended.
+const nightOf = (day: string, readings: readonly Reading[], timezone: string) => {
+  const night = [...readings].filter((reading) => reading.startAt && reading.endAt).sort((a, b) => instantOf(b, timezone) - instantOf(a, timezone))[0];
+  return night ? [{ day, from: localIso(Date.parse(night.startAt!), timezone), to: localIso(Date.parse(night.endAt!), timezone), value: night.value }] : [];
+};
+
 const allowlist = triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('get_health'));
 
 export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolHandler<GetHealthArgs, GetHealthResult, ToolDispatcherContext> => ({
   name: 'get_health',
   description:
-    "The owner's own health readings by local day, up to 31 days ending today, as daily values or a summary; one source per signal. Sleep is time asleep, never time in bed. HRV, daytime_hrv and wrist temperature carry their method, never blended. heart_rate, daytime_hrv, respiratory_rate, spo2 and hr_recovery are day means. food_energy, protein, carbs and fat are what the owner's own food app logged that day; a macro is missing on a day an entry lacked it. They are context for a plan, never a judgement of what the owner ate. The numbers stay in this turn and are never stored or logged.",
+    "The owner's own health readings, up to 31 days ending today, one source per signal: by local day, a summary, hourly over at most two days (heart_rate, daytime_hrv, steps, movement, daylight, active_energy, stand_hours), or nightly with each night's start and end (sleep and its stages, sleep_midpoint, sleep_efficiency, hrv, wrist_temperature). Sleep is time asleep, never time in bed. HRV, daytime_hrv and wrist temperature carry their method, never blended. heart_rate, daytime_hrv, respiratory_rate, spo2 and hr_recovery are day means. food_energy, protein, carbs and fat are what the owner's food app logged; a macro is missing on a day an entry lacked it. Context for a plan, never a judgement of what the owner ate. The numbers stay in this turn and are never stored or logged.",
   schema: getHealthArgsSchema,
   trigger_allowlist: allowlist,
   autonomy_gated: false,
@@ -190,9 +209,15 @@ export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolH
     const today = localDayOf(clock.now(), timezone);
     if (daysBetween(args.to, today) < 0) return { ok: false, code: 'invalid_args', error: `to must not be after today (${today}) in the owner's time zone` };
     const unavailable = (reason: Extract<GetHealthResult, { state: 'unavailable' }>['reason']): ReturnType<typeof result> => result({ state: 'unavailable', reason, next: UNAVAILABLE_NEXT[reason] });
+    const signals = [...new Set(args.signals)];
+    if (args.aggregation === 'hourly' || args.aggregation === 'nightly') {
+      const allowed = readsOfGrain(GRAIN_OF[args.aggregation]);
+      const refused = signals.filter((signal) => !allowed.includes(signal));
+      if (refused.length > 0) return { ok: false, code: 'invalid_args', error: `${args.aggregation} reads only ${allowed.join(', ')}; not ${refused.join(', ')}` };
+      if (args.aggregation === 'hourly' && daysBetween(args.from, args.to) >= HEALTH_READ_MAX_HOURLY_DAYS) return { ok: false, code: 'invalid_args', error: `hourly reads at most ${HEALTH_READ_MAX_HOURLY_DAYS} days` };
+    }
     const consent = await book.consent();
     if (consent.kind !== 'granted') return unavailable(consent.kind);
-    const signals = [...new Set(args.signals)];
     let raw: unknown;
     try {
       raw = await book.series({ from: args.from, to: args.to, signals: [...new Set(signals.map((signal) => SIGNALS[signal].stored))] });
@@ -222,8 +247,11 @@ export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolH
       const present = values.map((entry) => entry.value).filter((value): value is number => value !== null);
       valued += present.length;
       const base = { signal, unit: SIGNALS[signal].unit, source: group.source as Available['source'], method: methodOf(signal, group) };
+      const held = (day: string) => byDay.get(day) ?? [];
       series.push(args.aggregation === 'summary'
         ? { ...base, summary: { mean: present.length ? round1(present.reduce((total, value) => total + value, 0) / present.length) : null, min: present.length ? Math.min(...present) : null, max: present.length ? Math.max(...present) : null, days_with_value: present.length } }
+        : args.aggregation === 'hourly' ? { ...base, hours: days.flatMap((day) => byHour(signal, held(day), timezone)) }
+        : args.aggregation === 'nightly' ? { ...base, nights: days.flatMap((day) => nightOf(day, held(day), timezone)) }
         : { ...base, days: values });
     }
     if (valued === 0) return unavailable('no_readings');
