@@ -40,8 +40,8 @@ import { APP_CALENDAR_DAY_PATH, appCalendarDayRequest } from './app-calendar-day
 import { APP_CALENDAR_PROPOSALS_PATH, appCalendarProposalRequest } from './app-calendar-proposal';
 import { HEALTH_SAMPLES_PATH, HEALTH_ZONE_CHANGE_PATH, PLACE_ARRIVED_PATH, PLACE_MOVED_PATH, verifiedHealthSamples, verifiedPlaceArrived, verifiedPlaceMoved, verifiedZoneChange, type ArrivalPlace, type HealthRecomputeCause } from '../health/zone-change-route';
 import { HealthRecomputeFailed, healthRecompute, HEALTH_RECOMPUTE_ID } from '../health/recompute';
-import { healthSnapshot, type HealthWakeReason } from '../health/wakes';
-import { wakeFreshMs, workoutStillFresh } from '../health/wake-notice';
+import { healthSnapshot, nightScoredToday, type HealthWakeReason } from '../health/wakes';
+import { wakeFreshMs, wakeNoteStillFresh, workoutStillFresh } from '../health/wake-notice';
 import { dispatchProviderCall, HEALTH_PROVIDER_PATH, verifiedProviderCall } from '../health/providers/provider-route';
 import { whoopOwner, WHOOP_SYNC_EVERY_MS, WHOOP_SYNC_ID, type WhoopOwner } from '../health/providers/whoop-owner';
 import { whoopConfig } from '../health/providers/whoop-routes';
@@ -188,7 +188,7 @@ import { calendarSource, mailSource, reviewMailFollowup, titleDigester, updateBo
 import { meetingPrepApplier, meetingPrepSpec } from './meeting-prep';
 import { prepGranola } from './meeting-prep-granola';
 import { prepFireflies } from './meeting-prep-fireflies';
-import { briefBodyAfter, briefBodyBefore, BRIEF_BODY_KEY, briefBodyPrompt, briefBodyRevision, type BriefBodyCode } from './brief-revision';
+import { briefBodyAfter, briefBodyBefore, BRIEF_BODY_KEY, BRIEF_BODY_TOOLS, briefBodyPrompt, briefBodyRevision, recoveryScored, type BriefBodyCode } from './brief-revision';
 import { emitObserved, observedEvents, triageHold, UPDATE_CARD_FRESH_MS, UPDATE_JUDGE_WAKE_KEY, updateSweepApplier, updateSweepCheck, updateSweepTools, type ObservedSubscriber, type SweepGate } from './update-sweep';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { recallChain, recallChainOn } from '../history/recall-chain';
@@ -563,6 +563,7 @@ const whatsappQuietMs = (value: string | undefined): number => {
 // When an upload last said a workout just ended (WORKOUT_WAKE): held until a recompute hands it to the trigger, and ignored
 // once it is no longer fresh.
 const WORKOUT_NOTED_KEY = 'health_workout_noted_v1';
+const NIGHT_NOTED_KEY = 'health_night_noted_v1';
 
 // What an app chain's compaction needs from the turn that made it due, and the chains a drain asked to compact in a later
 // pass, each with when it was asked.
@@ -5491,7 +5492,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
       }, effects, () => ownerName(memory), briefEgress.screen), ...(this.env.CALENDAR_PLAN === '1' ? [calendarPlanHandler(google, desk, clock, briefEgress.screen)] : []), readDriveHandler(google, this.env.DRIVE_READS === '1', this.env.DRIVE_READS === '1'), connectServiceHandler(google), consoleLinkTool, connectAppTool, ...progressNoteTools, ...secondMessageTools, ...attachTools, ...chartTools, ...tapbackTools, ...replyOfferTools, ...this.recallTools(episodes, memory), ...memoryHandlers({
-        sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner), ...(semantic ? { semantic } : {}), ...(this.env.MEMORY_VALIDITY === '1' ? { validity: true } : {}), ...(this.env.PEOPLE_MAP === '1' ? { people: true } : {}),
+        sql: storage.sql, store: memory, transaction: work => storage.transactionSync(work), conversationRef: surfaceChatRef(channel, owner), forgiving: true, ...(semantic ? { semantic } : {}), ...(this.env.MEMORY_VALIDITY === '1' ? { validity: true } : {}), ...(this.env.PEOPLE_MAP === '1' ? { people: true } : {}),
         // The tool has already deleted the claims and taken custody of the texts. One cleaning pass runs now, so a card waiting
         // to send loses the text before the turn ends; what it cannot clean, the forget purge job retries, and the forget
         // itself never fails on a store.
@@ -6016,10 +6017,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const healthRpc = (operation: string, payload: string) => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', operation, payload);
     // The newest derived row under model-use consent: with that consent withdrawn it returns nothing.
     const readModelHealth = async () => { const rpc = signedRpc(this.env), doName = identity.get<string>('do_name'); return rpc && doName ? rpc('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName }) : null; };
-    // A night just ended. The wake reaches the model only while the owner's daily Brief is on and their health may reach the
-    // model now: consent withdrawn after the upload, or never given, keeps the Brief at its planned time.
+    // A night just ended and the recompute that read it has run. The wake reaches the model only while the owner's daily Brief is
+    // on and today's row holds a scored Recovery they may share with the model now: consent withdrawn after the upload, a read
+    // that fails, or a night that could not be scored keeps the Brief at its planned time.
     const wakeNoticed = async () => {
-      if (schedPrefs.enabled('daily_brief') && healthSnapshot(await readModelHealth().catch(() => null)) !== null) wakeToday(`day-plan:${crypto.randomUUID()}`);
+      if (schedPrefs.enabled('daily_brief') && nightScoredToday(await readModelHealth().catch(() => null), ownerDay())) wakeToday(`day-plan:${crypto.randomUUID()}`);
     };
     const recompute = healthRecompute({ scheduler, now: Date.now, ownerZone: () => clock.timezone, producer: {
       readSeries: range => healthRpc('series_read', JSON.stringify(range)), writeContext: payload => healthRpc('context_write', payload),
@@ -6036,17 +6038,19 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // still finds it; the first one that starts after it and finds today's row hands it to the health trigger, so the
       // trigger never reads the day before the workout.
       if (workout && this.env.WORKOUT_WAKE === '1') storage.kv.put(WORKOUT_NOTED_KEY, Date.now());
+      // WAKE_BRIEF: the night is noted now and the wake waits for the recompute this upload arms, since the Brief moved to now
+      // would otherwise be written from the rows as they were before the upload.
+      if (woke && this.env.WAKE_BRIEF === '1') storage.kv.put(NIGHT_NOTED_KEY, Date.now());
       await recompute.ask();
-      if (woke && this.env.WAKE_BRIEF === '1') await wakeNoticed();
       if (cause === 'readings' && runtime.welcome.lateHealth()) this.continueWelcome(runtime);
     };
     // BRIEF_BODY_REVISION (brief-revision.ts): today's first row written after the Brief went out has the Brief looked at again
     // once, on the surface that took it.
     const ownerDay = () => localIso(Date.now(), clock.timezone).slice(0, 10);
     const briefBodyStart = () => this.env.BRIEF_BODY_REVISION !== '1' ? Promise.resolve(null) : briefBodyBefore({ day: ownerDay(), reached: plans.reached(ownerDay(), 'card:brief'),
-      doneOn: storage.kv.get<string>(BRIEF_BODY_KEY), todayRow: async () => ((await healthRpc('scores_read', JSON.stringify({ day: ownerDay() })) as { scores?: { day?: unknown } } | null)?.scores?.day) === ownerDay() });
+      doneOn: storage.kv.get<string>(BRIEF_BODY_KEY), todayScored: async () => { const scores = (await healthRpc('scores_read', JSON.stringify({ day: ownerDay() })) as { scores?: { day?: unknown; recovery?: unknown } } | null)?.scores; return scores?.day === ownerDay() && recoveryScored(scores.recovery); } });
     const briefBodyFinish = async (trace: string, before: boolean | 'unread' | null, outcome: string): Promise<void> => {
-      const day = ownerDay(), decided = await briefBodyAfter(before, outcome, async () => healthSnapshot(await readModelHealth())?.day ?? null, day);
+      const day = ownerDay(), decided = await briefBodyAfter(before, outcome, async () => { const seen = healthSnapshot(await readModelHealth()); return seen === null ? null : { day: seen.day, scored: seen.zones.recovery !== null }; }, day);
       if (decided === null) return;
       if (decided !== 'go') { log({ trace, hop: 'brief_body', ms: 0, ok: decided !== 'row_unread', code: decided }); return; }
       storage.kv.put(BRIEF_BODY_KEY, day);
@@ -6060,13 +6064,24 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (!revises && quiet()) return 'quiet';
       if (!revises && !reachesOut()) return 'not_reaching_out';
       const now = Date.now(), day = localIso(now, clock.timezone).slice(0, 10);
-      const chosen = briefBodyRevision(await ledgerJob(trace, briefBodyPrompt(localIso(now, clock.timezone).replace('T', ' '), dayCards(), revises), HEALTH_READ_TOOLS as ToolName[],
+      const chosen = briefBodyRevision(await ledgerJob(trace, briefBodyPrompt(localIso(now, clock.timezone).replace('T', ' '), dayCards(), revises), [...BRIEF_BODY_TOOLS],
         undefined, true, undefined, true));
       if (typeof chosen === 'string') return chosen;
       await finalOutbox.enqueueFenced({ id: trace, trace, payload: { chat_id: owner, text: redactSecretUrls(chosen.text).text }, ownerSubject: String(owner),
         doName: storage.kv.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], expiresAt: now + UPDATE_CARD_FRESH_MS,
         revision: { day, card: 'card:brief' }, ...(revises ? { inPlace: true as const } : {}) }, work => storage.transactionSync(work));
       return 'revised';
+    };
+    // The wake an upload noted, taken by the first recompute that started after it. An older note is dropped: its night is no
+    // longer one that just ended.
+    const nightWake = async (runStartedAt: number) => {
+      const noted = storage.kv.get<number>(NIGHT_NOTED_KEY);
+      if (noted === undefined) return;
+      const freshMs = wakeFreshMs(this.env.WAKE_BRIEF_FRESH_MIN);
+      if (Date.now() - noted > freshMs) { storage.kv.delete(NIGHT_NOTED_KEY); return; }
+      if (this.env.WAKE_BRIEF !== '1' || !wakeNoteStillFresh(noted, runStartedAt, freshMs)) return;
+      storage.kv.delete(NIGHT_NOTED_KEY);
+      await wakeNoticed();
     };
     const healthRecomputeRun = async () => {
       const started = Date.now(), trace = `${HEALTH_RECOMPUTE_ID}:${started}`;
@@ -6083,6 +6098,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       log({ trace, hop: 'health_recompute', ms: Date.now() - started, ok: true, code: outcome });
       log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'health_recompute' });
       await briefBodyFinish(trace, briefBody, outcome);
+      await nightWake(started);
     };
     const healthTrigger = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`, doName = identity.get<string>('do_name'), rpc = signedRpc(this.env), timezone = clock.timezone;

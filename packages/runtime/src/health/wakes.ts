@@ -45,6 +45,13 @@ export const healthSnapshot = (raw: unknown): HealthSnapshot | null => {
   return { day: context.day, sources: basisSources(context.basis), drivers: driverPhrases(context.drivers), zones: { recovery: zoneOf('recovery'), form: zoneOf('form'), weight: zoneOf('weight') }, load };
 };
 
+// Whether the model-use read holds today's row with a scored Recovery: the night the owner woke from is in the rows. A row that
+// is yesterday's, or today's with no Recovery, is what the read held before the night was computed.
+export const nightScoredToday = (raw: unknown, today: string): boolean => {
+  const snapshot = healthSnapshot(raw);
+  return snapshot !== null && snapshot.day === today && snapshot.zones.recovery !== null;
+};
+
 // Two rows are comparable when they come from the same wearables and the earlier is today's or yesterday's, so a switch of
 // wearable or a stale row never reads as a change.
 const comparable = (before: HealthSnapshot | null, after: HealthSnapshot, today: string): before is HealthSnapshot =>

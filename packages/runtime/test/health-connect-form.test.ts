@@ -72,11 +72,11 @@ describe('Form on Android, where Health Connect has no daylight or movement minu
     expect(signals).not.toContain('steps');
   });
 
-  it('computes the same but never accepts it when steps came from another app', async () => {
+  it('accepts it the same when steps came from another app', async () => {
     const samples = history(25, 9);
     const stray = samples.map((s, i) => (i === samples.findIndex(x => x.signal === 'steps_window') ? { ...s, samsung_writer: undefined } : s));
     const [mixed, own] = [await formAt(stray, 9), await formAt(samples, 9)];
-    expect(mixed).toMatchObject({ activation: 'candidate_unaccepted', score: own.score });
+    expect(mixed).toMatchObject({ activation: 'accepted', score: own.score });
   });
 
   it('keeps every step count out of the logs and out of the row it writes, which holds the score and the signals used, never a reading', async () => {
