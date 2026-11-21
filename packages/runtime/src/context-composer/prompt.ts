@@ -3,15 +3,18 @@ import {
   renderRecall,
   wrapSkills,
   type CanaryTokens,
+  type DerivedBody,
   type DerivedMissingPillarReason,
   type DerivedMissingPillars,
   HEALTH_SIGNALS,
+  HEALTH_USUAL_WORDS,
   type HealthInventoryEntry,
   type NarrativeContext,
   type PartialHealthView,
   type Skill,
   type TrustedInvocationEnvelope,
 } from '@waldo/contracts';
+import { PARTS_SO_FAR_AGAINST_WHOLE_DAYS, USUAL_SPAN } from '../health/scores/usual';
 import { sanitiseVerifyOnly } from '../scribe/sanitiser';
 import { MODEL_CONTEXT_MAX_CHARS, sanitiseInputSchema, sanitiseResultSchema, type SanitisationFailureSource, type SanitiseFailureReason } from '@waldo/contracts';
 import { sha256Prefixed } from './canonical';
@@ -215,6 +218,7 @@ export function renderHealth(health: ContextHealthMaterial | null, unreadable = 
     `Recovery: ${health.narrative.recovery_descriptor}. Load: ${health.narrative.load_descriptor ?? 'unavailable'}.`,
     ...renderMissingPillars(health.view.missing_pillars),
     ...renderInventory(health.view.inventory),
+    ...renderBody(health.view.body),
     ...renderBaseline(health.view.baseline_state),
     ...renderSleepDebt(health.view.sleep_debt),
     ...renderEnergyWindows(health.view.energy_windows),
@@ -256,6 +260,7 @@ function renderPartialHealth(view: PartialHealthView, daySummary: string, highSt
       ? [`In the row: ${view.present.length === 0 ? 'none of the inputs these scores use' : view.present.map((item) => (item === 'last_night_sleep' ? NIGHT_WORDS[view.as_of_day] : PRESENT_WORDS[item])).join('; ')}.`]
       : renderInventory(view.inventory)),
     ...renderMissingPillars(view.missing_pillars),
+    ...renderBody(view.body),
     ...(view.load_zone === undefined ? [] : [`Load: ${view.load_zone}.`]),
     ...renderBaseline(view.baseline_state),
     ...renderSleepDebt(view.sleep_debt),
@@ -279,6 +284,50 @@ function renderInventory(inventory: readonly HealthInventoryEntry[] | undefined)
     return `${HEALTH_SIGNALS[entry.signal].words} (${GRAIN_WORDS[entry.grain]}; ${NEWEST_WORDS[entry.newest]}; ${REGULARITY_WORDS[entry.regularity]}${from})`;
   });
   return [`Body data on hand this month: ${kinds.join('; ')}.`];
+}
+
+// Today against the owner's own usual, in words: which way each reading and each part of a score stood and whether far, the sleep
+// part against the need, the load so far against a usual day, and the hours of high strain at rest. What is worth saying is the
+// model's call; every reading is given, usual ones included. Kinds and parts are named in the registry's own words.
+const TENTHS = ['none', 'one tenth', 'two tenths', 'three tenths', 'four tenths', 'five tenths', 'six tenths', 'seven tenths', 'eight tenths', 'nine tenths'] as const;
+const PART_WORDS: Readonly<Record<string, string>> = {
+  sleep: HEALTH_SIGNALS.sleep_duration.words, hrv: HEALTH_SIGNALS.overnight_hrv.words, resting_heart_rate: HEALTH_SIGNALS.resting_heart_rate.words,
+  sleep_midpoint: HEALTH_SIGNALS.sleep_midpoint.words, daylight: HEALTH_SIGNALS.daylight_duration.words, movement: HEALTH_SIGNALS.movement_duration.words,
+  stress: HEALTH_SIGNALS.heart_rate_window.words, from_the_night: 'last night', calendar: 'calendar', tasks: 'open tasks', messages: 'messages', physical_load: 'physical load',
+};
+const PART_PILLAR_WORDS = { recovery: 'Recovery', form: 'Form', load: 'Load' } as const;
+const UNAVAILABLE_PART_WORDS = { no_reading: 'no reading today', baseline_immature: 'usual still forming' } as const;
+type BodyStanding = DerivedBody['readings'][number]['standing'];
+const standingWords = (standing: BodyStanding): string => {
+  if (standing.state === 'forming') return 'usual still forming';
+  if (standing.direction === 'within') return 'within usual';
+  const direction = standing.direction === 'later' || standing.direction === 'earlier' ? `${standing.direction} than` : standing.direction;
+  return `${standing.far ? 'far ' : ''}${direction} usual`;
+};
+const partWords = (part: DerivedBody['parts'][number]): string => {
+  const name = 'via' in part && part.via === 'steps' ? HEALTH_SIGNALS.steps_window.words : PART_WORDS[part.key] ?? part.key.replace(/_/g, ' ');
+  if ('need_tenths' in part) return `${name}: ${part.need_tenths >= 10 ? 'met your need' : `about ${TENTHS[part.need_tenths]} of your need`}`;
+  if ('unavailable' in part) return `${name}: ${UNAVAILABLE_PART_WORDS[part.unavailable]}`;
+  return `${name}${PARTS_SO_FAR_AGAINST_WHOLE_DAYS.includes(part.key) ? ' so far today, against whole days' : ''}: ${standingWords(part.standing)}`;
+};
+function renderBody(body: DerivedBody | undefined): string[] {
+  if (body === undefined) return [];
+  const pillars = (['recovery', 'form', 'load'] as const).flatMap((pillar) => {
+    const parts = body.parts.filter((part) => part.pillar === pillar);
+    return parts.length === 0 ? [] : [`${PART_PILLAR_WORDS[pillar]} parts today: ${parts.map(partWords).join('; ')}.`];
+  });
+  const load = body.day_load;
+  const loadLine = load === undefined ? [] : [load.state === 'forming'
+    ? 'Day load so far: your usual day is still forming.'
+    : `Day load so far: ${load.direction === 'within' ? 'within your usual day' : `${load.far ? 'far ' : ''}${load.direction} your usual day`} (candidate${load.approximate ? ', from approximate heart-rate zones' : ''}).`];
+  const strain = body.strain_hours === undefined ? [] : [body.strain_hours.length === 0
+    ? 'High strain at rest today (candidate): no settled hour so far.'
+    : `High strain at rest today (candidate): ${body.strain_hours.map((range) => `${range.start}-${range.end}`).join('; ')}.`];
+  return [
+    ...(body.readings.length === 0 ? [] : [`Against your usual today: ${body.readings.map((reading) => `${HEALTH_USUAL_WORDS[reading.signal]}${USUAL_SPAN[reading.signal] === 'so_far_against_whole_days' ? ' so far today, against whole days' : ''}: ${standingWords(reading.standing)}`).join('; ')}.`]),
+    ...pillars, ...loadLine, ...strain,
+    'get_crs, where it is offered (among the health tools), gives each day\'s Recovery, Form and Load and their parts over up to ninety days, with these bands and today\'s readings against them; read it before saying how the body has moved over days or weeks.',
+  ];
 }
 
 // Each stored reason in words, and the one step that supplies what it lacks. Facts about inputs, never advice on the body.

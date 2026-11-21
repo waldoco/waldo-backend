@@ -5,6 +5,8 @@ import { hallTypeSchema } from '../../memory/hall';
 import { lifeAreaSchema } from '../../memory/area';
 import { sourceTaintSchema } from '../../memory/sanitise';
 import { connectIntentSchema } from '../connect-intent';
+import { derivedMissingPillarReasonSchema, formZoneSchema, loadZoneSchema, recoveryZoneSchema } from '../../health/crs';
+import { healthChangeUnitV1Schema, healthPartKeysV1, healthPartUnavailableReasonV1Schema, healthUsualSignalV1Schema } from '../../app/health-ingest';
 
 // Model-supplied argument shapes for the read-cluster tools (ADR-0008/0021 surface). The
 // dispatcher validates args at the PreToolUse Zod gate (ADR-0032) before any handler runs,
@@ -24,6 +26,7 @@ export const getCrsArgsSchema = z.strictObject({
   range_days: z.int().min(1).max(90).default(1),
 });
 export type GetCrsArgs = z.infer<typeof getCrsArgsSchema>;
+
 
 // The owner's own readings from the health plane, by local day, for the owner's own model context (the beta ruling
 // lets them reach the model and owner-channel replies, never storage or egress). Days are the owner's local days,
@@ -112,6 +115,58 @@ export const getHealthResultSchema = z.discriminatedUnion('state', [
   z.strictObject({ state: z.literal('unavailable'), reason: healthReadUnavailableReasonSchema, next: z.string().min(1).max(400).optional() }),
 ]);
 export type GetHealthResult = z.infer<typeof getHealthResultSchema>;
+
+// get_crs: the owner's Recovery, Form and Load by local day over the last range_days ending on the owner's own today, as the score
+// engine stored them, with the parts of each score; the owner's usual bands from the newest day; and today's readings against them,
+// from the engine's own list of what changed. Every figure is the engine's, so a reading and its band are one statistic. span says
+// what a band's reading covers: the night, the day's one reading, the day's hours so far against the same hours of earlier days,
+// or the day's total so far against earlier whole days. The numbers stay in the turn that asked.
+const crsDaySchema = z.iso.date();
+const crsDirectionSchema = z.enum(['above', 'below', 'within', 'later', 'earlier']);
+const crsPillarSchema = <Zone extends z.ZodType>(zone: Zone) => z.union([
+  z.strictObject({ score: z.number().min(0).max(100), zone }),
+  z.strictObject({ reason: derivedMissingPillarReasonSchema }),
+]);
+const crsPartKeySchema = z.enum([...new Set([...healthPartKeysV1.recovery, ...healthPartKeysV1.form, ...healthPartKeysV1.weight])] as [string, ...string[]]);
+const crsPartPillarSchema = z.enum(['recovery', 'form', 'load']);
+export const crsPartSchema = z.union([
+  // need_minutes: the sleep part's need, which its score is time asleep against. steps: Form's movement part read on steps.
+  z.strictObject({
+    pillar: crsPartPillarSchema, key: crsPartKeySchema, score: z.number().min(0).max(100), direction: crsDirectionSchema.nullable(),
+    need_minutes: z.int().min(0).max(1440).optional(), steps: z.literal(true).optional(),
+  }),
+  z.strictObject({ pillar: crsPartPillarSchema, key: crsPartKeySchema, unavailable: healthPartUnavailableReasonV1Schema }),
+]);
+const crsSpanSchema = z.enum(['night', 'day', 'same_hours', 'so_far_against_whole_days']);
+export const getCrsResultSchema = z.discriminatedUnion('state', [
+  z.strictObject({
+    state: z.literal('available'),
+    timezone: z.string().min(1),
+    from: crsDaySchema,
+    to: crsDaySchema,
+    // Each day that holds a row, oldest first; a day without one is left out, never a zero. backfilled: recomputed later from
+    // readings that arrived late.
+    days: z.array(z.strictObject({
+      day: crsDaySchema,
+      recovery: crsPillarSchema(recoveryZoneSchema).optional(),
+      form: crsPillarSchema(formZoneSchema).optional(),
+      load: crsPillarSchema(loadZoneSchema).optional(),
+      backfilled: z.literal(true).optional(),
+      parts: z.array(crsPartSchema).max(12).optional(),
+    })).max(90),
+    // The newest day's usual bands. A provisional band is still short of the owner's fourteen days.
+    usual: z.array(z.strictObject({
+      signal: healthUsualSignalV1Schema, words: z.string().min(1).max(80), unit: healthChangeUnitV1Schema, span: crsSpanSchema,
+      state: z.enum(['provisional', 'personal']), low: z.number(), centre: z.number(), high: z.number(), own_days: z.int().min(0).max(30),
+    })).max(healthUsualSignalV1Schema.options.length).optional(),
+    // Today's readings against the band, when the newest day is today: far is two spreads or more from the centre.
+    today: z.array(z.strictObject({
+      signal: healthUsualSignalV1Schema, unit: healthChangeUnitV1Schema, value: z.number(), direction: crsDirectionSchema, far: z.boolean(),
+    })).max(healthUsualSignalV1Schema.options.length).optional(),
+  }),
+  z.strictObject({ state: z.literal('unavailable'), reason: healthReadUnavailableReasonSchema, next: z.string().min(1).max(400).optional() }),
+]);
+export type GetCrsResult = z.infer<typeof getCrsResultSchema>;
 
 // The owner's screen time as their phone sent it: one summary per device and local day, at most 31 days ending no later than
 // today in the owner's zone. Stored summaries, not a live read of the phone: received_at says how fresh each one is.
