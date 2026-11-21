@@ -29,6 +29,7 @@ import { bodyViewOf } from './health-body';
 import { healthChangesV1Schema } from '../../../contracts/src/app/health-ingest';
 import type { ContextHealthMaterial, ZoneHealthMaterial } from '../context-composer/types';
 import { TRAINING_LOAD_PHRASES } from '../health/scores/training-load';
+import { circularDelta } from '../health/scores/stats';
 import { shiftDay } from '../health/scores/time';
 import { STEADY_SCORE_MOVE } from '../health/scores/zones';
 import type { OwnerClock } from '../tools/live/get-context';
@@ -246,7 +247,7 @@ const CHANGE_SUBJECT_WORDS: Readonly<Record<string, string>> = {
   'tier2.sleep_midpoint': 'sleep timing', 'tier2.daylight': 'daylight', 'tier2.movement': 'movement', 'tier2.stress': 'daytime stress',
   'tier2.calendar': 'calendar load', 'tier2.tasks': 'task load', 'tier2.messages': 'message load', 'tier2.physical_load': 'physical load',
   'tier2.resting_state': 'resting state', 'tier2.circadian': 'circadian rhythm',
-  'tier3.overnight_hrv': 'overnight heart rate variability', 'tier3.resting_heart_rate': 'resting heart rate', 'tier3.sleep_midpoint': 'sleep midpoint',
+  'tier3.overnight_hrv': 'overnight heart rate variability', 'tier3.resting_heart_rate': 'resting heart rate', 'tier3.sleep_midpoint': 'sleep timing',
   'tier3.daylight': 'daylight', 'tier3.movement': 'movement minutes', 'tier3.stress_heart_rate': 'daytime heart rate at rest', 'tier3.breathing_rate': 'breathing rate',
   'tier3.spo2': 'blood oxygen', 'tier3.wrist_temperature': 'wrist temperature', 'tier3.awake_time': 'awake time in the night', 'tier3.walking_heart_rate': 'walking heart rate',
   'tier3.steps': 'steps', 'tier3.active_energy': 'active energy', 'tier3.vo2_max': 'cardio fitness',
@@ -258,7 +259,10 @@ const changeWords = (value: unknown): string | null => {
   if (!parsed.success) return null;
   const phrases = parsed.data.filter(change => change.significant).slice(0, MAX_CHANGE_PHRASES).flatMap(change => {
     const subject = CHANGE_SUBJECT_WORDS[`tier${change.subject.tier}.${change.subject.key}`];
-    const way = change.against === 'usual' ? (change.to > change.from ? 'above your usual' : 'below your usual') : (change.to > change.from ? 'up since yesterday' : 'down since yesterday');
+    // Sleep timing is a minute of the day, so it is read round the clock: half past midnight against a usual ten to midnight is later.
+    const way = change.against !== 'usual' ? (change.to > change.from ? 'up since yesterday' : 'down since yesterday')
+      : change.unit === 'local_minute' ? (circularDelta(change.to, change.from) > 0 ? 'later than your usual' : 'earlier than your usual')
+      : change.to > change.from ? 'above your usual' : 'below your usual';
     const phrase = subject ? `${subject} ${way}${VERDICT_WORDS[change.verdict]}` : null;
     return phrase && wordOnly(phrase) ? [phrase] : [];
   });
