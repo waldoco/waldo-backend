@@ -1,7 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { HEALTH_SIGNALS, HEALTH_SIGNAL_NAMES, type HealthSignal } from '../../contracts/src/health/signals';
 import { healthContextBook } from '../src/channels/health-context';
+import { createOwnerResponder } from '../src/channels/owner-turn';
+import type { RunEffectScope } from '../src/channels/run-effect-scope';
+import { createOwnerTurnContext } from '../src/context-composer/owner-turn';
 import { renderHealth } from '../src/context-composer/prompt';
+import { ownerMessageAdmission } from '../src/identity/owner-message-admission';
+import { ownerJobAdmission } from '../src/identity/surface-owner-admission';
+import type { LLMGatewayAdapter } from '../src/llm/provider';
+import { DAY_CARDS, dayPlanInput } from '../src/prompt/day-cards';
 import { EVERY_KIND_NOW, EVERY_KIND_SIGNALS, everyKindRows } from './support/health-every-kind';
 
 // Every kind of body data Waldo stores reaches the model, or says here why not yet. A kind reaches when the model's standing health
@@ -43,7 +50,7 @@ const REACH: Readonly<Record<HealthSignal, Reach>> = {
 
 const clock = { timezone: 'UTC', now: () => new Date(EVERY_KIND_NOW) };
 // The signed reads, answered from the rows the producer wrote, as the database would.
-const blockOf = async (without: readonly string[] = []): Promise<string> => {
+const materialOf = async (without: readonly string[] = []) => {
   const rows = await everyKindRows(without);
   const today = rows.at(-1)!;
   const compiledAt = new Date(EVERY_KIND_NOW - 600_000).toISOString();
@@ -62,9 +69,10 @@ const blockOf = async (without: readonly string[] = []): Promise<string> => {
   };
   const book = healthContextBook(call, 'owner-every-kind', clock, undefined, undefined, { partial: true, inventory: true, body: true } as never);
   const material = await book.latest();
-  if (material === 'unreadable') throw new Error('the block was unreadable');
-  return renderHealth(material);
+  if (material === 'unreadable' || material === null) throw new Error('the block was unreadable');
+  return material;
 };
+const blockOf = async (without: readonly string[] = []): Promise<string> => renderHealth(await materialOf(without));
 
 const words = (signal: HealthSignal) => HEALTH_SIGNALS[signal].words;
 const DIRECTION = '(?:far )?(?:above|below|later than|earlier than) usual|within usual';
@@ -99,5 +107,58 @@ describe('every stored kind reaches the model, or says why not yet', () => {
     const block = await blockOf();
     // Clock times are the one shape a digit may take in the block; nothing else of the body carries one.
     expect(block.replace(/\b(?:[01]\d|2[0-3]):[0-5]\d\b/g, '')).not.toMatch(/\d/);
+  });
+});
+
+// The body read is one part of the situation every run is given, not a health-only block: the owner's own turn, the Brief, a
+// wake and the day plan all compose it from the same read, beside the day's own context.
+const readingLine = /Against your usual today: [^\n]*(?:above|below|later than|earlier than|within) usual/;
+const expectBody = (text: string) => {
+  expect(text).toMatch(readingLine);
+  expect(text).toMatch(/Freshness: fresh\./);
+  expect(text).toMatch(/Confidence: (?:high|medium|low)\./);
+};
+const scope = (): RunEffectScope => ({ runId: 'run-every', attempt: 'attempt-every', deadline: Date.now() + 15 * 60_000, signal: new AbortController().signal, admit: vi.fn(), commit: work => work() });
+const OWNER = '10000000-0000-0000-0000-000000000001';
+const bound = async () => ({ ownerId: OWNER, bindingRef: 'runtime:owner-demo', revision: '5', physicalDoId: 'actual-do' });
+const CANARIES = ['0123456789abcdef', '1123456789abcdef', '2123456789abcdef'];
+const composedWith = async (admission: Parameters<typeof createOwnerTurnContext>[0]) => {
+  const context = createOwnerTurnContext(admission, { health: () => materialOf() });
+  const composed = await context.composer.compose(context.invocation, { ...context.snapshot(), canary_tokens: CANARIES, replay_context_ref: null });
+  if (!composed.ok) throw new Error(`the run did not compose: ${JSON.stringify(composed)}`);
+  return composed.prompt;
+};
+
+describe('the body read sits in every run\'s situation', () => {
+  it('in the owner\'s own turn', async () => {
+    const admission = await ownerMessageAdmission({
+      lookup: async () => ({ owner_id: OWNER, do_name: 'owner-demo', state_version: 0, admission_revision: '1', presence_id: '20000000-0000-0000-0000-000000000001', provider: 'telegram', subject: '1001' }),
+      scope: scope(), locator: { environment: 'staging', namespace: 'owner-staging', doName: 'owner-demo', doId: 'actual-do' },
+      actualDoId: 'actual-do', expectedDoId: (name: string) => name === 'owner-demo' ? 'actual-do' : 'other-do',
+      allowedDoNames: ['owner-demo'], provider: 'telegram' as const, subject: '1001', text: 'Can I fit a run in before my 3pm?',
+      occurrenceKey: 'every-run-chat', occurredAt: Date.now() - 1, now: Date.now,
+    });
+    expectBody(await composedWith(admission));
+  });
+  // The Brief, and the wakes: the heartbeat look, the patrol and the spot before an event.
+  it.each(['brief', 'heartbeat', 'patrol', 'pre_activity_spot'] as const)('in a %s run', async (job) => {
+    const admission = await ownerJobAdmission({ lookup: bound, expectedPhysicalDoId: 'actual-do', job, occurrenceKey: `${job}:every`, occurredAt: Date.now() - 1 });
+    expectBody(await composedWith(admission));
+  });
+  it('in the day plan, which places the owner\'s cards around their day', async () => {
+    const inputs: string[] = [];
+    const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {
+      inputs.push(request.messages.map(message => String(message.content)).join('\n'));
+      return { ok: true, data: { model: request.model, text: '{}', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
+    } };
+    const admission = await ownerJobAdmission({ lookup: bound, expectedPhysicalDoId: 'actual-do', job: 'heartbeat', occurrenceKey: 'plan:every', occurredAt: Date.now() - 1 });
+    const args: Parameters<typeof createOwnerResponder> = ['fixture'];
+    args[5] = []; args[7] = false; args[10] = gateway;
+    args[17] = () => materialOf();
+    args[21] = { jobHost: { admit: async () => admission, chain: (_admission, surfaceChain) => surfaceChain }, leanScheduled: true };
+    await createOwnerResponder(...args).planDay('day-plan:every', dayPlanInput({ localNow: '2026-03-20T07:00', calendar: 'Board review 15:00-16:30.', cards: DAY_CARDS, proactivity: 'Quiet hours 23:00-07:00' }));
+    expect(inputs).toHaveLength(1);
+    expectBody(inputs[0]!);
+    expect(inputs[0]!).toContain('Board review 15:00-16:30.');
   });
 });
