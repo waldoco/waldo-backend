@@ -2,6 +2,7 @@ import { calendarPromptProjection, mailPromptProjection, sha256Hex, type Calenda
 import { CALENDAR_LAST_SEEN_TABLE_SCHEMA } from '../do-schema';
 import { localDayWindow } from '../health/scores/time';
 import { localIso } from './reminders';
+import { passedSince } from './past-date';
 
 const DAY_MS = 24 * 60 * 60_000;
 const LAST_SEEN_KEPT_MS = 14 * DAY_MS;
@@ -22,7 +23,15 @@ type Sql = Pick<SqlStorage, 'exec'>;
 type WatchKey = 'calendar_since' | 'mail_since';
 // What a calendar change was before it, from what the sweep last saw of the event: never its title, only whether that changed.
 export const changeDetail = (change: Change): string => `${change.detail}${change.before ? ` (before: ${JSON.stringify(change.before)})` : ''}`;
-export const changeLines = (changes: readonly Change[]): string => changes.map((change) => `- ${change.source} ${change.kind}: ${changeDetail(change)}${change.source_ref ? ` [source_ref ${change.source_ref}]` : ''}`).join('\n');
+// With now, a calendar change to an event that has already ended says so, so a record still waiting for a card reads as past.
+const eventEnded = (change: Change, now: number): string => {
+  if (change.source !== 'calendar') return '';
+  let end: unknown;
+  try { end = (JSON.parse(change.detail) as { end?: unknown }).end; } catch { return ''; }
+  const passed = typeof end === 'string' ? passedSince(Date.parse(end), now) : '';
+  return passed ? ` [event ended: ${passed}]` : '';
+};
+export const changeLines = (changes: readonly Change[], now?: number): string => changes.map((change) => `- ${change.source} ${change.kind}: ${changeDetail(change)}${change.source_ref ? ` [source_ref ${change.source_ref}]` : ''}${now === undefined ? '' : eventEnded(change, now)}`).join('\n');
 
 export type ChangeBefore = Readonly<{ start: string; end: string; all_day: boolean; title_changed: boolean; attendees?: number }>;
 // ref: the event or message a reader opens the change by.
@@ -201,9 +210,9 @@ export const updateBook = (sql: Sql) => {
         .map((row) => `- ${row.feedback}: ${row.text.replace(/\n/g, ' ')}`).join('\n');
     },
     // A row a sweep job wrote with no new changes of its own (it judged earlier mail) and that sent nothing says nothing.
-    unfolded(timezone: string): string {
+    unfolded(timezone: string, now?: number): string {
       return sql.exec<{ at: number; changes: string; text: string | null; held_at: number | null; held_code: HeldCode | null }>("SELECT at, changes, text, held_at, held_code FROM update_cards WHERE folded = 0 AND (text IS NOT NULL OR changes != '[]') ORDER BY at").toArray()
-        .map((row) => `[${localIso(row.at, timezone)}] ${row.text ? `sent as update: ${row.text.replace(/\n/g, ' ')}` : row.held_at !== null ? `${heldWhen(row.held_at, row.held_code, timezone)}: not yet told` : 'not sent'}\n${changeLines(JSON.parse(row.changes) as Change[])}`)
+        .map((row) => `[${localIso(row.at, timezone)}] ${row.text ? `sent as update: ${row.text.replace(/\n/g, ' ')}` : row.held_at !== null ? `${heldWhen(row.held_at, row.held_code, timezone)}: not yet told` : 'not sent'}\n${changeLines(JSON.parse(row.changes) as Change[], now)}`)
         .join('\n');
     },
     // HELD_RAISE. Marks a recorded batch held, keeping the first time it was; a row with no changes of its own holds nothing.
