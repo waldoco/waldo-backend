@@ -76,9 +76,26 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // readings but no score row a block of that alone; anything else leaves the block as the stored row makes it.
   HEALTH_INVENTORY?: string;
   HEALTH_TRAINING_LOAD?: string;
+  // '1' has the health producer write today's Form curve, measured and then projected, on today's derived row, for the app's
+  // calendar day; anything else writes none.
+  HEALTH_FORM_CURVE?: string;
   // '1' has the health decision reason from the reviewed health protocols (skills/health-protocols), read through the
   // owner's next day, in the chat role. Anything else keeps the decision as it was.
   HEALTH_ACTIONS?: string;
+  // "1" writes the parts of each score (HEALTH_SCORE_PARTS) and the owner's usual band for each reading (HEALTH_USUAL) on the
+  // derived row, and shows them to a build that names health revision 13; anything else writes and shows neither. Apply migration
+  // 20261116100000, which admits the two new columns, before turning either on. Both need HEALTH_PROVISIONAL_SCORES "1".
+  HEALTH_SCORE_PARTS?: string;
+  HEALTH_USUAL?: string;
+  // "1" writes the day's load (HEALTH_DAY_LOAD) or today's hourly stress curve (HEALTH_STRESS_CURVE) on the derived row, and shows
+  // it to a build that names health revision 14; anything else writes and shows none. Apply migrations 20261116110000 (day load)
+  // and 20261116110100 (the stress curve), which admit the new columns, before turning each on.
+  HEALTH_DAY_LOAD?: string;
+  // "0", or a comma list of upload sources (apple, health_connect, samsung) whose days the day's load counts every observed minute
+  // for, from the hourly heart-rate bins, beside HEALTH_DAY_LOAD, and shows to a build that names health revision 15. Apply
+  // migration 20261116110200 first.
+  HEALTH_PASSIVE_LOAD?: string;
+  HEALTH_STRESS_CURVE?: string;
   HEALTH_COACHING?: string;
   // "1" lets a health proposal, and a chat card, swap an event for another in its slot (a hard workout for an easy one) by
   // renaming it; the connector-proxy function must be deployed with the rename first.

@@ -30,7 +30,7 @@ import { inMemoryToolOutputStore } from '../conversation/tool-output-store';
 import { readToolOutputHandler } from '../tools/read-tool-output';
 import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
 import { localTrustedBriefContextComposer, localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, type LocalSystemSkillBinding } from '../llm/run-loop-adapters';
-import type { ContextHealthMaterial } from '../context-composer/types';
+import type { HealthRead } from '../context-composer/types';
 import { renderHealth } from '../context-composer/prompt';
 import { BYTES_PER_TOKEN_EST, estimatedTokens } from '../conversation/window';
 import { JoinedConversationPath } from '../conversation/joined-path';
@@ -50,6 +50,7 @@ import { composeDayPlanInput } from './day-cards';
 import { fitPromptToBudget } from '../prompt/fit-prompt';
 import { ownerProfilePrompt } from '../memory/owner-profile';
 import { FORGOTTEN, QUIET_NOTE, QUIET_TAG, withoutBringUpLess, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, knownPeopleBlock, SOURCE_PEOPLE_CLAIMS_SCHEMA, SOURCE_PEOPLE_RULE, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, promotionInstruction, PROMOTION_SCHEMA, promotionInput, SOURCE_CLAIMS_SCHEMA, SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput, withoutHealthClaims, type ClaimStore, barrierPrompt, memoryPrompt, RETIRE_RULES } from '../memory/claims';
+import { OWNER_WORDS_CHECK_FORMAT, OWNER_WORDS_CHECK_INSTRUCTION, ownerWordsCheckInput, ownerWordsStated, type OwnerWordsCheck } from '../memory/owner-words-check';
 import { CAPACITY_INSTRUCTION, CAPACITY_SCHEMA } from '../prompt/capacity';
 import { sha256Hex } from '../context-composer/canonical';
 import { outsideView } from '../memory/outside-view';
@@ -217,7 +218,7 @@ export const createOwnerResponder = (
   egressAllowlist?: readonly string[],
   // D5: derived health context (zones only) for the system prompt's health material. The
   // owner DO wires the signed-rail book; undefined composes with no health material.
-  health?: (trace?: string) => Promise<ContextHealthMaterial | null>,
+  health?: (trace?: string) => Promise<HealthRead>,
   reactionChoices: readonly string[] = [],
   privateRunScope?: RunEffectScope,
   // Private host dependency only. No channel/env/request repository selection or seed.
@@ -329,10 +330,13 @@ export const createOwnerResponder = (
   };
   // Memory checks a span against the text the model read, so it gets that text and the spans the owner did not write.
   const memoryView = (parts: readonly InboundPart[]) => { const shown = renderForModel(parts); return { text: shown.text, sourceQuoteRanges: shown.foreignRanges }; };
-  const memoryContext = () => ({ ...(backgroundSourceTaint === 'external' ? { memoryOutside: true } : {}), ...(activeOwnerTurn ? { ownerInitiated:true, askedIn: { surface: activeOwnerTurn.surface, conversation_ref: activeOwnerTurn.conversationRef }, memoryTurn: {
+  // remember's check outside the turn's model: it is sent only what remember hands it (memory/owner-words-check).
+  // A memory purpose, so its trace keeps metadata only: the input is the owner's message.
+  const ownerWordsCheck: OwnerWordsCheck = async (input) => ownerWordsStated(await ask(traceId, 'memory_owner_words_check', OWNER_WORDS_CHECK_INSTRUCTION, ownerWordsCheckInput(input), OWNER_WORDS_CHECK_FORMAT, undefined, undefined, undefined, roleModel), input.replacing !== undefined);
+  const memoryContext = () => ({ ...(backgroundSourceTaint === 'external' ? { memoryOutside: true } : {}), ...(activeOwnerTurn ? { ownerInitiated:true, ownerWordsCheck, askedIn: { surface: activeOwnerTurn.surface, conversation_ref: activeOwnerTurn.conversationRef }, memoryTurn: {
     ownerId: safety.authenticatedUserId, conversationRef: activeOwnerTurn.conversationRef,
     current: { message_ref: activeOwnerTurn.messageRef?.id ?? activeOwnerTurn.traceId, ...memoryView(activeOwnerTurn.parts) },
-    recent: [...recentOwnerTurns.values()].filter(turn => !barrier().holds(turn.text)).concat(control.heard().map((steer, index) => ({ message_ref: `${traceId}-steer-${index}`, text: steer.text, sourceQuoteRanges: steer.foreignRanges }))),
+    recent: [...recentOwnerTurns.values()].filter(turn => !barrier().holds(turn.text)).concat(control.heard().map((steer, index) => ({ message_ref: `${traceId}-steer-${index}`, text: steer.text, sourceQuoteRanges: steer.foreignRanges, steer: true as const }))),
   } } : {}) });
   let expectedProcedure: string | undefined;
   const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, callScope?: RunEffectScope, light = false, hostedSearch = true) => {
@@ -477,7 +481,7 @@ export const createOwnerResponder = (
   const ask = async (...args: Parameters<typeof complete>) => (await complete(...args)).text;
   const dayPlanHealth = async (trace: string): Promise<string> => {
     const shared = await health?.(trace) ?? null;
-    return shared ? `${SHARED_HEALTH_LABEL}\n${renderHealth(shared)}` : renderHealth(null);
+    return shared === 'unreadable' ? renderHealth(null, true) : shared ? `${SHARED_HEALTH_LABEL}\n${renderHealth(shared)}` : renderHealth(null);
   };
   const control = turnControl();
   const tree = new ConversationTree();
@@ -1019,7 +1023,7 @@ export const createOwnerResponder = (
     if (!jobHost) return undefined;
     const admission = await jobHost.admit();
     if (!admission) return undefined;
-    let healthRead: Promise<ContextHealthMaterial | null> | undefined;
+    let healthRead: Promise<HealthRead> | undefined;
     const jobContext = createOwnerTurnContext(admission, {
       ...(surfaceChain === undefined ? {} : { conversationRef: jobHost.chain(admission, surfaceChain) }),
       ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}),

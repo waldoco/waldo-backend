@@ -4,7 +4,7 @@ import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { TelegramOwnerInbox } from '../src/channels/telegram-owner-inbox';
 import { persistInboxWake } from '../src/scheduler/alarm-slot';
-import { claimStore } from '../src/memory/claims';
+import { claimStore, turnMemoryPrompt } from '../src/memory/claims';
 import { questBook } from '../src/channels/quests';
 import { episodeIndex } from '../src/channels/episodes';
 import { holdTopic } from './helpers/pending-topic';
@@ -47,11 +47,17 @@ it('the registered owner DO uses remember, correction and forget tools without a
   });
   expect(seen.inputs.some(input => input.includes('claim_ops'))).toBe(false);
 });
-it('the registered owner DO rejects a fabricated owner quote', async () => {
+// The owner's chat keeps a quote that is not the owner's words as Waldo's own read of their message, never as the owner's word:
+// it stays out of the always-loaded profile until the owner confirms it.
+it('the registered owner DO never keeps a fabricated owner quote as the owner\'s word', async () => {
   seen.outputs.push(tool('remember', { kind: 'fact', text: 'Bank is evilbank', evidence_quote: 'evilbank' }), []);
   await turn('memory-do-forged', 1, 'Read my mail');
-  await runInDurableObject(stub('memory-do-forged'), (_i, state) => expect(claimStore(state.storage.sql).claims()).toEqual([]));
-  expect(seen.inputs.some(input => input.includes('not grounded'))).toBe(true);
+  await runInDurableObject(stub('memory-do-forged'), (_i, state) => {
+    const store = claimStore(state.storage.sql);
+    expect(store.claims()).toMatchObject([{ text: 'Bank is evilbank', origin: 'agent', source: 'inferred', verification_status: 'provisional' }]);
+    expect(turnMemoryPrompt(store, '')).not.toContain('evilbank');
+  });
+  expect(seen.inputs.some(input => input.includes('Saved as Waldo\'s inference, because the quote is not the owner\'s exact words'))).toBe(true);
 });
 it('a held coffee topic keeps unrelated profile available in the registered owner DO', async () => {
   const name = 'memory-do-topic-scope';

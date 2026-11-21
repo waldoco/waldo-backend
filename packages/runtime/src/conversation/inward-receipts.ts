@@ -20,6 +20,10 @@ export const INWARD_RECEIPT_LINES: Readonly<Partial<Record<ToolName, (args: Fiel
   track_responsibility: (args) => `Now tracking "${text(args, 'title')}" (you can close it)`,
   workspace_write: (args) => `Wrote ${text(args, 'path')} in your workspace (its earlier versions are kept)`,
   create_artifact: (args) => `Created "${text(args, 'name')}" in your artifacts`,
+  revise_artifact: (args) => `Revised artifact ${text(args, 'artifact_id')} (its earlier revision is kept)`,
+  restore_artifact: (args) => `Brought back revision ${String(args.revision)} of artifact ${text(args, 'artifact_id')} (you can restore again)`,
+  log_meal: (args) => `Logged a meal: "${text(args, 'description')}" (you can delete it)`,
+  log_workout: (args) => `Logged a workout: "${text(args, 'type')}" (you can delete it)`,
   // The note is gone once cancelled, so the line carries it: the owner can set it again from here.
   cancel_reminder: (args, result) => args.all === true ? 'Cancelled all your reminders'
     : result.cancelled !== true ? null
