@@ -27,7 +27,7 @@ const pieceOf = <T>(schema: z.ZodType<T>, value: unknown, name: string, onError?
 // begin at), so a reading beyond an edge has a direction, and one at two spreads or more from the centre is far. Each side is read
 // against its own edge, so a band that is not symmetric (a back-transformed log band) is read as stored. A band with no width is
 // the owner's flat history: any other reading is beyond it and far, as the engine's own bound treats it.
-const standingOf = (band: Usual, reading: number): Standing => {
+export const standingOf = (band: Usual, reading: number): Standing => {
   const circular = band.signal === 'sleep_midpoint';
   const offset = circular ? circularDelta(reading, band.centre) : reading - band.centre;
   const up = circular ? circularDelta(band.high, band.centre) : band.high - band.centre;
@@ -40,11 +40,13 @@ const standingOf = (band: Usual, reading: number): Standing => {
   return { state: 'compared', direction: 'within' };
 };
 
-const PILLARS = { recovery: 'recovery', form: 'form', weight: 'load' } as const;
+// The model calls the Weight pillar Load, and a part's direction by the reading's own sense: sleep timing is later or earlier.
+export const PILLARS = { recovery: 'recovery', form: 'form', weight: 'load' } as const;
 type Parts = z.infer<typeof healthPartsV1Schema>;
-type StoredPart = NonNullable<Parts['recovery' | 'form' | 'weight']>[number];
+export type StoredPart = NonNullable<Parts['recovery' | 'form' | 'weight']>[number];
 const PART_DIRECTION = { above_usual: 'above', below_usual: 'below', usual: 'within' } as const;
 const CLOCK_DIRECTION = { above_usual: 'later', below_usual: 'earlier', usual: 'within' } as const;
+export const partDirection = (key: string, direction: keyof typeof PART_DIRECTION) => (key === 'sleep_midpoint' ? CLOCK_DIRECTION : PART_DIRECTION)[direction];
 
 // A part's standing: its own direction, which the engine read against the same band, and far when today's reading of that band lies
 // far; a band still short of the owner's fourteen days is forming. The sleep part stands against the need: its score is time asleep
@@ -55,7 +57,7 @@ const partOf = (pillar: keyof typeof PILLARS, part: StoredPart, readings: Readon
   if (part.key === 'sleep') return { pillar: 'recovery', key: 'sleep', need_tenths: Math.round(part.score / 10) };
   if (part.direction === null) return null;
   if (part.baseline?.state === 'provisional') return { ...named, standing: { state: 'forming' } } as Part;
-  const direction = (part.key === 'sleep_midpoint' ? CLOCK_DIRECTION : PART_DIRECTION)[part.direction];
+  const direction = partDirection(part.key, part.direction);
   const reading = part.signals.length === 1 ? readings.get(part.signals[0]!) : undefined;
   const far = reading?.state === 'compared' && reading.direction === direction && reading.far === true;
   // Movement with no band of its own was read on steps: the engine links a steps stand-in to no band.

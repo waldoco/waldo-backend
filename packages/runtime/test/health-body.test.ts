@@ -176,6 +176,7 @@ describe('the words the model is given', () => {
     expect(text).toContain('Load parts today: calendar: no reading today.');
     expect(text).toContain('Day load so far: far above your usual day (candidate, from approximate heart-rate zones).');
     expect(text).toContain('High strain at rest today (candidate): 09:00-11:00.');
+    expect(text).toContain('If get_crs is in your function list');
     expect(text).not.toContain('\n\n');
     expect(text.replace(/\b(?:[01]\d|2[0-3]):[0-5]\d\b/g, '').replace(/recovery\.v5/g, '')).not.toMatch(/\d/);
   });

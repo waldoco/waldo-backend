@@ -70,7 +70,7 @@ const words = (signal: HealthSignal) => HEALTH_SIGNALS[signal].words;
 const DIRECTION = '(?:far )?(?:above|below|later than|earlier than) usual|within usual';
 const expectedIn = (signal: HealthSignal, reach: Reach): RegExp => {
   if ('notYet' in reach) throw new Error('a kind that is not yet placed has no expectation');
-  if (reach.block === 'reading') return new RegExp(`${words(signal)}: (?:${DIRECTION})`);
+  if (reach.block === 'reading') return new RegExp(`${words(signal)}(?: so far today, against whole days)?: (?:${DIRECTION})`);
   if (reach.block === 'need') return new RegExp(`${words(signal)}: (?:met your need|about (?:one|two|three|four|five|six|seven|eight|nine) tenths? of your need)`);
   return /[Dd]ay load so far: (?:(?:far )?(?:above|below) your usual day|within your usual day)/;
 };

@@ -63,8 +63,8 @@ const seriesOf = (without: readonly string[]) => ({
 export const EVERY_KIND_SIGNALS: readonly string[] = [...new Set(seriesOf([]).sources[0]!.samples.map(entry => String(entry.signal)))];
 
 // The stored history the producer reads for its significance: the rows of the earlier days, as the database would answer.
-const historyOf = (rows: readonly Record<string, unknown>[]) => ({
-  history: { from: addDays(EVERY_KIND_TODAY, -89), to: EVERY_KIND_TODAY, days: rows.filter(row => row.day !== EVERY_KIND_TODAY) },
+const historyOf = (rows: readonly Record<string, unknown>[], today = EVERY_KIND_TODAY) => ({
+  history: { from: addDays(today, -89), to: today, days: rows.filter(row => String(row.day) < today) },
 });
 
 // Every row the producer writes for this owner, with every derived switch on, oldest first; today's row last. without: kinds this
@@ -86,4 +86,29 @@ export const everyKindRows = async (without: readonly string[] = []): Promise<Re
   const backfilled = await run([]);
   const rows = await run(backfilled);
   return [...backfilled.filter(row => !rows.some(next => next.day === row.day)), ...rows].sort((a, b) => String(a.day).localeCompare(String(b.day)));
+};
+
+// The rows of an owner whose phone synced every evening: one producer run a day, each reading only what had arrived by then, so each
+// day's row was written while it was today, with its parts and bands, as an owner who syncs daily has them. Oldest first.
+export const everyKindDailyRows = async (): Promise<Record<string, unknown>[]> => {
+  const full = seriesOf([]);
+  const stored = new Map<string, Record<string, unknown>>();
+  for (let back = NIGHTS - 1; back >= 0; back--) {
+    const today = addDays(EVERY_KIND_TODAY, -back);
+    const readAt = `${today}T20:00:00.000123Z`;
+    const series = { ...full, read_at: readAt, sources: full.sources.map(s => ({ ...s, samples: s.samples.filter(e => String(e.day) <= today) })) };
+    await produceHealthScores({
+      readSeries: async range => ({ ...series, sources: series.sources.map(s => ({ ...s, samples: s.samples.filter(e => range.signals.includes(String(e.signal))) })) }),
+      writeContext: async payload => {
+        const row = JSON.parse(payload) as Record<string, unknown>;
+        const held = stored.get(String(row.day));
+        if (!(row.backfilled === true && held && held.backfilled !== true)) stored.set(String(row.day), row);
+        return { written: true };
+      },
+      compute: dailyScoresFor('1'),
+      readHistory: async () => historyOf([...stored.values()], today),
+      scoreParts: true, usual: true, trainingLoad: true, changes: true, dayLoad: true, stressCurve: true, passiveLoad: ['apple'],
+    } as Parameters<typeof produceHealthScores>[0], { now: Date.parse(readAt), timezone: 'UTC' });
+  }
+  return [...stored.values()].sort((a, b) => String(a.day).localeCompare(String(b.day)));
 };

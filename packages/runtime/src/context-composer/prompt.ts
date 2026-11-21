@@ -14,6 +14,7 @@ import {
   type Skill,
   type TrustedInvocationEnvelope,
 } from '@waldo/contracts';
+import { USUAL_SPAN } from '../health/scores/usual';
 import { sanitiseVerifyOnly } from '../scribe/sanitiser';
 import { MODEL_CONTEXT_MAX_CHARS, sanitiseInputSchema, sanitiseResultSchema, type SanitisationFailureSource, type SanitiseFailureReason } from '@waldo/contracts';
 import { sha256Prefixed } from './canonical';
@@ -323,8 +324,9 @@ function renderBody(body: DerivedBody | undefined): string[] {
     ? 'High strain at rest today (candidate): no settled hour so far.'
     : `High strain at rest today (candidate): ${body.strain_hours.map((range) => `${range.start}-${range.end}`).join('; ')}.`];
   return [
-    ...(body.readings.length === 0 ? [] : [`Against your usual today: ${body.readings.map((reading) => `${HEALTH_USUAL_WORDS[reading.signal]}: ${standingWords(reading.standing)}`).join('; ')}.`]),
+    ...(body.readings.length === 0 ? [] : [`Against your usual today: ${body.readings.map((reading) => `${HEALTH_USUAL_WORDS[reading.signal]}${USUAL_SPAN[reading.signal] === 'so_far_against_whole_days' ? ' so far today, against whole days' : ''}: ${standingWords(reading.standing)}`).join('; ')}.`]),
     ...pillars, ...loadLine, ...strain,
+    'If get_crs is in your function list, it gives each day\'s Recovery, Form and Load and their parts over up to ninety days, with these bands and today\'s readings against them; read it before saying how the body has moved over days or weeks.',
   ];
 }
 
