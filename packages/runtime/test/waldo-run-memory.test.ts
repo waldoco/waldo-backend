@@ -4,8 +4,9 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { TOOL_PERMISSIONS, triggerTypeSchema, type LLMRequest, type ToolName } from '@waldo/contracts';
 import { createOwnerResponder } from '../src/channels/owner-turn';
+import { ownerJobAdmission } from '../src/identity/surface-owner-admission';
 import type { ConversationStore } from '../src/channels/conversation-store';
-import { LOOP_CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS } from '../src/channels/check-back';
+import { DAY_CARD_TOOLS, LOOP_CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS } from '../src/channels/check-back';
 import { claimStore, memoryPrompt, withOutsideNotes, WALDO_RUN_REF, type ClaimStore } from '../src/memory/claims';
 import { memoryHandlers, type MemoryToolContext } from '../src/tools/live/memory';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
@@ -17,7 +18,7 @@ const NOTE = { kind: 'fact', text: 'The Northwind pitch moved to Friday.', evide
 
 const withSql = <T,>(name: string, work: (sql: SqlStorage) => Promise<T>) =>
   runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(name)), async (_instance, state) => work(state.storage.sql));
-const rememberIn = (sql: SqlStorage, store: ClaimStore) => memoryHandlers({ sql, store, conversationRef: 'owner', hideHistory: async () => undefined }).find((tool) => tool.name === 'remember')!;
+const rememberIn = (sql: SqlStorage, store: ClaimStore, conversationRef = 'owner') => memoryHandlers({ sql, store, conversationRef, hideHistory: async () => undefined }).find((tool) => tool.name === 'remember')!;
 const runCtx = (over: Partial<MemoryToolContext> = {}) => ({ authenticatedUserId: OWNER, trigger: 'user_message', memoryRun: { ownerId: OWNER, conversationRef: 'owner', runId: 'card:brief:1' }, ...over }) as unknown as MemoryToolContext;
 
 describe('remember in a run Waldo started', () => {
@@ -110,5 +111,48 @@ describe('a run that read outside content', () => {
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatchObject({ toolArgSourceTaint: 'external', memoryRun: { runId: expect.any(String) } });
     expect(seen[0]!.memoryTurn).toBeUndefined();
+  });
+});
+
+// The Brief and every day card run tainted, since each reads calendar or mail text someone else wrote (owner-do ledgerJob),
+// and so does the heartbeat's check-back. While notes learned from outside content are off (MEMORY_OUTSIDE_NOTES, off in
+// staging), what such a run tries to keep is refused, not stored as Waldo's own note; it is kept, labelled as outside
+// content, only where those notes are on.
+describe('a Brief over the owner\'s calendar', () => {
+  const brief = async (name: string, outsideNotes: boolean) => withSql(name, async (sql) => {
+    const store = outsideNotes ? withOutsideNotes(claimStore(sql)) : claimStore(sql);
+    const fake = (tool: string) => ({ name: tool as ToolName, description: `The ${tool} tool.`, schema: z.object({}).passthrough(), trigger_allowlist: allowed(tool),
+      handle: async () => ({ ok: true as const, data: { done: tool }, source_taint: null }) });
+    // Bound to the surface's chat, as owner-do binds the memory tools, which is the chain a Telegram job runs on.
+    const tools = [rememberIn(sql, store, 'telegram-1'), ...DAY_CARD_TOOLS.filter((tool) => tool !== 'remember' && tool !== 'get_context').map(fake)];
+    const requests: LLMRequest[] = [];
+    const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {
+      requests.push(request);
+      const call = !request.response_format && requests.filter((seen) => !seen.response_format).length === 1 ? { call_id: 'keep', name: 'remember', arguments: JSON.stringify(NOTE) } : undefined;
+      return { ok: true, data: { model: request.model, text: request.response_format ? '{}' : call ? '' : 'SKIP', ...(call ? { tool_calls: [call] } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
+    } };
+    const saved: Parameters<ConversationStore['save']>[0][number][] = [];
+    const conversation: ConversationStore = { load: async () => ({ entries: [...saved], leafId: saved.at(-1)?.id ?? null }), save: async (rows) => { saved.push(...rows); } };
+    const admission = await ownerJobAdmission({ lookup: async () => ({ ownerId: '10000000-0000-0000-0000-000000000001', bindingRef: 'runtime:owner-demo', revision: '5', physicalDoId: 'actual-do' }),
+      expectedPhysicalDoId: 'actual-do', job: 'brief', occurrenceKey: `brief:${crypto.randomUUID()}`, occurredAt: Date.now() - 1 });
+    const args: Parameters<typeof createOwnerResponder> = [{ openaiApiKey: 'fixture', toolLoader: 'harness' }];
+    args[1] = conversation; args[3] = () => undefined; args[5] = tools as never; args[7] = false; args[10] = gateway;
+    args[21] = { jobHost: { admit: async () => admission, chain: (_admission, surfaceChain) => surfaceChain }, leanScheduled: true };
+    await createOwnerResponder(...args).prompt('card:brief:1', 'telegram-1', 'Write the Daily Brief for today.\n\nCalendar: Northwind pitch, Friday 10:00',
+      async (_hop, work) => work(), 'telegram', DAY_CARD_TOOLS, undefined, undefined, undefined, 'external', 'plans', undefined, undefined, true);
+    const asked = requests.filter((request) => !request.response_format);
+    return { offered: (asked[0]!.tools ?? []).map((tool) => tool.name), answer: JSON.stringify(asked[1]), claims: store.allClaims() };
+  });
+
+  it('is offered remember, but keeps nothing while notes learned from outside content are off', async () => {
+    const { offered, answer, claims } = await brief('brief-outside-off', false);
+    expect(offered).toContain('remember');
+    expect(answer).toContain('keeps no note from it');
+    expect(claims).toEqual([]);
+  });
+
+  it('keeps the note as learned from outside content where those notes are on', async () => {
+    const { claims } = await brief('brief-outside-on', true);
+    expect(claims.map((claim) => claim.origin)).toEqual(['untrusted']);
   });
 });
