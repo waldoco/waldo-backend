@@ -47,6 +47,7 @@ import { photonCallback } from './channels/imessage/photon-routes';
 import { PHOTON_CALLBACK_PATH, photonConfig } from './channels/imessage/photon';
 import { photonKeepAlive } from './channels/imessage/enrollment';
 import { withSwitches } from './switches';
+import { noteBrowserSession } from './identity/session-device';
 
 // Augment the ambient worker env so both the DO base (typed on Cloudflare.Env)
 // and the test's `env` import (also Cloudflare.Env) see the DO bindings.
@@ -138,6 +139,7 @@ const routedConsoleTicket = async (request: Request, env: Env): Promise<Response
   try { ownerCookie = await auth.ownerCookie(ticket.owner, request); }
   catch { ownerCookie = null; }
   if (!ownerCookie) return new Response('Sign-in is temporarily unavailable. Request a new link and try again.', { status: 503, headers: { 'cache-control': 'no-store' } });
+  await noteBrowserSession(env.OWNER_DO, ticket.owner, ownerCookie, request);
   const headers = new Headers(response.headers);
   headers.append('set-cookie', consoleCookie(OWNER_COOKIE, ownerCookie));
   headers.set('cache-control', 'no-store');
