@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { GoogleError } from '../src/connectors/google';
 import { ensureGmailWatches, gmailWatchesBook } from '../src/channels/gmail-watches';
 import { watchStatusLine } from '../src/channels/watch-upkeep';
 import { gmailPush, type GmailWatch } from '../src/connectors/google-push';
@@ -14,7 +15,7 @@ const world = () => {
   const store = kv(), book = gmailWatchesBook(store), watched: string[] = [], refuse = new Set<string>();
   let now = 1_000 * HOUR;
   const proxy = { gmailWatch: async (_doName: string, connection: string): Promise<GmailWatch> => {
-    if (refuse.has(connection)) throw new Error('gmail 403');
+    if (refuse.has(connection)) throw new GoogleError(403, 'google_push_refused');
     watched.push(connection);
     return { historyId: '100', expiration: now + 7 * DAY };
   } };
@@ -25,7 +26,7 @@ const world = () => {
 describe('a Gmail watch per mail account', () => {
   it('watches each account, a push names its account, and a redelivery wakes nothing', async () => {
     const w = world();
-    expect(await w.run([{ id: 'conn-1', local: false }, { id: 'conn-2', local: false }])).toEqual({ started: 2, failed: 0, skipped: 0, fresh: 0 });
+    expect(await w.run([{ id: 'conn-1', local: false }, { id: 'conn-2', local: false }])).toEqual({ started: 2, failed: 0, skipped: 0, fresh: 0, misses: [] });
     expect(w.watched).toEqual(['conn-1', 'conn-2']);
     expect(w.book.admit('conn-2', '101')).toBe('conn-2');
     expect(w.book.admit('conn-2', '101')).toBeNull();
@@ -38,7 +39,7 @@ describe('a Gmail watch per mail account', () => {
     const w = world();
     w.refuse.add('conn-1');
     expect(await w.run([{ id: 'conn-1', local: false }, { id: 'local:old@example.test', local: true }, { id: 'conn-3', local: false }]))
-      .toEqual({ started: 1, failed: 1, skipped: 1, fresh: 0 });
+      .toEqual({ started: 1, failed: 1, skipped: 1, fresh: 0, misses: ['google_refused'] });
     expect(w.book.misses()).toEqual([{ account: 'conn-1', at: w.now(), reason: 'failed' }, { account: 'local:old@example.test', at: w.now(), reason: 'local_rail' }]);
     expect(w.book.admit('conn-1', '200')).toBeNull();
     w.refuse.clear();
@@ -54,7 +55,7 @@ describe('a Gmail watch per mail account', () => {
     w.refuse.clear();
     w.book.clearFailure('conn-1');
     w.book.clearFailure('conn-2');
-    expect(await w.run([{ id: 'conn-1', local: false }, { id: 'conn-2', local: false }])).toEqual({ started: 1, failed: 0, skipped: 0, fresh: 1 });
+    expect(await w.run([{ id: 'conn-1', local: false }, { id: 'conn-2', local: false }])).toEqual({ started: 1, failed: 0, skipped: 0, fresh: 1, misses: [] });
   });
 
   it('an account no longer read is forgotten, so its pushes wake nothing', async () => {

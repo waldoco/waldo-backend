@@ -439,6 +439,17 @@ it('a signed calendar watch on a calendar grant starts the channel at the edge, 
  expect(await(await serve(await request({do_name:'owner',op:'channel_stop',connection:'conn',channel_id:'chan-1',resource_id:'res-1'}))).json()).toEqual({data:null});
  expect(JSON.parse(seen[1]!)).toEqual({id:'chan-1',resourceId:'res-1'});
 });
+it('an events watch Google cannot push answers and logs its closed code under its own op, never the calendar',async()=>{
+ fixture();const inner=fetch;
+ vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>String(input).includes('/events/watch')
+  ?Response.json({error:{code:400,errors:[{reason:'pushNotSupportedForRequestedResource',message:'PRIVATE_CANARY'}]}},{status:400}):inner(input,init)));
+ const logs=vi.spyOn(console,'log');
+ const out=await(await serve(await request({...watchBody,op:'events_watch',calendar_id:'holidays@group.v.calendar.example.test'}))).json() as {error?:{message:string}};
+ expect(out.error?.message).toBe('google_push_unsupported');
+ const lines=logs.mock.calls.map(call=>JSON.parse(String(call[0])) as {hop:string;op?:string;error?:string}).filter(line=>line.hop==='connector_proxy');
+ expect(lines.map(({op,error})=>[op,error])).toEqual([['events_watch','google_push_unsupported']]);
+ expect(JSON.stringify(logs.mock.calls)).not.toMatch(/holidays|PRIVATE_CANARY/);
+});
 it('a calendar watch without a calendar scope, on a foreign connection or to a foreign path never reaches Google',async()=>{
  for(const [input,scopes] of [[watchBody,['https://www.googleapis.com/auth/gmail.send']],[{...watchBody,connection:'foreign'},undefined],[{...watchBody,address:'https://w.test/elsewhere'},undefined]] as const){
   const f=fixture();if(scopes)f.scope(scopes);const seen=withWatch();

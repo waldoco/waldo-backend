@@ -1,7 +1,7 @@
 import { routerSignature, signedRpc, hex, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { ProxyIntentError, type ProxyIntent } from './proxy-intent';
 import { GOOGLE_METHODS, GOOGLE_REVOKE_OUTCOMES, GoogleError, parseGoogleProfile, type GoogleClient, type GoogleProfile, type GoogleRevokeOutcome, type GoogleTokens } from './google';
-import type { CalendarWatch, GmailWatch } from './google-push';
+import { GooglePushError, type CalendarWatch, type GmailWatch } from './google-push';
 import { withRequestTimeout } from '../identity/request-timeout';
 
 // Google tokens live in Supabase Vault and are used only inside the connector-proxy Edge Function.
@@ -99,13 +99,13 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     calendarWatch: async (doName, connection, input) => {
       const other = input.calendarId !== undefined && input.calendarId !== 'primary';
       const { data } = await post({ do_name: doName, op: other ? 'events_watch' : 'calendar_watch', connection, channel_id: input.channelId, token: input.token, address: input.address, ...(other ? { calendar_id: input.calendarId } : {}) }) as { data?: { channelId?: unknown; resourceId?: unknown; expiration?: unknown } };
-      if (data?.channelId !== input.channelId || typeof data.resourceId !== 'string' || typeof data.expiration !== 'number' || !Number.isSafeInteger(data.expiration)) throw new Error('calendar watch reply malformed');
+      if (data?.channelId !== input.channelId || typeof data.resourceId !== 'string' || typeof data.expiration !== 'number' || !Number.isSafeInteger(data.expiration)) throw new GooglePushError(502, 'malformed');
       return { channelId: input.channelId, resourceId: data.resourceId, expiration: data.expiration };
     },
     stopChannel: async (doName, connection, channel) => { await post({ do_name: doName, op: 'channel_stop', connection, channel_id: channel.channelId, resource_id: channel.resourceId }); },
     gmailWatch: async (doName, connection, topic) => {
       const { data } = await post({ do_name: doName, op: 'gmail_watch', connection, topic }) as { data?: { historyId?: unknown; expiration?: unknown } };
-      if (typeof data?.historyId !== 'string' || !/^\d{1,30}$/.test(data.historyId) || typeof data.expiration !== 'number' || !Number.isSafeInteger(data.expiration)) throw new Error('gmail watch reply malformed');
+      if (typeof data?.historyId !== 'string' || !/^\d{1,30}$/.test(data.historyId) || typeof data.expiration !== 'number' || !Number.isSafeInteger(data.expiration)) throw new GooglePushError(502, 'malformed');
       return { historyId: data.historyId, expiration: data.expiration };
     },
     // Google is asked first, and no answer of its keeps the secret: the delete runs whatever it was, and only a failed

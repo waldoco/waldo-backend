@@ -9,13 +9,15 @@ export const CHANNEL_STOP_URL = 'https://www.googleapis.com/calendar/v3/channels
 const WATCH_TTL_S = 7 * 24 * 3600;
 const RENEW_BEFORE_MS = 24 * 3_600_000;
 export const RETRY_AFTER_FAILURE_MS = 6 * 3_600_000;
+// Google's own answer that a calendar has no push (a public holidays calendar, for one) lasts: it is asked again weekly.
+export const RETRY_UNSUPPORTED_MS = 7 * 24 * 3_600_000;
 
 export type CalendarWatch = Readonly<{ channelId: string; resourceId: string; expiration: number }>;
-export type CalendarWatchState = CalendarWatch | Readonly<{ failedAt: number }>;
+export type CalendarWatchState = CalendarWatch | Readonly<{ failedAt: number; unsupported?: boolean }>;
 export type CalendarPush = Readonly<{ channelId: string; token: string; state: 'sync' | 'exists' | 'not_exists'; messageNumber: number }>;
 
 export class GooglePushError extends Error {
-  constructor(readonly status: number, readonly code: 'invalid_request' | 'auth' | 'refused' | 'transient' | 'malformed') { super(`google_push_${code}`); this.name = 'GooglePushError'; }
+  constructor(readonly status: number, readonly code: 'invalid_request' | 'auth' | 'refused' | 'unsupported' | 'transient' | 'malformed') { super(`google_push_${code}`); this.name = 'GooglePushError'; }
 }
 
 const encoder = new TextEncoder();
@@ -57,8 +59,18 @@ export const parseCalendarPush = (headers: Headers): CalendarPush | null => {
   return { channelId, token, state, messageNumber: Number(number) };
 };
 
-const failure = (status: number): GooglePushError =>
-  new GooglePushError(status, status === 401 ? 'auth' : status === 429 || status >= 500 ? 'transient' : 'refused');
+// Only the reason Google names is read from its error body, and only to tell a calendar that has no push from a refusal.
+const UNSUPPORTED_REASON = 'pushNotSupportedForRequestedResource';
+const failure = async (response: Response): Promise<GooglePushError> => {
+  const { status } = response;
+  if (status === 401) { void response.body?.cancel(); return new GooglePushError(status, 'auth'); }
+  if (status === 429 || status >= 500) { void response.body?.cancel(); return new GooglePushError(status, 'transient'); }
+  const text = await response.text().catch(() => '');
+  let reasons: unknown;
+  try { reasons = (JSON.parse(text.length <= 4096 ? text : '') as { error?: { errors?: unknown } }).error?.errors; } catch { reasons = undefined; }
+  const unsupported = Array.isArray(reasons) && reasons.some((entry) => (entry as { reason?: unknown } | null)?.reason === UNSUPPORTED_REASON);
+  return new GooglePushError(status, unsupported ? 'unsupported' : 'refused');
+};
 
 const post = async (fetcher: typeof fetch, bearer: string, url: string, body: unknown): Promise<Response> => {
   let response: Response;
@@ -67,7 +79,7 @@ const post = async (fetcher: typeof fetch, bearer: string, url: string, body: un
   } catch {
     throw new GooglePushError(502, 'transient');
   }
-  if (!response.ok) { void response.body?.cancel(); throw failure(response.status); }
+  if (!response.ok) throw await failure(response);
   return response;
 };
 
@@ -91,7 +103,7 @@ export const stopChannel = async (fetcher: typeof fetch, bearer: string, channel
 
 // Renew a day before expiry; after a failed attempt, the 10-minute poll carries on and the next try waits.
 export const watchDue = (state: CalendarWatchState | null, now: number): boolean =>
-  state === null ? true : 'failedAt' in state ? now - state.failedAt >= RETRY_AFTER_FAILURE_MS : state.expiration - now < RENEW_BEFORE_MS;
+  state === null ? true : 'failedAt' in state ? now - state.failedAt >= (state.unsupported ? RETRY_UNSUPPORTED_MS : RETRY_AFTER_FAILURE_MS) : state.expiration - now < RENEW_BEFORE_MS;
 
 // Gmail pushes arrive through Google Cloud Pub/Sub. The owner sets up the topic and push subscription in
 // the OAuth app's Cloud project, and each environment names that project in GMAIL_PUSH_PROJECT. Gmail push is
