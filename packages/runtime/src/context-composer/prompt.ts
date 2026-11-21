@@ -14,7 +14,7 @@ import {
   type Skill,
   type TrustedInvocationEnvelope,
 } from '@waldo/contracts';
-import { USUAL_SPAN } from '../health/scores/usual';
+import { PARTS_SO_FAR_AGAINST_WHOLE_DAYS, USUAL_SPAN } from '../health/scores/usual';
 import { sanitiseVerifyOnly } from '../scribe/sanitiser';
 import { MODEL_CONTEXT_MAX_CHARS, sanitiseInputSchema, sanitiseResultSchema, type SanitisationFailureSource, type SanitiseFailureReason } from '@waldo/contracts';
 import { sha256Prefixed } from './canonical';
@@ -308,7 +308,7 @@ const partWords = (part: DerivedBody['parts'][number]): string => {
   const name = 'via' in part && part.via === 'steps' ? HEALTH_SIGNALS.steps_window.words : PART_WORDS[part.key] ?? part.key.replace(/_/g, ' ');
   if ('need_tenths' in part) return `${name}: ${part.need_tenths >= 10 ? 'met your need' : `about ${TENTHS[part.need_tenths]} of your need`}`;
   if ('unavailable' in part) return `${name}: ${UNAVAILABLE_PART_WORDS[part.unavailable]}`;
-  return `${name}: ${standingWords(part.standing)}`;
+  return `${name}${PARTS_SO_FAR_AGAINST_WHOLE_DAYS.includes(part.key) ? ' so far today, against whole days' : ''}: ${standingWords(part.standing)}`;
 };
 function renderBody(body: DerivedBody | undefined): string[] {
   if (body === undefined) return [];
@@ -326,7 +326,7 @@ function renderBody(body: DerivedBody | undefined): string[] {
   return [
     ...(body.readings.length === 0 ? [] : [`Against your usual today: ${body.readings.map((reading) => `${HEALTH_USUAL_WORDS[reading.signal]}${USUAL_SPAN[reading.signal] === 'so_far_against_whole_days' ? ' so far today, against whole days' : ''}: ${standingWords(reading.standing)}`).join('; ')}.`]),
     ...pillars, ...loadLine, ...strain,
-    'If get_crs is in your function list, it gives each day\'s Recovery, Form and Load and their parts over up to ninety days, with these bands and today\'s readings against them; read it before saying how the body has moved over days or weeks.',
+    'get_crs, where it is offered (among the health tools), gives each day\'s Recovery, Form and Load and their parts over up to ninety days, with these bands and today\'s readings against them; read it before saying how the body has moved over days or weeks.',
   ];
 }
 

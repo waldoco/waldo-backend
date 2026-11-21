@@ -20,6 +20,8 @@ export const USUAL_SPAN = {
   breathing_rate: 'night', spo2: 'night', wrist_temperature: 'night', awake_time: 'night', walking_heart_rate: 'day', steps: 'same_hours',
   active_energy: 'so_far_against_whole_days', vo2_max: 'day',
 } as const satisfies Readonly<Record<(typeof USUAL_SIGNALS)[number], 'night' | 'day' | 'same_hours' | 'so_far_against_whole_days'>>;
+// Load's physical part reads the day's active energy so far against earlier whole days, as active energy's own band does (weight.ts).
+export const PARTS_SO_FAR_AGAINST_WHOLE_DAYS: readonly string[] = ['physical_load'];
 // A reading that cannot be below nothing has a band that stops at nothing.
 const NON_NEGATIVE = new Set(['daylight', 'movement', 'awake_time', 'active_energy']);
 const round4 = (value: number) => Math.round(value * 10_000) / 10_000;

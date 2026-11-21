@@ -253,6 +253,16 @@ describe('the brain tool surface', () => {
     }
   });
 
+  it('offers get_crs among the health tools while HEALTH_BODY_CONTEXT is on, and not while it is off', async () => {
+    const on = await ownerReply('tool-surface-crs-on', 'on', { HEALTH_BODY_CONTEXT: '1' });
+    expect(on.tools!.find((tool) => tool.name === 'get_crs')).toMatchObject({ namespace: 'health', defer_loading: true });
+    expect(on.tool_search!.namespaces).toHaveProperty('health');
+    const off = await ownerReply('tool-surface-crs-off', 'on', { HEALTH_BODY_CONTEXT: '0' });
+    expect(off.tools!.map((tool) => tool.name)).not.toContain('get_crs');
+    const direct = await ownerReply('tool-surface-crs-direct', 'off', { HEALTH_BODY_CONTEXT: '1' });
+    expect(direct.tools!.map((tool) => tool.name)).toContain('get_crs');
+  });
+
   // A round after a search replays the provider's search items, and an OpenAI tool_search_output carries the loaded
   // definitions: health tools among them. The scribe reads each tool turn whole, so it must pass them unchanged.
   it('a search round replays through the scribe unchanged, health tool definitions included', async () => {

@@ -166,18 +166,34 @@ describe('the words the model is given', () => {
     const text = renderHealth(material({
       readings: [{ signal: 'breathing_rate', standing: { state: 'compared', direction: 'above', far: true } }, { signal: 'spo2', standing: { state: 'forming' } }],
       parts: [{ pillar: 'recovery', key: 'sleep', need_tenths: 8 }, { pillar: 'form', key: 'sleep_midpoint', standing: { state: 'compared', direction: 'earlier' } },
-        { pillar: 'form', key: 'movement', standing: { state: 'compared', direction: 'within' }, via: 'steps' }, { pillar: 'load', key: 'calendar', unavailable: 'no_reading' }],
+        { pillar: 'form', key: 'movement', standing: { state: 'compared', direction: 'within' }, via: 'steps' }, { pillar: 'load', key: 'calendar', unavailable: 'no_reading' },
+        { pillar: 'load', key: 'physical_load', standing: { state: 'compared', direction: 'below' } }],
       day_load: { state: 'compared', direction: 'above', far: true, approximate: true },
       strain_hours: [{ start: '09:00', end: '11:00' }],
     }));
     expect(text).toContain('Against your usual today: breathing rate: far above usual; blood oxygen: usual still forming.');
     expect(text).toContain('Recovery parts today: time asleep: about eight tenths of your need.');
     expect(text).toContain('Form parts today: sleep timing: earlier than usual; steps: within usual.');
-    expect(text).toContain('Load parts today: calendar: no reading today.');
+    expect(text).toContain('Load parts today: calendar: no reading today; physical load so far today, against whole days: below usual.');
     expect(text).toContain('Day load so far: far above your usual day (candidate, from approximate heart-rate zones).');
     expect(text).toContain('High strain at rest today (candidate): 09:00-11:00.');
-    expect(text).toContain('If get_crs is in your function list');
+    expect(text).toContain('get_crs, where it is offered (among the health tools)');
     expect(text).not.toContain('\n\n');
     expect(text.replace(/\b(?:[01]\d|2[0-3]):[0-5]\d\b/g, '').replace(/recovery\.v5/g, '')).not.toMatch(/\d/);
+  });
+});
+
+import { parseJsonc } from '../../../scripts/jsonc.mjs';
+import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
+import config from '../wrangler.jsonc?raw';
+// The body read's readings stand on what changed today, so the switch that gives the model its body words is never on where the
+// list is not written: there the model would hear the parts and no reading outside them.
+describe('HEALTH_BODY_CONTEXT in the Worker config', () => {
+  it('is on only where HEALTH_CHANGES is on', () => {
+    type Vars = Readonly<Record<string, string>>;
+    const parsed = flatConfig(parseJsonc(config)) as { vars: Vars; env: Readonly<Record<string, { vars?: Vars }>> };
+    for (const [name, vars] of [['production', parsed.vars], ...Object.entries(parsed.env).map(([env, entry]) => [env, { ...parsed.vars, ...entry.vars }] as const)] as const) {
+      if (vars.HEALTH_BODY_CONTEXT === '1') expect(vars.HEALTH_CHANGES, name).toBe('1');
+    }
   });
 });

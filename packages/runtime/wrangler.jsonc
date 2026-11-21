@@ -406,7 +406,7 @@
           "HEALTH_SOLO_NOTICE": "1",
           "HEALTH_PARTIAL_CONTEXT": "1",
           "HEALTH_INVENTORY": "1",
-          "HEALTH_BODY_CONTEXT": "1",
+          "HEALTH_BODY_CONTEXT": "0",
           "HEALTH_TRAINING_LOAD": "1",
           "HEALTH_SCORE_PARTS": "1",
           "HEALTH_USUAL": "1",
