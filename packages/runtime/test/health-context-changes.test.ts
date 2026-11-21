@@ -34,6 +34,12 @@ describe('the model\'s words for what changed today', () => {
       expect(summary(changes)).not.toContain('Changed today');
     }
   });
+  it('reads sleep timing round the clock, as later or earlier than usual, across midnight', () => {
+    const midpoint = (from: number, to: number) => ({ ...change(3, 'sleep_midpoint', 'form', from, to, 'declined'), unit: 'local_minute' });
+    expect(summary([midpoint(1430, 30)])).toContain('sleep timing later than your usual');
+    expect(summary([midpoint(30, 1400)])).toContain('sleep timing earlier than your usual');
+    expect(summary([midpoint(30, 1400)])).not.toMatch(/sleep midpoint|above your usual|below your usual/);
+  });
   it('names at most six, the first six the list ranks', () => {
     const keys = ['sleep', 'hrv', 'resting_heart_rate', 'resting_state', 'daylight', 'movement', 'stress'];
     const pillarOf: Record<string, string> = { sleep: 'recovery', hrv: 'recovery', resting_heart_rate: 'recovery', resting_state: 'recovery', daylight: 'form', movement: 'form', stress: 'form' };
