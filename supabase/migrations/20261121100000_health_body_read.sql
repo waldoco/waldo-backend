@@ -14,7 +14,7 @@
 -- Basis: docs/app/HEALTH_PLANE_AMENDMENT.md ruling 2, the owner's derived health context may reach model context, here only under
 -- live storage and model-use grants for the row's basis, as waldo.health_context_read is. The values reach the owner's Worker for
 -- that turn's prompt alone, which is given words and clock times; nothing of them is stored, logged or traced by this read.
--- No table, column or existing function changes. Rollback: supabase/rollback/20261121130000_health_body_read.down.sql.
+-- No table, column or existing function changes. Rollback: supabase/rollback/20261121100000_health_body_read.down.sql.
 create function waldo.health_body_read(p_do_name text, p_payload text, p_at bigint, p_sig text) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare v_owner uuid; v_auth uuid; v_body jsonb;
