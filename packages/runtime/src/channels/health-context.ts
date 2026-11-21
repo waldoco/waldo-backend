@@ -24,6 +24,7 @@ import {
   type RecoveryHealthView,
 } from '@waldo/contracts';
 import { isPartialHealth } from '../context-composer/prompt';
+import { healthChangesV1Schema } from '../../../contracts/src/app/health-ingest';
 import type { ContextHealthMaterial, ZoneHealthMaterial } from '../context-composer/types';
 import { TRAINING_LOAD_PHRASES } from '../health/scores/training-load';
 import { shiftDay } from '../health/scores/time';
@@ -71,6 +72,8 @@ export type HealthContextRow = Readonly<{
     windows?: unknown;
     // The candidate training load: a closed phrase and method, or a closed reason, never a figure.
     training_load?: unknown;
+    // What changed today (healthChangesV1Schema), read by the model as words only: which subject, which way, and better or worse.
+    changes?: unknown;
     // The row's updated_at: when the app last compiled this derived context. It becomes the
     // narrative's compiled_at - the truthful as-of the prepareHealth provenance bound checks
     // against the turn's snapshot time, which a read-time stamp would always violate.
@@ -233,6 +236,33 @@ const presentOf = (context: RowContext): PartialHealthPresent[] => {
   ];
 };
 
+// What changed today, in words: the significant changes only, the furthest first, each its subject, which way it moved against
+// yesterday or the owner's usual, and whether that is better or worse. The figures stay on the row; no number reaches the prompt.
+const CHANGE_SUBJECT_WORDS: Readonly<Record<string, string>> = {
+  'tier1.recovery': 'Recovery', 'tier1.form': 'Form', 'tier1.weight': 'load',
+  'tier2.sleep': 'sleep', 'tier2.hrv': 'heart rate variability', 'tier2.resting_heart_rate': 'resting heart rate', 'tier2.from_the_night': 'the night',
+  'tier2.sleep_midpoint': 'sleep timing', 'tier2.daylight': 'daylight', 'tier2.movement': 'movement', 'tier2.stress': 'daytime stress',
+  'tier2.calendar': 'calendar load', 'tier2.tasks': 'task load', 'tier2.messages': 'message load', 'tier2.physical_load': 'physical load',
+  'tier2.resting_state': 'resting state', 'tier2.circadian': 'circadian rhythm',
+  'tier3.overnight_hrv': 'overnight heart rate variability', 'tier3.resting_heart_rate': 'resting heart rate', 'tier3.sleep_midpoint': 'sleep midpoint',
+  'tier3.daylight': 'daylight', 'tier3.movement': 'movement minutes', 'tier3.stress_heart_rate': 'daytime heart rate at rest', 'tier3.breathing_rate': 'breathing rate',
+  'tier3.spo2': 'blood oxygen', 'tier3.wrist_temperature': 'wrist temperature', 'tier3.awake_time': 'awake time in the night', 'tier3.walking_heart_rate': 'walking heart rate',
+  'tier3.steps': 'steps', 'tier3.active_energy': 'active energy', 'tier3.vo2_max': 'cardio fitness',
+};
+const VERDICT_WORDS: Readonly<Record<string, string>> = { improved: ' (better)', declined: ' (worse)', neutral: '' };
+const MAX_CHANGE_PHRASES = 6;
+const changeWords = (value: unknown): string | null => {
+  const parsed = healthChangesV1Schema.safeParse(value);
+  if (!parsed.success) return null;
+  const phrases = parsed.data.filter(change => change.significant).slice(0, MAX_CHANGE_PHRASES).flatMap(change => {
+    const subject = CHANGE_SUBJECT_WORDS[`tier${change.subject.tier}.${change.subject.key}`];
+    const way = change.against === 'usual' ? (change.to > change.from ? 'above your usual' : 'below your usual') : (change.to > change.from ? 'up since yesterday' : 'down since yesterday');
+    const phrase = subject ? `${subject} ${way}${VERDICT_WORDS[change.verdict]}` : null;
+    return phrase && wordOnly(phrase) ? [phrase] : [];
+  });
+  return phrases.length ? `Changed today: ${phrases.join('; ')}.` : null;
+};
+
 const daySummaryParts = (context: RowContext): string[] => {
   const parts: string[] = [];
   const drivers = [...new Set([...pillarDrivers(context.form), ...wordList(context.drivers, 4)])].slice(0, 4);
@@ -241,6 +271,8 @@ const daySummaryParts = (context: RowContext): string[] => {
   if (tags.length > 0) parts.push(`Tags: ${tags.join(', ')}.`);
   const trainingLoad = trainingLoadWords(context.training_load);
   if (trainingLoad !== null) parts.push(trainingLoad);
+  const changed = changeWords(context.changes);
+  if (changed !== null) parts.push(changed);
   return parts;
 };
 
