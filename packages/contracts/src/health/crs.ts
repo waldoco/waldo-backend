@@ -246,7 +246,8 @@ export type DerivedHealthDestinationView = z.infer<typeof derivedHealthDestinati
 export const DERIVED_HEALTH_VIEW_BOUNDS = {
   fields: Math.max(...[formHealthViewSchema, recoveryHealthViewSchema, partialHealthViewSchema].map((schema) => Object.keys(schema.shape).length)),
   items: healthSignalV1Schema.options.length,
-  depth: 4,
+  // A body reading's standing: the view, its body, the readings, a reading, its standing.
+  depth: 5,
 } as const;
 
 // The sensor-named pillar key must never sit directly against a numeric literal in non-test

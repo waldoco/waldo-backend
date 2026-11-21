@@ -93,8 +93,9 @@ describe('every stored kind reaches the model, or says why not yet', () => {
   it('the synthetic owner sends every kind, so a kind placed in the block is tested on a real reading', () => {
     expect([...EVERY_KIND_SIGNALS].sort()).toEqual([...HEALTH_SIGNAL_NAMES].sort());
   });
-  it('names each kind placed in the block with which way it stood against the owner\'s usual', async () => {
-    const block = await blockOf();
+  it('names each kind placed in the block with which way it stood against the owner\'s usual, in the prompt a run is given', async () => {
+    // Through the composer and the Scribe, as a Brief is composed: a block that renders but is refused on its way in reaches no one.
+    const block = await composedWith(await ownerJobAdmission({ lookup: bound, expectedPhysicalDoId: 'actual-do', job: 'brief', occurrenceKey: 'brief:reach', occurredAt: Date.now() - 1 }));
     const missing = Object.entries(REACH).flatMap(([signal, reach]) =>
       'notYet' in reach || ('owner' in reach && reach.owner) ? [] : expectedIn(signal as HealthSignal, reach).test(block) ? [] : [signal]);
     expect(missing, block).toEqual([]);

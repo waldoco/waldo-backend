@@ -261,6 +261,9 @@ describe('the brain tool surface', () => {
     expect(off.tools!.map((tool) => tool.name)).not.toContain('get_crs');
     const direct = await ownerReply('tool-surface-crs-direct', 'off', { HEALTH_BODY_CONTEXT: '1' });
     expect(direct.tools!.map((tool) => tool.name)).toContain('get_crs');
+    // Deferred inside the health namespace, it costs the round's up-front tool definitions nothing: the budget above holds as is.
+    expect(bytes(openAIVisible((await openAIBody(on)).tools as WireTool[]))).toBe(bytes(openAIVisible((await openAIBody(off)).tools as WireTool[])));
+    expect(bytes(anthropicVisible((await anthropicBody(on)).tools as WireTool[]))).toBe(bytes(anthropicVisible((await anthropicBody(off)).tools as WireTool[])));
   });
 
   // A round after a search replays the provider's search items, and an OpenAI tool_search_output carries the loaded
