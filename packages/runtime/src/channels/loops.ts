@@ -49,8 +49,12 @@ export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): numb
       return closed;
     },
     get: (id: string): Loop | undefined => sql.exec<Loop>('SELECT * FROM loops WHERE id = ?', id).toArray()[0],
-    // An open loop whose due time is behind the owner's local clock (a due date alone, once that day has begun), as dueLoops reads it.
-    passed: (id: string, localNow: string): boolean => sql.exec("SELECT 1 FROM loops WHERE id = ? AND status = 'open' AND due IS NOT NULL AND due <= ?", id, localNow.slice(0, 16)).toArray().length > 0,
+    // An open loop whose due time is behind the owner's clock, by the same rule as the words the model reads beside it (a due
+    // date alone once that day is over), so the model is never told a loop is ahead that outside content may close uncarded.
+    passed(id: string, now: number, timezone: string): boolean {
+      const due = sql.exec<{ due: string }>("SELECT due FROM loops WHERE id = ? AND status = 'open' AND due IS NOT NULL", id).toArray()[0]?.due;
+      return due !== undefined && passedLocal(due, now, timezone) !== '';
+    },
     // A loop the mail follow-through opened from an observed source; an owner's loop, or an unknown id, is not.
     sourceBound: (id: string): boolean => sql.exec('SELECT 1 FROM loop_mail_sources WHERE loop_id = ?', id).toArray().length > 0,
     list: (status = 'open') => sql.exec<Loop>('SELECT l.*, s.source_ref FROM loops l LEFT JOIN loop_mail_sources s ON s.loop_id = l.id WHERE l.status = ? ORDER BY l.due IS NULL, l.due, l.created_at', status).toArray(),
