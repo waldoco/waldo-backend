@@ -158,7 +158,7 @@ describe('an injected request in the owner\'s turn can set an owner-inward write
 
   it('a passed owner loop closed after outside text is listed with its title; a mail follow-up, whose title is someone else\'s text, is not', () => {
     expect(inwardReceipt('close_loop', JSON.stringify({ id: 'o1', outcome: 'done' }), { id: 'o1', closed: true, title: 'Send the deck', due: '2026-11-16T09:00' }))
-      .toBe('Closed "Send the deck" (due 2026-11-16 09:00) as its time had passed (tell me if you still want it and I will open it again)');
+      .toBe('Closed "Send the deck" (due 2026-11-16 09:00); tell me if you still want it and I will open it again');
     expect(inwardReceipt('close_loop', JSON.stringify({ id: 'o2', outcome: 'done' }), { id: 'o2', closed: true })).toBeNull();
   });
 });

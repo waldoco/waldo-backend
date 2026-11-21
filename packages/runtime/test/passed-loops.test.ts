@@ -50,13 +50,16 @@ const fake = (name: string) => ({ name: name as ToolName, description: `The ${na
 // The heartbeat's check-back turn, as owner-do runs it: tainted by the reader worker's result, lean, with the check-back tools.
 // The Brief runs the same way with the day card's tools and its own message; its reply is plain text, so the close is listed.
 const BRIEF = { tools: [...DAY_CARD_TOOLS, 'propose_calendar_change', 'propose_action'] as readonly ToolName[], message: 'Write the Daily Brief for today.' };
-const checkBack = async (sql: SqlStorage, closeId: (ids: Readonly<{ passed: string; ahead: string }>) => string, run?: typeof BRIEF) => {
+type LoopIds = Readonly<{ passed: string; ahead: string; dueToday: string; dueYesterday: string }>;
+const checkBack = async (sql: SqlStorage, closeId: (ids: LoopIds) => string, run?: typeof BRIEF) => {
   const now = Date.now();
   let n = 0;
   const book = loopBook(sql, { newId: () => String(++n), now: () => now });
   const passed = book.open({ title: 'Send the Northwind deck to Priya', due: localIso(now - 3 * DAY, 'UTC').slice(0, 16) });
   const ahead = book.open({ title: 'Renew the passport', due: localIso(now + 20 * DAY, 'UTC').slice(0, 16) });
-  const id = closeId({ passed: passed.id, ahead: ahead.id });
+  const dueToday = book.open({ title: 'Pay the rent', due: localIso(now, 'UTC').slice(0, 10) });
+  const dueYesterday = book.open({ title: 'File the expenses', due: localIso(now - DAY, 'UTC').slice(0, 10) });
+  const id = closeId({ passed: passed.id, ahead: ahead.id, dueToday: dueToday.id, dueYesterday: dueYesterday.id });
   const tools = [...loopHandlers(book), ...[...new Set([...LOOP_CHECK_BACK_TOOLS, ...(run?.tools ?? [])])].filter((name) => name !== 'close_loop' && name !== 'get_context').map(fake)];
   const requests: LLMRequest[] = [];
   const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {
@@ -72,7 +75,7 @@ const checkBack = async (sql: SqlStorage, closeId: (ids: Readonly<{ passed: stri
   const args: Parameters<typeof createOwnerResponder> = [{ openaiApiKey: 'fixture', toolLoader: 'harness' }];
   args[1] = store; args[3] = () => undefined; args[5] = tools as never; args[7] = false; args[10] = gateway;
   args[21] = { jobHost: { admit: async () => admission, chain: (_admission, surfaceChain) => surfaceChain }, leanScheduled: true,
-    loopIsSourceBound: (loop) => book.sourceBound(loop), loopHasPassed: (loop) => book.passed(loop, localIso(Date.now(), 'UTC')) };
+    loopIsSourceBound: (loop) => book.sourceBound(loop), loopHasPassed: (loop) => book.passed(loop, now, 'UTC') };
   const owner = createOwnerResponder(...args);
   const due = dueLoops(sql, now, 'UTC');
   const text = run ? `${run.message}\n\n${openLoopsPrompt(book, 'UTC', 10_000, false, now)}\n\nCalendar: Priya replied on Monday: "Got the deck, thanks."`
@@ -81,7 +84,7 @@ const checkBack = async (sql: SqlStorage, closeId: (ids: Readonly<{ passed: stri
     ? await owner.prompt('card:brief:1', 'telegram-7', text, async (_hop, work) => work(), 'telegram', run.tools, undefined, undefined, undefined, 'external', 'plans', undefined, ['propose_calendar_change', 'propose_action'], true)
     : await owner.prompt('heartbeat:1', 'telegram-7', text, async (_hop, work) => work(), 'telegram', LOOP_CHECK_BACK_TOOLS, undefined, undefined, undefined, 'external', 'decides', undefined, undefined, true);
   // Read inside the object's own context: storage cannot be touched once the callback returns.
-  return { status: (loop: string) => book.get(loop)?.status, passed, ahead, now, text, reply: checkBackReply(raw), requests: requests.filter((request) => !request.response_format),
+  return { status: (loop: string) => book.get(loop)?.status, passed, ahead, dueToday, dueYesterday, now, text, reply: checkBackReply(raw), requests: requests.filter((request) => !request.response_format),
     stillDue: dueLoops(sql, now + DAY, 'UTC').map((loop) => loop.id) };
 };
 
@@ -119,6 +122,38 @@ describe('a scheduled run that read outside content closes the owner\'s loop onc
     });
     expect(status).toBe('open');
     expect(JSON.stringify(requests[1])).toContain('taint_needs_approval');
+  });
+
+  it('a loop due today with no time is not yet passed: closing it under outside content needs the card; one due yesterday closes', async () => {
+    const { today, requests } = await withSql('date-only-loop-due-today', async (sql) => {
+      const run = await checkBack(sql, (ids) => ids.dueToday);
+      return { ...run, today: run.status(run.dueToday.id) };
+    });
+    expect(today).toBe('open');
+    expect(JSON.stringify(requests[1])).toContain('taint_needs_approval');
+    const after = await withSql('date-only-loop-due-yesterday', async (sql) => {
+      const run = await checkBack(sql, (ids) => ids.dueYesterday);
+      return run.status(run.dueYesterday.id);
+    });
+    expect(after).toBe('done');
+  });
+
+  it('passed agrees with the words the model reads, on the owner\'s own clock', async () => {
+    await withSql('passed-agrees-with-words', async (sql) => {
+      // 18:35 UTC on 20 Nov is 00:05 on 21 Nov in Kolkata.
+      const now = Date.parse('2026-11-20T18:35:00Z');
+      const book = loopBook(sql, { newId: () => crypto.randomUUID().slice(0, 6), now: () => now });
+      const cases = [['2026-11-21', false], ['2026-11-21T18:00', false], ['2026-11-20', true], ['2026-11-20T23:30', true], ['2026-11-22', false]] as const;
+      for (const [due, passed] of cases) {
+        const loop = book.open({ title: `Due ${due}`, due });
+        expect(book.passed(loop.id, now, 'Asia/Kolkata'), due).toBe(passed);
+        expect(passedLocal(due, now, 'Asia/Kolkata') !== '', due).toBe(passed);
+      }
+      const rent = book.open({ title: 'Pay the rent', due: '2026-11-21' });
+      expect(book.passed(rent.id, Date.parse('2026-11-21T18:30:00Z'), 'Asia/Kolkata')).toBe(true);
+      book.close(rent.id, 'done');
+      expect(book.passed(rent.id, Date.parse('2026-11-25T00:00:00Z'), 'Asia/Kolkata')).toBe(false);
+    });
   });
 
   it('the owner\'s open loops say which have passed', async () => {
