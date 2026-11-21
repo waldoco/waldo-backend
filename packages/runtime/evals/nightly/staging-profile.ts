@@ -142,6 +142,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   HEALTH_DAY_LOAD: gap('the day load is served to the app only; the model never reads it and the world serves synthetic health; staging has it on since migration 20261116110000 was applied (19 Nov 2026)'),
   HEALTH_PASSIVE_LOAD: gap('the passive day load is served to the app only; the model never reads it and the world serves synthetic health; staging lists apple and health_connect, and it acts only once HEALTH_DAY_LOAD is on after migrations 20261116110000 and 20261116110200'),
   HEALTH_STRESS_CURVE: gap('the stress curve is served to the app only; the model never reads it and the world serves synthetic health; staging has it on since migration 20261116110100 was applied (19 Nov 2026)'),
+  HEALTH_CHANGES: gap('what changed today reaches the model only as words beside the zone words, and the world serves synthetic health; staging has it off until the gate turns it on after its migration is applied'),
   HEALTH_FORM_CURVE: inert('the measured Form curve is read only by the app\'s calendar day; no turn is sent it'),
   MEMORY_NIGHTLY_SOURCE_UPDATES: gap('the nightly memory pass is not run in a trial'),
   MEMORY_CLAIM_CONTROLS: inert('the app\'s claim controls (confirm, forget, dismiss, bring up less) are an app read; the trial runs no app controls'),

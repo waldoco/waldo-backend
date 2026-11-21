@@ -5,7 +5,7 @@ import {
   healthConsentListV1Schema, healthConsentVersionV1, healthConsentWithdrawV1Schema, healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthSampleV1Schema,
   HEALTH_SCORES_HISTORY_REVISION_V1, healthScoresHistoryQueryV1Schema, healthScoresHistoryResponseV1Schema,
   healthScoresQueryV1Schema, healthScoresResponseV1Schema, healthScoresV1Schema, healthSettingsV1Schema, reduceSleepContextV2,
-  HEALTH_SLEEP_NEED_MAX_MINUTES_V1, HEALTH_SLEEP_NEED_MIN_MINUTES_V1,
+  HEALTH_SLEEP_NEED_MAX_MINUTES_V1, HEALTH_SLEEP_NEED_MIN_MINUTES_V1, healthChangesV1Schema,
   HEALTH_PARTS_REVISION_V1, healthPartKeysV1, healthPartsV1Schema, healthScoresHistoryV1Schema, healthUsualListV1Schema, healthUsualSignalV1Schema, healthUsualV1Schema,
   healthFormPartV1Schema, healthPartBaselineV1Schema, healthPartDirectionV1Schema, healthPartUnavailableReasonV1Schema, healthRecoveryPartV1Schema, healthSleepPartV1Schema,
   healthUsualMethodV1Schema, healthWeightPartV1Schema, healthGroupKeyV1Schema, healthPartGroupV1Schema, healthGroupKeysV1,
@@ -949,5 +949,41 @@ describe('health revision 15: an hour\'s heart-rate bins and the day\'s load cou
         { ...v1, parts: { ...v1.parts, passive: { state: 'unavailable', reason: 'watch_off' } } }, { ...v1, parts: { ...v1.parts, passive: { state: 'unavailable' } } }, { ...v1, parts: null },
       ]);
     });
+  });
+});
+
+describe('health revision 18: what changed today', () => {
+  const score = { subject: { tier: 1, key: 'weight' }, pillar: 'weight', from: 60, to: 70, unit: 'score', against: 'yesterday', verdict: 'declined', significant: true };
+  const part = { subject: { tier: 2, key: 'resting_state' }, pillar: 'recovery', from: 50, to: 42, unit: 'score', against: 'yesterday', verdict: 'declined', significant: false };
+  const reading = { subject: { tier: 3, key: 'resting_heart_rate', method: 'provider_resting_daily' }, pillar: 'recovery', from: 55, to: 50.4, unit: 'beats_per_minute', against: 'usual', verdict: 'improved', significant: true };
+  const vital = { subject: { tier: 3, key: 'breathing_rate', method: null }, pillar: 'recovery', from: 14, to: 16.2, unit: 'breaths_per_minute', against: 'usual', verdict: 'neutral', significant: true };
+  it('takes each tier with its own pillar, unit and comparison', () => {
+    expect(healthChangesV1Schema.safeParse([score, part, reading, vital]).success).toBe(true);
+    expect(healthChangesV1Schema.safeParse([]).success).toBe(true);
+    expect(healthChangesV1Schema.safeParse([{ ...score, subject: { tier: 2, key: 'calendar' } }]).success).toBe(true);
+    expect(healthChangesV1Schema.safeParse([{ ...reading, subject: { tier: 3, key: 'sleep_midpoint', method: null }, pillar: 'form', unit: 'local_minute', from: 20, to: 1410, verdict: 'declined' }]).success).toBe(true);
+    expect(healthScoresV1Schema.shape.changes.safeParse([score]).success).toBe(true);
+  });
+  it('refuses a change outside its subject\'s pillar, unit, comparison or method, a fraction of a point, a verdict on nothing, a repeat, and a stray key', () => {
+    const refused = [
+      [{ ...score, pillar: 'form' }], [{ ...part, pillar: 'weight' }], [{ ...reading, pillar: 'form' }],
+      [{ ...score, unit: 'percent' }], [{ ...reading, unit: 'score' }],
+      [{ ...score, against: 'usual' }], [{ ...reading, against: 'yesterday' }],
+      [{ ...reading, subject: { ...reading.subject, method: null } }], [{ ...vital, subject: { ...vital.subject, method: 'rmssd' } }],
+      [{ ...score, to: 70.5 }], [{ ...score, to: 101 }],
+      [{ ...score, to: 60, verdict: 'declined' }], [{ ...score, to: 60, verdict: 'neutral', significant: true }],
+      [score, { ...score, from: 61 }],
+      [{ ...score, note: 'heavy day' }], [{ ...score, verdict: 'great' }], [{ ...score, subject: { tier: 1, key: 'stamina' } }],
+      [{ ...score, subject: { tier: 4, key: 'weight' } }], [{ ...score, to: Number.NaN }],
+      Array.from({ length: 33 }, (_, i) => ({ ...vital, subject: { tier: 3, key: 'steps', method: null }, pillar: 'form', unit: 'count', from: i, to: i + 1, verdict: 'neutral' })),
+    ];
+    for (const changes of refused) expect(healthChangesV1Schema.safeParse(changes).success, JSON.stringify(changes).slice(0, 120)).toBe(false);
+  });
+});
+
+describe('health revision 18 fixture', () => {
+  it('is a scores answer the contract takes, for the app to test against', async () => {
+    const { scores } = (await import('./fixtures/health-scores-changes.v18.json')).default as { scores: unknown };
+    expect(healthScoresV1Schema.safeParse(scores).success).toBe(true);
   });
 });
