@@ -356,7 +356,7 @@ export function prepareHealth(
     null,
     canaries,
   );
-  if (!preparedView.ok) throw new FailClosed(`sanitisation_failed:${preparedView.reason}:narrative`);
+  if (!preparedView.ok) throw new FailClosed(`sanitisation_failed:${preparedView.reason}:health_view`);
   const preparedNarrative = {
     ...narrative.data,
     // A partial view's summary is empty on a day with no drivers or tags; empty text carries nothing to sanitise.
