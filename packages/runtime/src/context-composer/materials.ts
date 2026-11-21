@@ -141,6 +141,8 @@ export async function loadRuntimeContextMaterials(
     // Admitted so loaders satisfy the type; the adapter-supplied value is never trusted -
     // prepareMaterials recomputes the omission count from the actual array below.
     'tool_outputs_omitted',
+    // Present only when the health read failed.
+    ...(typeof raw === 'object' && raw !== null && 'health_unreadable' in raw ? ['health_unreadable'] : []),
   ], 'materials_unavailable');
   if (
     materials.principal_ref !== invocation.verified_authority.principal_ref ||
@@ -252,6 +254,7 @@ export async function loadRuntimeContextMaterials(
     soul_base,
     safety_rules,
     health,
+    ...(materials.health_unreadable === true ? { health_unreadable: true as const } : {}),
     workspace: Object.freeze([...workspace].sort(compareFragments)),
     tool_outputs: Object.freeze([...toolOutputs].sort(compareFragments)),
     tool_outputs_omitted: toolOutputsOmitted,

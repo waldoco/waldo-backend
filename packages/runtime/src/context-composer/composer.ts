@@ -96,7 +96,7 @@ export function createContextComposer(deps: ContextComposerDependencies): Contex
         );
 
         enter('rendering');
-        const assembled = assembleReasonsPrompt(invocation.data, stagedInputs, materials, skills.selected, recall, health);
+        const assembled = assembleReasonsPrompt(invocation.data, stagedInputs, materials, skills.selected, recall, health, materials.health_unreadable === true);
         const rendered = await renderProviderPrompt(assembled.prompt, inputs.canary_tokens);
         if (!rendered.ok) throw new FailClosed(rendered.failure);
         const prompt = rendered.prompt;
@@ -141,7 +141,7 @@ export function createContextComposer(deps: ContextComposerDependencies): Contex
           instructions: assembled.instructions,
           operations: assembled.operations,
           ...(skills.selected.length ? { skillPrompt: wrapSkills(skills.selected) } : {}),
-          healthPrompt: renderHealth(health),
+          healthPrompt: renderHealth(health, materials.health_unreadable === true),
           checkpoint: checkedCheckpoint.data,
           evidence,
         });
