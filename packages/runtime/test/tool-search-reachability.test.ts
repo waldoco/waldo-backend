@@ -83,7 +83,7 @@ describe.each(['openai', 'anthropic'] as const)('with tool search on, %s can cal
     const at = wire(provider);
     const loop: Loop = { id: 'loop-1', title: 'Find the venue hours', due: '2030-11-04T09:00', status: 'open', created_at: 0, closed_at: null };
     const tools = [handler('get_context', () => ({ ok: true, data: { now: 'synthetic' }, source_taint: null })), handler('close_loop', () => ({ ok: true, data: { closed: true }, source_taint: null }))];
-    await responder(at, tools).prompt(`loop-${provider}`, `loop-${provider}`, loopCheckBackText([loop]), time, 'app', LOOP_CHECK_BACK_TOOLS);
+    await responder(at, tools).prompt(`loop-${provider}`, `loop-${provider}`, loopCheckBackText([loop], Date.now(), 'UTC'), time, 'app', LOOP_CHECK_BACK_TOOLS);
     expect(reachable[provider](naming(at, 'with close_loop'), 'close_loop')).toBe(true);
   });
 

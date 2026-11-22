@@ -28,6 +28,9 @@ export const INWARD_RECEIPT_LINES: Readonly<Partial<Record<ToolName, (args: Fiel
   cancel_reminder: (args, result) => args.all === true ? 'Cancelled all your reminders'
     : result.cancelled !== true ? null
     : `Cancelled the reminder${text(result, 'at') ? ` for ${text(result, 'at').replace('T', ' ')}` : ''}: "${text(result, 'note')}"`,
+  // Only an owner's loop answers with its title; a mail follow-up's title is someone else's text and is not repeated here.
+  close_loop: (_args, result) => typeof result.title !== 'string' ? null
+    : `Closed "${text(result, 'title')}"${text(result, 'due') ? ` (due ${text(result, 'due').replace('T', ' ')})` : ''}; tell me if you still want it and I will open it again`,
   cancel_task: (args) => `Stopped background task ${text(args, 'job_id')} (you can start it again)`,
   start_task: (args) => `Started background task "${text(args, 'title')}" (${args.profile === 'web' ? 'public web only' : 'your own data, no web'}; you can stop it)`,
   steer_task: (args) => `Changed background task ${text(args, 'job_id')}: "${text(args, 'instruction')}" (you can change it again or cancel it)`,
