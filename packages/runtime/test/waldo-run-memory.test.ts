@@ -119,16 +119,19 @@ describe('a run that read outside content', () => {
 // staging), what such a run tries to keep is refused, not stored as Waldo's own note; it is kept, labelled as outside
 // content, only where those notes are on.
 describe('a Brief over the owner\'s calendar', () => {
-  const brief = async (name: string, outsideNotes: boolean) => withSql(name, async (sql) => {
+  const brief = async (name: string, outsideNotes: boolean, clean = false) => withSql(name, async (sql) => {
     const store = outsideNotes ? withOutsideNotes(claimStore(sql)) : claimStore(sql);
     const fake = (tool: string) => ({ name: tool as ToolName, description: `The ${tool} tool.`, schema: z.object({}).passthrough(), trigger_allowlist: allowed(tool),
-      handle: async () => ({ ok: true as const, data: { done: tool }, source_taint: null }) });
+      handle: async () => ({ ok: true as const, data: { done: tool }, source_taint: tool === 'search_communication' ? 'external' as const : null }) });
+    // A clean Brief reads a mail first, then tries to keep what it read.
+    const script = clean ? [{ name: 'search_communication', args: { query: 'Northwind' } }, { name: 'remember', args: NOTE }] : [{ name: 'remember', args: NOTE }];
     // Bound to the surface's chat, as owner-do binds the memory tools, which is the chain a Telegram job runs on.
     const tools = [rememberIn(sql, store, 'telegram-1'), ...DAY_CARD_TOOLS.filter((tool) => tool !== 'remember' && tool !== 'get_context').map(fake)];
     const requests: LLMRequest[] = [];
     const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {
       requests.push(request);
-      const call = !request.response_format && requests.filter((seen) => !seen.response_format).length === 1 ? { call_id: 'keep', name: 'remember', arguments: JSON.stringify(NOTE) } : undefined;
+      const step = request.response_format ? undefined : script[requests.filter((seen) => !seen.response_format).length - 1];
+      const call = step ? { call_id: `c-${step.name}`, name: step.name, arguments: JSON.stringify(step.args) } : undefined;
       return { ok: true, data: { model: request.model, text: request.response_format ? '{}' : call ? '' : 'SKIP', ...(call ? { tool_calls: [call] } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
     } };
     const saved: Parameters<ConversationStore['save']>[0][number][] = [];
@@ -139,9 +142,9 @@ describe('a Brief over the owner\'s calendar', () => {
     args[1] = conversation; args[3] = () => undefined; args[5] = tools as never; args[7] = false; args[10] = gateway;
     args[21] = { jobHost: { admit: async () => admission, chain: (_admission, surfaceChain) => surfaceChain }, leanScheduled: true };
     await createOwnerResponder(...args).prompt('card:brief:1', 'telegram-1', 'Write the Daily Brief for today.\n\nCalendar: Northwind pitch, Friday 10:00',
-      async (_hop, work) => work(), 'telegram', DAY_CARD_TOOLS, undefined, undefined, undefined, 'external', 'plans', undefined, undefined, true);
+      async (_hop, work) => work(), 'telegram', DAY_CARD_TOOLS, undefined, undefined, undefined, clean ? undefined : 'external', 'plans', undefined, undefined, true);
     const asked = requests.filter((request) => !request.response_format);
-    return { offered: (asked[0]!.tools ?? []).map((tool) => tool.name), answer: JSON.stringify(asked[1]), claims: store.allClaims() };
+    return { offered: (asked[0]!.tools ?? []).map((tool) => tool.name), answer: JSON.stringify(asked.at(-1)), claims: store.allClaims() };
   });
 
   it('is offered remember, but keeps nothing while notes learned from outside content are off', async () => {
@@ -154,5 +157,11 @@ describe('a Brief over the owner\'s calendar', () => {
   it('keeps the note as learned from outside content where those notes are on', async () => {
     const { claims } = await brief('brief-outside-on', true);
     expect(claims.map((claim) => claim.origin)).toEqual(['untrusted']);
+  });
+
+  it('that starts clean is tainted at the read: once it has read a mail it keeps no note while those notes are off', async () => {
+    const { answer, claims } = await brief('brief-clean-reads-mail', false, true);
+    expect(answer).toContain('keeps no note from it');
+    expect(claims).toEqual([]);
   });
 });
