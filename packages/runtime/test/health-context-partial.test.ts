@@ -308,7 +308,7 @@ describe('no health context, and a health read that failed', () => {
     expect(await book.latest()).toBe('unreadable');
     expect(await book.read()).toBe('unknown');
     expect(errors).toHaveLength(2);
-    const block = renderHealth(null, true);
+    const block = renderHealth(null, 'unreadable');
     expect(block).not.toBe(renderHealth(null));
     expect(block).toContain('could not be read');
     expect(block).toMatch(/not .*share/i);
