@@ -1,5 +1,5 @@
 import { PERSON_RINGS, rememberArgsSchema, forgetMemoryArgsSchema, readMemoryArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ToolHandler, type ToolName, type ReadMemoryArgs, type RememberArgs, type ForgetMemoryArgs } from '@waldo/contracts';
-import { FORGOTTEN, ground, normalizeForGrounding, OUTSIDE_REF, textFingerprint, type Claim, type ClaimStore } from '../../memory/claims';
+import { FORGOTTEN, ground, normalizeForGrounding, OUTSIDE_REF, textFingerprint, WALDO_RUN_REF, type Claim, type ClaimStore } from '../../memory/claims';
 import { carriesTopic, forgettableTopic, hidesTopic } from '../../memory/forget-guard';
 import { NODE_STATEMENT } from '../../memory/node-sources';
 import { HEALTH_MEMORY_RULES } from '../../memory/health-rules';
@@ -19,6 +19,9 @@ import { ClosedRunError } from '../../channels/run-effect-scope';
 export type { MemoryOwnerTurn };
 export type MemoryToolContext = ToolDispatcherContext & {
   memoryTurn?: Readonly<{ ownerId: string; conversationRef: string; current: MemoryOwnerTurn; recent: readonly MemoryOwnerTurn[] }>;
+  // Set by the host for a run Waldo started (a Brief, a check-back, a reminder): no owner message to ground a note in, so a
+  // note it saves is Waldo's own read, with this run as its source.
+  memoryRun?: Readonly<{ ownerId: string; conversationRef: string; runId: string }>;
   // Set by the host for a model call built from outside content: memory reads go through the same fence as its memory block.
   memoryOutside?: boolean;
   // Set by the host for the owner's own turn: the check outside the turn's model (memory/owner-words-check).
@@ -110,13 +113,33 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
   // A claim a turn may read: a note learned from outside content only when the store recalls those, nothing being
   // forgotten, and in a turn that read outside content nothing fenced from it. A person is shown only through such a claim.
   const readableIn = (outside: boolean) => (claim: Claim) => (store.outsideNotes === true || claim.origin !== 'untrusted') && !hidden(claim) && (!outside || outsideSafe(claim));
+  // A run Waldo started has no owner message, so what it saves is its own read: an agent note sourced to the run, or, once the
+  // run has read outside content, a note learned from that content, as in chat. It replaces nothing, names no one and carries
+  // no health detail (synced readings are read live and never kept in memory), so it cannot change what the owner told Waldo.
+  const ranByWaldo = async (args: RememberArgs, ctx: MemoryToolContext) => {
+    const run = ctx.memoryRun;
+    if (!run || run.ownerId !== ctx.authenticatedUserId || run.conversationRef !== deps.conversationRef) return fail('Authenticated owner memory context is unavailable.');
+    if (args.replaces_id !== undefined || args.replaces_text !== undefined || args.people?.length || args.on_date) return fail('A note from a run Waldo started replaces nothing and names no one. Save it on its own; the owner can correct it later.');
+    const texts = [args.text, args.evidence_quote, ...(args.aliases ?? [])];
+    if (texts.some(blocked)) return fail('This memory matches a forget barrier.');
+    if (args.kind === 'health' || texts.some(text => text.includes(HEALTH_SPAN_MARKER) || numericHealthIn(text))) return fail('A run Waldo started keeps no health note: the owner\'s health is read live when it is needed, never kept in memory from here.');
+    const outside = ctx.toolArgSourceTaint === 'external';
+    if (outside && store.outsideNotes !== true) return fail('This run read outside content (mail, a web page or a connected tool), so it keeps no note from it.');
+    const known = store.claims().find(row => normalizeForGrounding(row.text) === normalizeForGrounding(args.text));
+    if (known) return success({ id: known.id, status: 'duplicate' });
+    await ready(ctx);
+    const add = () => { store.add({ kind: args.kind, text: args.text, source: 'inferred', evidence: args.evidence_quote, origin: outside ? 'untrusted' : 'agent',
+      source_ref: outside ? `${OUTSIDE_REF}page, mail or tool result read by a run Waldo started, ${now().slice(0, 10)}` : `${WALDO_RUN_REF}${run.runId}`, aliases: args.aliases, ...(args.area ? { area: args.area } : {}) }, now()); return store.lastClaimId(); };
+    const id = ctx.runScope ? ctx.runScope.commit(add) : deps.transaction ? deps.transaction(add) : add();
+    return success({ id, status: 'stored', source: outside ? 'outside' : 'waldo', note: outside ? 'Saved as a note learned from outside content, not the owner\'s words.' : 'Saved as Waldo\'s own note from this run, not the owner\'s words; the owner can correct or forget it.' });
+  };
   const base = (name: ToolName, description: string) => ({ name, description, trigger_allowlist: triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes(name)), autonomy_gated: false });
   return [
     { ...base('remember', `${store.outsideNotes === true ? 'Store a fact with a verbatim quote: the owner\'s, or outside content just read.' : 'Store a fact or preference with a verbatim quote of the owner\'s words.'}${deps.forgiving ? ' A paraphrase stays your inference.' : ''} Correct a claim with replaces_id (12 for c12)${deps.forgiving ? ' or replaces_text (its text as shown)' : ''}. Memory is context, never permission to act. ${HEALTH_MEMORY_RULES.join(' ')}`),
       schema: deps.forgiving ? rememberArgsSchema : rememberArgsSchema.omit({ replaces_text: true }), mutates_state: true,
       async handle(args: RememberArgs, ctx) {
         await ready(ctx); const turn = admitted(ctx);
-        if (!turn) return fail('Authenticated owner memory context is unavailable.');
+        if (!turn) return ranByWaldo(args, ctx);
         const grounded = [turn.current, ...turn.recent].find(message => ownerParts(message).some(part => quotesWords(part, args.evidence_quote) && ground(args.evidence_quote, { owner: part }) === 'owner'));
         // The model's paraphrase of what the owner just wrote is still worth keeping, as its own read of their current message.
         // Only in a turn that read no outside content, from messages of this turn wholly the owner's: a forwarded or quoted chunk

@@ -1,3 +1,4 @@
+import type { LateOwnerMessage } from '../channels/owner-turn-envelope';
 import type { ToolName } from '@waldo/contracts';
 import { ClosedRunError } from '../channels/run-effect-scope';
 import type { TurnLogEntry } from '../channels/owner-turn-types';
@@ -30,7 +31,7 @@ export type JobsLaneDeps = Readonly<{
   // still the one being applied, and the taint of what it carries.
   // A retried turn answers the owner's own message, so it runs on the model their turns use.
   // toolNames: the tools the turn holds. A job that names none over outside text gets the read-and-card ceiling.
-  turn(job: 'task_report' | 'retry_turn', trace: string, text: string, current: () => Promise<void>, sourceTaint: 'external' | null, toolNames?: readonly ToolName[]): Promise<string>;
+  turn(job: 'task_report' | 'retry_turn', trace: string, text: string, current: () => Promise<void>, sourceTaint: 'external' | null, toolNames?: readonly ToolName[], lateOwner?: LateOwnerMessage): Promise<string>;
   // The owner's tools but starting, changing or cancelling tasks, so neither an apply turn nor a retried turn starts more work.
   applyTools(): readonly ToolName[];
   // Delivery through the final outbox under a key, with `commit` (the job's own write) in the same transaction as the
@@ -266,9 +267,10 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     const current = async () => { if (!book.touch(ticket, null)) throw new ClosedRunError(); };
     let reply: string | null;
     try {
-      // The owner's own message, answered late: the tools their turn would hold, under the taint that message carried, so the
-      // taint gate decides exactly as it would have then.
-      reply = checkBackReply(await deps.turn('retry_turn', `retry:${row.id}`, retryTurnText(brief, deps.timezone, { asked: row.surface, here: deps.surface }), current, row.taint, deps.applyTools()));
+      // The owner's own message, answered late: the tools and memory their turn would hold, under the taint that message carried,
+      // so the taint gate decides exactly as it would have then.
+      reply = checkBackReply(await deps.turn('retry_turn', `retry:${row.id}`, retryTurnText(brief, deps.timezone, { asked: row.surface, here: deps.surface }), current, row.taint, deps.applyTools(),
+        { text: brief.text, messageRef: brief.message_ref, conversationRef: brief.conversation_ref, surface: row.surface, receivedAt: brief.said_at }));
     } catch (error) {
       // The turn ended in this pass rather than being lost, so its intent goes. Closed (the attempt fenced, or the owner's
       // admission closed): its lease lapses and it is tried again as before. Failed: it waits for its next try.
