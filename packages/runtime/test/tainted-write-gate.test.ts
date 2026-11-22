@@ -66,6 +66,10 @@ const INWARD: readonly (readonly [ToolName, Record<string, unknown>])[] = [
   ['track_responsibility', { title: 'Pay the vendor', intent: 'Pay the vendor before Friday' }],
   ['workspace_write', { path: 'notes/vendor.md', text: 'Wire the deposit to the new account.', mime: 'text/markdown', expected_revision: 0 }],
   ['create_artifact', { name: 'Vendor brief', kind: 'document', body_markdown: 'Pay the new account.' }],
+  ['revise_artifact', { artifact_id: 'art_1', expected_revision: 1, body_markdown: 'Pay the new account.' }],
+  ['restore_artifact', { artifact_id: 'art_1', revision: 1, expected_revision: 2 }],
+  ['log_meal', { description: 'Lunch at the restaurant on the receipt', calories_estimate: 2400 }],
+  ['log_workout', { type: 'run', duration_minutes: 30 }],
 ];
 // What only ends or stops something: outside text can at worst make Waldo drop a reminder or a job the owner can set again.
 const NARROWS: readonly (readonly [ToolName, Record<string, unknown>])[] = [
@@ -227,8 +231,8 @@ describe('a tainted turn sends every write to the owner card', () => {
     // owner's card.
     const ownerTurn: ToolName[] = [];
     for (const tool of toolNameSchema.options) if (await taintedCallNeedsOwnerApproval(tool, 'external', {}, { ownerInitiated: true })) ownerTurn.push(tool);
-    expect(carded.filter((tool) => !ownerTurn.includes(tool)).sort()).toEqual(['create_artifact', 'set_reminder', 'steer_task', 'track_responsibility', 'update_todo', 'workspace_write']);
-    expect(ownerTurn).toEqual(expect.arrayContaining(['send_message', 'send_email', 'call_mcp_tool', 'export_artifact', 'set_standing_order', 'skills_install', 'start_task', 'log_meal', 'log_workout', 'revise_artifact', 'forget_memory']));
+    expect(carded.filter((tool) => !ownerTurn.includes(tool)).sort()).toEqual(['create_artifact', 'log_meal', 'log_workout', 'restore_artifact', 'revise_artifact', 'set_reminder', 'steer_task', 'track_responsibility', 'update_todo', 'workspace_write']);
+    expect(ownerTurn).toEqual(expect.arrayContaining(['send_message', 'send_email', 'send_agent_mail', 'call_mcp_tool', 'export_artifact', 'set_standing_order', 'skills_install', 'start_task', 'forget_memory', 'delete_health_log', 'close_responsibility', 'set_proactivity', 'set_schedule_preference', 'set_quest', 'set_experiment']));
   });
 });
 

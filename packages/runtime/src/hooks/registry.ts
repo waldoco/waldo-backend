@@ -187,6 +187,8 @@ export type HookRuntimeContext = {
   proposalOnlyCall?: ToolName;
   // The owner's loop store: whether a loop is bound to an observed mail source. Unwired, every tainted close is the owner's.
   loopIsSourceBound?: (id: string) => MaybePromise<boolean>;
+  // The owner's loop store: whether an open loop's due time is behind the owner's clock. Unwired, no loop has passed.
+  loopHasPassed?: (id: string) => MaybePromise<boolean>;
   // Set by the host on a turn the owner's own message started, quotes and forwards included: its reply goes to the owner.
   ownerInitiated?: boolean;
   egressAllowlist?: readonly string[];
@@ -541,21 +543,21 @@ const ownerStatedFigure = (args: unknown, ctx: Pick<HookRuntimeContext, 'ownerIn
 // owner's card instead of running. A tool changes something when its receipt can back a claim, so the set is read from the
 // tool's record, and a record without an exemption is carded. Privileged actions are carded by their own law first.
 export const taintedCallNeedsOwnerApproval = async (
-  tool: ToolName, taint: SourceTaint, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound' | 'ownerInitiated'>,
+  tool: ToolName, taint: SourceTaint, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound' | 'loopHasPassed' | 'ownerInitiated'>,
 ): Promise<boolean> => taintGateBlocksDirectExecution(tool, taint)
   || (isExternalSourceTaint(taint) && await recordNeedsOwnerCard(tool, TOOL_RECORDS[tool], args, ctx));
 
 // One record's answer for a tainted call. own_card is not admitted here: the dispatcher admits it per call from the
 // handler's proposal_only declaration, so the exemption holds only while the handler actually only proposes.
 export const recordNeedsOwnerCard = async (
-  tool: ToolName, record: Pick<ToolRecord, 'claim' | 'tainted'>, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound' | 'ownerInitiated'>,
+  tool: ToolName, record: Pick<ToolRecord, 'claim' | 'tainted'>, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound' | 'loopHasPassed' | 'ownerInitiated'>,
 ): Promise<boolean> => {
   const tainted = record.tainted;
   if (record.claim === null || (tainted !== undefined && 'refused' in tainted)) return false;
   switch (tainted?.exempt) {
     case 'draft': case 'honest_origin': case 'instructions_only': return false;
     case 'narrows': return clearsEverything(tool, args);
-    case 'source_bound': return !(await boundToObservedSource(tool, args, ctx));
+    case 'source_bound': return !(await boundToObservedSource(tool, args, ctx)) && !(await passedOwnerLoop(tool, args, ctx));
     case 'commits_on_card': return !typedBrowserStep(tool, args);
     case 'owner_inward': return ctx.ownerInitiated !== true || combinedTask(tool, args);
     default: return true;
@@ -587,6 +589,14 @@ const boundToObservedSource = async (tool: ToolName, args: unknown, ctx: Pick<Ho
   if (tool === 'open_loop') return typeof record?.source_ref === 'string';
   if (tool === 'close_loop') return typeof record?.id === 'string' && ctx.loopIsSourceBound !== undefined && await ctx.loopIsSourceBound(record.id);
   return false;
+};
+
+// An owner's loop whose due time has passed closes without a card, as narrows does: outside text can at worst make Waldo stop
+// checking back on something already behind the owner, the reply lists the close with the loop's title and due time
+// (conversation/inward-receipts), so the owner can have it opened again. A loop still ahead closes only from their card.
+const passedOwnerLoop = async (tool: ToolName, args: unknown, ctx: Pick<HookRuntimeContext, 'loopHasPassed'>): Promise<boolean> => {
+  const id = tool === 'close_loop' && typeof args === 'object' && args !== null ? (args as { id?: unknown }).id : undefined;
+  return typeof id === 'string' && ctx.loopHasPassed !== undefined && await ctx.loopHasPassed(id);
 };
 
 // The typed browse_act operations that commit nothing: the owner's browser host sends no request but GET or HEAD and holds a
