@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { iso8601Schema } from '../core/error';
+import { HEALTH_SIGNAL_GRAINS } from './signals';
+import { healthSignalV1Schema } from '../app/health-ingest';
 
 // The canonical Form/CRS zone vocabulary — this file is its single owner; memory/sanitise
 // and every egress shape consume it from here. The top band is 'energized', never 'peak'
@@ -89,6 +91,18 @@ export const derivedMissingPillarsSchema = z.strictObject({
 });
 export type DerivedMissingPillars = z.infer<typeof derivedMissingPillarsSchema>;
 
+// One kind of body data the owner's sources sent in the last thirty days, in words: how often it carries a value, how recent
+// its newest reading is, on how many of the thirty days it arrived, and from which sources. Never a value.
+export const healthInventoryEntrySchema = z.strictObject({
+  signal: healthSignalV1Schema,
+  grain: z.enum(HEALTH_SIGNAL_GRAINS),
+  newest: z.enum(['within_hours', 'today', 'yesterday', 'this_week', 'this_month']),
+  regularity: z.enum(['nearly_every_day', 'most_days', 'some_days', 'a_few_days']),
+  sources: z.array(z.enum(['apple', 'oura', 'whoop', 'samsung', 'health_connect'])).min(1).max(5),
+});
+export type HealthInventoryEntry = z.infer<typeof healthInventoryEntrySchema>;
+export const healthInventorySchema = z.array(healthInventoryEntrySchema).max(healthSignalV1Schema.options.length);
+
 const derivedViewShared = {
   authority: z.literal('backend'),
   provenance_refs: z.array(opaqueHealthProvenanceRefSchema).min(1).max(4),
@@ -105,6 +119,8 @@ const derivedViewShared = {
   energy_windows: derivedEnergyWindowsSchema.optional(),
   // The pillars the row could not compute and the reason it stored for each. Absent on a view written before it existed.
   missing_pillars: derivedMissingPillarsSchema.optional(),
+  // What body data exists for the owner, whatever any score could make of it. Absent when it was not read.
+  inventory: healthInventorySchema.optional(),
 } as const;
 
 const derivedViewCommon = {
@@ -142,7 +158,7 @@ export type RecoveryHealthView = z.infer<typeof recoveryHealthViewSchema>;
 // carries no Recovery or Form zone and no readiness word, only what the row records in words: which sources it was computed
 // from, which inputs it shows arrived, which pillars it could not compute and why, and any pillar honest on its own (Load,
 // sleep debt, energy windows). An expired view carries nothing from that old day but its age and sources.
-export const partialHealthSourceSchema = z.enum(['apple', 'oura', 'whoop', 'samsung', 'health_connect']);
+export const partialHealthSourceSchema = healthInventoryEntrySchema.shape.sources.element;
 export type PartialHealthSource = z.infer<typeof partialHealthSourceSchema>;
 // Inputs a stored row shows arrived. A signal the row does not record (steps, heart rate through the day) is never named.
 // last_night_sleep is the row's own night, the one that ended on the row's day: last night only for today's row.
@@ -158,6 +174,9 @@ export const partialHealthViewSchema = z.strictObject({
   present: z.array(partialHealthPresentSchema).max(5),
   missing_pillars: derivedMissingPillarsSchema,
   load_zone: loadZoneSchema.optional(),
+  // No score row is stored for the owner at all: the view stands on the inventory alone, and its day and freshness are those of
+  // the newest reading.
+  no_score_row: z.literal(true).optional(),
 });
 export type PartialHealthView = z.infer<typeof partialHealthViewSchema>;
 

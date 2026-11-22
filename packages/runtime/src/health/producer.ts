@@ -120,11 +120,10 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/;
 
 export type SleepStages = Readonly<Record<(typeof STAGES)[number], number>>;
-// samsungWriter is whether Samsung Health wrote the reading, as the read says it; false when another app did or none was recorded.
 // A workout's activity, and its zones and effort as the read returns them; detail is the rest of what it stored, unchecked,
 // for a reader that checks it. Null for any other signal. A food entry's grams likewise, each null when not a finite number.
 // max is an hourly heart-rate window's highest; bins an hour's heart-rate bins. Each is null for any other signal.
-export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; samsungWriter: boolean; workout?: WorkoutDetail | null; nutrition?: NutritionGrams | null; max?: number | null; bins?: HeartRateBins | null }>;
+export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; workout?: WorkoutDetail | null; nutrition?: NutritionGrams | null; max?: number | null; bins?: HeartRateBins | null }>;
 const MACROS = ['protein_g', 'carbohydrate_g', 'fat_g'] as const;
 export type NutritionGrams = Readonly<Record<(typeof MACROS)[number], number | null>>;
 export type HeartRateBins = Readonly<{ fromBpm: number; outside: readonly number[]; inside: readonly number[] }>;
@@ -174,7 +173,6 @@ const reading = (raw: unknown): Reading | null => {
     signal: r.signal, day: r.day, value: r.value, startAt: instant(r.start_at), endAt: instant(r.end_at),
     timezone: typeof r.timezone === 'string' ? r.timezone : null, method: typeof r.method === 'string' ? r.method : null,
     stages: r.signal === 'sleep_duration' ? stagesOf(r.stages) : null,
-    samsungWriter: r.samsung_writer === true,
     workout: r.signal === 'workout' ? workoutDetailOf(r.activity, r.workout) : null,
     nutrition: r.signal === 'nutrition' ? nutritionOf(r.nutrition) : null,
     max: r.signal === 'heart_rate_window' && typeof r.max === 'number' && Number.isFinite(r.max) ? r.max : null,
@@ -395,22 +393,18 @@ const sleepDebtOf = (debt: DailyScores['sleep_debt'], basis: Readonly<{ accepted
   return debt.state === 'available' && debt.debt_minutes !== null ? { state: 'available', debt_minutes: debt.debt_minutes, need_basis: debt.need_basis, ...version, ...trend } : { state: 'partial', confidence: debt.coverage, ...version, ...trend };
 };
 
-// The confidence of each source a row can be computed from, as ADR-0081 ranks them. Health Connect is a transport, not a
-// source: its readings enter a canonical score only from Samsung Health, at the Samsung confidence.
+// The confidence of each source a row can be computed from, as ADR-0081 ranks them. Health Connect is a transport: whichever
+// app wrote a reading into it, its readings enter a canonical score at the Health Connect confidence, the Samsung one.
 const SOURCE_CONFIDENCE: Readonly<Record<string, number>> = { apple: 1, oura: 0.85, whoop: 0.8, health_connect: 0.6, samsung: 0.6 };
 const LOWEST_SOURCE_CONFIDENCE = 0.6;
 const round3 = (value: number) => Math.round(value * 1000) / 1000;
 
 // Whether a row computed from this source may carry activation accepted. An unknown source never may. A Health Connect row
-// may only when every reading it was computed from was written by Samsung Health, and none without a writer recorded
-// counts; otherwise it is computed the same and written as a candidate.
-const acceptable = (source: Source): boolean => {
-  if (source.source === 'health_connect') {
-    const scored = source.readings.filter(r => SIGNALS.includes(r.signal));
-    return scored.length > 0 && scored.every(r => r.samsungWriter);
-  }
-  return Object.hasOwn(SOURCE_CONFIDENCE, source.source);
-};
+// may when it holds a scored reading. The series read carries no writer for it: the phone names one writer per kind and slot
+// and a window's id names its hour, so a second app's hour replaces the first at ingest and the producer keeps one reading
+// per hour and one asleep reading per night. A merged total (steps or energy several apps made) names no writer at all.
+const acceptable = (source: Source): boolean =>
+  source.source === 'health_connect' ? source.readings.some(r => SIGNALS.includes(r.signal)) : Object.hasOwn(SOURCE_CONFIDENCE, source.source);
 
 type AvailablePillar = Readonly<{ score: number; coverage: number; algorithm_version: string; activation: string; hrv_method: HrvMethod | null; baseline?: unknown; used: unknown }>;
 type RowSource = Readonly<{ source: string; epoch: number; accepted: boolean }>;
