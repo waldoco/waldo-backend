@@ -11,9 +11,9 @@ import { episodeIndex } from '../src/channels/episodes';
 let sequence = 0;
 const withStorage = <T>(fn: (storage: DurableObjectStorage) => T | Promise<T>) =>
   runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`owner-findings-${sequence++}`)), (_instance, state) => fn(state.storage));
-type Switches = Readonly<{ lookupOffered?: boolean; agreementsOffered?: boolean; now?: () => number }>;
-const stores = (storage: DurableObjectStorage, { lookupOffered = true, agreementsOffered = true, now = () => 1_000 }: Switches = {}) => {
-  const claims = claimStore(storage.sql, work => storage.transactionSync(work)), consent = consentLedger(storage.sql, { lookupOffered, agreementsOffered });
+type Switches = Readonly<{ lookupOffered?: boolean; now?: () => number }>;
+const stores = (storage: DurableObjectStorage, { lookupOffered = true, now = () => 1_000 }: Switches = {}) => {
+  const claims = claimStore(storage.sql, work => storage.transactionSync(work)), consent = consentLedger(storage.sql, { lookupOffered });
   return { claims, consent, findings: findingStore(storage.sql, claims, consent, now) };
 };
 const DAY = 86_400_000;
@@ -85,21 +85,6 @@ describe('consent ledger', () => {
     expect(listed.items.map(item => item.text)).toEqual([finding.text]);
     expect(offAgain.findings.forget(listed.items[0]!.finding_id, 6)).toEqual([finding.text, finding.evidence_quote]);
     expect(offAgain.findings.page(50).total).toBe(0);
-  }));
-  it('offers no agreements while this server holds their copy back, and the look-up goes with them', () => withStorage(storage => {
-    const held = stores(storage, { agreementsOffered: false });
-    expect(held.consent.grant('terms', 1, 1)).toBe('not_offered');
-    expect(held.consent.grant('privacy_notice', 1, 1)).toBe('not_offered');
-    expect(held.consent.grant('owner_lookup', 1, 1)).toBe('not_offered');
-    expect(held.consent.list()).toMatchObject({ agreements_offered: false, owner_lookup_offered: false });
-    expect(storage.sql.exec('SELECT 1 FROM consent_ledger').toArray()).toEqual([]);
-    // A yes recorded while the copy was offered stops counting once it is held back again; the rows stay as evidence.
-    agree(stores(storage).consent);
-    const again = stores(storage, { agreementsOffered: false });
-    expect(again.consent.agreed()).toBe(false);
-    expect(again.consent.active('owner_lookup')).toBe(false);
-    expect(again.consent.state('terms').status).toBe('granted');
-    expect(stores(storage).consent.agreed()).toBe(true);
   }));
 });
 

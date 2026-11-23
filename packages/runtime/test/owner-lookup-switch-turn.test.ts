@@ -7,7 +7,7 @@ import { consentLedger } from '../src/onboarding/consent-ledger';
 import { findingStore } from '../src/onboarding/findings';
 import { ensureSchema } from '../src/tracer/schema';
 
-// The look-up tools in a real owner turn read the same switches as the app routes: with the agreements held back, the model's
+// The look-up tools in a real owner turn read the same switch as the app routes: with the look-up not offered, the model's
 // list_owner_findings answers not_offered for a yes given earlier, and lists the finding all the same.
 const OWNER_ID = '6d2f0a8e-41c7-4b9e-a3d5-8e1c7f2b9a04';
 const BASE = 'https://directory.fixture.invalid';
@@ -45,7 +45,7 @@ const directory = () => vi.stubGlobal('fetch', async (input: RequestInfo | URL, 
   if (fn === 'health_context_read') return Response.json(null);
   return new Response('unexpected', { status: 500 });
 });
-const ownerFor = async (name: string, state: DurableObjectState, switches: Readonly<{ APP_AGREEMENTS: string; OWNER_LOOKUP: string }>) => {
+const ownerFor = async (name: string, state: DurableObjectState, switches: Readonly<{ OWNER_LOOKUP: string }>) => {
   claimStore(state.storage.sql);
   ensureSchema(state.storage);
   state.storage.kv.put('do_name', name);
@@ -72,11 +72,11 @@ const receiptOf = (tool: string) => {
 const FOUND = { category: 'work', text: 'Product manager at Northwind', source_url: 'https://ashamenon.example/about', evidence_quote: 'Asha Menon is a product manager at Northwind' } as const;
 // A yes given while both switches were on, and one finding from it.
 const seedYes = (state: DurableObjectState) => {
-  const sql = state.storage.sql, consent = consentLedger(sql, { lookupOffered: true, agreementsOffered: true });
+  const sql = state.storage.sql, consent = consentLedger(sql, { lookupOffered: true });
   consent.grant('terms', 1, 1); consent.grant('privacy_notice', 1, 1); consent.grant('owner_lookup', 1, 1);
   findingStore(sql, claimStore(sql, w => state.storage.transactionSync(w)), consent, Date.now).record(FOUND, 'About', Date.now());
 };
-const lookupTurn = (name: string, switches: Readonly<{ APP_AGREEMENTS: string; OWNER_LOOKUP: string }>) =>
+const lookupTurn = (name: string, switches: Readonly<{ OWNER_LOOKUP: string }>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     directory();
     const owner = await ownerFor(name, state, switches);
@@ -88,19 +88,15 @@ const lookupTurn = (name: string, switches: Readonly<{ APP_AGREEMENTS: string; O
     return JSON.parse(receipt.slice(receipt.indexOf('\n') + 1)) as { ok: boolean; data?: { lookup: string; total: number }; source_taint?: string };
   });
 
-it('with the agreements held back, the tool answers not_offered for the earlier yes and still lists the finding', async () => {
-  expect(await lookupTurn('lookup-turn-held', { APP_AGREEMENTS: '0', OWNER_LOOKUP: '1' })).toMatchObject({ ok: true, data: { lookup: 'not_offered', total: 1 }, source_taint: 'external' });
+it('with the look-up not offered, the tool answers not_offered for the earlier yes and still lists the finding', async () => {
+  expect(await lookupTurn('lookup-turn-unoffered', { OWNER_LOOKUP: '0' })).toMatchObject({ ok: true, data: { lookup: 'not_offered', total: 1 }, source_taint: 'external' });
 });
 
-it('with the look-up not offered, the tool answers not_offered too', async () => {
-  expect(await lookupTurn('lookup-turn-unoffered', { APP_AGREEMENTS: '1', OWNER_LOOKUP: '0' })).toMatchObject({ ok: true, data: { lookup: 'not_offered', total: 1 } });
+// The turn reads the switch through the same helper as the onboarding routes: only "1" turns it on.
+it.each(['true', '', ' 1'])('with OWNER_LOOKUP %j, the tool answers not_offered', async (lookup) => {
+  expect(await lookupTurn(`lookup-turn-${lookup.trim() || 'blank'}-${lookup.length}`, { OWNER_LOOKUP: lookup })).toMatchObject({ ok: true, data: { lookup: 'not_offered', total: 1 } });
 });
 
-// The turn reads the switches through the same helper as the onboarding routes: only "1" turns either on.
-it.each([['true', '1'], ['1', 'true'], ['', '1'], ['1', ' 1']])('with APP_AGREEMENTS %j and OWNER_LOOKUP %j, the tool answers not_offered', async (agreements, lookup) => {
-  expect(await lookupTurn(`lookup-turn-${agreements || 'unset'}-${lookup.trim() || 'blank'}`, { APP_AGREEMENTS: agreements, OWNER_LOOKUP: lookup })).toMatchObject({ ok: true, data: { lookup: 'not_offered', total: 1 } });
-});
-
-it('with both switches on, the same yes is granted', async () => {
-  expect(await lookupTurn('lookup-turn-on', { APP_AGREEMENTS: '1', OWNER_LOOKUP: '1' })).toMatchObject({ ok: true, data: { lookup: 'granted', total: 1 } });
+it('with the look-up on, the same yes is granted', async () => {
+  expect(await lookupTurn('lookup-turn-on', { OWNER_LOOKUP: '1' })).toMatchObject({ ok: true, data: { lookup: 'granted', total: 1 } });
 });

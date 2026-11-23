@@ -210,7 +210,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
       } else if ('welcome' in step) {
         const { stage, sources, text } = step.welcome;
         transcript.push({ role: 'world', text: `The welcome build reads the owner's ${stage} source and writes constellation nodes, which the owner reads.` });
-        const raw = await responder.welcome!(`${scenario.id}-welcome-${stage}`, stage, welcomeStageText(stage, sources, constellationSoFar({ allClaims: () => [], nodes: () => [] }), text), 2);
+        const raw = await responder.welcome!(`${scenario.id}-welcome-${stage}`, stage, welcomeStageText(stage, sources, constellationSoFar({ allClaims: () => [], nodes: () => [] }), text));
         // An answer that is not a node list writes nothing, as the build settles that stage unavailable.
         const nodes = (() => { try { return (JSON.parse(raw) as { nodes?: readonly Readonly<{ label?: string; summary?: string }>[] }).nodes; } catch { return undefined; } })();
         transcript.push({ role: 'waldo', text: !Array.isArray(nodes) ? '(the answer was not a node list; nothing written)' : nodes.length ? nodes.map((node) => `${node.label}: ${node.summary}`).join('\n') : '(no nodes)' });

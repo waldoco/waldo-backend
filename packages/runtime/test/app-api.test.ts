@@ -335,7 +335,6 @@ describe('Connect iMessage from the app', () => {
 describe('a chat attachment upload at the Worker', () => {
   const upload = (headers: Record<string, string>) => new Request('https://w.test/app/v1/chat/uploads', {
     method: 'POST', body: new Uint8Array(1024).fill(7), headers: { authorization: `Bearer ${CREDENTIAL}`, ...headers } });
-  const on = () => ({ ...(env() as object), APP_CHAT_ATTACHMENTS: '1' }) as never;
 
   it('refuses an upload its headers already rule out without reading its bytes or reaching the owner object', async () => {
     for (const [headers, status, error] of [
@@ -347,14 +346,14 @@ describe('a chat attachment upload at the Worker', () => {
     ] as const) {
       forwards.length = 0;
       const request = upload(headers);
-      const response = (await handleApp(request, on(), fakeAuth().auth))!;
+      const response = (await handleApp(request, env(), fakeAuth().auth))!;
       expect([error, response.status, await response.json(), request.bodyUsed, forwards.length]).toEqual([error, status, { error }, false, 0]);
     }
   });
 
   it('forwards an upload whose headers pass to the owner object, with its kind and name', async () => {
     forwards.length = 0;
-    const response = (await handleApp(upload({ 'content-type': 'application/pdf', 'x-waldo-upload-kind': 'file', 'x-waldo-upload-name': 'lease.pdf' }), on(), fakeAuth().auth))!;
+    const response = (await handleApp(upload({ 'content-type': 'application/pdf', 'x-waldo-upload-kind': 'file', 'x-waldo-upload-name': 'lease.pdf' }), env(), fakeAuth().auth))!;
     expect(await response.json()).toEqual({ forwarded: true });
     expect([forwards[0]!.headers.get('x-waldo-upload-kind'), forwards[0]!.headers.get('x-waldo-upload-name'), (await forwards[0]!.arrayBuffer()).byteLength]).toEqual(['file', 'lease.pdf', 1024]);
   });

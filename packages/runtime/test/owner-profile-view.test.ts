@@ -15,7 +15,7 @@ const AT = '2026-10-26T04:00:00.000Z';
 const ops = (add: unknown[]) => JSON.stringify({ add, seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null });
 const owner = (storage: DurableObjectStorage) => {
   const claims = claimStore(storage.sql, work => storage.transactionSync(work));
-  const consent = consentLedger(storage.sql, { lookupOffered: true, agreementsOffered: true });
+  const consent = consentLedger(storage.sql, { lookupOffered: true });
   // Saving answers reads nothing from the host: it writes claims and pins them.
   const setup = firstRun(storage.sql, consent, claims, {} as FirstRunHost, () => 1_000);
   return { storage, claims, consent, setup, findings: findingStore(storage.sql, claims, consent, () => 2_000) };

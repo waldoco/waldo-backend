@@ -1,4 +1,4 @@
-// The commands Telegram took, in the owner's console (CONSOLE_HARNESS): the same handlers, run as the signed-in owner behind
+// The commands Telegram took, in the owner's console: the same handlers, run as the signed-in owner behind
 // the console's session, CSRF check and rate budget, on a deploy with no Telegram bot. /fire and /langfuse are for admins. /console and /stop have their
 // own homes (the console itself; a message's stop and WhatsApp's /stop), so they are refused here.
 import { env } from 'cloudflare:workers';
@@ -76,26 +76,21 @@ const hops = (state: DurableObjectState) => state.storage.sql.exec<{ hop: string
 const receipt = (ok: 0 | 1) => [['command', ok], ['machine_turn', ok]];
 const appChat = async (owner: Owner, name: string) => (await (await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main', { headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64) } })))
   .json() as { messages: { role: string; text: string }[] }).messages;
-const ON = { CONSOLE_HARNESS: '1' };
 
 describe('diagnostics in the console', { timeout: 30_000 }, () => {
-  it('says which commands this owner has, with this session\'s token, and is not there with the switch off', async () => {
-    await consoleOf('harness-get', ON, async (send) => {
+  it('says which commands this owner has, with this session\'s token', async () => {
+    await consoleOf('harness-get', {}, async (send) => {
       const response = await send('', undefined, 'GET');
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ version: 1, csrf: expect.stringMatching(/^.{16,}$/), commands: ['/trace', '/e2e', '/usage', '/heldrows', '/ledger', '/langfuse', '/fire'] });
     });
-    await consoleOf('harness-get-owner', ON, async (send) => {
+    await consoleOf('harness-get-owner', {}, async (send) => {
       expect(((await (await send('', undefined, 'GET')).json()) as { commands: string[] }).commands).toEqual(['/trace', '/e2e', '/usage', '/heldrows', '/ledger']);
-    });
-    await consoleOf('harness-off', { CONSOLE_HARNESS: '0' }, async send => {
-      expect((await send('/trace')).status).toBe(404);
-      expect((await send('', undefined, 'GET')).status).toBe(404);
     });
   });
 
   it('answers each read as the Telegram commands did, for an app owner with no Telegram, and leaves a receipt for each', async () => {
-    await consoleOf('harness-reads', ON, async (send, state) => {
+    await consoleOf('harness-reads', {}, async (send, state) => {
       traceBook(state.storage.sql).record({ trace: 'app-1', hop: 'llm_reply', ms: 3, ok: true }, Date.now());
       expect(await output(await send('/trace'))).toContain('llm_reply');
       expect(await output(await send('/e2e'))).toMatch(/^\[x\] Chat reply: ok at /);
@@ -107,7 +102,7 @@ describe('diagnostics in the console', { timeout: 30_000 }, () => {
   });
 
   it('fires a day card for an app owner: it is written, it reaches the app chat, and the fire says it ran', async () => {
-    await consoleOf('harness-fire-card', ON, async (send, state, owner) => {
+    await consoleOf('harness-fire-card', {}, async (send, state, owner) => {
       dayPlanBook(state.storage.sql).save(new Date().toISOString().slice(0, 10), { card: 'card:brief', time: '00:00', reason: 'planned' });
       const said = await output(await send('/fire card:brief'));
       expect(said).toMatch(/^Fired card:brief\.\n/);
@@ -117,7 +112,7 @@ describe('diagnostics in the console', { timeout: 30_000 }, () => {
   });
 
   it('fires nothing for an app owner the directory cannot confirm, and says so', async () => {
-    await consoleOf('harness-fire-unconfirmed', ON, async (send, state, owner) => {
+    await consoleOf('harness-fire-unconfirmed', {}, async (send, state, owner) => {
       dayPlanBook(state.storage.sql).save(new Date().toISOString().slice(0, 10), { card: 'card:brief', time: '00:00', reason: 'planned' });
       wire.authority = 'outage';
       expect(await output(await send('/fire card:brief'))).toBe('Waldo could not confirm your account just now, so nothing was fired.');
@@ -134,7 +129,7 @@ describe('diagnostics in the console', { timeout: 30_000 }, () => {
   });
 
   it('refuses a wrong token, another method, a command with another home and anything else', async () => {
-    await consoleOf('harness-refusals', ON, async send => {
+    await consoleOf('harness-refusals', {}, async send => {
       expect((await send('/trace', 'not-the-session-token')).status).toBe(403);
       expect((await send('/trace', undefined, 'PUT')).status).toBe(405);
       for (const command of ['/console', '/stop', 'trace', 'hello there', ''])
@@ -144,7 +139,7 @@ describe('diagnostics in the console', { timeout: 30_000 }, () => {
 
   it('answers a failed command with a bare 503, logs its class, never its text, and leaves a failed receipt', async () => {
     // Staging's text capture lets free-form error text into the trace book, so this is where the text would land.
-    await consoleOf('harness-failure', { ...ON, LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'staging' }, async (send, state, owner) => {
+    await consoleOf('harness-failure', { LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'staging' }, async (send, state, owner) => {
       const lines: string[] = [];
       vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')); });
       vi.spyOn(owner as unknown as { runHarness(): Promise<string> }, 'runHarness').mockRejectedValue(new TypeError('synthetic internal detail'));
@@ -159,7 +154,7 @@ describe('diagnostics in the console', { timeout: 30_000 }, () => {
   });
 
   it('keeps /fire and /langfuse for admins: an owner gets their own diagnostics, and a fire or self-test is refused without running', async () => {
-    await consoleOf('harness-owner-only', ON, async (send, state, owner) => {
+    await consoleOf('harness-owner-only', {}, async (send, state, owner) => {
       dayPlanBook(state.storage.sql).save(new Date().toISOString().slice(0, 10), { card: 'card:brief', time: '00:00', reason: 'planned' });
       const ran = vi.spyOn(owner as unknown as { runHarness(): Promise<string> }, 'runHarness');
       for (const command of ['/fire card:brief', '/fire', '/langfuse']) {
@@ -173,7 +168,7 @@ describe('diagnostics in the console', { timeout: 30_000 }, () => {
   });
 
   it('on a deploy without the directory, offers its one owner every command and leaves their fires unspaced, as before', async () => {
-    await consoleOf('harness-no-directory', { ...ON, SUPABASE_PROJECT_URL: undefined, SUPABASE_PUBLISHABLE_KEY: undefined, WALDO_ROUTER_HMAC_SECRET: undefined } as never, async (send, _state, owner) => {
+    await consoleOf('harness-no-directory', { SUPABASE_PROJECT_URL: undefined, SUPABASE_PUBLISHABLE_KEY: undefined, WALDO_ROUTER_HMAC_SECRET: undefined } as never, async (send, _state, owner) => {
       vi.spyOn(owner as unknown as { runHarness(): Promise<string> }, 'runHarness').mockResolvedValue('Fired.');
       expect(((await (await send('', undefined, 'GET')).json()) as { commands: string[] }).commands).toEqual(['/trace', '/e2e', '/usage', '/heldrows', '/ledger', '/langfuse', '/fire']);
       expect([await output(await send('/fire fetch')), await output(await send('/fire fetch'))]).toEqual(['Fired.', 'Fired.']);
@@ -181,7 +176,7 @@ describe('diagnostics in the console', { timeout: 30_000 }, () => {
   });
 
   it('spends a read before asking the directory, so a non-admin repeating /fire is stopped by the read budget', async () => {
-    await consoleOf('harness-owner-repeats', ON, async send => {
+    await consoleOf('harness-owner-repeats', {}, async send => {
       const statuses: number[] = [];
       for (let n = 0; n < 100; n += 1) statuses.push((await send('/fire fetch')).status);
       expect(statuses.slice(0, 10).every(status => status === 403)).toBe(true);
@@ -191,7 +186,7 @@ describe('diagnostics in the console', { timeout: 30_000 }, () => {
   });
 
   it('refuses an admin command when the directory cannot say who is an admin, and offers only the diagnostics', async () => {
-    await consoleOf('harness-admin-outage', ON, async (send, _state, owner) => {
+    await consoleOf('harness-admin-outage', {}, async (send, _state, owner) => {
       const ran = vi.spyOn(owner as unknown as { runHarness(): Promise<string> }, 'runHarness');
       wire.admin = 'outage';
       expect(((await (await send('', undefined, 'GET')).json()) as { commands: string[] }).commands).toEqual(['/trace', '/e2e', '/usage', '/heldrows', '/ledger']);
@@ -202,7 +197,7 @@ describe('diagnostics in the console', { timeout: 30_000 }, () => {
 
   it('runs each job at most once in ten minutes, and a refused fire spends none of the action budget approvals share', async () => {
     vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-11-07T09:00:00Z') });
-    await consoleOf('harness-spacing', ON, async (send, _state, owner) => {
+    await consoleOf('harness-spacing', {}, async (send, _state, owner) => {
       vi.spyOn(owner as unknown as { runHarness(): Promise<string> }, 'runHarness').mockResolvedValue('Fired.');
       expect(await output(await send('/fire fetch'))).toBe('Fired.');
       const refused = await send('/fire fetch');
@@ -218,7 +213,7 @@ describe('diagnostics in the console', { timeout: 30_000 }, () => {
   it('caps an owner\'s fires in a day, and the cap lifts a day after the first', async () => {
     const start = Date.parse('2026-11-07T09:00:00Z');
     vi.useFakeTimers({ toFake: ['Date'], now: start });
-    await consoleOf('harness-daily', ON, async (send, _state, owner) => {
+    await consoleOf('harness-daily', {}, async (send, _state, owner) => {
       vi.spyOn(owner as unknown as { runHarness(): Promise<string> }, 'runHarness').mockResolvedValue('Fired.');
       const statuses: number[] = [];
       while (statuses.length < FIRE_DAILY_LIMIT + 2) {
@@ -233,7 +228,7 @@ describe('diagnostics in the console', { timeout: 30_000 }, () => {
   });
 
   it('answers a fire whose job failed with the error\'s class only, on the page and in the log', async () => {
-    await consoleOf('harness-fire-failure', { ...ON, LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'staging' }, async (send, state, owner) => {
+    await consoleOf('harness-fire-failure', { LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'staging' }, async (send, state, owner) => {
       const lines: string[] = [];
       vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')); });
       vi.spyOn(owner as unknown as { asOwnerJob(): Promise<void> }, 'asOwnerJob').mockRejectedValue(new TypeError('synthetic internal detail'));

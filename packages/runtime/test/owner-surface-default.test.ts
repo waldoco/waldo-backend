@@ -76,6 +76,8 @@ beforeEach(() => {
       if (op === 'calendar_watch') return Response.json({ data: { channelId: 'surface-channel', resourceId: 'res-1', expiration: Date.now() + 86_400_000 } });
       return Response.json({ data: [] });
     }
+    // The turn's spend, synced to the cost ledger after it.
+    if (fn === 'cost_ledger_add') return Response.json(1);
     world.unlisted.push(fn ?? url);
     return new Response('unexpected', { status: 500 });
   });

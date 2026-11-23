@@ -23,10 +23,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   LANGFUSE_SECRET_KEY?: string;
   LANGFUSE_BASE_URL?: string;
   LANGFUSE_CAPTURE_TEXT?: string;
-  // 'on' sends per-day spend to waldo.cost_ledger_daily after each turn; anything else keeps it off.
-  WALDO_COST_LEDGER_SYNC?: string;
   // An invited owner's monthly spend ceiling in USD (llm/cost-ledger.ts ownerCeilingUsd); unset or invalid reads as 25.
   OWNER_SPEND_CEILING_USD?: string;
+  // An open sign-up owner's monthly spend ceiling in USD (identity/open-signup.ts openOwnerCeilingUsd); unset or invalid reads as 5.
+  OPEN_SIGNUP_SPEND_CEILING_USD?: string;
   // 'on' turns conversation compaction on for the app chat; anything else keeps the plain window.
   WALDO_COMPACTION?: string;
   // '1' cuts chat history in steps and holds the start between cuts, so the provider's cache keeps the leading history.
@@ -113,18 +113,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // the owner has: Telegram only while they are linked there on a deploy that runs it, else the app, WhatsApp or iMessage.
   // Off: Telegram, as before.
   OWNER_SURFACE_DEFAULT?: string;
-  // "1" lets the app attach one voice note, photo or file to a chat message (APP_CHAT_UPLOAD_PATH). Off, the upload route is
-  // not there and a send that names an attachment is refused.
-  APP_CHAT_ATTACHMENTS?: string;
-  // "1" serves the commands Telegram took in the console (DASHBOARD_HARNESS_PATH), so none needs Telegram: the owner's
-  // diagnostics (/trace /e2e /usage /heldrows /ledger), and for admins /langfuse and /fire. Off, the route is not there.
-  CONSOLE_HARNESS?: string;
   // "1" lets a typed /stop on WhatsApp stop the running turn at once and the owner's background work, as on Telegram. Off, it
   // waits its turn as any message does.
   WHATSAPP_STOP?: string;
-  // "1" lets a typed /stop on iMessage stop the running turn, the messages waiting ahead of it and the owner's background work.
-  // Off, it runs as any message does.
-  IMESSAGE_STOP?: string;
   // "1" lets a night that just ended, from an app upload or a WHOOP sync, give a Brief still to come one model turn: send it now,
   // earlier, or keep it, never later. WAKE_BRIEF_FRESH_MIN (default 180) is how fresh the night's end must be;
   // WAKE_BRIEF_TURNS_PER_DAY (default 3) caps the turns. Off unless "1".
@@ -304,16 +295,11 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" shows the model the memory it chose (pins, what is new since the nightly review, recall stubs) instead of the newest facts.
   MEMORY_SELECTION?: string;
   AI?: EmbeddingRunner;
-  // "1" offers the in-app terms and privacy notice; anything else holds them back, until the owner approves their copy.
-  APP_AGREEMENTS?: string;
   // "1" offers the owner look-up; anything else keeps it off, until the privacy notice that discloses it is published.
   OWNER_LOOKUP?: string;
   // "1" starts the owner look-up as a background job once the owner's yes and their name are both in (onboarding/lookup.ts);
   // anything else leaves the look-up to the owner's own turns. It also needs OWNER_LOOKUP.
   ONBOARDING_LOOKUP?: string;
-  // "1" runs the second welcome build: sources in order over the constellation so far, look-up findings as Waldo's read, and
-  // late sources read once; anything else keeps the first build.
-  WELCOME_V2?: string;
   // "1" gives every owner turn the owner profile view (memory/owner-profile.ts) in place of the pinned blocks; anything else keeps them.
   OWNER_PROFILE?: string;
   MEMORY_NIGHTLY_SOURCE_UPDATES?: string;

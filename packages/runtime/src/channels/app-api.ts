@@ -45,8 +45,7 @@ export const APP_AUTONOMY_CHANGES_PATH = `${APP_AUTONOMY_PATH}/changes`;
 export const APP_DEVICES_PATH = `${APP_PATH}/devices`;
 const MAX_BODY_BYTES = 8192;
 
-// APP_ID_TOKEN_SIGNIN "1" serves Sign in with Apple and Google; otherwise the route answers 404 and the app offers the email code.
-type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_SCORE_PARTS?: string; HEALTH_USUAL?: string; HEALTH_DAY_LOAD?: string; HEALTH_PASSIVE_LOAD?: string; HEALTH_STRESS_CURVE?: string; HEALTH_FORM_CURVE?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string; DEVICE_PLACE?: string; DEVICE_CALENDAR?: string; WAKE_BRIEF?: string; WAKE_BRIEF_FRESH_MIN?: string; APP_CHAT_ATTACHMENTS?: string; WORKOUT_WAKE?: string; ARRIVAL_LOOK?: string }>;
+type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_SCORE_PARTS?: string; HEALTH_USUAL?: string; HEALTH_DAY_LOAD?: string; HEALTH_PASSIVE_LOAD?: string; HEALTH_STRESS_CURVE?: string; HEALTH_FORM_CURVE?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string; DEVICE_PLACE?: string; DEVICE_CALENDAR?: string; WAKE_BRIEF?: string; WAKE_BRIEF_FRESH_MIN?: string; WORKOUT_WAKE?: string; ARRIVAL_LOOK?: string }>;
 
 const UPLOAD_READ_MS = 60_000;
 // Errors before authentication share one shape so the app cannot learn who is invited.
@@ -71,9 +70,8 @@ export const readBoundedBody = async (request:Request, max:number, timeoutMs=500
 
 // The Worker's half of a chat upload, for the app's bearer and the console's owner cookie alike. It spends its own per-owner
 // budget and is bounded at the attachment cap before it is read; a voice note or photo comes from a phone, so the read may take
-// up to a minute. Off, the route is not there. The owner object stays the authority on what it keeps.
-export const forwardAppUpload = async (request: Request, env: Readonly<{ owners: DurableObjectNamespace; limiter: RateLimit; on: boolean }>, doName: string, sessionHash: string): Promise<Response> => {
-  if (!env.on) return fail(404);
+// up to a minute. The owner object stays the authority on what it keeps.
+export const forwardAppUpload = async (request: Request, env: Readonly<{ owners: DurableObjectNamespace; limiter: RateLimit }>, doName: string, sessionHash: string): Promise<Response> => {
   if (request.method !== 'POST') return fail(405);
   try { if (!(await env.limiter.limit({ key: `app-upload:${doName}` })).success) return fail(429); } catch { return fail(503); }
   const length = request.headers.get('content-length');
@@ -238,7 +236,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   }
 
   if (url.pathname === `${APP_PATH}/auth/id_token`) {
-    if (env.APP_ID_TOKEN_SIGNIN !== '1' || !auth.signInWithIdToken) return fail(404);
+    if (!auth.signInWithIdToken) return fail(404);
     if (request.method !== 'POST') return fail(405);
     const asked = appIdTokenRequestV1Schema.safeParse(await readJson(request));
     if (!asked.success) return fail(403);
@@ -298,7 +296,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     const secret = env.WALDO_ROUTER_HMAC_SECRET;
     return handleAppDeviceContext({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody, ...(secret ? { moved: () => notifyOwnerPlaceMoved(owners, secret, who.doName) } : {}), ...(secret && env.ARRIVAL_LOOK === '1' ? { arrived: (place: ArrivalPlace) => notifyOwnerPlaceArrived(owners, secret, who.doName, place) } : {}), ...(defer ? { defer } : {}) });
   }
-  if (url.pathname === APP_CHAT_UPLOAD_PATH) return forwardAppUpload(request, { owners, limiter: env.RESPONSIBILITY_RATE_LIMITER, on: env.APP_CHAT_ATTACHMENTS === '1' }, who.doName, await linkCodeHash(sessionIdOf(who.credential)!));
+  if (url.pathname === APP_CHAT_UPLOAD_PATH) return forwardAppUpload(request, { owners, limiter: env.RESPONSIBILITY_RATE_LIMITER }, who.doName, await linkCodeHash(sessionIdOf(who.credential)!));
   // The phone's calendar spends its own per-owner budget and is answered by the owner's object, which holds its consent and
   // events. Off, the routes are not there.
   if (url.pathname === APP_DEVICE_CALENDAR_PATH || url.pathname.startsWith(`${APP_DEVICE_CALENDAR_PATH}/`)) {

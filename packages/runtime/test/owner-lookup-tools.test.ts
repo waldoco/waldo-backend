@@ -30,7 +30,7 @@ const browsePage: ToolHandler<any, unknown, MemoryToolContext> = { name: 'browse
   async handle({ url }: { url: string }) { return { ok: true, data: { url, provider: 'cloudflare_playwright', data: TALK }, source_taint: 'external' }; } };
 const turn = (storage: DurableObjectStorage, ownerSaid: string, options: Readonly<{ pages?: ReturnType<typeof observedPages>; runId?: string; lookupOffered?: boolean; search?: typeof fetch }> = {}) => {
   const results = [ownSite, namesake, injected];
-  const claims = claimStore(storage.sql, work => storage.transactionSync(work)), consent = consentLedger(storage.sql, { lookupOffered: options.lookupOffered ?? true, agreementsOffered: true }), pages = options.pages ?? observedPages();
+  const claims = claimStore(storage.sql, work => storage.transactionSync(work)), consent = consentLedger(storage.sql, { lookupOffered: options.lookupOffered ?? true }), pages = options.pages ?? observedPages();
   const findings = findingStore(storage.sql, claims, consent, Date.now);
   const handlers: ToolHandler<any, unknown, MemoryToolContext>[] = [
     observeReads(webSearchHandler('test-brave-key', options.search ?? brave(results)), pages) as ToolHandler<any, unknown, MemoryToolContext>,

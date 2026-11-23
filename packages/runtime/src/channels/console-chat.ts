@@ -15,7 +15,7 @@ export const CONSOLE_CHAT_PATH = '/console/dashboard/api/v1/chat';
 // request without a CORS preflight, which this route never answers.
 export const CONSOLE_CHAT_HEADER = 'x-waldo-console';
 
-type ChatEnv = OwnerDirectoryEnv & PublicOriginEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; APP_CHAT_ATTACHMENTS?: string }>;
+type ChatEnv = OwnerDirectoryEnv & PublicOriginEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
 
 const answer = (status: number, body: object, extra: Record<string, string> = {}) =>
   Response.json(body, { status, headers: { ...DASHBOARD_OVERVIEW_HEADERS, ...extra } });
@@ -98,7 +98,7 @@ export const handleConsoleChat = async (request: Request, env: ChatEnv, auth: Co
   // The app's own per-owner buckets: chat from the app and the console shares one budget, sized for the app's polling.
   if (!env.RESPONSIBILITY_RATE_LIMITER) return answer(503, { error: 'chat_unavailable' });
   // An attachment is staged exactly as the app stages one, on the app's upload budget; the send that names it comes after.
-  if (chosen.upload) return relay(await forwardAppUpload(request, { owners, limiter: env.RESPONSIBILITY_RATE_LIMITER, on: env.APP_CHAT_ATTACHMENTS === '1' }, doName, sessionHash));
+  if (chosen.upload) return relay(await forwardAppUpload(request, { owners, limiter: env.RESPONSIBILITY_RATE_LIMITER }, doName, sessionHash));
   try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `${chosen.bucket}:${doName}` })).success) return answer(429, { error: 'rate_limited' }, { 'retry-after': '60' }); }
   catch { return answer(503, { error: 'chat_unavailable' }); }
 

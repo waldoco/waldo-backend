@@ -84,7 +84,7 @@ it('an app turn, which runs on a run scope, recalls a claim by meaning when the 
 it('prices the turn\'s embedding call into the cost ledger and the month the spend ceiling reads', async () => {
   directory();
   const name = 'semantic-recall-owner-do-cost';
-  await appTurn(name, { WALDO_COST_LEDGER_SYNC: 'on' });
+  await appTurn(name);
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const pending = state.storage.kv.get<{ open: CostRollupRow[]; sending?: { rows: CostRollupRow[] } }>(COST_ROLLUP_KEY);
     const rows = [...pending?.open ?? [], ...pending?.sending?.rows ?? []].filter((row) => row.model === WORKERS_AI_BGE_M3_EMBEDDING_MODEL);

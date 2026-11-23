@@ -142,7 +142,7 @@ describe('openIMessageMedia', () => {
   const pdf = { id: 'att-pdf', name: 'notes.pdf', mimeType: 'application/pdf', size: PDF.length };
   const media = (...files: IMessageMedia['files'][number][]): IMessageMedia => ({ messageGuid: 'msg-1', files });
   const opened = (bytes: readonly Uint8Array[]): PhotonAttachmentSource => vi.fn(async () => ({ ok: true as const, bytes }));
-  const deps = (source: PhotonAttachmentSource | null, enabled = true) => ({ enabled, source, sender: SENDER, signal: signal(), admit: vi.fn() });
+  const deps = (source: PhotonAttachmentSource | null) => ({ source, sender: SENDER, signal: signal(), admit: vi.fn() });
 
   it('opens a photo and a document into model attachments with a note for each', async () => {
     const d = deps(opened([PNG, PDF]));
@@ -162,13 +162,6 @@ describe('openIMessageMedia', () => {
       parts: [{ authorship: 'media_note', text: '[Owner sent a file "Scan 12 Nov", attached.]' }],
       attachments: [{ kind: 'file', mime_type: 'application/pdf', filename: 'Scan 12 Nov.pdf', data_base64: btoa(String.fromCharCode(...header)) }] });
     expect(await openIMessageMedia(media(scan), deps(opened([new Uint8Array([0x4d, 0x5a, 0, 1])])))).toEqual({ kind: 'reply', text: "I got your file but can't read that format here; send it in the app." });
-  });
-
-  it('answers once and fetches nothing while IMESSAGE_MEDIA is off', async () => {
-    const d = deps(opened([PNG]), false);
-    expect(await openIMessageMedia(media(photo), d)).toEqual({ kind: 'reply', text: "I got your photo but couldn't open it here; send it in the app." });
-    expect(await openIMessageMedia(media(pdf, photo), d)).toEqual({ kind: 'reply', text: "I got your files but couldn't open them here; send them in the app." });
-    expect(d.source).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -201,14 +194,14 @@ describe('openIMessageMedia', () => {
     expect(await openIMessageMedia(media(zip), deps(opened([PNG])))).toEqual({ kind: 'reply', text: "I got your file but can't read that format here; send it in the app." });
   });
 
-  describe('a voice note, with IMESSAGE_VOICE on (a transcriber given)', () => {
+  describe('a voice note, with a transcriber set up', () => {
     const AUDIO = new Uint8Array([0x63, 0x61, 0x66, 0x66, 9, 9]);
     const voice = { id: 'att-voice', name: 'Audio Message.caf', mimeType: 'audio/x-caf', size: AUDIO.length };
     const heard = (text: string) => vi.fn(async (_audio: Uint8Array, _name: string, _mime: string) => text);
 
     it('is fetched from Photon and transcribed; the transcript is its own part and nothing is attached', async () => {
       const transcribe = heard(' Book the dentist for Thursday. ');
-      const d = { ...deps(opened([AUDIO]), false), transcribe };
+      const d = { ...deps(opened([AUDIO])), transcribe };
       expect(await openIMessageMedia(media(voice), d)).toEqual({ kind: 'opened', attachments: [],
         parts: [{ authorship: 'media_note', text: '[Owner sent a voice note.]' }, { authorship: 'file_transcript', text: 'Book the dentist for Thursday.' }] });
       expect(d.source).toHaveBeenCalledWith(expect.objectContaining({ messageGuid: 'msg-1', sender: SENDER, files: [{ id: 'att-voice', mimeType: 'audio/x-caf' }] }));
@@ -267,10 +260,9 @@ describe('openIMessageMedia', () => {
         parts: [{ authorship: 'media_note', text: '[Owner sent an audio file "song.mp3".]' }, { authorship: 'file_transcript', text: 'La la la.' }] });
     });
 
-    it('is heard only with IMESSAGE_VOICE on and a transcriber set up', () => {
-      expect(iMessageTranscriber({ IMESSAGE_VOICE: '0', OPENAI_API_KEY: 'synthetic' } as never)).toBeUndefined();
-      expect(iMessageTranscriber({ IMESSAGE_VOICE: '1' } as never)).toBeUndefined();
-      expect(iMessageTranscriber({ IMESSAGE_VOICE: '1', OPENAI_API_KEY: 'synthetic' } as never)).toBeTypeOf('function');
+    it('is heard only with a transcriber set up', () => {
+      expect(iMessageTranscriber({} as never)).toBeUndefined();
+      expect(iMessageTranscriber({ OPENAI_API_KEY: 'synthetic' } as never)).toBeTypeOf('function');
     });
 
     it('a closed turn stops before the fetch and before the transcript is used', async () => {
@@ -284,8 +276,8 @@ describe('openIMessageMedia', () => {
     });
   });
 
-  it('a voice note stays refused with the flag off', async () => {
-    expect(await openIMessageMedia(media({ ...photo, mimeType: 'audio/mp4', name: 'voice.m4a' }), deps(null, false))).toEqual({ kind: 'reply', text: IMESSAGE_MEDIA_REPLIES.voice });
+  it('a voice note stays refused with no transcriber set up', async () => {
+    expect(await openIMessageMedia(media({ ...photo, mimeType: 'audio/mp4', name: 'voice.m4a' }), deps(null))).toEqual({ kind: 'reply', text: IMESSAGE_MEDIA_REPLIES.voice });
   });
 
   it.each([
@@ -299,14 +291,10 @@ describe('openIMessageMedia', () => {
     expect(lines.join('\n')).not.toMatch(/att-photo|IMG_0001|msg-1|owner@/);
   });
 
-  it('the console says what happens to a photo or file, by the flag, and claims tapbacks only for a host that verified them', () => {
-    expect(renderIMessage([], 'csrf', { media: true, voice: true })).toContain('Direct iMessages: text, voice notes, and photos and documents sent to your Waldo number. Groups and SMS are not supported.');
-    expect(renderIMessage([], 'csrf', { voice: true })).toContain('Direct iMessage text and voice notes. Photos and files get a reply asking you to send them in the app. Groups and SMS are not supported.');
-    const off = renderIMessage([], 'csrf', {}), on = renderIMessage([], 'csrf', { media: true });
-    const TAPBACKS = 'Groups, SMS and voice notes are not supported. Waldo sends a tapback only from a host whose row says tapbacks verified.';
-    expect(off).toContain(`Direct iMessage text only. Photos and files get a reply asking you to send them in the app. ${TAPBACKS}`);
-    expect(on).toContain(`Direct iMessages: text, and photos and documents sent to your Waldo number. ${TAPBACKS}`);
-    for (const page of [off, on]) expect(page).not.toContain('reactions are not supported');
+  it('the console says what happens to a photo, file or voice note, and claims tapbacks only for a host that verified them', () => {
+    const page = renderIMessage([], 'csrf');
+    expect(page).toContain('Direct iMessages: text, voice notes, and photos and documents sent to your Waldo number. Groups and SMS are not supported. Waldo sends a tapback only from a host whose row says tapbacks verified.');
+    expect(page).not.toContain('reactions are not supported');
     const row = { bridge_id: 'imb_' + '0'.repeat(32), account_id: 'ima_' + '0'.repeat(32), state: 'active', kind: 'owner', subject: 'owner@example.invalid', chat_guid: 'iMessage;-;owner@example.invalid', host_version: 'h1', online: true, textReady: true } as never;
     expect(renderIMessage([{ ...(row as object), tapbacksReady: true } as never], 'csrf')).toContain('online · text verified · tapbacks verified');
     expect(renderIMessage([{ ...(row as object), tapbacksReady: false } as never], 'csrf')).toContain('online · text verified · tapbacks not verified');

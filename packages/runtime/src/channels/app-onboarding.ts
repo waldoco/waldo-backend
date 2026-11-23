@@ -103,7 +103,7 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
     // Loaded lazily: the step-up table reaches Durable Object modules, which cannot load in plain Node.
     const { stepUpGated, appLinkStepUpAction } = await import('./console-step-up');
     if (stepUpGated(appLinkStepUpAction(link.data.provider)) && !await host.signedInRecently()) return problem('step_up_required');
-    if (!host.consent.stepsOpen()) return problem('agreements_required');
+    if (!host.consent.agreed()) return problem('agreements_required');
     const offered = await host.chat.offered(link.data.provider).catch(() => null);
     if (offered === null) return problem('unavailable');
     if (!offered) return problem('not_offered');
@@ -134,7 +134,7 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
   }
   if (path === ANSWERS_PATH) {
     // The answers are the owner's personal details: none is kept before the agreements, while the server offers them.
-    if (!host.consent.stepsOpen()) return problem('agreements_required');
+    if (!host.consent.agreed()) return problem('agreements_required');
     const answers = appSetupAnswersRequestV1Schema.parse(body);
     const held = host.transaction(() => host.firstRun.saveAnswers(answers));
     host.setupDone?.();
@@ -185,9 +185,7 @@ export type OwnerOnboardingDeps = Readonly<{
   signedInRecently(): Promise<boolean>;
   setupDone?(): void;
   lookupChanged?(): void;
-  // The server's switches: the agreements, off until the owner approves their copy, and the look-up, off until the notice that
-  // discloses it is published.
-  agreementsOffered: boolean;
+  // The server's switch for the look-up, off until the notice that discloses it is published.
   lookupOffered: boolean;
   // Hides retained copies of these texts wherever the owner's memory forget reaches them (chat history, stored tool output,
   // episodes, thread titles and the rest), and throws when it cannot verify that it did.
@@ -199,7 +197,7 @@ export const FIRST_RUN_QUIET_FROM = '22:00';
 const HIDE_TEXT_MIN_CHARS = 12;
 export const ownerOnboardingHost = (deps: OwnerOnboardingDeps): AppOnboardingHost => {
   const { storage, now } = deps, sql = storage.sql, transaction = <T>(work: () => T) => storage.transactionSync(work);
-  const claims = claimStore(sql, transaction), consent = consentLedger(sql, { agreementsOffered: deps.agreementsOffered, lookupOffered: deps.lookupOffered });
+  const claims = claimStore(sql, transaction), consent = consentLedger(sql, { lookupOffered: deps.lookupOffered });
   const findings = findingStore(sql, claims, consent, now);
   // A short literal would hide every chat line that happens to contain it, so only passages of the length the owner-evidence
   // rule uses are swept; the finding itself is gone either way.

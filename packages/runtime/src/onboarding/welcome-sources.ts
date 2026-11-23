@@ -172,14 +172,12 @@ export const setupStage = (claims: ClaimStore, healthMemory: () => boolean) => a
   };
 };
 
-// The public web reaches the gift only as look-up findings. In the first build this stage writes no node: it says whether
-// the look-up is live and found anything. In the second (v2) it reads the findings, kept and not yet decided, as outside text
+// The public web reaches the gift only as look-up findings: this stage reads them, kept and not yet decided, as outside text
 // the model may build Waldo's read on; a finding the owner forgets or corrects, or that expires, takes that read with it.
 export const WELCOME_WEB_FINDINGS = 50;
 const domainOf = (url: string) => { try { return new URL(url).hostname; } catch { return ''; } };
-export const webStage = (findings: Pick<FindingStore, 'offered' | 'lookup' | 'page'>, v2 = false) => async (): Promise<StageInput> => {
+export const webStage = (findings: Pick<FindingStore, 'offered' | 'lookup' | 'page'>) => async (): Promise<StageInput> => {
   if (!findings.offered() || findings.lookup() !== 'granted') return settled('skipped');
-  if (!v2) return settled(findings.page(1).total > 0 ? 'done' : 'empty');
   const found = findings.page(WELCOME_WEB_FINDINGS).items;
   if (!found.length) return settled('empty');
   const lines = found.map((item) => `[${item.finding_id}] ${item.category}: ${item.text} · from ${item.source.title || domainOf(item.source.url)} (${domainOf(item.source.url)}) · ${item.state === 'unconfirmed' ? 'not yet seen by the owner' : 'kept by the owner'}`);
@@ -201,27 +199,25 @@ export const welcomeSourceAvailable = (deps: Readonly<{ claims: ClaimStore; heal
   };
 
 // The owner object's welcome run: the readers over its own connections, and one model call per stage, which the owner object
-// runs as an owner job on its queue.
-// v2: the second build (WELCOME_V2), with lookupOpen saying whether the owner look-up is still running.
+// runs as an owner job on its queue. lookupOpen says whether the owner look-up is still running.
 export const ownerWelcome = (deps: Readonly<{
   sql: Pick<SqlStorage, 'exec'>; transaction<T>(work: () => T): T; claims: ClaimStore; now(): number; timezone(): string; healthMemory(): boolean;
   healthRead: HealthReadBook; google: GoogleAccess; findings(): Pick<FindingStore, 'offered' | 'lookup' | 'page'>;
-  ask(stage: WelcomeStage, input: string, version?: 2): Promise<string>;
-  v2?: Readonly<{ lookupOpen(): boolean }>;
+  ask(stage: WelcomeStage, input: string): Promise<string>;
+  lookupOpen(): boolean;
 }>) => ({
   build: () => welcomeBuild(deps.sql, deps.now),
   // Something to do: a stage due, or a skipped stage to check for its source.
   wanted: () => { const build = welcomeBuild(deps.sql, deps.now); return build.due().length > 0 || build.reopenable().length > 0; },
   // Health readings may have landed since an empty health stage: take it up once more, within a day of it settling.
-  lateHealth: (): boolean => deps.transaction(() => welcomeBuild(deps.sql, deps.now).lateHealth(deps.v2 !== undefined)),
-  // The look-up under this grant ended: a web stage that settled without it reads the findings once (second build only).
-  lateWeb: (grant: number): boolean => deps.v2 !== undefined && deps.transaction(() => welcomeBuild(deps.sql, deps.now).lateWeb(grant)),
-  // A Google account was connected: calendar and mail read again once, within a day of settling (second build only).
-  googleConnected: (): boolean => deps.v2 !== undefined && deps.transaction(() => welcomeBuild(deps.sql, deps.now).googleConnected()),
+  lateHealth: (): boolean => deps.transaction(() => welcomeBuild(deps.sql, deps.now).lateHealth()),
+  // The look-up under this grant ended: a web stage that settled without it reads the findings once.
+  lateWeb: (grant: number): boolean => deps.transaction(() => welcomeBuild(deps.sql, deps.now).lateWeb(grant)),
+  // A Google account was connected: calendar and mail read again once, within a day of settling.
+  googleConnected: (): boolean => deps.transaction(() => welcomeBuild(deps.sql, deps.now).googleConnected()),
   run: () => runWelcome({
-    build: welcomeBuild(deps.sql, deps.now), claims: deps.claims, now: deps.now, transaction: deps.transaction, ask: deps.ask, available: welcomeSourceAvailable(deps),
-    read: { health: healthStage(deps.healthRead, deps.timezone, deps.now, deps.healthMemory), calendar: calendarStage(deps.google, deps.now), mail: mailStage(deps.google), web: () => webStage(deps.findings(), deps.v2 !== undefined)(), setup: setupStage(deps.claims, deps.healthMemory) },
-    ...(deps.v2 ? { v2: deps.v2 } : {}),
+    build: welcomeBuild(deps.sql, deps.now), claims: deps.claims, now: deps.now, transaction: deps.transaction, ask: deps.ask, lookupOpen: deps.lookupOpen, available: welcomeSourceAvailable(deps),
+    read: { health: healthStage(deps.healthRead, deps.timezone, deps.now, deps.healthMemory), calendar: calendarStage(deps.google, deps.now), mail: mailStage(deps.google), web: () => webStage(deps.findings())(), setup: setupStage(deps.claims, deps.healthMemory) },
   }),
 });
 export type OwnerWelcome = ReturnType<typeof ownerWelcome>;

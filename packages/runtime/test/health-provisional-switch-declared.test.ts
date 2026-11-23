@@ -14,12 +14,10 @@ describe('HEALTH_PROVISIONAL_SCORES in the Worker config', () => {
     expect(parsed.env.staging.vars.HEALTH_PROVISIONAL_SCORES).toBe('1');
   });
   it('leaves the staging vars the gate turned on as they are', () => {
-    expect(parsed.env.staging.vars.APP_AGREEMENTS).toBe('1');
     expect(parsed.env.staging.vars.OWNER_LOOKUP).toBe('1');
     expect(parsed.env.staging.vars.WHATSAPP_DEBUG_LOG).toBe('false');
   });
   it('leaves production\'s own values as they are', () => {
-    expect(parsed.vars.APP_AGREEMENTS).toBe('0');
     expect(parsed.vars.OWNER_LOOKUP).toBe('0');
     expect(parsed.vars.WHATSAPP_DEBUG_LOG).toBe('false');
   });

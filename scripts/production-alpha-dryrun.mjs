@@ -26,9 +26,6 @@ export function configChecks(cfg) {
   out.push(vars.LANGFUSE_CAPTURE_TEXT === 'false' && vars.WHATSAPP_DEBUG_LOG === 'false'
     ? ok('no-text-capture', 'LANGFUSE_CAPTURE_TEXT and WHATSAPP_DEBUG_LOG are "false"')
     : gap('no-text-capture', 'LANGFUSE_CAPTURE_TEXT and WHATSAPP_DEBUG_LOG must be "false"', 'S8'));
-  out.push(vars.WALDO_COST_LEDGER_SYNC === 'on'
-    ? ok('cost-ledger', 'WALDO_COST_LEDGER_SYNC=on')
-    : gap('cost-ledger', 'WALDO_COST_LEDGER_SYNC is not "on", so the per-owner spend ceiling is inert', 'S9'));
   out.push(vars.WALDO_OWNER_DO_NAMESPACE
     ? ok('do-namespace', 'WALDO_OWNER_DO_NAMESPACE is set')
     : gap('do-namespace', 'WALDO_OWNER_DO_NAMESPACE is empty; files and the workspace answer "unavailable" until it names the production OWNER_DO namespace id', 'S5'));

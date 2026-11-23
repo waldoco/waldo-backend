@@ -10,7 +10,7 @@ import { verifiedOpenOwnerMark } from '../src/identity/open-owner-hold';
 const SECRET = 'fictional-open-signup-router-secret-0000000000', DIRECTORY = 'https://open-signup.fixture.invalid', KEY = 'fictional-public-key';
 const NEWCOMER = 'newcomer@example.test', MEMBER = 'member@example.test', INVITED = 'invited@example.test', INVITE = 'ABCDEFGHJKLMNPQRSTUV';
 const NONCE = 'raw-nonce-0123456789abcdef', CODE = '123456', IP = '203.0.113.9';
-const OPEN = { OPEN_SIGNUP: '1', OPEN_SIGNUP_DAILY_CAP: '2', OPEN_SIGNUP_TOTAL_CAP: '3', APP_AGREEMENTS: '1', WALDO_COST_LEDGER_SYNC: 'on' };
+const OPEN = { OPEN_SIGNUP: '1', OPEN_SIGNUP_DAILY_CAP: '2', OPEN_SIGNUP_TOTAL_CAP: '3' };
 
 const sha = async (text: string) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].map(b => b.toString(16).padStart(2, '0')).join('');
 const base64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
@@ -96,7 +96,7 @@ const directory = async () => {
       last_seen_at: new Date().toISOString(), expires_at: new Date(Date.now() + 12 * 60 * 60_000).toISOString(), rotated_to: null, signed_in_at: new Date().toISOString() })));
   });
   const member = (email = MEMBER) => { state.owners.set(email, { auth: userFor(email), doName: `owner-${crypto.randomUUID()}`, open: false }); };
-  const settings = { ...env, SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: KEY, WALDO_ROUTER_HMAC_SECRET: SECRET, APP_ID_TOKEN_SIGNIN: '1',
+  const settings = { ...env, SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: KEY, WALDO_ROUTER_HMAC_SECRET: SECRET,
     RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } };
   const auth = consoleAuth(settings, fetcher as typeof fetch)!;
   // The owner objects, as far as a sign-in reaches them: the Worker's mark, checked against the router secret.
@@ -132,8 +132,8 @@ describe('open sign-up in the app', () => {
     expect(state.calls.filter(fn => fn.startsWith('open_') || fn === 'signup_owner_open' || fn === 'mark')).toEqual([]);
   });
 
-  it('stays off, and says so without an address, while the agreements or the spend ledger are off or a cap is malformed', async () => {
-    for (const broken of [{ APP_AGREEMENTS: '0' }, { WALDO_COST_LEDGER_SYNC: 'off' }, { OPEN_SIGNUP_DAILY_CAP: '0' }, { OPEN_SIGNUP_TOTAL_CAP: 'ten' }]) {
+  it('stays off, and says so without an address, while a cap is malformed', async () => {
+    for (const broken of [{ OPEN_SIGNUP_DAILY_CAP: '0' }, { OPEN_SIGNUP_TOTAL_CAP: 'ten' }]) {
       const { app, state, token } = await directory();
       const logs = captureLogs();
       try {
@@ -265,7 +265,7 @@ describe('the sign-up screen asks the server first', () => {
     expect(await options(OPEN)).toEqual({ status: 200, body: { open_signup: true } });
     expect(await options({})).toEqual({ status: 200, body: { open_signup: false } });
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    try { expect(await options({ ...OPEN, WALDO_COST_LEDGER_SYNC: 'off' })).toEqual({ status: 200, body: { open_signup: false } }); }
+    try { expect(await options({ ...OPEN, OPEN_SIGNUP_TOTAL_CAP: 'ten' })).toEqual({ status: 200, body: { open_signup: false } }); }
     finally { quiet.mockRestore(); }
     expect(state.calls).toEqual([]);
   });

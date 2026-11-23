@@ -33,10 +33,6 @@ export type IMessageEnv = OwnerDirectoryEnv & PhotonEnv & PublicOriginEnv & Read
   IMESSAGE_ONBOARDING_URL?: string;
   /** Shared Waldo number: the address owners text "waldo CODE" to, shown in the console. */
   IMESSAGE_WALDO_ADDRESS?: string;
-  /** "1": photos and files on Photon are fetched for the model. Otherwise each gets one reply that it was not opened. */
-  IMESSAGE_MEDIA?: string;
-  /** "1": a voice note sent alone is fetched from Photon and transcribed. Otherwise it gets one reply to type it or use the app. */
-  IMESSAGE_VOICE?: string;
   WALDO_FILE_TOOLS?: string;
 }> & PhotonMediaEnv & TranscriberEnv;
 
