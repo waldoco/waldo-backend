@@ -616,7 +616,11 @@ export class RuntimeLLMProvider {
           const usableAhead = plans.slice(index + 1).some((later) => later.step.provider !== plan.step.provider
             && !settledModels.has(modelKey(later.step)) && !this.circuitBreaker.isOpen(later.step.provider));
           const walkPastRejection = gatewayResult.wireRejected === true && usableAhead;
-          if (!reachedByOutage && !gatewayResult.unsendable && !walkPastRejection) return invalidResponseFailure(plan.fallback_step, attempts, routingLogs, undefined, gatewayResult.error);
+          // A provider reached because another refused the shape has had the request's one failover: a second refusal ends
+          // the route at its floor, the same as an outage, rather than as a bad request the owner never hears about.
+          const reachedByRejection = attempts.slice(0, -1).some((attempt) => attempt.outcome === 'failure'
+            && attempt.code === 'invalid_args' && attempt.provider !== plan.step.provider);
+          if (!reachedByOutage && !reachedByRejection && !gatewayResult.unsendable && !walkPastRejection) return invalidResponseFailure(plan.fallback_step, attempts, routingLogs, undefined, gatewayResult.error);
           // The adapter's error names only the status and the provider's error type, never its message.
           if (walkPastRejection) console.warn(JSON.stringify({ hop: 'provider_rejected_request', ok: false, provider: plan.step.provider, model: plan.step.model, detail: gatewayResult.error }));
           settledModels.add(modelKey(plan.step));

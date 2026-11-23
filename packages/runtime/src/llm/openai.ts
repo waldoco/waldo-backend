@@ -164,7 +164,8 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
         ? ` (${[error.status, error.code, error.param].filter((part) => part !== undefined && part !== null && part !== '').join(' ')})`
         : '';
       const retry = error instanceof OpenAI.APIError ? retryAdvice(error.headers) : undefined;
-      return { ok: false, code: openAIErrorCode(error), error: `OpenAI request failed${detail}`, ...(retry ? { retry } : {}), ...(billedRounds > 0 ? { spent: searchSpent } : {}) };
+      const wireRejected = error instanceof OpenAI.APIError && error.status === 400;
+      return { ok: false, code: openAIErrorCode(error), error: `OpenAI request failed${detail}`, ...(retry ? { retry } : {}), ...(wireRejected ? { wireRejected: true } : {}), ...(billedRounds > 0 ? { spent: searchSpent } : {}) };
     } finally {
       clearTimeout(timeout);
       input.runScope?.signal.removeEventListener('abort', abortRun);
