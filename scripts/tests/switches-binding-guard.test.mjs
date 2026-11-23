@@ -25,13 +25,13 @@ test('the config as it stands passes, and every switch is flat-equal to what the
 test('the 1808c6ed shape, every switch its own var, fails on the binding count and on the flat vars', () => {
   const { bad } = checkConfig(flatConfig(config), secrets);
   assert.ok(bad.some((line) => line.includes(`over ${BINDING_BUDGET}`)), bad.join('\n'));
-  assert.ok(bad.some((line) => line.includes('var "DEVICE_WEATHER" must go in WALDO_SWITCHES')), bad.join('\n'));
+  assert.ok(bad.some((line) => line.includes('var "MEDICATIONS" must go in WALDO_SWITCHES')), bad.join('\n'));
 });
 
 test('a new flat var, a non-string switch, a name in both places, an oversized object or no runbook names each fail', () => {
   const cases = [
     [(c) => { c.env.staging.vars.NEW_SWITCH = '1'; }, 'var "NEW_SWITCH" must go in WALDO_SWITCHES'],
-    [(c) => { c.vars.WALDO_SWITCHES.DEVICE_PLACE = 1; }, 'WALDO_SWITCHES.DEVICE_PLACE must be a string'],
+    [(c) => { c.vars.WALDO_SWITCHES.MEDICATIONS = 1; }, 'WALDO_SWITCHES.MEDICATIONS must be a string'],
     [(c) => { c.vars.WALDO_SWITCHES.WALDO_ENVIRONMENT = 'staging'; }, '"WALDO_ENVIRONMENT" is declared both flat and in WALDO_SWITCHES'],
     [(c) => { c.env.staging.vars.WALDO_SWITCHES.FILLER = 'x'.repeat(5000); }, 'bytes, over'],
     [(c) => { delete c.env.staging.vars.WALDO_SWITCHES; }, 'staging: WALDO_SWITCHES must be an object'],
@@ -54,11 +54,11 @@ test('every switch has an inventory row, and every kept or deleted switch says w
   assert.deepEqual(checkInventory(config, inventory, '2026-11-23').bad, []);
   const cases = [
     [(c, inv) => { c.env.staging.vars.WALDO_SWITCHES.NEW_THING = '1'; }, 'switch "NEW_THING" has no row'],
-    [(c, inv) => { delete c.vars.WALDO_SWITCHES.DEVICE_PLACE; delete c.env.staging.vars.WALDO_SWITCHES.DEVICE_PLACE; }, 'inventory row "DEVICE_PLACE" names no switch'],
+    [(c, inv) => { delete c.vars.WALDO_SWITCHES.MEDICATIONS; delete c.env.staging.vars.WALDO_SWITCHES.MEDICATIONS; }, 'inventory row "MEDICATIONS" names no switch'],
     [(c, inv) => { delete inv.MEDICATIONS.removeBy; }, '"MEDICATIONS" is kept with no removeBy'],
     [(c, inv) => { delete inv.MEDICATIONS.reason; }, '"MEDICATIONS" is kept with no reason'],
-    [(c, inv) => { inv.DEVICE_PLACE.disposition = 'maybe'; }, 'disposition "maybe"'],
-    [(c, inv) => { delete inv.DEVICE_PLACE.batch; }, '"DEVICE_PLACE" is unconditional with no batch'],
+    [(c, inv) => { inv.CALENDAR_UNDO_CANCEL.disposition = 'maybe'; }, 'disposition "maybe"'],
+    [(c, inv) => { delete inv.CALENDAR_UNDO_CANCEL.batch; }, '"CALENDAR_UNDO_CANCEL" is unconditional with no batch'],
   ];
   for (const [mutate, expected] of cases) {
     const c = clone(), inv = structuredClone(inventory);

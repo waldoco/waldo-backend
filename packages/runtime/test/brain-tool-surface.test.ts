@@ -219,10 +219,10 @@ describe('the brain tool surface', () => {
 
   // A worker round sends every tool of its profile, with no tool search: the owner-round budget above does not cover it, so
   // each profile's round is pinned at its measured size plus a small margin, and growing it is a decision, not drift. The
-  // owner has Drive reads and MCP reads on, and browsing (added as above), so every profile tool is in the round.
+  // owner has Google's MCP servers configured, and browsing (added as above), so every profile tool is in the round.
   it('a task worker\'s round stays within the size pinned for its profile', async () => {
     const mcp = JSON.stringify([{ name: 'gmail', url: 'https://gmailmcp.googleapis.com/mcp/v1', auth: 'google' }, { name: 'calendar', url: 'https://calendarmcp.googleapis.com/mcp/v1', auth: 'google' }, { name: 'drive', url: 'https://drivemcp.googleapis.com/mcp/v1', auth: 'google' }]);
-    const request = await ownerReply('tool-surface-worker', 'off', { DRIVE_READS: '1', MCP_READ_INTENTS: '1', WALDO_MCP_SERVERS: mcp });
+    const request = await ownerReply('tool-surface-worker', 'off', { WALDO_MCP_SERVERS: mcp });
     const owned = [...request.tools!, ...toolDefinitions([browsePageHandler(undefined, undefined, undefined), browseActHandler(undefined, undefined, undefined)])];
     const PINNED = { reader: { openai: 5_480, anthropic: 5_330 }, errand: { openai: 6_840, anthropic: 6_690 } } as const;
     const measured: Record<string, { openai: number; anthropic: number }> = {};

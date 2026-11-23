@@ -23,7 +23,7 @@ const seen: Array<{ tool: string }> = [];
 const intents: Array<string | undefined> = [];
 const readOnlyFlags: Array<boolean | undefined> = [];
 const auth: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async (_url, tool, _args, _conn, intent) => { seen.push({ tool }); intents.push(intent?.id); readOnlyFlags.push(intent?.readOnly); return [{ text: 'ok' }]; } };
-const run = (server: string, tool: string) => dispatchTool({ id: `r-${server}-${tool}`, name: 'read_mcp_tool', args: { server, tool, args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, auth, true)] });
+const run = (server: string, tool: string) => dispatchTool({ id: `r-${server}-${tool}`, name: 'read_mcp_tool', args: { server, tool, args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, auth)] });
 
 describe('read_mcp_tool through the real dispatcher', () => {
   it('passes a host-derived intent for metadata reads and never one from model args', async () => {
@@ -33,17 +33,14 @@ describe('read_mcp_tool through the real dispatcher', () => {
     expect(readOnlyFlags).toEqual([true, true, true]);
     for (const id of intents) expect(id).toMatch(/^mcpread:[0-9a-f]{64}$/);
     expect(new Set(intents).size).toBe(3);
-    const withArgIntent = await dispatchTool({ id: 'x', name: 'read_mcp_tool', args: { server: 'drive', tool: 'search_files', args: { intent: { id: 'model-chosen' } } } }, context(), { handlers: [readMcpToolHandler(SERVERS, auth, true)] });
+    const withArgIntent = await dispatchTool({ id: 'x', name: 'read_mcp_tool', args: { server: 'drive', tool: 'search_files', args: { intent: { id: 'model-chosen' } } } }, context(), { handlers: [readMcpToolHandler(SERVERS, auth)] });
     expect(withArgIntent).toMatchObject({ ok: true });
     expect(intents[3]).toMatch(/^mcpread:/);
   });
 
-  it('is off by default: the same read is forbidden and makes no call, and on it runs', async () => {
+  it('runs a catalogue read with one call', async () => {
     seen.length = 0;
-    const off = await dispatchTool({ id: 'off', name: 'read_mcp_tool', args: { server: 'drive', tool: 'search_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, auth)] });
-    expect(off).toMatchObject({ ok: false, code: 'forbidden' });
-    expect(seen).toEqual([]);
-    const on = await dispatchTool({ id: 'on', name: 'read_mcp_tool', args: { server: 'drive', tool: 'search_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, auth, true)] });
+    const on = await dispatchTool({ id: 'on', name: 'read_mcp_tool', args: { server: 'drive', tool: 'search_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, auth)] });
     expect(on).toMatchObject({ ok: true });
     expect(seen).toEqual([{ tool: 'search_files' }]);
   });
@@ -81,22 +78,22 @@ describe('read_mcp_tool through the real dispatcher', () => {
   it('unknown server is a typed not_found; a provider failure keeps its real code', async () => {
     expect(await run('nope', 'x')).toMatchObject({ ok: false, code: 'not_found' });
     const boom: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async () => { throw new Error('upstream boom'); } };
-    const out = await dispatchTool({ id: 'boom', name: 'read_mcp_tool', args: { server: 'drive', tool: 'search_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, boom, true)] });
+    const out = await dispatchTool({ id: 'boom', name: 'read_mcp_tool', args: { server: 'drive', tool: 'search_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, boom)] });
     expect(out).toMatchObject({ ok: false, code: 'transient', error: 'upstream boom' });
   });
 
   it('the edge mcp_read_rejected code is a typed rejected result with no reconnect', async () => {
     const rejected: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async () => { throw Object.assign(new Error('mcp_read_rejected'), { status: 400 }); } };
-    const out = await dispatchTool({ id: 'rej', name: 'read_mcp_tool', args: { server: 'drive', tool: 'search_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, rejected, true)] });
+    const out = await dispatchTool({ id: 'rej', name: 'read_mcp_tool', args: { server: 'drive', tool: 'search_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, rejected)] });
     expect(out).toMatchObject({ ok: false, code: 'rejected', source_taint: 'external', error: 'The connector refused this read.' });
     expect(out).not.toHaveProperty('connect');
     const other: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async () => { throw Object.assign(new Error('bad request'), { status: 400 }); } };
-    expect(await dispatchTool({ id: 'o', name: 'read_mcp_tool', args: { server: 'drive', tool: 'search_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, other, true)] })).toMatchObject({ ok: false, code: 'transient' });
+    expect(await dispatchTool({ id: 'o', name: 'read_mcp_tool', args: { server: 'drive', tool: 'search_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, other)] })).toMatchObject({ ok: false, code: 'transient' });
   });
 
   it('an intent_unavailable on a read is rejected, not transient, and offers no reconnect', async () => {
     const gone: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async () => { throw new ProxyIntentError('intent_unavailable'); } };
-    const out = await dispatchTool({ id: 'iu', name: 'read_mcp_tool', args: { server: 'drive', tool: 'search_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, gone, true)] });
+    const out = await dispatchTool({ id: 'iu', name: 'read_mcp_tool', args: { server: 'drive', tool: 'search_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, gone)] });
     expect(out).toMatchObject({ ok: false, code: 'rejected', source_taint: 'external', error: 'The connector could not run this read.' });
     expect(out).not.toHaveProperty('connect');
   });
@@ -105,7 +102,7 @@ describe('read_mcp_tool through the real dispatcher', () => {
     const got: Array<Record<string, unknown>> = [];
     const spy: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async (_u, _t, a) => { got.push(a); return [{ text: 'ok' }]; } };
     for (const [tool, args] of [['list_recent_files', {}], ['search_files', { query: 'x', excludeContentSnippets: false }], ['get_file_metadata', { fileId: 'f', excludeContentSnippets: false }]] as const) {
-      await dispatchTool({ id: `s-${tool}`, name: 'read_mcp_tool', args: { server: 'drive', tool, args } }, context(), { handlers: [readMcpToolHandler(SERVERS, spy, true)] });
+      await dispatchTool({ id: `s-${tool}`, name: 'read_mcp_tool', args: { server: 'drive', tool, args } }, context(), { handlers: [readMcpToolHandler(SERVERS, spy)] });
     }
     expect(got).toHaveLength(3);
     for (const a of got) expect(a.excludeContentSnippets).toBe(true);
@@ -118,28 +115,28 @@ describe('read_mcp_tool through the real dispatcher', () => {
   });
 
   it('the tool description names each read-only server and its exact read tools, and nothing from other servers', () => {
-    const handler = readMcpToolHandler(SERVERS, auth, true);
+    const handler = readMcpToolHandler(SERVERS, auth);
     expect(handler.description).toContain('"drive"');
     for (const tool of ['search_files', 'list_recent_files', 'get_file_metadata']) expect(handler.description).toContain(tool);
     expect(handler.description).not.toContain('read_file_content');
     expect(handler.description).not.toContain('"mail"');
     expect(handler.description).not.toContain('delete_file');
     // With no configured servers it still covers the owner's own connected servers, and names none.
-    const bare = readMcpToolHandler(undefined, auth, true).description;
+    const bare = readMcpToolHandler(undefined, auth).description;
     expect(bare).toContain('search_mcp_tools');
     expect(bare).not.toContain('Use exactly these server');
   });
 
   it('a missing Drive grant yields a fixed, typed message naming the feature and reason, with no button claim and no link text', async () => {
     const expired: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async () => { throw Object.assign(new Error('insufficient scopes'), { status: 403 }); } };
-    const out = await dispatchTool({ id: 'scope', name: 'read_mcp_tool', args: { server: 'drive', tool: 'list_recent_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, expired, true)] });
+    const out = await dispatchTool({ id: 'scope', name: 'read_mcp_tool', args: { server: 'drive', tool: 'list_recent_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, expired)] });
     expect(out).toMatchObject({ ok: false, code: 'auth_failed', connect: { status: 'auth_required', service: 'google', reason: 'scope_missing', feature: 'drive' } });
     const error = (out as { error: string }).error;
     expect(error).toContain('drive');
     expect(error).toMatch(/not authorized/);
     expect(error).not.toMatch(/button/i);
     expect(error).not.toMatch(/https?:/);
-    const notConnected = await dispatchTool({ id: 'nc', name: 'read_mcp_tool', args: { server: 'drive', tool: 'list_recent_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, { resolve: async () => null, proxy: async () => [] }, true)] });
+    const notConnected = await dispatchTool({ id: 'nc', name: 'read_mcp_tool', args: { server: 'drive', tool: 'list_recent_files', args: {} } }, context(), { handlers: [readMcpToolHandler(SERVERS, { resolve: async () => null, proxy: async () => [] })] });
     expect((notConnected as { error: string }).error).toMatch(/not connected/);
   });
 });

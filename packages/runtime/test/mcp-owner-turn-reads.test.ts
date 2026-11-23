@@ -22,7 +22,7 @@ const args = { server: 'notion', tool: 'notion-search', args: { query: 'q' } };
 describe('MCP reads and the owner\'s turn', () => {
   it('marks only an untainted turn the owner started as the owner\'s turn', async () => {
     const { owner, seen } = recorder();
-    const read = readMcpToolHandler(undefined, undefined, false, owner), search = searchMcpToolsHandler(owner);
+    const read = readMcpToolHandler(undefined, undefined, owner), search = searchMcpToolsHandler(owner);
     const cases: Partial<ToolDispatcherContext>[] = [
       {},
       { toolArgSourceTaint: 'external' },

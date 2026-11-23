@@ -7,7 +7,7 @@ import { isTimeZone, localDayWindow } from '../health/scores/time';
 import { md5Hex } from './md5';
 import type { Change } from './update-cards';
 
-// The owner's phone calendars (DEVICE_CALENDAR), held in the owner's object, the only writer: the calendar consent and its
+// The owner's phone calendars, held in the owner's object, the only writer: the calendar consent and its
 // epochs, the latest snapshot per phone, and the changes between two snapshots waiting for the update judge. The contract is
 // device-context.ts (device calendar). Consent and data live together so a withdrawal deletes in the same transaction.
 // Nothing here logs an event, a title or a calendar name.

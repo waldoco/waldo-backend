@@ -52,7 +52,7 @@ it('structured API-disabled 403 is actionable without claiming scope failure',as
 
 const runtimeRead=async(args:unknown)=>{
  const proxy=googleProxy({SUPABASE_PROJECT_URL:'https://edge.invalid',SUPABASE_PUBLISHABLE_KEY:'fixture-key',WALDO_ROUTER_HMAC_SECRET:cfg.WALDO_ROUTER_HMAC_SECRET},async(raw,init)=>serve(new Request(raw,init)))!;
- const handler=readDriveHandler({client:async()=>proxy.client('owner','conn')},true);
+ const handler=readDriveHandler({client:async()=>proxy.client('owner','conn')});
  return dispatchTool({id:'drive-wire',name:'read_drive',args},{authenticatedUserId:'owner',turnId:'drive-turn',trigger:'user_message',session:buildSessionState({trigger:'user_message',canary_tokens:['1111111111111111','2222222222222222','3333333333333333'],started_at:1}),hasApproval:()=>false,sourceTaint:null,toolArgSourceTaint:null,sanitise},{handlers:[handler]});
 };
 it.each(['recent','search','get'])('actual dispatcher→Core handler→signed GoogleProxy→Edge→HTTP %s metadata read',async action=>{
@@ -89,7 +89,7 @@ it('actual dispatcher to signed proxy reads actual Docs body with no result ledg
   const u=new URL(String(raw));if(u.hostname==='www.googleapis.com'){f.hops.push('drive-content');if(u.searchParams.has('fields')){metadataReads++;return Response.json({id,name:'Plan',mimeType:'application/vnd.google-apps.document',modifiedTime:at,version:'17',capabilities:{canDownload:true}});}return new Response(marker,{headers:{'content-type':'text/plain'}});}return original(raw,init);
  }));
  const proxy=googleProxy({SUPABASE_PROJECT_URL:'https://edge.invalid',SUPABASE_PUBLISHABLE_KEY:'fixture-key',WALDO_ROUTER_HMAC_SECRET:cfg.WALDO_ROUTER_HMAC_SECRET},async(raw,init)=>serve(new Request(raw,init)))!;
- const handler=readDriveHandler({client:async()=>proxy.client('owner','conn')},true,true);
+ const handler=readDriveHandler({client:async()=>proxy.client('owner','conn')});
  const result=await dispatchTool({id:'content-wire',name:'read_drive',args:{action:'content',file_id:id,connection_id:'conn',expected_modified_time:at}},{authenticatedUserId:'owner',turnId:'content-turn',trigger:'user_message',session:buildSessionState({trigger:'user_message',canary_tokens:['1111111111111111','2222222222222222','3333333333333333'],started_at:1}),hasApproval:()=>false,sourceTaint:null,toolArgSourceTaint:null,sanitise},{handlers:[handler]});
  expect(result).toMatchObject({ok:true,source_taint:'external',data:{text:marker,account:{connection_id:'conn'},truncated:false}});expect(metadataReads).toBe(2);expect(JSON.stringify(f.log.mock.calls)).not.toContain(marker);expect(f.hops).not.toContain('proxy_idem_claim');expect(f.hops).not.toContain('proxy_idem_store');
 });
@@ -97,7 +97,7 @@ it.each(['1111111111111111'])('unsafe document content stays external and is blo
  const f=fixture();const original=fetch;const at='2026-10-03T10:00:00Z';const id='document_123456';
  vi.stubGlobal('fetch',vi.fn(async(raw:RequestInfo|URL,init?:RequestInit)=>{const u=new URL(String(raw));if(u.hostname==='www.googleapis.com')return u.searchParams.has('fields')?Response.json({id,name:'Plan',mimeType:'text/plain',modifiedTime:at,version:'17',capabilities:{canDownload:true}}):new Response(body,{headers:{'content-type':'text/plain'}});return original(raw,init);}));
  const proxy=googleProxy({SUPABASE_PROJECT_URL:'https://edge.invalid',SUPABASE_PUBLISHABLE_KEY:'fixture-key',WALDO_ROUTER_HMAC_SECRET:cfg.WALDO_ROUTER_HMAC_SECRET},async(raw,init)=>serve(new Request(raw,init)))!;
- const h=readDriveHandler({client:async()=>proxy.client('owner','conn')},true,true);
+ const h=readDriveHandler({client:async()=>proxy.client('owner','conn')});
  const result=await dispatchTool({id:'injection-wire',name:'read_drive',args:{action:'content',file_id:id,connection_id:'conn',expected_modified_time:at}},{authenticatedUserId:'owner',turnId:'content-turn',trigger:'user_message',session:buildSessionState({trigger:'user_message',canary_tokens:['1111111111111111','2222222222222222','3333333333333333'],started_at:1}),hasApproval:()=>false,sourceTaint:null,toolArgSourceTaint:null,sanitise},{handlers:[h]});
  expect(result.ok).toBe(false);expect(result).toMatchObject({code:'forbidden',error:'Google Drive content failed safety checks.'});expect(f.hops).not.toContain('proxy_idem_store');
 });

@@ -49,7 +49,7 @@ export function configChecks(cfg) {
   out.push((prod.routes ?? []).length
     ? ok('domain', 'routes declared')
     : decide('domain', 'no route or custom domain; production would answer on workers.dev', 'S6'));
-  const flags = ['CALENDAR_GROUNDED_PREP', 'DRIVE_READS', 'MAIL_SOURCE_FOLLOWUPS', 'MCP_READ_INTENTS'];
+  const flags = ['CALENDAR_GROUNDED_PREP', 'MAIL_SOURCE_FOLLOWUPS'];
   const stagingVars = flatVars(staging.vars);
   const differ = flags.filter((name) => vars[name] !== stagingVars[name]);
   out.push(differ.length

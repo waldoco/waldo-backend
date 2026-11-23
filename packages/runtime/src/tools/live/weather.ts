@@ -74,10 +74,10 @@ export const getWeatherHandler = (book: WeatherPlaceBook, provider: WeatherKit, 
 
 const result = (data: GetWeatherResult) => ({ ok: true as const, data, source_taint: null });
 
-// get_weather is offered only with the place switch, the weather switch and the WeatherKit key all present.
+// get_weather is offered only with the WeatherKit key present.
 export const weatherTools = (
-  env: WeatherKitEnv & Readonly<{ DEVICE_PLACE?: string; DEVICE_WEATHER?: string }>, call: SignedCall | null, doName: string | null, clock: OwnerClock, cache: WeatherCache | null,
+  env: WeatherKitEnv, call: SignedCall | null, doName: string | null, clock: OwnerClock, cache: WeatherCache | null,
 ) => {
-  const credentials = env.DEVICE_PLACE === '1' && env.DEVICE_WEATHER === '1' ? weatherKitCredentials(env) : null;
+  const credentials = weatherKitCredentials(env);
   return credentials ? [getWeatherHandler(weatherPlaceBook(call, doName), weatherKit(credentials, cache), clock)] : [];
 };

@@ -79,11 +79,11 @@ describe('get_weather', () => {
     expect(logged).toEqual([{ hop: 'weatherkit', code: 'result_shape' }, { hop: 'weatherkit', code: 'result_shape' }]);
   });
 
-  it('is offered only with both switches on and all four WeatherKit secrets set', () => {
-    const on = { DEVICE_PLACE: '1', DEVICE_WEATHER: '1', WEATHERKIT_TEAM_ID: 'TEAM123456', WEATHERKIT_SERVICE_ID: 'in.example.weather', WEATHERKIT_KEY_ID: 'KEY1234567', WEATHERKIT_PRIVATE_KEY: 'synthetic' };
+  it('is offered only with all four WeatherKit secrets set', () => {
+    const on = { WEATHERKIT_TEAM_ID: 'TEAM123456', WEATHERKIT_SERVICE_ID: 'in.example.weather', WEATHERKIT_KEY_ID: 'KEY1234567', WEATHERKIT_PRIVATE_KEY: 'synthetic' };
     const offered = (env: Record<string, string>) => weatherTools(env, null, 'do-x', clock, null).map(tool => tool.name);
     expect(offered(on)).toEqual(['get_weather']);
-    for (const off of [{ DEVICE_PLACE: '0' }, { DEVICE_WEATHER: '0' }, { DEVICE_PLACE: '' }, { DEVICE_WEATHER: '' }, { WEATHERKIT_PRIVATE_KEY: '' }, { WEATHERKIT_TEAM_ID: '' }]) {
+    for (const off of [{ WEATHERKIT_PRIVATE_KEY: '' }, { WEATHERKIT_TEAM_ID: '' }, { WEATHERKIT_SERVICE_ID: '' }, { WEATHERKIT_KEY_ID: '' }]) {
       expect(offered({ ...on, ...off })).toEqual([]);
     }
   });

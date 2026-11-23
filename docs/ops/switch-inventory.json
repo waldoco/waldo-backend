@@ -15,10 +15,6 @@
     "disposition": "unconditional",
     "batch": "delivery-proactive (after W4)"
   },
-  "DRIVE_READS": {
-    "disposition": "unconditional",
-    "batch": "device-google"
-  },
   "APP_AGREEMENTS": {
     "disposition": "unconditional",
     "batch": "app-identity"
@@ -80,10 +76,6 @@
   "MAIL_SOURCE_FOLLOWUPS": {
     "disposition": "unconditional",
     "batch": "delivery-proactive (after W4)"
-  },
-  "MCP_READ_INTENTS": {
-    "disposition": "unconditional",
-    "batch": "device-google"
   },
   "IMESSAGE_CONNECTOR_ENABLED": {
     "disposition": "kept",
@@ -295,14 +287,6 @@
     "disposition": "unconditional",
     "batch": "memory"
   },
-  "DEVICE_PLACE": {
-    "disposition": "unconditional",
-    "batch": "device-google"
-  },
-  "DEVICE_CALENDAR": {
-    "disposition": "unconditional",
-    "batch": "device-google"
-  },
   "CALENDAR_COVERAGE": {
     "disposition": "unconditional",
     "batch": "turn-day-cards (after W2)"
@@ -314,14 +298,6 @@
   "BLOCK_LIFECYCLE": {
     "disposition": "unconditional",
     "batch": "turn-day-cards (after W2)"
-  },
-  "ARRIVAL_LOOK": {
-    "disposition": "unconditional",
-    "batch": "device-google"
-  },
-  "DEVICE_WEATHER": {
-    "disposition": "unconditional",
-    "batch": "device-google"
   },
   "BROWSER_FORM_SUBMIT": {
     "disposition": "kept",

@@ -22,7 +22,7 @@ it('rejects wrong-account adapter instead of silently returning another mailbox'
 });
 it('routes Drive selection and always supplies an account receipt',async()=>{
  const calls:unknown[]=[];
- const handler=readDriveHandler({client:async(...args:unknown[])=>{calls.push(args);return {account,driveListFiles:async()=>({files:[],nextPageToken:null,incompleteSearch:false})} as never;}},true);
+ const handler=readDriveHandler({client:async(...args:unknown[])=>{calls.push(args);return {account,driveListFiles:async()=>({files:[],nextPageToken:null,incompleteSearch:false})} as never;}});
  expect(await handler.handle({action:'recent',page_size:2,account:account.email} as never,undefined as never)).toMatchObject({ok:true,data:{account}});
  expect(calls[0]).toEqual(['drive',undefined,undefined,account.email]);
 });

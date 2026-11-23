@@ -132,7 +132,7 @@ describe('the look\'s contract', () => {
   });
 });
 
-// Arriving home or at the gym, places the owner named on their phone, brings the same look forward (ARRIVAL_LOOK).
+// Arriving home or at the gym, places the owner named on their phone, brings the same look forward.
 describe('a look brought forward by an arrival', () => {
   it('knows where the owner arrived, is told an arrival is a reason to look and not to speak, and reads health and place', async () => {
     for (const [cause, where] of [['arrived_home', 'arrived home'], ['arrived_gym', 'arrived at the gym']] as const) {

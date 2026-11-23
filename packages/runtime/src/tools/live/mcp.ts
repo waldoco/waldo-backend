@@ -279,8 +279,8 @@ export const callMcpToolHandler = (serversRaw: string | undefined, desk?: McpDes
 });
 
 // Read-only MCP bridge: reads on Google's MCP servers without the owner button. The edge runs them on a
-// non-storing rail (no ledger row, no stored result) and checks the same catalogue, so readIntents is the
-// deploy switch for that rail. Only catalogue reads qualify; writes are refused on every path.
+// non-storing rail (no ledger row, no stored result) and checks the same catalogue. Only catalogue reads qualify; writes are
+// refused on every path.
 // The model must pick a real server and tool, so the description lists only the readable servers and
 // their exact read tools from the live configuration (closed names from deploy config, never user text).
 const readableMcpServers = (serversRaw: string | undefined) => mcpServers(serversRaw).filter((s) => googleMcpServer(s.url) !== undefined && (s.read_tools ?? []).length > 0);
@@ -292,13 +292,13 @@ const readMcpToolDescription = (serversRaw: string | undefined): string => {
   return `${base} Use exactly these server and tool names: ${lines.join('; ')}.`;
 };
 
-export const readMcpToolHandler = (serversRaw: string | undefined, googleAuth?: McpGoogleAuth, readIntents = false, owner?: McpOwnerServers): ToolHandler<CallMcpToolArgs, unknown, ToolDispatcherContext> => ({
+export const readMcpToolHandler = (serversRaw: string | undefined, googleAuth?: McpGoogleAuth, owner?: McpOwnerServers): ToolHandler<CallMcpToolArgs, unknown, ToolDispatcherContext> => ({
   name: 'read_mcp_tool',
   description: readMcpToolDescription(serversRaw),
   schema: callMcpToolArgsSchema,
   trigger_allowlist: allowlist('read_mcp_tool'),
   autonomy_gated: false,
-  eligible: () => (readIntents && readableMcpServers(serversRaw).length) || owner?.list().some((connection) => connection.runs_without_asking > 0) ? { ok: true } : { ok: false, reason: 'not_configured' },
+  eligible: () => readableMcpServers(serversRaw).length || owner?.list().some((connection) => connection.runs_without_asking > 0) ? { ok: true } : { ok: false, reason: 'not_configured' },
   handle: async ({ server, tool, args, answers }: CallMcpToolArgs, ctx?: ToolDispatcherContext): Promise<ToolResult<unknown>> => {
     const servers = mcpServers(serversRaw);
     const found = servers.find((s) => s.name === server);
@@ -326,9 +326,6 @@ export const readMcpToolHandler = (serversRaw: string | undefined, googleAuth?: 
     }
     // The proxy rail requires a host-derived intent on every MCP call. A read gets one from the turn
     // and tool-call identity (same shape as draft_email), never from model args.
-    if (!readIntents) {
-      return { ok: false, code: 'forbidden', error: 'owner-button-free reads are not enabled on this Waldo yet.', source_taint: 'external' };
-    }
     if (!ctx?.turnId || !ctx.toolCallId) return { ok: false, code: 'rejected', error: 'Read invocation identity is unavailable.', source_taint: 'external' };
     const intent: ProxyIntent = { id: `mcpread:${await sha256Hex(JSON.stringify([ctx.authenticatedUserId, ctx.turnId, ctx.toolCallId]))}`, readOnly: true };
     try {

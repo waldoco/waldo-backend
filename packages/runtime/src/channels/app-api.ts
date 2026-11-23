@@ -46,7 +46,7 @@ export const APP_DEVICES_PATH = `${APP_PATH}/devices`;
 const MAX_BODY_BYTES = 8192;
 
 // APP_ID_TOKEN_SIGNIN "1" serves Sign in with Apple and Google; otherwise the route answers 404 and the app offers the email code.
-type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_SCORE_PARTS?: string; HEALTH_USUAL?: string; HEALTH_DAY_LOAD?: string; HEALTH_PASSIVE_LOAD?: string; HEALTH_STRESS_CURVE?: string; HEALTH_FORM_CURVE?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string; DEVICE_PLACE?: string; DEVICE_CALENDAR?: string; WAKE_BRIEF?: string; WAKE_BRIEF_FRESH_MIN?: string; APP_CHAT_ATTACHMENTS?: string; WORKOUT_WAKE?: string; ARRIVAL_LOOK?: string }>;
+type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_SCORE_PARTS?: string; HEALTH_USUAL?: string; HEALTH_DAY_LOAD?: string; HEALTH_PASSIVE_LOAD?: string; HEALTH_STRESS_CURVE?: string; HEALTH_FORM_CURVE?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string; WAKE_BRIEF?: string; WAKE_BRIEF_FRESH_MIN?: string; APP_CHAT_ATTACHMENTS?: string; WORKOUT_WAKE?: string }>;
 
 const UPLOAD_READ_MS = 60_000;
 // Errors before authentication share one shape so the app cannot learn who is invited.
@@ -291,18 +291,16 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-screen-time:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
     return handleAppScreenTime({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody });
   }
-  // Device context spends its own per-owner budget. Off, the routes are not there.
+  // Device context spends its own per-owner budget.
   if (url.pathname === APP_DEVICE_CONTEXT_PATH || url.pathname.startsWith(`${APP_DEVICE_CONTEXT_PATH}/`)) {
-    if (env.DEVICE_PLACE !== '1') return fail(404);
     try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-device-context:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
     const secret = env.WALDO_ROUTER_HMAC_SECRET;
-    return handleAppDeviceContext({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody, ...(secret ? { moved: () => notifyOwnerPlaceMoved(owners, secret, who.doName) } : {}), ...(secret && env.ARRIVAL_LOOK === '1' ? { arrived: (place: ArrivalPlace) => notifyOwnerPlaceArrived(owners, secret, who.doName, place) } : {}), ...(defer ? { defer } : {}) });
+    return handleAppDeviceContext({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody, ...(secret ? { moved: () => notifyOwnerPlaceMoved(owners, secret, who.doName) } : {}), ...(secret ? { arrived: (place: ArrivalPlace) => notifyOwnerPlaceArrived(owners, secret, who.doName, place) } : {}), ...(defer ? { defer } : {}) });
   }
   if (url.pathname === APP_CHAT_UPLOAD_PATH) return forwardAppUpload(request, { owners, limiter: env.RESPONSIBILITY_RATE_LIMITER, on: env.APP_CHAT_ATTACHMENTS === '1' }, who.doName, await linkCodeHash(sessionIdOf(who.credential)!));
   // The phone's calendar spends its own per-owner budget and is answered by the owner's object, which holds its consent and
-  // events. Off, the routes are not there.
+  // events.
   if (url.pathname === APP_DEVICE_CALENDAR_PATH || url.pathname.startsWith(`${APP_DEVICE_CALENDAR_PATH}/`)) {
-    if (env.DEVICE_CALENDAR !== '1') return fail(404);
     if (!['GET', 'POST'].includes(request.method)) return fail(405);
     try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-device-calendar:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
     const length = request.headers.get('content-length');

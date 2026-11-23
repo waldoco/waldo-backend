@@ -412,7 +412,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
       if (fn === 'health_series_read') return healthSeries(localIso(now(), TIMEZONE).slice(0, 10), daysOld, seed.health_series);
       throw new Error(`unexpected health call ${fn}`);
     }, 'eval-owner'), clock),
-    searchMcpToolsHandler(mcp), readMcpToolHandler(undefined, undefined, false, mcp), callMcpToolHandler(undefined, mcpDesk, undefined, mcp),
+    searchMcpToolsHandler(mcp), readMcpToolHandler(undefined, undefined, mcp), callMcpToolHandler(undefined, mcpDesk, undefined, mcp),
     ...(cards ? approvalHandlers(cards) : []),
   ];
   const handlers = seed.actions
