@@ -33,3 +33,12 @@ export const INGEST_UNITS: ReadonlyMap<string, Readonly<{ unit: string; windowed
 const seriesRead = newestDefinition(/create or replace function waldo\.health_series_read\(/);
 // The kinds the series read returns.
 export const SERIES_READ_SIGNALS = Object.assign(quotedNames(/v_all constant text\[\] := array\[([^\]]+)\]/.exec(seriesRead.text)?.[1] ?? ''), { file: seriesRead.file });
+
+// The names the owner's usual may carry, in each function that checks a stored row's parts and usual bands.
+const usualList = (fn: string) => {
+  const found = newestDefinition(new RegExp(`create (?:or replace )?function waldo\\.${fn}\\(`));
+  const body = found.text.slice(0, found.text.indexOf('end $$;'));
+  return Object.assign(quotedNames(/v_signals constant text\[\] := array\[([^\]]+)\]/.exec(body)?.[1] ?? ''), { file: found.file });
+};
+export const PARTS_USUAL_SIGNALS = usualList('health_parts_valid');
+export const USUAL_BAND_SIGNALS = usualList('health_usual_valid');

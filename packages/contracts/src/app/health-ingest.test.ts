@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  appHealthRoutesV1, checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_COACH_REVISION_V1, HEALTH_NUTRITION_REVISION_V1, HEALTH_OBSERVED_PEAK_REVISION_V1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
+  appHealthRoutesV1, checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_COACH_REVISION_V1, HEALTH_NUTRITION_REVISION_V1, HEALTH_OBSERVED_PEAK_REVISION_V1, HEALTH_WELLBEING_CONSENT_VERSION_V1, HEALTH_WELLBEING_REVISION_V1, healthStateOfMindAssociationV1Schema, healthStateOfMindLabelV1Schema, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
   healthApiErrorV1Schema, healthBaselineV1Schema, healthChangeRejectionReasonV1Schema, healthDriverPhraseV1Schema, healthEnergyWindowV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema,
   healthConsentListV1Schema, healthConsentVersionV1, healthConsentWithdrawV1Schema, healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthSampleV1Schema,
   HEALTH_SCORES_HISTORY_REVISION_V1, healthScoresHistoryQueryV1Schema, healthScoresHistoryResponseV1Schema,
@@ -31,8 +31,15 @@ describe('health consent', () => {
     rejected(healthConsentGrantV1Schema, [{ ...grant, source: 'garmin' }, { ...grant, source: 'oura' }]);
   });
   it('carries the copy version that names intraday window summaries for a device source and the WHOOP-specific notice for WHOOP', () => {
-    expect([HEALTH_CONSENT_VERSION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1]).toEqual([2, 4]);
-    expect((['apple', 'samsung', 'health_connect', 'whoop'] as const).map(healthConsentVersionV1)).toEqual([2, 2, 2, 4]);
+    expect([HEALTH_CONSENT_VERSION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_WELLBEING_CONSENT_VERSION_V1]).toEqual([2, 4, 5]);
+    expect((['apple', 'samsung', 'health_connect', 'whoop'] as const).map(healthConsentVersionV1)).toEqual([5, 5, 5, 4]);
+  });
+  it('still lets a device source grant on copy 2, so a build that predates copy 5 keeps granting, and on no other earlier copy', () => {
+    for (const source of ['apple', 'samsung', 'health_connect'] as const) {
+      expect(healthConsentGrantV1Schema.safeParse({ ...grant, source, version: HEALTH_CONSENT_VERSION_V1 }).success, source).toBe(true);
+      expect(healthConsentGrantV1Schema.safeParse({ ...grant, source, version: HEALTH_WELLBEING_CONSENT_VERSION_V1 }).success, source).toBe(true);
+    }
+    rejected(healthConsentGrantV1Schema, [{ ...grant, version: 3 }, { ...grant, version: 6 }, { ...grant, source: 'whoop', version: HEALTH_WELLBEING_CONSENT_VERSION_V1 }]);
   });
   it('ties a grant to the copy of its own source: WHOOP on the device copy, or a device source on the WHOOP copy, is refused', () => {
     expect(healthConsentGrantV1Schema.safeParse({ ...grant, source: 'whoop', version: HEALTH_PROVIDER_CONSENT_VERSION_V1 }).success).toBe(true);
@@ -290,7 +297,7 @@ describe('per-sample rejection', () => {
       { ...receipt, rejected: [{ ...rejection, reason: 'too_high' }] }, { ...receipt, rejected: [{ ...rejection, signal: 'blood_glucose' }] },
       { ...receipt, rejected: Array.from({ length: 129 }, () => rejection) },
     ]);
-    expect(healthChangeRejectionReasonV1Schema.options).toEqual(['invalid_sample', 'unsupported_signal', 'revision_conflict']);
+    expect(healthChangeRejectionReasonV1Schema.options).toEqual(['invalid_sample', 'unsupported_signal', 'revision_conflict', 'consent_required']);
   });
 });
 
@@ -949,5 +956,33 @@ describe('health revision 15: an hour\'s heart-rate bins and the day\'s load cou
         { ...v1, parts: { ...v1.parts, passive: { state: 'unavailable', reason: 'watch_off' } } }, { ...v1, parts: { ...v1.parts, passive: { state: 'unavailable' } } }, { ...v1, parts: null },
       ]);
     });
+  });
+});
+
+describe('health revision 17: wellbeing kinds', () => {
+  const point = { ...common, start_at: common.start_at, end_at: common.start_at };
+  const mood = { ...point, sample_id: 'HK:som-1', signal: 'state_of_mind', unit: 'valence', value: -0.4, kind: 'momentary_emotion', labels: ['stressed', 'drained'], associations: ['work'] };
+  const hour = { ...common, sample_id: 'HK:sound-1', signal: 'audio_exposure_window', unit: 'dba', value: 71.5, method: 'environmental', start_at: '2026-10-10T09:00:00Z', end_at: '2026-10-10T10:00:00Z', utc_offset_minutes: 0 };
+  it('is revision 17, above the open health revisions and the sync push', () => expect(HEALTH_WELLBEING_REVISION_V1).toBe(17));
+  it('takes each kind in its unit and within its bounds', () => {
+    for (const sample of [
+      { ...point, sample_id: 'HK:w', signal: 'hydration', unit: 'millilitres', value: 350 }, { ...point, sample_id: 'HK:c', signal: 'caffeine', unit: 'milligrams', value: 95 },
+      { ...point, sample_id: 'HK:a', signal: 'alcoholic_drinks', unit: 'count', value: 1.5 }, mood, { ...mood, kind: 'daily_mood', labels: undefined, associations: undefined },
+      { ...common, sample_id: 'HK:b', signal: 'sleep_breathing_disturbances', unit: 'events_per_hour', value: 3.2 }, hour, { ...hour, method: 'headphone' },
+      { ...point, sample_id: 'HK:s', signal: 'walking_steadiness', unit: 'percent', value: 88 },
+    ]) expect(healthSampleV1Schema.safeParse(sample).success, sample.signal).toBe(true);
+  });
+  it('refuses a wrong unit, a value past its bound, an open label, free text, a missing kind or method, and a sound level that is not one local hour', () => {
+    rejected(healthSampleV1Schema, [
+      { ...point, sample_id: 'HK:w', signal: 'hydration', unit: 'fluid_ounces', value: 12 }, { ...point, sample_id: 'HK:c', signal: 'caffeine', unit: 'milligrams', value: 4_000 },
+      { ...mood, value: 1.5 }, { ...mood, labels: ['elated'] }, { ...mood, labels: ['calm', 'calm'] }, { ...mood, associations: ['office'] }, { ...mood, note: 'after the board call' },
+      { ...mood, kind: undefined }, { ...hour, method: undefined }, { ...hour, end_at: '2026-10-10T09:30:00Z' }, { ...point, sample_id: 'HK:s', signal: 'walking_steadiness', unit: 'ratio', value: 0.88 },
+    ]);
+  });
+  it('names Apple\'s labels and associations, every one', () => {
+    expect([healthStateOfMindLabelV1Schema.options.length, healthStateOfMindAssociationV1Schema.options.length]).toEqual([38, 18]);
+  });
+  it('lets a deletion name a wellbeing kind', () => {
+    expect(healthIngestV1Schema.safeParse({ ...batch, samples: [], deletions: [{ sample_id: 'HK:som-0', signal: 'state_of_mind', revision: 2 }] }).success).toBe(true);
   });
 });

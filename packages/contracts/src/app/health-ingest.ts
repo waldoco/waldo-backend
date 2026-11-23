@@ -27,15 +27,22 @@ export const isHealthProviderSourceV1 = (source: string): boolean => (HEALTH_PRO
 // rested on. A stored grant keeps the version it was written on, so reading one back accepts every version its source has
 // had (WHOOP's grants were written on copies 2 and 3 before). The app owns the wording; a changed notice takes the next number.
 export const HEALTH_PROVIDER_CONSENT_VERSION_V1 = 4;
+// Copy 5 is the device sources' copy for health revision 17: copy 2's words, plus one line for each wellbeing kind (water,
+// caffeine, alcohol, state of mind, breathing disturbances in sleep, sound levels, walking steadiness). A wellbeing reading is
+// stored only under a storage grant on copy 5, so no owner has one stored without having seen its line. Copy 2 is still
+// offered, so a build that predates copy 5 keeps granting on the words it shows.
+export const HEALTH_WELLBEING_CONSENT_VERSION_V1 = 5;
 type HealthSourceV1 = z.infer<typeof healthSourceV1Schema>;
-const CONSENT_COPY_V1: Readonly<Record<HealthSourceV1, Readonly<{ current: number; had: readonly number[] }>>> = {
-  apple: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
-  samsung: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
-  health_connect: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
-  whoop: { current: HEALTH_PROVIDER_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1, 3, HEALTH_PROVIDER_CONSENT_VERSION_V1] },
+// current: the copy a new build grants on. offered: every copy a new grant may name. had: every copy a stored grant may carry.
+const DEVICE_COPY_V1 = { current: HEALTH_WELLBEING_CONSENT_VERSION_V1, offered: [HEALTH_CONSENT_VERSION_V1, HEALTH_WELLBEING_CONSENT_VERSION_V1], had: [HEALTH_CONSENT_VERSION_V1, HEALTH_WELLBEING_CONSENT_VERSION_V1] };
+const CONSENT_COPY_V1: Readonly<Record<HealthSourceV1, Readonly<{ current: number; offered: readonly number[]; had: readonly number[] }>>> = {
+  apple: DEVICE_COPY_V1,
+  samsung: DEVICE_COPY_V1,
+  health_connect: DEVICE_COPY_V1,
+  whoop: { current: HEALTH_PROVIDER_CONSENT_VERSION_V1, offered: [HEALTH_PROVIDER_CONSENT_VERSION_V1], had: [HEALTH_CONSENT_VERSION_V1, 3, HEALTH_PROVIDER_CONSENT_VERSION_V1] },
 };
 export const healthConsentVersionV1 = (source: HealthSourceV1): number => CONSENT_COPY_V1[source].current;
-const currentCopyOfItsSource = (row: { source: HealthSourceV1; version: number }) => row.version === CONSENT_COPY_V1[row.source].current;
+const offeredCopyOfItsSource = (row: { source: HealthSourceV1; version: number }) => CONSENT_COPY_V1[row.source].offered.includes(row.version);
 const copyItsSourceHad = (row: { source: HealthSourceV1; version: number }) => CONSENT_COPY_V1[row.source].had.includes(row.version);
 // Purposes are separate grants, requested together on one consent screen: storage_compute (store and compute the
 // owner's health data and show the owner their scores) and model_processing (let Waldo use it when it talks to the
@@ -62,7 +69,7 @@ export const healthConsentGrantV1Schema = z.strictObject({
   version: z.int().positive(),
   expected_epoch: epochV1,
   age_attested_18_plus: z.literal(true),
-}).refine(currentCopyOfItsSource, { message: 'a new grant names the current copy version of its source', path: ['version'] });
+}).refine(offeredCopyOfItsSource, { message: 'a new grant names a copy version its source offers', path: ['version'] });
 export const healthConsentWithdrawV1Schema = z.strictObject({
   request_id: healthRequestIdV1Schema,
   source: healthSourceV1Schema,
@@ -186,7 +193,7 @@ const sampleCommon = {
   utc_offset_minutes: z.int().min(-840).max(840),
 };
 const hrvMethodV1 = z.enum(['rmssd', 'sdnn']);
-const WINDOW_SIGNALS: readonly string[] = ['heart_rate_window', 'hrv_window', 'steps_window', 'active_energy_window', 'daylight_duration', 'movement_duration', 'stand_hour', 'heart_rate_bins_window'];
+const WINDOW_SIGNALS: readonly string[] = ['heart_rate_window', 'hrv_window', 'steps_window', 'active_energy_window', 'daylight_duration', 'movement_duration', 'stand_hour', 'heart_rate_bins_window', 'audio_exposure_window'];
 const HOUR_MS = 3_600_000;
 // The bucket is exactly one hour and starts on the hour of the reading's own offset (so +05:30 and +05:45
 // zones align on their local clock, not the UTC clock).
@@ -221,6 +228,23 @@ export const HEALTH_OBSERVED_PEAK_REVISION_V1 = 6;
 // build never sends one, and a backend that does not know it rejects that reading alone.
 export const HEALTH_NUTRITION_REVISION_V1 = 7;
 const grams = z.number().finite().min(0).max(1_000);
+// Health revision 17: wellbeing kinds, each a reading the owner's phone already holds. A build sends them from revision 17, only
+// after its consent screen shows copy 5; a backend that does not know one rejects that reading alone, and a storage grant on an
+// earlier copy rejects it with consent_required. Blood pressure and glucose are not among them.
+export const HEALTH_WELLBEING_REVISION_V1 = 17;
+// Apple's HKStateOfMind labels and associations, as Apple names them, in snake case. Closed lists: the owner picks them on the
+// phone, and no free text from a state of mind is ever sent.
+export const healthStateOfMindLabelV1Schema = z.enum([
+  'amazed', 'amused', 'angry', 'annoyed', 'anxious', 'ashamed', 'brave', 'calm', 'confident', 'content', 'disappointed', 'discouraged',
+  'disgusted', 'drained', 'embarrassed', 'excited', 'frustrated', 'grateful', 'guilty', 'happy', 'hopeful', 'hopeless', 'indifferent',
+  'irritated', 'jealous', 'joyful', 'lonely', 'overwhelmed', 'passionate', 'peaceful', 'proud', 'relieved', 'sad', 'satisfied', 'scared',
+  'stressed', 'surprised', 'worried',
+]);
+export const healthStateOfMindAssociationV1Schema = z.enum([
+  'community', 'current_events', 'dating', 'education', 'family', 'fitness', 'friends', 'health', 'hobbies', 'identity', 'money',
+  'partner', 'self_care', 'spirituality', 'tasks', 'travel', 'weather', 'work',
+]);
+const distinct = <T>(items: readonly T[]) => new Set(items).size === items.length;
 // Time in five heart-rate zones. The phone reads the beats and buckets them on the bounds it names, so the backend never sees a
 // beat series: lower_bounds_bpm are where zones 2 to 5 start, rising, on the named basis. A provider that reports only zone
 // durations (WHOOP's zone zero folds into zone 1) has no bounds. The zones' time fits inside the session, with a minute's slack.
@@ -312,6 +336,24 @@ export const healthSampleV1Schema = z.discriminatedUnion('signal', [
     from_bpm: z.int().min(30).max(HEALTH_HR_BINS_TOP_BPM_V1).refine(bpm => bpm % HEALTH_HR_BIN_BPM_V1 === 0, 'bins start on a multiple of 5 bpm'),
     bin_bpm: z.literal(HEALTH_HR_BIN_BPM_V1), outside_workouts: binSeconds, in_workouts: binSeconds,
   }).refine(binsAddUp, 'heart-rate bins are two equal arrays below the top bin whose seconds add up to value'),
+  // Revision 17. Water, caffeine and alcoholic drinks are point records, one per entry the owner or an app logged.
+  z.strictObject({ ...sampleCommon, sleep_context: z.never().optional(), signal: z.literal('hydration'), unit: z.literal('millilitres'), value: z.number().finite().min(0).max(5_000) }),
+  z.strictObject({ ...sampleCommon, sleep_context: z.never().optional(), signal: z.literal('caffeine'), unit: z.literal('milligrams'), value: z.number().finite().min(0).max(1_000) }),
+  z.strictObject({ ...sampleCommon, sleep_context: z.never().optional(), signal: z.literal('alcoholic_drinks'), unit: z.literal('count'), value: z.number().finite().min(0).max(20) }),
+  // One state of mind the owner logged: how pleasant it felt from -1 to 1, whether a moment's emotion or the day's mood, and the
+  // labels and associations the owner picked.
+  z.strictObject({
+    ...sampleCommon, sleep_context: z.never().optional(), signal: z.literal('state_of_mind'), unit: z.literal('valence'), value: z.number().finite().min(-1).max(1),
+    kind: z.enum(['momentary_emotion', 'daily_mood']),
+    labels: z.array(healthStateOfMindLabelV1Schema).max(healthStateOfMindLabelV1Schema.options.length).refine(distinct, 'a label repeats').optional(),
+    associations: z.array(healthStateOfMindAssociationV1Schema).max(healthStateOfMindAssociationV1Schema.options.length).refine(distinct, 'an association repeats').optional(),
+  }),
+  // The night's breathing disturbances per hour asleep, as the Watch measured them.
+  z.strictObject({ ...sampleCommon, sleep_context: z.never().optional(), signal: z.literal('sleep_breathing_disturbances'), unit: z.literal('events_per_hour'), value: z.number().finite().min(0).max(200) }),
+  // One local hour's A-weighted sound level, the energy average of what the phone measured in it: the surroundings, or headphones.
+  z.strictObject({ ...sampleCommon, sleep_context: z.never().optional(), signal: z.literal('audio_exposure_window'), unit: z.literal('dba'), method: z.enum(['environmental', 'headphone']), value: z.number().finite().min(0).max(140) }),
+  // Walking steadiness as the phone estimated it, from 0 to 100 percent.
+  z.strictObject({ ...sampleCommon, sleep_context: z.never().optional(), signal: z.literal('walking_steadiness'), unit: z.literal('percent'), value: z.number().finite().min(0).max(100) }),
 ]).refine(sample => Date.parse(sample.start_at) <= Date.parse(sample.end_at), 'sample end precedes start')
   .refine(sample => !WINDOW_SIGNALS.includes(sample.signal) || isLocalHourBucket(sample), 'window signals are fixed local-hour buckets')
   .refine(sample => sample.signal !== 'heart_rate_window' || (sample.min <= sample.value && sample.value <= sample.max), 'heart-rate window mean outside its range')
@@ -321,6 +363,7 @@ export const healthSignalV1Schema = z.enum([
   'heart_rate_window', 'hrv_window', 'spo2', 'respiratory_rate', 'steps_window', 'active_energy_window', 'workout',
   'wrist_temperature', 'walking_heart_rate_average', 'vo2_max', 'heart_rate_recovery', 'mindful_duration',
   'body_mass', 'body_fat_percentage', 'lean_body_mass', 'stand_hour', 'nutrition', 'heart_rate_bins_window',
+  'hydration', 'caffeine', 'alcoholic_drinks', 'state_of_mind', 'sleep_breathing_disturbances', 'audio_exposure_window', 'walking_steadiness',
 ]);
 export const healthSampleDeletionV1Schema = z.strictObject({ sample_id: sampleIdV1, signal: healthSignalV1Schema, revision: epochV1 });
 // anchor_before and anchor_after form an opaque compare-and-set cursor of at most 2048 characters; the app keeps its
@@ -345,9 +388,11 @@ export const healthIngestV1Schema = z.strictObject({
 // unsupported_signal: the signal is one this backend does not know yet; a newer build loses only that reading.
 // revision_conflict: the same reading at the same revision was stored with other content; the app re-reads it and sends it
 // at a higher revision.
+// consent_required: a wellbeing reading under a storage grant on a copy before 5. Only a revision-17 build sends one, so no
+// older build sees this reason.
 // The anchor advances as for an accepted batch: the receipt is the trace of what was not stored.
 export const HEALTH_PER_SAMPLE_REVISION_V1 = 3;
-export const healthChangeRejectionReasonV1Schema = z.enum(['invalid_sample', 'unsupported_signal', 'revision_conflict']);
+export const healthChangeRejectionReasonV1Schema = z.enum(['invalid_sample', 'unsupported_signal', 'revision_conflict', 'consent_required']);
 export const healthChangeRejectionV1Schema = z.strictObject({
   change: z.enum(['sample', 'deletion']),
   index: z.int().min(0).max(HEALTH_INGEST_MAX_CHANGES_V1 - 1),

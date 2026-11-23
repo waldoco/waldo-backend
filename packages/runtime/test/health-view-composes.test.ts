@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   crsPillarSchema, derivedHealthDestinationEligibilitySchema, derivedHealthDestinationViewSchema, DERIVED_HEALTH_VIEW_BOUNDS, formHealthViewSchema,
-  HEALTH_SIGNALS, HEALTH_SIGNAL_GRAINS, partialHealthViewSchema, recoveryComponentSchema, recoveryHealthViewSchema, SANITISE_DESTINATION_POLICIES,
+  HEALTH_ENGINE_ONLY_SIGNALS, HEALTH_SIGNALS, HEALTH_SIGNAL_GRAINS, partialHealthViewSchema, recoveryComponentSchema, recoveryHealthViewSchema, SANITISE_DESTINATION_POLICIES,
 } from '@waldo/contracts';
 import { healthSignalV1Schema } from '../../contracts/src/app/health-ingest';
 import { healthContextBook, type HealthContextRow } from '../src/channels/health-context';
@@ -36,7 +36,8 @@ const materialFor = async (kinds: readonly string[]) => {
   };
   const material = await healthContextBook(call, 'owner-every-kind', clock, undefined, undefined, { partial: true, inventory: true }).latest();
   if (material === null || material === 'unreadable') throw new Error('no health material');
-  expect('inventory' in material.view && material.view.inventory).toHaveLength(kinds.length);
+  // A kind only the score engine reads is never offered in the inventory.
+  expect('inventory' in material.view && material.view.inventory).toHaveLength(kinds.filter(kind => !(HEALTH_ENGINE_ONLY_SIGNALS as readonly string[]).includes(kind)).length);
   return material;
 };
 
