@@ -15,6 +15,7 @@ import { claimStore } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
+import { AUTONOMY_OFF } from './helpers/autonomy-off';
 import { presenceAuthority } from './helpers/directory-presence';
 import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
@@ -130,7 +131,7 @@ const owned = async (name: string, script: (steps: Readonly<{
     const plans = dayPlanBook(state.storage.sql);
     for (const card of ['card:brief', 'card:midday', 'card:close'] as const) plans.save(today(), { card, time: null, reason: 'planned by the fixture' });
     const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
-    const owner = new OwnerDO(state, { ...env, ...directory, ...whatsapp, ...google, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const owner = new OwnerDO(state, { ...env, ...directory, ...whatsapp, ...google, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, ...AUTONOMY_OFF });
     let seq = 0;
     const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
     const internals = owner as unknown as { bindWhatsApp(subject: string | null): void; runtimes: Record<string, unknown>;

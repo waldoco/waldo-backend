@@ -26,6 +26,7 @@ import { renderHealth } from '../src/context-composer/prompt';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 import { routerSignature } from '../src/identity/owner-directory';
+import { AUTONOMY_OFF } from './helpers/autonomy-off';
 
 type Call = Readonly<{ name: string; arguments: Record<string, unknown> }>;
 type Round = Readonly<{ calls: readonly Call[] }> | Readonly<{ text: string }>;
@@ -190,7 +191,7 @@ describe('the planning Brief on the app', { timeout: 30_000 }, () => {
     // The Brief is offered its proposal tools directly on either loader; the owner's own turn loads a deferred one as usual.
     model.brief = [{ calls: [{ name: 'offer_replies', arguments: { choices: ANSWERS } }] }, { text: QUESTION }];
     model.owner = [...via(harness, 'propose_calendar_change', BLOCK), { text: 'It is on a card for your yes.' }];
-    await owned(`planning-brief-ask-${loader}`, { PLANNING_BRIEF: '1', ...(harness ? { WALDO_TOOL_LOADER: 'harness' } : {}) }, async ({ state, brief, say, history, approvals, decide, hops }) => {
+    await owned(`planning-brief-ask-${loader}`, { PLANNING_BRIEF: '1', ...AUTONOMY_OFF, ...(harness ? { WALDO_TOOL_LOADER: 'harness' } : {}) }, async ({ state, brief, say, history, approvals, decide, hops }) => {
       await brief();
       // The Brief planned with the planning instruction, could raise cards and offer answers, and was told no health is shared.
       expect(model.briefAsked[0]).toContain(PLANNING_BRIEF_INSTRUCTION);
