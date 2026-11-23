@@ -105,7 +105,7 @@ describe('sanitise destination structural policy', () => {
         max_array_items: 10,
         max_key_chars: 64,
       },
-      // The largest derived health view: a partial view's fifteen fields, and an inventory entry for each of the 25 kinds.
+      // The largest derived health view: a partial view's sixteen fields, and an inventory entry for each of the 25 kinds.
       system_prompt: {
         payload_kind: 'text_or_structured',
         max_chars: MODEL_CONTEXT_MAX_CHARS,
