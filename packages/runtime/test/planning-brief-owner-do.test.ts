@@ -252,8 +252,9 @@ describe('the planning Brief on the app', { timeout: 30_000 }, () => {
       expect(model.briefAsked[0]).toContain('No events.');
       expect(model.briefAsked[0]).toContain('SYNTH-OTHER room booking');
       expect(model.briefTools[0]).toContain('search_communication');
-      // A card turn has no close tool: a stale loop stays until the owner, or a card they approve, closes it.
-      expect(model.briefTools[0]).not.toContain('close_loop');
+      // A card turn holds close_loop for a loop whose time has passed; this one has no due time, so after outside content its
+      // close would still be the owner's card, and the turn closes nothing itself.
+      expect(model.briefTools[0]).toContain('close_loop');
       expect(state.storage.sql.exec<{ status: string }>("SELECT status FROM loops WHERE id = 'loop-synth'").one().status).toBe('open');
       expect(await approvals()).toEqual([]);
       expect(briefRow(await history()).parts.map(part => part.type)).toEqual(['text', 'quick_replies']);

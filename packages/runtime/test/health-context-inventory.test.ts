@@ -10,6 +10,7 @@ import { scrubTraceHealth } from '../src/observability/trace-health-scrub';
 const TZ = 'Asia/Kolkata', HOUR = 3_600_000;
 const NOW = Date.parse('2026-11-01T06:30:00Z');
 const clock = { timezone: TZ, now: () => new Date(NOW) };
+const readable = <T,>(found: T | 'unreadable'): T => { if (found === 'unreadable') throw new Error('health read unreadable'); return found; };
 const ago = (hours: number) => new Date(NOW - hours * HOUR).toISOString().replace('.000Z', 'Z');
 const kind = (signal: string, hoursAgo: number, days: number) => ({ signal, newest_at: ago(hoursAgo), days });
 const STEPS_ONLY = { sources: [{ source: 'health_connect', kinds: [kind('steps_window', 1, 30), kind('heart_rate_window', 2, 12)] }] };
@@ -61,7 +62,7 @@ describe('the health inventory in words', () => {
 
   it('gives an owner with readings and no score row a block of what exists, with no zone and no figure', async () => {
     const { health, codes } = book({ inventory: STEPS_ONLY });
-    const material = await health.latest();
+    const material = readable(await health.latest());
     expect(material && derivedHealthDestinationViewSchema.safeParse(material.view).success).toBe(true);
     const block = renderHealth(material);
     expect(block).toBe([
@@ -79,8 +80,8 @@ describe('the health inventory in words', () => {
   });
 
   it('adds the inventory to a full day\'s block as one line', async () => {
-    const block = renderHealth(await book({ row: FULL_ROW, inventory: STEPS_ONLY }).health.latest());
-    const without = renderHealth(await book({ row: FULL_ROW, inventory: { sources: [] } }).health.latest());
+    const block = renderHealth(readable(await book({ row: FULL_ROW, inventory: STEPS_ONLY }).health.latest()));
+    const without = renderHealth(readable(await book({ row: FULL_ROW, inventory: { sources: [] } }).health.latest()));
     expect(block.split('\n').filter(line => !without.split('\n').includes(line))).toEqual([
       'Body data on hand this month: heart rate through the day (hourly; newest within hours; some days); steps (hourly; newest within hours; nearly every day).',
     ]);
@@ -98,7 +99,7 @@ describe('the health inventory in words', () => {
   it('reads no inventory unless both switches are on', async () => {
     for (const options of [{ partial: true, inventory: false }, { partial: false, inventory: true }]) {
       const { health, calls } = book({ row: FULL_ROW, inventory: STEPS_ONLY }, options);
-      expect(renderHealth(await health.latest())).not.toContain('Body data on hand');
+      expect(renderHealth(readable(await health.latest()))).not.toContain('Body data on hand');
       expect(calls.map(call => call.fn)).toEqual(['health_context_read']);
     }
   });
@@ -106,7 +107,7 @@ describe('the health inventory in words', () => {
   it('gives the row\'s block alone, and logs why, when the inventory read fails or answers another shape', async () => {
     for (const inventory of [new Error('timeout'), { error: 'invalid_request' }]) {
       const { health, errors, codes } = book({ row: FULL_ROW, inventory });
-      const block = renderHealth(await health.latest());
+      const block = renderHealth(readable(await health.latest()));
       expect(block).toContain('Form zone: steady.');
       expect(block).not.toContain('Body data on hand');
       expect(errors).toHaveLength(1);
@@ -125,7 +126,7 @@ describe('the health inventory in words', () => {
   });
 
   it('ages an owner whose newest reading is days old as expired, and still says what exists', async () => {
-    const block = renderHealth(await book({ inventory: { sources: [{ source: 'apple', kinds: [kind('sleep_duration', 24 * 5, 9)] }] } }).health.latest());
+    const block = renderHealth(readable(await book({ inventory: { sources: [{ source: 'apple', kinds: [kind('sleep_duration', 24 * 5, 9)] }] } }).health.latest()));
     expect(block).toContain('is more than three days old');
     expect(block).toContain('Body data on hand this month: time asleep (nightly; newest this week; some days).');
   });
