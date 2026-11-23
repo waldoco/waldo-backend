@@ -156,8 +156,9 @@
     "reason": "off everywhere and superseded by WALDO_TOOL_LOADER \"harness\"; delete with the loader batch"
   },
   "WALDO_TOOL_LOADER": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
+    "disposition": "kept",
+    "reason": "Unfinished: production runs \"off\" until the harness loader is measured live (tokens per round, rounds, latency) and its eval passes; the tool-surface budget tests measure menus through this switch.",
+    "removeBy": "2026-12-31"
   },
   "WALDO_COMPACTION": {
     "disposition": "unconditional",
@@ -214,8 +215,9 @@
     "batch": "health-context (after W3)"
   },
   "WALDO_STREAM_REPLIES": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
+    "disposition": "kept",
+    "reason": "Unfinished: the model fakes in most owner-object tests answer unstreamed, so a streamed app turn falls to the template floor. Needs a shared streaming fake first.",
+    "removeBy": "2026-12-31"
   },
   "HEALTH_PROVISIONAL_SCORES": {
     "disposition": "unconditional",
@@ -402,12 +404,14 @@
     "batch": "delivery-proactive (after W4)"
   },
   "CAPACITY_BUDGET": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
+    "disposition": "kept",
+    "reason": "Unfinished: on, every planning Brief sets a budget and is treated as reading others text, so a Brief over only the owner data loses its kept note.",
+    "removeBy": "2026-12-31"
   },
   "NEXT_DUE_ALARM": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
+    "disposition": "kept",
+    "reason": "Unfinished: the eviction-after-claimed-write uncertainty proof in owner-do-ingress-isolation fails with it on (the alarm runs before the inbox lease is due).",
+    "removeBy": "2026-12-31"
   },
   "WALDO_RECALL_CHAIN": {
     "disposition": "unconditional",
@@ -426,12 +430,14 @@
     "batch": "tasks"
   },
   "WALDO_LEAN_SCHEDULED": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
+    "disposition": "kept",
+    "reason": "Unfinished: on, the lean shared menu offers open_loop on a card turn over outside text and refuses it only at dispatch; the taint proof wants it not offered.",
+    "removeBy": "2026-12-31"
   },
   "WALDO_ONE_TIMELINE": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
+    "disposition": "kept",
+    "reason": "Unfinished: the cutover tests build pre-cutover chains on the off path, and production still holds those chains.",
+    "removeBy": "2026-12-31"
   },
   "WALDO_LIGHT_CHAT": {
     "disposition": "kept",
