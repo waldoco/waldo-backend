@@ -102,19 +102,19 @@ const turnRequest = async (name: string, switchValue: string | undefined) => {
   });
 };
 
-it('the deployed Worker setting is off, and an app turn on it sends the covered rows verbatim, never the summary', async () => {
-  expect(DEPLOYED).toBe('off');
+it('the deployed Worker setting is on, and an app turn on it reads the summary first and leaves out the rows it covers', async () => {
+  expect(DEPLOYED).toBe('on');
   expect((withSwitches(env) as { WALDO_COMPACTION?: string }).WALDO_COMPACTION).toBe(DEPLOYED);
   const sent = await turnRequest('compaction-wiring-deployed', DEPLOYED);
-  for (const text of [asked(0), answered(0), asked(1), answered(1), recent, NEXT]) expect(sent).toContain(text);
-  expect(sent).not.toContain('harbour walks');
-  expect(sent).not.toContain('summary of');
-});
-
-it('an app turn with the switch on reads the summary first and leaves out the rows it covers', async () => {
-  const sent = await turnRequest('compaction-wiring-on', 'on');
   expect(sent.indexOf('harbour walks')).toBeGreaterThanOrEqual(0);
   expect(sent.indexOf('harbour walks')).toBeLessThan(sent.indexOf('Middle question'));
   for (const text of [asked(0), answered(0), asked(1), answered(1)]) expect(sent).not.toContain(text);
   for (const text of ['Middle question', recent, NEXT]) expect(sent).toContain(text);
+});
+
+it('an app turn with the switch off sends the covered rows verbatim, never the summary', async () => {
+  const sent = await turnRequest('compaction-wiring-off', 'off');
+  for (const text of [asked(0), answered(0), asked(1), answered(1), recent, NEXT]) expect(sent).toContain(text);
+  expect(sent).not.toContain('harbour walks');
+  expect(sent).not.toContain('summary of');
 });

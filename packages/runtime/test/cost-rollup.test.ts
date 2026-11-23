@@ -105,8 +105,8 @@ describe('hosted config', () => {
   it('staging records spend', () => {
     expect(costRollupEnabled(parsed.env.staging.vars)).toBe(true);
   });
-  it('production keeps the ledger off', () => {
-    expect(costRollupEnabled(parsed.vars)).toBe(false);
+  it('production records spend', () => {
+    expect(costRollupEnabled(parsed.vars)).toBe(true);
   });
 });
 

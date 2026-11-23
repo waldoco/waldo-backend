@@ -73,10 +73,10 @@ describe('the deploy switch', () => {
     expect(COMPACTION.enabled).toBe(false);
   });
 
-  // On in staging, where the app chat compacts after a reply; off in production. Off is the rollback, one line each.
-  it('is off in production and on in staging', () => {
+  // On in both, where the app chat compacts after a reply. Off is the rollback, one line each.
+  it('is on in production and in staging', () => {
     const parsed = flatConfig(parseJsonc(config)) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
-    expect(parsed.vars.WALDO_COMPACTION).toBe('off');
+    expect(parsed.vars.WALDO_COMPACTION).toBe('on');
     expect(parsed.env.staging.vars.WALDO_COMPACTION).toBe('on');
   });
 });
