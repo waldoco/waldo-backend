@@ -1,9 +1,10 @@
 import { withRequestTimeout } from '../identity/request-timeout';
 import { numericHealthIn } from '../scribe/sanitiser';
-import { pushNotificationSchema, type PushNotification } from '../../../contracts/src/ui/notification';
+import { APPROVAL_PUSH_CATEGORY, pushNotificationSchema, type PushNotification } from '../../../contracts/src/ui/notification';
 
 // Expo's push service, which delivers through APNs and FCM. The directory releases only tokens registered under expo.
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
+const EXPO_RECEIPTS_URL = 'https://exp.host/--/api/v2/push/getReceipts';
 // Each push has a fixed line per trigger and the ids the app opens, never health or email content. An approval push names
 // the approval it opens, which the caller adds; the text never says what it suggests or why. A prep or update push may carry
 // a body code writes in place of its fixed line, naming a meeting by pushTitle and its time (channels/event-briefs.ts
@@ -17,6 +18,12 @@ export const PUSHES = {
   // A copy of an app message WhatsApp's closed window keeps: it opens Main chat as an event does, and, already admitted as the
   // message it copies, it is no interruption of its own (the owner's limits apply to events only).
   copy: { body: 'Waldo has a new message for you', data: { trigger: 'event' } },
+  // Any other message Waldo writes to the app chat outside a turn (a reminder, a card, a report, a notice): the message was
+  // admitted when it was sent, so its push counts on the proactive ceiling and holds in quiet hours like the rest.
+  message: { body: 'Waldo has a new message for you', data: { trigger: 'event' } },
+  // Waldo's answer to a message the owner sent in the app. The owner just wrote, so quiet hours do not hold it and it has a
+  // ceiling of its own; the app decides whether to show it while it is open.
+  reply: { body: 'Waldo replied', data: { trigger: 'event' } },
 } as const satisfies Record<string, Readonly<{ body: string; data: Omit<PushNotification, 'approval_id'> }>>;
 export type PushKind = keyof typeof PUSHES;
 
@@ -46,8 +53,18 @@ export const PROACTIVE_PUSH_BACKSTOP = 24;
 // Event pushes, which an outside source's notices raise, count apart: a noisy source never uses up the day's prep and update
 // pushes. This is a backstop under the owner's own limits (OwnerPushDeps.held), which the deploy can set (EVENT_PUSH_PER_DAY).
 export const EVENT_PUSH_DAILY_LIMIT = 3;
+// Reply pushes have their own backstop against a sender loop; a busy conversation stays far under it.
+export const REPLY_PUSH_DAILY_LIMIT = 60;
 const CARD_PUSHES: ReadonlySet<PushKind> = new Set(['brief', 'approval']);
 const BUDGET_KEY = 'app_push_budget_v1';
+const REPLY_BUDGET_KEY = 'app_push_reply_budget_v1';
+// Expo's ticket for each push it accepted, until its receipt is read: Expo has the receipt about 15 minutes after the send
+// and keeps it for a day. A ticket names its device so a receipt that says the token is dead retires that registration.
+const TICKETS_KEY = 'app_push_tickets_v1';
+export const RECEIPT_AFTER_MS = 15 * 60_000;
+const RECEIPT_KEPT_MS = 24 * 60 * 60_000;
+const MAX_TICKETS = 100;
+type Ticket = Readonly<{ id: string; installation_id: string; device_epoch: number; at: number }>;
 const PROACTIVE_BUDGET_KEY = 'app_push_proactive_budget_v1';
 const EVENT_BUDGET_KEY = 'app_push_event_budget_v1';
 // The owner-day the Brief was last pushed, which opens the day's last slot to approval pushes.
@@ -63,7 +80,7 @@ export type OwnerPushDeps = Readonly<{
   // The owner's active Expo devices with their tokens, read for this send and never kept.
   targets(): Promise<unknown>;
   // Drops a registration Expo says its device no longer holds, fenced on the epoch that was read.
-  retire(target: PushTarget): Promise<unknown>;
+  retire(target: Pick<PushTarget, 'installation_id' | 'device_epoch'>): Promise<unknown>;
   send: typeof fetch;
   today(): string;
   quiet(): boolean;
@@ -75,6 +92,7 @@ export type OwnerPushDeps = Readonly<{
   eventPerDay?: number;
   // PROACTIVE_GATE: the owner's daily budget for unasked messages, which raises the proactive ceiling up to the backstop.
   proactivePerDay?(): number;
+  now?(): number;
 }>;
 
 const readTargets = (value: unknown): readonly PushTarget[] => {
@@ -102,14 +120,14 @@ export const ownerPush = (deps: OwnerPushDeps) => async (kind: PushKind, approva
   const data = pushNotificationSchema.safeParse({ ...fixed, ...(approvalId === undefined ? {} : { approval_id: approvalId }),
     ...(kind === 'update' && cardRef !== undefined ? { card_ref: cardRef } : {}) });
   if (!data.success) return deps.log('invalid_payload', 0);
-  if (deps.quiet()) return deps.log('quiet', 0);
+  if (kind !== 'reply' && deps.quiet()) return deps.log('quiet', 0);
   const held = deps.held?.(kind);
   if (held) return deps.log(`held_${held}`, 0);
-  const card = CARD_PUSHES.has(kind), key = card ? BUDGET_KEY : kind === 'event' ? EVENT_BUDGET_KEY : PROACTIVE_BUDGET_KEY;
+  const card = CARD_PUSHES.has(kind), key = card ? BUDGET_KEY : kind === 'event' ? EVENT_BUDGET_KEY : kind === 'reply' ? REPLY_BUDGET_KEY : PROACTIVE_BUDGET_KEY;
   const day = deps.today(), budget = deps.kv.get<{ day: string; sent: number }>(key);
   const sent = budget?.day === day ? budget.sent : 0;
   const proactive = deps.proactivePerDay ? Math.min(Math.max(deps.proactivePerDay(), PROACTIVE_PUSH_DAILY_LIMIT), PROACTIVE_PUSH_BACKSTOP) : PROACTIVE_PUSH_DAILY_LIMIT;
-  const limit = kind === 'event' ? deps.eventPerDay ?? EVENT_PUSH_DAILY_LIMIT : !card ? proactive : kind === 'approval' && deps.kv.get<string>(BRIEF_DAY_KEY) !== day ? PUSH_DAILY_LIMIT - 1 : PUSH_DAILY_LIMIT;
+  const limit = kind === 'event' ? deps.eventPerDay ?? EVENT_PUSH_DAILY_LIMIT : kind === 'reply' ? REPLY_PUSH_DAILY_LIMIT : !card ? proactive : kind === 'approval' && deps.kv.get<string>(BRIEF_DAY_KEY) !== day ? PUSH_DAILY_LIMIT - 1 : PUSH_DAILY_LIMIT;
   if (sent >= limit) return deps.log('daily_limit', 0);
   let devices: readonly PushTarget[];
   try { devices = readTargets(await deps.targets()); } catch { return deps.log('targets_unavailable', 0); }
@@ -121,7 +139,7 @@ export const ownerPush = (deps: OwnerPushDeps) => async (kind: PushKind, approva
   try {
     response = await withRequestTimeout(signal => deps.send(EXPO_PUSH_URL, { method: 'POST', signal,
       headers: { 'content-type': 'application/json', accept: 'application/json', authorization: `Bearer ${deps.accessToken}` },
-      body: JSON.stringify(devices.map(device => ({ to: device.token, body, data: data.data, sound: 'default' }))) }));
+      body: JSON.stringify(devices.map(device => ({ to: device.token, body, data: data.data, sound: 'default', ...(kind === 'approval' ? { categoryId: APPROVAL_PUSH_CATEGORY } : {}) }))) }));
   } catch { return deps.log('send_failed', 0); }
   if (!response.ok) return deps.log('send_refused', 0);
   let answer: unknown;
@@ -131,8 +149,52 @@ export const ownerPush = (deps: OwnerPushDeps) => async (kind: PushKind, approva
   const accepted = tickets.filter(ticket => (ticket as { status?: unknown } | null)?.status === 'ok').length;
   deps.log(accepted === devices.length ? 'sent' : 'partial', accepted);
   // Expo answers in the order the messages were sent, so a ticket names its device by position.
+  const at = (deps.now ?? Date.now)();
+  const issued = devices.flatMap((device, index) => {
+    const id = (tickets[index] as { status?: unknown; id?: unknown } | null);
+    return id?.status === 'ok' && typeof id.id === 'string' && id.id ? [{ id: id.id, installation_id: device.installation_id, device_epoch: device.device_epoch, at }] : [];
+  });
+  if (issued.length) deps.kv.put(TICKETS_KEY, [...(deps.kv.get<Ticket[]>(TICKETS_KEY) ?? []), ...issued].slice(-MAX_TICKETS));
   const gone = devices.filter((_device, index) => unregistered(tickets[index]));
   if (!gone.length) return;
   const failed = (await Promise.allSettled(gone.map(device => deps.retire(device)))).filter(outcome => outcome.status === 'rejected').length;
   deps.log(failed ? 'retire_failed' : 'retired', failed || gone.length);
+};
+
+// Expo's receipt errors, as closed log codes; any other is 'receipt_error'.
+const RECEIPT_ERRORS: Readonly<Record<string, string>> = { DeviceNotRegistered: 'receipt_device_not_registered', MessageTooBig: 'receipt_too_big',
+  MessageRateExceeded: 'receipt_rate_exceeded', MismatchSenderId: 'receipt_sender_mismatch', InvalidCredentials: 'receipt_invalid_credentials' };
+// Reads the receipts of the tickets old enough to have one. A push Expo accepted can still fail at Apple or Google: each such
+// failure is logged by its reason, and a token the receipt says is dead retires its registration, fenced on its epoch. A
+// receipt not ready yet is asked for again next time; a ticket past the day Expo keeps receipts is dropped as missing. A read
+// that fails keeps every ticket for the next one. Never throws.
+export const pushReceipts = (deps: OwnerPushDeps) => async (): Promise<void> => {
+  const now = (deps.now ?? Date.now)(), held = deps.kv.get<Ticket[]>(TICKETS_KEY) ?? [];
+  const missing = held.filter(ticket => now - ticket.at >= RECEIPT_KEPT_MS), live = held.filter(ticket => now - ticket.at < RECEIPT_KEPT_MS);
+  const due = live.filter(ticket => now - ticket.at >= RECEIPT_AFTER_MS);
+  if (missing.length) { deps.kv.put(TICKETS_KEY, live); deps.log('receipt_missing', missing.length); }
+  if (!due.length || !deps.accessToken) return;
+  let receipts: Record<string, { status?: unknown; details?: { error?: unknown } } | undefined>;
+  try {
+    const response = await withRequestTimeout(signal => deps.send(EXPO_RECEIPTS_URL, { method: 'POST', signal,
+      headers: { 'content-type': 'application/json', accept: 'application/json', authorization: `Bearer ${deps.accessToken}` },
+      body: JSON.stringify({ ids: due.map(ticket => ticket.id) }) }));
+    if (!response.ok) return deps.log('receipts_refused', 0);
+    const data = ((await withRequestTimeout(() => response.json())) as { data?: unknown }).data;
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return deps.log('receipts_unreadable', 0);
+    receipts = data as typeof receipts;
+  } catch { return deps.log('receipts_unavailable', 0); }
+  const read = due.filter(ticket => receipts[ticket.id]?.status === 'ok' || receipts[ticket.id]?.status === 'error');
+  const failed = read.filter(ticket => receipts[ticket.id]!.status === 'error');
+  const latest = deps.kv.get<Ticket[]>(TICKETS_KEY) ?? [];
+  deps.kv.put(TICKETS_KEY, latest.filter(ticket => !read.some(done => done.id === ticket.id)));
+  if (read.length > failed.length) deps.log('receipt_ok', read.length - failed.length);
+  const codes = new Map<string, number>();
+  for (const ticket of failed) { const code = RECEIPT_ERRORS[String(receipts[ticket.id]!.details?.error)] ?? 'receipt_error'; codes.set(code, (codes.get(code) ?? 0) + 1); }
+  for (const [code, count] of codes) deps.log(code, count);
+  const dead = failed.filter(ticket => receipts[ticket.id]!.details?.error === 'DeviceNotRegistered');
+  if (!dead.length) return;
+  const outcomes = await Promise.allSettled(dead.map(ticket => deps.retire({ installation_id: ticket.installation_id, device_epoch: ticket.device_epoch })));
+  const stuck = outcomes.filter(outcome => outcome.status === 'rejected').length;
+  deps.log(stuck ? 'retire_failed' : 'retired', stuck || dead.length);
 };
