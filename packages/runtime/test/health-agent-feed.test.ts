@@ -91,7 +91,7 @@ describe('renderHealth tells the model what its health context is made of', () =
     }, clock);
     expect(renderHealth(legacy)).toBe([
       'Form zone: steady.',
-      'Trend: improving. Freshness: fresh.',
+      "Trend: improving. Freshness: fresh; these scores are today's.",
       'Confidence: high. Missing components: none.',
       'Recovery: solid. Load: moderate.',
       'Day summary: Form steady; recovery solid; load moderate. Drivers: sleep below baseline. Tags: travel.',

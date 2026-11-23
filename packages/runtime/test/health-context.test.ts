@@ -38,6 +38,7 @@ describe('toContextHealthMaterial', () => {
       form_zone: 'steady',
       trend: 'improving',
       freshness: 'fresh',
+      as_of_day: 'today',
       missing_components: [],
       confidence_band: 'high',
       provenance_refs: [`hpr_${md5Hex('health-context.ctx-1')}`],
@@ -216,7 +217,7 @@ describe('toContextHealthMaterial reads what the stored row says about its own s
 
   it('produces the material it always did for a row without the new fields', () => {
     const material = toContextHealthMaterial(row(), clock);
-    expect(Object.keys(material!.view).sort()).toEqual(['algorithm_version', 'authority', 'confidence_band', 'destination_eligibility', 'form_zone', 'freshness', 'missing_components', 'provenance_refs', 'trend']);
+    expect(Object.keys(material!.view).sort()).toEqual(['algorithm_version', 'as_of_day', 'authority', 'confidence_band', 'destination_eligibility', 'form_zone', 'freshness', 'missing_components', 'provenance_refs', 'trend']);
   });
 
   it('words sleep debt as an amount only: some, little, partial or unknown, with no direction', () => {

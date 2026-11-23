@@ -77,9 +77,9 @@ const shared = {
   baseline_state: { recovery: 'personal', form: 'personal', load: 'provisional' }, sleep_debt: { amount: 'some', trend: 'building' },
   energy_windows: [['07:00', '09:00', 'peak'], ['13:00', '14:00', 'dip'], ['16:00', '18:00', 'peak'], ['21:00', '22:00', 'dip']].map(([start, end, kind]) => ({ start, end, kind })),
   missing_pillars: { recovery: 'stale_inputs', form: 'stale_inputs', load: 'calendar_demand_unavailable', sleep_debt: 'missing_sleep' },
-  inventory: EVERY_KIND.map(signal => ({ signal, grain: HEALTH_SIGNAL_GRAINS[0], newest: 'today', regularity: 'nearly_every_day', sources: [...SOURCES] })),
+  inventory: EVERY_KIND.map(signal => ({ signal, grain: HEALTH_SIGNAL_GRAINS[0], newest: 'today', regularity: 'nearly_every_day', freshness: 'fresh', sources: [...SOURCES] })),
 };
-const common = { ...shared, trend: 'steady', freshness: 'fresh', confidence_band: 'high' };
+const common = { ...shared, trend: 'steady', freshness: 'fresh', confidence_band: 'high', as_of_day: 'yesterday' };
 const LARGEST = {
   form: formHealthViewSchema.parse({ ...common, algorithm_version: 'form.v9', form_zone: 'steady', missing_components: crsPillarSchema.options }),
   recovery: recoveryHealthViewSchema.parse({ ...common, algorithm_version: 'recovery.v5', recovery_zone: 'solid', missing_components: recoveryComponentSchema.options }),

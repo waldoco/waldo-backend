@@ -48,9 +48,9 @@ describe('the health inventory in words', () => {
       { source: 'health_connect', kinds: [kind('sleep_duration', 30, 27), kind('steps_window', 26, 5)] },
     ] }, clock);
     expect(inventory?.entries).toEqual([
-      { signal: 'sleep_duration', grain: 'night', newest: 'today', regularity: 'nearly_every_day', sources: ['apple', 'health_connect'] },
-      { signal: 'steps_window', grain: 'hour', newest: 'yesterday', regularity: 'some_days', sources: ['health_connect'] },
-      { signal: 'body_mass', grain: 'reading', newest: 'this_month', regularity: 'a_few_days', sources: ['apple'] },
+      { signal: 'sleep_duration', grain: 'night', newest: 'today', regularity: 'nearly_every_day', freshness: 'fresh', sources: ['apple', 'health_connect'] },
+      { signal: 'steps_window', grain: 'hour', newest: 'yesterday', regularity: 'some_days', freshness: 'fresh', sources: ['health_connect'] },
+      { signal: 'body_mass', grain: 'reading', newest: 'this_month', regularity: 'a_few_days', freshness: 'expired', sources: ['apple'] },
     ]);
     expect(inventory?.newestAt).toBe(NOW - 6 * HOUR);
   });
@@ -68,7 +68,8 @@ describe('the health inventory in words', () => {
     expect(block).toBe([
       'Partial health context: no Recovery, Form or Load reading is stored for this owner yet, so there is no recovery or readiness reading to give.',
       'Freshness: fresh. Latest body data: today, from Health Connect.',
-      'Body data on hand this month: heart rate through the day (hourly; newest within hours; some days); steps (hourly; newest within hours; nearly every day).',
+      'Body data on hand this month: heart rate through the day (hourly; newest within hours, fresh; some days); steps (hourly; newest within hours, fresh; nearly every day).',
+      'Each kind is fresh, stale or expired by its newest reading, on the scale get_health uses: fresh within a day and a half, stale within three days, expired after.',
       'If get_health is in your function list, it reads any kind on hand; read what the question needs before answering from the body data.',
     ].join('\n'));
     expect(block).not.toMatch(/\d/);
@@ -79,11 +80,12 @@ describe('the health inventory in words', () => {
     expect(scrubbed).toContain('Before.');
   });
 
-  it('adds the inventory to a full day\'s block as one line', async () => {
+  it('adds the inventory to a full day\'s block as one line, with the scale its freshness words are on', async () => {
     const block = renderHealth(readable(await book({ row: FULL_ROW, inventory: STEPS_ONLY }).health.latest()));
     const without = renderHealth(readable(await book({ row: FULL_ROW, inventory: { sources: [] } }).health.latest()));
     expect(block.split('\n').filter(line => !without.split('\n').includes(line))).toEqual([
-      'Body data on hand this month: heart rate through the day (hourly; newest within hours; some days); steps (hourly; newest within hours; nearly every day).',
+      'Body data on hand this month: heart rate through the day (hourly; newest within hours, fresh; some days); steps (hourly; newest within hours, fresh; nearly every day).',
+      'Each kind is fresh, stale or expired by its newest reading, on the scale get_health uses: fresh within a day and a half, stale within three days, expired after.',
     ]);
   });
 
@@ -128,6 +130,43 @@ describe('the health inventory in words', () => {
   it('ages an owner whose newest reading is days old as expired, and still says what exists', async () => {
     const block = renderHealth(readable(await book({ inventory: { sources: [{ source: 'apple', kinds: [kind('sleep_duration', 24 * 5, 9)] }] } }).health.latest()));
     expect(block).toContain('is more than three days old');
-    expect(block).toContain('Body data on hand this month: time asleep (nightly; newest this week; some days).');
+    expect(block).toContain('Body data on hand this month: time asleep (nightly; newest this week, expired; some days).');
+  });
+});
+
+// The block says, kind by kind, how fresh the newest reading is on get_health's scale, and which day the scores are for, so a
+// run reasons about data that has not synced instead of reading it as current. Whether to say so or ask for a sync is the
+// model's call; these check only that it is told.
+describe('how fresh the body data is, in the block', () => {
+  const at = (iso: string) => ({ timezone: TZ, now: () => new Date(Date.parse(iso)) });
+  const scored = (day: string, compiledAt: string): HealthContextRow => ({ ...FULL_ROW, context: { ...FULL_ROW.context, id: `ctx-${day}`, day, compiled_at: compiledAt } });
+  const blockAt = async (clockAt: ReturnType<typeof at>, row: HealthContextRow, kinds: readonly { signal: string; newest_at: string; days: number }[]) => {
+    const call = async (fn: string) => (fn === 'health_context_read' ? row : { sources: [{ source: 'apple', kinds }] });
+    return renderHealth(readable(await healthContextBook(call, 'do-x', clockAt, undefined, undefined, { partial: true, inventory: true }).latest()));
+  };
+
+  it('a night not yet synced at Brief time: the scores are yesterday\'s and stale, and the newest sleep is yesterday\'s', async () => {
+    // 07:30 in Kolkata; the newest row was computed at 22:00 the evening before, and the newest night ended yesterday morning.
+    const block = await blockAt(at('2026-11-01T02:00:00Z'), scored('2026-10-31', '2026-10-31T16:30:00Z'), [
+      { signal: 'sleep_duration', newest_at: '2026-10-31T01:00:00Z', days: 28 },
+      { signal: 'overnight_hrv', newest_at: '2026-10-31T01:00:00Z', days: 28 },
+      { signal: 'steps_window', newest_at: '2026-10-31T15:30:00Z', days: 30 },
+    ]);
+    expect(block).toContain("Freshness: stale; these scores are yesterday's.");
+    expect(block).toContain('time asleep (nightly; newest yesterday, fresh;');
+    expect(block).toContain('fresh within a day and a half, stale within three days, expired after.');
+    expect(block).not.toMatch(/\d/);
+  });
+
+  it('a watch off for two days: the scores are from an earlier day, and the watch\'s kinds are stale while the phone\'s steps are fresh', async () => {
+    const block = await blockAt(at('2026-11-01T06:30:00Z'), scored('2026-10-30', '2026-10-30T14:30:00Z'), [
+      { signal: 'sleep_duration', newest_at: '2026-10-30T01:00:00Z', days: 20 },
+      { signal: 'overnight_hrv', newest_at: '2026-10-30T01:00:00Z', days: 20 },
+      { signal: 'steps_window', newest_at: '2026-11-01T05:30:00Z', days: 30 },
+    ]);
+    expect(block).toContain("Freshness: stale; these scores are from an earlier day.");
+    expect(block).toContain('time asleep (nightly; newest this week, stale;');
+    expect(block).toContain('steps (hourly; newest within hours, fresh;');
+    expect(block).not.toMatch(/\d/);
   });
 });
