@@ -46,8 +46,8 @@ export const OUTBOX_CUSTODY: unique symbol = Symbol('send.outbox_custody');
 export const APP_THREAD: unique symbol = Symbol('send.app_thread');
 // Answers the owner can tap under a card's row, from the planning Brief's offer_replies. Only the app reads it; a symbol key.
 export const APP_REPLIES: unique symbol = Symbol('send.app_replies');
-// A message whose copy for a chat surface goes stale at this time (epoch ms): a day card is no use to the chat once its day or the next card has passed.
-export const APP_COPY_UNTIL: unique symbol = Symbol('send.app_copy_until');
+// What a message the app copies to a chat surface is (a day card), so its copy is replaced only as the message would be.
+export const APP_COPY_OF: unique symbol = Symbol('send.app_copy_of');
 
 export type Admission = 'admitted' | 'dormant' | 'retry';
 

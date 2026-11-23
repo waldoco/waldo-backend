@@ -20,7 +20,7 @@ import { traceBook } from '../src/channels/harness';
 import { armHeartbeat } from '../src/channels/heartbeat';
 import { loopBook } from '../src/channels/loops';
 import { HEALTH_MEMORY_KEY } from '../src/channels/health-memory';
-import { PROACTIVE_SURFACE_KEY, WHATSAPP_COPY_FRESH_MS, WHATSAPP_COPY_PREFIX } from '../src/channels/proactive-surface';
+import { PROACTIVE_SURFACE_KEY, WHATSAPP_COPY_PREFIX } from '../src/channels/proactive-surface';
 import { reminderBook } from '../src/channels/reminders';
 import { standingOrderBook } from '../src/channels/standing-orders';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
@@ -348,8 +348,8 @@ describe('the app and WhatsApp', { timeout: 20_000 }, () => {
       expect(heartbeat.payload.chat_id).toBe(ctx.appSubject);
       await outboxPass(owner, state, ctx);
       expect(await said(owner, ctx)).toEqual([{ role: 'assistant', text: CHECK_BACK_TEXT }]);
-      const delivered = outbox(state).find(record => record.id === heartbeat.id)!;
-      expect(copies(state).map(record => [record.id, record.expiresAt])).toEqual([[`${WHATSAPP_COPY_PREFIX}${heartbeat.id}`, delivered.deliveredAt! + WHATSAPP_COPY_FRESH_MS]]);
+      // The copy has no clock of its own: it waits until it goes out or a newer copy replaces it.
+      expect(copies(state).map(record => [record.id, record.expiresAt])).toEqual([[`${WHATSAPP_COPY_PREFIX}${heartbeat.id}`, undefined]]);
       // A restart that lost the settled mark settles the check-back again; its copy is the same record, queued once.
       const rows = outbox(state);
       rows.find(record => record.id === heartbeat.id)!.settled = false;
@@ -442,44 +442,35 @@ describe('the app and WhatsApp', { timeout: 20_000 }, () => {
     }, { surface: 'both' });
   });
 
-  it('a Brief copy left waiting for WhatsApp\'s closed window expires with the card\'s own day, so waiting copies cannot fill the outbox', async () => {
-    await withOwner('surface-both-copy-expires', async (owner, state, ctx) => {
+  it('a Brief copy left waiting for WhatsApp\'s closed window waits past its day, until the Check-in\'s copy replaces it', async () => {
+    await withOwner('surface-both-copy-superseded', async (owner, state, ctx) => {
       await dueBrief(state);
+      await scheduler(state).schedule({ id: 'card:midday', kind: 'brief', payloadRefs: { id: 'card:midday' }, occurrenceAt: AT + 30 * 3_600_000, dueAt: AT + 30 * 3_600_000, recurrence: null });
       await schedulePass(owner, state);
       await outboxPass(owner, state, ctx);
       expect(wire.whatsapp).toEqual(['template:waldo_proactive_update']);
-      const [copy] = copies(state);
-      expect([copy!.status, copy!.expiresAt]).toEqual(['pending', Date.parse('2026-10-04T00:00:00Z')]);
-      expect(copy!.expiresAt!).toBeLessThan(AT + WHATSAPP_COPY_FRESH_MS);
-      ctx.now = copy!.expiresAt!;
+      const [brief] = copies(state);
+      expect([brief!.status, brief!.expiresAt]).toEqual(['pending', undefined]);
+      // A day later nothing has replaced it: it still waits.
+      ctx.now = AT + 26 * 3_600_000;
+      for (let pass = 0; pass < 2; pass += 1) await outboxPass(owner, state, ctx);
+      expect(copies(state).map(record => record.status)).toEqual(['pending']);
+      // The next card's copy replaces it, and the ending says what it was and what held it.
+      ctx.now = AT + 30 * 3_600_000;
       const lines = vi.spyOn(console, 'log');
       try {
-        for (let pass = 0; pass < 2; pass += 1) await outboxPass(owner, state, ctx);
-        // The expiry says what expired and what held it: a copy behind WhatsApp's closed window.
+        await schedulePass(owner, state);
+        for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
         expect(lines.mock.calls.map(call => String(call[0])).filter(line => line.includes('"hop":"outbox_expired"')))
-          .toEqual([expect.stringContaining('"code":"expired:whatsapp_copy:window_closed"')]);
+          .toEqual([expect.stringContaining('"code":"superseded:whatsapp_copy:window_closed"')]);
       } finally { lines.mockRestore(); }
-      // Expired and settled, the copy is a terminal record the outbox evicts when it needs room; a pending one is never evicted.
-      expect(copies(state).map(record => [record.status, record.reason, record.settled])).toEqual([['blocked', 'expired', true]]);
-      expect(wire.whatsapp).toEqual(['template:waldo_proactive_update']);
-      expect(await said(owner, ctx)).toEqual([{ role: 'assistant', text: CARD_TEXT }]);
-    }, { surface: 'both', window: 'closed' });
-  });
-
-  it('a Brief copy is not replayed when the owner writes that night: it went stale with its day', async () => {
-    await withOwner('surface-both-copy-stale', async (owner, state, ctx) => {
-      await dueBrief(state);
-      // The Check-in is due that afternoon, and covers the same day with newer facts.
-      await scheduler(state).schedule({ id: 'card:midday', kind: 'brief', payloadRefs: { id: 'card:midday' }, occurrenceAt: AT + 5 * 3_600_000, dueAt: AT + 5 * 3_600_000, recurrence: null });
-      await schedulePass(owner, state);
-      await outboxPass(owner, state, ctx);
-      expect(wire.whatsapp).toEqual(['template:waldo_proactive_update']);
-      ctx.now = AT + 14 * 60 * 60_000 + 30 * 60_000;
+      expect(copies(state).map(record => [record.id === brief!.id, record.status, record.reason ?? null]))
+        .toEqual([[true, 'blocked', 'superseded'], [false, 'pending', null]]);
+      // The owner writes: only the newest copy goes.
       state.storage.kv.put('wa_last_inbound_ms', ctx.now);
       const internal = owner as unknown as { setup(channel: 'whatsapp'): { finalOutbox: TelegramFinalOutbox; settleFinal(record: FinalRecord): Promise<void> }; outboxRoute(surface: 'whatsapp'): OutboxRoute };
       await releaseWhatsAppOutbox(internal.setup('whatsapp').finalOutbox, internal.outboxRoute('whatsapp'), internal.setup('whatsapp').settleFinal);
-      expect(wire.whatsapp).toEqual(['template:waldo_proactive_update']);
-      expect(copies(state).map(record => [record.status, record.reason])).toEqual([['blocked', 'expired']]);
+      expect(wire.whatsapp.filter(sent => sent.startsWith('text:'))).toEqual([`text:${CARD_TEXT}`]);
     }, { surface: 'both', window: 'closed' });
   });
 
@@ -497,9 +488,7 @@ describe('the app and WhatsApp', { timeout: 20_000 }, () => {
       const internal = owner as unknown as { setup(channel: 'whatsapp'): { finalOutbox: TelegramFinalOutbox; settleFinal(record: FinalRecord): Promise<void> }; outboxRoute(surface: 'whatsapp'): OutboxRoute };
       await releaseWhatsAppOutbox(internal.setup('whatsapp').finalOutbox, internal.outboxRoute('whatsapp'), internal.setup('whatsapp').settleFinal);
       for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
-      ctx.now = copy!.expiresAt!;
-      for (let pass = 0; pass < 2; pass += 1) await outboxPass(owner, state, ctx);
-      expect(copies(state).map(record => [record.payload.chat_id, record.status])).toEqual([[Number(SUBJECT), 'blocked']]);
+      expect(copies(state).map(record => [record.id, record.payload.chat_id, record.status])).toEqual([[copy!.id, Number(SUBJECT), 'blocked']]);
       expect(wire.to).toEqual([`+${SUBJECT}`]);
       expect(wire.whatsapp).toEqual(['template:waldo_proactive_update']);
       expect(await said(owner, ctx)).toEqual([{ role: 'assistant', text: CARD_TEXT }]);

@@ -1,7 +1,7 @@
 import { APP_PROACTIVE_SURFACE_RECEIPTS_V1 } from '../../../contracts/src/app/controls';
 import type { AppSend, ScheduledAppDelivery } from './surfaces/app';
 import type { OutboxRoute } from './delivery-routes';
-import { telegramReceipt, tookPart, type FinalRecord } from './telegram-final-outbox';
+import { telegramReceipt, tookPart, type CopyOf, type FinalRecord } from './telegram-final-outbox';
 import type { ReadsAs } from '../prompt/update-cards';
 
 // Where Waldo's proactive messages go for an owner reachable on the app and on a chat surface: the day cards (the Brief among
@@ -112,32 +112,61 @@ export const refusingUnreachableCheckBacks = <H extends Readonly<{ name: string;
 // A copy of a message the app already has. Its id names the app delivery it copies, so each one is copied once.
 export const WHATSAPP_COPY_PREFIX = 'whatsapp-copy:';
 export const IMESSAGE_COPY_PREFIX = 'imessage-copy:';
-// How long a copy may wait for WhatsApp, from the moment the app got the message. The app keeps the message either way; a
-// copy left waiting for a closed window would otherwise wait out Meta's 30 days in the shared delivery outbox, which never
-// evicts a pending record, so a month of copies could leave no room for the owner's own messages.
-export const WHATSAPP_COPY_FRESH_MS = 24 * 60 * 60 * 1000;
 
-// What held a record that expired unsent, read when it expired: a closed WhatsApp window (for a record bound there), quiet
-// hours, low volume or follow-ups off; `waited` when none of those holds now, as with the owner's limits or a long queue.
+// What held a record that ended unsent (expired, or superseded by a newer one), read when it ended: a closed WhatsApp window
+// (for a record bound there), quiet hours, low volume or follow-ups off; `waited` when none of those holds now, as with the
+// owner's limits or a long queue.
 export type ExpiryFacts = Readonly<{ windowClosed: boolean; quiet: boolean; volumeLow: boolean; followupsOff: boolean }>;
-const recordKind = (record: FinalRecord): string =>
+export const recordKind = (record: FinalRecord): string =>
   record.id.startsWith(WHATSAPP_COPY_PREFIX) ? 'whatsapp_copy' : record.dayCard ? 'day_card' : record.revision ? 'revision'
     : record.update ? 'update_card' : record.calendarPrep ? 'meeting_prep' : record.mailFollowup ? 'mail_followup'
       : record.heartbeat ? 'check_back' : record.reminder ? 'reminder' : record.standingOrder ? 'standing_order'
         : record.announcement ? 'announcement' : record.scheduleNotice ? 'schedule_notice' : record.healthNotice ? 'health_notice'
           : record.answersOwner ? 'answer' : record.notice ? 'notice' : 'message';
-// A closed code for an expired record, so the expired deliveries can be told apart by kind and by hold.
-export const expiredCode = (record: FinalRecord, facts: ExpiryFacts): string => `expired:${recordKind(record)}:${
+// A closed code for a record that ended unsent, so those endings can be told apart by cause, kind and hold.
+export const expiredCode = (record: FinalRecord, facts: ExpiryFacts): string => `${record.reason === 'superseded' ? 'superseded' : 'expired'}:${recordKind(record)}:${
   facts.windowClosed ? 'window_closed' : facts.quiet ? 'quiet' : facts.volumeLow ? 'volume_low' : facts.followupsOff ? 'followups_off' : 'waited'}`;
+
+// A waiting message ends unsent only when a newer one makes it moot, never by the clock: a day card covers the cards and the
+// day's updates still waiting before it, a newer day update the older ones (an in-place edit only a card replaces), a newer
+// copy the older copy, and a newer notice of the same kind the older one. Only a record for the same chat is reached.
+// A record the outbox already sent any part of is never superseded (TelegramFinalOutbox).
+type Superseding = Pick<FinalRecord, 'id' | 'payload' | 'ownerSubject' | 'dayCard' | 'update' | 'revision' | 'inPlace' | 'announcement' | 'copyOf'>;
+const dayUpdate = (record: Superseding): boolean => record.update !== undefined || record.revision !== undefined || record.id.startsWith('intervention:');
+// What a copy of this record is, for supersedes.
+export const copyOf = (record: Superseding): CopyOf | undefined => record.dayCard ? 'day_card' : dayUpdate(record) ? 'day_update' : undefined;
+const REAUTH = /^google-reauth:([^:]+):/;
+export const supersededBy = (next: Superseding) => (waiting: Superseding): boolean => {
+  if (waiting.ownerSubject !== next.ownerSubject || waiting.payload.chat_id !== next.payload.chat_id || waiting.id === next.id) return false;
+  if (next.dayCard) return waiting.dayCard !== undefined || dayUpdate(waiting);
+  if (dayUpdate(next)) return dayUpdate(waiting) && !waiting.inPlace && !waiting.dayCard;
+  if (next.announcement) return waiting.announcement !== undefined;
+  if (next.id.startsWith(WHATSAPP_COPY_PREFIX)) return waiting.id.startsWith(WHATSAPP_COPY_PREFIX) && waiting.copyOf !== undefined
+    && (next.copyOf === 'day_card' || (next.copyOf === 'day_update' && waiting.copyOf === 'day_update'));
+  if (next.id.startsWith('connect-app:')) return waiting.id.startsWith('connect-app:');
+  const account = REAUTH.exec(next.id)?.[1];
+  return account !== undefined && REAUTH.exec(waiting.id)?.[1] === account;
+};
+
+// The most copies that wait for one chat at once. A window can stay closed for weeks while the app keeps every message, and the
+// outbox never evicts a waiting record, so past this many the oldest copy is replaced by the newest.
+export const COPIES_WAITING_MAX = 8;
+export const copySupersedes = (copy: Superseding, records: readonly FinalRecord[]): ((record: FinalRecord) => boolean) => {
+  const waiting = records.filter(record => record.status === 'pending' && record.id.startsWith(WHATSAPP_COPY_PREFIX)
+    && record.ownerSubject === copy.ownerSubject && record.payload.chat_id === copy.payload.chat_id && record.id !== copy.id);
+  const replaced = supersededBy(copy), kept = waiting.filter(record => !replaced(record)).sort((a, b) => a.createdAt - b.createdAt);
+  const overflow = new Set(kept.slice(0, Math.max(0, kept.length - (COPIES_WAITING_MAX - 1))).map(record => record.id));
+  return record => replaced(record) || overflow.has(record.id);
+};
 
 // Delivers to the app first, and only a message the app took is copied, under that app message's id. A send worth delivering
 // only now (a one-time code, a short-lived link) is never queued for a chat surface, which may hold it for days. A copy that
 // cannot be queued is reported by its code alone and never fails or repeats the app delivery.
-export const withCopy = (prefix: string, deliver: ScheduledAppDelivery, queue: (id: string, text: string, until?: number) => Promise<void>, report: (code: 'copy_failed') => void): ScheduledAppDelivery =>
+export const withCopy = (prefix: string, deliver: ScheduledAppDelivery, queue: (id: string, text: string, copyOf?: CopyOf) => Promise<void>, report: (code: 'copy_failed') => void): ScheduledAppDelivery =>
   async (text: string, send?: AppSend) => {
     const row = await deliver(text, send);
     if (send?.nowOnly) return row;
-    try { await queue(`${prefix}${row}`, text, send?.copyUntil); } catch { report('copy_failed'); }
+    try { await queue(`${prefix}${row}`, text, send?.copyOf); } catch { report('copy_failed'); }
     return row;
   };
 

@@ -361,12 +361,6 @@ export const dayWindow = (now: number, timezone: string): Readonly<{ from: numbe
   return { from: day.start, to: day.end };
 };
 
-// A card waiting for the owner (WhatsApp outside its 24-hour window) is current until the owner's next card is due, which
-// covers the same day with newer facts, and never past its own day. Then it expires unsent: a reply after a quiet stretch
-// brings no burst of old cards.
-export const cardExpiry = (occurrenceAt: number, timezone: string, laterDue: readonly number[]): number =>
-  Math.min(dayWindow(occurrenceAt, timezone).to, ...laterDue.filter(due => due > occurrenceAt));
-
 // How late a card that waited for the model may still go out: the Brief until local midday, the Check-in until the Close is
 // due, the Close until quiet hours start. Never past the card's own day.
 export type CardFreshness = Readonly<{ closeDue: number | null; quietStart: string | null }>;
