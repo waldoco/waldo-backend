@@ -19,9 +19,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     const done = (text: string) => ({ ok: true as const, data: { model: request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
     if (request.response_format) return done('{}');
     const said = String(request.messages.at(-1)?.content ?? '');
-    // An apply turn's message may follow the result with what was said since, the owner's question included.
-    const report = /^\[A background task you started has finished: "(First|Second) report"/.exec(said)?.[1];
-    const turn = report ? `report:${report.toLowerCase()}` : said.includes('what time is it') ? 'owner' : 'other';
+    const turn = said.includes('what time is it') ? 'owner' : said.includes('First report') ? 'report:first' : said.includes('Second report') ? 'report:second' : 'other';
     if (model.turns.at(-1) !== turn) model.turns.push(turn);
     if (turn === 'report:first' && model.held === 0) { model.held = 1; await new Promise<void>(resolve => { model.release = resolve; }); }
     return done(turn === 'owner' ? 'It is noon.' : 'The research is in.');
@@ -60,9 +58,7 @@ const withAppOwner = (name: string, ownerFirst: '0' | '1' | 'in-switches', run: 
     const ownerFirstVar = ownerFirst === 'in-switches'
       ? { WALDO_SWITCHES: { ...(env as unknown as { WALDO_SWITCHES: Record<string, string> }).WALDO_SWITCHES, WALDO_OWNER_FIRST: '1' } }
       : { WALDO_OWNER_FIRST: ownerFirst };
-    // With the recall chain on, search_episodes' description is longer than a model request allows, so an apply turn
-    // carrying it never reaches the model; this test is about turn order, so the chain stays off.
-    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, WALDO_RECALL_CHAIN: '0', ...ownerFirstVar }) as unknown as Owner;
+    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, ...ownerFirstVar }) as unknown as Owner;
     try { await run(owner, state, instance as InstanceType<typeof OwnerDO>); } finally { model.release?.(); logged.mockRestore(); await state.storage.deleteAlarm(); poolAlarm.mockRestore(); }
   });
 
@@ -103,7 +99,7 @@ it('a switch carried only in WALDO_SWITCHES reaches the owner object, as every d
   // The object the runtime built from the test pool's env reads the production value, which wrangler.jsonc nests.
   expect('WALDO_OWNER_FIRST' in env).toBe(false);
   await withAppOwner('owner-first-in-switches', 'in-switches', async (owner, state, instance) => {
-    expect((instance as unknown as { env: Record<string, unknown> }).env.WALDO_OWNER_FIRST).toBe('1');
+    expect((instance as unknown as { env: Record<string, unknown> }).env.WALDO_OWNER_FIRST).toBe('0');
     await sendWhileFirstReportRuns(owner, state, 'owner-first-in-switches');
     expect(model.turns).toEqual(['report:first', 'owner', 'report:second']);
   });

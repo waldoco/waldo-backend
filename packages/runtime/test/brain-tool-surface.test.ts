@@ -22,8 +22,8 @@ import { parseJsonc } from '../../../scripts/jsonc.mjs';
 import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
 import { TOOL_DEFINITION_BUDGET_TOKENS } from './helpers/tool-budget';
 
-// The brain's tool surface on a real owner turn: an app message to an owner with every Google feature connected and no
-// feature switch on, so the full menu is what tool search shapes. The scripted model records the request; both adapters then build their wire bodies
+// The brain's tool surface on a real owner turn: an app message to an owner with every Google feature connected, so the
+// tool list is the production one. The scripted model records the request; both adapters then build their wire bodies
 // from it with recording clients, so the test measures what each provider would be sent and what its model would see.
 const OWNER_ID = '6c2e9b14-3a7d-4f05-9e81-2b4c6d8f0a13';
 const BASE = 'https://directory.fixture.invalid';
@@ -49,10 +49,8 @@ vi.mock('../src/channels/telegram-turn', async load => {
 const { OwnerDO } = await import('../src/channels/owner-do');
 
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); model.requests = []; model.respond = undefined; });
-const { WALDO_SWITCHES: _deployed, ...unswitched } = env as typeof env & { WALDO_SWITCHES?: unknown };
 
-// flag: the owner DO's WALDO_TOOL_SEARCH, undefined as in a deploy without the var. The deployed switches are dropped, so the
-// harness loader is off and the menu is the full one; settings turns on what a test needs.
+// flag: the owner DO's WALDO_TOOL_SEARCH, undefined as in a deploy without the var.
 const ownerReply = async (name: string, flag: string | undefined, settings: Readonly<Record<string, string>> = {}): Promise<LLMRequest> => {
   model.requests = [];
   vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2030-11-04T09:00:00Z') });
@@ -73,7 +71,7 @@ const ownerReply = async (name: string, flag: string | undefined, settings: Read
     state.storage.kv.put('app_subject', String(appSubjectFor(name)));
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [{ id: 'conn-1', email: 'owner@example.test', scopes: [...GOOGLE_CONSENT_SCOPES] }]);
-    const owner = new OwnerDO(state, { ...unswitched, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, WALDO_TOOL_SEARCH: flag, ...settings });
+    const owner = new OwnerDO(state, { ...env, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, WALDO_TOOL_SEARCH: flag, ...settings });
     try {
       const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: `client-${name}`, text: ASKED }) }));
       expect(sent.status).toBe(202);
@@ -153,7 +151,7 @@ describe('the brain tool surface', () => {
     expect(anthropic).toEqual(request.tools!.map((tool) => ({ name: tool.name, description: tool.description, input_schema: { ...tool.parameters, type: 'object' } })));
   });
 
-  // Only the exact string 'on' turns search on: unset and every other spelling send the full menu.
+  // Only the exact string 'on' turns search on: unset and every other spelling send the full menu, as production does.
   it.each([undefined, '', 'off', 'ON', 'true', 'on '].map((flag, index) => [JSON.stringify(flag) ?? 'unset', flag, index] as const))('switch %s is off: no tool search, no deferred tool', async (_label, flag, index) => {
     const request = await ownerReply(`tool-surface-flag-${index}`, flag);
     expect(request.tool_search).toBeUndefined();
@@ -289,9 +287,9 @@ it('neither staging nor production runs tool search', () => {
   expect(parsed.vars.WALDO_TOOL_SEARCH).toBe('off');
 });
 
-// Both environments load tools through the harness (find_tools/use_tool), the same on any provider.
-it('staging and production load tools through the harness', () => {
+// Staging loads tools through the harness (find_tools/use_tool), the same on any provider; production keeps the full menu.
+it('staging loads tools through the harness and production does not', () => {
   const parsed = flatConfig(parseJsonc(config)) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
   expect(parsed.env.staging.vars.WALDO_TOOL_LOADER).toBe('harness');
-  expect(parsed.vars.WALDO_TOOL_LOADER).toBe('harness');
+  expect(parsed.vars.WALDO_TOOL_LOADER).toBe('off');
 });

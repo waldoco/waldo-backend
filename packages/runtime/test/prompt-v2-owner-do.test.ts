@@ -68,8 +68,8 @@ describe('WALDO_PROMPT_V2 on the owner object', () => {
     for (const request of requests) expect(request.system?.includes(V2_SECTION)).toBe(expected);
   });
 
-  it('is on in production and in staging', () => {
-    expect(PARSED.vars.WALDO_PROMPT_V2).toBe('1');
+  it('is off in production until a judged run covers its scenarios, and on in staging', () => {
+    expect(PARSED.vars.WALDO_PROMPT_V2).toBe('0');
     expect(PARSED.env.staging.vars.WALDO_PROMPT_V2).toBe('1');
   });
 });

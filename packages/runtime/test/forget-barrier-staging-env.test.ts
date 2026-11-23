@@ -87,13 +87,8 @@ it('the staging Worker runs owner turns on the item rule: a held memory item is 
   expect(JSON.stringify(model.requests), 'the held goal is no quest line in the prompt').not.toMatch(/coffee/i);
 });
 
-it('the production Worker runs owner turns on the item rule too', async () => {
-  expect((withSwitches(env) as { WALDO_FORGET_BARRIER?: string }).WALDO_FORGET_BARRIER).toBe('on');
+it('the production Worker keeps the earlier whole-read rule', async () => {
+  expect((withSwitches(env) as { WALDO_FORGET_BARRIER?: string }).WALDO_FORGET_BARRIER).toBe('off');
   const { modes } = await readMemoryTurn('forget-barrier-production-env', (withSwitches(env) as { WALDO_FORGET_BARRIER?: string }).WALDO_FORGET_BARRIER);
-  expect(modes).toEqual(['items']);
-});
-
-it('with the switch off, an owner turn keeps the earlier whole-read rule', async () => {
-  const { modes } = await readMemoryTurn('forget-barrier-off', 'off');
   expect(modes).toEqual(['reads']);
 });

@@ -86,10 +86,10 @@ const unmarked = (value: unknown): unknown => {
   return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'cache_control').map(([key, inner]) => [key, unmarked(inner)]));
 };
 
-it('staging and production turn the switch on', () => {
+it('staging turns the switch on', () => {
   expect(STAGING.WALDO_THINKING_REPLAY).toBe('1');
   const production = (flatConfig(parseJsonc(config)) as { vars: Record<string, string> }).vars;
-  expect(production.WALDO_THINKING_REPLAY).toBe('1');
+  expect(production.WALDO_THINKING_REPLAY).toBe('0');
 });
 
 it('an owner turn that reads twice sends each round as an unchanged extension of the one before, its thinking in place', async () => {

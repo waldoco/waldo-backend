@@ -99,7 +99,6 @@ test('every handler of the Worker\'s default export flattens its env', () => {
 // which a later change set on purpose.
 const BEFORE_MOVE = '1808c6ed83c9d84be2b4ae36ad05e9d27343b772';
 const CHANGED_SINCE = {
-  production: { WALDO_MODEL_PROVIDER: 'anthropic' },
   staging: { OPEN_SIGNUP: '1', PHONE_SMS_VERIFY: '1', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en', MEDICATIONS: '1',
     WHATSAPP_PROACTIVE_TEMPLATE: 'waldo_proactive_update', WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE: 'en', OPEN_SIGNUP_SPEND_CEILING_USD: '50' },
 };

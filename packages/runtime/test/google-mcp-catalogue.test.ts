@@ -174,12 +174,12 @@ describe('a preview that is not available reads as not available, never an error
 
 describe('staging only', () => {
   // The test pool loads the top-level (production) block of wrangler.jsonc; staging lives under env.staging.
-  it('production config names no MCP server, so its button-free reads, on as in staging, have none to read', () => {
+  it('production config names no MCP server and keeps button-free reads off', () => {
     const production = withSwitches(env) as { WALDO_ENVIRONMENT?: string; WALDO_MCP_SERVERS?: string; MCP_READ_INTENTS?: string };
     expect(production.WALDO_ENVIRONMENT).toBe('production');
     expect(production.WALDO_MCP_SERVERS).toBe('[]');
     expect(mcpServers(production.WALDO_MCP_SERVERS)).toEqual([]);
-    expect(production.MCP_READ_INTENTS).toBe('1');
+    expect(production.MCP_READ_INTENTS).toBe('0');
   });
 });
 
