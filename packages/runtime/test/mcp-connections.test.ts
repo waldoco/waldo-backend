@@ -632,7 +632,7 @@ describe('Official servers from the catalogue', () => {
       session: buildSessionState({ trigger: 'user_message', canary_tokens: canaries, started_at: 1 }), ...over };
     let round = 0;
     await runToolLoop({
-      handlers: [searchMcpToolsHandler(mcp), readMcpToolHandler(undefined, undefined, false, mcp), web], ctx, maxSteps: 10, onTool: (event) => events.push(event),
+      handlers: [searchMcpToolsHandler(mcp), readMcpToolHandler(undefined, undefined, mcp), web], ctx, maxSteps: 10, onTool: (event) => events.push(event),
       step: async (tools) => {
         if (!tools || round >= calls.length) return { text: 'done' };
         const made = calls[round++]!;
@@ -953,7 +953,7 @@ describe('Slack, an official server that signs in only with a pre-registered cli
       session: buildSessionState({ trigger: 'user_message', canary_tokens: canaries, started_at: 1 }), ...over };
     let round = 0;
     await runToolLoop({
-      handlers: [searchMcpToolsHandler(rig.mcp), readMcpToolHandler(undefined, undefined, false, rig.mcp), callMcpToolHandler(undefined, { proposeMcpCall: async (proposal) => { proposals.push(proposal); return `p${proposals.length}`; } }, undefined, rig.mcp), web], ctx, maxSteps: 10, onTool: (event) => events.push(event),
+      handlers: [searchMcpToolsHandler(rig.mcp), readMcpToolHandler(undefined, undefined, rig.mcp), callMcpToolHandler(undefined, { proposeMcpCall: async (proposal) => { proposals.push(proposal); return `p${proposals.length}`; } }, undefined, rig.mcp), web], ctx, maxSteps: 10, onTool: (event) => events.push(event),
       step: async (tools) => {
         if (!tools || round >= calls.length) return { text: 'done' };
         const made = calls[round++]!;
@@ -1025,7 +1025,7 @@ describe('Slack, an official server that signs in only with a pre-registered cli
     const { steps, proposals } = await slackTurn(rig, [{ name: 'call_mcp_tool', arguments: { server: 'slack', tool: 'slack_create_canvas', args: { channel: 'C1', text: 'x' } } }]);
     expect(steps).toEqual([['call_mcp_tool', 'ran']]);
     expect(proposals).toHaveLength(1);
-    const read = readMcpToolHandler(undefined, undefined, false, rig.mcp);
+    const read = readMcpToolHandler(undefined, undefined, rig.mcp);
     for (const ctx of [{ ownerInitiated: true, toolArgSourceTaint: null }, { toolArgSourceTaint: 'external' }]) {
       const refused = await read.handle(send, { authenticatedUserId: 'owner-a', trigger: 'user_message', sourceTaint: null, turnId: 'turn-1', toolCallId: 'call-1', ...ctx } as unknown as ToolDispatcherContext);
       expect(refused).toMatchObject({ ok: false, code: 'forbidden' });

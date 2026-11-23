@@ -57,7 +57,7 @@ export type SweepCheckDeps = Readonly<{
   held(): readonly string[];
   // A change it read lands on the owner's today: asks for a health recompute, after the transaction.
   dayChanged(): Promise<void>;
-  // DEVICE_CALENDAR: the changes between the owner's phone-calendar snapshots, taken once inside the transaction, judged with
+  // The changes between the owner's phone-calendar snapshots, taken once inside the transaction, judged with
   // the rest.
   phone?: Readonly<{ takeChanges(): readonly Change[] }>;
   // BLOCK_LIFECYCLE: notes, in the same transaction, which of Waldo's blocks the owner just changed themselves.

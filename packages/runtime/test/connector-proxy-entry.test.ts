@@ -200,7 +200,7 @@ it('real dispatcher and signed googleProxy reach non-storing Edge metadata dispa
  const handlers=[readMcpToolHandler(JSON.stringify([{name:'drive',url:'https://drivemcp.googleapis.com/mcp/v1',auth:'google',requires:'drive',allow_tools:['search_files'],read_tools:['search_files']}]),{
   resolve:async()=>({mode:'proxy' as const,connection:'conn'}),
   proxy:(url,tool,args,connection,intent)=>proxy.mcpCall('owner',connection,url,tool,args,intent),
- },true)];
+ })];
  const context={authenticatedUserId:'owner',turnId:'fixture-turn',trigger:'user_message' as const,session:buildSessionState({trigger:'user_message',canary_tokens:['1111111111111111','2222222222222222','3333333333333333'],started_at:1}),hasApproval:()=>false,sourceTaint:null,toolArgSourceTaint:null,sanitise};
  const out=await dispatchTool({id:'fixture-read-call',name:'read_mcp_tool',args:{server:'drive',tool:'search_files',args:{query:'fictional'}}},context,{handlers});
  expect(out).toMatchObject({ok:true,source_taint:'external',data:{output:[{type:'text',text:'synthetic result'}]}});
@@ -234,7 +234,7 @@ it('provider read authentication failures retain typed 401 and 403 without opaqu
 });
 const realSignedProxy=()=>googleProxy({SUPABASE_PROJECT_URL:'https://edge.invalid',SUPABASE_PUBLISHABLE_KEY:'fictional-public',WALDO_ROUTER_HMAC_SECRET:cfg.WALDO_ROUTER_HMAC_SECRET!},async(input,init)=>serve(new Request(input,init)))!;
 const dispatchActualRead=async()=>{
- const proxy=realSignedProxy();const handlers=[readMcpToolHandler(JSON.stringify([{name:'drive',url:'https://drivemcp.googleapis.com/mcp/v1',auth:'google',requires:'drive',allow_tools:['search_files'],read_tools:['search_files']}]),{resolve:async()=>({mode:'proxy' as const,connection:'conn'}),proxy:(url,tool,args,connection,intent)=>proxy.mcpCall('owner',connection,url,tool,args,intent)},true)];
+ const proxy=realSignedProxy();const handlers=[readMcpToolHandler(JSON.stringify([{name:'drive',url:'https://drivemcp.googleapis.com/mcp/v1',auth:'google',requires:'drive',allow_tools:['search_files'],read_tools:['search_files']}]),{resolve:async()=>({mode:'proxy' as const,connection:'conn'}),proxy:(url,tool,args,connection,intent)=>proxy.mcpCall('owner',connection,url,tool,args,intent)})];
  return dispatchTool({id:'fixture-read-call',name:'read_mcp_tool',args:{server:'drive',tool:'search_files',args:{query:'fictional'}}},{authenticatedUserId:'owner',turnId:'fixture-turn',trigger:'user_message',session:buildSessionState({trigger:'user_message',canary_tokens:['1111111111111111','2222222222222222','3333333333333333'],started_at:1}),hasApproval:()=>false,sourceTaint:null,toolArgSourceTaint:null,sanitise},{handlers});
 };
 it('actual dispatcher-wire-Edge provider 401 reaches typed reconnect and 403 reads as not available, without storing read results',async()=>{

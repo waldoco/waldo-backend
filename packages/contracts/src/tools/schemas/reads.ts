@@ -177,7 +177,7 @@ export const getDeviceContextResultSchema = z.discriminatedUnion('state', [
 ]);
 export type GetDeviceContextResult = z.infer<typeof getDeviceContextResultSchema>;
 
-// The events on the owner's phone calendars, as each phone last sent them (DEVICE_CALENDAR): what Waldo sees of a work
+// The events on the owner's phone calendars, as each phone last sent them: what Waldo sees of a work
 // Outlook or Exchange account, or a local calendar, that no connected account shows. phone numbers the owner's phones 1, 2, ...
 // most recently heard from first; each says when it was read and how many minutes ago, and whether it shared times only or
 // stopped at its cap (complete false). An event whose iCal UID matches a connected Google event is left out and counted;

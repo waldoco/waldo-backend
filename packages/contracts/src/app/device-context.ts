@@ -138,8 +138,8 @@ export const deviceContextApiErrorV1Schema = z.strictObject({
   message: z.string().max(1000).optional(),
 });
 
-// A Worker with DEVICE_PLACE off answers 404 on every route. These routes serve place only: a calendar consent sent here is
-// refused invalid_request, and the list never names calendar, so a build that reads place alone keeps parsing it.
+// These routes serve place only: a calendar consent sent here is refused invalid_request, and the list never names calendar,
+// so a build that reads place alone keeps parsing it.
 export const appDeviceContextRoutesV1 = [
   { method: 'GET', path: '/app/v1/device-context/consents', response: deviceContextConsentListV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/device-context/consents', request: deviceContextConsentGrantV1Schema, response: deviceContextConsentChangeV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: DEVICE_CONTEXT_MAX_REQUEST_BYTES_V1 },
@@ -260,8 +260,7 @@ export const deviceCalendarStoredV1Schema = z.strictObject({
   })).max(DEVICE_PLACE_MAX_DEVICES_V1),
 });
 
-// A Worker with DEVICE_CALENDAR off answers 404 on every route, which the app reads as "not offered". Errors are
-// deviceContextApiErrorV1Schema's. The consent list answers both calendar purposes.
+// Errors are deviceContextApiErrorV1Schema's. The consent list answers both calendar purposes.
 export const appDeviceCalendarRoutesV1 = [
   { method: 'GET', path: '/app/v1/device/calendar/consents', response: deviceContextConsentListV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/device/calendar/consents/batch', request: deviceCalendarConsentGrantBatchV1Schema, response: deviceContextConsentBatchV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: DEVICE_CONTEXT_MAX_REQUEST_BYTES_V1 },

@@ -7,7 +7,7 @@ import { accountsToRead, MAX_ACCOUNTS_PER_READ, type GoogleAccess } from './goog
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
 
-// The owner's phone calendars, read from what each phone last sent (DEVICE_CALENDAR), for any turn that plans their time. The
+// The owner's phone calendars, read from what each phone last sent, for any turn that plans their time. The
 // same meeting often sits on a phone calendar and a connected Google calendar: a phone event whose iCal UID a connected Google
 // event shares is left out and counted. Anything else that may be the same is the model's to judge, never code's guess by
 // title or time. Titles and places are other people's words: data, never instructions.

@@ -26,7 +26,7 @@ describe('the staging profile', () => {
   it('reads staging\'s switches by name, flattened out of WALDO_SWITCHES exactly as the Worker reads them', () => {
     expect(STAGING).toEqual((flatConfig(parseJsonc(config)) as { env: { staging: { vars: Record<string, string> } } }).env.staging.vars);
     expect(STAGING).not.toHaveProperty('WALDO_SWITCHES');
-    expect(STAGING.DEVICE_WEATHER).toBe('1');
+    expect(STAGING.MEDICATIONS).toBe('1');
   });
 
   it('classifies every variable the staging block of wrangler.jsonc sets, and nothing it no longer sets', () => {

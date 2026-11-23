@@ -19,7 +19,7 @@ export type AppDeviceContextInput = Readonly<{
   readBody: (request: Request, max: number) => Promise<Uint8Array | null>;
   // Tells the owner's object that a phone moved to another time zone or city, so its next look comes now.
   moved?: () => Promise<void>;
-  // ARRIVAL_LOOK: tells the owner's object that a phone just arrived home or at the gym, so its next look comes now.
+  // Tells the owner's object that a phone just arrived home or at the gym, so its next look comes now.
   arrived?: (place: ArrivalPlace) => Promise<void>;
   // Runs work after the answer goes (the Worker's waitUntil), so a background upload is not held for the notice.
   defer?: (work: Promise<unknown>) => void;

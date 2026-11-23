@@ -176,12 +176,6 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // '1': memory keeps people (who claims are about, rings, dates that come round); read_memory reads them and forget_memory
   // forgets one person. Off unless '1'.
   PEOPLE_MAP?: string;
-  // "1" serves /app/v1/device-context (the owner's place consent and the latest coarse place per phone) and offers
-  // get_device_context, which reads each phone's zone and city. Off unless "1".
-  DEVICE_PLACE?: string;
-  // "1" serves /app/v1/device/calendar (the owner's phone-calendar consent and each phone's latest snapshot), hands the
-  // changes between snapshots to the update judge, and offers query_phone_calendar. Off unless "1".
-  DEVICE_CALENDAR?: string;
   // "1" gives the Brief, the update triage and the intervention look the coverage facts (connected calendars and when each was
   // read, whether the phone calendar is shared, events per weekday over two weeks) and the judgment of whether that is the
   // owner's whole day. Off unless "1".
@@ -195,12 +189,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // changed alone), lets the Close sometimes ask how a block went, and feeds the blocks' and offers' outcomes to the nightly
   // capacity note. Off unless "1".
   BLOCK_LIFECYCLE?: string;
-  // "1" with DEVICE_PLACE "1": a place upload that says the phone just arrived home or at the gym (places the owner named on the
-  // phone) brings Waldo's next look forward, as a move to another city does. Off unless "1".
-  ARRIVAL_LOOK?: string;
-  // "1" with DEVICE_PLACE "1" and the four WeatherKit secrets set offers get_weather: today's and tomorrow's weather where the
-  // owner's phones last were, from WeatherKit asked with the cell's centre only. Off unless "1".
-  DEVICE_WEATHER?: string;
+  // With the four WeatherKit secrets set, get_weather is offered: today's and tomorrow's weather where the owner's phones last
+  // were, from WeatherKit asked with the cell's centre only.
   WEATHERKIT_TEAM_ID?: string;
   WEATHERKIT_SERVICE_ID?: string;
   WEATHERKIT_KEY_ID?: string;
@@ -297,8 +287,6 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_MCP_SERVERS?: string;
   // The Google Cloud project holding Waldo's Gmail push topic in this environment; unset keeps Gmail push off.
   GMAIL_PUSH_PROJECT?: string;
-  MCP_READ_INTENTS?: string;
-  DRIVE_READS?: string;
   // "1" with Workers AI bound adds the meaning leg to memory recall; anything else keeps recall to words.
   MEMORY_SEMANTIC_RECALL?: string;
   // "1" shows the model the memory it chose (pins, what is new since the nightly review, recall stubs) instead of the newest facts.

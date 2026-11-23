@@ -95,17 +95,15 @@ it('deploy configuration decides MCP, browse and Drive eligibility', async () =>
   const missing = { ok: false, reason: 'not_configured' };
   expect(await verdict(callMcpToolHandler(undefined))).toEqual(missing);
   expect(await verdict(callMcpToolHandler(plain))).toEqual({ ok: true });
-  expect(await verdict(readMcpToolHandler(readable, undefined, false))).toEqual(missing);
-  expect(await verdict(readMcpToolHandler(plain, undefined, true))).toEqual(missing);
-  expect(await verdict(readMcpToolHandler(readable, undefined, true))).toEqual({ ok: true });
+  expect(await verdict(readMcpToolHandler(plain, undefined))).toEqual(missing);
+  expect(await verdict(readMcpToolHandler(readable, undefined))).toEqual({ ok: true });
   expect(await verdict(browsePageHandler(undefined, undefined, undefined))).toEqual(missing);
   expect(await verdict(browsePageHandler('key', 'project', undefined))).toEqual({ ok: true });
   expect(await verdict(browsePageHandler(undefined, undefined, undefined, fetch, { allowBrowserbase: false, cloudflare: (async () => ({})) as never }))).toEqual({ ok: true });
   expect(await verdict(browsePageHandler('key', 'project', undefined, fetch, { allowBrowserbase: false }))).toEqual(missing);
   expect(await verdict(browseActHandler(undefined, undefined, undefined))).toEqual(missing);
   expect(await verdict(browseActHandler('key', 'project', undefined))).toEqual({ ok: true });
-  expect(await verdict(readDriveHandler({ client: async () => null }, false))).toEqual(missing);
-  expect(await verdict(readDriveHandler({ client: async () => null }, true))).toEqual({ ok: true });
+  expect(await verdict(readDriveHandler({ client: async () => null }))).toEqual({ ok: true });
 });
 
 it('the owner browser offers browse tools only where its Cloudflare host can serve them, whatever the Browserbase keys say', async () => {

@@ -24,7 +24,6 @@ const gap = (why: string): VarClass => ({ kind: 'known_gap', why });
 const IDENTITY = 'names or addresses this deployment';
 const IMESSAGE = 'iMessage connector setup; the trial runs the app surface';
 const WHATSAPP = 'WhatsApp surface setup; the trial runs the app surface';
-const SYNTHETIC_TOOLS = 'the trial\'s tools are the synthetic handlers of world.ts, not the live registry';
 
 export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_MODEL_PROVIDER: mapped("the profile's chat model is that provider's; a live run refuses a Claude staging, since its judge is Claude"),
@@ -89,10 +88,8 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   CALENDAR_PLAN: gap('no trial offers propose_calendar_plan or approves a day plan; staging has it on'),
   BRIEF_DAY_PLAN: gap('the Brief cases run without the time-blocked plan; no case judges it yet; staging has it on'),
   MAIL_SOURCE_FOLLOWUPS: gap('the mail follow-up sweep is not run in a trial'),
-  DRIVE_READS: gap(SYNTHETIC_TOOLS),
   OWNER_LOOKUP: gap('the look-up consent gate is not modelled; the world offers the look-up tool directly'),
   OWNER_PROFILE: gap('the profile view is not rendered in a trial'),
-  MCP_READ_INTENTS: gap(SYNTHETIC_TOOLS),
   WALDO_MCP_SERVERS: gap('the world seeds its own connected tool server'),
   WALDO_EGRESS_ALLOWLIST: gap('the world has no network, so the egress boundary is held by its own tests, not by a trial'),
   HEALTH_PROVISIONAL_SCORES: gap('the world serves synthetic health, not the provisional score computation'),
@@ -125,13 +122,9 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   HEALTH_CHARTS: gap('a trial turn has no app chat read to draw a chart in; test/show-health-chart.test.ts measures the tool and the live read; staging has it on'),
   PEOPLE_MAP: gap('the trial memory holds no people; test/people-map.test.ts measures the store, the reads and forgetting a person; staging has it on'),
   SCREEN_TIME: gap('the world serves no screen time and the trial offers no get_screen_time; staging has it on'),
-  DEVICE_PLACE: gap('the world serves no device place and the trial offers no get_device_context; staging has it on'),
-  DEVICE_CALENDAR: gap('the world serves no phone calendar and the trial offers no query_phone_calendar; staging has it on'),
   CALENDAR_COVERAGE: gap('the coverage facts read Google calendars over two weeks and the phone calendar, which a trial world does not serve; no case judges the coverage question yet'),
   FREE_WINDOW_OFFERS: gap('offers come from the update triage and the intervention look, which a trial does not run; no case judges a free-window offer yet'),
   BLOCK_LIFECYCLE: gap('Waldo\'s blocks come from the approval ledger and the update sweep, which a trial does not run; no case judges the block lifecycle yet'),
-  DEVICE_WEATHER: gap('the world serves no weather and the trial offers no get_weather; staging has it on once the WeatherKit secrets are set'),
-  ARRIVAL_LOOK: gap('the world serves no device place, so no phone arrives anywhere; staging has it on'),
   ONBOARDING_LOOKUP: gap('no trial runs onboarding or the background owner look-up; staging has it on'),
   WELCOME_V2: gap('one trial asks a single second-build stage (w1); the build\'s order, admission and caps are held by their own tests; staging has it on'),
   HEALTH_ACTIONS: gap('the health trigger\'s decision is not run in a trial; the trial\'s skill book always offers health-protocols, as staging does'),

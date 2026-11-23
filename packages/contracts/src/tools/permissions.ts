@@ -144,9 +144,9 @@ export const toolNameSchema = z.enum([
   'search_history',
   // get_screen_time: the owner's daily screen-time summaries as their phone sent them; offered while SCREEN_TIME is on.
   'get_screen_time',
-  // get_device_context: each of the owner's phones' time zone and city as the phone last sent them; offered while DEVICE_PLACE is on.
+  // get_device_context: each of the owner's phones' time zone and city as the phone last sent them.
   'get_device_context',
-  // get_weather: today's and tomorrow's weather where the owner's phones last were, from Apple Weather; offered while DEVICE_WEATHER is on.
+  // get_weather: today's and tomorrow's weather where the owner's phones last were, from Apple Weather; offered while the WeatherKit key is set.
   'get_weather',
   // propose_calendar_plan: a day plan's new blocks on one card the owner approves in one tap; offered while CALENDAR_PLAN is on.
   'propose_calendar_plan',
@@ -158,7 +158,7 @@ export const toolNameSchema = z.enum([
   'review_experiment',
   // check_task: how one background task the model started stands, and its result while the owner has not heard it yet.
   'check_task',
-  // query_phone_calendar: the events on the owner's phone calendars as the phone last sent them; offered while DEVICE_CALENDAR is on.
+  // query_phone_calendar: the events on the owner's phone calendars as the phone last sent them.
   'query_phone_calendar',
   // steer_task: change a running background task's work, as a correction or an addition, keeping its id (WALDO_TASK_STEER).
   'steer_task',

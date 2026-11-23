@@ -105,7 +105,7 @@ describe('Google MCP servers are read-only by construction', () => {
   it('a read goes owner-button-free on read_mcp_tool, and only Drive gets its fixed arguments', async () => {
     const sent: Array<{ url: string; tool: string; args: Record<string, unknown>; intent?: { id: string; readOnly?: boolean } }> = [];
     const auth: McpGoogleAuth = { resolve: async () => ({ mode: 'proxy', connection: 'c1' }), proxy: async (url, tool, args, _c, intent) => { sent.push({ url, tool, args, ...(intent ? { intent } : {}) }); return [{ type: 'text', text: 'ok' }]; } };
-    const handler = readMcpToolHandler(registry, auth, true);
+    const handler = readMcpToolHandler(registry, auth);
     expect(handler.eligible?.()).toEqual({ ok: true });
     expect(handler.description).toContain('server "gmail": search_threads, get_thread, get_message, list_drafts, get_draft, list_labels');
     expect(handler.description).toContain('server "sheets": get_spreadsheet, get_values');
@@ -158,28 +158,27 @@ describe('a preview that is not available reads as not available, never an error
   });
 
   it.each([[403, 'google_scope_missing'], [404, 'mcp_read_unavailable']])('a Google %i through the edge (%s)', async (status, message) => {
-    unavailable(await readMcpToolHandler(registry, proxyFailing(status, message), true).handle({ server: 'calendar', tool: 'suggest_time', args: {} }, ctx));
+    unavailable(await readMcpToolHandler(registry, proxyFailing(status, message)).handle({ server: 'calendar', tool: 'suggest_time', args: {} }, ctx));
   });
 
   it('the edge finding the grant without the scope is still a scope gap with a connect card', async () => {
-    const out = await readMcpToolHandler(registry, proxyFailing(403, 'insufficient scopes'), true).handle({ server: 'gmail', tool: 'search_threads', args: {} }, ctx);
+    const out = await readMcpToolHandler(registry, proxyFailing(403, 'insufficient scopes')).handle({ server: 'gmail', tool: 'search_threads', args: {} }, ctx);
     expect(out).toMatchObject({ ok: false, code: 'auth_failed', connect: { reason: 'scope_missing', feature: 'mail' } });
   });
 
   it('a 401 still asks the owner to reconnect', async () => {
-    const out = await readMcpToolHandler(registry, proxyFailing(401, 'google_reauth_needed'), true).handle({ server: 'gmail', tool: 'search_threads', args: {} }, ctx);
+    const out = await readMcpToolHandler(registry, proxyFailing(401, 'google_reauth_needed')).handle({ server: 'gmail', tool: 'search_threads', args: {} }, ctx);
     expect(out).toMatchObject({ ok: false, code: 'auth_failed', connect: { reason: 'reauth_needed' } });
   });
 });
 
 describe('staging only', () => {
   // The test pool loads the top-level (production) block of wrangler.jsonc; staging lives under env.staging.
-  it('production config names no MCP server and keeps button-free reads off', () => {
-    const production = withSwitches(env) as { WALDO_ENVIRONMENT?: string; WALDO_MCP_SERVERS?: string; MCP_READ_INTENTS?: string };
+  it('production config names no MCP server', () => {
+    const production = withSwitches(env) as { WALDO_ENVIRONMENT?: string; WALDO_MCP_SERVERS?: string };
     expect(production.WALDO_ENVIRONMENT).toBe('production');
     expect(production.WALDO_MCP_SERVERS).toBe('[]');
     expect(mcpServers(production.WALDO_MCP_SERVERS)).toEqual([]);
-    expect(production.MCP_READ_INTENTS).toBe('0');
   });
 });
 

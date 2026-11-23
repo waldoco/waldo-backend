@@ -304,7 +304,7 @@ describe('free time and Drive cover every account too', () => {
   });
 
   const drive = (name: string) => ({ driveListFiles: async () => ({ files: [{ id: `${name}-file`, name, mimeType: 'text/plain', modifiedTime: null, webViewLink: null, size: null }], nextPageToken: null, incompleteSearch: false }) });
-  const driveHandler = (access: GoogleAccess) => readDriveHandler(access, true) as unknown as { handle(args: unknown, ctx?: unknown): Promise<unknown> };
+  const driveHandler = (access: GoogleAccess) => readDriveHandler(access) as unknown as { handle(args: unknown, ctx?: unknown): Promise<unknown> };
   it('Drive recent files come from every account, each under its account', async () => {
     const result = await driveHandler(accessFor([WORK, HOME], { [WORK.email]: drive('Deck'), [HOME.email]: drive('Recipes') })).handle(readDriveArgsSchema.parse({ action: 'recent' }));
     expect(result).toMatchObject({ ok: true, data: { accounts: [{ email: WORK.email, read: 'ok' }, { email: HOME.email, read: 'ok' }], by_account: [{ account: receipt(WORK), files: [{ name: 'Deck' }] }, { account: receipt(HOME), files: [{ name: 'Recipes' }] }] } });
@@ -313,7 +313,7 @@ describe('free time and Drive cover every account too', () => {
     const calls: Array<readonly [GoogleFeature | undefined, string | undefined]> = [];
     const access = accessFor([WORK, HOME], { [WORK.email]: drive('Deck'), [HOME.email]: drive('Recipes') }, calls);
     expect(await driveHandler(access).handle(readDriveArgsSchema.parse({ action: 'get', file_id: 'file-0123456789' }))).toMatchObject({ ok: false, code: 'rejected' });
-    await readDriveHandler(access, true, true).handle(readDriveArgsSchema.parse({ action: 'content', file_id: 'file-0123456789', connection_id: HOME.id, expected_modified_time: '2026-10-25T08:00:00Z' }), undefined as never);
+    await readDriveHandler(access).handle(readDriveArgsSchema.parse({ action: 'content', file_id: 'file-0123456789', connection_id: HOME.id, expected_modified_time: '2026-10-25T08:00:00Z' }), undefined as never);
     expect(calls).toEqual([['drive', HOME.email]]);
   });
 });

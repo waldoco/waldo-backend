@@ -14,11 +14,7 @@ const limiterKeys: string[] = [];
 // What the Worker told the owner's object: the notice path and its signature header.
 const notices: { path: string; sig: string | null; body: string }[] = [];
 let ownerAnswer = 200;
-let devicePlace: string | undefined = '1';
-let arrivalLook: string | undefined;
 const env = () => ({
-  ...(devicePlace === undefined ? {} : { DEVICE_PLACE: devicePlace }),
-  ...(arrivalLook === undefined ? {} : { ARRIVAL_LOOK: arrivalLook }),
   OWNER_DO: { idFromName: (n: string) => n, get: () => ({ fetch: async (request: Request) => {
     notices.push({ path: new URL(request.url).pathname, sig: request.headers.get('x-waldo-moved-sig') ?? request.headers.get('x-waldo-arrived-sig'), body: await request.text() });
     return Response.json({ forwarded: true }, { status: ownerAnswer });
@@ -32,7 +28,7 @@ const rpcs: Rpc[] = [];
 let rpcResult: unknown = {};
 const logged: string[] = [];
 beforeEach(() => {
-  rpcs.length = 0; limiterKeys.length = 0; logged.length = 0; notices.length = 0; ownerAnswer = 200; rpcResult = {}; devicePlace = '1'; arrivalLook = undefined;
+  rpcs.length = 0; limiterKeys.length = 0; logged.length = 0; notices.length = 0; ownerAnswer = 200; rpcResult = {};
   vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
     rpcs.push({ fn: url.split('/rpc/')[1]!, body: JSON.parse(String(init.body)) });
     if (rpcResult instanceof Error) throw rpcResult;
@@ -55,12 +51,7 @@ const upload = { request_id: 'dc-place-0001', expected_epoch: 1, device_id: DEVI
 const consent = (purpose: string, status = 'granted') => ({ signal: 'place', purpose, version: 1, status, epoch: 1, granted_at: '2026-11-01T08:00:00.000Z', withdrawn_at: null });
 
 describe('app device-context routes', () => {
-  it('are not there while DEVICE_PLACE is off, and need a credential before anything', async () => {
-    devicePlace = undefined;
-    expect((await get('/app/v1/device-context/consents')).status).toBe(404);
-    devicePlace = '0';
-    expect((await post('/app/v1/device-context/place', upload)).status).toBe(404);
-    devicePlace = '1';
+  it('need a credential before anything', async () => {
     const anonymous = await handleApp(new Request('https://w.test/app/v1/device-context/consents'), env(), auth);
     expect(anonymous!.status).toBe(401);
     expect(rpcs).toEqual([]);
@@ -114,8 +105,7 @@ describe('app device-context routes', () => {
     expect(logged.join(' ')).not.toMatch(/tdr1w|Testville|Asia\/Kolkata/);
   });
 
-  it('with ARRIVAL_LOOK on, sends the phone\'s arrival to the database and tells the owner\'s object once, signed with the place word only', async () => {
-    arrivalLook = '1';
+  it('sends the phone\'s arrival to the database and tells the owner\'s object once, signed with the place word only', async () => {
     rpcResult = { request_id: 'dc-place-0001', replayed: false, status: 'accepted', moved: false, arrived: 'gym' };
     const response = await post('/app/v1/device-context/place', { ...upload, arrived: 'gym' });
     expect([response.status, await response.json()]).toEqual([200, { request_id: 'dc-place-0001', replayed: false, status: 'accepted' }]);
@@ -123,9 +113,8 @@ describe('app device-context routes', () => {
     expect(notices).toEqual([{ path: '/app/v1/internal/place-arrived', sig: await routerSignature(SECRET, 0, 'placearrived.gym.owner-1'), body: '{"place":"gym"}' }]);
   });
 
-  it('tells it no arrival with the switch off, on a replay or when the database answers none, and the receipt never carries one', async () => {
-    for (const [look, answer] of [[undefined, { replayed: false, arrived: 'home' }], ['0', { replayed: false, arrived: 'home' }], ['1', { replayed: true, arrived: 'home' }], ['1', { replayed: false, arrived: null }]] as const) {
-      arrivalLook = look;
+  it('tells it no arrival on a replay or when the database answers none, and the receipt never carries one', async () => {
+    for (const answer of [{ replayed: true, arrived: 'home' }, { replayed: false, arrived: null }] as const) {
       rpcResult = { request_id: 'dc-place-0001', status: 'accepted', moved: false, ...answer };
       const response = await post('/app/v1/device-context/place', { ...upload, arrived: 'home' });
       expect([response.status, await response.json()]).toEqual([200, { request_id: 'dc-place-0001', replayed: answer.replayed, status: 'accepted' }]);
@@ -134,7 +123,6 @@ describe('app device-context routes', () => {
   });
 
   it('refuses an arrival the contract does not name before the database is asked', async () => {
-    arrivalLook = '1';
     for (const arrived of ['office', true, 'Home']) {
       const response = await post('/app/v1/device-context/place', { ...upload, arrived });
       expect(response.status).toBe(400);
