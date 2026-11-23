@@ -130,6 +130,8 @@ const saysOnTelegram = async (owner: Owner, state: DurableObjectState, name: str
   await admitOnTelegram(state, name, text);
   await drainTelegram(owner);
 };
+// The alarm pass after a chat drain: it takes the compactions asked for before it began, so it starts a moment later.
+const laterPass = async (owner: Owner) => { await new Promise(resolve => setTimeout(resolve, 5)); await owner.alarm().catch(() => undefined); };
 const appHeaders = (name: string) => ({ 'x-waldo-do-name': name, 'x-waldo-app-session-hash': SESSION, 'content-type': 'application/json' });
 const saysInApp = async (owner: Owner, state: DurableObjectState, name: string, text: string) => {
   const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers: appHeaders(name),
@@ -199,7 +201,7 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
       await saysOnWhatsApp(owner(), 'My gym is at 7 every weekday.');
       const legacy = [...state.storage.kv.list({ prefix: 'conv:' })];
       expect(legacy.length).toBeGreaterThan(0);
-      restart({ ...ON, WALDO_COMPACTION: 'on' });
+      restart(ON);
       await saysInApp(owner(), state, name, 'What does my week look like?');
       await owner().alarm().catch(() => undefined);
       expect([...state.storage.kv.list({ prefix: 'conv:' })]).toEqual(legacy);
@@ -222,8 +224,9 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
     await withOwner(name, {}, async (owner, state, restart) => {
       await saysOnWhatsApp(owner(), 'My gym is at 7 every weekday.');
       const legacy = [...state.storage.kv.list({ prefix: 'conv:' })];
-      restart({ ...ON, WALDO_COMPACTION: 'on' });
+      restart(ON);
       await saysOnWhatsApp(owner(), 'Plan my week.');
+      await laterPass(owner());
       expect([...state.storage.kv.list({ prefix: 'conv:' })]).toEqual(legacy);
       expect(timeline(state).filter(row => row.role === 'compaction')).toHaveLength(1);
       await saysOnWhatsApp(owner(), 'And Friday?');
@@ -235,7 +238,7 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
     const name = 'one-timeline-cutover-thread';
     await withOwner(name, {}, async (owner, state, restart) => {
       await saysOnWhatsApp(owner(), 'My gym is at 7 every weekday.');
-      restart({ ...ON, WALDO_COMPACTION: 'on' });
+      restart(ON);
       const call = async (path: string, body: unknown) => (await owner().fetch(new Request(`https://telegram-owner/app/v1${path}`, { method: 'POST', headers: appHeaders(name), body: JSON.stringify(body) }))).json() as Promise<Record<string, string>>;
       const thread = (await call('/threads', { operation_id: '0b6f3c1e-8a2d-4f5b-9c7e-000000000001' })).thread_id!;
       const { message_id: id } = await call(`/threads/${thread}/messages`, { client_message_id: 'thread-client-01', text: 'Plan the trip.', expected_revision: 1 });
@@ -254,7 +257,7 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
     const name = 'one-timeline-cutover-reading';
     await withOwner(name, {}, async (owner, state, restart) => {
       await saysOnWhatsApp(owner(), 'My resting heart rate is 52 these days.');
-      restart({ ...ON, WALDO_COMPACTION: 'on' });
+      restart(ON);
       model.summary = 'Earlier on WhatsApp: the owner said their resting heart rate is 52 these days.';
       await saysInApp(owner(), state, name, 'How am I doing?');
       await owner().alarm().catch(() => undefined);
@@ -268,7 +271,7 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
     await withOwner(name, {}, async (owner, state, restart) => {
       await saysOnWhatsApp(owner(), 'Your HRV this morning: 38 ms.', { context: { forwarded: true } });
       await saysOnWhatsApp(owner(), 'My gym is at 7 every weekday.');
-      restart({ ...ON, WALDO_COMPACTION: 'on' });
+      restart(ON);
       model.summary = 'Earlier on WhatsApp: the owner trains at 7 on weekdays; their HRV was 38 ms.';
       await saysInApp(owner(), state, name, 'How am I doing?');
       await owner().alarm().catch(() => undefined);
@@ -285,7 +288,7 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
     await withOwner(name, {}, async (owner, state, restart) => {
       state.storage.kv.put(PROACTIVE_SURFACE_KEY, 'whatsapp');
       await saysOnWhatsApp(owner(), 'My gym is at 7 every weekday.');
-      restart({ ...ON, WALDO_COMPACTION: 'on' });
+      restart(ON);
       await saysOnWhatsApp(owner(), 'My dentist is on Tuesday.');
       await saysInApp(owner(), state, name, 'What does my week look like?');
       await owner().alarm().catch(() => undefined);
@@ -305,7 +308,7 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
     const name = 'one-timeline-cutover-abort';
     await withOwner(name, {}, async (owner, state, restart) => {
       await saysOnWhatsApp(owner(), 'My gym is at 7 every weekday.');
-      restart({ ...ON, WALDO_COMPACTION: 'on' });
+      restart(ON);
       let stopped = false;
       model.hold = async signal => {
         model.hold = undefined;
@@ -317,6 +320,7 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
         await ended;
       };
       await saysInApp(owner(), state, name, 'What does my week look like?');
+      await owner().alarm().catch(() => undefined);
       await vi.waitFor(() => expect(model.compacted).toHaveLength(1), { timeout: 10_000, interval: 20 });
       await vi.waitFor(() => expect(stopped).toBe(true), { timeout: 10_000, interval: 20 });
       expect(timeline(state).filter(row => row.role === 'compaction')).toEqual([]);
@@ -328,7 +332,7 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
     const name = 'one-timeline-forget-carried';
     await withOwner(name, {}, async (owner, state, restart) => {
       await saysOnWhatsApp(owner(), 'My sister Priya lands Thursday at 6pm.');
-      restart({ ...ON, WALDO_COMPACTION: 'on' });
+      restart(ON);
       model.summary = 'Earlier on WhatsApp: the owner\'s sister arrives on Thursday evening.';
       await saysInApp(owner(), state, name, 'What does my week look like?');
       await owner().alarm().catch(() => undefined);
@@ -345,7 +349,7 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
     await withOwner(name, TELEGRAM, async (owner, state, restart) => {
       state.storage.kv.put('telegram_subject', '7');
       await saysOnTelegram(owner(), state, name, 'My sister Priya lands Thursday at 6pm.');
-      restart({ ...ON, ...TELEGRAM, WALDO_COMPACTION: 'on' });
+      restart({ ...ON, ...TELEGRAM });
       model.summary = 'Earlier on Telegram: the owner\'s sister arrives on Thursday evening.';
       await saysInApp(owner(), state, name, 'What does my week look like?');
       await owner().alarm().catch(() => undefined);
@@ -413,7 +417,7 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
       await saysOnTelegram(owner(), state, name, 'My gym is at 7 every weekday.');
       const legacy = JSON.stringify([...state.storage.kv.list({ prefix: 'conv:' })]);
       expect(legacy).toContain('My gym is at 7 every weekday.');
-      restart({ ...ON, ...TELEGRAM, WALDO_COMPACTION: 'on' });
+      restart({ ...ON, ...TELEGRAM });
       await saysInApp(owner(), state, name, 'What does my week look like?');
       await owner().alarm().catch(() => undefined);
       expect(JSON.stringify([...state.storage.kv.list({ prefix: 'conv:' })])).toBe(legacy);
@@ -427,8 +431,9 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
     await withOwner(name, TELEGRAM, async (owner, state, restart) => {
       state.storage.kv.put('telegram_subject', '7');
       await saysOnTelegram(owner(), state, name, 'My gym is at 7 every weekday.');
-      restart({ ...ON, ...TELEGRAM, WALDO_COMPACTION: 'on' });
+      restart({ ...ON, ...TELEGRAM });
       await saysOnTelegram(owner(), state, name, 'Plan my week.');
+      await laterPass(owner());
       expect(timeline(state).filter(row => row.role === 'compaction')).toHaveLength(1);
       expect(model.compacted.find(input => input.includes('[on Telegram] My gym is at 7 every weekday.'))).toBeDefined();
     });
@@ -439,7 +444,7 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
     await withOwner(name, TELEGRAM, async (owner, state, restart) => {
       state.storage.kv.put('telegram_subject', '7');
       await saysOnTelegram(owner(), state, name, 'My gym is at 7 every weekday.');
-      restart({ ...ON, ...TELEGRAM, WALDO_COMPACTION: 'on' });
+      restart({ ...ON, ...TELEGRAM });
       let stopped = false;
       model.hold = async signal => {
         model.hold = undefined;
@@ -454,23 +459,25 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
         await ended;
       };
       await saysInApp(owner(), state, name, 'What does my week look like?');
+      await owner().alarm().catch(() => undefined);
       await vi.waitFor(() => expect(model.compacted).toHaveLength(1), { timeout: 10_000, interval: 20 });
       await vi.waitFor(() => expect(stopped).toBe(true), { timeout: 10_000, interval: 20 });
       expect(timeline(state).filter(row => row.role === 'compaction')).toEqual([]);
     });
   });
 
-  it('a Telegram turn with another message waiting leaves the compaction to the last turn', async () => {
+  it('Telegram turns leave the compaction to the alarm pass after them', async () => {
     const name = 'one-timeline-telegram-queue';
     await withOwner(name, TELEGRAM, async (owner, state, restart) => {
       state.storage.kv.put('telegram_subject', '7');
       await saysOnTelegram(owner(), state, name, 'My gym is at 7 every weekday.');
-      restart({ ...ON, ...TELEGRAM, WALDO_COMPACTION: 'on' });
+      restart({ ...ON, ...TELEGRAM });
       await admitOnTelegram(state, name, 'Plan my week.');
       await admitOnTelegram(state, name, 'And Friday?');
       await drainTelegram(owner());
-      expect(model.compacted).toEqual([]);
       await drainTelegram(owner());
+      expect(model.compacted).toEqual([]);
+      await laterPass(owner());
       expect(model.compacted).toHaveLength(1);
     });
   });
@@ -480,7 +487,7 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
     await withOwner(name, TELEGRAM, async (owner, state, restart) => {
       state.storage.kv.put('telegram_subject', '7');
       await saysOnTelegram(owner(), state, name, 'My gym is at 7 every weekday.');
-      restart({ ...ON, ...TELEGRAM, WALDO_COMPACTION: 'on' });
+      restart({ ...ON, ...TELEGRAM });
       model.hold = async () => {
         model.hold = undefined;
         const tapped = await owner().fetch(new Request('https://telegram-owner/enqueue', {
@@ -489,6 +496,7 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
         expect(tapped.status).toBe(200);
       };
       await saysInApp(owner(), state, name, 'What does my week look like?');
+      await owner().alarm().catch(() => undefined);
       // A tap that ended the summary would leave no summary row.
       await vi.waitFor(() => expect(timeline(state).filter(row => row.role === 'compaction')).toHaveLength(1), { timeout: 10_000, interval: 20 });
     });

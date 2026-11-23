@@ -34,20 +34,20 @@ const deliver = async (instance: OwnerDO, id: string, text: string, doName: stri
   expect((await handleWhatsAppWebhook(request, { OWNER_DO: owners, WHATSAPP_APP_SECRET: APP_SECRET, WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' }, () => undefined, directory)).status).toBe(200);
   await drainWhatsAppTurns(instance);
 };
-// With WALDO_CALL_CEILINGS on, a WhatsApp chat's history is held to the conversation layer's budget, and every reply call
+// A WhatsApp chat's history is held to the conversation layer's budget, and every reply call
 // reports the ceiling its class has and whether the whole call went over it.
 type ReplyShape = { history_tokens_est?: number; tools_tokens_est?: number; system_tokens_est?: number; current_tokens_est?: number; ceiling_tokens?: number; over_ceiling?: boolean };
 const replyShapes = (logs: { mock: { calls: unknown[][] } }): ReplyShape[] => logs.mock.calls.flatMap(([raw]) => {
   try { const line = JSON.parse(String(raw)) as { hop?: string; shape?: { context?: ReplyShape } }; return line.hop === 'llm_reply' && line.shape?.context ? [line.shape.context] : []; } catch { return []; }
 });
 
-it.each([['1'], [undefined]] as const)('a long WhatsApp chat with WALDO_CALL_CEILINGS=%s', async (ceilings) => {
-  const doName = `call-ceilings-${ceilings ?? 'off'}`;
+it('a long WhatsApp chat', async () => {
+  const doName = 'call-ceilings-on';
   calls.length = 0;
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName)), async (_instance, state) => {
     const net = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ messages: [{ id: 'wamid.out' }] }));
     const logs = vi.spyOn(console, 'log');
-    const instance = new OwnerDO(state, { ...env, ...(ceilings ? { WALDO_CALL_CEILINGS: ceilings } : {}), OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' });
+    const instance = new OwnerDO(state, { ...env, OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' });
     try {
       const said = Array.from({ length: 36 }, (_, index) => `Note ${index}: ${'the venue changed again and the caterer needs the final count by Thursday. '.repeat(51)}`);
       for (const [index, text] of said.entries()) await deliver(instance, `wamid.ceiling.${index}`, text, doName);
@@ -56,23 +56,19 @@ it.each([['1'], [undefined]] as const)('a long WhatsApp chat with WALDO_CALL_CEI
       const last = shapes.at(-1)!;
       // The newest message always goes whole: what gives way is the oldest history.
       expect(JSON.stringify(calls.at(-1)!.input!.at(-1))).toContain(said.at(-1)!.slice(0, 200));
-      if (ceilings) {
-        for (const shape of shapes) {
-          expect(shape.history_tokens_est!).toBeLessThanOrEqual(CONTEXT_BUDGET.historyTokens * 1.1);
-          expect(shape.ceiling_tokens).toBe(CONTEXT_BUDGET.chatCeilingTokens);
-          const whole = shape.tools_tokens_est! + shape.system_tokens_est! + shape.history_tokens_est! + shape.current_tokens_est!;
-          expect(shape.over_ceiling).toBe(whole > CONTEXT_BUDGET.chatCeilingTokens);
-        }
-        expect(last.history_tokens_est!).toBeGreaterThan(CONTEXT_BUDGET.historyTokens * 0.6);
-      } else {
-        expect(last.history_tokens_est!).toBeGreaterThan(CONTEXT_BUDGET.historyTokens * 1.2);
-        expect(shapes.every((shape) => shape.ceiling_tokens === undefined && shape.over_ceiling === undefined)).toBe(true);
+      for (const shape of shapes) {
+        expect(shape.history_tokens_est!).toBeLessThanOrEqual(CONTEXT_BUDGET.historyTokens * 1.1);
+        expect(shape.ceiling_tokens).toBe(CONTEXT_BUDGET.chatCeilingTokens);
+        const whole = shape.tools_tokens_est! + shape.system_tokens_est! + shape.history_tokens_est! + shape.current_tokens_est!;
+        expect(shape.over_ceiling).toBe(whole > CONTEXT_BUDGET.chatCeilingTokens);
       }
+      // A stepped cut keeps its target share of the budget, and the history grows from there until the next cut.
+      expect(last.history_tokens_est!).toBeGreaterThan(CONTEXT_BUDGET.historyTokens * CONTEXT_BUDGET.steppedTarget);
     } finally { logs.mockRestore(); net.mockRestore(); await state.storage.deleteAlarm(); }
   });
 }, 240_000);
 
-// The budget's sizes are deploy settings. With the stepped window on as well, each cut keeps the latest exchanges whole:
+// The budget's sizes are deploy settings. Each stepped cut keeps the latest exchanges whole:
 // what gives way is always the oldest history, never part of a recent message.
 it('the history budget and chat ceiling come from their settings, and a stepped cut keeps the latest exchanges whole', async () => {
   const doName = 'call-ceilings-settings-stepped';
@@ -80,7 +76,7 @@ it('the history budget and chat ceiling come from their settings, and a stepped 
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName)), async (_instance, state) => {
     const net = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ messages: [{ id: 'wamid.out' }] }));
     const logs = vi.spyOn(console, 'log');
-    const instance = new OwnerDO(state, { ...env, WALDO_CALL_CEILINGS: '1', WALDO_STEPPED_WINDOW: '1', WALDO_HISTORY_BUDGET_TOKENS: '11429', WALDO_CHAT_CEILING_TOKENS: '51429',
+    const instance = new OwnerDO(state, { ...env, WALDO_HISTORY_BUDGET_TOKENS: '11429', WALDO_CHAT_CEILING_TOKENS: '51429',
       OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' });
     try {
       const said = Array.from({ length: 12 }, (_, index) => `Note ${index}: ${'the venue changed again and the caterer needs the final count by Thursday. '.repeat(51).trim()}`);

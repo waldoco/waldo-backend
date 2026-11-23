@@ -10,7 +10,7 @@ import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 import { COMPACTION_DUE_KEY } from '../src/scheduler/alarm-slot';
 
-// WALDO_COMPACTION_WAKE: the app turn that makes a chain due leaves its compaction to a later alarm pass of its own, so the
+// The app turn that makes a chain due leaves its compaction to a later alarm pass of its own, so the
 // pass that ran the owner's turn never also runs a summary call.
 const OWNER_ID = '6d2f0a8e-41c7-4b9e-a3d5-8e1c7f2b9a04';
 const BASE = 'https://directory.fixture.invalid';
@@ -103,12 +103,12 @@ const inOwner = <T,>(name: string, work: (state: DurableObjectState) => Promise<
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     try { return await work(state); } finally { await state.storage.deleteAlarm(); await state.storage.deleteAll(); }
   });
-const ownerFor = async (name: string, state: DurableObjectState, compaction: string | undefined, extra: Readonly<Record<string, string>> = {}) => {
+const ownerFor = async (name: string, state: DurableObjectState, extra: Readonly<Record<string, string>> = {}) => {
   claimStore(state.storage.sql);
   ensureSchema(state.storage);
   state.storage.kv.put('do_name', name);
   await state.storage.put('origin', 'https://fixture.invalid');
-  return new OwnerDO(state, { ...env, WALDO_COMPACTION: compaction, WALDO_COMPACTION_WAKE: '1', SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, ...extra });
+  return new OwnerDO(state, { ...env, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, ...extra });
 };
 const send = async (owner: InstanceType<typeof OwnerDO>, name: string, text: string) => {
   const sent = await owner.fetch(new globalThis.Request('https://owner.invalid/app/v1/chat/main/messages', { method: 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'c'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: `client-${text.replace(/\W+/g, '-')}`, text }) }));
@@ -136,7 +136,7 @@ it('the turn that makes a chain due arms a compaction wake and runs no summary c
   directory();
   const name = 'compaction-wake-on';
   await inOwner(name, async (state) => {
-    const owner = await ownerFor(name, state, 'on');
+    const owner = await ownerFor(name, state);
     await seed(state);
     await turn(owner, state, name, 'What is on today?');
     expect(compactions(), 'no summary call in the pass that ran the turn').toHaveLength(0);
@@ -166,7 +166,7 @@ it('a pass runs only the compactions asked for before it began, and keeps one as
   directory();
   const name = 'compaction-wake-later';
   await inOwner(name, async (state) => {
-    const owner = await ownerFor(name, state, 'on');
+    const owner = await ownerFor(name, state);
     await seed(state);
     await turn(owner, state, name, 'What is on today?');
     const asked = state.storage.kv.get<Pending>(PENDING)!;
@@ -190,7 +190,7 @@ it('the owner\'s chain waits for a Telegram message already admitted, and is tak
   directory();
   const name = 'compaction-wake-telegram';
   await inOwner(name, async (state) => {
-    const owner = await ownerFor(name, state, 'on');
+    const owner = await ownerFor(name, state);
     state.storage.kv.put(PENDING, { app: [], chats: [{ chat: 'telegram', at: Date.now() - 1_000 }] });
     state.storage.kv.put('telegram_owner_inbox_v1', [{ id: 'row-1', digest: 'd', sequence: 1, updateId: 1, body: '{"update_id":1}', admittedAt: Date.now(), state: 'admitted', bot: 'fixture-bot', subject: '7', doName: name }]);
     await (owner as unknown as { compactDue(passStart: number): Promise<void> }).compactDue(Date.now());
@@ -209,7 +209,7 @@ it('a compaction the pass has no time left for stays pending, and the next pass 
   directory();
   const name = 'compaction-wake-short-pass';
   await inOwner(name, async (state) => {
-    const owner = await ownerFor(name, state, 'on');
+    const owner = await ownerFor(name, state);
     await seed(state);
     await turn(owner, state, name, 'What is on today?');
     state.storage.kv.put(PENDING, { ...state.storage.kv.get<Pending>(PENDING)!, chats: [{ chat: 'telegram', at: Date.now() - 1_000 }] });
@@ -233,7 +233,7 @@ it('with NEXT_DUE_ALARM on, the compaction wake still runs its lane', async () =
   directory();
   const name = 'compaction-wake-next-due';
   await inOwner(name, async (state) => {
-    const owner = await ownerFor(name, state, 'on', { NEXT_DUE_ALARM: '1' });
+    const owner = await ownerFor(name, state, { NEXT_DUE_ALARM: '1' });
     await seed(state);
     await turn(owner, state, name, 'What is on today?');
     expect(compactions()).toHaveLength(0);
@@ -251,7 +251,7 @@ it('a compaction lane that throws keeps every request for the next pass and leav
   directory();
   const name = 'compaction-wake-throws';
   await inOwner(name, async (state) => {
-    const owner = await ownerFor(name, state, 'on');
+    const owner = await ownerFor(name, state);
     state.storage.kv.put(PENDING, { app: [], chats: [{ chat: 'telegram', at: Date.now() - 1_000 }] });
     state.storage.kv.put(COMPACTION_DUE_KEY, Date.now() - 1_000);
     vi.spyOn(owner as unknown as { compactTimeline(): Promise<void> }, 'compactTimeline').mockRejectedValue(new Error('synthetic compaction failure'));

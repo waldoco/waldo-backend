@@ -53,15 +53,14 @@ describe('contextBudget', () => {
 });
 
 describe('where the turn reads them', () => {
-  it('the chat history budget under WALDO_CALL_CEILINGS is the history setting', () => {
-    expect(compactionSettings({ WALDO_CALL_CEILINGS: '1', WALDO_HISTORY_BUDGET_TOKENS: '14000' }).budgetTokens).toBe(14_000);
-    expect(compactionSettings({ WALDO_CALL_CEILINGS: '1' }).budgetTokens).toBe(31_429);
-    expect(compactionSettings({ WALDO_HISTORY_BUDGET_TOKENS: '14000' }).budgetTokens).toBe(compactionSettings({}).budgetTokens);
+  it('the chat history budget is the history setting', () => {
+    expect(compactionSettings({ WALDO_HISTORY_BUDGET_TOKENS: '14000' }).budgetTokens).toBe(14_000);
+    expect(compactionSettings({}).budgetTokens).toBe(31_429);
   });
 
   it('a stepped cut keeps the newest rows that fit in the target share of the budget', () => {
     const costs = Array.from({ length: 20 }, () => 10);
-    expect(compactionSettings({ WALDO_STEPPED_WINDOW: '1', WALDO_STEPPED_WINDOW_TARGET: '0.8' }).steppedTarget).toBe(0.8);
+    expect(compactionSettings({ WALDO_STEPPED_WINDOW_TARGET: '0.8' }).steppedTarget).toBe(0.8);
     expect(steppedWindowStart(costs, 100, 0, 0.5)).toBe(14);
     expect(steppedWindowStart(costs, 100, 0, 0.8)).toBe(11);
   });

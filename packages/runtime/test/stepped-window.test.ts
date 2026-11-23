@@ -25,12 +25,6 @@ const afterCut = stepped.budgetTokens / 2 + 170;
 const turn = (tree: ConversationTree, leaf: string, from?: string, settings = stepped) => compactedHistory(tree, leaf, undefined, settings, from);
 
 describe('the stepped window', () => {
-  it('is off unless WALDO_STEPPED_WINDOW is exactly "1"', () => {
-    expect(compactionSettings({}).steppedWindow).toBe(false);
-    expect(compactionSettings({ WALDO_STEPPED_WINDOW: 'on' }).steppedWindow).toBe(false);
-    expect(compactionSettings({ WALDO_STEPPED_WINDOW: '1' }).steppedWindow).toBe(true);
-  });
-
   it('a cut keeps the share of the budget the stepped target sets', () => {
     const tree = grow(new ConversationTree(), 1, 6);
     const half = turn(tree, 'a6'), most = turn(tree, 'a6', undefined, { ...stepped, steppedTarget: 0.8 });

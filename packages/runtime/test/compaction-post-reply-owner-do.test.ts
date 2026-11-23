@@ -10,8 +10,8 @@ import { claimStore } from '../src/memory/claims';
 import { forgetPurge } from '../src/memory/forget-purge';
 import { ensureSchema } from '../src/tracer/schema';
 
-// A long app chat, then one real app turn through an OwnerDO built with the deploy's WALDO_COMPACTION value. After the
-// turn's reply is saved and its inbox record settled, the owner object compacts the chain on its own: nothing calls it.
+// A long app chat, then one real app turn through an OwnerDO. After the turn's reply is saved and its inbox record settled,
+// the owner object compacts the chain in its next alarm pass, on its own: nothing calls it.
 const OWNER_ID = '6d2f0a8e-41c7-4b9e-a3d5-8e1c7f2b9a04';
 const BASE = 'https://directory.fixture.invalid';
 const PRINCIPAL = `prn_${OWNER_ID.replaceAll('-', '')}`;
@@ -103,12 +103,12 @@ const inOwner = <T,>(name: string, work: (state: DurableObjectState) => Promise<
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     try { return await work(state); } finally { await state.storage.deleteAlarm(); await state.storage.deleteAll(); }
   });
-const ownerFor = async (name: string, state: DurableObjectState, compaction: string | undefined) => {
+const ownerFor = async (name: string, state: DurableObjectState) => {
   claimStore(state.storage.sql);
   ensureSchema(state.storage);
   state.storage.kv.put('do_name', name);
   await state.storage.put('origin', 'https://fixture.invalid');
-  return new OwnerDO(state, { ...env, WALDO_COMPACTION: compaction, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+  return new OwnerDO(state, { ...env, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
 };
 const send = async (owner: InstanceType<typeof OwnerDO>, name: string, text: string) => {
   const sent = await owner.fetch(new globalThis.Request('https://owner.invalid/app/v1/chat/main/messages', { method: 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'c'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: `client-${text.replace(/\W+/g, '-')}`, text }) }));
@@ -117,11 +117,13 @@ const send = async (owner: InstanceType<typeof OwnerDO>, name: string, text: str
 };
 const settled = (state: DurableObjectState, id: string) =>
   vi.waitFor(() => expect(state.storage.kv.get<{ state: string }>(`app:inbox-record:${id}`)?.state).toBe('completed'), { timeout: 15_000, interval: 20 });
-// One app turn, run until its inbox record settles and the serial work queued behind it (the compaction) has finished.
+// One app turn, run until its inbox record settles, then the alarm pass that runs the compaction it made due.
 const turn = async (owner: InstanceType<typeof OwnerDO>, state: DurableObjectState, name: string, text: string, call?: { name: string; args: unknown }) => {
   if (call) model.calls.push({ name: call.name, arguments: JSON.stringify(call.args) });
   const id = await send(owner, name, text);
   await settled(state, id);
+  await drained(owner);
+  await owner.alarm();
   await drained(owner);
   return id;
 };
@@ -132,11 +134,11 @@ const summaries = (state: DurableObjectState) => stored(state).filter(entry => e
 const compactions = () => model.requests.filter(request => request.system === COMPACTION_INSTRUCTION);
 const replyTo = (text: string): Request[] => model.requests.filter(request => request.response_format === undefined && request.system !== COMPACTION_INSTRUCTION && JSON.stringify(request.messages.at(-1)?.content ?? '').includes(text));
 
-it('with the switch on, one reply past the trigger compacts the chain once; the next turn reads [summary] + tail and the transcript keeps every row', async () => {
+it('one reply past the trigger compacts the chain once; the next turn reads [summary] + tail and the transcript keeps every row', async () => {
   directory();
   const name = 'compaction-post-reply-on';
   await inOwner(name, async (state) => {
-    const owner = await ownerFor(name, state, 'on');
+    const owner = await ownerFor(name, state);
     const seeded = await seed(state);
     await turn(owner, state, name, 'What is on today?');
     expect(compactions()).toHaveLength(1);
@@ -160,40 +162,11 @@ it('with the switch on, one reply past the trigger compacts the chain once; the 
   });
 });
 
-it('with the switch off, no compaction or flush call is made, no attempt is noted, and the turn sends the model what it sent before', async () => {
-  directory();
-  const sentWith = async (name: string, compaction: string | undefined) => inOwner(name, async (state) => {
-    const owner = await ownerFor(name, state, compaction);
-    await seed(state);
-    await turn(owner, state, name, 'What is on today?');
-    const sent = { requests: [...model.requests], attempt: state.storage.kv.get(`${PREFIX}compaction-attempt:${CHAT}`), summaries: summaries(state).length };
-    model.requests = [];
-    return sent;
-  });
-  // Each turn's message carries the owner's clock to the minute, so both runs read one instant: a minute that turns between
-  // them would otherwise differ the bytes this test compares.
-  const realNow = Date.now;
-  const instant = realNow();
-  Date.now = () => instant;
-  let off: Awaited<ReturnType<typeof sentWith>>, on: Awaited<ReturnType<typeof sentWith>>;
-  try {
-    off = await sentWith('compaction-post-reply-off', 'off');
-    on = await sentWith('compaction-post-reply-on-first', 'on');
-  } finally { Date.now = realNow; }
-  expect(off.requests.filter(request => request.system === COMPACTION_INSTRUCTION || request.response_format?.name === 'claim_ops')).toEqual([]);
-  expect(off.attempt).toBeUndefined();
-  expect(off.summaries).toBe(0);
-  // Before any summary exists the switch changes nothing the turn sends: the reply's history is byte for byte the same.
-  const reply = (requests: readonly Request[]) => JSON.stringify(requests.filter(request => request.response_format === undefined && request.system !== COMPACTION_INSTRUCTION).map(request => request.messages));
-  expect(reply(on.requests)).toBe(reply(off.requests));
-  expect(on.summaries).toBe(1);
-});
-
 it('a topic the owner forgets in the turn never reaches the summary call or the stored summary', async () => {
   directory();
   const name = 'compaction-post-reply-forget';
   await inOwner(name, async (state) => {
-    const owner = await ownerFor(name, state, 'on');
+    const owner = await ownerFor(name, state);
     await seed(state);
     // The fake summary repeats the topic whenever its input carries it.
     model.summary = input => input.includes('Lotus Hall') ? `Decisions:\n- The party is at the Lotus Hall.` : SUMMARY;
@@ -209,7 +182,7 @@ it('a topic still pending from an earlier forget is cleaned from the chain befor
   directory();
   const name = 'compaction-post-reply-held';
   await inOwner(name, async (state) => {
-    const owner = await ownerFor(name, state, 'on');
+    const owner = await ownerFor(name, state);
     await seed(state);
     // A console forget whose first purge pass left the conversation uncleaned: the topic is pending, its rows still carry it.
     const memory = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
@@ -232,7 +205,7 @@ it('a summary that carries a health number is not stored, and the attempt still 
   directory();
   const name = 'compaction-post-reply-health';
   await inOwner(name, async (state) => {
-    const owner = await ownerFor(name, state, 'on');
+    const owner = await ownerFor(name, state);
     await seed(state);
     model.summary = () => 'Facts:\n- The owner slept 5 hours and prefers harbour walks.';
     await turn(owner, state, name, 'What is on today?');
@@ -247,7 +220,7 @@ it('an owner message sent while the summary is being written stops it: its turn 
   directory();
   const name = 'compaction-post-reply-mid';
   await inOwner(name, async (state) => {
-    const owner = await ownerFor(name, state, 'on');
+    const owner = await ownerFor(name, state);
     await seed(state);
     let late = '';
     // The summary call answers only when its run is aborted, or after far longer than the late turn takes.
@@ -280,7 +253,7 @@ it('a message admitted while the turn ran is answered before the chain compacts'
   directory();
   const name = 'compaction-post-reply-waiting';
   await inOwner(name, async (state) => {
-    const owner = await ownerFor(name, state, 'on');
+    const owner = await ownerFor(name, state);
     await seed(state);
     let late = '';
     model.onReply = async () => { model.onReply = async () => undefined; late = await send(owner, name, 'Also: book the ferry'); };
@@ -296,25 +269,11 @@ it('a message admitted while the turn ran is answered before the chain compacts'
 type Private = { compactApp(record: unknown, alarmEnd?: number): Promise<void>; setup(channel: string): { compactChain: (...args: unknown[]) => Promise<void> }; appContext: (...args: unknown[]) => unknown };
 const recordFor = (conversationRef: string) => ({ id: 'app-900', updateId: 900, clientId: 'client-900', digest: 'd', text: 'What is on today?', owner: '', sessionHash: 'c'.repeat(64), conversationRef, admittedAt: Date.now(), state: 'completed' });
 
-it('with the switch off the compaction job reads nothing: no runtime, no admission, no directory call', async () => {
-  const calls: string[] = [];
-  vi.stubGlobal('fetch', async (input: RequestInfo | URL) => { calls.push(String(input instanceof globalThis.Request ? input.url : input)); return new Response('unexpected', { status: 500 }); });
-  const name = 'compaction-job-off';
-  await inOwner(name, async (state) => {
-    const owner = await ownerFor(name, state, 'off') as unknown as Private;
-    const setup = vi.spyOn(owner, 'setup'), admission = vi.spyOn(owner, 'appContext');
-    await owner.compactApp({ ...recordFor(CHAT), owner: name });
-    expect(setup).not.toHaveBeenCalled();
-    expect(admission).not.toHaveBeenCalled();
-    expect(calls).toEqual([]);
-  });
-});
-
 it('the compaction job runs only on a chain of the owner the session admits', async () => {
   directory();
   const name = 'compaction-job-chain';
   await inOwner(name, async (state) => {
-    const owner = await ownerFor(name, state, 'on') as unknown as Private;
+    const owner = await ownerFor(name, state) as unknown as Private;
     const runtime = owner.setup('app');
     const compact = vi.spyOn(runtime, 'compactChain').mockResolvedValue(undefined);
     await owner.compactApp({ ...recordFor(`owner:prn_${'0'.repeat(32)}`), owner: name });

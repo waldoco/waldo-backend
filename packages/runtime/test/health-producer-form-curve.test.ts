@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { produceHealthScores } from '../src/health/producer';
-import { dailyScoresFor } from '../src/health/scores';
+import { computeDailyScores, provisionalDailyScores } from '../src/health/scores';
 import * as curveModule from '../src/health/scores/form-curve';
 
 // Today's measured Form curve on the derived row, behind the producer's formCurve switch. Every value is synthetic.
@@ -30,12 +30,12 @@ const series = (nights = 20) => ({
   sources: [{ source: 'apple', consent_epoch: 3, truncated: false, samples: Array.from({ length: nights }, (_, i) => dayOfReadings(addDays(TODAY, -i), i, i === 0 ? 15 : 24)).flat() }],
 });
 type Row = Record<string, any>;
-const written = async (formCurve: boolean | undefined, samples = series(), flag: string | undefined = '1', readCurves?: () => Promise<unknown>): Promise<Row[]> => {
+const written = async (formCurve: boolean | undefined, samples = series(), compute = provisionalDailyScores, readCurves?: () => Promise<unknown>): Promise<Row[]> => {
   const rows: Row[] = [];
   await produceHealthScores({
     readSeries: async range => ({ ...samples, sources: samples.sources.map(x => ({ ...x, samples: x.samples.filter(e => range.signals.includes(String(e.signal))) })) }),
     writeContext: async payload => { rows.push(JSON.parse(payload) as Row); return { written: true }; },
-    compute: dailyScoresFor(flag),
+    compute,
     ...(formCurve === undefined ? {} : { formCurve }),
     ...(readCurves ? { readCurves } : {}),
   }, { now: NOW, timezone: 'UTC' });
@@ -68,7 +68,7 @@ describe('the derived row: today\'s measured Form curve', () => {
     }
   });
   it('writes the curve with the earlier engine too, in that engine\'s version', async () => {
-    const today = (await written(true, series(), '0')).find(r => r.day === TODAY)!;
+    const today = (await written(true, series(), computeDailyScores)).find(r => r.day === TODAY)!;
     expect(today.form_curve.version).toBe('form.candidate.v8');
     expect(today.form_curve.points.at(-1).score).toBe(today.form.score);
   });
@@ -98,7 +98,7 @@ describe('the derived row: today\'s measured Form curve', () => {
     await produceHealthScores({
       readSeries: async range => ({ ...samples, sources: samples.sources.map(x => ({ ...x, samples: x.samples.filter(e => range.signals.includes(String(e.signal))) })) }),
       writeContext: async payload => { payloads.push(payload); return { written: true }; },
-      compute: dailyScoresFor('1'), formCurve: true, trainingLoad: true,
+      compute: provisionalDailyScores, formCurve: true, trainingLoad: true,
     }, { now: late, timezone: 'UTC' });
     const today = payloads.find(payload => (JSON.parse(payload) as Row).day === TODAY)!;
     expect((JSON.parse(today) as Row).form_curve.points.length).toBeGreaterThan(60);
@@ -111,7 +111,7 @@ describe('the derived row: today\'s projected Form curve', () => {
   // Each earlier day woke at 07:00 and holds a measured point every quarter hour to 22:00, climbing a point an hour.
   const heldCurves = (n: number) => ({ curves: Array.from({ length: n }, (_, k) => ({ day: addDays(TODAY, -(k + 1)),
     points: Array.from({ length: 61 }, (_, slot) => ({ at: new Date(Date.parse(at(addDays(TODAY, -(k + 1)), 7)) + slot * 900_000).toISOString(), score: 50 + Math.floor(slot / 4), kind: 'measured' })) })) });
-  const todayOf = async (readCurves?: () => Promise<unknown>) => (await written(true, series(), '1', readCurves)).find(r => r.day === TODAY)!;
+  const todayOf = async (readCurves?: () => Promise<unknown>) => (await written(true, series(), provisionalDailyScores, readCurves)).find(r => r.day === TODAY)!;
 
   it('follows the measured points with projected ones, in the projection\'s version, and leaves the measured part as it was', async () => {
     const plain = await todayOf(), projected = await todayOf(async () => heldCurves(10));
@@ -154,8 +154,8 @@ describe('the derived row: today\'s projected Form curve', () => {
   it('never asks for the stored curves with the switch off, or when today has no curve', async () => {
     let asked = 0;
     const read = async () => { asked += 1; return heldCurves(10); };
-    await written(false, series(), '1', read);
-    await written(true, series(1), '1', read);
+    await written(false, series(), provisionalDailyScores, read);
+    await written(true, series(1), provisionalDailyScores, read);
     expect(asked).toBe(0);
   });
 });

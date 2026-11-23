@@ -9,12 +9,12 @@ import { failedReceipts, STATE_INVARIANTS } from '../evals/nightly/receipts';
 import { runTrial } from '../evals/nightly/trial';
 import { CHAT_REF } from '../evals/nightly/world';
 import { durableConversationStore } from '../src/channels/conversation-store';
-import { COMPACTION, COMPACTION_INSTRUCTION, compactionSettings } from '../src/conversation/compaction';
+import { COMPACTION, COMPACTION_INSTRUCTION } from '../src/conversation/compaction';
 import { estimateMessageTokens } from '../src/conversation/window';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { numericHealthIn } from '../src/scribe/sanitiser';
 
-const ON = compactionSettings({ WALDO_COMPACTION: 'on' });
+const ON = { ...COMPACTION, enabled: true };
 const NO_CLAIM_OPS = '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}';
 const SUMMARY = `Owner instructions:\n- End every planning summary with ${INSTRUCTION_CODE}.\nOpen items:\n- Bring up the caterer's revised quote ${PROMISED_QUOTE} when the owner asks what is open.`;
 const tokens = (text: string) => estimateMessageTokens({ role: 'user', content: text });

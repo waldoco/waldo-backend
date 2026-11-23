@@ -27,16 +27,6 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_COST_LEDGER_SYNC?: string;
   // An invited owner's monthly spend ceiling in USD (llm/cost-ledger.ts ownerCeilingUsd); unset or invalid reads as 25.
   OWNER_SPEND_CEILING_USD?: string;
-  // 'on' turns conversation compaction on for the app chat; anything else keeps the plain window.
-  WALDO_COMPACTION?: string;
-  // '1' cuts chat history in steps and holds the start between cuts, so the provider's cache keeps the leading history.
-  WALDO_STEPPED_WINDOW?: string;
-  // '1' caps standing orders and quests in the prompt and clears a turn's tool results down to the latest few past a size.
-  WALDO_CONTEXT_CAPS?: string;
-  // '1' runs the compaction a drain makes due in a later alarm pass of its own, never in the pass that ran the owner's turns.
-  WALDO_COMPACTION_WAKE?: string;
-  // '1' holds every chat's history to the conversation layer of the call budget and measures each call against its class's ceiling.
-  WALDO_CALL_CEILINGS?: string;
   // The context budget's sizes (conversation/context-budget.ts); each defaults to its value there.
   WALDO_HISTORY_BUDGET_TOKENS?: string;
   WALDO_CHAT_CEILING_TOKENS?: string;
@@ -48,7 +38,6 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_STANDING_ORDERS_CHARS?: string;
   WALDO_WHATS_NEW_CHARS?: string;
   WALDO_QUESTS_CHARS?: string;
-  WALDO_TIMEZONE_ASK?: string;
   WALDO_ENVIRONMENT?: string;
   WALDO_OWNER_DO_NAMESPACE?: string;
   WALDO_RELEASE?: string;
@@ -63,43 +52,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_TOOL_LOADER?: string;
   // 'on' shows owner replies while they are written (Telegram drafts, the app's receipt draft). Off when unset.
   WALDO_STREAM_REPLIES?: string;
-  // "1" scores from the owner's first day against the shared baseline and writes the provisional versions; anything else keeps
-  // the earlier engine. Apply the derived-row migration that admits the new keys before turning it on.
-  HEALTH_PROVISIONAL_SCORES?: string;
-  // "1" lets the health trigger, on a day with nothing coming, send one short note as an update card when the model judges
-  // it worth it; anything else keeps such a day silent.
-  HEALTH_SOLO_NOTICE?: string;
-  // "1" gives the model a partial health block, in words, for a day whose body data made no Recovery score, and fills the
-  // block's missing lists from the stored row; anything else leaves such a day with no health block.
-  HEALTH_PARTIAL_CONTEXT?: string;
-  // "1", with HEALTH_PARTIAL_CONTEXT, adds to the health block which kinds of body data exist, in words, and gives an owner with
-  // readings but no score row a block of that alone; anything else leaves the block as the stored row makes it.
-  HEALTH_INVENTORY?: string;
-  HEALTH_TRAINING_LOAD?: string;
   // '1' has the health producer write today's Form curve, measured and then projected, on today's derived row, for the app's
   // calendar day; anything else writes none.
   HEALTH_FORM_CURVE?: string;
-  // '1' has the health decision reason from the reviewed health protocols (skills/health-protocols), read through the
-  // owner's next day, in the chat role. Anything else keeps the decision as it was.
-  HEALTH_ACTIONS?: string;
-  // "1" writes the parts of each score (HEALTH_SCORE_PARTS) and the owner's usual band for each reading (HEALTH_USUAL) on the
-  // derived row, and shows them to a build that names health revision 13; anything else writes and shows neither. Apply migration
-  // 20261116100000, which admits the two new columns, before turning either on. Both need HEALTH_PROVISIONAL_SCORES "1".
-  HEALTH_SCORE_PARTS?: string;
-  HEALTH_USUAL?: string;
-  // "1" writes the day's load (HEALTH_DAY_LOAD) or today's hourly stress curve (HEALTH_STRESS_CURVE) on the derived row, and shows
-  // it to a build that names health revision 14; anything else writes and shows none. Apply migrations 20261116110000 (day load)
-  // and 20261116110100 (the stress curve), which admit the new columns, before turning each on.
-  HEALTH_DAY_LOAD?: string;
-  // "0", or a comma list of upload sources (apple, health_connect, samsung) whose days the day's load counts every observed minute
-  // for, from the hourly heart-rate bins, beside HEALTH_DAY_LOAD, and shows to a build that names health revision 15. Apply
-  // migration 20261116110200 first.
-  HEALTH_PASSIVE_LOAD?: string;
-  HEALTH_STRESS_CURVE?: string;
-  HEALTH_COACHING?: string;
-  // "1" lets a health proposal, and a chat card, swap an event for another in its slot (a hard workout for an easy one) by
-  // renaming it; the connector-proxy function must be deployed with the rename first.
-  HEALTH_EASE_WORKOUT?: string;
   // "1" makes an approved calendar cancel undoable for 10 minutes, by restoring the event on the version the cancel left;
   // the connector-proxy function must be deployed with restoreEvent first.
   CALENDAR_UNDO_CANCEL?: string;
@@ -131,9 +86,6 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WAKE_BRIEF?: string;
   WAKE_BRIEF_FRESH_MIN?: string;
   WAKE_BRIEF_TURNS_PER_DAY?: string;
-  // WORKOUT_WAKE: an upload with a workout that just ended wakes the health trigger once that day, which may propose one change
-  // to the rest of the day around recovery, or none. Off unless "1"; the owner's health proposals preference still governs it.
-  WORKOUT_WAKE?: string;
   // "1" has the morning Brief end with the rest of the day laid out in time blocks after its paragraph. Off unless "1".
   BRIEF_DAY_PLAN?: string;
   // "1" offers propose_calendar_plan to owner turns and the planning Brief: a day plan's new blocks on one card, added in one
@@ -169,10 +121,6 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" offers track/log/list/stop_medication on owner turns and words medicine reminders in the harness from a health-plane
   // read. Off unless "1".
   MEDICATIONS?: string;
-  // "1" serves /app/v1/screen-time and offers get_screen_time, which reads the daily summaries the owner's phone sent. Off unless "1".
-  SCREEN_TIME?: string;
-  // '1': app owner turns are offered show_health_chart, and app chat reads at chat=11 draw health charts from a live read.
-  HEALTH_CHARTS?: string;
   // '1': memory keeps people (who claims are about, rings, dates that come round); read_memory reads them and forget_memory
   // forgets one person. Off unless '1'.
   PEOPLE_MAP?: string;
@@ -371,9 +319,6 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // (default 180, at least 30) and raise drift or an anomaly it judges worth one message or card, under the owner's limits.
   PROACTIVE_INTERVENTIONS?: string;
   PROACTIVE_REVIEW_EVERY_MIN?: string;
-  // '1': on the first wake of each release, the owner's Waldo reads the team's announcements and decides how and whether to
-  // tell its owner about each new capability that is live for them (announcements.ts). Off unless "1".
-  WHATS_NEW?: string;
   // '1' lets an update push say what changed (titles, times, names), checked at the send; anything else sends the fixed line.
   UPDATE_PUSH_NAMES?: string;
   WALDO_EGRESS_ALLOWLIST?: string;

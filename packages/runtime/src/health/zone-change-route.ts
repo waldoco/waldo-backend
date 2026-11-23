@@ -74,7 +74,7 @@ export const verifiedZoneChange = async (request: Request, secret: string | unde
 export const notifyOwnerHealthSamples = (owners: OwnerNamespace, secret: string, doName: string, cause: HealthRecomputeCause = 'readings', woke = false, workout = false): Promise<void> =>
   send(SAMPLES, owners, secret, doName, cause === 'settings' ? { settings: true } : { ...(woke ? { woke: true } : {}), ...(workout ? { workout: true } : {}) });
 // woke: the readings carry a night that just ended (WAKE_BRIEF), which may move today's Brief. workout: they carry a workout
-// that just ended (WORKOUT_WAKE), which may reshape the rest of the day.
+// that just ended, which may reshape the rest of the day.
 export type HealthSamplesNotice = Readonly<{ cause: HealthRecomputeCause; woke: boolean; workout: boolean }>;
 export const verifiedHealthSamples = async (request: Request, secret: string | undefined, addressesThisObject: (doName: string) => boolean): Promise<HealthSamplesNotice | null> => {
   const body = await verified(SAMPLES, request, secret, addressesThisObject);

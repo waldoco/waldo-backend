@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { produceHealthScores } from '../src/health/producer';
-import { dailyScoresFor } from '../src/health/scores';
+import { provisionalDailyScores } from '../src/health/scores';
 import { healthPartsV1Schema, healthUsualListV1Schema } from '../../contracts/src/app/health-ingest';
 
 // Form for a Galaxy Watch through Health Connect, as the series read returns it: Samsung Health's night, heart-rate hours and
@@ -37,7 +37,7 @@ const produce = async (samples: readonly Sample[], atHour: number, detail = fals
   await produceHealthScores({
     readSeries: async range => ({ access: 'granted', read_at: iso(local(TODAY, atHour)).replace('Z', '000Z'), sources: [{ source: 'health_connect', consent_epoch: 1, truncated: false, samples: samples.filter(s => range.signals.includes(String(s.signal))) }] }),
     writeContext: async payload => { payloads.push(payload); rows.push(JSON.parse(payload)); return { written: true }; },
-    compute: dailyScoresFor('1'),
+    compute: provisionalDailyScores,
     ...(detail ? { scoreParts: true, usual: true } : {}),
     readDemand: async () => ({ state: 'available', days: Array.from({ length: 31 }, (_, i) => ({ day: addDays(TODAY, -i), busy_minutes: 240, partial: false })) }),
   }, { now: local(TODAY, atHour), timezone: TZ });

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { BACKFILL_DAYS_PER_RUN, produceHealthScores, type ProducerDeps } from '../src/health/producer';
-import { dailyScoresFor } from '../src/health/scores';
+import { computeDailyScores, provisionalDailyScores } from '../src/health/scores';
 
 // Days that arrive late: Recovery and sleep debt are recomputed for each past day with no row, oldest first, labelled
 // backfilled, without Form or Weight, without a zone change, and never over a live row. Synthetic owners and values.
@@ -29,7 +29,7 @@ const historyOf = (stored: ReadonlySet<string>) => stored.size
   ? { history: { from: addDays(TODAY, -89), to: TODAY, days: [...stored].sort().map(day => ({ day, recovery: { reason: 'no_readings' }, form: { reason: 'no_readings' }, weight: { reason: 'no_readings' } })) } }
   : { unavailable: 'no_readings' };
 // `stored` is the set of days that already hold a row; the fake writer adds to it, as the database would.
-const run = async (flag: string | undefined, nights: number, over: Partial<ProducerDeps> & { stored?: Set<string>; changed?: readonly string[]; source?: string; samples?: Sample[]; lateAnswer?: unknown; historyAnswer?: () => Promise<unknown> } = {}): Promise<Run> => {
+const run = async (compute: typeof computeDailyScores, nights: number, over: Partial<ProducerDeps> & { stored?: Set<string>; changed?: readonly string[]; source?: string; samples?: Sample[]; lateAnswer?: unknown; historyAnswer?: () => Promise<unknown> } = {}): Promise<Run> => {
   const samples = over.samples ? { access: 'granted', read_at: READ_AT, sources: [{ source: over.source ?? 'apple', consent_epoch: 3, truncated: false, samples: over.samples }] } : series(nights, over.source);
   const rows: Row[] = [], zoneNotices: string[] = [], scoreReads: string[] = [], historyReads: number[] = [];
   const stored = over.stored ?? new Set<string>();
@@ -45,7 +45,7 @@ const run = async (flag: string | undefined, nights: number, over: Partial<Produ
     },
     readScores: async day => { scoreReads.push(day); return stored.has(day) ? { scores: { day } } : { unavailable: 'no_readings' }; },
     readHistory: async days => { historyReads.push(days); return over.historyAnswer ? over.historyAnswer() : historyOf(stored); },
-    compute: dailyScoresFor(flag),
+    compute,
     onZoneChange: async day => { zoneNotices.push(day); },
     ...(over.backfillLimit === undefined ? {} : { backfillLimit: over.backfillLimit }),
   }, { now: NOW, timezone: 'UTC' });
@@ -56,7 +56,7 @@ const late = (rows: Row[]) => rows.filter(r => r.backfilled === true);
 
 describe('backfilled rows: which days and what they hold', () => {
   it('writes a row for each past day older than yesterday, oldest first, beside the two live rows', async () => {
-    const { rows } = await run('1', 25);
+    const { rows } = await run(provisionalDailyScores, 25);
     expect(live(rows).map(r => r.day).sort()).toEqual([addDays(TODAY, -1), TODAY]);
     const days = late(rows).map(r => r.day);
     expect(days.length).toBeGreaterThan(10);
@@ -65,7 +65,7 @@ describe('backfilled rows: which days and what they hold', () => {
     expect(new Set(days).size).toBe(days.length);
   });
   it('carries Recovery and sleep debt, and leaves Form and Weight unavailable with a reason, and no windows', async () => {
-    const { rows } = await run('1', 25);
+    const { rows } = await run(provisionalDailyScores, 25);
     for (const row of late(rows)) {
       expect(row.backfilled).toBe(true);
       expect(Object.keys(row.form)).toEqual(['reason']);
@@ -77,12 +77,12 @@ describe('backfilled rows: which days and what they hold', () => {
     expect(late(rows).some(r => 'score' in r.recovery)).toBe(true);
   });
   it('labels a live row personal on the first morning when the late days already give it fourteen of its own', async () => {
-    const { rows } = await run('1', 20);
+    const { rows } = await run(provisionalDailyScores, 20);
     const today = live(rows).find(r => r.day === TODAY)!;
     expect(today.recovery.baseline.state).toBe('personal');
   });
   it('writes none with provisional scores off, and reads no stored row for an older day', async () => {
-    const { rows, scoreReads, historyReads } = await run(undefined, 25);
+    const { rows, scoreReads, historyReads } = await run(computeDailyScores, 25);
     expect(late(rows)).toEqual([]);
     expect(scoreReads.filter(day => day < addDays(TODAY, -1))).toEqual([]);
     expect(historyReads).toEqual([]);
@@ -91,13 +91,13 @@ describe('backfilled rows: which days and what they hold', () => {
 
 describe('backfilled rows: never a change, never over a live row', () => {
   it('names no zone change and no wake for a backfilled row, whatever the writer says moved', async () => {
-    const { rows, zoneNotices } = await run('1', 25, { changed: ['recovery'] });
+    const { rows, zoneNotices } = await run(provisionalDailyScores, 25, { changed: ['recovery'] });
     expect(late(rows).length).toBeGreaterThan(0);
     expect(zoneNotices).toEqual([TODAY]);
   });
   it('leaves a day that already has a row alone, and a stale answer for one costs nothing', async () => {
     const older = addDays(TODAY, -5);
-    const { rows, outcome } = await run('1', 25, { stored: new Set([older]) });
+    const { rows, outcome } = await run(provisionalDailyScores, 25, { stored: new Set([older]) });
     expect(late(rows).map(r => r.day)).not.toContain(older);
     expect(outcome).toBe('written');
   });
@@ -108,7 +108,7 @@ describe('backfilled rows: never a change, never over a live row', () => {
       writeContext: async payload => { if ((JSON.parse(payload) as Row).backfilled) throw new Error('database down'); return { written: true }; },
       readScores: async () => ({ unavailable: 'no_readings' }),
       readHistory: async () => ({ unavailable: 'no_readings' }),
-      compute: dailyScoresFor('1'),
+      compute: provisionalDailyScores,
     }, { now: NOW, timezone: 'UTC' });
     expect(outcome).toBe('written');
   });
@@ -118,10 +118,10 @@ describe('backfilled rows: bounded work that continues', () => {
   it('is thirty days a run', () => expect(BACKFILL_DAYS_PER_RUN).toBe(30));
   it('writes at most the limit, the oldest first, and the next run takes the next days', async () => {
     const stored = new Set<string>();
-    const first = await run('1', 25, { backfillLimit: 5, stored });
+    const first = await run(provisionalDailyScores, 25, { backfillLimit: 5, stored });
     const firstDays = late(first.rows).map(r => r.day);
     expect(firstDays).toHaveLength(5);
-    const second = await run('1', 25, { backfillLimit: 5, stored });
+    const second = await run(provisionalDailyScores, 25, { backfillLimit: 5, stored });
     const secondDays = late(second.rows).map(r => r.day);
     expect(secondDays).toHaveLength(5);
     expect(secondDays.every(day => !firstDays.includes(day) && day > firstDays.at(-1)!)).toBe(true);
@@ -132,7 +132,7 @@ describe('backfilled rows: the written-row log', () => {
   it('logs one line for each successful write, backfilled ones included, with nothing else in it', async () => {
     const lines: Record<string, unknown>[] = [];
     const spy = vi.spyOn(console, 'log').mockImplementation((line: unknown) => { try { lines.push(JSON.parse(String(line))); } catch { /* not a record */ } });
-    const { rows } = await run('1', 25);
+    const { rows } = await run(provisionalDailyScores, 25);
     spy.mockRestore();
     const logged = lines.filter(line => line.hop === 'health_scores');
     expect(logged).toHaveLength(rows.length);
@@ -149,7 +149,7 @@ describe('backfilled rows: a day with nothing to score', () => {
     sample('sleep_duration', addDays(TODAY, -10), { start_at: at(addDays(TODAY, -11), 23), end_at: at(addDays(TODAY, -10), 7), value: 450, method: 'asleep_duration' }),
   ];
   it('writes no backfilled row for it and still writes the days after it', async () => {
-    const { rows } = await run('1', 0, { samples: sparse() });
+    const { rows } = await run(provisionalDailyScores, 0, { samples: sparse() });
     const days = late(rows).map(r => r.day);
     expect(days).not.toContain(addDays(TODAY, -10));
     expect(days).toEqual([addDays(TODAY, -8), addDays(TODAY, -7), addDays(TODAY, -3), addDays(TODAY, -2)]);
@@ -158,7 +158,7 @@ describe('backfilled rows: a day with nothing to score', () => {
 
 describe('backfilled rows: a refused write ends the scan', () => {
   it('stops at the first backfilled write the database refuses, and the live rows stand', async () => {
-    const { rows, outcome } = await run('1', 25, { lateAnswer: { error: 'consent_required' } });
+    const { rows, outcome } = await run(provisionalDailyScores, 25, { lateAnswer: { error: 'consent_required' } });
     expect(late(rows)).toHaveLength(1);
     expect(live(rows)).toHaveLength(2);
     expect(outcome).toBe('written');
@@ -167,13 +167,13 @@ describe('backfilled rows: a refused write ends the scan', () => {
 
 describe('backfilled rows: one read of the stored days a run', () => {
   it('reads which days hold a row once, over ninety days, and the stored row only for yesterday and today', async () => {
-    const { rows, scoreReads, historyReads } = await run('1', 25, { stored: new Set([addDays(TODAY, -5)]) });
+    const { rows, scoreReads, historyReads } = await run(provisionalDailyScores, 25, { stored: new Set([addDays(TODAY, -5)]) });
     expect(late(rows).length).toBeGreaterThan(10);
     expect(historyReads).toEqual([90]);
     expect(scoreReads).toEqual([addDays(TODAY, -1), TODAY]);
   });
   it('takes nothing stored as every day missing', async () => {
-    const { rows } = await run('1', 25, { historyAnswer: async () => ({ unavailable: 'no_readings' }) });
+    const { rows } = await run(provisionalDailyScores, 25, { historyAnswer: async () => ({ unavailable: 'no_readings' }) });
     expect(late(rows).length).toBeGreaterThan(10);
   });
   it.each([
@@ -183,7 +183,7 @@ describe('backfilled rows: one read of the stored days a run', () => {
     ['a throw', async () => { throw new Error('database down'); }],
     ['an answer of another shape', async () => ({ history: { days: [{ when: TODAY }] } })],
   ])('backfills nothing this run when the read gives %s, and the live rows stand', async (_kind, historyAnswer) => {
-    const { rows, outcome } = await run('1', 25, { historyAnswer });
+    const { rows, outcome } = await run(provisionalDailyScores, 25, { historyAnswer });
     expect(late(rows)).toEqual([]);
     expect(live(rows)).toHaveLength(2);
     expect(outcome).toBe('written');

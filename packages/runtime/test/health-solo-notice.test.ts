@@ -7,7 +7,7 @@ import {
   HEALTH_NOTICE_FORMAT, HEALTH_TRIGGER_FLOOR_MS, type HealthTriggerDeps,
 } from '../src/health/trigger';
 
-// The health trigger on a day with nothing on the owner's plate. With HEALTH_SOLO_NOTICE on, the model decides whether one
+// The health trigger on a day with nothing on the owner's plate. The model decides whether one
 // short note is worth sending now, and a note goes out as an update card under the same budget, quiet hours and update-card
 // preferences as every other. Every reading is synthetic and distinctive, so finding one anywhere is a leak.
 const LEAKS = ['47.3', '37.9', '61.4', '52.6'];
@@ -48,7 +48,7 @@ const withNotice = <T>(work: (h: Harness) => Promise<T>) => runInDurableObject(e
     reschedule: async at => { reschedules.push(at); },
     log: line => { logs.push(JSON.stringify(line)); },
     soloNotice: {
-      enabled: () => true, held: () => null,
+      held: () => null,
       // As the owner object does it: the outbox write and the commit land together.
       deliver: async (id, text, commit) => { delivered.push({ id, text }); commit(); },
       ...notice,
@@ -62,15 +62,11 @@ const runs = (sql: SqlStorage) => sql.exec<{ local_day: string; mode: string; ou
 const everything = (sql: SqlStorage) => JSON.stringify([sql.exec('SELECT * FROM health_trigger_runs').toArray(), sql.exec('SELECT * FROM health_trigger_pending').toArray(), sql.exec('SELECT * FROM health_trigger_wakes').toArray()]);
 
 describe('the health trigger on a day with nothing coming', () => {
-  it('with the switch off, stays silent exactly as before: nothing_coming and no model call', async () => {
+  it('without a note to send, stays silent: nothing_coming and no model call', async () => {
     await withNotice(async ({ sql, deps, prompts, delivered }) => {
-      expect(await runHealthTrigger(deps({}, { enabled: () => false }))).toBe('nothing_coming');
+      expect(await runHealthTrigger(deps({ soloNotice: undefined }))).toBe('nothing_coming');
       expect([prompts.length, delivered.length, runs(sql).length]).toEqual([0, 0, 0]);
       expect(deps().book.pending(NOW)).toBeNull();
-    });
-    await withNotice(async ({ deps, prompts }) => {
-      expect(await runHealthTrigger(deps({ soloNotice: undefined }))).toBe('nothing_coming');
-      expect(prompts).toEqual([]);
     });
   });
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { produceHealthScores } from '../src/health/producer';
-import { dailyScoresFor } from '../src/health/scores';
+import { provisionalDailyScores } from '../src/health/scores';
 import { WRITER_USED_SIGNALS as ADMITTED } from './support/migration-lists';
 
 // waldo.health_context_write refuses a whole derived row when a pillar's used.signals names anything outside its closed list.
@@ -45,7 +45,7 @@ describe('the signals a score names are ones the derived-row writer admits', () 
     const outcome = await produceHealthScores({
       readSeries: async range => ({ access: 'granted', read_at: iso(at(TODAY, 18)).replace('Z', '000Z'), sources: [{ source: 'health_connect', consent_epoch: 1, truncated: false, samples: samples.filter(s => range.signals.includes(s.signal)) }] }),
       writeContext: write,
-      compute: dailyScoresFor('1'),
+      compute: provisionalDailyScores,
     }, { now: at(TODAY, 18), timezone: 'UTC' });
     expect(named.flat()).toContain('steps');
     expect(outcome).toBe('written');

@@ -108,7 +108,5 @@ const withoutDetail = <P extends DailyScores['form'] | DailyScores['weight']>(pi
   return rest as P;
 };
 
-// The engine the owner's recompute runs, chosen by the HEALTH_PROVISIONAL_SCORES variable: only the exact value "1" turns
-// provisional scores on, and anything else is the earlier engine itself.
-export const dailyScoresFor = (flag: string | undefined): ((input: DailyScoresInput) => DailyScores) =>
-  (flag === '1' ? input => computeDailyScores({ ...input, provisional: true }) : computeDailyScores);
+// The engine the owner's recompute runs: provisional scores.
+export const provisionalDailyScores = (input: DailyScoresInput): DailyScores => computeDailyScores({ ...input, provisional: true });

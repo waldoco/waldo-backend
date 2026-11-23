@@ -8,7 +8,7 @@ import { createOwnerResponder } from '../src/channels/owner-turn';
 import { TOOL_OUTPUT_LIMIT } from '../src/conversation/tool-loop';
 import { CONTEXT_BUDGET, type ContextBudget } from '../src/conversation/context-budget';
 
-// An owner turn that reads one long thread after another, through the real responder: with WALDO_CONTEXT_CAPS the first
+// An owner turn that reads one long thread after another, through the real responder: with the context caps the first
 // clearing leaves only the latest three results; without it the turn halves its results as before.
 const allowed = (name: ToolName) => triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes(name));
 const ROUNDS = 12;
@@ -32,7 +32,7 @@ const clearingIn = (contextCaps: ContextBudget | undefined) => runInDurableObjec
   return { firstCleared: firstCleared && kept(firstCleared), at: firstCleared?.length };
 });
 
-it('with WALDO_CONTEXT_CAPS an owner turn clears its tool results down to the latest three; without it, it halves them', async () => {
+it('with the context caps an owner turn clears its tool results down to the latest three; without it, it halves them', async () => {
   const capped = await clearingIn(CONTEXT_BUDGET);
   const plain = await clearingIn(undefined);
   expect(capped.firstCleared).toBe(3);

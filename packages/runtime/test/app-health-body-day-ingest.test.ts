@@ -41,6 +41,7 @@ beforeEach(() => {
     const fn = url.split('/rpc/')[1]!;
     const body = JSON.parse(String(init.body)) as Record<string, string>;
     if (fn === 'health_ingest') return Response.json(receipt);
+    if (fn === 'health_settings_read') return Response.json({ sleep_need_minutes: null, updated_at: null });
     if (fn === 'health_series_read') {
       const signals = (JSON.parse(body.p_payload!) as { signals: string[] }).signals;
       return Response.json({ ...series, sources: series.sources.map(s => ({ ...s, samples: s.samples.filter(e => signals.includes(String(e.signal))) })) });
@@ -56,35 +57,14 @@ const ingest = async (over: Record<string, string>) => {
   await handleApp(new Request('https://w.test/app/v1/health/ingest', { method: 'POST', headers: { authorization: `Bearer ${CREDENTIAL}`, 'content-type': 'application/json' }, body: JSON.stringify(batch) }), env(over), auth, p => { work.push(p); });
   await Promise.all(work);
 };
-const NEW = /day_load|stress_curve/;
 
-describe('the Worker recompute and the day load and curve switches', () => {
-  it('writes each key for its own switch, with the provisional engine on, and nothing else of the row changes', async () => {
-    await ingest({ HEALTH_PROVISIONAL_SCORES: '1' });
-    const plain = rows;
-    rows = [];
-    await ingest({ HEALTH_PROVISIONAL_SCORES: '1', HEALTH_DAY_LOAD: '1', HEALTH_STRESS_CURVE: '1' });
+describe('the Worker recompute: the day load and curve', () => {
+  it('writes the day load on today\'s and yesterday\'s rows and the curve on today\'s only', async () => {
+    await ingest({});
     const today = rows.find(r => r.day === TODAY) as Record<string, any>;
     expect(today.day_load.state).toBe('available');
     expect(today.stress_curve.hours.length).toBeGreaterThan(1);
     expect(rows.filter(r => 'stress_curve' in r).map(r => r.day)).toEqual([TODAY]);
     expect(rows.filter(r => 'day_load' in r).map(r => r.day).sort()).toEqual(['2026-03-19', TODAY]);
-    const strip = ({ day_load: _l, stress_curve: _s, ...rest }: Record<string, unknown>) => rest;
-    expect(rows.map(strip)).toEqual(plain.map(strip));
-    for (const [name, key] of [['HEALTH_DAY_LOAD', 'day_load'], ['HEALTH_STRESS_CURVE', 'stress_curve']] as const) {
-      rows = [];
-      await ingest({ HEALTH_PROVISIONAL_SCORES: '1', [name]: '1' });
-      const keys = Object.keys(rows.find(r => r.day === TODAY)!).filter(k => NEW.test(k));
-      expect(keys, name).toEqual([key]);
-    }
-  });
-  it('writes none with the switches absent, "0" or anything but "1"', async () => {
-    for (const flag of [undefined, '0', '', 'true', ' 1']) {
-      rows = [];
-      const flags: Record<string, string> = flag === undefined ? {} : { HEALTH_DAY_LOAD: flag, HEALTH_STRESS_CURVE: flag };
-      await ingest({ HEALTH_PROVISIONAL_SCORES: '1', ...flags });
-      expect(rows.length, String(flag)).toBeGreaterThan(0);
-      expect(JSON.stringify(rows), String(flag)).not.toMatch(NEW);
-    }
   });
 });

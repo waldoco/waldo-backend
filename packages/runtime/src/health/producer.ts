@@ -105,11 +105,8 @@ const VITAL_SIGNALS: readonly string[] = ['respiratory_rate', 'spo2', 'wrist_tem
 const NIGHT_SIGNALS: readonly string[] = ['respiratory_rate', 'spo2', 'wrist_temperature'] satisfies readonly HealthSignal[];
 // The passive load's readings are read on their own too: 24 bins and 24 step windows a day would otherwise eat the scores' row cap.
 const PASSIVE_SIGNALS: readonly string[] = ['heart_rate_bins_window', 'steps_window'] satisfies readonly HealthSignal[];
-// Only the phone's own transports send heart-rate bins.
-const PASSIVE_SOURCES: readonly string[] = ['apple', 'health_connect', 'samsung'];
-// HEALTH_PASSIVE_LOAD: "0", or a comma list of the sources passive load is on for. Anything not a phone transport is ignored.
-export const passiveLoadSources = (value: string | undefined): readonly string[] =>
-  (value ?? '').split(',').map(source => source.trim()).filter(source => PASSIVE_SOURCES.includes(source));
+// The phone transports passive load is on for. Samsung also sends heart-rate bins, and waits for a real Galaxy Watch cadence check.
+export const PASSIVE_LOAD_SOURCES: readonly string[] = ['apple', 'health_connect'];
 const RESTING_METHODS: readonly string[] = ['overnight_resting', 'provider_resting_daily', 'resting_measurement', 'unknown'];
 const STAGES = ['light', 'deep', 'rem', 'unspecified', 'awake'] as const;
 // ADR-0081's confidence order for whole sources (Apple > Oura > WHOOP), then the phone transports. Ranked, not counted:

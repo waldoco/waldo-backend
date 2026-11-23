@@ -30,8 +30,6 @@ export type AppHealthInput = Readonly<{
   // `woke` says the upload carries a night that just ended, `workout` a workout that just ended; the notice carries those yeses
   // and nothing else.
   notifySamples?: (woke?: boolean, workout?: boolean) => Promise<void>;
-  // WORKOUT_WAKE: on, an upload with a workout that just ended tells the owner's object so. Absent, no upload says so.
-  workoutWake?: boolean;
   // WAKE_BRIEF: how fresh a night's end must be to tell the owner's object they just woke. Absent, no upload says so.
   wakeFreshMs?: number;
   // Tells the owner's object that their stated sleep need changed, so it recomputes their rows on it.
@@ -48,7 +46,7 @@ export type AppHealthInput = Readonly<{
   // nothing is written and nothing is shown, whatever rows already hold: setting a switch back to off is the rollback.
   dayLoad?: boolean;
   stressCurve?: boolean;
-  // The upload sources the day's load counts every observed minute for (HEALTH_PASSIVE_LOAD), beside dayLoad; a build that names
+  // The upload sources the day's load counts every observed minute for, beside dayLoad; a build that names
   // health revision 15 is shown that load and its parts while any source is on. Empty, every build is shown v1 and no parts.
   passiveLoad?: readonly string[];
   formCurve?: boolean;
@@ -353,6 +351,6 @@ export const handleAppHealth = async (input: AppHealthInput): Promise<Response> 
   const answered = healthIngestReceiptV1Schema.safeParse(result);
   const refused = new Set(answered.success ? (answered.data.rejected ?? []).filter(rejection => rejection.change === 'sample').map(rejection => rejection.index) : []);
   recompute(input, result, body.data.timezone, input.wakeFreshMs !== undefined && sleepJustEnded(body.data.samples, Date.now(), input.wakeFreshMs),
-    input.workoutWake === true && workoutJustEnded(body.data.samples.filter((_, index) => !refused.has(index)), Date.now()));
+    workoutJustEnded(body.data.samples.filter((_, index) => !refused.has(index)), Date.now()));
   return logRefusal(input, settle(result, responseSchema));
 };

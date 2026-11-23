@@ -39,7 +39,7 @@ let answers: Record<string, unknown | Error> = {};
 beforeEach(() => {
   rpcs.length = 0; toOwner.length = 0;
   ownerAnswer = () => Response.json({ error: 'unavailable' }, { status: 503 });
-  answers = { health_ingest: receipt, health_series_read: series(), health_context_write: { written: true } };
+  answers = { health_ingest: receipt, health_series_read: series(), health_context_write: { written: true }, health_settings_read: { sleep_need_minutes: null, updated_at: null } };
   vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
     const fn = url.split('/rpc/')[1]!;
     rpcs.push({ fn, body: JSON.parse(String(init.body)) });
@@ -110,10 +110,12 @@ describe('the Worker recomputes when the owner\'s object cannot take the notice'
     expect(new URL(toOwner[0]!.url).pathname).toBe(HEALTH_SAMPLES_PATH);
     const fns = rpcs.map(r => r.fn);
     expect(fns[0]).toBe('health_ingest');
-    // The scores' read of the month, and beside it the read of the night's vital signals.
-    expect(fns.slice(1, 3)).toEqual(['health_series_read', 'health_series_read']);
-    // Each write is preceded by a read of the row it replaces, so its zones can hold through a steady move.
-    expect(fns.slice(3).every(fn => fn === 'health_context_write' || fn === 'health_scores_read')).toBe(true);
+    // The scores' read of the month, and beside it the reads of the night's vital signals and of the passive load's bins, then
+    // the owner's stated need.
+    expect(fns.slice(1, 5)).toEqual(['health_series_read', 'health_series_read', 'health_series_read', 'health_settings_read']);
+    // Each write is preceded by a read of the row it replaces, so its zones can hold through a steady move; today's also by the
+    // need read again, and the late days by one read of which days hold a row.
+    expect(fns.slice(5).every(fn => ['health_context_write', 'health_scores_read', 'health_settings_read', 'health_scores_history'].includes(fn))).toBe(true);
     expect(fns.filter(fn => fn === 'health_context_write')).toHaveLength(2);
   });
 
@@ -130,10 +132,10 @@ describe('the Worker recomputes when the owner\'s object cannot take the notice'
     expect(JSON.parse(rpcs[1]!.body.p_payload as string).signals).toContain('steps_window');
   });
 
-  it('with provisional scores, asks which days hold a row once, signed, as ninety days in a number', async () => {
+  it('asks which days hold a row once, signed, as ninety days in a number', async () => {
     answers.health_scores_history = { unavailable: 'no_readings' };
     const d = deferrals();
-    await ingest(batch, d.defer, { HEALTH_PROVISIONAL_SCORES: '1' });
+    await ingest(batch, d.defer);
     await Promise.all(d.work);
     const history = rpcs.filter(r => r.fn === 'health_scores_history');
     expect(history.map(r => r.body.p_payload)).toEqual(['{"days":90}']);
@@ -142,20 +144,16 @@ describe('the Worker recomputes when the owner\'s object cannot take the notice'
     expect(rpcs.filter(r => r.fn === 'health_context_write').length).toBeGreaterThan(2);
   });
 
-  it('reads the owner\'s health settings only with the coaching switch on, signed, and computes on the need they stated', async () => {
-    const run = async (over: Record<string, string>) => {
+  it('reads the owner\'s health settings, signed, and computes on the need they stated', async () => {
+    const run = async () => {
       rpcs.length = 0;
       const d = deferrals();
-      await ingest(batch, d.defer, over);
+      await ingest(batch, d.defer);
       await Promise.all(d.work);
       return { settings: rpcs.filter(r => r.fn === 'health_settings_read'), writes: rpcs.filter(r => r.fn === 'health_context_write').map(r => JSON.parse(String(r.body.p_payload))) };
     };
-    const off = await run({ HEALTH_PROVISIONAL_SCORES: '1' });
-    expect(off.settings).toEqual([]);
-    expect(off.writes.length).toBeGreaterThan(0);
-    for (const row of off.writes) expect(row.sleep_debt?.need_basis ?? 'blended_average').not.toBe('owner_confirmed');
     answers.health_settings_read = { sleep_need_minutes: 480, updated_at: '2026-10-01T08:00:00.000Z' };
-    const on = await run({ HEALTH_PROVISIONAL_SCORES: '1', HEALTH_COACHING: '1' });
+    const on = await run();
     // Once to compute on, and once more before today's row, so a need saved mid-run never lands on a row of the old need.
     expect(on.settings).toHaveLength(2);
     for (const read of on.settings) expect(read.body.p_sig).toBe(await routerSignature(SECRET, read.body.p_at as number, `health.settings_read.owner-1.${md5Hex('{}')}`));
@@ -163,7 +161,7 @@ describe('the Worker recomputes when the owner\'s object cannot take the notice'
     expect(live.length).toBeGreaterThan(0);
     for (const row of live) expect(row.sleep_debt.need_basis).toBe('owner_confirmed');
     answers.health_settings_read = new Error('down');
-    expect((await run({ HEALTH_PROVISIONAL_SCORES: '1', HEALTH_COACHING: '1' })).writes).toEqual([]);
+    expect((await run()).writes).toEqual([]);
   });
 
   it('writes the read instant and the consent epoch it read, so the database can fence on both', async () => {
@@ -220,14 +218,14 @@ describe('the Worker recomputes when the owner\'s object cannot take the notice'
     const d = deferrals();
     await ingest(batch, d.defer);
     await Promise.all(d.work);
-    expect(rpcs.map(r => r.fn)).toEqual(['health_ingest', 'health_series_read', 'health_series_read']);
+    expect(rpcs.map(r => r.fn)).toEqual(['health_ingest', 'health_series_read', 'health_series_read', 'health_series_read']);
   });
 });
 
 describe('a saved sleep need asks the owner\'s object to recompute', () => {
   const put = (body: unknown, defer?: (work: Promise<unknown>) => void) => handleApp(new Request('https://w.test/app/v1/health/settings', {
     method: 'PUT', headers: { authorization: `Bearer ${CREDENTIAL}`, 'content-type': 'application/json' }, body: JSON.stringify(body),
-  }), env({ HEALTH_COACHING: '1' }), auth, defer) as Promise<Response>;
+  }), env(), auth, defer) as Promise<Response>;
 
   it('after the answer, with the signed settings notice that spends no welcome retry, and never fails the save', async () => {
     answers.health_settings_write = { sleep_need_minutes: 480, updated_at: '2026-10-11T08:00:00.000Z' };

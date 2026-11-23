@@ -3,7 +3,7 @@ import { derivedHealthDestinationViewSchema } from '@waldo/contracts';
 import { healthContextBook, toContextHealthMaterial, type HealthContextRow } from '../src/channels/health-context';
 import { renderHealth } from '../src/context-composer/prompt';
 import { produceHealthScores } from '../src/health/producer';
-import { dailyScoresFor } from '../src/health/scores';
+import { provisionalDailyScores } from '../src/health/scores';
 import { scrubTraceHealth } from '../src/observability/trace-health-scrub';
 
 // The partial health block, read from rows the real producer writes for owners whose body data cannot make a Recovery score.
@@ -44,7 +44,7 @@ const storedRow = async (kinds: Kinds, nights = 20): Promise<Record<string, unkn
   await produceHealthScores({
     readSeries: async (range: { signals: readonly string[] }) => ({ access: 'granted', read_at: iso(NOW).replace('Z', '000Z'), sources: [{ source: 'health_connect', consent_epoch: 1, truncated: false, samples: samples.filter(s => range.signals.includes(String(s.signal))) }] }),
     writeContext: async (payload: string) => { written.push(JSON.parse(payload)); return { written: true }; },
-    compute: dailyScoresFor('1'),
+    compute: provisionalDailyScores,
     readDemand: async () => (kinds.calendar
       ? { state: 'available', days: Array.from({ length: 31 }, (_, i) => ({ day: addDays(TODAY, -i), busy_minutes: 240 + wobble(i, 40), partial: false })) }
       : { state: 'unavailable' }),

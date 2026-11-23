@@ -167,26 +167,6 @@
     "disposition": "unconditional",
     "batch": "turn-day-cards (after W2)"
   },
-  "WALDO_COMPACTION": {
-    "disposition": "unconditional",
-    "batch": "health-context (after W3)"
-  },
-  "WALDO_STEPPED_WINDOW": {
-    "disposition": "unconditional",
-    "batch": "health-context (after W3)"
-  },
-  "WALDO_CONTEXT_CAPS": {
-    "disposition": "unconditional",
-    "batch": "health-context (after W3)"
-  },
-  "WALDO_COMPACTION_WAKE": {
-    "disposition": "unconditional",
-    "batch": "health-context (after W3)"
-  },
-  "WALDO_CALL_CEILINGS": {
-    "disposition": "unconditional",
-    "batch": "health-context (after W3)"
-  },
   "WALDO_HISTORY_BUDGET_TOKENS": {
     "disposition": "knob"
   },
@@ -217,79 +197,19 @@
   "WALDO_WHATS_NEW_CHARS": {
     "disposition": "knob"
   },
-  "WALDO_TIMEZONE_ASK": {
-    "disposition": "unconditional",
-    "batch": "health-context (after W3)"
-  },
   "WALDO_STREAM_REPLIES": {
     "disposition": "unconditional",
     "batch": "turn-day-cards (after W2)"
-  },
-  "HEALTH_PROVISIONAL_SCORES": {
-    "disposition": "unconditional",
-    "batch": "health-context (after W3)"
-  },
-  "HEALTH_SOLO_NOTICE": {
-    "disposition": "unconditional",
-    "batch": "health-context (after W3)"
-  },
-  "HEALTH_PARTIAL_CONTEXT": {
-    "disposition": "unconditional",
-    "batch": "health-context (after W3)"
-  },
-  "HEALTH_INVENTORY": {
-    "disposition": "unconditional",
-    "batch": "health-context (after W3)"
-  },
-  "HEALTH_TRAINING_LOAD": {
-    "disposition": "unconditional",
-    "batch": "health-context (after W3)"
-  },
-  "HEALTH_SCORE_PARTS": {
-    "disposition": "unconditional",
-    "batch": "health-context (after W3)"
-  },
-  "HEALTH_USUAL": {
-    "disposition": "unconditional",
-    "batch": "health-context (after W3)"
-  },
-  "HEALTH_DAY_LOAD": {
-    "disposition": "unconditional",
-    "batch": "health-context (after W3)"
-  },
-  "HEALTH_PASSIVE_LOAD": {
-    "disposition": "unconditional",
-    "batch": "health-context (after W3)"
-  },
-  "HEALTH_STRESS_CURVE": {
-    "disposition": "unconditional",
-    "batch": "health-context (after W3)"
   },
   "HEALTH_FORM_CURVE": {
     "disposition": "kept",
     "reason": "unfinished: off everywhere; Form curve not yet accepted",
     "removeBy": "2026-12-31"
   },
-  "HEALTH_COACHING": {
-    "disposition": "unconditional",
-    "batch": "health-context (after W3)"
-  },
-  "HEALTH_ACTIONS": {
-    "disposition": "unconditional",
-    "batch": "health-context (after W3)"
-  },
   "MEDICATIONS": {
     "disposition": "kept",
     "reason": "safety: medicine reminders stay off where no code-level dosing check exists (HEY-297)",
     "removeBy": "2026-12-31"
-  },
-  "SCREEN_TIME": {
-    "disposition": "unconditional",
-    "batch": "health-context (after W3)"
-  },
-  "HEALTH_CHARTS": {
-    "disposition": "unconditional",
-    "batch": "health-context (after W3)"
   },
   "PEOPLE_MAP": {
     "disposition": "unconditional",
@@ -341,10 +261,6 @@
   "WELCOME_V2": {
     "disposition": "unconditional",
     "batch": "app-identity"
-  },
-  "HEALTH_EASE_WORKOUT": {
-    "disposition": "unconditional",
-    "batch": "health-context (after W3)"
   },
   "CALENDAR_UNDO_CANCEL": {
     "disposition": "unconditional",
@@ -549,10 +465,6 @@
   "PROACTIVE_REVIEW_EVERY_MIN": {
     "disposition": "knob"
   },
-  "WHATS_NEW": {
-    "disposition": "unconditional",
-    "batch": "health-context (after W3)"
-  },
   "WAKE_BRIEF": {
     "disposition": "unconditional",
     "batch": "turn-day-cards (after W2)"
@@ -562,10 +474,6 @@
   },
   "WAKE_BRIEF_TURNS_PER_DAY": {
     "disposition": "knob"
-  },
-  "WORKOUT_WAKE": {
-    "disposition": "unconditional",
-    "batch": "health-context (after W3)"
   },
   "BRIEF_DAY_PLAN": {
     "disposition": "unconditional",

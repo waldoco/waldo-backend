@@ -58,6 +58,7 @@ beforeEach(() => {
     if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: body.p_do_name, state_version: 1, admission_revision: '5' });
     if (fn === 'health_context_read' || fn === 'health_log_recent') return Response.json(fn === 'health_log_recent' ? [] : null);
     if (fn === 'assert_channel_presence' || fn === 'set_owner_settings') return Response.json(true);
+    if (fn === 'health_settings_read') return Response.json({ sleep_need_minutes: null, updated_at: null });
     if (fn === 'health_series_read') {
       const samples = [...plane.samples.values()].map(s => ({ signal: s.payload.signal, day: s.payload.day, value: s.payload.value, start_at: s.payload.start_at, end_at: s.payload.end_at, timezone: 'Europe/Berlin', method: s.payload.method ?? null }));
       return Response.json({ access: 'granted', read_at: new Date(Date.now()).toISOString().replace('Z', '123Z'), sources: [{ source: 'whoop', consent_epoch: plane.epoch, truncated: false, samples }] });
@@ -169,17 +170,15 @@ describe('WHOOP on the owner object', () => {
     });
   });
 
-  for (const [label, over, noted] of [['on', { WORKOUT_WAKE: '1' }, true], ['off', {}, false]] as const) {
-    it(`notes a WHOOP workout that just ended for the health trigger as an app upload does, with WORKOUT_WAKE ${label}: ${noted ? 'noted' : 'never noted'}`, async () => {
-      const w = workoutRecord({ start: new Date(START - 65 * 60_000).toISOString(), end: new Date(START - 20 * 60_000).toISOString() });
-      world.workouts.push(w);
-      await withOwner(async ({ call, state }) => {
-        await call('exchange', { code: 'good-code', denied: false });
-        const answer = await call('hint', { type: 'workout.updated', id: String(w.id), trace: 'trace-work-0001' });
-        expect(await answer.json()).toEqual({ result: 'handled' });
-        expect([...plane.samples.keys()].some(key => key.startsWith('workout|'))).toBe(true);
-        expect(state.storage.kv.get('health_workout_noted_v1')).toBe(noted ? START : undefined);
-      }, over);
+  it('notes a WHOOP workout that just ended for the health trigger as an app upload does', async () => {
+    const w = workoutRecord({ start: new Date(START - 65 * 60_000).toISOString(), end: new Date(START - 20 * 60_000).toISOString() });
+    world.workouts.push(w);
+    await withOwner(async ({ call, state }) => {
+      await call('exchange', { code: 'good-code', denied: false });
+      const answer = await call('hint', { type: 'workout.updated', id: String(w.id), trace: 'trace-work-0001' });
+      expect(await answer.json()).toEqual({ result: 'handled' });
+      expect([...plane.samples.keys()].some(key => key.startsWith('workout|'))).toBe(true);
+      expect(state.storage.kv.get('health_workout_noted_v1')).toBe(START);
     });
-  }
+  });
 });

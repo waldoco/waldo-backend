@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { produceHealthScores, type ProducerDeps, type ProducerFailure } from '../src/health/producer';
 import { HealthRecomputeFailed, healthRecompute } from '../src/health/recompute';
-import { dailyScoresFor } from '../src/health/scores';
+import { provisionalDailyScores } from '../src/health/scores';
 
 // A recompute that fails says which step failed and the database's closed answer to it, and nothing else. Synthetic owners.
 const NOW = Date.parse('2026-03-20T12:00:00Z');
@@ -21,7 +21,7 @@ const run = async (over: Partial<ProducerDeps>) => {
   const outcome = await produceHealthScores({
     readSeries: async range => ({ ...series, sources: series.sources.map(s => ({ ...s, samples: s.samples.filter(e => range.signals.includes(e.signal)) })) }),
     writeContext: async () => ({ written: true, changed: [] }),
-    compute: dailyScoresFor('1'),
+    compute: provisionalDailyScores,
     onFailure: failure => told.push(failure),
     ...over,
   }, { now: NOW, timezone: 'UTC' });
@@ -75,7 +75,7 @@ describe('the recompute run', () => {
     // run() never asks the scheduler for anything.
     scheduler: { lookup: () => { throw new Error('unused'); }, schedule: () => { throw new Error('unused'); } },
     now: () => NOW, ownerZone: () => 'UTC',
-    producer: { readSeries: async () => series, writeContext: async () => ({ written: true, changed: [] }), compute: dailyScoresFor('1'), ...producer },
+    producer: { readSeries: async () => series, writeContext: async () => ({ written: true, changed: [] }), compute: provisionalDailyScores, ...producer },
   });
 
   it('throws the step and the database\'s code as one typed code, with no digit, owner or payload in it', async () => {

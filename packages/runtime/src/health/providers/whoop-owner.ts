@@ -46,13 +46,10 @@ export type WhoopOwnerDeps = Readonly<{
   now(): number;
   timezone(): string;
   // Recomputes the owner's derived rows after readings were committed, and tells the health trigger about a zone change.
-  // woke: the committed readings carry a night that just ended (WAKE_BRIEF). workout: they carry a workout that just ended
-  // (WORKOUT_WAKE).
+  // woke: the committed readings carry a night that just ended (WAKE_BRIEF). workout: they carry a workout that just ended.
   produce(woke?: boolean, workout?: boolean): Promise<unknown>;
   // WAKE_BRIEF: how fresh a night's end must be to count as the owner just waking. Absent, a sync never says so.
   wakeFreshMs?: number;
-  // WORKOUT_WAKE: present, a sync or hint that commits a workout that just ended says so. Absent, none does.
-  workoutWake?: true;
   arm(at: number): Promise<void>;
   disarm(): Promise<void>;
   log(line: WhoopLog): void;
@@ -189,7 +186,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
       if (!receipt.data.replayed) committed += receipt.data.accepted + receipt.data.deleted;
     }
     if (committed > 0 && deps.wakeFreshMs !== undefined && sleepJustEnded(samples, deps.now(), deps.wakeFreshMs)) pass.woke = true;
-    if (committed > 0 && deps.workoutWake && workoutJustEnded(samples, deps.now())) pass.workout = true;
+    if (committed > 0 && workoutJustEnded(samples, deps.now())) pass.workout = true;
     return committed;
   };
 

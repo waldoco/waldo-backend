@@ -261,12 +261,12 @@ describe('the health trigger\'s traces', () => {
   }
 });
 
-// A day with nothing on the owner's plate. With HEALTH_SOLO_NOTICE at "1", the model decides whether a note is worth it,
-// and one goes out as an update card through the final outbox. Off, the day stays as silent as it always was.
+// A day with nothing on the owner's plate. The model decides whether a note is worth it, and one goes out as an update card
+// through the final outbox.
 describe('the health-only note on the owner object', () => {
   const NOTE = 'Update\nRecovery is compromised after a short night. Nothing is booked today, so an easy evening would help.';
   // The Expo token is set so a push, if the note path made one, would be seen: the only pushes are the Brief's and an approval's.
-  const ON = { ...CONFIG, HEALTH_SOLO_NOTICE: '1', EXPO_ACCESS_TOKEN: 'synthetic-expo-access' };
+  const ON = { ...CONFIG, EXPO_ACCESS_TOKEN: 'synthetic-expo-access' };
   const notices = () => fixture.requests.filter(r => r.request.response_format?.name === 'health_notice');
   const queued = (state: DurableObjectState) => (state.storage.kv.get<{ id: string; status: string; payload: { text: string }; update?: { recordId: number } }[]>(FINAL_OUTBOX_KEY) ?? []).filter(row => row.id.startsWith('health-notice:'));
   beforeEach(() => { fixture.event = null; fixture.notice = JSON.stringify({ kind: 'notice', text: NOTE }); });
@@ -293,18 +293,6 @@ describe('the health-only note on the owner object', () => {
       expect([fixture.pushes, fixture.targetsAsked]).toEqual([[], 0]);
       for (const leak of LEAKS) for (const [where, text] of [['the model request', sent], ['tables and storage', dump(state)], ['printed lines', printed.join('\n')]] as const) expect(text, `${leak} in ${where}`).not.toContain(leak);
     }, ON);
-  });
-
-  it('stays silent with the switch off: no model call, no run and nothing queued', async () => {
-    for (const config of [CONFIG, { ...CONFIG, HEALTH_SOLO_NOTICE: '0' }]) {
-      fixture.requests = [];
-      await withOwner(async ({ state, pass, notify }) => {
-        await notify();
-        await pass();
-        expect([notices().length, evaluations().length, runs(state), queued(state)]).toEqual([0, 0, [], []]);
-        expect(state.storage.sql.exec('SELECT day FROM health_trigger_pending').toArray()).toEqual([]);
-      }, config);
-    }
   });
 
   it('holds the note, before any model call, once the Close has gone out or the owner turned update cards off', async () => {

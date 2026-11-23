@@ -305,7 +305,7 @@ describe('WHOOP webhooks as hints', () => {
     expect(wokes).toEqual([true, false, false]);
   });
 
-  it('says a workout just ended, only the yes, when WORKOUT_WAKE is on and a hint or a sync committed a fresh workout', async () => {
+  it('says a workout just ended, only the yes, when a hint or a sync committed a fresh workout', async () => {
     const workouts: (boolean | undefined)[] = [];
     const produce = async (_woke?: boolean, workout?: boolean) => { workouts.push(workout); };
     const ended = (h: Awaited<ReturnType<typeof connected>>, minutesAgo: number) => {
@@ -314,16 +314,14 @@ describe('WHOOP webhooks as hints', () => {
       h.world.workouts.push(w);
       return String(w.id);
     };
-    const fresh = await connected({ produce, workoutWake: true });
+    const fresh = await connected({ produce });
     expect(await fresh.owner.hint({ type: 'workout.updated', id: ended(fresh, 20), trace: 'trace-work-0001' })).toBe('handled');
-    const off = await connected({ produce });
-    expect(await off.owner.hint({ type: 'workout.updated', id: ended(off, 20), trace: 'trace-work-0002' })).toBe('handled');
-    const old = await connected({ produce, workoutWake: true });
+    const old = await connected({ produce });
     expect(await old.owner.hint({ type: 'workout.updated', id: ended(old, 4 * 60), trace: 'trace-work-0003' })).toBe('handled');
-    const synced = await connected({ produce, workoutWake: true });
+    const synced = await connected({ produce });
     ended(synced, 30);
     expect(await synced.owner.sync()).toBe('synced');
-    expect(workouts).toEqual([true, false, false, true]);
+    expect(workouts).toEqual([true, false, true]);
     expect(synced.logs.map(line => JSON.stringify(line)).join('\n')).not.toMatch(/Running|11:|T\d\d:/);
   });
 

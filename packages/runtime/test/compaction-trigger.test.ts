@@ -2,16 +2,13 @@ import { ownerTyped } from './helpers/owner-typed';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { compactionSummaryOpen, forgetMemoryArgsSchema, type AdapterResult, type LLMResponse } from '@waldo/contracts';
-import config from '../wrangler.jsonc?raw';
-import { parseJsonc } from '../../../scripts/jsonc.mjs';
-import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { ClosedRunError, type RunEffectScope } from '../src/channels/run-effect-scope';
 import { createOwnerResponder, type OwnerContextHost } from '../src/channels/owner-turn';
 import { createOwnerTurnContext } from '../src/context-composer/owner-turn';
 import { surfaceOwnerAdmission, type SurfaceOwnerBinding } from '../src/identity/surface-owner-admission';
 import { canonicalOwnerConversationStore } from '../src/conversation/canonical-owner-store';
-import { COMPACTION, COMPACTION_INSTRUCTION, compactionSettings, type CompactionSettings, type CompactionSpan } from '../src/conversation/compaction';
+import { COMPACTION, COMPACTION_INSTRUCTION, type CompactionSettings, type CompactionSpan } from '../src/conversation/compaction';
 import { redactConversationEntries } from '../src/channels/conversation-store';
 import { claimStore, FORGOTTEN } from '../src/memory/claims';
 import { forgetPurge } from '../src/memory/forget-purge';
@@ -66,26 +63,11 @@ const responderOn = (store: Args[1], gateway: LLMGatewayAdapter, options: Readon
 const say = (responder: ReturnType<typeof createOwnerResponder>, n: number, text = question(n)) =>
   responder.respond(ownerTyped({ traceId: `app-${n}`, conversationRef: 'owner', surface: 'app', text }), (_name, work) => work());
 
-describe('the deploy switch', () => {
-  it('is on only for the exact value "on", and leaves every other setting at its default', () => {
-    expect(compactionSettings({ WALDO_COMPACTION: 'on' })).toEqual({ ...COMPACTION, enabled: true });
-    for (const value of [undefined, '', 'off', 'ON', 'true', '1', ' on']) expect(compactionSettings({ WALDO_COMPACTION: value }).enabled).toBe(false);
-    expect(COMPACTION.enabled).toBe(false);
-  });
-
-  // On in staging, where the app chat compacts after a reply; off in production. Off is the rollback, one line each.
-  it('is off in production and on in staging', () => {
-    const parsed = flatConfig(parseJsonc(config)) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
-    expect(parsed.vars.WALDO_COMPACTION).toBe('off');
-    expect(parsed.env.staging.vars.WALDO_COMPACTION).toBe('on');
-  });
-});
-
 describe('a chain compacts under the settings its store was built with', () => {
-  it('a store built with the switch on compacts, and the next turn reads the summary first, while the module default stays off', async () => {
+  it('a store built with compaction compacts, and the next turn reads the summary first, while the module default stays off', async () => {
     await inOwner('compaction-switch-on', async (storage) => {
       const fake = model();
-      const responder = responderOn(storeOn(storage, small(compactionSettings({ WALDO_COMPACTION: 'on' }))), fake.gateway);
+      const responder = responderOn(storeOn(storage, small({ ...COMPACTION, enabled: true })), fake.gateway);
       for (let n = 1; n <= 6; n += 1) await say(responder, n);
       await responder.compactIfDue!('owner');
       expect(fake.compactions()).toHaveLength(1);
@@ -99,10 +81,10 @@ describe('a chain compacts under the settings its store was built with', () => {
     });
   });
 
-  it('a store built with the switch off makes no compaction call and writes no row, whatever its budget', async () => {
+  it('a store built without compaction makes no compaction call and writes no row, whatever its budget', async () => {
     await inOwner('compaction-switch-off', async (storage) => {
       const fake = model();
-      const responder = responderOn(storeOn(storage, small(compactionSettings({ WALDO_COMPACTION: 'off' }))), fake.gateway);
+      const responder = responderOn(storeOn(storage, small(COMPACTION)), fake.gateway);
       for (let n = 1; n <= 6; n += 1) await say(responder, n);
       await responder.compactIfDue!('owner');
       expect(fake.compactions()).toHaveLength(0);
@@ -128,7 +110,7 @@ describe('a scoped turn', () => {
       const hops: TurnLogEntry[] = [];
       args[3] = entry => hops.push(entry);
       args[10] = fake.gateway;
-      args[21] = { contextHost, history: (context) => canonicalOwnerConversationStore(storage, context, undefined, undefined, small(compactionSettings({ WALDO_COMPACTION: 'on' }))) };
+      args[21] = { contextHost, history: (context) => canonicalOwnerConversationStore(storage, context, undefined, undefined, small({ ...COMPACTION, enabled: true })) };
       const responder = createOwnerResponder(...args);
       for (let n = 1; n <= 6; n += 1) {
         const { scope } = closableScope(storage);
@@ -147,7 +129,7 @@ describe('a turn whose run was closed writes no compaction row', () => {
     await inOwner('compaction-closed-after-reply', async (storage) => {
       const fake = model();
       const { scope, close } = closableScope(storage);
-      const responder = responderOn(storeOn(storage, small(compactionSettings({ WALDO_COMPACTION: 'on' }))), fake.gateway, { scope });
+      const responder = responderOn(storeOn(storage, small({ ...COMPACTION, enabled: true })), fake.gateway, { scope });
       for (let n = 1; n <= 6; n += 1) await say(responder, n);
       close();
       await expect(responder.compactIfDue!('owner')).rejects.toBeInstanceOf(ClosedRunError);
@@ -161,7 +143,7 @@ describe('a turn whose run was closed writes no compaction row', () => {
     await inOwner('compaction-closed-in-flight', async (storage) => {
       const { scope, close } = closableScope(storage);
       const fake = model(close);
-      const responder = responderOn(storeOn(storage, small(compactionSettings({ WALDO_COMPACTION: 'on' }))), fake.gateway, { scope });
+      const responder = responderOn(storeOn(storage, small({ ...COMPACTION, enabled: true })), fake.gateway, { scope });
       for (let n = 1; n <= 6; n += 1) await say(responder, n);
       await expect(responder.compactIfDue!('owner')).rejects.toBeInstanceOf(ClosedRunError);
       expect(fake.compactions()).toHaveLength(1);
@@ -184,7 +166,7 @@ describe('a topic forgotten in the turn never reaches its summary', () => {
         }
         return fake.gateway.complete(input);
       } };
-      const responder = responderOn(storeOn(storage, small(compactionSettings({ WALDO_COMPACTION: 'on' }))), gateway, { tools: [forget as never] });
+      const responder = responderOn(storeOn(storage, small({ ...COMPACTION, enabled: true })), gateway, { tools: [forget as never] });
       for (const n of [1, 2]) await say(responder, n);
       await say(responder, 3, `Question 3: book the Lotus Hall for the party. ${'q'.repeat(50)}`);
       for (const n of [4, 5]) await say(responder, n);
@@ -213,7 +195,7 @@ describe('a topic forgotten in the turn never reaches its summary', () => {
         return { ok: true, data: { model: input.request.model, text: 'Noted for the Lotus Hall.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1 } };
       } };
       const hops: TurnLogEntry[] = [];
-      const responder = responderOn(storeOn(storage, small(compactionSettings({ WALDO_COMPACTION: 'on' }))), gateway, { tools: [forget as never], log: entry => hops.push(entry) });
+      const responder = responderOn(storeOn(storage, small({ ...COMPACTION, enabled: true })), gateway, { tools: [forget as never], log: entry => hops.push(entry) });
       for (let n = 1; n <= 5; n += 1) await say(responder, n, `Question ${n}: the Lotus Hall party. ${'q'.repeat(70)}`);
       await say(responder, 6, `Please forget the Lotus Hall plan. ${'q'.repeat(60)}`);
       await responder.compactIfDue!('owner');
@@ -250,7 +232,7 @@ describe('the span a held topic leaves', () => {
     await inOwner('compaction-flush-held-topic', async (storage) => {
       const fake = model();
       const spans: CompactionSpan[] = [];
-      const responder = responderOn(storeOn(storage, small(compactionSettings({ WALDO_COMPACTION: 'on' }))), forgettingGateway(fake),
+      const responder = responderOn(storeOn(storage, small({ ...COMPACTION, enabled: true })), forgettingGateway(fake),
         { tools: [forgetTool as never], integration: { compactionFlush: async (span) => { spans.push(span); } } });
       await lotusChat(responder, true);
       await responder.compactIfDue!('owner');
@@ -263,7 +245,7 @@ describe('the span a held topic leaves', () => {
   it('the summary row counts only the rows it was made from', async () => {
     await inOwner('compaction-covers-held-topic', async (storage) => {
       const fake = model();
-      const responder = responderOn(storeOn(storage, small(compactionSettings({ WALDO_COMPACTION: 'on' }))), forgettingGateway(fake), { tools: [forgetTool as never] });
+      const responder = responderOn(storeOn(storage, small({ ...COMPACTION, enabled: true })), forgettingGateway(fake), { tools: [forgetTool as never] });
       await lotusChat(responder, true);
       await responder.compactIfDue!('owner');
       const [row] = summaries(storage) as unknown as { covers: { rows: number } }[];
@@ -275,7 +257,7 @@ describe('the span a held topic leaves', () => {
     await inOwner('compaction-output-held-topic', async (storage) => {
       const fake = model(undefined, LOTUS_SUMMARY);
       const hops: TurnLogEntry[] = [];
-      const responder = responderOn(storeOn(storage, small(compactionSettings({ WALDO_COMPACTION: 'on' }))), forgettingGateway(fake), { tools: [forgetTool as never], log: entry => hops.push(entry) });
+      const responder = responderOn(storeOn(storage, small({ ...COMPACTION, enabled: true })), forgettingGateway(fake), { tools: [forgetTool as never], log: entry => hops.push(entry) });
       await lotusChat(responder, true);
       await responder.compactIfDue!('owner');
       expect(fake.compactions()).toHaveLength(1);
@@ -302,7 +284,7 @@ describe('a forget that lands while the summary is being written', () => {
     await before(storage, memory);
     const hops: TurnLogEntry[] = [];
     const fake = model(() => during(storage, memory), summary);
-    const responder = responderOn(storeOn(storage, small(compactionSettings({ WALDO_COMPACTION: 'on' }))), fake.gateway,
+    const responder = responderOn(storeOn(storage, small({ ...COMPACTION, enabled: true })), fake.gateway,
       { memory, log: entry => hops.push(entry), ...(scoped ? { scope: closableScope(storage).scope } : {}) });
     await lotusChat(responder);
     await responder.compactIfDue!('owner');
@@ -358,7 +340,7 @@ describe('a forget that lands while the summary is being written', () => {
   it('a row the store scrubbed when it saved it still reads as the summary read it', async () => {
     await inOwner('compaction-scrubbed-source', async (storage) => {
       const fake = model();
-      const responder = responderOn(storeOn(storage, small(compactionSettings({ WALDO_COMPACTION: 'on' }))), fake.gateway, { scope: closableScope(storage).scope });
+      const responder = responderOn(storeOn(storage, small({ ...COMPACTION, enabled: true })), fake.gateway, { scope: closableScope(storage).scope });
       for (let n = 1; n <= 6; n += 1) await say(responder, n, n === 3 ? `Question 3: I signed in at https://example.invalid/cb?code=abc123 ${'q'.repeat(40)}` : question(n));
       await responder.compactIfDue!('owner');
       expect(JSON.stringify(fake.compactions()[0]!.request.messages)).toContain('?code=abc123');

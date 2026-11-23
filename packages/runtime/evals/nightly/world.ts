@@ -458,8 +458,8 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
       }, from, to, TIMEZONE),
       admit: () => ({ verdict: 'send' }), charge: () => undefined, decide,
       propose: async (args) => { proposal = args; effect('calendar.change.proposed', args); return nextId('proposal'); },
-      // HEALTH_SOLO_NOTICE on, as the switch would have it, with an update card free to go out.
-      soloNotice: { enabled: () => true, held: () => null, deliver: async (id, text, commit) => { notice = text; effect('health.notice', { id }); commit(); } },
+      // An update card free to go out.
+      soloNotice: { held: () => null, deliver: async (id, text, commit) => { notice = text; effect('health.notice', { id }); commit(); } },
       reschedule: async () => undefined, log: () => undefined,
     });
     return { outcome, proposal, notice };

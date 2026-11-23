@@ -9,7 +9,7 @@ import type { GoogleClient } from '../src/connectors/google';
 const iso = (s: string) => s as never;
 const slot = { start: '2026-11-02T07:00:00+05:30', end: '2026-11-02T08:00:00+05:30' };
 
-const swap = async (name: string, renames: boolean, proxyKeepsTitle = false) => {
+const swap = async (name: string, proxyKeepsTitle = false) => {
   const cards: string[] = [];
   const writes: { start: string; end: string; title?: string }[] = [];
   let event = { id: 'e1', title: 'Intervals', ...slot, all_day: false, etag: 'v1' };
@@ -26,7 +26,7 @@ const swap = async (name: string, renames: boolean, proxyKeepsTitle = false) => 
     const desk = approvalDesk(state.storage.sql, {
       owner: 42, call: async (method, body) => { if (method === 'sendMessage') cards.push((body as { text: string }).text); return {}; },
       google: async () => client, newId: () => '1', now: () => Date.UTC(2026, 10, 2, 0, 0), timezone: 'Asia/Kolkata', log: () => undefined,
-      effects: ownerEffectLedger(state.storage, () => Date.UTC(2026, 10, 2, 0, 0)), renames,
+      effects: ownerEffectLedger(state.storage, () => Date.UTC(2026, 10, 2, 0, 0)),
     });
     try {
       out.id = await desk.propose({ action: 'move', event_id: 'e1', title: 'Intervals', rename_to: 'Easy run', start: iso(slot.start), end: iso(slot.end), reason: 'short night' });
@@ -39,7 +39,7 @@ const swap = async (name: string, renames: boolean, proxyKeepsTitle = false) => 
 
 describe('a calendar swap', () => {
   it('renames the event in its slot on approval, says so on the card and the receipt, and undo gives the old name back', async () => {
-    const { cards, writes, out, event } = await swap('calendar-swap', true);
+    const { cards, writes, out, event } = await swap('calendar-swap');
     expect(cards[0]).toBe('Change "Intervals" to "Easy run", Mon 2 Nov, 07:00–08:00. short night');
     expect(out.done).toEqual({ toast: 'Done', message: 'Done: Change "Intervals" to "Easy run", Mon 2 Nov, 07:00–08:00. Undo is available for 10 minutes.' });
     expect(writes).toEqual([{ ...slot, title: 'Easy run' }, { ...slot, title: 'Intervals' }]);
@@ -48,15 +48,8 @@ describe('a calendar swap', () => {
   });
 
   it('says it was not renamed when the calendar kept the old name, as a connector that predates renames does', async () => {
-    const { out, event } = await swap('calendar-swap-kept', true, true);
+    const { out, event } = await swap('calendar-swap-kept', true);
     expect(out.done).toEqual({ toast: 'Not renamed', message: 'Not renamed: the calendar kept the name "Intervals", so nothing changed.' });
     expect(event.title).toBe('Intervals');
-  });
-
-  it('is refused before any card while renames are off', async () => {
-    const { cards, writes, out } = await swap('calendar-swap-off', false);
-    expect(out.error).toContain('Renaming an event is not available yet');
-    expect(cards).toEqual([]);
-    expect(writes).toEqual([]);
   });
 });

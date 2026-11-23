@@ -60,7 +60,7 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 type Owner = Readonly<{ fetch(request: Request): Promise<Response>; alarm(): Promise<void>; setup(channel: string): { ready: Promise<unknown>; announcementPass(): Promise<void>; ledger(): Promise<string> } }>;
-type Config = Readonly<{ switches?: Record<string, string>; release?: string; gate?: boolean; off?: boolean; whatsNewChars?: string }>;
+type Config = Readonly<{ switches?: Record<string, string>; release?: string; gate?: boolean; whatsNewChars?: string }>;
 
 const withOwner = async <T>(name: string, run: (owner: (config?: Config) => Owner, state: DurableObjectState) => Promise<T>): Promise<T> => {
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
@@ -73,7 +73,7 @@ const withOwner = async <T>(name: string, run: (owner: (config?: Config) => Owne
     state.storage.kv.put('timezone_confirmed', true);
     await state.storage.put('google:accounts', MAIL_ONLY_GOOGLE);
     const owner = (config: Config = {}) => new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TELEGRAM_ID: undefined,
-      WALDO_ENVIRONMENT: 'staging', WALDO_RELEASE: config.release ?? 'r1', WHATS_NEW: config.off ? '0' : '1', WALDO_SWITCHES: JSON.stringify(config.switches ?? { TRUSTED_COORDINATION: '1' }),
+      WALDO_ENVIRONMENT: 'staging', WALDO_RELEASE: config.release ?? 'r1', WALDO_SWITCHES: JSON.stringify(config.switches ?? { TRUSTED_COORDINATION: '1' }),
       ...(config.gate ? { PROACTIVE_GATE: '1' } : {}), ...(config.whatsNewChars ? { WALDO_WHATS_NEW_CHARS: config.whatsNewChars } : {}) } as never) as unknown as Owner;
     try { return await run(owner, state); } finally { await state.storage.deleteAlarm(); poolAlarm.mockRestore(); }
   });
@@ -145,15 +145,6 @@ describe('what\'s new in the owner object', () => {
       await runtime.alarm();
       await runtime.alarm();
       expect([wire.feeds, model.decisions, stateOf(state)]).toEqual([1, 1, { family: 'card' }]);
-    });
-  });
-
-  it('with WHATS_NEW off, no alarm asks the directory and nothing is decided', async () => {
-    await withOwner('announce-feature-off', async (owner, state) => {
-      const runtime = owner({ off: true });
-      await runtime.alarm();
-      await runtime.setup('app').announcementPass();
-      expect([wire.feeds, model.decisions, stateOf(state)]).toEqual([0, 0, {}]);
     });
   });
 
