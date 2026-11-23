@@ -1,3 +1,4 @@
+import { EVERY_RUN_TOOLS } from '../src/channels/owner-turn';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -97,7 +98,7 @@ it('an update card is written with the owner\'s health logs, no stored copy of i
       const offered = ((JSON.parse(update!) as { tools?: { name: string }[] }).tools ?? []).map(tool => tool.name);
       expect(offered).toContain('propose_action');
       expect(offered).toContain('skills_load');
-      for (const tool of offered.filter(name => name !== 'skills_load')) expect(updateSweepTools(false)).toContain(tool);
+      for (const tool of offered.filter(name => !EVERY_RUN_TOOLS.includes(name))) expect(updateSweepTools(false)).toContain(tool);
       const stored = storedText(state);
       expect(stored).toContain('Changed event');
       expect(stored).not.toContain('640 kcal');

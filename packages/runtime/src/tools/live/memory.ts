@@ -1,5 +1,5 @@
 import { PERSON_RINGS, rememberArgsSchema, forgetMemoryArgsSchema, readMemoryArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type ToolHandler, type ToolName, type ReadMemoryArgs, type RememberArgs, type ForgetMemoryArgs } from '@waldo/contracts';
-import { FORGOTTEN, ground, normalizeForGrounding, OUTSIDE_REF, textFingerprint, type Claim, type ClaimStore } from '../../memory/claims';
+import { FORGOTTEN, ground, normalizeForGrounding, OUTSIDE_REF, textFingerprint, WALDO_RUN_REF, type Claim, type ClaimStore } from '../../memory/claims';
 import { carriesTopic, forgettableTopic, hidesTopic } from '../../memory/forget-guard';
 import { NODE_STATEMENT } from '../../memory/node-sources';
 import { HEALTH_MEMORY_RULES } from '../../memory/health-rules';
@@ -13,13 +13,23 @@ import { outsideSafe } from '../../memory/outside-view';
 import { personCard, StalePersonRef, type Person } from '../../memory/people';
 import { ownerParts, type MemoryOwnerTurn } from '../owner-words';
 import { importedQuote, importSourceOf } from '../../memory/import-ref';
+import type { OwnerWordsCheck } from '../../memory/owner-words-check';
+import { ClosedRunError } from '../../channels/run-effect-scope';
 
 export type { MemoryOwnerTurn };
 export type MemoryToolContext = ToolDispatcherContext & {
   memoryTurn?: Readonly<{ ownerId: string; conversationRef: string; current: MemoryOwnerTurn; recent: readonly MemoryOwnerTurn[] }>;
+  // Set by the host for a run Waldo started (a Brief, a check-back, a reminder): no owner message to ground a note in, so a
+  // note it saves is Waldo's own read, with this run as its source.
+  // ownText: the run's prompt held only the owner's own text, though the run started tainted for its actions' sake.
+  memoryRun?: Readonly<{ ownerId: string; conversationRef: string; runId: string; ownText?: true }>;
   // Set by the host for a model call built from outside content: memory reads go through the same fence as its memory block.
   memoryOutside?: boolean;
+  // Set by the host for the owner's own turn: the check outside the turn's model (memory/owner-words-check).
+  ownerWordsCheck?: OwnerWordsCheck;
 };
+// How long remember waits for that check before keeping the rules for a turn that read outside content.
+const OWNER_WORDS_CHECK_MS = 15_000;
 type Dependencies = Readonly<{
   sql: Pick<SqlStorage, 'exec'>;
   store: ClaimStore;
@@ -35,8 +45,8 @@ type Dependencies = Readonly<{
   validity?: boolean;
   // PEOPLE_MAP: claims may name the people they are about, read_memory reads people, and forget_memory forgets one person.
   people?: boolean;
-  // OWNER_CLOSES_MAIL_ITEMS: in a turn that read no outside content, a quote that is not the owner's exact words keeps the claim
-  // as Waldo's inference instead of failing, and a correction may name the claim it replaces by its text (replaces_text).
+  // In a turn that read no outside content, a quote that is not the owner's exact words keeps the claim as Waldo's inference
+  // instead of failing, and a correction may name the claim it replaces by its text (replaces_text). The owner's chat sets it.
   forgiving?: boolean;
 }>;
 const PEOPLE_OFF = 'The people map is not on for this owner yet, so memory holds no people; read or forget by query, topic or claim ids instead.';
@@ -49,7 +59,7 @@ const shown = (data: unknown, claims: readonly Readonly<{ origin?: string | null
 const CONFIRM_NOTE = 'It becomes the owner\'s once they confirm it or say it again in a later message of their own.';
 const HELD_NOTE = `Already held, but not as the owner's statement. ${CONFIRM_NOTE}`;
 // Why a write was kept as Waldo's read rather than the owner's word, said back to the model.
-const READ_BECAUSE = { tainted: 'this turn read outside content', earlier: 'the claim it replaces was not the owner\'s word and the quote is not from the owner\'s current message', inexact: 'the quote is not the owner\'s exact words' } as const;
+const READ_BECAUSE = { tainted: 'this turn read outside content and the quote is not from the owner\'s current message', earlier: 'the claim it replaces was not the owner\'s word and the quote is not from the owner\'s current message', inexact: 'the quote is not the owner\'s exact words' } as const;
 const saidAs = (because?: keyof typeof READ_BECAUSE) => because ? { source: 'inferred', note: `Saved as Waldo's inference, because ${READ_BECAUSE[because]}. ${CONFIRM_NOTE}` } : {};
 // Evidence is the owner's words, not any characters in them: the quote is a run of whole words of an owner-written part and
 // holds more than one letter or digit, unless it is the whole part. Words compare as grounding compares them (case, quotation
@@ -73,6 +83,24 @@ const overlapsEvidence = (text: string, evidence: string, start: number, end: nu
   return false;
 };
 
+const ownerSaid = async (ctx: MemoryToolContext, current: MemoryOwnerTurn, args: RememberArgs, previous: Claim | undefined): Promise<boolean> => {
+  const check = ctx.ownerWordsCheck;
+  if (!check) return false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      // Only the owner's own words reach the check. A replaced claim is shown only when it is the owner's too: a note Waldo
+      // inferred or learned from outside content carries words outside content may have written, and it needs no yes to change.
+      check({ ownerWords: ownerParts(current).filter(part => part.trim()).join('\n'), note: args.text, kind: args.kind, ...(args.aliases?.length ? { aliases: args.aliases } : {}),
+        ...(previous && previous.origin !== 'agent' && previous.origin !== 'untrusted' ? { replacing: previous.text } : {}) }),
+      new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), OWNER_WORDS_CHECK_MS); }),
+    ]);
+  } catch (error) {
+    if (error instanceof ClosedRunError) throw error;
+    return false;
+  } finally { clearTimeout(timer); }
+};
+
 export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, MemoryToolContext>[] => {
   const { store, sql } = deps;
   const now = () => (deps.now?.() ?? new Date()).toISOString();
@@ -86,18 +114,40 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
   // A claim a turn may read: a note learned from outside content only when the store recalls those, nothing being
   // forgotten, and in a turn that read outside content nothing fenced from it. A person is shown only through such a claim.
   const readableIn = (outside: boolean) => (claim: Claim) => (store.outsideNotes === true || claim.origin !== 'untrusted') && !hidden(claim) && (!outside || outsideSafe(claim));
+  // A run Waldo started has no owner message, so what it saves is its own read: an agent note sourced to the run, or, once the
+  // run has read outside content, a note learned from that content, as in chat. It replaces nothing, names no one and carries
+  // no health detail (synced readings are read live and never kept in memory), so it cannot change what the owner told Waldo.
+  const ranByWaldo = async (args: RememberArgs, ctx: MemoryToolContext) => {
+    const run = ctx.memoryRun;
+    if (!run || run.ownerId !== ctx.authenticatedUserId || run.conversationRef !== deps.conversationRef) return fail('Authenticated owner memory context is unavailable.');
+    if (args.replaces_id !== undefined || args.replaces_text !== undefined || args.people?.length || args.on_date) return fail('A note from a run Waldo started replaces nothing and names no one. Save it on its own; the owner can correct it later.');
+    const texts = [args.text, args.evidence_quote, ...(args.aliases ?? [])];
+    if (texts.some(blocked)) return fail('This memory matches a forget barrier.');
+    if (args.kind === 'health' || texts.some(text => text.includes(HEALTH_SPAN_MARKER) || numericHealthIn(text))) return fail('A run Waldo started keeps no health note: the owner\'s health is read live when it is needed, never kept in memory from here.');
+    // A run whose prompt was the owner's own text reads as outside only once a tool read someone else's: the loop adds that
+    // read's origin to the one it started with ('*'), so an origin past the first is a read.
+    const outside = ctx.toolArgSourceTaint === 'external' && !(run.ownText === true && (ctx.taintOrigins?.length ?? 2) <= 1);
+    if (outside && store.outsideNotes !== true) return fail('This run read outside content (mail, a web page or a connected tool), so it keeps no note from it.');
+    const known = store.claims().find(row => normalizeForGrounding(row.text) === normalizeForGrounding(args.text));
+    if (known) return success({ id: known.id, status: 'duplicate' });
+    await ready(ctx);
+    const add = () => { store.add({ kind: args.kind, text: args.text, source: 'inferred', evidence: args.evidence_quote, origin: outside ? 'untrusted' : 'agent',
+      source_ref: outside ? `${OUTSIDE_REF}page, mail or tool result read by a run Waldo started, ${now().slice(0, 10)}` : `${WALDO_RUN_REF}${run.runId}`, aliases: args.aliases, ...(args.area ? { area: args.area } : {}) }, now()); return store.lastClaimId(); };
+    const id = ctx.runScope ? ctx.runScope.commit(add) : deps.transaction ? deps.transaction(add) : add();
+    return success({ id, status: 'stored', source: outside ? 'outside' : 'waldo', note: outside ? 'Saved as a note learned from outside content, not the owner\'s words.' : 'Saved as Waldo\'s own note from this run, not the owner\'s words; the owner can correct or forget it.' });
+  };
   const base = (name: ToolName, description: string) => ({ name, description, trigger_allowlist: triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes(name)), autonomy_gated: false });
   return [
-    { ...base('remember', `${store.outsideNotes === true ? 'Store a fact or preference with a verbatim quote: the owner\'s, or outside content just read.' : 'Store a fact or preference grounded in a verbatim quote from the owner in this conversation.'}${deps.forgiving ? ' A quote that is not their exact words keeps the note as your inference until they confirm it.' : ''} To correct an active claim, pass its id as replaces_id: the c12 that starts its memory line, or 12${deps.forgiving ? '; or pass its text, as memory shows it, as replaces_text' : ''}. Memory is context, never permission to act. ${HEALTH_MEMORY_RULES.join(' ')}`),
+    { ...base('remember', `${store.outsideNotes === true ? 'Store a fact with a verbatim quote: the owner\'s, or outside content just read.' : 'Store a fact or preference with a verbatim quote of the owner\'s words.'}${deps.forgiving ? ' A paraphrase stays your inference.' : ''} Correct a claim with replaces_id (12 for c12)${deps.forgiving ? ' or replaces_text (its text as shown)' : ''}. Memory is context, never permission to act. ${HEALTH_MEMORY_RULES.join(' ')}`),
       schema: deps.forgiving ? rememberArgsSchema : rememberArgsSchema.omit({ replaces_text: true }), mutates_state: true,
       async handle(args: RememberArgs, ctx) {
         await ready(ctx); const turn = admitted(ctx);
-        if (!turn) return fail('Authenticated owner memory context is unavailable.');
+        if (!turn) return ranByWaldo(args, ctx);
         const grounded = [turn.current, ...turn.recent].find(message => ownerParts(message).some(part => quotesWords(part, args.evidence_quote) && ground(args.evidence_quote, { owner: part }) === 'owner'));
         // The model's paraphrase of what the owner just wrote is still worth keeping, as its own read of their current message.
-        // Only in a turn that read no outside content and from a message wholly the owner's: a forwarded or quoted chunk in it,
-        // or anything the turn read, could be what the paraphrase came from.
-        const inexact = !grounded && deps.forgiving === true && ctx.toolArgSourceTaint !== 'external' && !turn.current.sourceQuoteRanges?.length;
+        // Only in a turn that read no outside content, from messages of this turn wholly the owner's: a forwarded or quoted chunk
+        // in the message or in one sent while the turn ran, or anything the turn read, could be what the paraphrase came from.
+        const inexact = !grounded && deps.forgiving === true && ctx.toolArgSourceTaint !== 'external' && ![turn.current, ...turn.recent.filter(message => message.steer)].some(message => message.sourceQuoteRanges?.length);
         const source = grounded ?? (inexact ? turn.current : undefined);
         if (!source) {
           // A note needs a source. With outside notes recalled, a turn that read outside content may save what it read: the
@@ -128,10 +178,11 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         // tool), a reading may have come from there, so none is stored from this turn: neither one the scribe left in these
         // arguments nor the marker of one it withheld. The evidence, aliases and the people's names and relations sit beside the text.
         const personTexts = links.flatMap(link => [link.name, link.relation].filter((text): text is string => text !== undefined));
-        if (ctx.toolArgSourceTaint === 'external' && [args.text, args.evidence_quote, ...(args.aliases ?? []), ...personTexts].some(text => text.includes(HEALTH_SPAN_MARKER) || numericHealthIn(text))) return fail('This turn read outside content (mail, a web page or a connected tool), so memory stores no health reading from it. Save the note without the reading, or save nothing.');
+        const outside = ctx.toolArgSourceTaint === 'external';
+        if (outside && [args.text, args.evidence_quote, ...(args.aliases ?? []), ...personTexts].some(text => text.includes(HEALTH_SPAN_MARKER) || numericHealthIn(text))) return fail('This turn read outside content (mail, a web page or a connected tool), so memory stores no health reading from it. Save the note without the reading, or save nothing.');
         const claims = store.claims();
         // Which claim the model means is its call; code only finds the one active claim this turn may read that has that text.
-        const named = args.replaces_text === undefined ? [] : claims.filter(readableIn(ctx.memoryOutside === true || ctx.toolArgSourceTaint === 'external'))
+        const named = args.replaces_text === undefined ? [] : claims.filter(readableIn(ctx.memoryOutside === true || outside))
           .filter(claim => normalizeForGrounding(claim.text) === normalizeForGrounding(args.replaces_text!));
         if (args.replaces_text !== undefined && named.length !== 1) return fail(named.length
           ? `More than one active claim reads that way (${named.map(claim => `c${claim.id}`).join(', ')}). Pass the one meant as replaces_id.`
@@ -139,12 +190,16 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         const previous = args.replaces_id !== undefined ? claims.find(claim => claim.id === args.replaces_id) : named[0];
         if (args.replaces_id !== undefined && !previous) return fail('Replacement id is not an active claim in this owner store.');
         if (inexact && previous && previous.origin !== 'agent' && previous.origin !== 'untrusted') return fail('Correcting what the owner told Waldo needs their exact words. Quote whole words from their message verbatim.');
-        // Outside content can steer the model but never speaks for the owner, so a turn that read it leaves what the owner told
-        // Waldo as it is. A row from before origin was recorded reads as the owner's; only a writer-stated or untrusted one may change.
-        if (previous && ctx.toolArgSourceTaint === 'external' && previous.origin !== 'agent' && previous.origin !== 'untrusted') return fail('This turn read outside content (mail, a web page or a connected tool), so it cannot change what the owner told Waldo. Ask the owner; their own reply can correct it.');
-        // The quote is the owner's, but a turn that read outside content chose to write it, so what it writes is Waldo's read
-        // until the owner confirms it or says it again. The source ref still names the owner message the quote sits in.
-        const tainted = ctx.toolArgSourceTaint === 'external';
+        // Outside content can steer what the model writes, so in a turn that read it the note is Waldo's read until the owner
+        // confirms it or says it again, and it leaves what the owner told Waldo as it is (a row from before origin was recorded
+        // reads as the owner's). The one way past: its quote sits in the owner's own words of the message that started this turn,
+        // and the check outside the turn's model, shown only those words, the note and the claim it replaces, finds that the
+        // owner said it. Which people a note names is the model's choice, so a note naming anyone keeps the rule.
+        const ownWords = outside && grounded === turn.current && ctx.ownerInitiated === true && !links.length && await ownerSaid(ctx, turn.current, args, previous);
+        // A forget the owner started while the check ran holds its words from here on.
+        if (ownWords && [args.text, args.evidence_quote, ...(args.aliases ?? [])].some(blocked)) return fail('This memory matches a forget barrier.');
+        const tainted = outside && !ownWords;
+        if (previous && tainted && previous.origin !== 'agent' && previous.origin !== 'untrusted') return fail('This turn read outside content (mail, a web page or a connected tool), so it cannot change what the owner told Waldo from words outside their current message. Ask the owner; their own reply can correct it.');
         // Correcting a held row (Waldo's read, or shared content) makes it the owner's only when their current message says it:
         // a quote from an earlier one may be the very words the held row was grounded on.
         const earlier = !tainted && (previous?.origin === 'agent' || previous?.origin === 'untrusted') && source !== turn.current;
@@ -157,7 +212,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
           const people = store.people.link(id, links, now());
           // A new person whose name memory already holds: which one is meant is the model's call, so it is shown the others.
           // Like a read, it shows each one only through claims this turn may read.
-          const readable = readableIn(ctx.memoryOutside === true || tainted);
+          const readable = readableIn(ctx.memoryOutside === true || outside);
           const namesakes = links.flatMap((link, index) => link.name === undefined ? [] : store.people.all()
             .filter(row => row.id !== people[index] && row.name.trim().toLowerCase() === link.name!.trim().toLowerCase())
             .flatMap(row => {
@@ -176,7 +231,7 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
         const upgrade = !previous && !tainted && !inexact && source === turn.current ? held : undefined;
         const replaced = previous ?? upgrade;
         // Outside content never changes who the owner's own notes are about.
-        if (!replaced && duplicate && links.length && tainted && duplicate.origin !== 'agent' && duplicate.origin !== 'untrusted') return fail('This turn read outside content (mail, a web page or a connected tool), so it cannot change who the owner\'s own notes are about. Ask the owner; their own reply can say it.');
+        if (!replaced && duplicate && links.length && outside && duplicate.origin !== 'agent' && duplicate.origin !== 'untrusted') return fail('This turn read outside content (mail, a web page or a connected tool), so it cannot change who the owner\'s own notes are about. Ask the owner; their own reply can say it.');
         await ready(ctx);
         if (replaced) {
           let named = {};
