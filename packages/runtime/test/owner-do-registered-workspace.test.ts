@@ -1,5 +1,6 @@
 // Actual deployed constructor, authenticated inbox and alarm, dispatcher, workspace host,
 // SQLite manifest and R2-shaped byte fixture. No private owner host or live provider exists.
+import { md5Hex } from '../src/channels/md5';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi, type MockInstance } from 'vitest';
 import type { WorkspaceState } from '@waldo/workspace';
@@ -118,6 +119,7 @@ async function proof(work: (h: {
           message = `common.owner.${args.p_locator}`; break;
         case 'health_context_read': expect(args.p_do_name).toBe(name); message = `healthctx.read.${name}`; break;
         case 'health_log_recent': expect(args.p_do_name).toBe(name); message = `health.recent.${name}.${args.p_limit}`; break;
+        case 'health_inventory_read': expect(args.p_do_name).toBe(name); message = `health.inventory_read.${name}.${md5Hex(args.p_payload)}`; break;
         default: unexpected.push(url); throw new Error(`local fixture denies unexpected signed RPC: ${fn}`);
       }
       expect(args.p_sig).toBe(await routerSignature(fixtureEnv.WALDO_ROUTER_HMAC_SECRET, args.p_at, message));
@@ -125,7 +127,7 @@ async function proof(work: (h: {
         if (mappingPause && dispatches.mock.calls.some(([call]) => call.name === 'workspace_write') && (!pauseAfterReservation || manifest()?.operations.some(operation => operation.status === 'pending'))) { const slot = mappingPause; mappingPause = undefined; slot.entered(); await slot.wait; }
         return missing ? new Response('missing', { status: 404 }) : Response.json({ ...mapping });
       }
-      return Response.json(fn === 'assert_channel_presence' ? true : fn === 'health_log_recent' ? [] : fn === 'common_owner_authority'
+      return Response.json(fn === 'assert_channel_presence' ? true : fn === 'health_log_recent' ? [] : fn === 'health_inventory_read' ? { sources: [] } : fn === 'common_owner_authority'
         ? { admission_revision: '1', auth_user_id: OWNER, do_name: name, owner_id: OWNER, presence_id: PRESENCE, provider: 'telegram', subject: '81101', state_version: 0 } : null);
     });
     const dispatches = vi.spyOn(dispatcher, 'dispatchTool'); // Observes original dispatcher, including losing async continuations.

@@ -465,6 +465,10 @@
   "PROACTIVE_REVIEW_EVERY_MIN": {
     "disposition": "knob"
   },
+  "WHATS_NEW": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
   "WAKE_BRIEF": {
     "disposition": "unconditional",
     "batch": "turn-day-cards (after W2)"

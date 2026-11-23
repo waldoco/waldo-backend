@@ -3594,7 +3594,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (this.env.NEXT_DUE_ALARM === '1') this.ctx.storage.kv.put(ALARM_FULL_RELEASE, this.env.WALDO_RELEASE ?? 'unknown');
       // What's new runs once per release, on the owner's chain after this pass, on each owner's own first wake: a deploy's
       // decisions spread over the owners' natural wakes instead of all at once.
-      if (this.ctx.storage.kv.get<string>(ANNOUNCEMENTS_CHECKED_KEY) !== announcementPassKey(this.env.WALDO_RELEASE, Date.now())
+      if (this.env.WHATS_NEW === '1' && this.ctx.storage.kv.get<string>(ANNOUNCEMENTS_CHECKED_KEY) !== announcementPassKey(this.env.WALDO_RELEASE, Date.now())
         && (this.ctx.storage.kv.get<number>(ANNOUNCEMENTS_RETRY_KEY) ?? 0) <= Date.now())
         void this.serial(() => announcementPass()).catch(error => {
           // Whatever stopped the pass (the model, the outbox, a read), it is tried again in an hour, not on every wake.
@@ -6542,7 +6542,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const foldAnnouncements = (ids: readonly string[]) => { for (const id of announced.fold(ids)) announcementReport(id, 'folded'); };
     // Whether what was decided may still be said, checked again whenever it is about to be: feature news is on for this owner,
     // and the capability is still live for them (its switch, its prerequisites). A capability turned off since stays unsaid.
-    const newsOn = () => loops.proactivity().feature_news !== false;
+    const newsOn = () => this.env.WHATS_NEW === '1' && loops.proactivity().feature_news !== false;
     const announcementPrerequisite = (prerequisite: AnnouncementPrerequisite, trace: string) => ({
       app: async () => this.appBound(), whatsapp: async () => this.whatsappBound(), imessage: async () => this.imessageBound(),
       google: async () => (await accounts()).length > 0,
@@ -6557,7 +6557,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const announcementPass = async (): Promise<void> => {
       const doName = identity.get<string>('do_name'), pass = announcementPassKey(this.env.WALDO_RELEASE, Date.now()), environment = this.env.WALDO_ENVIRONMENT ?? 'development';
-      if (!announcementCall || !doName) return;
+      if (this.env.WHATS_NEW !== '1' || !announcementCall || !doName) return;
       const trace = `announcements:${pass}`;
       await runAnnouncementPass({
         pass, checkedPass: () => identity.get<string>(ANNOUNCEMENTS_CHECKED_KEY), markChecked: checked => identity.put(ANNOUNCEMENTS_CHECKED_KEY, checked),

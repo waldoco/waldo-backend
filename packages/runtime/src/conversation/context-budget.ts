@@ -18,7 +18,7 @@ export type ContextBudget = Readonly<{
   keepLatest: number;
   standingOrdersChars: number;
   questsChars: number;
-  // The characters of quoted product copy an owner turn's "what's new" section reads.
+  // WHATS_NEW: the characters of quoted product copy an owner turn's "what's new" section reads.
   whatsNewChars: number;
 }>;
 

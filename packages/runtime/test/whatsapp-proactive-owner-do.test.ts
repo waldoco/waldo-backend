@@ -52,6 +52,7 @@ beforeEach(() => {
     if (fn === 'presence_hint') return Response.json(!wire.unlinked && String(init?.body).includes('"p_provider":"whatsapp"') ? '1111' : null);
     if (fn === 'unlink_presence') { wire.unlinked = true; return Response.json(true); }
     if (fn === 'health_context_read') return Response.json(null);
+    if (fn === 'health_inventory_read') return Response.json({ sources: [] });
     if (url === 'https://graph.facebook.com/v26.0/fictional-phone-id/messages') {
       const body = JSON.parse(String(init?.body)) as { to: string; type: string; template?: { name: string }; text?: { body: string } };
       wire.events.push(body.type === 'template' ? `template:${body.template!.name}` : `text:${body.text!.body}`);
