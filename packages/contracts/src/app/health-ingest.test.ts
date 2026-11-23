@@ -395,8 +395,8 @@ describe('health scores history (revision 4)', () => {
     expect(HEALTH_SCORES_HISTORY_REVISION_V1).toBe(HEALTH_BASELINE_REVISION_V1);
   });
   it('takes exactly one window, of 7, 30 or 90 days', () => {
-    for (const days of ['7', '30', '90']) expect(healthScoresHistoryQueryV1Schema.safeParse({ days }).success, days).toBe(true);
-    rejected(healthScoresHistoryQueryV1Schema, [{}, { days: '14' }, { days: '0' }, { days: '91' }, { days: '07' }, { days: ' 7' }, { days: 7 }, { days: '7', from: '2026-10-01' }, { days: '7.0' }, { days: '' }, { days: ['7'] }]);
+    for (const days of ['7', '30', '90', '180', '365']) expect(healthScoresHistoryQueryV1Schema.safeParse({ days }).success, days).toBe(true);
+    rejected(healthScoresHistoryQueryV1Schema, [{}, { days: '14' }, { days: '0' }, { days: '91' }, { days: '181' }, { days: '366' }, { days: '07' }, { days: ' 7' }, { days: 7 }, { days: '7', from: '2026-10-01' }, { days: '7.0' }, { days: '' }, { days: ['7'] }]);
   });
   it('lists the days that have a row, oldest first, with gaps and never zeros', () => {
     for (const valid of [
@@ -985,5 +985,17 @@ describe('health revision 18 fixture', () => {
   it('is a scores answer the contract takes, for the app to test against', async () => {
     const { scores } = (await import('./fixtures/health-scores-changes.v18.json')).default as { scores: unknown };
     expect(healthScoresV1Schema.safeParse(scores).success).toBe(true);
+  });
+});
+
+describe('the Body screen\'s six months and year', () => {
+  const entry = (day: string) => ({ day, recovery: { state: 'unavailable', reason: 'no_readings' }, form: { state: 'unavailable', reason: 'no_readings' }, weight: { state: 'unavailable', reason: 'no_readings' } });
+  it('takes a year of daily rows spanning its window, and refuses one whose days or span do not fit it', () => {
+    const year = { state: 'available', window_days: 365, from: '2025-11-20', to: '2026-11-19', days: ['2025-11-20', '2026-03-01', '2026-11-19'].map(entry) };
+    expect(healthScoresHistoryResponseV1Schema.safeParse(year).success).toBe(true);
+    expect(healthScoresHistoryResponseV1Schema.safeParse({ ...year, window_days: 180, from: '2026-05-24' }).success).toBe(false);
+    expect(healthScoresHistoryResponseV1Schema.safeParse({ ...year, from: '2025-11-21' }).success).toBe(false);
+    expect(healthScoresHistoryResponseV1Schema.safeParse({ ...year, window_days: 366, from: '2025-11-19' }).success).toBe(false);
+    expect(healthScoresHistoryResponseV1Schema.safeParse({ ...year, window_days: 180, from: '2026-05-24', days: [entry('2026-05-24'), entry('2026-11-19')] }).success).toBe(true);
   });
 });

@@ -6,7 +6,7 @@ import {
   healthApiErrorV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema, healthConsentListV1Schema, healthConsentWithdrawV1Schema,
   healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthScoresQueryV1Schema, healthScoresResponseV1Schema,
   healthBaselineV1Schema, healthScoresUnavailableV1Schema, healthScoresV1Schema, healthSleepDebtV1Schema, HEALTH_SLEEP_DEBT_REVISION_V1, HEALTH_SCORES_HISTORY_REVISION_V1,
-  healthSettingsV1Schema, HEALTH_PARTS_REVISION_V1, healthPartsV1Schema, HEALTH_BODY_DAY_REVISION_V1, HEALTH_PASSIVE_LOAD_REVISION_V1, HEALTH_DAY_LOAD_V2_VERSION_V1, HEALTH_CHANGES_REVISION_V1,
+  healthSettingsV1Schema, HEALTH_PARTS_REVISION_V1, healthPartsV1Schema, HEALTH_BODY_DAY_REVISION_V1, HEALTH_PASSIVE_LOAD_REVISION_V1, HEALTH_DAY_LOAD_V2_VERSION_V1, HEALTH_CHANGES_REVISION_V1, HEALTH_LONG_HISTORY_REVISION_V1, HEALTH_SCORES_HISTORY_PARTS_MAX_DAYS_V1,
 } from '../../../contracts/src/app/health-ingest';
 import { healthHistoryView, historyWindowOf, partsOfShownPillars } from './app-health-history';
 import { rowFreshness } from './health-context';
@@ -248,11 +248,12 @@ const scoresHistory = async ({ request, url, doName, rpc, scoreParts }: AppHealt
   if (revision < HEALTH_SCORES_HISTORY_REVISION_V1) return refuse('invalid_request', 404);
   if (request.method !== 'GET') return refuse('unavailable', 405);
   const days = historyWindowOf(url);
-  if (!days) return refuse('invalid_request');
-  // A day's parts reach a build that names revision 13 only, and only while the switch is on; the pillars are read at revision 4 as ever.
+  if (!days || (days > HEALTH_SCORES_HISTORY_PARTS_MAX_DAYS_V1 && revision < HEALTH_LONG_HISTORY_REVISION_V1)) return refuse('invalid_request');
+  // A day's parts reach a build that names revision 13 only, only while the switch is on, and only in a window of ninety days or
+  // fewer; the pillars are read at revision 4 as ever.
   const readers = {
     pillar: (pillar: Pillar, stored: unknown) => pillarView(pillar, stored, HEALTH_SCORES_HISTORY_REVISION_V1), failure: failureCode,
-    ...(revision >= HEALTH_PARTS_REVISION_V1 && scoreParts === true ? { parts: (stored: unknown) => healthPartsV1Schema.safeParse(stored) } : {}),
+    ...(revision >= HEALTH_PARTS_REVISION_V1 && scoreParts === true && days <= HEALTH_SCORES_HISTORY_PARTS_MAX_DAYS_V1 ? { parts: (stored: unknown) => healthPartsV1Schema.safeParse(stored) } : {}),
   };
   // The database returns each day's parts only when asked, so a build below revision 13 and the producer's own read never carry them.
   return answer(healthHistoryView(await invokeHealth(rpc, doName, 'scores_history', JSON.stringify({ days, ...(readers.parts ? { parts: true } : {}) })), days, readers));
