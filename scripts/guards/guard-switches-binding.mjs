@@ -10,7 +10,8 @@
 // 3. Flat vars plus the secrets the production runbook names stay at or under BINDING_BUDGET in every environment.
 // 4. Every switch has a row in docs/ops/switch-inventory.json and every row names a switch still in the config, so a
 //    switch made unconditional leaves both together. A kept switch carries its reason and a removal date. A removal date
-//    already past is reported, not failed, so the guard's result never depends on the clock.
+//    already past is reported, not failed, so the guard's result never depends on the clock. A switch marked unconditional
+//    is listed in SHIPPED_SWITCHES (src/switches.ts), so announcements naming it stay live after it is removed.
 // 5. Nothing below a seam reads an env that skipped it: every Durable Object or entrypoint class passes
 //    withSwitches(env) to super, the Worker's default export flattens in each handler, and no module imports env
 //    from cloudflare:workers or reads process.env.
@@ -96,7 +97,11 @@ export const checkConfig = (cfg, secretNames) => {
 
 const DISPOSITIONS = new Set(['unconditional', 'kept', 'delete', 'knob']);
 
-export const checkInventory = (cfg, inventory, today) => {
+// The names in packages/runtime/src/switches.ts SHIPPED_SWITCHES, read from its source text.
+export const shippedSwitches = (source) =>
+  new Set([...(source.match(/SHIPPED_SWITCHES[^=]*= new Set\(\[([\s\S]*?)\]\)/)?.[1] ?? '').matchAll(/'([A-Z][A-Z0-9_]*)'/g)].map((match) => match[1]));
+
+export const checkInventory = (cfg, inventory, today, shipped) => {
   const bad = [], overdue = [];
   const declared = new Set([cfg?.vars, ...Object.values(cfg?.env ?? {}).map((block) => block?.vars)]
     .flatMap((vars) => Object.keys(vars?.WALDO_SWITCHES ?? {})));
@@ -105,6 +110,7 @@ export const checkInventory = (cfg, inventory, today) => {
     if (!declared.has(name)) bad.push(`inventory row "${name}" names no switch in wrangler.jsonc; delete the row with the switch`);
     if (!DISPOSITIONS.has(row?.disposition)) { bad.push(`inventory row "${name}" has disposition "${row?.disposition}"`); continue; }
     if (row.disposition === 'unconditional' && !row.batch) bad.push(`inventory row "${name}" is unconditional with no batch`);
+    if (row.disposition === 'unconditional' && !shipped.has(name)) bad.push(`inventory row "${name}" is unconditional but not in SHIPPED_SWITCHES, so its announcements would go quiet once it is removed`);
     if (row.disposition === 'kept' || row.disposition === 'delete') {
       if (!row.reason) bad.push(`inventory row "${name}" is ${row.disposition} with no reason`);
     }
@@ -194,7 +200,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const cfg = parseJsonc(readFileSync(join(root, 'packages/runtime/wrangler.jsonc'), 'utf8'));
   const secrets = runbookSecretNames(readFileSync(join(root, 'docs/ops/PRODUCTION_ALPHA_RUNBOOK_2026-10-22.md'), 'utf8'));
   const { bad, counts } = checkConfig(cfg, secrets);
-  const inventory = checkInventory(cfg, JSON.parse(readFileSync(join(root, 'docs/ops/switch-inventory.json'), 'utf8')), new Date().toISOString().slice(0, 10));
+  const inventory = checkInventory(cfg, JSON.parse(readFileSync(join(root, 'docs/ops/switch-inventory.json'), 'utf8')), new Date().toISOString().slice(0, 10),
+    shippedSwitches(readFileSync(join(root, 'packages/runtime/src/switches.ts'), 'utf8')));
   bad.push(...inventory.bad, ...checkSources(sourceFiles(root)));
   if (bad.length) {
     process.stderr.write(`${NAME}: ${bad.join('; ')}\n`);
