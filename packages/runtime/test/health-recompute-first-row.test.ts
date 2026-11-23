@@ -21,7 +21,7 @@ const plane = (stored: Set<string>, options: { readFails?: boolean } = {}) => {
       readSeries: async () => ({ access: 'granted', read_at: new Date(NOW).toISOString(), sources: [{ source: 'health_connect', consent_epoch: 1, truncated: false, samples: steps }] }),
       writeContext: async (payload: string) => { stored.add(String((JSON.parse(payload) as { day: string }).day)); return { written: true }; },
       readScores: async (day: string) => { if (options.readFails) throw new Error('synthetic outage'); return stored.has(day) ? { scores: { day } } : { scores: null }; },
-      compute: dailyScoresFor('1', '1'),
+      compute: dailyScoresFor('1'),
       readDemand: async () => ({ state: 'unavailable' }),
     } as never,
     firstRowToday: async day => { told.push(day); },
