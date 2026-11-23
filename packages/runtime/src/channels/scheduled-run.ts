@@ -9,7 +9,10 @@ import type { FinalRecord } from './telegram-final-outbox';
 // raise a card. Each run may still call only its own list (the dispatcher refuses the rest), so seeing the menu grants nothing.
 // Tools only the owner's own turn holds are never offered to a machine turn, so they are not part of it.
 const OWNER_TURN_ONLY = toolsWhere((record) => record.ownerTurnOnly);
-export const SCHEDULED_DIRECT: readonly ToolName[] = ['offer_replies', 'propose_action', 'propose_calendar_change', 'propose_calendar_plan'];
+// Every run Waldo starts is offered these in its function list when it holds them, not one find_tools hop away: the owner's
+// past conversation, which its lean view leaves out, and closing a loop whose time has passed.
+export const LOOK_BACK_DIRECT: readonly ToolName[] = ['search_episodes', 'close_loop'];
+export const SCHEDULED_DIRECT: readonly ToolName[] = ['offer_replies', 'propose_action', 'propose_calendar_change', 'propose_calendar_plan', ...LOOK_BACK_DIRECT];
 // The update sweep's and triage's tools beyond the outside-text reads (update-sweep.ts; a test holds the two in step).
 const SWEEP_TOOLS: readonly ToolName[] = ['get_context', 'read_memory', 'search_episodes', 'open_loop', 'send_email', 'propose_calendar_change', 'propose_action'];
 export const SCHEDULED_MENU: readonly ToolName[] = [...new Set<ToolName>([...LOOP_CHECK_BACK_TOOLS, ...OUTSIDE_TEXT_JOB_TOOLS, ...SWEEP_TOOLS, ...SCHEDULED_DIRECT])]
@@ -35,6 +38,9 @@ export const OLDER_SENT_MAX_CHARS = 300;
 // Enough of each row for its gist, so one long Brief does not fill the run. Rows are cut as they are rendered, after the forget
 // barrier has judged them whole, so a cut can never split a held topic past it.
 export const RECENT_ROW_MAX_CHARS = 1_500;
+// What a run Waldo started is told about the rest of the owner's history, which it reads with its own tools when the work
+// needs it: whether to look, and for what, is the model's call.
+export const LOOK_BACK = 'Only the newest of your conversation with the owner is shown here. Everything they said before, on every surface (the app, WhatsApp, email, iMessage), is in search_episodes, and what you know about them is in read_memory. When this work touches something the owner may have talked about before (a project, a person, a plan, a promise), search for it before you write, and use what you find.';
 
 const shown = (entry: ConversationEntry) => entry.role !== 'compaction' && entry.modelProjection.mode !== 'omit';
 // Rows written before roles were stored name their reply by id.

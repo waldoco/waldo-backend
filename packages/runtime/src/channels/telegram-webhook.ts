@@ -77,8 +77,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   HEALTH_INVENTORY?: string;
   // "1", with HEALTH_PROVISIONAL_SCORES, lets no pillar switch another off: Recovery from the night's sleep alone and Form from
   // the day's own parts without Recovery, each a candidate at its lower coverage; anything else keeps the provisional rule.
-  HEALTH_SCORES_DEGRADE?: string;
   HEALTH_TRAINING_LOAD?: string;
+  // '1' has the health producer write today's Form curve, measured and then projected, on today's derived row, for the app's
+  // calendar day; anything else writes none.
+  HEALTH_FORM_CURVE?: string;
   // '1' has the health decision reason from the reviewed health protocols (skills/health-protocols), read through the
   // owner's next day, in the chat role. Anything else keeps the decision as it was.
   HEALTH_ACTIONS?: string;

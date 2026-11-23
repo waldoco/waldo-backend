@@ -32,6 +32,13 @@ describe('HEALTH_SOLO_NOTICE in the Worker config', () => {
   });
 });
 
+describe('HEALTH_FORM_CURVE in the Worker config', () => {
+  it('is declared off for staging and production, until the privacy review ADR-0081 asks for has passed', () => {
+    expect(parsed.vars.HEALTH_FORM_CURVE).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_FORM_CURVE).toBe('0');
+  });
+});
+
 describe('HEALTH_TRAINING_LOAD in the Worker config', () => {
   it('is on for staging, which deploys with migration 20261031170000, and off for production', () => {
     expect(parsed.vars.HEALTH_TRAINING_LOAD).toBe('0');
@@ -131,19 +138,19 @@ describe('HEALTH_PASSIVE_LOAD in the Worker config', () => {
 });
 
 describe('HEALTH_DAY_LOAD and HEALTH_STRESS_CURVE in the Worker config', () => {
-  it('keeps the day load off in both blocks until migration 20261116110000 is applied and the gate turns it on at a named deploy', () => {
-    expect([parsed.vars.HEALTH_DAY_LOAD, parsed.env.staging.vars.HEALTH_DAY_LOAD]).toEqual(['0', '0']);
+  it('keeps the day load off in production and on in staging, where migration 20261116110000 is applied (19 Nov 2026)', () => {
+    expect([parsed.vars.HEALTH_DAY_LOAD, parsed.env.staging.vars.HEALTH_DAY_LOAD]).toEqual(['0', '1']);
   });
-  it('keeps the stress curve off in both blocks until the gate turns it on at a named deploy with migration 20261116110100', () => {
-    expect([parsed.vars.HEALTH_STRESS_CURVE, parsed.env.staging.vars.HEALTH_STRESS_CURVE]).toEqual(['0', '0']);
+  it('keeps the stress curve off in production and on in staging, where migration 20261116110100 is applied (19 Nov 2026)', () => {
+    expect([parsed.vars.HEALTH_STRESS_CURVE, parsed.env.staging.vars.HEALTH_STRESS_CURVE]).toEqual(['0', '1']);
   });
 });
 
 describe('HEALTH_SCORE_PARTS and HEALTH_USUAL in the Worker config', () => {
-  it('are off in both blocks until the gate turns them on at a named deploy with migration 20261116100000', () => {
+  it('are off in production and on in staging, where migration 20261116100000 is applied (19 Nov 2026)', () => {
     for (const name of ['HEALTH_SCORE_PARTS', 'HEALTH_USUAL']) {
       expect(parsed.vars[name], name).toBe('0');
-      expect(parsed.env.staging.vars[name], name).toBe('0');
+      expect(parsed.env.staging.vars[name], name).toBe('1');
     }
   });
 });

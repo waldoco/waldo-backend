@@ -53,8 +53,7 @@ export const computeDailyScores = (input: DailyScoresInput): DailyScores => {
   const prior = priorDays(input.targetDay, byDay);
 
   const provisional = input.provisional === true;
-  const degrade = provisional && input.degrade === true;
-  const basis = provisional ? provisionalRecoveryBasis(target, prior, input.sleepNeedMinutes, degrade) : recoveryBasis(target, prior, input.sleepNeedMinutes);
+  const basis = provisional ? provisionalRecoveryBasis(target, prior, input.sleepNeedMinutes) : recoveryBasis(target, prior, input.sleepNeedMinutes);
   let recovery: RecoveryResult;
   if ('reason' in basis) recovery = { state: 'unavailable', reason: basis.reason };
   else {
@@ -68,7 +67,7 @@ export const computeDailyScores = (input: DailyScoresInput): DailyScores => {
   const debt = sleepDebt(input.targetDay, byDay, prior, input.sleepNeedMinutes, provisional);
   // Asked for, a provisional computation also keeps what each score was made of; none of it changes a score.
   const detail = provisional && (input.parts === true || input.usual === true);
-  const form = formScore(target, prior, input.sleepNeedMinutes, input.asOf, provisional, degrade, detail);
+  const form = formScore(target, prior, input.sleepNeedMinutes, input.asOf, provisional, detail);
   const weight = weightScore(target, prior, provisional, detail);
   const scores: DailyScores = {
     recovery,
@@ -112,6 +111,5 @@ const withoutDetail = <P extends DailyScores['form'] | DailyScores['weight']>(pi
 
 // The engine the owner's recompute runs, chosen by the HEALTH_PROVISIONAL_SCORES variable: only the exact value "1" turns
 // provisional scores on, and anything else is the earlier engine itself.
-// HEALTH_SCORES_DEGRADE "1" adds the degraded rule to the provisional engine, and does nothing without it.
-export const dailyScoresFor = (flag: string | undefined, degrade?: string): ((input: DailyScoresInput) => DailyScores) =>
-  (flag === '1' ? input => computeDailyScores({ ...input, provisional: true, degrade: degrade === '1' }) : computeDailyScores);
+export const dailyScoresFor = (flag: string | undefined): ((input: DailyScoresInput) => DailyScores) =>
+  (flag === '1' ? input => computeDailyScores({ ...input, provisional: true }) : computeDailyScores);

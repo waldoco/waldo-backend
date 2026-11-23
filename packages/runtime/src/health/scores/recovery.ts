@@ -33,7 +33,7 @@ export interface RecoveryBasis {
   // Provisional only: the own-day count of each used component that stands on the owner's history, and whether a prior took part.
   readonly own?: readonly number[];
   readonly usedPrior?: boolean;
-  // The degraded rule only: the night's sleep alone, with no overnight heart signal that stands on a baseline.
+  // Provisional only: the night's sleep alone, with no overnight heart signal that stands on a baseline.
   readonly sleepOnly?: true;
   // Provisional only: why a part that has no row is missing, for the parts the app is shown.
   readonly absent?: ReadonlyMap<string, Absent>;
@@ -114,12 +114,11 @@ const matchedStanding = <Method extends string>(
   return null;
 };
 
-export const provisionalRecoveryBasis = (target: DayRecord, prior: readonly DayRecord[], sleepNeedMinutes: number | null, degrade = false): RecoveryOutcome => {
+export const provisionalRecoveryBasis = (target: DayRecord, prior: readonly DayRecord[], sleepNeedMinutes: number | null): RecoveryOutcome => {
   if (!target.sleep) return { reason: 'missing_sleep' };
   const nights = prior.flatMap(day => (day.sleep ? [day.sleep.asleepMinutes] : []));
   const need = sleepNeedMinutes ?? sleepNeed(nights);
   if (need <= 0) return { reason: 'baseline_immature' };
-  if (!degrade && !target.overnightHrv.length && !target.restingHeartRate.length) return { reason: 'missing_resting_signal' };
 
   // The sleep part is read against the need, not a usual: it carries the need and what the need stands on.
   const sleepBasis = { z: null, own: sleepNeedMinutes === null ? nights.length : null, ownShare: sleepNeedMinutes === null ? sleepNeedOwnShare(nights.length) : null, signals: [], need: { minutes: need, basis: sleepNeedMinutes === null ? 'blended_average' as const : 'owner_confirmed' as const } };
@@ -155,6 +154,6 @@ export const provisionalRecoveryBasis = (target: DayRecord, prior: readonly DayR
     own.push(resting.at.own);
     usedPrior ||= resting.at.prior;
   } else absent.set('resting_heart_rate', target.restingHeartRate.length ? 'baseline_immature' : 'no_reading');
-  if (!hrv && !resting) return degrade ? { components, signals, days: [...days].sort(), hrvMethod, own, usedPrior, absent, sleepOnly: true } : { reason: 'baseline_immature' };
+  if (!hrv && !resting) return { components, signals, days: [...days].sort(), hrvMethod, own, usedPrior, absent, sleepOnly: true };
   return { components, signals, days: [...days].sort(), hrvMethod, own, usedPrior, absent };
 };

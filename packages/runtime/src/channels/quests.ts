@@ -184,12 +184,19 @@ const experimentPart = ({ experiment, offered }: ExperimentNote, today: string):
     ? `ended ${experiment.ends_on}, verdict ${offered ? 'offered, waiting for the owner' : 'due'}`
     : `day ${daysBetween(experiment.started_on, today)} of ${experiment.days}`}`;
 
+// A deadline behind the owner says how long ago it passed, so a finished quest reads as finished; what to do about it is the
+// model's call with the owner.
+const deadlineLine = (deadline: string, today: string): string => {
+  const passed = deadline < today ? daysBetween(deadline, today) - 1 : 0;
+  return passed > 0 ? `ended ${deadline}, passed ${passed === 1 ? 'yesterday' : `${passed} days ago`}` : `ends ${deadline}`;
+};
+
 const questLine = (book: QuestBook, quest: AppQuestV1, due = false): string => `- [${quest.id}] ${quest.title} (${[
   quest.state,
   quest.check_in_days === null ? 'no check-ins on a schedule' : `check-ins every ${quest.check_in_days === 1 ? 'day' : `${quest.check_in_days} days`}`,
   ...(due ? ['check-in due tonight'] : []),
   ...(quest.plan ? [`plan: ${quest.plan}`] : []), ...(quest.usual ? [`usual: ${quest.usual}`] : []), ...(quest.target ? [`target: ${quest.target}`] : []),
-  ...(quest.progress ? [`progress: ${quest.progress}`] : []), ...(quest.deadline ? [`ends ${quest.deadline}`] : []),
+  ...(quest.progress ? [`progress: ${quest.progress}`] : []), ...(quest.deadline ? [deadlineLine(quest.deadline, book.today())] : []),
   ...book.experimentsIn(quest.id).map(note => experimentPart(note, book.today())),
 ].join('; ')})`;
 

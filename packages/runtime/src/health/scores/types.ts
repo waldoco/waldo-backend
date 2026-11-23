@@ -70,11 +70,10 @@ export interface DailyScoresInput {
   readonly sleepNeedMinutes: number | null;
   // The newest instant the inputs were read, used only to judge freshness of intraday data.
   readonly asOf: string | null;
-  // Off unless true. On, each component reads against the shared baseline from the owner's first day.
+  // Off unless true. On, each component reads against the shared baseline from the owner's first day, and no pillar switches
+  // another off: Recovery stands on the night's sleep without an overnight heart signal, and Form on the day's own parts
+  // without Recovery, each at the lower coverage that leaves and under its own candidate version.
   readonly provisional?: boolean;
-  // Provisional only, off unless true. On, no pillar switches another off: Recovery stands on the night's sleep without an
-  // overnight heart signal, and Form on the day's own parts without Recovery, each at the lower coverage that leaves.
-  readonly degrade?: boolean;
   // Off unless true, and only with provisional. On, the result also carries the parts of each available pillar (parts) and the
   // owner's usual bands (usual); every score, zone and coverage in it is the same as with them off.
   readonly parts?: boolean;
