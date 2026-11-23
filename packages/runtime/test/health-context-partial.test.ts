@@ -57,6 +57,9 @@ const asRead = (stored: Record<string, unknown>, compiledAt = iso(NOW - HOUR)): 
   const { timezone: _tz, read_at: _readAt, ...kept } = stored;
   return { context: { ...kept, id: 'ctx-partial', compiled_at: compiledAt } as never, previous: null };
 };
+// A sleep-plus-steps row as the provisional engine stored it before scores degraded: no Recovery or Form without an overnight
+// heart signal. Such rows stay in the store until recomputed, so the partial block still reads them.
+const gatedRow = (stored: Record<string, unknown>) => ({ ...stored, recovery: { reason: 'missing_resting_signal' }, form: { reason: 'missing_resting_signal' } });
 const read = (row: HealthContextRow, partial = true) => toContextHealthMaterial(row, clock, undefined, { partial });
 const viewOf = (row: HealthContextRow) => read(row)!.view as Record<string, unknown>;
 
@@ -84,8 +87,17 @@ describe('a partial health block from the rows the producer writes', () => {
     expect(block).not.toMatch(/In the row:.*steps/);
   });
 
-  it('sleep plus steps: names last night\'s sleep and the sleep debt, and that no overnight heart signal arrived', async () => {
-    const row = asRead(await storedRow({ sleep: true, steps: true }));
+  it('sleep plus steps: Recovery stands on the night\'s sleep alone, at low confidence, with HRV named as missing', async () => {
+    const stored = await storedRow({ sleep: true, steps: true });
+    expect(stored['recovery']).toMatchObject({ algorithm_version: 'recovery.v6', activation: 'candidate_unaccepted', used: { signals: ['sleep'] } });
+    const block = renderHealth(read(asRead(stored)));
+    expect(block.startsWith('Recovery zone:')).toBe(true);
+    expect(block).toContain('Confidence: low. Missing components: hrv.');
+    expect(block).not.toMatch(/\d/);
+  });
+
+  it('a row stored before scores degraded, sleep plus steps: names last night\'s sleep and the sleep debt, and that no overnight heart signal arrived', async () => {
+    const row = asRead(gatedRow(await storedRow({ sleep: true, steps: true })));
     const view = viewOf(row);
     expect(view).toMatchObject({ present: ['last_night_sleep', 'recent_sleep'], missing_pillars: { recovery: 'missing_resting_signal', form: 'missing_resting_signal', load: 'calendar_demand_unavailable' } });
     expect(view['missing_pillars']).not.toHaveProperty('sleep_debt');
@@ -100,7 +112,7 @@ describe('a partial health block from the rows the producer writes', () => {
   // A sleep-plus-steps owner at 07:00, before the day's first upload: the newest row is yesterday's, and its night is the one
   // before last. The block never says last night's sleep is in hand.
   it('names a row\'s night by the row\'s day: yesterday\'s row read at 07:00 has the night before last, not last night', async () => {
-    const stored = await storedRow({ sleep: true, steps: true });
+    const stored = gatedRow(await storedRow({ sleep: true, steps: true }));
     const early = { timezone: TZ, now: () => new Date(local(addDays(TODAY, 1), 7)) };
     const material = toContextHealthMaterial(asRead(stored), early, undefined, { partial: true });
     expect(material!.view).toMatchObject({ as_of_day: 'yesterday', present: ['last_night_sleep', 'recent_sleep'] });
@@ -110,16 +122,21 @@ describe('a partial health block from the rows the producer writes', () => {
     expect(block).not.toContain("last night's sleep");
   });
 
-  it('heart plus steps: the stored row cannot tell it from steps only, so the block says no more than steps only does', async () => {
-    const [heart, steps] = [await storedRow({ heart: true, steps: true }), await storedRow({ steps: true })];
-    expect(heart).toEqual(steps);
-    expect(renderHealth(read(asRead(heart)))).toBe(renderHealth(read(asRead(steps))));
+  it('heart plus steps: Form stands on the day\'s heart rate and steps without Recovery, in words and at its confidence', async () => {
+    const stored = await storedRow({ heart: true, steps: true });
+    expect(stored['form']).toMatchObject({ algorithm_version: 'form.v11', activation: 'candidate_unaccepted', used: { signals: ['steps', 'stress'] } });
+    const view = viewOf(asRead(stored));
+    expect(view).toMatchObject({ availability: 'partial', form_without_recovery: { basis: ['steps', 'stress'], confidence_band: 'low' }, missing_pillars: { recovery: 'missing_sleep' } });
+    expect(view['missing_pillars']).not.toHaveProperty('form');
+    const block = renderHealth(read(asRead(stored)));
+    expect(block).toContain('Form stands on the day alone.');
+    expect(block).not.toMatch(/\d/);
   });
 
   it('heart plus steps with a calendar: Load is honest on its own and is carried in words', async () => {
     const row = asRead(await storedRow({ heart: true, steps: true, calendar: true }));
     const view = viewOf(row);
-    expect(view).toMatchObject({ present: ['calendar'], load_zone: expect.any(String), missing_pillars: { recovery: 'missing_sleep', form: 'missing_sleep' } });
+    expect(view).toMatchObject({ present: ['calendar'], load_zone: expect.any(String), missing_pillars: { recovery: 'missing_sleep' } });
     expect(view['missing_pillars']).not.toHaveProperty('load');
     const block = renderHealth(read(row));
     expect(block).toContain(`Load: ${String(view['load_zone'])}.`);
@@ -190,7 +207,7 @@ describe('a partial health block from the rows the producer writes', () => {
   });
 
   it('the switch off keeps today\'s behaviour: a row without Recovery is no block', async () => {
-    for (const kinds of [{ steps: true }, { sleep: true, steps: true }, { heart: true, steps: true }]) {
+    for (const kinds of [{ steps: true }, { heart: true, steps: true }]) {
       expect(read(asRead(await storedRow(kinds)), false), JSON.stringify(kinds)).toBeNull();
     }
   });
@@ -207,9 +224,9 @@ describe('a partial health block from the rows the producer writes', () => {
 describe('the missing list is true for each case', () => {
   const cases: readonly [string, Kinds, Record<string, string>][] = [
     ['steps only', { steps: true }, { recovery: 'missing_sleep', form: 'missing_sleep', load: 'calendar_demand_unavailable', sleep_debt: 'missing_sleep' }],
-    ['sleep plus steps', { sleep: true, steps: true }, { recovery: 'missing_resting_signal', form: 'missing_resting_signal', load: 'calendar_demand_unavailable' }],
-    ['heart plus steps', { heart: true, steps: true }, { recovery: 'missing_sleep', form: 'missing_sleep', load: 'calendar_demand_unavailable', sleep_debt: 'missing_sleep' }],
-    ['heart, steps and a calendar', { heart: true, steps: true, calendar: true }, { recovery: 'missing_sleep', form: 'missing_sleep', sleep_debt: 'missing_sleep' }],
+    ['sleep plus steps', { sleep: true, steps: true }, { form: 'baseline_immature', load: 'calendar_demand_unavailable' }],
+    ['heart plus steps', { heart: true, steps: true }, { recovery: 'missing_sleep', load: 'calendar_demand_unavailable', sleep_debt: 'missing_sleep' }],
+    ['heart, steps and a calendar', { heart: true, steps: true, calendar: true }, { recovery: 'missing_sleep', sleep_debt: 'missing_sleep' }],
   ];
   for (const [name, kinds, expected] of cases) {
     it(`${name}: each missing pillar is one the stored row could not compute, with the reason it stored`, async () => {
@@ -243,5 +260,89 @@ describe('a partial block in a trace', () => {
     expect(scrubbed).not.toContain('Partial health context');
     expect(scrubbed).not.toContain('Sleep debt');
     expect(scrubbed).toContain('Before.');
+  });
+});
+
+// A morning where today's newest row has no Recovery (the phone has sent steps and the calendar made today's Load, the night's
+// sleep has not been scored) while yesterday's row was scored. The read returns the row before today's as `previous`.
+describe('the last scored day when the newest row has no Recovery', () => {
+  const YESTERDAY = addDays(TODAY, -1);
+  const scoredYesterday = { day: YESTERDAY, form_score: 61, recovery_zone: 'good', weight_zone: 'moderate' };
+  const withPrevious = (row: HealthContextRow, previous: unknown): HealthContextRow => ({ ...row, previous: previous as HealthContextRow['previous'] });
+  const newest = async () => asRead(await storedRow({ steps: true, calendar: true }));
+
+  it('names yesterday\'s Recovery and Load in words, labelled as yesterday\'s, inside the one partial paragraph', async () => {
+    const material = read(withPrevious(await newest(), scoredYesterday))!;
+    expect(material.view).toMatchObject({ availability: 'partial', as_of_day: 'today' });
+    expect(derivedHealthDestinationViewSchema.safeParse(material.view).success).toBe(true);
+    const block = renderHealth(material);
+    expect(block.startsWith('Partial health context:')).toBe(true);
+    expect(block).toMatch(/Day summary:.*yesterday.*Recovery solid/);
+    expect(block).toMatch(/Day summary:.*Load moderate/);
+    expect(block).toContain('no sleep was recorded for the night');
+    expect(block).not.toMatch(/\d/);
+    expect(block).not.toMatch(/Recovery zone|Form zone/);
+    const input = JSON.stringify([{ role: 'system', content: `Before.\n\n${block}\n\nAfter.` }]);
+    expect(JSON.stringify(scrubTraceHealth({ trace: 't', hop: 'llm_reply', ms: 1, ok: true, text: { input, output: '' } }).text)).not.toContain('Recovery solid');
+  });
+
+  it('says nothing of an earlier day, a day with no Recovery, or a word it does not know', async () => {
+    const row = await newest();
+    for (const previous of [
+      { ...scoredYesterday, day: addDays(TODAY, -2) },
+      { ...scoredYesterday, recovery_zone: null, weight_zone: null },
+      { ...scoredYesterday, recovery_zone: 'unknown', weight_zone: 'unknown' },
+      { ...scoredYesterday, recovery_zone: 'astonishing', weight_zone: 'astonishing' },
+      null,
+    ]) {
+      const summary = (read(withPrevious(row, previous))!.narrative as { day_summary: string }).day_summary;
+      expect(summary).not.toMatch(/yesterday|Recovery|Load/);
+    }
+  });
+
+  it('adds nothing to a scored row, an expired one, or the switch off', async () => {
+    const scored = asRead(await storedRow({ sleep: true, heart: true, steps: true }));
+    expect(renderHealth(read(withPrevious(scored, scoredYesterday)))).not.toContain('last scored day');
+    const old = { timezone: TZ, now: () => new Date(NOW + 4 * 24 * HOUR) };
+    const expired = toContextHealthMaterial(withPrevious(await newest(), scoredYesterday), old, undefined, { partial: true })!;
+    expect(renderHealth(expired)).not.toContain('last scored day');
+    expect(read(withPrevious(await newest(), scoredYesterday), false)).toBeNull();
+  });
+});
+
+// No data and a failed read are different facts for the model: one is the owner's choice or an empty store, the other an
+// outage it must not turn into "you share nothing".
+describe('no health context, and a health read that failed', () => {
+  const failing = async () => { throw new Error('synthetic outage'); };
+
+  it('no row, or health not shared: no material, the standing sentence, and no failure is logged', async () => {
+    const errors: unknown[] = [];
+    for (const call of [async () => null, async () => ({ context: null, previous: null })]) {
+      const book = healthContextBook(call, 'do-health', clock, error => errors.push(error), undefined, { partial: true });
+      expect(await book.latest()).toBeNull();
+      expect(await book.read()).toBeNull();
+    }
+    expect(errors).toEqual([]);
+    expect(renderHealth(null)).toBe('No derived health context is available for this invocation.');
+  });
+
+  it('a read that throws reaches the model as unreadable, is logged, and says not to call it none shared', async () => {
+    const errors: unknown[] = [];
+    const book = healthContextBook(failing, 'do-health', clock, error => errors.push(error), undefined, { partial: true });
+    expect(await book.latest()).toBe('unreadable');
+    expect(await book.read()).toBe('unknown');
+    expect(errors).toHaveLength(2);
+    const block = renderHealth(null, 'unreadable');
+    expect(block).not.toBe(renderHealth(null));
+    expect(block).toContain('could not be read');
+    expect(block).toMatch(/not .*share/i);
+    expect(block).toContain('get_health');
+  });
+
+  it('a row that fails validation is unreadable too, never read as none shared', async () => {
+    const stored = await storedRow({ sleep: true, heart: true, steps: true });
+    const broken = asRead({ ...stored, recovery: { zone: 'good', algorithm_version: 'not a version' } });
+    const book = healthContextBook(async () => broken, 'do-health', clock, undefined, undefined, { partial: true });
+    expect(await book.latest()).toBe('unreadable');
   });
 });

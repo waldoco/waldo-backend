@@ -78,7 +78,8 @@ export type HealthContextRow = Readonly<{
     // The consent basis the row was computed under: each source and its consent epoch. Only the source names are read.
     basis?: unknown;
   }> | null;
-  previous: Readonly<{ day: string; form_score: unknown }> | null;
+  // The scored row before the newest, as the read returns it: Form as a score (read only for the trend) and the stored zone words.
+  previous: Readonly<{ day: string; form_score: unknown; recovery_zone?: unknown; weight_zone?: unknown }> | null;
 }>;
 
 // Stored zone words map through the contracts bridge (one table for writer and reader). An
@@ -287,9 +288,21 @@ const sourceOf = (context: RowContext, compiledAt: string): ContextHealthMateria
   produced_at: Date.parse(compiledAt),
 });
 
+// Today's row can exist before the night's sleep is scored (the phone sent steps, the calendar made today's Load). The row
+// before it, when it is yesterday's and was scored, is the owner's best stored reading of their body, so it is named in words
+// with its day, never as today's. The read gives it no compile time, so only yesterday's row is offered.
+const lastScoredDayParts = (context: RowContext, previous: HealthContextRow['previous'], clock: OwnerClock): string[] => {
+  const now = clock.now().getTime();
+  if (previous === null || context.day !== localIso(now, clock.timezone).slice(0, 10) || previous.day !== localIso(now - 24 * HOUR_MS, clock.timezone).slice(0, 10)) return [];
+  const recovery = fromRowZone('recovery', previous.recovery_zone);
+  if (recovery === null) return [];
+  const load = fromRowZone('weight', previous.weight_zone);
+  return [`The last scored day was yesterday (the night before last): Recovery ${recovery}${load === null ? '' : `; Load ${load}`}.`];
+};
+
 // A day whose body data made no Recovery, or whose newest row is over three days old. It says only what the row records, in
 // words; an expired row gives nothing of its old day but its age and sources.
-const partialMaterial = (context: RowContext, clock: OwnerClock, stamp: RowStamp, onError?: (error: unknown) => void): ContextHealthMaterial | null => {
+const partialMaterial = (context: RowContext, previous: HealthContextRow['previous'], clock: OwnerClock, stamp: RowStamp, onError?: (error: unknown) => void): ContextHealthMaterial | null => {
   const now = clock.now().getTime();
   const asOfDay: PartialHealthView['as_of_day'] = context.day === localIso(now, clock.timezone).slice(0, 10) ? 'today'
     : context.day === localIso(now - 24 * HOUR_MS, clock.timezone).slice(0, 10) ? 'yesterday' : 'earlier';
@@ -316,7 +329,7 @@ const partialMaterial = (context: RowContext, clock: OwnerClock, stamp: RowStamp
       ...(sleepDebt === undefined ? {} : { sleep_debt: sleepDebt }),
       ...(windows === undefined ? {} : { energy_windows: windows }),
     };
-    summary = daySummaryParts(context);
+    summary = [...daySummaryParts(context), ...lastScoredDayParts(context, previous, clock)];
   }
   const viewParsed = derivedHealthDestinationViewSchema.safeParse(view);
   const narrativeParsed = partialHealthNarrativeSchema.safeParse({ day_summary: summary.join(' '), active_goals: [], upcoming_high_stakes: [], compiled_at: stamp.compiledAt });
@@ -431,7 +444,7 @@ export function toContextHealthMaterial(
       if (recovery === null && missingReason(context.recovery) === undefined) return null;
       const stamp = rowStamp(context, clock, onError);
       if (stamp === null) return null;
-      if (recovery === null || stamp.freshness === 'expired') return partialMaterial(context, clock, stamp, onError);
+      if (recovery === null || stamp.freshness === 'expired') return partialMaterial(context, row.previous, clock, stamp, onError);
     }
     if (recovery === null) return null;
     const recoveryVersion = pillarVersion(context.recovery, 'recovery');
@@ -537,7 +550,8 @@ export const healthZoneWords = (material: ContextHealthMaterial | null): readonl
 
 export type HealthContextBook = Readonly<{
   linked(): boolean;
-  latest(trace?: string): Promise<ContextHealthMaterial | null>;
+  // A read that failed or returned a row that is not valid is 'unreadable', never null: null is no row, or health not shared.
+  latest(trace?: string): Promise<ContextHealthMaterial | null | 'unreadable'>;
   // As latest, but a read that failed is 'unknown' rather than none shared, for a caller that must not take an outage for a revoke.
   read(trace?: string): Promise<ContextHealthMaterial | null | 'unknown'>;
 }>;
@@ -587,7 +601,7 @@ export const healthContextBook = (
   };
   return {
     linked: () => call !== null && doName !== null,
-    latest: async (trace) => { const found = await read(trace); return found === 'unknown' ? null : found; },
+    latest: async (trace) => { const found = await read(trace); return found === 'unknown' ? 'unreadable' : found; },
     read,
   };
 };

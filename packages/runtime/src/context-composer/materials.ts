@@ -141,6 +141,8 @@ export async function loadRuntimeContextMaterials(
     // Admitted so loaders satisfy the type; the adapter-supplied value is never trusted -
     // prepareMaterials recomputes the omission count from the actual array below.
     'tool_outputs_omitted',
+    // Present only when the health read failed.
+    ...(typeof raw === 'object' && raw !== null && 'health_unreadable' in raw ? ['health_unreadable'] : []),
   ], 'materials_unavailable');
   if (
     materials.principal_ref !== invocation.verified_authority.principal_ref ||
@@ -252,6 +254,7 @@ export async function loadRuntimeContextMaterials(
     soul_base,
     safety_rules,
     health,
+    ...(materials.health_unreadable === true ? { health_unreadable: true as const } : {}),
     workspace: Object.freeze([...workspace].sort(compareFragments)),
     tool_outputs: Object.freeze([...toolOutputs].sort(compareFragments)),
     tool_outputs_omitted: toolOutputsOmitted,
@@ -312,14 +315,18 @@ function viewMatchesNarrative(
     : narrative.recovery_descriptor === view.recovery_zone;
 }
 
+// The health block a run is given, or why it was left out. Only a view refused for its size is left out alone: the run goes on
+// without it and the model is told so. Any other refusal (a canary, a payload of another shape) still fails the whole run.
+export type PreparedHealth = Readonly<{ health: ContextHealthMaterial | null; withheld?: 'oversize' }>;
+
 export function prepareHealth(
   health: ContextHealthMaterial | null,
   canaries: CanaryTokens,
   provenance: ProvenanceCollector,
   revisionRef: string,
   snapshotAt: number,
-): ContextHealthMaterial | null {
-  if (health === null) return null;
+): PreparedHealth {
+  if (health === null) return { health: null };
   const view = derivedHealthDestinationViewSchema.safeParse(health.view);
   const narrative = (view.success && 'availability' in view.data ? partialHealthNarrativeSchema : narrativeContextSchema).safeParse(health.narrative);
   if (
@@ -333,12 +340,6 @@ export function prepareHealth(
   ) {
     throw new FailClosed('health_context_invalid');
   }
-  provenance.add(
-    health.source,
-    { source_kind: 'derived_health_view' },
-    stableJson({ view: view.data, narrative: narrative.data }),
-    revisionRef,
-  );
   if (
     health.source.source_kind !== 'derived_health_view' ||
     health.source.source_taint !== null ||
@@ -353,7 +354,14 @@ export function prepareHealth(
     null,
     canaries,
   );
-  if (!preparedView.ok) throw new FailClosed(`sanitisation_failed:${preparedView.reason}:narrative`);
+  if (!preparedView.ok && preparedView.reason === 'oversize') return { health: null, withheld: 'oversize' };
+  if (!preparedView.ok) throw new FailClosed(`sanitisation_failed:${preparedView.reason}:health_view`);
+  provenance.add(
+    health.source,
+    { source_kind: 'derived_health_view' },
+    stableJson({ view: view.data, narrative: narrative.data }),
+    revisionRef,
+  );
   const preparedNarrative = {
     ...narrative.data,
     // A partial view's summary is empty on a day with no drivers or tags; empty text carries nothing to sanitise. A zone view's
@@ -364,7 +372,7 @@ export function prepareHealth(
       preparePromptSourceText(item, null, canaries, 'narrative'),
     ),
   };
-  return Object.freeze({
+  return { health: Object.freeze({
     view: preparedView.value,
     narrative: Object.freeze({
       ...preparedNarrative,
@@ -372,7 +380,7 @@ export function prepareHealth(
       upcoming_high_stakes: Object.freeze([...preparedNarrative.upcoming_high_stakes]),
     }),
     source: health.source,
-  }) as ContextHealthMaterial;
+  }) as ContextHealthMaterial };
 }
 
 function prepareMandatoryFragment(

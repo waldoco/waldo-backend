@@ -6,7 +6,7 @@ import { produceHealthScores } from '../src/health/producer';
 import { dailyScoresFor } from '../src/health/scores';
 import { WRITER_USED_SIGNALS } from './support/migration-lists';
 
-// Scores degrade, they do not gate (ADR-0081 amendment, rulings of 16 Nov): with HEALTH_SCORES_DEGRADE, Recovery stands on the
+// Scores degrade, they do not gate (ADR-0081 amendment, rulings of 16 Nov): the provisional engine stands Recovery on the
 // night's sleep without an overnight heart signal and Form on the day's own parts without Recovery, each a candidate at its
 // lower coverage. Rows come from the real producer; every value is synthetic, a Health Connect owner in Kolkata read at 18:00,
 // when today has the eight hours of steps Form's day parts need.
@@ -38,7 +38,7 @@ const dayOf = (day: string, i: number, lastHour: number, kinds: Kinds): Sample[]
 };
 
 // Today's row as the producer writes it, through a writer that refuses a used name its newest migration does not admit.
-const todaysRow = async (kinds: Kinds, degrade: string | undefined): Promise<Record<string, unknown>> => {
+const todaysRow = async (kinds: Kinds, provisional: '1' | '0' = '1', scoreParts = false): Promise<Record<string, unknown>> => {
   const samples = Array.from({ length: 20 }, (_, i) => dayOf(addDays(TODAY, -i), i, i === 0 ? 17 : 23, kinds)).flat();
   const written: Record<string, unknown>[] = [];
   const outcome = await produceHealthScores({
@@ -50,7 +50,7 @@ const todaysRow = async (kinds: Kinds, degrade: string | undefined): Promise<Rec
       written.push(row);
       return { written: true };
     },
-    compute: dailyScoresFor('1', degrade),
+    compute: dailyScoresFor(provisional), scoreParts,
     readDemand: async () => ({ state: 'unavailable' }),
   } as never, { now: NOW, timezone: TZ });
   expect(outcome).toBe('written');
@@ -65,40 +65,44 @@ const asRead = (stored: Record<string, unknown>): HealthContextRow => {
 const pillar = (row: Record<string, unknown>, name: string) => row[name] as Record<string, unknown>;
 
 describe('scores degrade, they do not gate', () => {
-  it('steps only: Form stands on the day\'s steps as a candidate, where the provisional rule gave none', async () => {
-    expect(pillar(await todaysRow({ steps: true }, undefined), 'form')).toEqual({ reason: 'missing_sleep' });
-    const form = pillar(await todaysRow({ steps: true }, '1'), 'form');
+  it('steps only: Form stands on the day\'s steps as a candidate, where the earlier engine gives none', async () => {
+    expect(pillar(await todaysRow({ steps: true }, '0'), 'form')).toEqual({ reason: 'missing_sleep' });
+    const form = pillar(await todaysRow({ steps: true }), 'form');
     expect(form).toMatchObject({ algorithm_version: 'form.v11', activation: 'candidate_unaccepted', used: { signals: ['steps'] } });
     // Its confidence is its coverage, steps' share of Form, times the source's confidence: well below a full day's.
     expect(form.confidence).toBeLessThanOrEqual(0.2);
   });
 
   it('sleep and steps without an overnight heart signal: Recovery stands on the night\'s sleep, and Form on it and the day', async () => {
-    const off = await todaysRow({ sleep: true, steps: true }, undefined);
-    expect(pillar(off, 'recovery')).toEqual({ reason: 'missing_resting_signal' });
-    const on = await todaysRow({ sleep: true, steps: true }, '1');
+    const on = await todaysRow({ sleep: true, steps: true });
     expect(pillar(on, 'recovery')).toMatchObject({ algorithm_version: 'recovery.v6', activation: 'candidate_unaccepted', used: { signals: ['sleep'] } });
     expect(pillar(on, 'form')).toMatchObject({ algorithm_version: 'form.v11', activation: 'candidate_unaccepted', used: { signals: ['sleep', 'sleep_midpoint', 'steps'] } });
   });
 
   it('heart rate and steps without sleep: Recovery keeps its reason, and Form reads the day\'s heart rate and steps', async () => {
-    const on = await todaysRow({ heart: true, steps: true }, '1');
+    const on = await todaysRow({ heart: true, steps: true });
     expect(pillar(on, 'recovery')).toEqual({ reason: 'missing_sleep' });
     expect(pillar(on, 'form')).toMatchObject({ algorithm_version: 'form.v11', used: { signals: ['steps', 'stress'] } });
   });
 
-  it('changes nothing for an owner with every input', async () => {
-    const kinds = { sleep: true, hrv: true, heart: true, steps: true };
-    expect(await todaysRow(kinds, '1')).toEqual(await todaysRow(kinds, undefined));
+  it('shows a Form without Recovery its night part as missing, and the parts it stood on as the whole score', async () => {
+    const row = await todaysRow({ heart: true, steps: true }, '1', true);
+    const parts = (row['components'] as Record<string, readonly Record<string, unknown>[]>)['form']!;
+    expect(parts[0]).toEqual({ key: 'from_the_night', state: 'unavailable', reason: 'no_reading' });
+    const shares = parts.flatMap(part => (part['state'] === 'available' ? [part['share'] as number] : []));
+    expect(shares.length).toBeGreaterThan(0);
+    expect(shares.reduce((sum, share) => sum + share, 0)).toBeCloseTo(1, 5);
+    expect(JSON.stringify(parts)).not.toContain('null,"share"');
   });
 
-  it('is off without the provisional engine', async () => {
-    const earlier = dailyScoresFor('0', '1');
-    expect(earlier).toBe(dailyScoresFor('0'));
+  it('leaves an owner with every input on the accepted versions', async () => {
+    const row = await todaysRow({ sleep: true, hrv: true, heart: true, steps: true });
+    expect(pillar(row, 'recovery')).toMatchObject({ algorithm_version: 'recovery.v5', activation: 'accepted', used: { signals: ['sleep', 'hrv', 'resting_heart_rate'] } });
+    expect(pillar(row, 'form')).toMatchObject({ algorithm_version: 'form.v10', activation: 'accepted' });
   });
 
   it('tells the model a Form that stands without Recovery, with its parts and confidence, and no reading on the night', async () => {
-    const material = toContextHealthMaterial(asRead(await todaysRow({ heart: true, steps: true }, '1')), clock, undefined, { partial: true });
+    const material = toContextHealthMaterial(asRead(await todaysRow({ heart: true, steps: true })), clock, undefined, { partial: true });
     expect(material && derivedHealthDestinationViewSchema.safeParse(material.view).success).toBe(true);
     const block = renderHealth(material);
     expect(block.split('\n').slice(0, 2)).toEqual([

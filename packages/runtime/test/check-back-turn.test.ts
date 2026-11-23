@@ -123,7 +123,7 @@ const looksThen = (reply: string, extra: (asked: string) => Call[] = () => []) =
   request.tool_turns?.length ? { text: reply } : { text: '', calls: [{ call_id: 'look', name: 'get_context', arguments: '{}' }, ...extra(asked)] };
 
 describe('a due reminder runs a fresh check-back turn', () => {
-  it('reads the current state with read-only tools and sends what it found, not the stored note', async () => {
+  it('reads the current state and sends what it found, not the stored note; it holds the tools to do what the owner asked, never memory writes', async () => {
     await withOwner('check-back-reminder', async (owner, state) => {
       await dueReminder(state);
       fixture.script = looksThen(FOUND);
@@ -132,7 +132,9 @@ describe('a due reminder runs a fresh check-back turn', () => {
       expect(first!.messages.at(-1)!.content).toContain(NOTE);
       expect(first!.messages.at(-1)!.content).not.toContain('Send the reminder briefly');
       expect(offered(first!)).toEqual(expect.arrayContaining(['get_context', 'read_memory', 'search_episodes']));
-      for (const effect of ['send_email', 'draft_email', 'set_reminder', 'open_loop', 'remember', 'browse_act']) expect(offered(first!)).not.toContain(effect);
+      // A reminder the owner set may do what they asked for at that time; a send goes on their card (owner-reminder-tools.test.ts).
+      expect(offered(first!)).toEqual(expect.arrayContaining(['set_reminder', 'propose_action']));
+      for (const write of ['remember', 'forget_memory']) expect(offered(first!)).not.toContain(write);
       expect(second!.tool_turns?.map(turn => turn.call.name)).toEqual(['get_context']);
       await transportPass(owner, state);
       expect(wire.sent).toEqual([FOUND]);
@@ -292,15 +294,15 @@ describe('a due reminder runs a fresh check-back turn', () => {
 });
 
 describe('a past-due loop Waldo took on runs a fresh check-back turn from the heartbeat', () => {
-  // The check-back applies what a reader worker found in the owner's mail and files, so its turn has read outside text:
-  // closing the owner's loop is the owner's call, on a card, as for any check-back that read outside content.
-  it('the turn reads, asks the owner on a card to close the loop, and its reply is what goes out instead of the stored title list', async () => {
+  // The check-back applies what a reader worker found in the owner's mail and files, so its turn has read outside text. A loop
+  // it was given is past due, so it closes it directly; the reply lists the close with the loop's title, so the owner can have
+  // it opened again (a loop still ahead closes only from the owner's card: passed-loops.test.ts).
+  it('the turn reads, closes the passed loop it was given, and its reply, with the close listed, is what goes out instead of the stored title list', async () => {
     await withOwner('check-back-loop', async (owner, state) => {
       const loop = dueLoop(state);
       await dueHeartbeat(state);
       const close = { id: loop.id, outcome: 'done' };
-      fixture.script = looksThen(FOUND, () => [{ call_id: 'close', name: 'close_loop', arguments: JSON.stringify(close) },
-        { call_id: 'card', name: 'propose_action', arguments: JSON.stringify({ tool: 'close_loop', args: close, reasoning: 'The worker found the draft sent.' }) }]);
+      fixture.script = looksThen(FOUND, () => [{ call_id: 'close', name: 'close_loop', arguments: JSON.stringify(close) }]);
       await schedulePass(owner, state);
       // The tick asks no model: it writes the job.
       expect(checkBackRequests()).toEqual([]);
@@ -309,22 +311,19 @@ describe('a past-due loop Waldo took on runs a fresh check-back turn from the he
       const [first] = checkBackRequests();
       expect(first!.messages.at(-1)!.content).toContain(LOOP_TITLE);
       expect(first!.messages.at(-1)!.content).toContain(loop.id);
+      expect(first!.messages.at(-1)!.content).toContain('due 2026-10-03 08:30, passed less than an hour ago');
       expect(offered(first!)).toEqual(expect.arrayContaining(['get_context', 'read_memory', 'close_loop', 'propose_action']));
-      for (const effect of ['send_email', 'set_reminder', 'open_loop', 'remember', 'start_task', 'cancel_task']) expect(offered(first!)).not.toContain(effect);
-      // The turn itself read only the owner's own context; the worker's result is what makes its direct close the owner's call.
-      expect(checkBackRequests()[1]!.tool_turns!.find(turn => turn.call.call_id === 'close')!.output).toContain('propose_action');
-      expect(state.storage.sql.exec('SELECT status FROM loops WHERE id = ?', loop.id).toArray()).toEqual([{ status: 'open' }]);
-      const cards = state.storage.sql.exec<{ id: string; payload_json: string }>("SELECT id, payload_json FROM ledger WHERE kind = 'tainted_action'").toArray();
-      expect(cards.map(card => JSON.parse(card.payload_json))).toMatchObject([{ tool: 'close_loop', args: close }]);
+      // remember is held: what the check-back learned is kept as Waldo's own note (waldo-run-memory.test.ts).
+      for (const effect of ['send_email', 'set_reminder', 'open_loop', 'forget_memory', 'start_task', 'cancel_task']) expect(offered(first!)).not.toContain(effect);
+      expect(checkBackRequests()[1]!.tool_turns!.find(turn => turn.call.call_id === 'close')!.output).toContain('"closed":true');
+      expect(state.storage.sql.exec('SELECT status FROM loops WHERE id = ?', loop.id).toArray()).toEqual([{ status: 'done' }]);
+      expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM ledger WHERE kind = 'tainted_action'").one()).toEqual({ n: 0 });
       await transportPass(owner, state);
-      expect(wire.sent).toContain(FOUND);
+      expect(wire.sent.join('\n')).toContain(FOUND);
+      expect(wire.sent.join('\n')).toContain(`Closed "${LOOP_TITLE}" (due 2026-10-03 08:30)`);
       expect(wire.sent.join('\n')).not.toContain('From your list');
       expect(state.storage.sql.exec("SELECT outcome, heartbeat_result FROM schedule_runs WHERE kind = 'heartbeat'").toArray()).toEqual([{ outcome: 'ok', heartbeat_result: 'acted' }]);
       expect(state.storage.sql.exec("SELECT status FROM background_runs WHERE kind = 'heartbeat' ORDER BY started_at").toArray()).toEqual([{ status: 'completed' }, { status: 'completed' }]);
-      const approve = { update_id: 301, callback_query: { id: 'close-launch', from: { id: 7, is_bot: false }, data: `a:${cards[0]!.id}`, message: { message_id: 41, chat: { id: 7, type: 'private' } } } };
-      expect((await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify(approve) }))).status).toBe(200);
-      await transportPass(owner, state);
-      expect(state.storage.sql.exec('SELECT status FROM loops WHERE id = ?', loop.id).toArray()).toEqual([{ status: 'done' }]);
     });
   });
 
@@ -377,10 +376,9 @@ describe('a past-due loop Waldo took on runs a fresh check-back turn from the he
     });
   });
 
-  // A check-back may read mail or a page that claims the work is done. Outside words cannot end a loop the owner gave
-  // Waldo: the direct close is refused toward the owner's card, the check-back raises that card on the owner's desk, and the
-  // loop stays open until the owner approves it.
-  it('a check-back that read outside content closes the owner\'s loop only from the owner\'s card', async () => {
+  // A check-back may read mail or a page that claims the work is done. Its loops are past due, so the close of one it was
+  // given runs and is listed for the owner; outside words still reach no loop it was not given, directly or on a card.
+  it('a check-back that read outside content closes a passed loop it was given, lists it, and reaches no other loop', async () => {
     await withOwner('check-back-loop-tainted', async (owner, state) => {
       const loop = dueLoop(state);
       const later = loopBook(state.storage.sql, { now: () => AT, newId: () => 'later' }).open({ title: 'a loop due tomorrow', due: '2026-10-04T09:00' });
@@ -391,29 +389,18 @@ describe('a past-due loop Waldo took on runs a fresh check-back turn from the he
         const round = request.tool_turns?.length ?? 0;
         if (round === 0) return { text: '', calls: [{ call_id: 'outside', name: 'search_contacts', arguments: JSON.stringify({ query: 'launch' }) }] };
         if (round === 1) return { text: '', calls: [{ call_id: 'close', name: 'close_loop', arguments: JSON.stringify(close) }] };
-        if (round === 2) return { text: '', calls: [cardFor('card', close), cardFor('other', { id: later.id, outcome: 'done' })] };
+        if (round === 2) return { text: '', calls: [cardFor('other', { id: later.id, outcome: 'done' })] };
         return { text: FOUND };
       };
       await checkBackPass(owner, state);
-      const requests = checkBackRequests();
-      expect(requests[0]!.messages.at(-1)!.content).toContain('card');
-      expect(offered(requests[1]!)).toContain('propose_action');
-      const turns = requests.at(-1)!.tool_turns!;
+      const turns = checkBackRequests().at(-1)!.tool_turns!;
       expect(turns.find(turn => turn.call.name === 'search_contacts')!.output).toContain('Launch email draft is done');
-      expect(turns.find(turn => turn.call.name === 'close_loop')!.output).toContain('propose_action');
-      expect(turns.find(turn => turn.call.call_id === 'card')!.output).toContain('"executed":false');
-      // The check-back's card, like its direct close, reaches only the loops it was given.
+      expect(turns.find(turn => turn.call.name === 'close_loop')!.output).toContain('"closed":true');
       expect(turns.find(turn => turn.call.call_id === 'other')!.output).toContain('no loop with the id');
-      const cards = state.storage.sql.exec<{ id: string; payload_json: string }>("SELECT id, payload_json FROM ledger WHERE kind = 'tainted_action'").toArray();
-      expect(cards).toHaveLength(1);
-      expect(JSON.parse(cards[0]!.payload_json)).toMatchObject({ tool: 'close_loop', args: close, preview: [`${LOOP_TITLE} (due 2026-10-03 08:30), as done`] });
-      expect(wire.sent.filter(text => text.includes('It closes:'))).toHaveLength(1);
-      expect(state.storage.sql.exec('SELECT status FROM loops WHERE id = ?', loop.id).toArray()).toEqual([{ status: 'open' }]);
-
-      const approve = { update_id: 300, callback_query: { id: 'close-it', from: { id: 7, is_bot: false }, data: `a:${cards[0]!.id}`, message: { message_id: 41, chat: { id: 7, type: 'private' } } } };
-      expect((await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify(approve) }))).status).toBe(200);
-      await transportPass(owner, state);
+      expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM ledger WHERE kind = 'tainted_action'").one()).toEqual({ n: 0 });
       expect(state.storage.sql.exec('SELECT id, status FROM loops ORDER BY id').toArray()).toEqual([{ id: later.id, status: 'open' }, { id: loop.id, status: 'done' }]);
+      await transportPass(owner, state);
+      expect(wire.sent.join('\n')).toContain(`Closed "${LOOP_TITLE}"`);
     }, true);
   });
 

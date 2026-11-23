@@ -3,7 +3,9 @@ import { ALGORITHM, DEGRADED_ALGORITHM, PROVISIONAL_ALGORITHM, provisionalRecove
 import { BASELINE_DAYS, circularZScore, combine, higherIsBetter, lowerIsBetter, mean, nearUsual, zScore, logZScore, type Component } from './stats';
 import { localDayWindow, wallMinute } from './time';
 import { formZone } from './zones';
-import type { DayRecord, FormResult, HourlyBucket, HrvMethod, UsedSignal } from './types';
+import { fromTheNight, partRows, PART_ORDER } from './parts';
+import { usualOfStanding } from './usual';
+import type { Absent, DayRecord, FormResult, HourlyBucket, HrvMethod, UsedSignal } from './types';
 
 const FORM_WEIGHTS = { recovery: 0.4, midpoint: 0.1, daylight: 0.1, motion: 0.2, stress: 0.2 } as const;
 const HOUR_MS = 3_600_000;
@@ -62,22 +64,32 @@ const throughMinute = (day: DayRecord, minute: number | null): DayRecord =>
 const formHours = (day: DayRecord, provisional: boolean): DayRecord =>
   ({ ...day, hourly: day.hourly.filter(bucket => bucket.heartRate !== null || bucket.hrvReadings.length > 0 || bucket.daylightMinutes !== null || bucket.movementMinutes !== null || (provisional && (bucket.steps ?? null) !== null)) });
 
-export const formScore = (record: DayRecord, earlier: readonly DayRecord[], sleepNeedMinutes: number | null, asOf: string | null, provisional = false, degrade = false): FormResult => {
-  const target = formHours(record, provisional), prior = earlier.map(day => formHours(day, provisional));
-  const outcome = provisional ? provisionalRecoveryBasis(target, prior, sleepNeedMinutes, degrade) : recoveryBasis(target, prior, sleepNeedMinutes);
-  // The degraded rule reads the day's own parts when Recovery has none; Recovery's reason stands only if they add nothing either.
-  if ('reason' in outcome && !degrade) return { state: 'unavailable', reason: outcome.reason };
-  const recovery: RecoveryBasis = 'reason' in outcome ? { components: [], signals: [], days: [], hrvMethod: null } : outcome;
-  const degraded = 'reason' in outcome || outcome.sleepOnly === true;
-  if (target.hourly.length === 0) return { state: 'unavailable', reason: 'intraday_inputs_unavailable' };
-  // The day's data horizon: the end of its newest hour. A day still running needs that horizon recent; a finished day is
-  // judged on the hours it has, so a recompute the next morning does not turn it stale.
+// What Form reads of a day read at `asOf`, or null when the day holds no hour of its own. The day's data horizon is the end of its
+// newest hour. A day still running needs that horizon recent; a finished day is judged on the hours it has, so a recompute the
+// next morning does not turn it stale. Only the current hour grows, so the newest hour, while the read falls inside it, is left
+// out on both sides until it ends: `settled` is the instant the day's hours are taken through.
+export const formReading = (record: DayRecord, asOf: string | null, provisional: boolean): Readonly<{ stale: boolean; settled: number }> | null => {
+  const target = formHours(record, provisional);
+  if (target.hourly.length === 0) return null;
   const { end } = localDayWindow(target.day, target.timezone);
   const horizon = Math.max(...target.hourly.map(bucket => Date.parse(bucket.startAt))) + HOUR_MS;
-  if (asOf !== null && Date.parse(asOf) < end && Date.parse(asOf) - horizon > FRESH_HOURS * HOUR_MS) return { state: 'unavailable', reason: 'stale_inputs' };
-  // Only the current hour grows, so the newest hour, while the read falls inside it, is left out on both sides until it ends.
+  const stale = asOf !== null && Date.parse(asOf) < end && Date.parse(asOf) - horizon > FRESH_HOURS * HOUR_MS;
   const filling = asOf !== null && Date.parse(asOf) >= horizon - HOUR_MS && Date.parse(asOf) < horizon;
-  const settled = filling ? horizon - HOUR_MS : horizon;
+  return { stale, settled: filling ? horizon - HOUR_MS : horizon };
+};
+
+export const formScore = (record: DayRecord, earlier: readonly DayRecord[], sleepNeedMinutes: number | null, asOf: string | null, provisional = false, detail = false): FormResult => {
+  const target = formHours(record, provisional), prior = earlier.map(day => formHours(day, provisional));
+  const outcome = provisional ? provisionalRecoveryBasis(target, prior, sleepNeedMinutes) : recoveryBasis(target, prior, sleepNeedMinutes);
+  // Provisional Form reads the day's own parts when Recovery has none; Recovery's reason stands only if they add nothing either.
+  if ('reason' in outcome && !provisional) return { state: 'unavailable', reason: outcome.reason };
+  const recovery: RecoveryBasis = 'reason' in outcome ? { components: [], signals: [], days: [], hrvMethod: null } : outcome;
+  const degraded = 'reason' in outcome || outcome.sleepOnly === true;
+  const reading = formReading(target, asOf, provisional);
+  if (reading === null) return { state: 'unavailable', reason: 'intraday_inputs_unavailable' };
+  if (reading.stale) return { state: 'unavailable', reason: 'stale_inputs' };
+  const { settled } = reading;
+  const { end } = localDayWindow(target.day, target.timezone);
   const cutoff = settled >= end ? null : wallMinute(settled, target.timezone);
   const sameHours = (day: DayRecord) => throughMinute(day, cutoff);
   const today = sameHours(target);
@@ -86,35 +98,42 @@ export const formScore = (record: DayRecord, earlier: readonly DayRecord[], slee
   const components: Component[] = recovery.components.map(component => ({ ...component, name: `recovery.${component.name}`, weight: component.weight * scale }));
   const signals: UsedSignal[] = [...recovery.signals];
   const days = new Set<string>(recovery.days);
-  const add = (name: UsedSignal, score: number, weight: number, used: readonly string[]) => { components.push({ name, score, weight }); signals.push(name); used.forEach(day => days.add(day)); };
+  const add = (name: UsedSignal, score: number, weight: number, used: readonly string[], extra: Pick<Component, 'basis' | 'usual'> = {}) => { components.push({ name, score, weight, ...extra }); signals.push(name); used.forEach(day => days.add(day)); };
+  const absent = new Map<string, Absent>('absent' in recovery ? recovery.absent ?? [] : []);
 
   const own: number[] = [...('own' in recovery ? recovery.own ?? [] : [])];
   const usedPrior = 'usedPrior' in recovery && recovery.usedPrior === true;
   // A component with no prior joins at seven own days and is judged against its own days alone.
-  const addOwn = (name: UsedSignal, at: ReturnType<typeof standing>, entries: readonly { day: string }[], weight: number, score: (z: number) => number) => {
-    if (at === null) return;
-    add(name, score(at.z), weight, entries.map(entry => entry.day));
+  // A component with no usual band of its own kind (steps standing in for movement: the contract reads a steps band as the plain
+  // mean of the owner's own days, not this estimate) keeps its direction and links to no band, as physical_load does.
+  const addOwn = (name: UsedSignal, signal: string | null, at: ReturnType<typeof standing>, entries: readonly { day: string }[], weight: number, score: (z: number) => number) => {
+    if (at === null) { absent.set(name, 'baseline_immature'); return; }
+    add(name, score(at.z), weight, entries.map(entry => entry.day), { basis: { z: at.z, own: at.own, ownShare: at.ownShare, signals: signal ? [signal] : [] }, usual: signal === null ? undefined : usualOfStanding(signal, null, at) ?? undefined });
     own.push(at.own);
   };
   if (provisional) {
     const midpoints = target.sleep ? history(prior, day => day.sleep?.midpointMinute ?? null) : [];
-    if (target.sleep) addOwn('sleep_midpoint', circularStanding(target.sleep.midpointMinute, midpoints.map(entry => entry.value)), midpoints, FORM_WEIGHTS.midpoint, nearUsual);
+    if (target.sleep) addOwn('sleep_midpoint', 'sleep_midpoint', circularStanding(target.sleep.midpointMinute, midpoints.map(entry => entry.value)), midpoints, FORM_WEIGHTS.midpoint, nearUsual);
     const daylight = dayTotal(today, bucket => bucket.daylightMinutes);
     const daylightHistory = history(prior, day => dayTotal(sameHours(day), bucket => bucket.daylightMinutes));
-    if (daylight !== null) addOwn('daylight', standing(daylight, daylightHistory.map(entry => entry.value), null), daylightHistory, FORM_WEIGHTS.daylight, nearUsual);
+    if (daylight === null) absent.set('daylight', 'no_reading');
+    else addOwn('daylight', 'daylight', standing(daylight, daylightHistory.map(entry => entry.value), null), daylightHistory, FORM_WEIGHTS.daylight, nearUsual);
     const movement = dayTotal(today, bucket => bucket.movementMinutes);
     const movementHistory = history(prior, day => dayTotal(sameHours(day), bucket => bucket.movementMinutes));
-    if (movement !== null) addOwn('movement', standing(movement, movementHistory.map(entry => entry.value), null), movementHistory, FORM_WEIGHTS.motion, nearUsual);
+    if (movement !== null) addOwn('movement', 'movement', standing(movement, movementHistory.map(entry => entry.value), null), movementHistory, FORM_WEIGHTS.motion, nearUsual);
     // A day with no movement minutes (Health Connect has none, nor an iPhone without a Watch) is read on its steps instead, against
     // its own days' steps through the same hours. Steps are walking volume, not effort, so they stand in for movement, never add to it.
     else {
       const steps = dayTotal(today, bucket => bucket.steps ?? null);
       const stepsHistory = history(prior, day => dayTotal(sameHours(day), bucket => bucket.steps ?? null));
-      if (steps !== null) addOwn('steps', standing(steps, stepsHistory.map(entry => entry.value), null), stepsHistory, FORM_WEIGHTS.motion, nearUsual);
+      if (steps === null) absent.set('movement', 'no_reading');
+      else addOwn('steps', null, standing(steps, stepsHistory.map(entry => entry.value), null), stepsHistory, FORM_WEIGHTS.motion, nearUsual);
     }
     const stress = stressReadingByMethod(today);
     const stressHistory = history(prior, day => stressReadingByMethod(sameHours(day)));
     const heartRate = stress && standing(stress.heartRate, stressHistory.map(entry => entry.value.heartRate), null);
+    if (!stress) absent.set('stress', 'no_reading');
+    else if (!heartRate) absent.set('stress', 'baseline_immature');
     if (stress && heartRate) {
       const parts = [lowerIsBetter(heartRate.z)], counts = [heartRate.own];
       // The day's own HRV method, against that method's own days only; the first method with a baseline of its own.
@@ -124,7 +143,9 @@ export const formScore = (record: DayRecord, earlier: readonly DayRecord[], slee
         const at = value === null ? null : standing(value, ownValues, null, 'ln');
         if (at) { parts.push(higherIsBetter(at.z)); counts.push(at.own); break; }
       }
-      add('stress', mean(parts), FORM_WEIGHTS.stress, stressHistory.map(entry => entry.day));
+      add('stress', mean(parts), FORM_WEIGHTS.stress, stressHistory.map(entry => entry.day), {
+        basis: { z: heartRate.z, own: Math.min(...counts), ownShare: heartRate.ownShare, signals: ['stress_heart_rate'] }, usual: usualOfStanding('stress_heart_rate', null, heartRate) ?? undefined,
+      });
       own.push(...counts);
     }
   } else {
@@ -152,7 +173,19 @@ export const formScore = (record: DayRecord, earlier: readonly DayRecord[], slee
 
   const { score, coverage } = combine(components);
   const used = { signals, days: [...days].sort() };
-  if (provisional) return { state: 'available', score, zone: formZone(score), coverage, hrv_method: recovery.hrvMethod, used, baseline: labelOf(own, usedPrior),
-    ...(degraded ? { algorithm_version: DEGRADED_ALGORITHM.form, activation: 'candidate_unaccepted' as const } : { algorithm_version: PROVISIONAL_ALGORITHM.form, activation: 'accepted' as const }) };
+  if (provisional) {
+    const asked = detail ? (() => {
+      const scaled = components.filter(component => component.name.startsWith('recovery.'));
+      // Steps fill movement's part when they stand in for it, so the shares still make the whole score.
+      const asPart = (name: string) => (name === 'steps' ? 'movement' : name);
+      const ownParts = components.filter(component => !component.name.startsWith('recovery.')).map(component => ({ ...component, name: asPart(component.name) }));
+      // A Form the degraded rule made without Recovery has no night part: it is shown missing, with Recovery's reason in the parts' words.
+      if (scaled.length === 0 && 'reason' in outcome) absent.set('from_the_night', outcome.reason === 'baseline_immature' ? 'baseline_immature' : 'no_reading');
+      const rows = partRows(PART_ORDER.form, [...(scaled.length ? [fromTheNight(scaled)] : []), ...ownParts], new Map([...absent].map(([name, reason]) => [asPart(name), reason])));
+      return { parts: rows, usual: components.flatMap(component => (component.usual ? [component.usual] : [])) };
+    })() : {};
+    return { state: 'available', score, zone: formZone(score), coverage, hrv_method: recovery.hrvMethod, used, baseline: labelOf(own, usedPrior), ...asked,
+      ...(degraded ? { algorithm_version: DEGRADED_ALGORITHM.form, activation: 'candidate_unaccepted' as const } : { algorithm_version: PROVISIONAL_ALGORITHM.form, activation: 'accepted' as const }) };
+  }
   return { state: 'available', score, zone: formZone(score), algorithm_version: ALGORITHM.form, activation: 'candidate_unaccepted', coverage, hrv_method: recovery.hrvMethod, used };
 };
