@@ -67,7 +67,8 @@ it.each([['default', undefined], ['harness', 'harness']] as const)('a due remind
       expect(model.systems[0]).not.toContain(SKILL.body_markdown);
       expect(model.systems[1]).toContain(SKILL.body_markdown);
       expect(model.tools[0]).toContain('skills_load');
-      for (const lifecycle of ['skills_install', 'skills_disable', 'set_reminder', 'send_email']) expect(model.tools[0]).not.toContain(lifecycle);
+      // The reminder may do what the owner asked for (a send goes on their card), but never installs or disables a skill.
+      for (const lifecycle of ['skills_install', 'skills_disable']) expect(model.tools[0]).not.toContain(lifecycle);
       expect(model.tools[1]).toEqual(model.tools[0]);
       const traced = state.storage.sql.exec<{ hop: string; ok: number }>("SELECT hop, ok FROM trace_log WHERE hop LIKE 'tool_%' AND hop != 'tool_eligibility' ORDER BY rowid").toArray();
       expect(traced.map(row => [row.hop, row.ok])).toEqual([['tool_skills_load', 1]]);

@@ -6,19 +6,21 @@ import type { Loop } from './loops';
 import { withPassed } from './past-date';
 import type { ReminderTiming } from './owner-turn-envelope';
 
-// A due check-back is a fresh machine turn: it reads the current state and decides what to say, or says nothing. It holds
-// read tools only, so a check-back can look but never act; a loop check-back may also close the loops it was given. Once
-// it has read outside text, closing a loop the owner made is the owner's call, so it can put that close on their card.
-export const CHECK_BACK_TOOLS: readonly ToolName[] = CHILD_READ_TOOLS;
+// A due check-back is a fresh machine turn: it reads the current state and decides what to say, or says nothing. A loop
+// check-back may also close the loops it was given; once it has read outside text, it closes an owner's loop directly only
+// when the loop's time has passed, and puts any other close on the owner's card. (The owner's own reminders hold every tool
+// a Waldo-started run may hold: owner-turn.ts remind.)
 // Turns that start on outside text hold no egress reads (tasks/profiles EGRESS_READ_TOOLS).
 export const OUTSIDE_TEXT_READS: readonly ToolName[] = CHILD_READ_TOOLS.filter((name) => !EGRESS_READ_TOOLS.includes(name));
-export const LOOP_CHECK_BACK_TOOLS: readonly ToolName[] = [...OUTSIDE_TEXT_READS, 'close_loop', 'propose_action'];
+// It may also keep what it learned (remember), as Waldo's own note: tools/live/memory.ts ranByWaldo.
+export const LOOP_CHECK_BACK_TOOLS: readonly ToolName[] = [...OUTSIDE_TEXT_READS, 'close_loop', 'propose_action', 'remember'];
 // A job that starts on text someone else wrote (a day card, an update card, an event brief) reads, and asks the owner on a
 // card for any change it thinks is wanted; it changes nothing itself. A job that needs more names its tools.
 export const OUTSIDE_TEXT_JOB_TOOLS: readonly ToolName[] = [...OUTSIDE_TEXT_READS, 'propose_action'];
-// A day card (the Brief among them) also closes a loop of the owner's that its day shows is over: once the loop's time has
+// A day card (the Brief among them) keeps what it learned as Waldo's own note, and closes a loop of the owner's that its day
+// shows is over: once the loop's time has
 // passed the close runs and the card lists it (hooks/registry.ts); a loop still ahead goes on the owner's card.
-export const DAY_CARD_TOOLS: readonly ToolName[] = [...OUTSIDE_TEXT_JOB_TOOLS, 'close_loop'];
+export const DAY_CARD_TOOLS: readonly ToolName[] = [...OUTSIDE_TEXT_JOB_TOOLS, 'close_loop', 'remember'];
 
 const LOOK = 'Look at the current state with your read tools before you write anything (mail, drafts, calendar, memory, earlier conversation, whatever this is about). Then say what matters now, from what you found, and ask at most one question; the owner wants the result, not the list of what you looked at.';
 const SILENT = `If what you found means the owner gains nothing from hearing from you now, reply with exactly ${SKIP_UPDATE}.`;
@@ -33,6 +35,7 @@ export const reminderCheckBackText = (note: string, timing?: ReminderTiming): st
   'This message is the reminder itself: remind them in your own words, usually in one short line. It is not a confirmation, so leave out when it was set and whether it repeats, and do not add a sentence explaining that they asked for it. Do not repeat the note word for word.',
   ...(timing === undefined ? [] : ['If it is well past its time, say it was due at that time, so they know it is late and can judge what is still worth doing. On time, just remind them and leave the time out.']),
   'When the reminder is about something you can check (a meeting, an email, a task), check it first with your read tools; if it moved or is already done, say that instead. A plain nudge needs no reads.',
+  'When the owner asked for something to be done at this time (send, draft, book, look something up), do it now with your tools, then remind them in a line of what you did: anything that reaches another person goes on their card.',
   SILENT,
 ].join('\n\n');
 
