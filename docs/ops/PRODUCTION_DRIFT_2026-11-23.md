@@ -52,7 +52,7 @@ migration (`node scripts/production-alpha-dryrun.mjs`, "migrations from zero").
 
 | Item | Staging | Production | Note |
 |---|---|---|---|
-| The 100 unconditional switches | on | off | Each code batch makes its switches unconditional in both environments. The config PR turns them on in production now, so production matches before the batches land. R2, R3 and R4 are among them. |
+| The 100 unconditional switches | on | off | Each code batch makes its switches unconditional in both environments, so production gets the behaviour with the code and the tests of that area. The config is not flipped ahead of the code: the test pool runs the production block, and hundreds of owner-object tests were written against every switch off. R2, R3 and R4 are among them. |
 | `LANGFUSE_RETENTION_SWEEP`, `HISTORY_ARCHIVE` | `dry` | `0` | `dry` counts and changes nothing. |
 | `WALDO_COST_LEDGER_SYNC` | `on` | `off` | Without it the spend ceilings are inert (runbook S9). Unconditional. |
 | `WALDO_TOOL_LOADER` | `harness` | `off` | Unconditional. |
