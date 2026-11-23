@@ -242,7 +242,7 @@ import { GRANOLA_MCP_URL, isGranolaHost, isReviewedGranola } from '../connectors
 import { readConsoleTicket } from '../identity/console-ticket';
 import { signedRpc } from '../identity/owner-directory';
 import { ownerGoogleSignin } from '../identity/owner-google-signin';
-import { ownerPush, pushReceipts } from './expo-push';
+import { ownerPush, pushReceipts, type PushTarget } from './expo-push';
 import { googleProxy } from '../connectors/connections';
 import { INTERRUPTED_NOTICES, NOTHING_RUNNING, STOPPED_BEFORE_START } from '../prompt/fixed-lines';
 import { googleNameLine } from '../prompt/messaging-behavior';
@@ -387,8 +387,6 @@ type OwnerRuntime = Readonly<{
   settleFinal(record: FinalRecord): Promise<void>;
   // The app's push to the owner's devices, within its kind's daily ceiling and never in quiet hours (expo-push.ts).
   push: ReturnType<typeof ownerPush>;
-  // Reads Expo's receipts for pushes it accepted, so a push Apple or Google failed is logged and a dead token retired.
-  pushReceipts: ReturnType<typeof pushReceipts>;
   fire(entry: ScheduleEntry): Promise<void | 'delivery_pending'>;
   beat(entry: ScheduleEntry): Promise<void | 'delivery_pending'>;
   noticeFailures(): Promise<void>;
@@ -1538,6 +1536,23 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return this.appBound() && proactiveOnOwnerChain(this.ctx.storage.kv, proactiveBothDefault(this.env));
   }
   // The app binding written at the owner's first app message: the local sign that the app is one of their surfaces.
+  private pushDirectory(): { call: NonNullable<ReturnType<typeof signedRpc>>; doName: string } {
+    const call = signedRpc(this.env), doName = this.ctx.storage.kv.get<string>('do_name');
+    if (!call || !doName) throw new Error('push directory unavailable');
+    return { call, doName };
+  }
+
+  private retirePushTarget({ installation_id: installation, device_epoch: epoch }: Pick<PushTarget, 'installation_id' | 'device_epoch'>): Promise<unknown> {
+    const { call, doName } = this.pushDirectory();
+    return call('app_push_retire', `app.push.retire.${doName}.${installation}.${epoch}`, { p_do_name: doName, p_installation_id: installation, p_device_epoch: epoch });
+  }
+
+  // Receipt codes go to the Worker log only; they carry counts, never a token or a ticket id.
+  private readPushReceipts(): Promise<void> {
+    return pushReceipts({ accessToken: this.env.EXPO_ACCESS_TOKEN, kv: this.ctx.storage.kv, send: fetch, retire: target => this.retirePushTarget(target),
+      log: (code, count) => console.log(JSON.stringify({ hop: 'app_push', ok: code === 'receipt_ok' || code === 'retired', code, detail: `${code}: ${count}` })) })();
+  }
+
   private appBound(): boolean {
     const kv = this.ctx.storage.kv, doName = kv.get<string>('do_name');
     return !!doName && kv.get<boolean>('app_unlinked') !== true && kv.get<string>('app_subject') === String(appSubjectFor(doName));
@@ -3522,7 +3537,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (marking) kv.put(ALARM_PASS_OPEN, true);
     this.passOwed = false;
     // Expo's receipts for pushes sent at least a quarter of an hour ago, beside the pass: a failed read waits for the next one.
-    if (this.appBound()) this.ctx.waitUntil(this.setup('app').pushReceipts().catch(() => undefined));
+    // Read without the turn runtime, whose build re-arms the heartbeat an idle wake must leave alone.
+    if (this.appBound()) this.ctx.waitUntil(this.readPushReceipts().catch(() => undefined));
     try {
       const alarmEnd = Date.now() + ALARM_TURN_BUDGET_MS;
       this.passEnd = alarmEnd;
@@ -5169,18 +5185,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const lookFollows = async (on: boolean) => { if (interventions && on && armable('heartbeat')) await armLook(Date.now()); else await dropLook(); };
     const dropLook = async () => { if (scheduler.lookup(INTERVENTION_REVIEW_ID).state !== 'absent') { await scheduler.cancelReadable(INTERVENTION_REVIEW_ID); cancelMachine('intervention'); } };
     // The app's push: fixed text to the owner's own devices, read from the directory for each send.
-    const pushDirectory = () => {
-      const call = signedRpc(this.env), doName = identity.get<string>('do_name');
-      if (!call || !doName) throw new Error('push directory unavailable');
-      return { call, doName };
-    };
     const eventPerDay = eventPushesPerDay(this.env.EVENT_PUSH_PER_DAY);
     const pushDeps: Parameters<typeof ownerPush>[0] = { accessToken: this.env.EXPO_ACCESS_TOKEN, kv: identity, send: fetch, quiet, today: () => localIso(Date.now(), clock.timezone).slice(0, 10),
-      targets: async () => { const { call, doName } = pushDirectory(); return call('app_push_targets', `app.push.targets.${doName}`, { p_do_name: doName }); },
-      retire: async ({ installation_id: installation, device_epoch: epoch }) => {
-        const { call, doName } = pushDirectory();
-        return call('app_push_retire', `app.push.retire.${doName}.${installation}.${epoch}`, { p_do_name: doName, p_installation_id: installation, p_device_epoch: epoch });
-      },
+      targets: async () => { const { call, doName } = this.pushDirectory(); return call('app_push_targets', `app.push.targets.${doName}`, { p_do_name: doName }); },
+      retire: target => this.retirePushTarget(target),
       log: (code, count) => {
         if (code === 'sent' || (code === 'partial' && count > 0)) markWindowPushed(this.ctx.storage.kv, Date.now(), this.ownerDay(Date.now()));
         log({ trace: `push:${Date.now()}`, hop: 'app_push', ms: 0, ok: code === 'sent' || code === 'retired' || code === 'receipt_ok', code, detail: `${code}: ${count}` });
@@ -5192,7 +5200,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         : reachesOut() ? null : 'consent',
       spent: kind => { if (kind === 'event' && interrupts) interrupts.book.spend(interrupts.limits(), false, 'push:event'); },
       ...(eventPerDay === null ? {} : { eventPerDay }), ...(interrupts ? { proactivePerDay: () => interrupts.limits().perDay } : {}) };
-    const push = ownerPush(pushDeps), receipts = pushReceipts(pushDeps);
+    const push = ownerPush(pushDeps);
     // Media reads are per-surface and feed the one transcriber/attachment pipeline: Telegram file ids go through getFile,
     // WhatsApp media ids through the Graph two-step, and an app attachment's id opens the upload staged in this object.
     const mediaReaders: Readonly<Record<ChannelKind, () => TelegramFileDownloader>> = {
@@ -7010,7 +7018,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await armTaskJobsWake(storage, made.job.due_at ?? Date.now());
       },
     };
-    const runtime: OwnerRuntime = { welcome, lookup, getToKnow, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}), ...(getToKnowApply ? { get_to_know_you: getToKnowApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, push, pushReceipts: receipts, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, reviseBriefForBody, healthChanged, healthTrigger, interventionReview, announcementPass, announcementsCurrent, placeMoved, placeArrived, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    const runtime: OwnerRuntime = { welcome, lookup, getToKnow, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}), ...(getToKnowApply ? { get_to_know_you: getToKnowApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, push, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, reviseBriefForBody, healthChanged, healthTrigger, interventionReview, announcementPass, announcementsCurrent, placeMoved, placeArrived, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       lookupToolHandlers: () => {
         const unlocated = webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch), this.lookupPages) : null;

@@ -168,7 +168,10 @@ const RECEIPT_ERRORS: Readonly<Record<string, string>> = { DeviceNotRegistered: 
 // failure is logged by its reason, and a token the receipt says is dead retires its registration, fenced on its epoch. A
 // receipt not ready yet is asked for again next time; a ticket past the day Expo keeps receipts is dropped as missing. A read
 // that fails keeps every ticket for the next one. Never throws.
-export const pushReceipts = (deps: OwnerPushDeps) => async (): Promise<void> => {
+// A receipt read needs only the token, the store, the wire, the directory's retire and the log: an owner wake reads them
+// without building the turn runtime.
+export type ReceiptDeps = Pick<OwnerPushDeps, 'accessToken' | 'kv' | 'retire' | 'send' | 'log' | 'now'>;
+export const pushReceipts = (deps: ReceiptDeps) => async (): Promise<void> => {
   const now = (deps.now ?? Date.now)(), held = deps.kv.get<Ticket[]>(TICKETS_KEY) ?? [];
   const missing = held.filter(ticket => now - ticket.at >= RECEIPT_KEPT_MS), live = held.filter(ticket => now - ticket.at < RECEIPT_KEPT_MS);
   const due = live.filter(ticket => now - ticket.at >= RECEIPT_AFTER_MS);
