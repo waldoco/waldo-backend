@@ -485,7 +485,7 @@ export const createOwnerResponder = (
   const ask = async (...args: Parameters<typeof complete>) => (await complete(...args)).text;
   const dayPlanHealth = async (trace: string): Promise<string> => {
     const shared = await health?.(trace) ?? null;
-    return shared === 'unreadable' ? renderHealth(null, true) : shared ? `${SHARED_HEALTH_LABEL}\n${renderHealth(shared)}` : renderHealth(null);
+    return shared === 'unreadable' ? renderHealth(null, 'unreadable') : shared ? `${SHARED_HEALTH_LABEL}\n${renderHealth(shared)}` : renderHealth(null);
   };
   const control = turnControl();
   const tree = new ConversationTree();
@@ -562,10 +562,18 @@ export const createOwnerResponder = (
   const contextInputs = () => ({ ...(context?.snapshot() ?? localTrustedBriefTurnSnapshot()), canary_tokens: CANARIES, replay_context_ref: null });
   // The store a turn reads its chain from carries the settings it read under, so the view and the trigger agree with it.
   const compaction = conversationStore?.compaction ?? COMPACTION;
+  // A health view left out of a run for its size is logged once a turn, by a fixed code and nothing of the view.
+  let healthWithheldNoted = false;
+  const noteHealthWithheld = (trace: string, composed: Readonly<{ health_withheld?: 'oversize' }>) => {
+    if (!composed.health_withheld || healthWithheldNoted) return;
+    healthWithheldNoted = true;
+    log({ trace, hop: 'health_context', ms: 0, ok: false, code: `withheld_${composed.health_withheld}` });
+  };
   const path = new JoinedConversationPath(composer, {
     complete: async (request) => {
       await assertCurrent();
         const trace = traceId;
+      noteHealthWithheld(trace, request.composition);
       // Capture-mode probe turns run on the stripped handler set; delegation wraps that
       // same set so probe confinement applies to children too (children are read-only by
       // construction, and the strip list is not widened here).
@@ -748,6 +756,7 @@ export const createOwnerResponder = (
           // Owner memory gets the room left in the FINAL system prompt (after the skill wrapper), because the sanitiser drops an oversize one whole.
           const composed = context ? await composer.compose(invocation, contextInputs()) : undefined;
           if (composed && !composed.ok) throw new Error(`owner context failed: ${composed.failure.code}`);
+          if (composed) noteHealthWithheld(trace, composed);
           // A composed owner context carries this line in its identity; a turn or job without one (no directory) reads it here.
           const ownerProfileLine = context ? undefined : (await privateOwner?.ownerProfile?.()) ?? undefined;
           await assertCurrent();
