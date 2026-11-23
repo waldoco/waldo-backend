@@ -1,7 +1,7 @@
 import { endAskCards, taskAskCard, taskAskRef, withdrawRunCards, type ApprovalDesk } from '../channels/approvals';
 import type { JobBook } from './jobs';
 
-// The cards a background task raises for its own steps (WALDO_TASK_ASK), between the owner's approval desk and the job book.
+// The cards a background task raises for its own steps, between the owner's approval desk and the job book.
 // An approval resumes the task, whose next attempt runs the step under the task's own scope: no card a task asked on ever
 // becomes a replay job, and the task, not the replay lane, settles it.
 export const taskAsks = (sql: SqlStorage, book: () => JobBook) => ({

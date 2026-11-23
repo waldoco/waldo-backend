@@ -138,11 +138,10 @@ export const openIMessageTurnMedia = async (host: OwnerHost, record: IMessageInb
     return { kind: 'answered' };
   }
   if (!record.media) return { kind: 'text' };
-  const keep = host.env.WALDO_FILE_TOOLS === '1'
-    ? uploadKeeper(() => workspaceOwnerHost(host.env, host.storage, host.id.toString(), record.ownerDoName, fetch, scope), record.ownerDoName) : undefined;
+  const keep = uploadKeeper(() => workspaceOwnerHost(host.env, host.storage, host.id.toString(), record.ownerDoName, fetch, scope), record.ownerDoName);
   const transcribe = iMessageTranscriber(host.env);
   const opened = await openIMessageMedia(record.media, { enabled: host.env.IMESSAGE_MEDIA === '1', source: photonAttachmentSource(host.env),
-    sender: record.binding.subject, signal: scope.signal, admit: scope.admit, ...(keep ? { keep } : {}), ...(transcribe ? { transcribe } : {}) });
+    sender: record.binding.subject, signal: scope.signal, admit: scope.admit, keep, ...(transcribe ? { transcribe } : {}) });
   if (opened.kind === 'opened') return opened;
   scope.commit(() => { new IMessageFinalOutbox(host.storage).freeze(record, opened.text); new IMessageOwnerInbox(host.storage).closeFinal(record); });
   return { kind: 'answered' };

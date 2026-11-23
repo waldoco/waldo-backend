@@ -137,7 +137,8 @@ describe('when the look-up job ends', () => {
     return row.id;
   };
   const apply = (book: JobBook, id: string, handler: ReturnType<typeof lookupApplier>, hops: string[] = [], now = T0) =>
-    applyMachineJob(book.get(id)!, { book, now: () => now, hop: (_row, name) => { hops.push(name); }, appliers: { owner_lookup: handler } });
+    applyMachineJob(book.get(id)!, { book, now: () => now, hop: (_row, name) => { hops.push(name); }, appliers: { owner_lookup: handler },
+      note: () => { throw new Error('a look-up reports its own stop, never the stopped note'); } });
 
   it('tells the owner what it found, counted from the findings it recorded, and lets the web stage read them', () => withOwner(async ({ book, deps }) => {
     const id = reported(book, deps());

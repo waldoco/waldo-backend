@@ -63,7 +63,7 @@ const fixture = (name: string, switches: Record<string, string | undefined>, wor
   state.storage.kv.put('app_subject', String(appSubjectFor(name)));
   const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
   const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, WALDO_OWNER_TELEGRAM_ID: undefined, OPENAI_API_KEY: 'synthetic-fixture',
-    WALDO_OWNER_TIMEZONE: 'UTC', ELEVENLABS_API_KEY: undefined, SMALLEST_AI_API_KEY: undefined, WALDO_STT_PROVIDER: undefined, WALDO_FILE_TOOLS: '0', ...switches } as never);
+    WALDO_OWNER_TIMEZONE: 'UTC', ELEVENLABS_API_KEY: undefined, SMALLEST_AI_API_KEY: undefined, WALDO_STT_PROVIDER: undefined, ...switches } as never);
   const session = { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'b'.repeat(64) };
   try {
     await work({

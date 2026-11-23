@@ -103,7 +103,7 @@ export const APPLY_RETRY_MS = 60 * 60_000;
 export const HELD_RETRY_MS = 30 * 60_000;
 export const HELD_WINDOW_MS = 36 * 60 * 60_000;
 
-// With WALDO_TASK_NOTES=1, a machine job that stopped (parked, or its worker failed or was blocked with nothing to show)
+// A machine job that stopped (parked, or its worker failed or was blocked with nothing to show)
 // tells the owner once a day per job, outside quiet hours, so background work never drops out of sight. `note` queues the
 // line under its key with `settle` in the same commit; a key already queued only settles.
 export type MachineNote = (key: string, text: string, settle: () => void) => Promise<void>;
@@ -117,7 +117,7 @@ const DAY_MS = 24 * 60 * 60_000;
 // The jobs lane's apply step for a machine job. The owner never asked for this work, so nothing here tells them about it
 // unless the job found something: a parked job, an empty result and an apply that never got a model all settle silently.
 export const applyMachineJob = async (row: JobRow, deps: Readonly<{
-  book: JobBook; now(): number; appliers: MachineAppliers; hop(row: JobRow, name: string, fields?: Partial<TurnLogEntry>): void; note?: MachineNote;
+  book: JobBook; now(): number; appliers: MachineAppliers; hop(row: JobRow, name: string, fields?: Partial<TurnLogEntry>): void; note: MachineNote;
 }>): Promise<void> => {
   try { await applyOnce(row, deps); } finally {
     const after = deps.book.get(row.id);
@@ -160,10 +160,10 @@ const applyOnce = async (row: JobRow, deps: Parameters<typeof applyMachineJob>[1
     if (deps.now() - row.updated_at < APPLY_RETRY_MS && book.postpone(row.id, deps.now() + deferDelay(row.deferrals))) return deps.hop(row, 'machine_apply_deferred', { ok: false });
     return quietly('machine_dropped', { ok: false, code: 'apply_unavailable' });
   };
-  // A job that stopped tells the owner when this deploy says so; otherwise it settles silently, as one that found nothing.
+  // A job that stopped tells the owner.
   const stopped = async (name: string, fields: Partial<TurnLogEntry>, why: string) => {
     // Waldo's own look is unasked by nature: a stopped one is not worth a message outside the owner's limits.
-    if (!deps.note || job === 'intervention') return quietly(name, fields);
+    if (job === 'intervention') return quietly(name, fields);
     try { await deps.note(`machine:${job}:stopped:${Math.floor(deps.now() / DAY_MS)}`, machineStoppedNote(job, why), settle); }
     catch (error) { if (error instanceof ClosedRunError) return; throw error; }
     done(name, { ...fields, detail: 'noted' });

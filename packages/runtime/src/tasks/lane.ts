@@ -53,15 +53,12 @@ export type JobsLaneDeps = Readonly<{
   }>;
   // Each machine job's apply, which names its own tools and delivery; a job with none settles silently.
   machine?: MachineAppliers;
-  // WALDO_TASK_NOTES: a machine job that stopped tells the owner (machine.ts), and a task parked for a crash or an outage
-  // runs once more before the owner hears it stopped.
-  followUp?: boolean;
-  // WALDO_TASK_ASK: how a card a task asked on stands, by id.
+  // How a card a task asked on stands, by id.
   askedCard?(approvalId: string): 'waiting' | 'approved' | 'declined';
-  // WALDO_TASK_PICKUP: what Waldo and the owner said since `since`, oldest first, on any surface, and whether any of it carried
+  // What Waldo and the owner said since `since`, oldest first, on any surface, and whether any of it carried
   // outside text, which then makes the report turn tainted.
   recentExchange?(since: number): Readonly<{ text: string; outside: boolean }>;
-  // WALDO_TASK_PICKUP: whether a card the owner can approve in words waits in the chat a report goes to (the app thread a task
+  // Whether a card the owner can approve in words waits in the chat a report goes to (the app thread a task
   // was started in, or main). A message landing between that card and the owner's answer would read as what their "yes" answers.
   held?(conversationRef: string | undefined): boolean;
 }>;
@@ -99,7 +96,7 @@ const endedEarly = (row: JobRow): 'partial' | 'blocked' | 'failed' | null => {
   return status === 'partial' || status === 'blocked' || status === 'failed' ? status : null;
 };
 
-// exchange: what Waldo and the owner said since the task finished (WALDO_TASK_PICKUP). A turn that was running when it finished may
+// exchange: what Waldo and the owner said since the task finished. A turn that was running when it finished may
 // have read it with check_task and told the owner already; the model judges what is left to say.
 export const resultApplyText = (row: JobRow, exchange?: string): string => {
   const brief = taskBrief(row);
@@ -162,10 +159,12 @@ export async function runJobsLane(deps: JobsLaneDeps): Promise<number | null> {
     settled = [];
   };
 
-  const machineNote = deps.followUp ? (key: string, text: string, settle: () => void) => deps.quiet() ? Promise.resolve(settle()) : deps.deliver(key, `machine:${key}`, text, settle) : undefined;
+  // A machine job that stopped tells the owner (machine.ts), and a task parked for a crash or an outage runs once more before
+  // the owner hears it stopped.
+  const machineNote = (key: string, text: string, settle: () => void) => deps.quiet() ? Promise.resolve(settle()) : deps.deliver(key, `machine:${key}`, text, settle);
   const apply = async (row: JobRow) => {
-    if (isMachine(row)) return applyMachineJob(row, { book, now: deps.now, appliers: deps.machine ?? {}, hop, ...(machineNote ? { note: machineNote } : {}) });
-    if (deps.followUp && row.kind === 'task' && book.retryParked(row.id, deps.now() + PARK_RETRY_MS)) { hop(row, 'task_park_retry', { ok: false, code: row.park_reason ?? 'parked' }); return; }
+    if (isMachine(row)) return applyMachineJob(row, { book, now: deps.now, appliers: deps.machine ?? {}, hop, note: machineNote });
+    if (row.kind === 'task' && book.retryParked(row.id, deps.now() + PARK_RETRY_MS)) { hop(row, 'task_park_retry', { ok: false, code: row.park_reason ?? 'parked' }); return; }
     if (row.kind === 'task' && row.park_reason) deps.host.endAsk(row);
     if (row.kind === 'task' && deps.now() - row.updated_at < REPORT_HOLD_MAX_MS && deps.held?.(taskBrief(row).conversation_ref)) {
       if (book.hold(row.id, deps.now() + REPORT_HOLD_RECHECK_MS)) hop(row, 'task_report_held');

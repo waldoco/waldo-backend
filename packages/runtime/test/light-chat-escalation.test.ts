@@ -237,7 +237,7 @@ it('a turn that carries an attachment takes no light step', async () => {
 });
 
 // A Brief, a reminder or a card is a machine turn on the same chat. The light step reads only the owner's own exchange, so
-// it cannot answer "what's on today?" from a Brief's plan wording; the strong role reads the whole chat.
+// it cannot answer "what's on today?" from a Brief's plan wording; the strong role reads the whole chat as sent.
 const BRIEF_JOB = 'Write the Brief: the violet-harbour review sits at 11:00.';
 const BRIEF_REPLY = 'Brief: the violet-harbour review at 11:00 is the anchor today.';
 const onLight = (light: Script): Script => (request, said) => request.request.tools?.some((tool) => tool.name === 'escalate') ? light(request, said) : { text: BRIEF_REPLY };
@@ -254,7 +254,9 @@ it('the light step reads the owner\'s own exchange and no machine turn: a Brief 
   expect(light.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);
   expect(light.slice(0, 2).map((message) => message.content)).toEqual(['Thanks for the kiwi-lantern tip.', LIGHT_REPLY]);
   expect(JSON.stringify(light)).not.toContain('violet-harbour');
-  for (const marker of ['kiwi-lantern', LIGHT_REPLY, BRIEF_JOB, BRIEF_REPLY]) expect(JSON.stringify(strong)).toContain(marker);
+  for (const marker of ['kiwi-lantern', LIGHT_REPLY, BRIEF_REPLY]) expect(JSON.stringify(strong)).toContain(marker);
+  // A job's prompt is stored as a keyed stub, so the strong role reads the Brief it sent, not the job that asked for it.
+  expect(JSON.stringify(strong)).not.toContain(BRIEF_JOB);
   expect(routes(hops)).toEqual(['answered', 'escalated']);
 });
 

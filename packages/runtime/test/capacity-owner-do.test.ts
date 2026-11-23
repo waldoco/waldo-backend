@@ -100,7 +100,7 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown> }; alarm(): Promise<void>; serial(work: () => Promise<void>): Promise<void>; fetch(request: Request): Promise<Response> }>;
-type Steps = Readonly<{ state: DurableObjectState; nightly(): Promise<void>; card(id: 'card:brief' | 'card:close'): Promise<void>; codes(hop: string): (string | null)[]; stored(): string;
+type Steps = Readonly<{ state: DurableObjectState; nightly(): Promise<void>; card(id: 'card:brief' | 'card:close', earlier?: number): Promise<void>; codes(hop: string): (string | null)[]; stored(): string;
   approvals(): Promise<ReturnType<typeof appApprovalListV1Schema.parse>['approvals']> }>;
 
 const owned = async (name: string, settings: Readonly<Record<string, unknown>>, run: (steps: Steps) => Promise<void>) => {
@@ -120,9 +120,9 @@ const owned = async (name: string, settings: Readonly<Record<string, unknown>>, 
         WALDO_OWNER_TELEGRAM_ID: undefined, WALDO_TOOL_OFFLOAD: '0', ...settings } as never) as unknown as Owner;
       await owner.setup('app').ready;
       await owner.serial(async () => undefined);
-      const fire = async (id: string, kind: 'brief' | 'dreaming') => {
+      const fire = async (id: string, kind: 'brief' | 'dreaming', earlier = 0) => {
         state.storage.sql.exec('DELETE FROM schedule');
-        await new Scheduler(state.storage.sql, state.storage, productionDeps()).schedule({ id, kind, payloadRefs: { id }, occurrenceAt: AT - 1000, dueAt: AT - 1000, recurrence: null });
+        await new Scheduler(state.storage.sql, state.storage, productionDeps()).schedule({ id, kind, payloadRefs: { id }, occurrenceAt: AT - 1000 - earlier, dueAt: AT - 1000 - earlier, recurrence: null });
         state.storage.kv.put('owner_alarm_last_v1', 1);
         await owner.alarm();
         await state.storage.deleteAlarm();
@@ -130,7 +130,7 @@ const owned = async (name: string, settings: Readonly<Record<string, unknown>>, 
       await run({
         state,
         nightly: () => fire(NIGHTLY_ID, 'dreaming'),
-        card: async id => { dayPlanBook(state.storage.sql).save(DAY, { card: id, time: '08:00', reason: 'planned' }); await fire(id, 'brief'); },
+        card: async (id, earlier) => { dayPlanBook(state.storage.sql).save(DAY, { card: id, time: '08:00', reason: 'planned' }); await fire(id, 'brief', earlier); },
         codes: hop => state.storage.sql.exec<{ note: string | null }>('SELECT note FROM trace_log WHERE hop = ? ORDER BY rowid', hop).toArray().map(row => row.note || null),
         stored: () => {
           const kv = [...state.storage.kv.list()].map(([key, value]) => `${key} ${JSON.stringify(value)}`);
@@ -325,7 +325,7 @@ describe('the Brief and the Close with CAPACITY_PLAN', { timeout: 30_000 }, () =
       await card('card:close');
       expect(model.cards[0]!.request).toContain(NOTE);
       health.shared = false;
-      await card('card:close');
+      await card('card:close', 60_000);
       const after = model.cards.at(-1)!.request;
       expect(after).not.toContain(NOTE);
       expect(after).toContain(NO_NOTE);

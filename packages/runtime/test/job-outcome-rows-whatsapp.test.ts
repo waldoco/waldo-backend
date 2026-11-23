@@ -88,7 +88,7 @@ const legacyChain = (state: DurableObjectState) => JSON.stringify([...state.stor
 
 describe('a WhatsApp owner\'s chain after a day card', { timeout: 30_000 }, () => {
   it('the owner\'s next turn reads the Brief it was sent and none of the Brief\'s prompt', async () => {
-    await withWhatsAppOwner('job-outcome-whatsapp', { WALDO_JOB_OUTCOME_ROWS: '1' }, async (owner, state) => {
+    await withWhatsAppOwner('job-outcome-whatsapp', {}, async (owner, state) => {
       await fireBrief(owner, state);
       await ownerSays(owner, 'Thanks. Anything I should prep?');
       const turn = model.asked.at(-1)!;
@@ -100,20 +100,13 @@ describe('a WhatsApp owner\'s chain after a day card', { timeout: 30_000 }, () =
   });
 
   it('with the one timeline on, an owner with no app still reads the Brief they were sent on WhatsApp in their next turn there', async () => {
-    await withWhatsAppOwner('job-outcome-whatsapp-timeline', { WALDO_JOB_OUTCOME_ROWS: '1', WALDO_ONE_TIMELINE: '1' }, async (owner, state) => {
+    await withWhatsAppOwner('job-outcome-whatsapp-timeline', { WALDO_ONE_TIMELINE: '1' }, async (owner, state) => {
       await fireBrief(owner, state);
       await ownerSays(owner, 'Thanks. Anything I should prep?');
       const turn = model.asked.at(-1)!;
       expect(turn).toContain('Anything I should prep?');
       expect(turn).toContain(BRIEF);
       expect(turn).not.toContain(JSON.stringify(CARD_MARK).slice(1, -1));
-    });
-  });
-
-  it('with the switch off, the chain keeps the Brief\'s prompt as it did before', async () => {
-    await withWhatsAppOwner('job-outcome-whatsapp-off', {}, async (owner, state) => {
-      await fireBrief(owner, state);
-      expect(legacyChain(state)).toContain(JSON.stringify(CARD_MARK).slice(1, -1));
     });
   });
 });

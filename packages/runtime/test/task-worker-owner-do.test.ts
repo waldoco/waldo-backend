@@ -156,13 +156,13 @@ it('cancel_task in an owner turn ends the task and withdraws the card its errand
   });
 }, 30_000);
 
-// The owner's ruling for a worker step that needs their approval: words now, a card later. The task stops at the step and
-// hands it back as a proposal; the report's apply turn asks the owner. The owner's real browse_act acts on a live turn's
-// browser session, so an approval could never replay it: propose_action makes no card for it, and nothing ran.
-it('a worker\'s browser step that needs the owner stops the task as a proposal, and the apply turn asks in words: no card, nothing ran', async () => {
+// A worker that hands a browser step back as a proposal: the report's apply turn asks the owner in words. The owner's real
+// browse_act acts on a live turn's browser session, so an approval could never replay it: propose_action makes no card for
+// it, and nothing ran.
+it('a browser step a worker hands back as a proposal is asked in words by the apply turn: no card, nothing ran', async () => {
   const name = 'task-owner-step-e2e';
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
-  type Rpc = { taskClaim(...args: unknown[]): Promise<{ tools: { name: string }[] } | 'fenced'>; taskTool(...args: unknown[]): Promise<Record<string, unknown> | 'fenced'>; taskReport(...args: unknown[]): Promise<string> };
+  type Rpc = { taskClaim(...args: unknown[]): Promise<{ tools: { name: string }[] } | 'fenced'>; taskReport(...args: unknown[]): Promise<string> };
   const step = { url: 'https://fixture.invalid/book', task: 'Book a table for two at 8pm.' };
   seen.browser = true;
   const jobId = await runInDurableObject(stub, async (instance, state) => {
@@ -178,11 +178,6 @@ it('a worker\'s browser step that needs the owner stops the task as a proposal, 
     // The owner's browse_act acts on a live turn's browser session, so an approval could never replay it.
     const owned = (instance as unknown as { setup(channel: string): { toolHandlers(): { name: string; turn_bound?: boolean }[] } }).setup('telegram').toolHandlers();
     expect(owned.find(handler => handler.name === 'browse_act')).toMatchObject({ turn_bound: true });
-    const refused = await rpc.taskTool(ticket, { call_id: 'c-book', name: 'browse_act', arguments: JSON.stringify(step) }, ['a1b2c3d4e5f60718', '1a2b3c4d5e6f7081', 'f0e1d2c3b4a59687']);
-    expect(refused).toMatchObject({ ok: false, error_code: 'taint_needs_approval', retryable: false });
-    expect(JSON.stringify(refused)).toContain('finish_task');
-    expect(JSON.stringify(refused)).not.toContain('propose_action');
-    expect(jobs(state.storage.sql)[0]).toMatchObject({ status: 'running', inflight_json: null });
     // A worker that read pages reports outside text, so its report is applied under the outside-text ceiling.
     state.storage.sql.exec("UPDATE task_jobs SET taint = 'external' WHERE id = ?", job.id);
     expect(await rpc.taskReport(ticket, { kind: 'result', result: { status: 'blocked', summary: 'Found a table at 8pm; booking it needs the owner.', findings: [],

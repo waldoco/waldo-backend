@@ -27,7 +27,7 @@ describe('uploadPath', () => {
   });
 });
 
-describe('every owner upload is kept (WALDO_FILE_TOOLS on)', () => {
+describe('every owner upload is kept', () => {
   it('saves a type the model cannot read and names the saved path instead of "cannot be read"', async () => {
     const w = await setup();
     const loaded = await loadTelegramMedia(zipDoc, { download: async () => bytes, keep: w.keep });

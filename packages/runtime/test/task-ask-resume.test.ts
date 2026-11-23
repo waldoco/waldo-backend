@@ -15,7 +15,7 @@ import { FINISH_TASK } from '../src/tasks/profiles';
 import { runTaskAttempt, type TaskModel } from '../src/tasks/worker-loop';
 import { PARK_WORDS } from '../src/prompt/fixed-lines';
 
-// Ask and resume (WALDO_TASK_ASK): a worker that reaches a step only the owner can approve raises the card at once and the job
+// Ask and resume: a worker that reaches a step only the owner can approve raises the card at once and the job
 // waits as awaiting_owner, with no lease or slot. The owner's answer resumes it: an approved step runs once in the resumed
 // attempt, under the job's own scope and admitted only as that approved call, and the worker reads it as a step already taken.
 // Real job book on Durable Object SQLite and the real dispatcher; the model, the card desk and the outbox are fakes. The trace is the job's
@@ -287,7 +287,7 @@ describe('the jobs lane and a waiting job', () => {
   });
 });
 
-describe('background work stays in sight (WALDO_TASK_NOTES)', () => {
+describe('background work stays in sight', () => {
   const parked = (book: JobBook, key: string) => {
     const { job } = book.create({ kind: 'task', profile: 'reader', idempotencyKey: key, origin: 'app-1', surface: 'app', brief, dueAt: T0, deadlineAt: T0 + 3_600_000 });
     book.startAttempt(job.id);
@@ -298,34 +298,31 @@ describe('background work stays in sight (WALDO_TASK_NOTES)', () => {
   it('a task parked for a crash runs once more after a backoff before the owner hears; the second park is reported', async () => {
     await withLane(async ({ book, clock, sent, log, deps }) => {
       const id = parked(book, 'crash-1');
-      expect(await runJobsLane(deps({ followUp: true }))).toBe(T0 + PARK_RETRY_MS);
+      expect(await runJobsLane(deps())).toBe(T0 + PARK_RETRY_MS);
       expect(book.get(id)).toMatchObject({ status: 'queued', park_retries: 1, crashes: 0, park_reason: null, due_at: T0 + PARK_RETRY_MS });
       expect(sent.size).toBe(0);
       expect(log.find(entry => entry.hop === 'task_park_retry')).toMatchObject({ code: 'crashed' });
       clock.at = T0 + PARK_RETRY_MS;
-      await runJobsLane(deps({ followUp: true }));
+      await runJobsLane(deps());
       expect(book.park(id, 'crashed')).toBe(true);
-      await runJobsLane(deps({ followUp: true }));
+      await runJobsLane(deps());
       expect(book.get(id)!.status).toBe('parked');
       expect(sent.get(`task:${id}`)).toBeDefined();
     });
   });
 
-  it('without the switch, or for a park that may have acted, the owner hears at once', async () => {
+  it('a park that may have acted is told to the owner at once', async () => {
     await withLane(async ({ book, sent, deps }) => {
-      const id = parked(book, 'crash-2');
-      await runJobsLane(deps());
-      expect(book.get(id)!.status).toBe('parked');
       const { job } = book.create({ kind: 'task', profile: 'errand', idempotencyKey: 'uncertain', origin: 'app-1', surface: 'app', brief, dueAt: T0, deadlineAt: T0 + 3_600_000 });
       book.startAttempt(job.id);
       expect(book.park(job.id, 'uncertain_effect')).toBe(true);
-      await runJobsLane(deps({ followUp: true }));
+      await runJobsLane(deps());
       expect(book.get(job.id)!.status).toBe('parked');
-      expect([...sent.keys()]).toEqual([`task:${id}`, `task:${job.id}`]);
+      expect([...sent.keys()]).toEqual([`task:${job.id}`]);
     });
   });
 
-  it('a machine job that stopped tells the owner once a day, and settles silently without the switch', async () => {
+  it('a machine job that stopped tells the owner once a day', async () => {
     await withLane(async ({ book, clock }) => {
       const machine = (key: string) => {
         const { job } = book.create({ kind: 'task', profile: 'reader', idempotencyKey: key, origin: 'machine:update_sweep', surface: 'app',
@@ -340,10 +337,6 @@ describe('background work stays in sight (WALDO_TASK_NOTES)', () => {
       await applyMachineJob(machine('m1'), { book, now: () => clock.at, appliers: {}, hop, note });
       expect([...notes.values()]).toEqual([machineStoppedNote('update_sweep', PARK_WORDS.crashed)]);
       await applyMachineJob(machine('m2'), { book, now: () => clock.at, appliers: {}, hop, note });
-      expect(notes.size).toBe(1);
-      const silent = machine('m3');
-      await applyMachineJob(silent, { book, now: () => clock.at, appliers: {}, hop });
-      expect(book.get(silent.id)!.status).toBe('parked');
       expect(notes.size).toBe(1);
     });
   });

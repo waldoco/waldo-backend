@@ -28,10 +28,10 @@ export type WatchdogView = z.infer<typeof watchdogViewSchema>;
 type Sql = Pick<SqlStorage, 'exec'>;
 const iso = (ms: number) => new Date(ms).toISOString();
 
-export const watchdogView = (sql: Sql, now: number, enabled: boolean): WatchdogView => {
+export const watchdogView = (sql: Sql, now: number): WatchdogView => {
   // A read creates nothing: an owner the watchdog never ran for has no tables yet, and that is an empty view.
   if (!sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'watchdog_findings'").toArray().length) {
-    return { version: 1, as_of: iso(now), enabled, last_check_at: null, judgments_last_hour: 0, open: [], counts_24h: {}, recent: [] };
+    return { version: 1, as_of: iso(now), enabled: true, last_check_at: null, judgments_last_hour: 0, open: [], counts_24h: {}, recent: [] };
   }
   const store = watchdogStore(sql);
   const kept = jobsKept(sql);
@@ -49,20 +49,20 @@ export const watchdogView = (sql: Sql, now: number, enabled: boolean): WatchdogV
   for (const finding of all) if (finding.at > now - DAY_MS) counts[finding.code] = (counts[finding.code] ?? 0) + 1;
   const last = store.lastCheck();
   return {
-    version: 1, as_of: iso(now), enabled, last_check_at: last === null ? null : iso(last), judgments_last_hour: store.judgments(now - HOUR_MS),
+    version: 1, as_of: iso(now), enabled: true, last_check_at: last === null ? null : iso(last), judgments_last_hour: store.judgments(now - HOUR_MS),
     open: store.open().map(shown), counts_24h: counts, recent: all.slice(-WATCHDOG_RECENT_LIMIT).reverse().map(shown),
   };
 };
 
 // GET only, no query; counted against the console's read window (`limited`) before any read.
-export const consoleWatchdog = async (input: Readonly<{ request: Request; sql: Sql; now: number; enabled: boolean; limited(): Response | null }>): Promise<Response> => {
+export const consoleWatchdog = async (input: Readonly<{ request: Request; sql: Sql; now: number; limited(): Response | null }>): Promise<Response> => {
   const reply = (body: object, status = 200, extra: Record<string, string> = {}) => Response.json(body, { status, headers: { ...DASHBOARD_OVERVIEW_HEADERS, ...extra } });
   if (input.request.method !== 'GET') return reply({ error: 'method_not_allowed' }, 405, { allow: 'GET' });
   if (new URL(input.request.url).search) return reply({ error: 'invalid_query' }, 400);
   const limited = input.limited();
   if (limited) return limited;
   try {
-    return reply(watchdogView(input.sql, input.now, input.enabled));
+    return reply(watchdogView(input.sql, input.now));
   } catch {
     console.error(JSON.stringify({ hop: 'console_watchdog', ok: false, code: 'watchdog_read_failed' }));
     return reply({ error: 'watchdog_unavailable' }, 503);

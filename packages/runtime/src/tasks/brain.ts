@@ -45,8 +45,7 @@ export type TaskHostDeps = Readonly<{
   // Ends the approval cards a run raised and the owner has not decided, for a job that was cancelled or forgotten.
   withdrawCards?(runRef: string): void;
   // Raises the owner's card for a worker's step that needs their approval, on the job's surface, as the job's ask
-  // (taskAskRef), and answers its id; null when this deploy does not ask mid-task (WALDO_TASK_ASK), and the worker then hands
-  // the step back in its result as before.
+  // (taskAskRef), and answers its id; null for a step it does not ask on, and the worker then hands the step back in its result.
   askOwner?(row: JobRow, call: LLMToolCall): Promise<string | null>;
   // Whether the card is still the approved one for exactly this call, asked as the step is about to run.
   askCurrent?(row: JobRow, approvalId: string, argsDigest: string): Promise<boolean>;
@@ -66,7 +65,7 @@ export type TaskHostDeps = Readonly<{
   // The owner's provider breaker. A claim carries its state to the worker, and the outcomes a worker sends back are replayed
   // into it, so a provider down for a worker is down for the owner's turns and the other workers too.
   providerHealth?: Pick<InMemoryCircuitBreaker, 'snapshot' | 'recordSuccess' | 'recordFailure'>;
-  // The progress watchdog's waiting nudge for a job, taken once by the claim at the round it reached (WALDO_WATCHDOG).
+  // The progress watchdog's waiting nudge for a job, taken once by the claim at the round it reached.
   nudge?(jobId: string, seq: number): NudgeCode | null;
 }>;
 

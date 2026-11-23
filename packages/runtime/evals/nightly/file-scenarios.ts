@@ -1,4 +1,4 @@
-// WALDO_FILE_TOOLS: an upload the model cannot read is kept in the owner's workspace, and the model chooses the file tools
+// An upload the model cannot read is kept in the owner's workspace, and the model chooses the file tools
 // to open it. The control asks something no file answers, so a good turn uses no file tool.
 import { readOnly, toolWorked, type Receipt } from './receipts';
 import { CALENDAR, START, type NightlyScenario } from './scenarios';

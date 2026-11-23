@@ -84,19 +84,14 @@ it('a video gets the honest unsupported reply and starts no turn', async () => {
   });
 }, 60_000);
 
-it.each(['1', '0'])('a zip on WhatsApp with WALDO_FILE_TOOLS=%s: kept in the owner\'s workspace and named to the model, or the old note', async (on) => {
-  await whatsappOwner(`wa-media-zip-${on}`, async (deliver, _graph, storage) => {
+it('a zip on WhatsApp is kept in the owner\'s workspace and named to the model', async () => {
+  await whatsappOwner('wa-media-zip-1', async (deliver, _graph, storage) => {
     await deliver({ id: 'wamid.zip', type: 'document', document: { id: 'media-zip', filename: 'photos.zip', mime_type: 'application/zip', caption: 'what is in this?' } });
     const prompt = JSON.stringify(modelInputs.at(-1));
     const manifest = storage.sql.exec<{ state_json: string }>('SELECT state_json FROM workspace_manifest').toArray()[0];
     const files = manifest ? (JSON.parse(manifest.state_json) as { files: { path: string; provenance: string; file_id: string }[] }).files : [];
-    if (on === '1') {
-      expect(files).toEqual([expect.objectContaining({ path: expect.stringMatching(/^uploads\/[0-9a-f]{8}\/photos\.zip$/), provenance: 'owner_upload' })]);
-      expect(prompt).toContain(`Saved in their workspace as ${files[0]!.path}`);
-      expect(prompt).not.toContain('cannot be read yet');
-    } else {
-      expect(files).toEqual([]);
-      expect(prompt).toContain('Owner sent a file \\"photos.zip\\". This file type cannot be read yet.');
-    }
-  }, { WALDO_FILE_TOOLS: on });
+    expect(files).toEqual([expect.objectContaining({ path: expect.stringMatching(/^uploads\/[0-9a-f]{8}\/photos\.zip$/), provenance: 'owner_upload' })]);
+    expect(prompt).toContain(`Saved in their workspace as ${files[0]!.path}`);
+    expect(prompt).not.toContain('cannot be read yet');
+  });
 }, 60_000);

@@ -153,7 +153,7 @@ export const iMessageMediaNotes = (files: readonly MediaFile[]): readonly Inboun
 export type OpenedIMessageMedia =
   | Readonly<{ kind: 'opened'; parts: readonly InboundPart[]; attachments: readonly LLMAttachment[] }>
   | Readonly<{ kind: 'reply'; text: string }>;
-// keep: present with WALDO_FILE_TOOLS on. Every file is then fetched and kept in the owner's workspace, whatever its type.
+// keep: when present, every file is fetched and kept in the owner's workspace, whatever its type.
 // transcribe: present with IMESSAGE_VOICE on and a transcriber set up. A voice note sent alone is then heard, not refused.
 export type OpenIMessageMediaDeps = Readonly<{ enabled: boolean; source: PhotonAttachmentSource | null; sender: string; signal: AbortSignal; admit: () => void; keep?: UploadKeeper; transcribe?: Transcriber }>;
 

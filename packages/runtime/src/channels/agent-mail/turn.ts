@@ -38,7 +38,7 @@ const named = (list: readonly Address[] | Address | undefined): string[] =>
 
 const where = (kept: KeptUpload): string => kept.status === 'saved' ? `${kept.path} (file_id ${kept.file_id}, revision ${kept.revision})` : '';
 
-// keep: present with WALDO_FILE_TOOLS on. Every attached file (not a part the mail shows inline, such as a signature logo)
+// keep: present where the owner has a workspace. Every attached file (not a part the mail shows inline, such as a signature logo)
 // is then kept in the owner's workspace, so a later turn can open the ones this turn could not. Files are kept only after the
 // scribe passes the mail: a withheld mail keeps nothing.
 export const mailForModel = async (raw: Uint8Array, row: Pick<AgentMailRow, 'id' | 'basis'>, address: string, canaries: readonly string[], keep?: UploadKeeper): Promise<MailForModel> => {
@@ -115,7 +115,7 @@ export type AgentMailDrainDeps = Readonly<{
   // Whether this alarm still has time for a model turn.
   room(): boolean;
   log(code: AgentMailTurnCode): void;
-  // With WALDO_FILE_TOOLS on: keeps each attachment in the owner's workspace as a provider import.
+  // Keeps each attachment in the owner's workspace as a provider import.
   keep?: UploadKeeper;
 }>;
 

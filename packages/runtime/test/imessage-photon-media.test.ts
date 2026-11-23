@@ -186,7 +186,7 @@ describe('openIMessageMedia', () => {
     expect(d.source).not.toHaveBeenCalled();
   });
 
-  it('with WALDO_FILE_TOOLS on, keeps every file, attaches the readable ones and names the saved path for the rest', async () => {
+  it('with a keeper, keeps every file, attaches the readable ones and names the saved path for the rest', async () => {
     const kept: { filename: string; key: string }[] = [];
     const keep = vi.fn(async (file: { filename: string; key: string }) => { kept.push(file); return { status: 'saved' as const, path: `uploads/f/${file.filename}`, file_id: `id-${kept.length}`, revision: 1 }; });
     const zip = { id: 'att-zip', name: 'notes.zip', mimeType: 'application/zip', size: 4 };

@@ -135,7 +135,7 @@ it('a photo with a caption reaches the model as an image beside the caption, and
     expect.objectContaining({ type: 'input_text', text: expect.stringContaining('What is on this label?') }),
     { type: 'input_image', image_url: `data:image/png;base64,${base64(PNG)}`, detail: 'auto' },
   ]));
-  expect(user.content.find((c: any) => c.type === 'input_text').text).toContain('[Owner sent a photo, attached.]');
+  expect(user.content.find((c: any) => c.type === 'input_text').text).toContain('[Owner sent a photo, attached.');
   expect(await w.reply()).toBe('Scripted owner reply.');
   expect(w.photon.calls).toEqual(['POST spectrum.photon.codes/projects/proj-fixture/imessage/tokens',
     expect.stringMatching(/^GET imessage\.spectrum\.photon\.codes\/v1\/messages\/sim-guid-/), 'GET imessage.spectrum.photon.codes/v1/attachments/photon-att-photo/data']);
@@ -151,7 +151,7 @@ it('a document with no caption reaches the model as a file', async () => {
   expect(proof.turns).toHaveLength(1);
   const user = JSON.parse(proof.turns[0]!).at(-1);
   expect(user.content).toContainEqual({ type: 'input_file', filename: 'notes.pdf', file_data: `data:application/pdf;base64,${base64(PDF)}` });
-  expect(user.content.find((c: any) => c.type === 'input_text').text).toContain('[Owner sent a file "notes.pdf", attached.]');
+  expect(user.content.find((c: any) => c.type === 'input_text').text).toContain('[Owner sent a file "notes.pdf", attached.');
   expect(await w.reply()).toBe('Scripted owner reply.');
 });
 
@@ -178,7 +178,6 @@ it('a failed fetch gets the honest fallback once: settled, never held, never ret
 
 it.each([
   ['an oversized photo', { ...photo, bytes: new Uint8Array(0) }, IMESSAGE_MEDIA_MAX_BYTES + 1, 'I got your photo but it is too large to open here; send it in the app.'],
-  ['a video', { ...photo, name: 'clip.mov', mimeType: 'video/quicktime' }, 8, "I got your file but can't read that format here; send it in the app."],
   ['an oversized voice note', { ...photo, name: 'Audio Message.caf', mimeType: 'audio/x-caf' }, IMESSAGE_MEDIA_MAX_BYTES + 1, "I can't listen to voice notes here yet; type it out or send it in the app."],
 ])('%s gets an honest refusal and nothing is fetched', async (_name, file, size, text) => {
   const w = await world();
@@ -189,6 +188,19 @@ it.each([
   expect(await w.reply()).toBe(text);
   expect(w.photon.calls).toEqual([]);
   expect(proof.turns).toHaveLength(0);
+});
+
+// Every file is kept in the owner's workspace, whatever its type, so a video is fetched and handed to the model's turn
+// rather than refused.
+it('a video is fetched and handed to the model\'s turn', async () => {
+  const w = await world();
+  const clip: Attached = { ...photo, id: 'photon-att-clip', name: 'clip.mov', mimeType: 'video/quicktime' };
+  expect((await w.host.send(w.media('', [clip]))).status).toBe(200);
+  await w.pump();
+  expect(w.photon.calls).toContain('GET imessage.spectrum.photon.codes/v1/attachments/photon-att-clip/data');
+  expect(proof.turns).toHaveLength(1);
+  expect(JSON.stringify(JSON.parse(proof.turns[0]!).at(-1))).toContain('[Owner sent a ');
+  expect(await w.reply()).toBe('Scripted owner reply.');
 });
 
 const voice: Attached = { id: 'photon-att-voice', name: 'Audio Message.caf', mimeType: 'audio/x-caf', bytes: new Uint8Array([0x63, 0x61, 0x66, 0x66, 0, 1, 0, 0]) };

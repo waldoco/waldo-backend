@@ -123,8 +123,6 @@ it('the owner asks how a task is going: the turn calls check_task once, reads it
     expect(output).toContain('"state":"running"');
     expect(output).toContain('"tools_called":{"search_communication":1,"read_thread":2}');
     expect(output).not.toContain('SYNTHETIC-MAIL-BODY');
-    // steer_task is off by default (WALDO_TASK_STEER), so this turn was never offered it.
-    expect(model.requests.some(request => request.includes('"name":"steer_task"'))).toBe(false);
     // Checking changed nothing about the job.
     expect(jobBook(state.storage.sql, { now: Date.now, newId: () => 'x', newToken: () => 'x' }).get(model.jobId)).toMatchObject({ status: 'running', rounds: 3 });
   });
@@ -145,7 +143,7 @@ it('the in-flight line rides in this turn\'s context with the task\'s age, never
   });
 });
 
-it('with WALDO_TASK_STEER on, the owner corrects a running task: one steer_task call keeps the job, then the reply is sent', async () => {
+it('the owner corrects a running task: one steer_task call keeps the job, then the reply is sent', async () => {
   await withAppOwner('task-steer-owner', async ({ state, call }) => {
     model.jobId = running(state);
     const sent = await call('POST', '/chat/main/messages', { client_message_id: 'steer-client-01', text: 'Actually, only vendors that ship to Pune.' });
@@ -163,10 +161,10 @@ it('with WALDO_TASK_STEER on, the owner corrects a running task: one steer_task 
     const job = jobBook(state.storage.sql, { now: Date.now, newId: () => 'x', newToken: () => 'x' }).get(model.jobId)!;
     expect(job).toMatchObject({ id: model.jobId, status: 'running', attempt: 1 });
     expect(jobCheckpoint(job).steers).toMatchObject([{ text: 'Only vendors that ship to Pune.', mode: 'interrupt' }]);
-  }, { WALDO_TASK_STEER: '1' });
+  });
 });
 
-it('with WALDO_TASK_PICKUP on, a task that finishes mid-turn is named at the next round and read with check_task; its report reads that reply and sends nothing more', async () => {
+it('a task that finishes mid-turn is named at the next round and read with check_task; its report reads that reply and sends nothing more', async () => {
   await withAppOwner('task-pickup-owner', async ({ owner, state, call }) => {
     model.jobId = running(state);
     model.otherId = running(state, 'b1b2c3d4e5f6', 'Venue search');
@@ -207,6 +205,6 @@ it('with WALDO_TASK_PICKUP on, a task that finishes mid-turn is named at the nex
     expect(JSON.stringify(report.messages)).toContain(PICKED);
     const shown = await mainTexts(call);
     expect(shown.filter(text => text === PICKED || text === REPORTED)).toEqual([PICKED]);
-  }, { WALDO_TASK_PICKUP: '1' });
+  });
   expect(wire.telegramSent).toBe(0);
 });
