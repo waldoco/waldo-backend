@@ -1,4 +1,4 @@
-// A voice note, photo or file in the app's chat (APP_CHAT_ATTACHMENTS): uploaded first, then sent as the message's one
+// A voice note, photo or file in the app's chat: uploaded first, then sent as the message's one
 // attachment, through the real owner object, inbox and the shared media pipeline every chat surface uses. The model is
 // scripted and the transcription provider answers from a fixture; every byte is synthetic.
 import { env } from 'cloudflare:workers';
@@ -51,7 +51,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 type Owner = InstanceType<typeof OwnerDO>;
 const bytes = (size: number, fill: number) => new Uint8Array(size).fill(fill);
 const base64 = (data: Uint8Array) => btoa(String.fromCharCode(...data));
-const fixture = (name: string, switches: Record<string, string | undefined>, work: (o: {
+const fixture = (name: string, work: (o: {
   owner: Owner; state: DurableObjectState;
   upload(kind: string, type: string, body: Uint8Array, fileName?: string): Promise<Response>;
   send(clientId: string, body: Record<string, unknown>): Promise<Response>;
@@ -63,7 +63,7 @@ const fixture = (name: string, switches: Record<string, string | undefined>, wor
   state.storage.kv.put('app_subject', String(appSubjectFor(name)));
   const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
   const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, WALDO_OWNER_TELEGRAM_ID: undefined, OPENAI_API_KEY: 'synthetic-fixture',
-    WALDO_OWNER_TIMEZONE: 'UTC', ELEVENLABS_API_KEY: undefined, SMALLEST_AI_API_KEY: undefined, WALDO_STT_PROVIDER: undefined, WALDO_FILE_TOOLS: '0', ...switches } as never);
+    WALDO_OWNER_TIMEZONE: 'UTC', ELEVENLABS_API_KEY: undefined, SMALLEST_AI_API_KEY: undefined, WALDO_STT_PROVIDER: undefined, WALDO_FILE_TOOLS: '0' } as never);
   const session = { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'b'.repeat(64) };
   try {
     await work({
@@ -83,11 +83,10 @@ const fixture = (name: string, switches: Record<string, string | undefined>, wor
 });
 const uploaded = async (response: Response) => { expect(response.status).toBe(201); return appChatUploadResultV1Schema.parse(await response.json()); };
 const admitted = async (response: Response) => { expect(response.status).toBe(202); return (await response.json() as { message_id: string }).message_id; };
-const ON = { APP_CHAT_ATTACHMENTS: '1' };
 
 describe('a voice note, photo or file sent in the app chat', { timeout: 30_000 }, () => {
   it('a voice note is transcribed by the shared transcriber, reaches the turn and the owner\'s row, and its audio is not kept', async () => {
-    await fixture('attach-voice', ON, async ({ upload, send, settled, staged, state }) => {
+    await fixture('attach-voice', async ({ upload, send, settled, staged, state }) => {
       const audio = bytes(48_000, 7);
       const { upload_id, kind, bytes: size } = await uploaded(await upload('voice', 'audio/mp4', audio));
       expect([kind, size]).toEqual(['voice', audio.length]);
@@ -105,7 +104,7 @@ describe('a voice note, photo or file sent in the app chat', { timeout: 30_000 }
   });
 
   it('a photo goes to the model as an image with its caption, and a file as a readable attachment', async () => {
-    await fixture('attach-photo-file', ON, async ({ upload, send, settled, staged }) => {
+    await fixture('attach-photo-file', async ({ upload, send, settled, staged }) => {
       const photo = bytes(2_048, 9);
       const shot = await uploaded(await upload('photo', 'image/png', photo));
       await settled(await admitted(await send('photo-client-0001', { text: 'Which of these is the receipt?', attachments: [{ upload_id: shot.upload_id }] })));
@@ -125,7 +124,7 @@ describe('a voice note, photo or file sent in the app chat', { timeout: 30_000 }
   });
 
   it('a voice note that cannot be transcribed still runs the turn and says so, and its audio is still dropped', async () => {
-    await fixture('attach-voice-stt-down', ON, async ({ upload, send, settled, staged }) => {
+    await fixture('attach-voice-stt-down', async ({ upload, send, settled, staged }) => {
       stt.fail = true;
       const { upload_id } = await uploaded(await upload('voice', 'audio/ogg', bytes(9_000, 3)));
       expect((await settled(await admitted(await send('voice-client-0002', { text: '', attachments: [{ upload_id }] })))).state).toBe('completed');
@@ -135,7 +134,7 @@ describe('a voice note, photo or file sent in the app chat', { timeout: 30_000 }
   });
 
   it('a sent upload cannot be sent again', async () => {
-    await fixture('attach-twice', ON, async ({ upload, send, settled }) => {
+    await fixture('attach-twice', async ({ upload, send, settled }) => {
       const { upload_id } = await uploaded(await upload('photo', 'image/jpeg', bytes(1_000, 1)));
       const first = await admitted(await send('twice-client-0001', { text: 'look', attachments: [{ upload_id }] }));
       expect((await send('twice-client-0002', { text: 'again', attachments: [{ upload_id }] })).status).toBe(409);
@@ -144,7 +143,7 @@ describe('a voice note, photo or file sent in the app chat', { timeout: 30_000 }
   });
 
   it('a photo sent in a thread reaches that thread\'s turn', async () => {
-    await fixture('attach-thread', ON, async ({ owner, upload, settled }) => {
+    await fixture('attach-thread', async ({ owner, upload, settled }) => {
       const headers = { 'x-waldo-do-name': 'attach-thread', 'x-waldo-app-session-hash': 'b'.repeat(64), 'content-type': 'application/json' };
       const { thread_id } = await (await owner.fetch(new Request('https://telegram-owner/app/v1/threads', { method: 'POST', headers,
         body: JSON.stringify({ operation_id: '0b6f3c1e-8a2d-4f5b-9c7e-000000000001', title: 'Receipts' }) }))).json() as { thread_id: string };
@@ -159,7 +158,7 @@ describe('a voice note, photo or file sent in the app chat', { timeout: 30_000 }
   });
 
   it('a file named in any script arrives under that name, percent-encoded; a malformed encoding is refused', async () => {
-    await fixture('attach-names', ON, async ({ upload, send, settled }) => {
+    await fixture('attach-names', async ({ upload, send, settled }) => {
       const doc = await uploaded(await upload('file', 'application/pdf', bytes(400, 6), encodeURIComponent('Rapport déc 予定.pdf')));
       await settled(await admitted(await send('names-client-0001', { text: '', attachments: [{ upload_id: doc.upload_id }] })));
       expect(model.requests.join('\n')).toContain('Rapport déc 予定.pdf');
@@ -169,8 +168,8 @@ describe('a voice note, photo or file sent in the app chat', { timeout: 30_000 }
 });
 
 describe('an upload nobody sends', () => {
-  it('wakes the owner object at its expiry and is dropped by the alarm there, with attachments since switched off', async () => {
-    await fixture('attach-expiry', ON, async ({ upload, send, settled, staged, state }) => {
+  it('wakes the owner object at its expiry and is dropped by the alarm there', async () => {
+    await fixture('attach-expiry', async ({ upload, send, settled, staged, state }) => {
       const { upload_id, expires_at } = await uploaded(await upload('voice', 'audio/mp4', bytes(5_000, 2)));
       expect(state.storage.kv.get<number>('app_uploads_due_v1')).toBe(expires_at);
       // An upload nobody has sent yet is not an owner message waiting: background work does not yield to it.
@@ -182,8 +181,8 @@ describe('an upload nobody sends', () => {
       expect(await state.storage.getAlarm()).toBeLessThanOrEqual(expires_at);
       const meta = state.storage.kv.get<{ expiresAt: number }>(`app_upload:${upload_id}`)!;
       state.storage.kv.put(`app_upload:${upload_id}`, { ...meta, expiresAt: Date.now() - 1 });
-      const off = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, WALDO_OWNER_TELEGRAM_ID: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', APP_CHAT_ATTACHMENTS: '0' } as never);
-      await off.alarm();
+      const later = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, WALDO_OWNER_TELEGRAM_ID: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC' } as never);
+      await later.alarm();
       expect(staged()).toEqual([]);
       expect(state.storage.kv.get('app_uploads_due_v1')).toBeNull();
     });
@@ -201,7 +200,7 @@ describe('every way an app message closes drops its upload', () => {
   ];
   it.each(closes)('when %s', async (why, close) => {
     const name = `attach-close-${closes.findIndex(([each]) => each === why)}`;
-    await fixture(name, ON, async ({ state, staged }) => {
+    await fixture(name, async ({ state, staged }) => {
       const { AppInbox } = await import('../src/channels/app-inbox');
       const { stageAppUpload } = await import('../src/channels/app-uploads');
       const inbox = new AppInbox(state.storage);
@@ -219,7 +218,7 @@ describe('every way an app message closes drops its upload', () => {
 
 describe('what an upload or send is refused', () => {
   it('refuses a type its kind does not take, an unnamed file, an empty body, an over-long caption and an unknown upload id', async () => {
-    await fixture('attach-refusals', ON, async ({ upload, send, staged }) => {
+    await fixture('attach-refusals', async ({ upload, send, staged }) => {
       expect((await upload('voice', 'image/png', bytes(10, 1))).status).toBe(415);
       expect((await upload('photo', 'image/heic', bytes(10, 1))).status).toBe(415);
       expect((await upload('file', 'application/pdf', bytes(10, 1))).status).toBe(400);
@@ -237,8 +236,8 @@ describe('what an upload or send is refused', () => {
 
   it('one owner cannot send another owner\'s upload: not by its id from their object, nor one staged under their name', async () => {
     let theirs = '';
-    await fixture('attach-owner-a', ON, async ({ upload }) => { theirs = (await uploaded(await upload('photo', 'image/png', bytes(10, 1)))).upload_id; });
-    await fixture('attach-owner-b', ON, async ({ send, staged, state }) => {
+    await fixture('attach-owner-a', async ({ upload }) => { theirs = (await uploaded(await upload('photo', 'image/png', bytes(10, 1)))).upload_id; });
+    await fixture('attach-owner-b', async ({ send, staged, state }) => {
       const refused = async (response: Response) => [response.status, await response.json()];
       expect(await refused(await send('cross-client-0001', { text: 'look', attachments: [{ upload_id: theirs }] }))).toEqual([409, { error: 'upload_unavailable' }]);
       const { stageAppUpload } = await import('../src/channels/app-uploads');
@@ -252,7 +251,7 @@ describe('what an upload or send is refused', () => {
   });
 
   it('caps the uploads waiting to be sent, and drops one left unsent past its hour', async () => {
-    await fixture('attach-capacity', ON, async ({ upload, send, staged, state }) => {
+    await fixture('attach-capacity', async ({ upload, send, staged, state }) => {
       const waiting: { upload_id: string }[] = [];
       for (let n = 0; n < 4; n += 1) waiting.push(await uploaded(await upload('photo', 'image/png', bytes(10, n + 1))));
       expect((await upload('photo', 'image/png', bytes(10, 9))).status).toBe(429);
@@ -263,27 +262,11 @@ describe('what an upload or send is refused', () => {
       await uploaded(await upload('photo', 'image/png', bytes(10, 9)));
     });
   });
-
-  it('with the switch off, has no upload route and refuses a send that names an attachment; a text send is unchanged', async () => {
-    await fixture('attach-off', { APP_CHAT_ATTACHMENTS: '0' }, async ({ upload, send, settled, staged, state }) => {
-      expect((await upload('photo', 'image/png', bytes(10, 1))).status).toBe(404);
-      expect((await send('off-client-00001', { text: 'hi', attachments: [{ upload_id: `up_${'B'.repeat(22)}` }] })).status).toBe(409);
-      // One staged while the switch was on is refused once it is off, and left to expire.
-      const { stageAppUpload } = await import('../src/channels/app-uploads');
-      const earlier = stageAppUpload(state.storage, { owner: 'attach-off', kind: 'photo', mime: 'image/png', name: 'photo.png', data: bytes(10, 1) }, Date.now());
-      if (earlier === 'capacity') throw new Error('fixture expected room for one upload');
-      expect((await send('off-client-00003', { text: 'hi', attachments: [{ upload_id: earlier.id }] })).status).toBe(409);
-      expect(model.requests.join('\n')).not.toContain('hi');
-      expect((await settled(await admitted(await send('off-client-00002', { text: 'plain text still works' }))))).toMatchObject({ state: 'completed' });
-      expect(model.requests.join('\n')).toContain('plain text still works');
-      expect(staged()).toHaveLength(2);
-    });
-  });
 });
 
 describe('a message with an attachment in a running turn\'s chat', () => {
   it('is never folded into that turn, whose note carries words only; a plain waiting message still is', async () => {
-    await fixture('attach-no-fold', ON, async ({ state }) => {
+    await fixture('attach-no-fold', async ({ state }) => {
       const { AppInbox } = await import('../src/channels/app-inbox');
       const { stageAppUpload } = await import('../src/channels/app-uploads');
       const inbox = new AppInbox(state.storage);

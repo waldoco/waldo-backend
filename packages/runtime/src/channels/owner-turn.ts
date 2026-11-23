@@ -57,7 +57,7 @@ import { outsideView } from '../memory/outside-view';
 import { episodesFromSearchTool, previousOwnerMessage, RECALL_MAX_CHARS, recallForTurn, withinReach } from '../memory/turn-recall';
 import type { SemanticRecall } from '../memory/semantic-recall';
 import { coreMemory, CORE_ROOM, LEXICAL_DEADLINE_MS, recallWithin, SEMANTIC_DEADLINE_MS, type MemorySelection } from '../memory/select-memory';
-import { WELCOME_INSTRUCTION, WELCOME_INSTRUCTION_V2, WELCOME_SCHEMA, WELCOME_SCHEMA_V2 } from '../onboarding/welcome';
+import { WELCOME_INSTRUCTION, WELCOME_SCHEMA } from '../onboarding/welcome';
 import type { ConversationStore, WindowStart } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
 import { billedAttemptEntries } from './billed-attempts';
@@ -1401,10 +1401,10 @@ export const createOwnerResponder = (
     },
     // One welcome stage's structured call. The memory_ purpose keeps its text out of every trace: the health stage's input
     // carries the owner's readings.
-    async welcome(trace, stage, input, version) {
-      const asOwner = await asOwnerJob(trace, job => job.welcome!(trace, stage, input, version));
+    async welcome(trace, stage, input) {
+      const asOwner = await asOwnerJob(trace, job => job.welcome!(trace, stage, input));
       if (asOwner !== undefined) return asOwner;
-      return ask(trace, `memory_welcome_${stage}`, version === 2 ? WELCOME_INSTRUCTION_V2 : WELCOME_INSTRUCTION, input, { name: 'welcome_nodes', schema: version === 2 ? WELCOME_SCHEMA_V2 : WELCOME_SCHEMA }, undefined, undefined, undefined, roleModel);
+      return ask(trace, `memory_welcome_${stage}`, WELCOME_INSTRUCTION, input, { name: 'welcome_nodes', schema: WELCOME_SCHEMA }, undefined, undefined, undefined, roleModel);
     },
     async promote(trace, gate) {
       const asOwner = await asOwnerJob(trace, job => job.promote(trace, gate));

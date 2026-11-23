@@ -92,8 +92,12 @@ async function world() {
   // The owner object's armed alarm and the outbox's own wake, read without running either.
   const wakes = () => runInDurableObject(ownerStub, async (_i, state) => ({ alarm: await state.storage.getAlarm(), outbox: state.storage.kv.get<number | null>(IMESSAGE_OUTBOX_DUE_KEY) ?? null }));
   const ownerAlarm = async () => { await runDurableObjectAlarm(ownerStub); await settle(); };
-  const setStop = (on: boolean) => runInDurableObject(ownerStub, async instance => { (instance as unknown as { env: { IMESSAGE_STOP?: string } }).env.IMESSAGE_STOP = on ? '1' : '0'; });
-  return { host, pump, handOver, activate, inbox, threaded, outcomes, wakes, ownerAlarm, setStop };
+  // Stands in for a process that ends between a /stop's admit and its stop: held, the owner object's stop does nothing.
+  const holdStop = (held: boolean) => runInDurableObject(ownerStub, async instance => {
+    const object = instance as unknown as { iMessageStop?: () => void };
+    if (held) object.iMessageStop = () => {}; else delete object.iMessageStop;
+  });
+  return { host, pump, handOver, activate, inbox, threaded, outcomes, wakes, ownerAlarm, holdStop };
 }
 
 // The owner sends A, then B while A's turn is held on its first model call; A is released and both turns run.
@@ -196,8 +200,8 @@ it('with no other wake, a refused threaded reply goes out plain on the wake its 
   expect((JSON.parse(plain!.body) as { target: { messageGuid?: string } }).target.messageGuid).toBeUndefined();
 }, 30_000);
 
-// IMESSAGE_STOP: a typed /stop from the owner, the control Telegram and WhatsApp have. It stops the running turn at once and
-// the messages waiting ahead of it, and answers once; an approval decision waiting is not stopped. Off, it waits its turn.
+// A typed /stop from the owner, the control Telegram and WhatsApp have. It stops the running turn at once and the messages
+// waiting ahead of it, and answers once; an approval decision waiting is not stopped.
 // The held call ends as a real model call does when its turn is aborted.
 async function holdA(w: Awaited<ReturnType<typeof world>>) {
   const gate = { held: false, open: false, aborted: false };
@@ -268,19 +272,19 @@ it('a /stop leaves an approval decision waiting behind the running turn to run',
   await vi.waitFor(async () => expect(await w.inbox()).toEqual(['interrupted', 'completed', 'completed']), { timeout: 10_000, interval: 20 });
 }, 30_000);
 
-// The process can end after a /stop's admit commits and before its stop runs. The switch is off while the /stop is admitted,
+// The process can end after a /stop's admit commits and before its stop runs. The stop is held while the /stop is admitted,
 // so its admit stops nothing; then, as after a restart, the next drain finds it waiting.
 it('a /stop whose stop never ran at its admit is stopped by the next drain, never run as a turn, and what waits ahead of it never runs', async () => {
   const w = await world();
   await w.activate();
   const gate = await holdA(w);
-  await w.setStop(false);
+  await w.holdStop(true);
   expect((await w.host.send(w.host.message('Also, is it raining in Pune?'))).status).toBe(200);
   await w.handOver();
   expect((await w.host.send(w.host.message('/stop'))).status).toBe(200);
   await w.handOver();
   await vi.waitFor(async () => expect(await w.inbox()).toEqual(['running', 'admitted', 'admitted']), { timeout: 10_000, interval: 20 });
-  await w.setStop(true);
+  await w.holdStop(false);
   gate.open = true;
   await vi.waitFor(async () => expect(await w.inbox()).toEqual(['completed', 'revoked', 'completed']), { timeout: 10_000, interval: 20 });
   await w.pump();
@@ -300,20 +304,4 @@ it('a /stop with nothing running answers that nothing is running, and starts no 
   expect(await answer(w)).toContain(NOTHING_RUNNING);
   expect(await w.inbox()).toEqual(['completed']);
   expect(proof.turns).toHaveLength(0);
-}, 30_000);
-
-it('with the switch off, a /stop waits its turn as any message does: the running reply goes out', async () => {
-  const w = await world();
-  await w.activate();
-  await w.setStop(false);
-  try {
-    const gate = await holdA(w);
-    expect((await w.host.send(w.host.message('/stop'))).status).toBe(200);
-    await w.handOver();
-    await vi.waitFor(async () => expect(await w.inbox()).toEqual(['running', 'admitted']), { timeout: 10_000, interval: 20 });
-    gate.open = true;
-    await vi.waitFor(async () => expect((await w.inbox())[0]).toBe('completed'), { timeout: 10_000, interval: 20 });
-    await w.pump();
-    expect(await answer(w)).toContain('Reply to turn 1.');
-  } finally { await w.setStop(true); }
 }, 30_000);

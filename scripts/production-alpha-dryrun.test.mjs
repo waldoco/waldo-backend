@@ -7,7 +7,7 @@ import { pendingDigest } from './staging-migration-apply.mjs';
 
 const ready = () => ({
   name: 'waldo-runtime',
-  vars: { WALDO_ENVIRONMENT: 'production', LANGFUSE_CAPTURE_TEXT: 'false', WHATSAPP_DEBUG_LOG: 'false', WALDO_COST_LEDGER_SYNC: 'on', WALDO_OWNER_DO_NAMESPACE: 'abc', WALDO_EGRESS_ALLOWLIST: '*', CALENDAR_GROUNDED_PREP: '1' },
+  vars: { WALDO_ENVIRONMENT: 'production', LANGFUSE_CAPTURE_TEXT: 'false', WHATSAPP_DEBUG_LOG: 'false', WALDO_OWNER_DO_NAMESPACE: 'abc', WALDO_EGRESS_ALLOWLIST: '*', CALENDAR_GROUNDED_PREP: '1' },
   r2_buckets: [{ binding: 'ARTIFACTS', bucket_name: 'waldo-artifacts-production' }],
   ratelimits: [{ name: 'RESPONSIBILITY_RATE_LIMITER', namespace_id: '1003' }],
   triggers: { crons: ['17 3 * * *'] },
@@ -34,14 +34,12 @@ test('a bucket or rate-limit namespace shared with staging is a gap', () => {
   assert.equal(status(cfg)['ratelimit-separate'], 'gap');
 });
 
-test('text capture, the cost ledger and the retention cron are gaps when unset', () => {
+test('text capture and the retention cron are gaps when unset', () => {
   const cfg = ready();
   cfg.vars.LANGFUSE_CAPTURE_TEXT = 'true';
-  delete cfg.vars.WALDO_COST_LEDGER_SYNC;
   delete cfg.triggers;
   const s = status(cfg);
   assert.equal(s['no-text-capture'], 'gap');
-  assert.equal(s['cost-ledger'], 'gap');
   assert.equal(s['retention-cron'], 'gap');
 });
 

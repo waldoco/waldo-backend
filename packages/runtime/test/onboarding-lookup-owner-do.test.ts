@@ -42,7 +42,7 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
-type Flags = Readonly<{ ONBOARDING_LOOKUP?: string; OWNER_LOOKUP?: string; WELCOME_V2?: string; BRAVE_SEARCH_API_KEY?: string }>;
+type Flags = Readonly<{ ONBOARDING_LOOKUP?: string; OWNER_LOOKUP?: string; BRAVE_SEARCH_API_KEY?: string }>;
 type Owner = InstanceType<typeof OwnerDO>;
 const ownerWith = async (flags: Flags, run: (h: Readonly<{ state: DurableObjectState; owner: Owner; book(): JobBook; app(path: string, body: unknown): Promise<Response>; jobs(): { id: string; status: string; brief_json: string; due_at: number | null }[]; hops(prefix: string): string[]; skipped(): string[] }>) => Promise<void>) => {
   const name = `lookup-owner-${crypto.randomUUID()}`;
@@ -51,7 +51,7 @@ const ownerWith = async (flags: Flags, run: (h: Readonly<{ state: DurableObjectS
     ensureSchema(state.storage);
     state.storage.kv.put('do_name', name);
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const owner = new OwnerDO(state, { ...env, ...directory, APP_AGREEMENTS: '1', OWNER_LOOKUP: '1', ...flags, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const owner = new OwnerDO(state, { ...env, ...directory, OWNER_LOOKUP: '1', ...flags, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     const app = (path: string, body: unknown) => owner.fetch(new Request(`https://telegram-owner${path}`, { method: 'POST',
       headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'c'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify(body) }));
     const jobs = () => state.storage.sql.exec<{ id: string; status: string; brief_json: string; due_at: number | null }>("SELECT id, status, brief_json, due_at FROM task_jobs WHERE origin = 'machine:owner_lookup'").toArray();
@@ -74,7 +74,7 @@ const CANARIES = ['a1b2c3d4e5f60718', '1a2b3c4d5e6f7081', 'f0e1d2c3b4a59687'];
 const settle = () => new Promise(resolve => setTimeout(resolve, 150));
 
 it('the yes and the setup answers write one look-up job carrying only the name, and the first reply lets it start', async () => {
-  await ownerWith({ ONBOARDING_LOOKUP: '1', WELCOME_V2: '1' }, async ({ state, app, jobs, hops, skipped }) => {
+  await ownerWith({ ONBOARDING_LOOKUP: '1' }, async ({ state, app, jobs, hops, skipped }) => {
     await consents(app, true);
     await settle();
     // No name yet: the yes alone writes nothing, and says why without saying anything about the owner.
@@ -164,7 +164,7 @@ it('a look-up whose yes stops counting is fenced at its next worker call, even b
     const ticket = book().startAttempt(jobs()[0]!.id)!;
     expect(await owner.taskClaim(ticket)).not.toBe('fenced');
     // The yes is withdrawn straight in the ledger, so no route and no reconcile runs: only the brain's own check can stop it.
-    consentLedger(state.storage.sql, { agreementsOffered: true, lookupOffered: true }).withdraw('owner_lookup', Date.now());
+    consentLedger(state.storage.sql, { lookupOffered: true }).withdraw('owner_lookup', Date.now());
     expect(await owner.taskTool(ticket, { call_id: 'lapsed-1', name: 'web_search', arguments: JSON.stringify({ query: 'Asha' }) }, CANARIES)).toBe('fenced');
     expect(jobs().map(job => job.status)).toEqual(['cancelled']);
     expect(hops('task_cancelled')).toEqual(['task_cancelled']);
@@ -177,7 +177,7 @@ it('withdrawing the yes cancels a look-up written earlier even with the switch n
   await ownerWith({ ONBOARDING_LOOKUP: '0' }, async ({ state, book, app, jobs, hops }) => {
     await consents(app, true);
     // A job written while the switch was on: the switch has since been turned off.
-    const made = startLookup({ book: book(), consent: consentLedger(state.storage.sql, { agreementsOffered: true, lookupOffered: true }), now: Date.now, surface: 'app',
+    const made = startLookup({ book: book(), consent: consentLedger(state.storage.sql, { lookupOffered: true }), now: Date.now, surface: 'app',
       started: () => null, markStarted: () => undefined, held: [] }, { name: 'Asha', email: null });
     expect(made.code).toBe('enqueued');
     expect((await app('/app/v1/consents/withdraw', { request_id: 'lookup-withdraw-off', purpose: 'owner_lookup' })).status).toBe(200);
@@ -212,7 +212,7 @@ it('the look-up worker\'s web search sends the search provider no location: only
 it('the look-up\'s end reaches the owner as one card on their surface, counting what it kept and naming none of it', async () => {
   // Midday in the owner's zone, outside quiet hours.
   vi.setSystemTime(Date.parse('2026-11-03T12:00:00Z'));
-  await ownerWith({ ONBOARDING_LOOKUP: '1', WELCOME_V2: '1' }, async ({ state, owner, book, app, jobs }) => {
+  await ownerWith({ ONBOARDING_LOOKUP: '1' }, async ({ state, owner, book, app, jobs }) => {
     await consents(app, true);
     await app('/app/v1/onboarding/answers', { request_id: 'lookup-answers-e', name: 'Asha' });
     await vi.waitFor(() => expect(jobs()).toHaveLength(1), { timeout: 10_000, interval: 25 });

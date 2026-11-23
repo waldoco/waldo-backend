@@ -22,7 +22,7 @@ export type SurfaceCapabilitiesV1 = z.infer<typeof surfaceCapabilitiesV1Schema>;
 
 // Declares only what each surface renders today: the console shows approvals but no chat parts,
 // and messaging charts stay alt text until a rasterizer is chosen. The app takes no files or voice
-// yet; iMessage files and voice notes open only behind the runtime's IMESSAGE_MEDIA and IMESSAGE_VOICE flags,
+// yet; iMessage files and voice notes open only while the runtime has Photon (and, for voice, a transcriber) set up,
 // which this static table cannot see, so it claims neither.
 export const SURFACE_CAPABILITIES_V1 = {
   app: { surface: 'app', approval: 'native', quick_replies: 'chips', max_buttons: QUICK_REPLY_MAX_CHOICES, charts: 'native', files: false, voice: false, threads: true, max_text_chars: REPLY_TEXT_MAX_CHARS },

@@ -154,8 +154,8 @@ export type OpenedIMessageMedia =
   | Readonly<{ kind: 'opened'; parts: readonly InboundPart[]; attachments: readonly LLMAttachment[] }>
   | Readonly<{ kind: 'reply'; text: string }>;
 // keep: present with WALDO_FILE_TOOLS on. Every file is then fetched and kept in the owner's workspace, whatever its type.
-// transcribe: present with IMESSAGE_VOICE on and a transcriber set up. A voice note sent alone is then heard, not refused.
-export type OpenIMessageMediaDeps = Readonly<{ enabled: boolean; source: PhotonAttachmentSource | null; sender: string; signal: AbortSignal; admit: () => void; keep?: UploadKeeper; transcribe?: Transcriber }>;
+// transcribe: present with a transcriber set up. A voice note sent alone is then heard, not refused.
+export type OpenIMessageMediaDeps = Readonly<{ source: PhotonAttachmentSource | null; sender: string; signal: AbortSignal; admit: () => void; keep?: UploadKeeper; transcribe?: Transcriber }>;
 
 // A voice note sent alone, fetched from Photon and transcribed the way a Telegram or WhatsApp voice note is: the transcript is
 // its own part, the audio is not attached or kept, and a failed transcription is said to the model. Anything Photon cannot
@@ -193,7 +193,6 @@ export const openIMessageMedia = async (media: IMessageMedia, deps: OpenIMessage
     return { kind: 'reply', text };
   };
   if (files.some(isVoice)) return deps.transcribe ? hear(media, deps, deps.transcribe, reply) : reply(IMESSAGE_MEDIA_REPLIES.voice, 'voice_note');
-  if (!deps.enabled) return reply(IMESSAGE_MEDIA_REPLIES.unopened(files), 'media_off');
   if (files.length > LLM_ATTACHMENTS_MAX) return reply(IMESSAGE_MEDIA_REPLIES.tooMany(files), 'too_many');
   // A file that declares no type is fetched, so its bytes can say whether the model reads it.
   const declared = files.map(file => readableAs({ kind: 'document', fileId: '', fileName: file.name, mimeType: file.mimeType, fileSize: file.size }));

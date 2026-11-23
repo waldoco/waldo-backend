@@ -8,7 +8,7 @@ import { readMemoryGraph } from '../src/channels/memory-graph';
 import { barrierMemory } from '../src/context-composer/forget-barrier';
 import { ownerProfilePrompt } from '../src/memory/owner-profile';
 import {
-  confirmWelcomeNode, correctWelcomeNode, runWelcome, WELCOME_HEALTH_NOT_SHARED, WELCOME_MAX_NODES, WELCOME_SCHEMA, WELCOME_STAGE_BUDGET_MS, welcomeBuild, welcomeSupportIds,
+  confirmWelcomeNode, correctWelcomeNode, runWelcome, WELCOME_HEALTH_NOT_SHARED, WELCOME_SCHEMA, WELCOME_STAGE_BUDGET_MS, welcomeBuild, welcomeSupportIds,
   type StageInput, type WelcomeDeps, type WelcomeStage,
 } from '../src/onboarding/welcome';
 import { setupStage } from '../src/onboarding/welcome-sources';
@@ -43,6 +43,7 @@ const deps = (sql: SqlStorage, transaction: <R>(work: () => R) => R, over: Parti
       setup: async () => ({ kind: 'settled', state: 'skipped' }),
     },
     ask: async (stage, text) => { asked.push(stage); inputs[stage] = text; return over.answers?.[stage] ?? answer(); },
+    lookupOpen: () => false,
   };
   return { claims, build, asked, inputs, deps: { ...base, ...over } as WelcomeDeps };
 };
@@ -268,17 +269,6 @@ describe('welcome build: admission', () => {
       build.start();
       await runWelcome(d);
       expect(claims.nodes().map((node) => node.label)).toEqual(['Down to 82 by spring', 'Clinic follow-ups']);
-    });
-  });
-
-  it('caps a stage at five nodes and the build at fifteen', async () => {
-    await withSql(async (sql, transaction) => {
-      const many = (make: (over: Partial<Node>) => Node) => answer(...Array.from({ length: 7 }, (_, index) => make({ label: `Pattern ${'abcdefg'[index]}` })));
-      const { build, claims, deps: d } = deps(sql, transaction, { answers: { health: many(healthNode), calendar: many(calendarNode), mail: many(mailNode) } });
-      build.start();
-      await runWelcome(d);
-      expect(claims.nodes()).toHaveLength(WELCOME_MAX_NODES);
-      expect(build.view().nodes).toBe(WELCOME_MAX_NODES);
     });
   });
 
@@ -782,7 +772,7 @@ describe('welcome build v2: one source after another, no copies, late sources on
   const extend = (node: Node, id: number | null) => ({ ...node, extends: id });
   const v2 = (sql: SqlStorage, transaction: <R>(work: () => R) => R, clock: { at: number }, over: Partial<WelcomeDeps> & { answers?: Partial<Record<WelcomeStage, string>>; lookup?: { open: boolean } } = {}) => {
     const claims = claimStore(sql, transaction), build = welcomeBuild(sql, () => clock.at);
-    const asked: WelcomeStage[] = [], inputs: Partial<Record<WelcomeStage, string>> = {}, versions: (number | undefined)[] = [];
+    const asked: WelcomeStage[] = [], inputs: Partial<Record<WelcomeStage, string>> = {};
     const lookup = over.lookup ?? { open: false };
     const d: WelcomeDeps = {
       build, claims, transaction, now: () => clock.at,
@@ -793,21 +783,20 @@ describe('welcome build v2: one source after another, no copies, late sources on
         web: async () => input(['web'], ['fnd_a']),
         setup: async () => ({ kind: 'input', text: '[c1] mornings are mine', sources: ['setup'], pointers: new Set(['c1']) }),
       },
-      ask: async (stage, text, version) => { asked.push(stage); inputs[stage] = text; versions.push(version); return over.answers?.[stage] ?? answer(); },
-      v2: { lookupOpen: () => lookup.open }, ...over,
+      ask: async (stage, text) => { asked.push(stage); inputs[stage] = text; return over.answers?.[stage] ?? answer(); },
+      lookupOpen: () => lookup.open, ...over,
     };
-    return { claims, build, asked, inputs, versions, lookup, deps: d };
+    return { claims, build, asked, inputs, lookup, deps: d };
   };
   const active = (claims: ClaimStore) => claims.nodes().filter((node) => node.status === 'active');
 
-  it('asks health, setup, calendar, mail, then web, each over the nodes already written, with the second schema', async () => {
+  it('asks health, setup, calendar, mail, then web, each over the nodes already written', async () => {
     await withSql(async (sql, transaction) => {
       const clock = { at: T0 };
-      const { build, asked, inputs, versions, deps: d } = v2(sql, transaction, clock, { answers: { health: answer(healthNode()), setup: answer(setupNode()) } });
+      const { build, asked, inputs, deps: d } = v2(sql, transaction, clock, { answers: { health: answer(healthNode()), setup: answer(setupNode()) } });
       build.start();
       await runWelcome(d);
       expect(asked).toEqual(['health', 'setup', 'calendar', 'mail', 'web']);
-      expect(versions.every((version) => version === 2)).toBe(true);
       expect(inputs.health).toContain('The constellation is empty so far.');
       expect(inputs.setup).toContain('[1] Late weekend sleeper');
       expect(inputs.calendar).toContain('[1] Late weekend sleeper');
@@ -945,12 +934,11 @@ describe('welcome build v2: one source after another, no copies, late sources on
       const { build, deps: d } = v2(sql, transaction, clock, { read: { health: async () => ({ ...input(['apple_health'], ['sleep_midpoint']), days: 3 }), calendar: async () => ({ kind: 'settled', state: 'skipped' }), mail: async () => ({ kind: 'settled', state: 'skipped' }), web: async () => ({ kind: 'settled', state: 'skipped' }), setup: async () => ({ kind: 'settled', state: 'skipped' }) }, answers: { health: answer(healthNode()) } });
       build.start();
       await runWelcome(d);
-      expect(transaction(() => build.lateHealth(true))).toBe(false);
+      expect(transaction(() => build.lateHealth())).toBe(false);
       clock.at += WELCOME_PARTIAL_HEALTH_MS;
-      expect(transaction(() => build.lateHealth(false))).toBe(false);
-      expect(transaction(() => build.lateHealth(true))).toBe(true);
+      expect(transaction(() => build.lateHealth())).toBe(true);
       await runWelcome(d);
-      expect(transaction(() => build.lateHealth(true))).toBe(false);
+      expect(transaction(() => build.lateHealth())).toBe(false);
     });
   });
 

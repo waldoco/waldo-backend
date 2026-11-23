@@ -2220,7 +2220,7 @@ it('an owner who chose the app and iMessage gets a Mac result in the app and one
   expect(forbiddenEgress).toEqual([]);
 }, 20_000);
 
-// IMESSAGE_MEDIA is "0" in this suite, as wrangler declares it: a photo or file is answered once, honestly, and never opened.
+// This suite sets up no Photon project: a photo, file or voice note is answered once, honestly, and never opened.
 const deliverOne = async (w: Awaited<ReturnType<typeof world>>) => {
   await w.pump();
   const { delivery } = await w.host.pull();
@@ -2230,7 +2230,7 @@ const deliverOne = async (w: Awaited<ReturnType<typeof world>>) => {
   return JSON.parse(delivery!.body).text as string;
 };
 
-it('with IMESSAGE_MEDIA off, a photo, a Mac file and a voice note each get one honest reply, settle, and reach neither the model nor Photon', async () => {
+it('with Photon not set up, a photo, a Mac file and a voice note each get one honest reply, settle, and reach neither the model nor Photon', async () => {
   const w = await world();
   await w.pairAndActivate();
   const photo = { ...w.host.message('what is this?'), photonAttachments: [{ id: 'photon-att-1', name: 'IMG_0001.png', mimeType: 'image/png', size: 8 }] };

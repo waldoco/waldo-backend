@@ -45,7 +45,7 @@ const withOwner = <T,>(name: string, work: (owner: InstanceType<typeof OwnerDO>,
   claimStore(state.storage.sql); ensureSchema(state.storage);
   state.storage.kv.put('do_name', name);
   const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-  const owner = new OwnerDO(state, { ...env, ...directory, APP_AGREEMENTS: '1', TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, ...extra });
+  const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, ...extra });
   try { return await work(owner, state); } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
 });
 const send = (owner: InstanceType<typeof OwnerDO>, name: string, client: string) =>
@@ -54,7 +54,7 @@ const send = (owner: InstanceType<typeof OwnerDO>, name: string, client: string)
 const mark = (owner: InstanceType<typeof OwnerDO>, name: string, secret = directory.WALDO_ROUTER_HMAC_SECRET) =>
   sendOpenOwnerMark({ idFromName: (value: string) => value as unknown as DurableObjectId, get: () => ({ fetch: (request: Request) => owner.fetch(request) }) }, secret, name);
 const accept = (state: DurableObjectState) => {
-  const consent = consentLedger(state.storage.sql, { agreementsOffered: true, lookupOffered: false }), at = Date.now();
+  const consent = consentLedger(state.storage.sql, { lookupOffered: false }), at = Date.now();
   consent.attestAge(at);
   consent.grant('terms', CURRENT_CONSENT_VERSION.terms, at);
   consent.grant('privacy_notice', CURRENT_CONSENT_VERSION.privacy_notice, at);
@@ -73,7 +73,7 @@ it('an owner who joined openly sends nothing to the model, and opens no console,
     expect(owners.released).toBe(0);
 
     // Accepting the terms alone, without the 18+ attestation, is not enough.
-    const consent = consentLedger(state.storage.sql, { agreementsOffered: true, lookupOffered: false });
+    const consent = consentLedger(state.storage.sql, { lookupOffered: false });
     consent.grant('terms', CURRENT_CONSENT_VERSION.terms, Date.now());
     consent.grant('privacy_notice', CURRENT_CONSENT_VERSION.privacy_notice, Date.now());
     expect((await send(owner, name, 'held-client-0002')).status).toBe(409);
@@ -111,7 +111,7 @@ it('an owner object with no mark sends as before and never asks the directory ab
 
 it('an owner who joined openly runs under the open sign-up ceiling; every other owner under the usual one', async () => {
   type Spend = { setup(channel: string): { monthSpend(): { spentUsd: number; ceilingUsd: number } | undefined } };
-  const ledger = { WALDO_COST_LEDGER_SYNC: 'on', OPEN_SIGNUP_SPEND_CEILING_USD: '7' };
+  const ledger = { OPEN_SIGNUP_SPEND_CEILING_USD: '7' };
   await withOwner('app-open-owner-ceiling', async owner => {
     await mark(owner, 'app-open-owner-ceiling');
     expect((owner as unknown as Spend).setup('app').monthSpend()?.ceilingUsd).toBe(7);
@@ -123,7 +123,7 @@ it('an owner who joined openly runs under the open sign-up ceiling; every other 
 
 it('each owner kind reads its own configured ceiling', async () => {
   type Spend = { setup(channel: string): { monthSpend(): { spentUsd: number; ceilingUsd: number } | undefined } };
-  const ledger = { WALDO_COST_LEDGER_SYNC: 'on', OPEN_SIGNUP_SPEND_CEILING_USD: '40', OWNER_SPEND_CEILING_USD: '60' };
+  const ledger = { OPEN_SIGNUP_SPEND_CEILING_USD: '40', OWNER_SPEND_CEILING_USD: '60' };
   await withOwner('app-open-owner-configured', async owner => {
     await mark(owner, 'app-open-owner-configured');
     expect((owner as unknown as Spend).setup('app').monthSpend()?.ceilingUsd).toBe(40);

@@ -31,12 +31,10 @@ describe('open sign-up on staging', () => {
     expect([ownerCeilingUsd(PRODUCTION), openOwnerCeilingUsd(PRODUCTION)]).toEqual([25, 5]);
   });
 
-  it('turns itself off, and says so, when the agreements or the cost ledger are not on', () => {
+  it('turns itself off, and says so, when a cap is not set', () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    expect(openSignupCaps({ ...STAGING, APP_AGREEMENTS: '0' })).toBeNull();
-    expect(openSignupCaps({ ...STAGING, WALDO_COST_LEDGER_SYNC: 'off' })).toBeNull();
     expect(openSignupCaps({ ...STAGING, OPEN_SIGNUP_DAILY_CAP: '' })).toBeNull();
-    expect(logged).toHaveBeenCalledTimes(3);
+    expect(logged).toHaveBeenCalledTimes(1);
     expect(String(logged.mock.calls[0]![0])).toContain('open_signup_misconfigured');
   });
 });

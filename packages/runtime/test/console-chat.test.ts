@@ -277,11 +277,10 @@ describe('console chat attachment upload', () => {
     method: 'POST', body,
     headers: { cookie: COOKIE, [CONSOLE_CHAT_HEADER]: '1', 'sec-fetch-site': 'same-origin', origin: ORIGIN, 'content-type': 'application/pdf', 'x-waldo-upload-kind': 'file', 'x-waldo-upload-name': encodeURIComponent('Lease – 2026.pdf'), ...headers },
   });
-  const on = (env: unknown) => ({ ...(env as object), APP_CHAT_ATTACHMENTS: '1' }) as never;
 
   it('hands the owner object the raw bytes, type, kind and name on the app upload path of the cookie owner and session, on the upload budget', async () => {
     const { env, forwards, keys } = setup();
-    const response = (await handleConsoleChat(upload(), on(env), fakeAuth()))!;
+    const response = (await handleConsoleChat(upload(), env, fakeAuth()))!;
     expect(response.status).toBe(202);
     expect(response.headers.get('cache-control')).toBe('private, no-store');
     const forwarded = forwards[0]!;
@@ -294,16 +293,10 @@ describe('console chat attachment upload', () => {
     expect(keys).toEqual(['app-upload:owner-1']);
   });
 
-  it('is not there with the switch off, and spends nothing', async () => {
-    const { env, forwards, keys } = setup();
-    expect((await handleConsoleChat(upload(), env, fakeAuth()))!.status).toBe(404);
-    expect([forwards.length, keys.length]).toEqual([0, 0]);
-  });
-
   it('refuses what the app route refuses, with the same statuses, before the owner object sees it', async () => {
     const { env, forwards } = setup();
     const status = async (headers: Record<string, string>, body?: BodyInit) => {
-      const response = (await handleConsoleChat(upload(headers, body), on(env), fakeAuth()))!;
+      const response = (await handleConsoleChat(upload(headers, body), env, fakeAuth()))!;
       return [response.status, (await response.json() as { error: string }).error];
     };
     expect(await status({ 'x-waldo-upload-kind': 'sticker' })).toEqual([400, 'invalid_kind']);
@@ -318,15 +311,15 @@ describe('console chat attachment upload', () => {
     const { env, forwards } = setup();
     const readOwnerCookie = vi.fn(async () => 'owner-1');
     for (const headers of [{ [CONSOLE_CHAT_HEADER]: '' }, { origin: 'https://evil.test' }, { 'sec-fetch-site': 'cross-site' }] as Record<string, string>[])
-      expect((await handleConsoleChat(upload(headers), on(env), fakeAuth(readOwnerCookie)))!.status).toBe(403);
+      expect((await handleConsoleChat(upload(headers), env, fakeAuth(readOwnerCookie)))!.status).toBe(403);
     expect(readOwnerCookie).not.toHaveBeenCalled();
-    expect((await handleConsoleChat(call(UPLOADS), on(env), fakeAuth()))!.status).toBe(405);
-    expect((await handleConsoleChat(call(`${UPLOADS}/up_x`, { method: 'POST' }), on(env), fakeAuth()))!.status).toBe(404);
+    expect((await handleConsoleChat(call(UPLOADS), env, fakeAuth()))!.status).toBe(405);
+    expect((await handleConsoleChat(call(`${UPLOADS}/up_x`, { method: 'POST' }), env, fakeAuth()))!.status).toBe(404);
     expect(forwards).toHaveLength(0);
     const spent = setup(false);
-    const limited = (await handleConsoleChat(upload(), on(spent.env), fakeAuth()))!;
+    const limited = (await handleConsoleChat(upload(), spent.env, fakeAuth()))!;
     expect([limited.status, limited.headers.get('retry-after'), spent.forwards.length]).toEqual([429, '60', 0]);
-    const ended = on({ OWNER_DO: { idFromName: (name: string) => name, get: () => ({ fetch: async () => Response.json({ error: 'unavailable' }, { status: 403 }) }) }, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } });
+    const ended = ({ OWNER_DO: { idFromName: (name: string) => name, get: () => ({ fetch: async () => Response.json({ error: 'unavailable' }, { status: 403 }) }) }, RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: true }) } }) as never;
     const response = (await handleConsoleChat(upload(), ended, fakeAuth()))!;
     expect([response.status, await response.json()]).toEqual([401, { error: 'sign_in_required' }]);
   });

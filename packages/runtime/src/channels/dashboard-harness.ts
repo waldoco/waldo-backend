@@ -57,12 +57,11 @@ export const harnessRefusalText = (refusal: HarnessRefusal): string =>
     : refusal.reason === 'wait' ? `Not yet: try again in ${waitText(refusal.seconds)}.`
       : 'Waldo could not check that command just now, so nothing ran.';
 
-// Commands Telegram took, in the owner's console (CONSOLE_HARNESS): the same handlers, run as the signed-in owner behind the
-// console's session, CSRF token and rate budget. A GET says which commands this owner has and carries this session's token;
-// with the switch off the route is not there. /stop has its own homes (a message's stop and WhatsApp's /stop) and is no
-// command here.
+// Commands Telegram took, in the owner's console: the same handlers, run as the signed-in owner behind the console's session,
+// CSRF token and rate budget. A GET says which commands this owner has and carries this session's token. /stop has its own
+// homes (a message's stop and WhatsApp's /stop) and is no command here.
 export const consoleHarness = async (input: Readonly<{
-  request: Request; csrf: string; enabled: boolean;
+  request: Request; csrf: string;
   admin(): Promise<boolean>;
   admit(command: HarnessCommand, budget: () => boolean): Promise<HarnessRefusal | null>;
   limited(kind: 'read' | 'action'): Response | null;
@@ -70,7 +69,6 @@ export const consoleHarness = async (input: Readonly<{
   ledger(): Promise<string>;
 }>): Promise<Response> => {
   const reply = (body: object, status = 200, extra: Record<string, string> = {}) => Response.json(body, { status, headers: { ...DASHBOARD_OVERVIEW_HEADERS, ...extra } });
-  if (!input.enabled) return reply({ error: 'not_found' }, 404);
   if (input.request.method === 'GET') {
     const limited = input.limited('read');
     if (limited) return limited;

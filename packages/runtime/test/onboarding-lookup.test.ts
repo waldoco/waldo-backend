@@ -21,7 +21,7 @@ const withOwner = <T,>(work: (h: Harness) => Promise<T> | T): Promise<T> =>
     let n = 0, started: number | null = null;
     const book = jobBook(state.storage.sql, { now: () => clock.at, newId: () => (n += 1).toString(16).padStart(12, '0'), newToken: () => `tok-${n += 1}` });
     const deps = ({ lookupOffered = true, ...over }: Partial<LookupDeps> & { lookupOffered?: boolean } = {}): LookupDeps => ({
-      book, consent: consentLedger(state.storage.sql, { agreementsOffered: true, lookupOffered }), now: () => clock.at, surface: 'app',
+      book, consent: consentLedger(state.storage.sql, { lookupOffered }), now: () => clock.at, surface: 'app',
       started: () => started, markStarted: (at) => { started = at; }, held: [], ...over,
     });
     return work({ book, clock, sql: state.storage.sql, deps });

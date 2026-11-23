@@ -19,10 +19,6 @@
     "disposition": "unconditional",
     "batch": "device-google"
   },
-  "APP_AGREEMENTS": {
-    "disposition": "unconditional",
-    "batch": "app-identity"
-  },
   "OWNER_LOOKUP": {
     "disposition": "kept",
     "reason": "egress and privacy: looks the owner up on the web; production waits for the published privacy notice that discloses it",
@@ -56,10 +52,6 @@
     "reason": "unfinished: off everywhere; needs the callback on Supabase's redirect allow list",
     "removeBy": "2026-12-31"
   },
-  "APP_ID_TOKEN_SIGNIN": {
-    "disposition": "unconditional",
-    "batch": "app-identity"
-  },
   "OPEN_SIGNUP": {
     "disposition": "kept",
     "reason": "authority and spend: lets strangers create owners; on only where the cohort and spend caps are ruled",
@@ -90,22 +82,10 @@
     "reason": "egress: iMessage relay; production has no Photon project or connector policy yet",
     "removeBy": "2027-01-31"
   },
-  "IMESSAGE_MEDIA": {
-    "disposition": "unconditional",
-    "batch": "imessage"
-  },
-  "IMESSAGE_STOP": {
-    "disposition": "unconditional",
-    "batch": "imessage"
-  },
   "LANGFUSE_RETENTION_SWEEP": {
     "disposition": "kept",
     "reason": "unfinished: \"dry\" only counts; deletes in Langfuse need a reviewed live run",
     "removeBy": "2026-12-31"
-  },
-  "IMESSAGE_VOICE": {
-    "disposition": "unconditional",
-    "batch": "imessage"
   },
   "WALDO_IMESSAGE_PROGRESS": {
     "disposition": "kept",
@@ -150,10 +130,6 @@
   },
   "WHATSAPP_QUIET_MS": {
     "disposition": "knob"
-  },
-  "WALDO_COST_LEDGER_SYNC": {
-    "disposition": "unconditional",
-    "batch": "app-identity"
   },
   "WALDO_FORGET_BARRIER": {
     "disposition": "unconditional",
@@ -338,10 +314,6 @@
     "reason": "egress and privacy: looks the owner up on the web; production waits for the published privacy notice that discloses it",
     "removeBy": "2027-01-31"
   },
-  "WELCOME_V2": {
-    "disposition": "unconditional",
-    "batch": "app-identity"
-  },
   "HEALTH_EASE_WORKOUT": {
     "disposition": "unconditional",
     "batch": "health-context (after W3)"
@@ -412,14 +384,6 @@
   "OWNER_SURFACE_DEFAULT": {
     "disposition": "unconditional",
     "batch": "delivery-proactive (after W4)"
-  },
-  "APP_CHAT_ATTACHMENTS": {
-    "disposition": "unconditional",
-    "batch": "app-identity"
-  },
-  "CONSOLE_HARNESS": {
-    "disposition": "unconditional",
-    "batch": "app-identity"
   },
   "WHATSAPP_STOP": {
     "disposition": "unconditional",

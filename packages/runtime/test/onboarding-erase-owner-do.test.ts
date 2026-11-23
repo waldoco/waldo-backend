@@ -34,7 +34,7 @@ const thread = (title: string) => ({ thread_id: 'th_1', title, revision: 1, titl
 const owner = (name: string, work: (o: { state: DurableObjectState; call(path: string, body?: unknown): Promise<Response> }) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     state.storage.kv.put('do_name', name);
-    const object = new OwnerDO(state, { ...env, ...directory, OWNER_LOOKUP: '1', APP_AGREEMENTS: '1', TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const object = new OwnerDO(state, { ...env, ...directory, OWNER_LOOKUP: '1', TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TELEGRAM_ID: undefined });
     const call = (path: string, body?: unknown) => object.fetch(new Request(`https://telegram-owner${path}`, {
       method: body === undefined ? 'GET' : 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -43,7 +43,7 @@ const owner = (name: string, work: (o: { state: DurableObjectState; call(path: s
   });
 // Two findings and their copies: the assistant said them in chat, the day's episode holds them, and a thread is named after one.
 const seed = (state: DurableObjectState) => {
-  const sql = state.storage.sql, claims = claimStore(sql, w => state.storage.transactionSync(w)), consent = consentLedger(sql, { lookupOffered: true, agreementsOffered: true });
+  const sql = state.storage.sql, claims = claimStore(sql, w => state.storage.transactionSync(w)), consent = consentLedger(sql, { lookupOffered: true });
   // The owner object reads findings by its own clock, so they are found now: an older one would have expired.
   const at = Date.now();
   consent.grant('terms', 1, at); consent.grant('privacy_notice', 1, at); consent.grant('owner_lookup', 1, at);

@@ -163,7 +163,7 @@ const supabase = async () => {
   const limited = { value: false }, now = { offset: 0 };
   const grantFetch = vi.fn(async () => new Response('console-grant-token'));
   const settings = {
-    ...env, SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: KEY, WALDO_ROUTER_HMAC_SECRET: SECRET, CONSOLE_GOOGLE_SIGNIN: '1', APP_ID_TOKEN_SIGNIN: '1',
+    ...env, SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: KEY, WALDO_ROUTER_HMAC_SECRET: SECRET, CONSOLE_GOOGLE_SIGNIN: '1',
     RESPONSIBILITY_RATE_LIMITER: { limit: async () => ({ success: !limited.value }) },
     OWNER_DO: { idFromName: (name: string) => name, get: () => ({ fetch: grantFetch }) } as unknown as DurableObjectNamespace,
   };
@@ -378,14 +378,6 @@ describe('app sign-in with an Apple or Google identity token', () => {
     // Apple's authorization code is accepted and unused until the Sign in with Apple key exists: never sent on, never logged.
     expect(state.grants).toEqual([{ grant_type: 'id_token', provider: 'apple', id_token: jwt, nonce: NONCE }]);
     expect(logs.lines.filter(line => line.includes('c0ffee'))).toEqual([]);
-  });
-
-  it('is served only while APP_ID_TOKEN_SIGNIN is "1": otherwise 404, asking Supabase nothing', async () => {
-    const { app, fetcher, token } = await supabase();
-    const body = google(token({ provider: 'google', email: INVITED }), { invite: INVITE });
-    for (const value of ['0', '', undefined, 'true']) expect(await app('/auth/id_token', body, { APP_ID_TOKEN_SIGNIN: value })).toEqual({ status: 404, body: { error: 'unavailable' } });
-    expect(fetcher).not.toHaveBeenCalled();
-    expect((await app('/auth/id_token', body, { APP_ID_TOKEN_SIGNIN: '1' })).body).toMatchObject({ state: 'active' });
   });
 
   it('is rate limited like the code routes, keyed by a digest of the token, and spends the owner\'s send budget on a confirm', async () => {

@@ -12,7 +12,7 @@ const button = (csrf: string, action: string, label: string, fields: Readonly<Re
 const dollars = (usd: number) => `$${usd.toFixed(2)}`;
 const spendTable = (spend: AdminSpendSection): string => {
   if ('error' in spend) return '<p>Spend is unavailable right now.</p>';
-  if (spend.total.calls === 0 && spend.total.usd === 0) return `<p>No spend recorded in the last ${ADMIN_SPEND_DAYS} days. The ledger fills only on deployments that sync it (WALDO_COST_LEDGER_SYNC).</p>`;
+  if (spend.total.calls === 0 && spend.total.usd === 0) return `<p>No spend recorded in the last ${ADMIN_SPEND_DAYS} days.</p>`;
   const line = (totals: AdminSpend['total']) => `<td>${dollars(totals.usd)}</td><td>${totals.calls}</td><td>${totals.input_tokens}</td><td>${totals.cached_tokens}</td>`;
   const owners = spend.owners.map((owner) => `<tr><td>${esc(owner.email ?? '(unknown owner)')}</td>${line(owner)}</tr>`).join('');
   const cut = spend.truncated ? '<p>Only the newest rows are counted; older days in the window were left out.</p>' : '';

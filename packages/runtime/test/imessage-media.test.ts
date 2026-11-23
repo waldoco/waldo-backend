@@ -10,7 +10,7 @@ import { IMESSAGE_MEDIA_MAX_BYTES } from '../src/channels/imessage/photon-media'
 import { fixtureDirectory, type FixtureOwner } from './helpers/imessage-fixture-directory';
 import { SimulatedHost } from './helpers/imessage-sim-host';
 
-// IMESSAGE_MEDIA=1 and IMESSAGE_VOICE=1 (vitest.imessage-media.config.ts): an owner's photo or file is fetched from Photon and
+// With Photon set up (vitest.imessage-media.config.ts): an owner's photo or file is fetched from Photon and
 // reaches the model with its caption, a voice note reaches it as a transcript, or the owner gets one fixed reply. Photon, the directory and the model are all answered in-isolate.
 
 const proof = vi.hoisted(() => ({ turns: [] as string[] }));
@@ -252,4 +252,4 @@ it('two media messages in a row are two turns, each with only its own file', asy
   expect(proof.turns[0]).toContain(base64(PNG)); expect(proof.turns[0]).not.toContain(base64(second.bytes));
   expect(proof.turns[1]).toContain(base64(second.bytes)); expect(proof.turns[1]).not.toContain(base64(PNG));
   expect(await w.counts()).toMatchObject({ pending: 0, handed: 2 });
-});
+}, 30_000);

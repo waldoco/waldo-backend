@@ -16,7 +16,7 @@ import { episodeIndex } from '../src/channels/episodes';
 
 let sequence = 0;
 type Calls = { acts: unknown[]; admitted: string[]; rpc: number; hidden: (readonly string[])[] };
-type Fakes = Partial<Pick<OwnerOnboardingDeps, 'rpc' | 'act' | 'admit' | 'chat' | 'assertCurrent' | 'hideText' | 'stopLookup' | 'lookupOffered' | 'agreementsOffered' | 'now' | 'signedInRecently'>>;
+type Fakes = Partial<Pick<OwnerOnboardingDeps, 'rpc' | 'act' | 'admit' | 'chat' | 'assertCurrent' | 'hideText' | 'stopLookup' | 'lookupOffered' | 'now' | 'signedInRecently'>> & Readonly<{ agreed?: boolean }>;
 const NO_CHAT: ChatChannels = { offered: async () => false, linked: async () => 'unknown', issue: async () => null };
 const owner = <T>(fn: (o: { storage: DurableObjectStorage; calls: Calls; send(path: string, body?: unknown, method?: string, contract?: string): Promise<Response>; act(body: Record<string, unknown>): Promise<Response> }) => Promise<T>, fakes: Fakes = {}) =>
   runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`app-onboarding-${sequence++}`)), async (_instance, state) => {
@@ -25,7 +25,7 @@ const owner = <T>(fn: (o: { storage: DurableObjectStorage; calls: Calls; send(pa
     const deps: OwnerOnboardingDeps = {
       storage: state.storage, doName: 'owner-name', now: fakes.now ?? (() => clock++), assertCurrent: fakes.assertCurrent ?? (async () => {}), chat: fakes.chat ?? NO_CHAT,
       signedInRecently: fakes.signedInRecently ?? (async () => true),
-      lookupOffered: fakes.lookupOffered ?? true, agreementsOffered: fakes.agreementsOffered ?? true, hideText: fakes.hideText ?? (async texts => { calls.hidden.push(texts); }), stopLookup: fakes.stopLookup ?? (() => {}),
+      lookupOffered: fakes.lookupOffered ?? true, hideText: fakes.hideText ?? (async texts => { calls.hidden.push(texts); }), stopLookup: fakes.stopLookup ?? (() => {}),
       rpc: fakes.rpc ?? (async () => { calls.rpc += 1; return { consents: [] }; }),
       act: fakes.act ?? (async action => { calls.acts.push(action); if (action.action === 'timezone.set') state.storage.kv.put('timezone_confirmed', true); return true; }),
       admit: fakes.admit ?? (async client => { calls.admitted.push(client); return true; }),
@@ -33,6 +33,11 @@ const owner = <T>(fn: (o: { storage: DurableObjectStorage; calls: Calls; send(pa
     const send = (path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST', contract?: string) =>
       appOnboardingRequest(new Request(`https://telegram-owner${path}`, { method, headers: { ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...(contract ? { [APP_CONTRACT_HEADER]: contract } : {}) },
         ...(body === undefined ? {} : { body: typeof body === 'string' ? body : JSON.stringify(body) }) }), ownerOnboardingHost(deps));
+    if (fakes.agreed) {
+      const consent = consentLedger(state.storage.sql, { lookupOffered: deps.lookupOffered });
+      consent.attestAge(clock);
+      for (const purpose of ['terms', 'privacy_notice'] as const) consent.grant(purpose, CURRENT_CONSENT_VERSION[purpose], clock);
+    }
     let request = 0;
     const act = (body: Record<string, unknown>) => send('/app/v1/onboarding/actions', { request_id: `onboarding-${request++}`, ...body });
     return fn({ storage: state.storage, calls, send, act });
@@ -69,11 +74,6 @@ describe('first run', () => {
     const current = appConsentListV1Schema.parse(await (await send('/app/v1/consents', undefined, 'GET', 'onboarding=3')).json());
     expect(current.consents.map(consent => [consent.purpose, consent.current_version])).toEqual(Object.entries(CURRENT_CONSENT_VERSION));
   }));
-  it('names the copy that would be required while the agreements are held back', () => owner(async ({ send }) => {
-    const list = appConsentListV1Schema.parse(await (await send('/app/v1/consents', undefined, 'GET', 'onboarding=3')).json());
-    expect(list.agreements_offered).toBe(false);
-    expect(list.consents.map(consent => consent.current_version)).toEqual(Object.values(CURRENT_CONSENT_VERSION));
-  }, { agreementsOffered: false }));
   it('keeps the three answers as owner memory, never as a fourth question', () => owner(async ({ storage, act }) => {
     await act({ action: 'start' }); await act(agree);
     await act({ action: 'name.set', name: 'Sam' });
@@ -200,7 +200,7 @@ describe('setup answers', () => {
     const profile = prompt.slice(prompt.indexOf('<owner_profile>'), prompt.indexOf('</owner_profile>'));
     for (const line of ['Wants to be called Asha', 'Most workdays are meetings', 'Things that tend to slip', 'Wears an Apple Watch.']) expect(profile).toContain(line);
     expect(profile.indexOf('Wants to be called Asha')).toBeLessThan(profile.indexOf('Most workdays are meetings'));
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
   it('corrects an answer in place, clears one sent as null or empty, and leaves the ones not sent alone', () => owner(async ({ storage, send }) => {
     await save(send, ANSWERS);
     expect(await held(await save(send, { day: { shape: 'focus', own_words: '' }, slips: { picked: [], own_words: '' }, wearable: null }))).toEqual({ name: true, day: true, slips: false, wearable: false });
@@ -209,14 +209,14 @@ describe('setup answers', () => {
     expect(await held(await save(send, { day: { shape: null, own_words: 'Night shifts on Fridays' }, slips: { picked: [], own_words: 'Gym' } }))).toMatchObject({ day: true, slips: true });
     expect(facts(storage).map(fact => fact.text)).toEqual(expect.arrayContaining(['About their workdays, in their own words: "Night shifts on Fridays"', 'Things that tend to slip, in their own words: "Gym"']));
     expect(await held(await save(send, { name: null, day: null }))).toEqual({ name: false, day: false, slips: true, wearable: false });
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
   it('answers the name step the run reads, before the run starts and after it finishes', () => owner(async ({ send, act }) => {
     await save(send, { name: 'Asha' });
     await act({ action: 'start' });
     expect(appOnboardingV1Schema.parse(await (await send('/app/v1/onboarding')).json()).steps.name).toBe('done');
     expect((await run(await act({ action: 'complete' }))).state).toBe('completed');
     expect(await held(await save(send, { name: 'Ash', wearable: 'samsung' }))).toMatchObject({ name: true, wearable: true });
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
   it('stores nothing before the agreements while they are offered', () => owner(async ({ storage, send, act }) => {
     const early = await save(send, ANSWERS);
     expect([early.status, await early.json()]).toEqual([409, { error: 'agreements_required' }]);
@@ -235,7 +235,7 @@ describe('setup answers', () => {
     }
     expect((await send('/app/v1/onboarding/answers')).status).toBe(405);
     expect(facts(storage).map(fact => fact.text)).toEqual(['Wants to be called Asha']);
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
 });
 
 describe('setup answers, onboarding revision 2', () => {
@@ -272,7 +272,7 @@ describe('setup answers, onboarding revision 2', () => {
       .toEqual(expect.arrayContaining(TEXTS.map(text => ({ text, origin: 'owner', source: 'stated', grounded: 'owner-grounded', pinned: true }))));
     expect(facts(storage)).toHaveLength(8);
     for (const prompt of [turnMemoryPrompt(store(storage), 'anything'), ownerProfilePrompt(store(storage), 'anything')]) for (const text of TEXTS) expect(prompt).toContain(text);
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
 
   it('keeps the picks about the owner\'s body apart, as health, so a path that leaves health out leaves them out', () => owner(async ({ storage, send }) => {
     await send(ANSWERS, { request_id: `setup-more-${request++}`, ...MORE, low: { picked: ['sleep', 'cancel'], own_words: 'I get short with people' } }, 'POST', REVISION_2);
@@ -297,7 +297,7 @@ describe('setup answers, onboarding revision 2', () => {
     // Clearing an answer clears both of its parts, and one part alone still reads as held.
     expect((await (await send(ANSWERS, { request_id: `setup-more-${request++}`, spots: ['sleep-onset'], low: null }, 'POST', REVISION_2)).json() as { held: Record<string, boolean> }).held).toMatchObject({ spots: true, low: false });
     expect(facts(storage).filter(claim => claim.source_ref?.includes('spots') || claim.source_ref?.includes('low')).map(claim => claim.text)).toEqual(['Where it is hardest for them: getting to sleep.']);
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
 
   it('keeps every answer in both pinned views at its longest', () => owner(async ({ storage, send }) => {
     const words = (topic: string) => `${topic} ${'and so on '.repeat(40)}`.slice(0, 280).trim();
@@ -313,7 +313,7 @@ describe('setup answers, onboarding revision 2', () => {
       for (const claim of facts(storage)) expect(prompt).toContain(claim.text);
       expect(prompt).not.toContain('not shown here');
     }
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
 
   it('takes the longest answers in characters JSON spells out, past the cap the other onboarding routes keep', () => owner(async ({ send }) => {
     const words = '\u0001'.repeat(280);
@@ -322,7 +322,7 @@ describe('setup answers, onboarding revision 2', () => {
       protect: { picked: [], own_words: words }, season: { choice: null, own_words: words }, low: { picked: [], own_words: words } };
     const saved = await send(ANSWERS, { request_id: `setup-more-${request++}`, ...longest }, 'POST', REVISION_2);
     expect([saved.status, (await saved.json() as { held: Record<string, boolean> }).held]).toEqual([200, { ...NONE, name: true, day: true, slips: true, matters: true, spots: true, protect: true, season: true, low: true }]);
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
 
   it('refuses the later answers from a build that does not declare revision 2, exactly as before, and stores nothing', () => owner(async ({ storage, send }) => {
     for (const contract of [undefined, 'onboarding=1', 'approvals=4', 'onboarding=x']) {
@@ -332,7 +332,7 @@ describe('setup answers, onboarding revision 2', () => {
       }
     }
     expect(facts(storage)).toEqual([]);
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
 
   it('keeps the onboarding cap for a build below revision 2, and the larger one for a build that declares it', () => owner(async ({ send }) => {
     const padded = (id: string) => `{"request_id":"${id}","name":"Asha"${' '.repeat(5000)}}`;
@@ -341,7 +341,7 @@ describe('setup answers, onboarding revision 2', () => {
       expect([refused.status, await refused.json()]).toEqual([400, { error: 'invalid_request' }]);
     }
     expect((await send(ANSWERS, padded(`setup-more-${request++}`), 'POST', REVISION_2)).status).toBe(200);
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
 
   it('answers a build that reads revision 1 with the first four only, and replays one request to each build at its own revision', () => owner(async ({ send }) => {
     const body = { request_id: 'setup-more-replay', name: 'Asha' };
@@ -355,21 +355,21 @@ describe('setup answers, onboarding revision 2', () => {
     const both = { request_id: 'setup-more-replay-2', name: 'Asha', ...MORE };
     expect((await (await send(ANSWERS, both, 'POST', REVISION_2)).json() as { held: unknown }).held).toEqual({ ...NONE, name: true, matters: true, spots: true, protect: true, rope: true, season: true, low: true });
     expect((await send(ANSWERS, both)).status).toBe(400);
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
 
   it('still takes an older build\'s name and day alone, and leaves the newer answers as they are', () => owner(async ({ storage, send }) => {
     await send(ANSWERS, { request_id: `setup-more-${request++}`, ...MORE }, 'POST', REVISION_2);
     const old = await send(ANSWERS, { request_id: `setup-more-${request++}`, name: 'Asha', day: { shape: 'meetings', own_words: '' } });
     expect([old.status, (await old.json() as { held: unknown }).held]).toEqual([200, { name: true, day: true, slips: false, wearable: false }]);
     expect(facts(storage)).toHaveLength(10);
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
 
   it('clears an answer sent as null or an empty choice, and corrects one in place', () => owner(async ({ storage, send }) => {
     await send(ANSWERS, { request_id: `setup-more-${request++}`, ...MORE }, 'POST', REVISION_2);
     const cleared = await send(ANSWERS, { request_id: `setup-more-${request++}`, matters: { picked: [], own_words: '' }, spots: [], protect: null, rope: null, season: { choice: null, own_words: '' }, low: { picked: ['sleep'], own_words: '' } }, 'POST', REVISION_2);
     expect((await cleared.json() as { held: unknown }).held).toEqual({ ...NONE, low: true });
     expect(facts(storage).map(claim => claim.text)).toEqual(['When running low: sleep goes first.']);
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
 
   it('keeps a reading in the owner\'s own words as they said it, dated, and out of the blocks every turn reads', () => owner(async ({ storage, send }) => {
     const said = 'resting HR 52 by Friday';
@@ -380,7 +380,7 @@ describe('setup answers, onboarding revision 2', () => {
     expect([claim!.text, claim!.pinned]).toEqual([`What happens when they run low, in their own words at setup on 1970-01-01: "${said}"`, null]);
     expect(turnMemoryPrompt(store(storage), 'anything')).not.toContain(said);
     expect(ownerProfilePrompt(store(storage), 'anything')).not.toContain(said);
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
 
   it('keeps a reading stated in any answer\'s own words as health, so recall that leaves health out never returns it', () => owner(async ({ storage, send }) => {
     const said = 'resting HR 52 lately';
@@ -395,7 +395,7 @@ describe('setup answers, onboarding revision 2', () => {
     const memory = store(storage);
     expect(memory.recall('resting HR', 20).filter(claim => claim.text.includes(said))).toHaveLength(6);
     expect(memory.recall('resting HR', 20).filter(claim => claim.kind !== 'health').map(claim => claim.text)).toEqual([]);
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
 
   it('reads a duplicated contract header, or one padded inside, as revision 1, and refuses the later answers', () => owner(async ({ send }) => {
     for (const contract of ['onboarding=2,onboarding=2', 'onboarding= 2', 'onboarding =2', 'approvals=4, onboarding=2', 'onboarding=2,']) {
@@ -404,7 +404,7 @@ describe('setup answers, onboarding revision 2', () => {
     }
     // Space around a header value is not part of it (Fetch trims it), so a padded header still declares revision 2.
     for (const contract of [' onboarding=2', 'onboarding=2 ']) expect((await send(ANSWERS, { request_id: `setup-more-${request++}`, rope: 'tell' }, 'POST', contract)).status).toBe(200);
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
 
   it('forgets each answer as the owner forgets any fact: gone from every view, and no longer held', () => owner(async ({ storage, send }) => {
     await send(ANSWERS, { request_id: `setup-more-${request++}`, ...MORE }, 'POST', REVISION_2);
@@ -413,7 +413,7 @@ describe('setup answers, onboarding revision 2', () => {
     for (const prompt of [turnMemoryPrompt(memory, 'anything'), ownerProfilePrompt(memory, 'anything')]) for (const text of TEXTS) expect(prompt).not.toContain(text);
     const after = await send(ANSWERS, { request_id: `setup-more-${request++}`, name: 'Asha' }, 'POST', REVISION_2);
     expect((await after.json() as { held: unknown }).held).toEqual({ ...NONE, name: true });
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
 });
 
 describe('setup answers, onboarding revision 4', () => {
@@ -448,14 +448,14 @@ describe('setup answers, onboarding revision 4', () => {
     const decision = turnMemoryPrompt({ ...memory, claims: (status?: string) => memory.claims(status).filter(noHealth), recall: (...args: Parameters<typeof memory.recall>) => memory.recall(...args).filter(noHealth) }, 'anything');
     expect(decision).toContain(TRAIN_TEXT);
     for (const text of ['their training', 'fitting training in']) expect(decision).not.toContain(text);
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
 
   it('says each time they train as Waldo reads it, and their words alone when no time is picked', () => owner(async ({ storage, send }) => {
     await send(ANSWERS, { request_id: `setup-train-${request++}`, train: { picked: ['early', 'lunch', 'evening', 'weekend', 'gap'], own_words: '' } }, 'POST', REVISION_4);
     expect(facts(storage).map(claim => claim.text)).toEqual(['Usually trains: before work, around lunch, in the evenings, at weekends, whenever there is a gap.']);
     await send(ANSWERS, { request_id: `setup-train-${request++}`, train: { picked: [], own_words: 'It varies with the season' } }, 'POST', REVISION_4);
     expect(facts(storage).map(claim => claim.text)).toEqual(['When they train, in their own words at setup on 1970-01-01: "It varies with the season"']);
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
 
   it('clears when they train with null or an empty choice, and corrects it in place', () => owner(async ({ storage, send }) => {
     await send(ANSWERS, { request_id: `setup-train-${request++}`, ...TRAINING }, 'POST', REVISION_4);
@@ -468,7 +468,7 @@ describe('setup answers, onboarding revision 4', () => {
       expect((await cleared.json() as { held: unknown }).held).toEqual({ ...NONE, matters: true, spots: true });
       expect(facts(storage).some(claim => claim.source_ref === 'owner, first run: train')).toBe(false);
     }
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
 
   it('keeps a reading stated with when they train as health, dated, out of the blocks every turn reads', () => owner(async ({ storage, send }) => {
     const said = 'resting HR 52 after the long runs';
@@ -477,7 +477,7 @@ describe('setup answers, onboarding revision 4', () => {
     expect([claim!.text, claim!.kind, claim!.pinned]).toEqual([`Usually trains: at weekends. In their own words at setup on 1970-01-01: "${said}"`, 'health', null]);
     expect(turnMemoryPrompt(store(storage), 'anything')).not.toContain(said);
     expect(ownerProfilePrompt(store(storage), 'anything')).not.toContain(said);
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
 
   it('keeps every answer in both pinned views at its longest, training included', () => owner(async ({ storage, send }) => {
     const words = (topic: string) => `${topic} ${'and so on '.repeat(40)}`.slice(0, 280).trim();
@@ -494,7 +494,7 @@ describe('setup answers, onboarding revision 4', () => {
       for (const claim of facts(storage)) expect(prompt).toContain(claim.text);
       expect(prompt).not.toContain('not shown here');
     }
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
 
   it('takes the longest answers in characters JSON spells out under the answers route cap', () => owner(async ({ send }) => {
     const words = '\u0001'.repeat(280);
@@ -504,7 +504,7 @@ describe('setup answers, onboarding revision 4', () => {
       low: { picked: ['focus', 'patience', 'sleep', 'push', 'cancel'], own_words: words }, train: { picked: ['early', 'lunch', 'evening', 'weekend', 'gap'], own_words: words } };
     const saved = await send(ANSWERS, longest, 'POST', REVISION_4);
     expect([saved.status, (await saved.json() as { held: Record<string, boolean> }).held]).toEqual([200, Object.fromEntries(Object.keys(NONE).map(key => [key, true]))]);
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
 
   it('refuses training from a build below revision 4, exactly as before, and stores nothing', () => owner(async ({ storage, send }) => {
     const naming = {
@@ -523,7 +523,7 @@ describe('setup answers, onboarding revision 4', () => {
       const saved = await send(ANSWERS, { request_id: `setup-train-${request++}`, matters: { picked: ['sleep'], own_words: '' }, spots: ['sleep-onset'] }, 'POST', contract);
       expect([contract, saved.status]).toEqual([contract, 200]);
     }
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
 
   it('answers each build at its own revision: train held only at revision 4, and one request replayed to each', () => owner(async ({ send }) => {
     const body = { request_id: 'setup-train-replay', name: 'Asha', low: { picked: ['sleep'], own_words: '' }, train: { picked: ['gap'], own_words: '' } };
@@ -542,7 +542,7 @@ describe('setup answers, onboarding revision 4', () => {
     expect(await (await send(ANSWERS, plain, 'POST', REVISION_3)).json()).toEqual({ request_id: plain.request_id, held: { ...two, name: true, low: true }, replayed: true });
     expect(await (await send(ANSWERS, { request_id: 'setup-train-replay-3', name: 'Asha' }, 'POST', REVISION_4)).json()).toEqual({ request_id: 'setup-train-replay-3', held: { ...NONE, name: true, low: true, train: true }, replayed: false });
     expect(await (await send(ANSWERS, { request_id: 'setup-train-replay-3', name: 'Asha' })).json()).toEqual({ request_id: 'setup-train-replay-3', held: { name: true, day: false, slips: false, wearable: false }, replayed: true });
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
 
   it('leaves train out of what a revision 2 or 3 build is told it holds, while holding it', () => owner(async ({ send }) => {
     await send(ANSWERS, { request_id: `setup-train-${request++}`, train: { picked: ['evening'], own_words: '' } }, 'POST', REVISION_4);
@@ -550,7 +550,7 @@ describe('setup answers, onboarding revision 4', () => {
     expect(await (await send(ANSWERS, { request_id: `setup-train-${request++}`, name: 'Asha' }, 'POST', REVISION_2)).json()).toEqual({ request_id: `setup-train-${request - 1}`, held: { ...two, name: true }, replayed: false });
     expect(await (await send(ANSWERS, { request_id: `setup-train-${request++}`, name: 'Asha' }, 'POST', REVISION_3)).json()).toEqual({ request_id: `setup-train-${request - 1}`, held: { ...two, name: true }, replayed: false });
     expect(await (await send(ANSWERS, { request_id: `setup-train-${request++}`, name: 'Asha' }, 'POST', REVISION_4)).json()).toEqual({ request_id: `setup-train-${request - 1}`, held: { ...NONE, name: true, train: true }, replayed: false });
-  }, { agreementsOffered: false }));
+  }, { agreed: true }));
 });
 
 describe('chat channels in the first run', () => {
@@ -678,7 +678,7 @@ describe('one consent representation per purpose', () => {
     expect(storage.sql.exec('SELECT 1 FROM consent_ledger').toArray()).toEqual([]);
   }));
   it('cannot store a health purpose even by a direct write', () => owner(async ({ storage }) => {
-    const ledger = consentLedger(storage.sql, { lookupOffered: true, agreementsOffered: true });
+    const ledger = consentLedger(storage.sql, { lookupOffered: true });
     expect(ledger.grant('storage_compute' as never, 1, 1)).toBe('stale_version');
     for (const purpose of ['storage_compute', 'model_processing', 'whoop']) {
       expect(() => storage.sql.exec("INSERT INTO consent_ledger (purpose, action, version, at) VALUES (?, 'granted', 1, 1)", purpose)).toThrow();
@@ -722,7 +722,7 @@ describe('health step reads both grants a cloud wearable needs', () => {
 });
 
 describe('consent and findings routes', () => {
-  const ledger = (storage: DurableObjectStorage) => consentLedger(storage.sql, { lookupOffered: true, agreementsOffered: true });
+  const ledger = (storage: DurableObjectStorage) => consentLedger(storage.sql, { lookupOffered: true });
   const stores = (storage: DurableObjectStorage) => {
     const claims = claimStore(storage.sql, work => storage.transactionSync(work)), consent = ledger(storage);
     return { claims, consent, findings: findingStore(storage.sql, claims, consent, () => 1_000) };
@@ -815,20 +815,6 @@ describe('consent and findings routes', () => {
     expect(storage.sql.exec<{ purpose: string }>("SELECT purpose FROM consent_ledger WHERE purpose IN ('terms', 'owner_lookup')").toArray()).toEqual([]);
     expect((await run(await act({ ...agree, owner_lookup: false }))).steps.agreements).toBe('done');
   }, { lookupOffered: false }));
-  it('holds the agreements back while the server has their copy off: the app is told, nothing is recorded, and the steps after them run', () => owner(async ({ storage, calls, send, act }) => {
-    expect(appConsentListV1Schema.parse(await (await send('/app/v1/consents')).json())).toMatchObject({ agreements_offered: false, owner_lookup_offered: false });
-    const terms = await send('/app/v1/consents', { request_id: 'grant-held-1', purpose: 'terms', version: 1, age_attested_18_plus: true });
-    expect([terms.status, await terms.json()]).toEqual([409, { error: 'not_offered' }]);
-    await act({ action: 'start' });
-    for (const owner_lookup of [true, false]) {
-      const yes = await act({ ...agree, owner_lookup });
-      expect([yes.status, await yes.json()]).toEqual([409, { error: 'not_offered' }]);
-    }
-    expect((await run(await act({ action: 'name.set', name: 'Sam' }))).steps).toMatchObject({ agreements: 'pending', name: 'done' });
-    expect(storage.sql.exec('SELECT 1 FROM consent_ledger').toArray()).toEqual([]);
-    expect(calls.hidden).toEqual([]);
-    expect(appOnboardingV1Schema.parse(await (await send('/app/v1/onboarding')).json()).steps.agreements).toBe('pending');
-  }, { agreementsOffered: false }));
   it('keeps what was found listed and forgettable while the server has the look-up off', () => owner(async ({ storage, calls, send }) => {
     const { id } = seed(storage);
     expect(appFindingListV1Schema.parse(await (await send('/app/v1/findings')).json())).toMatchObject({ lookup: 'not_granted', total: 1, items: [{ finding_id: id, text: ACME.text }] });

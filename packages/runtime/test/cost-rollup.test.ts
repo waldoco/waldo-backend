@@ -3,10 +3,7 @@ import { OPENAI_GPT_6_1_TERRA_MODEL, OPENAI_GPT_6_LUNA_MODEL } from '@waldo/cont
 import { md5Hex } from '../src/channels/md5';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { modelCost } from '../src/llm/pricing';
-import { COST_MONTH_KEY, COST_ROLLUP_KEY, COST_ROLLUP_MAX_ATTEMPTS, costRollup, costRollupDelta, costRollupEnabled } from '../src/observability/cost-rollup';
-import config from '../wrangler.jsonc?raw';
-import { parseJsonc } from '../../../scripts/jsonc.mjs';
-import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
+import { COST_MONTH_KEY, COST_ROLLUP_KEY, COST_ROLLUP_MAX_ATTEMPTS, costRollup, costRollupDelta } from '../src/observability/cost-rollup';
 
 const DAY = Date.UTC(2026, 9, 20, 10);
 const llm = (over: Partial<TurnLogEntry> = {}): TurnLogEntry => ({
@@ -88,25 +85,6 @@ describe('cache writes', () => {
     rollup.record(written(), DAY);
     await rollup.flush();
     expect(JSON.parse(rpc.sent[0]!.args.p_rows as string)).toEqual([expect.objectContaining({ calls: 2, cache_write: 7_000 })]);
-  });
-});
-
-describe('costRollupEnabled', () => {
-  it('is off unless the flag says on', () => {
-    expect(costRollupEnabled({})).toBe(false);
-    expect(costRollupEnabled({ WALDO_COST_LEDGER_SYNC: 'off' })).toBe(false);
-    expect(costRollupEnabled({ WALDO_COST_LEDGER_SYNC: 'on' })).toBe(true);
-  });
-});
-
-describe('hosted config', () => {
-  type Vars = { WALDO_COST_LEDGER_SYNC?: string };
-  const parsed = flatConfig(parseJsonc(config)) as { vars: Vars; env: { staging: { vars: Vars } } };
-  it('staging records spend', () => {
-    expect(costRollupEnabled(parsed.env.staging.vars)).toBe(true);
-  });
-  it('production keeps the ledger off', () => {
-    expect(costRollupEnabled(parsed.vars)).toBe(false);
   });
 });
 

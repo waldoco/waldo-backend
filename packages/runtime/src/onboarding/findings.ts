@@ -51,7 +51,7 @@ export const isLookupRef = (ref: string | null | undefined): boolean => typeof r
 
 // Findings about the owner from the public web. They are external content, kept apart from owner memory: no owner turn's
 // prompt carries one until the owner keeps or corrects it, which turns it into an owner claim through the claim store. The
-// one prompt that reads them before that is the second welcome build's web stage (WELCOME_V2), where they arrive fenced as
+// one prompt that reads them before that is the welcome build's web stage, where they arrive fenced as
 // outside text and anything built on them is Waldo's untrusted read (origin untrusted, source web), never the owner's word.
 // That read goes with its finding: forgetting one, correcting one, its expiry unconfirmed, or withdrawing the look-up purges
 // every welcome read citing it, and with it the node that read held up. Forgetting one, or withdrawing the look-up

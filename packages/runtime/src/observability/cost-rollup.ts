@@ -20,7 +20,7 @@ type Pending = { open: CostRollupRow[]; sending?: { id: string; rows: CostRollup
 
 export const COST_ROLLUP_KEY = 'cost_rollup_pending';
 // This owner's spend in the current UTC month, kept beside the deltas so a turn can read it without a database call.
-// It counts every delta recorded while the ledger is on, sent or not.
+// It counts every delta recorded, sent or not.
 export const COST_MONTH_KEY = 'cost_month_usd';
 type MonthSpend = { month: string; usd: number };
 const utcMonth = (at: number) => new Date(at).toISOString().slice(0, 7);
@@ -28,8 +28,6 @@ export const COST_ROLLUP_MAX_ATTEMPTS = 20;
 
 // One flush in flight per DO storage, shared by every channel runtime the DO builds over it.
 const flights = new WeakMap<Kv, Promise<void>>();
-
-export const costRollupEnabled = (env: Readonly<{ WALDO_COST_LEDGER_SYNC?: string }>): boolean => env.WALDO_COST_LEDGER_SYNC === 'on';
 
 export const costRollupDelta = (entry: TurnLogEntry, at: number): CostRollupRow | null => {
   const day = new Date(at).toISOString().slice(0, 10);
