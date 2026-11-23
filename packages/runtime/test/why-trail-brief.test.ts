@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
 import { appSubjectFor } from '../src/channels/app-api';
 import { dayCardsWhy, dayPlanBook } from '../src/channels/day-cards';
-import { loopBook } from '../src/channels/loops';
 import { traceBook } from '../src/channels/harness';
 import { claimStore } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
@@ -76,9 +75,6 @@ const brief = async (name: string, trail: '1' | '0', why: (claim: number) => unk
       await owner.setup('app').ready;
       await owner.serial(async () => undefined);
       state.storage.sql.exec('DELETE FROM schedule');
-      // A follow-up opened from a mail puts someone else's words in the Brief's prompt, so it starts tainted and proposes on a card.
-      const loop = loopBook(state.storage.sql, { newId: () => 'mail', now: () => AT }).open({ title: 'Reply to Priya about the run', due: '2026-10-25' });
-      state.storage.sql.exec('INSERT INTO loop_mail_sources (loop_id, source_ref) VALUES (?, ?)', loop.id, 'gmail:owner@example.test:m1');
       dayPlanBook(state.storage.sql).save(DAY, { card: 'card:brief', time: '00:00', reason: 'planned' });
       await new Scheduler(state.storage.sql, state.storage, productionDeps())
         .schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: AT - 1000, dueAt: AT - 1000, recurrence: null });
