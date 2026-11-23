@@ -1406,7 +1406,6 @@ const OMITTED_LINE_MAX_CHARS = 100;
 // A reading is a moment, read live through get_health; a line that would carry a health number on every turn is left to recall.
 export const statedReading = (claim: Claim): boolean => numericHealthIn(claim.text) || (claim.kind === 'health' && /\p{Nd}/u.test(claim.text));
 const healthNotesLine = (notes: number) => `(${notes} health notes are left out here; recall finds them when a message needs them, and get_health is current.)`;
-export const readingsLine = (readings: number) => `(${readings} health readings the owner stated are left out here; recall finds them, and get_health is current.)`;
 // A claim the owner asked Waldo to bring up less is the owner's own wish, not a judgment: a turn that speaks unprompted (a
 // brief, a nudge, a background job) does not see it. The owner's own turns still do, marked, and answer from it when asked.
 // A constellation node resting on one is left out with it, and its edges and statements with the node.
@@ -1535,9 +1534,9 @@ const PIN_RULES = [
   'Keep each block within its budget: pin what Waldo needs on most days, and unpin what has gone stale. Waldo shows the newest unpinned claims in whatever room the pins leave.',
 ];
 
-// MEMORY_VALIDITY: what the nightly does when the day shows a claim is no longer true. The model judges it; code only checks
+// What the nightly does when the day shows a claim is no longer true. The model judges it; code only checks
 // the quote is the owner's and keeps the old claim as dated history.
-export const RETIRE_RULES = [
+const RETIRE_RULES = [
   'When what the owner said today contradicts a claim, or shows it has stopped being true, do not leave both standing and do not delete the old one. If they stated a new version, use corrections with the old claim id; if the old claim is simply over (a job left, a habit dropped), list it in retire with a quote of the owner\'s words in evidence, and in replaced_by_text the exact text of the claim you add for what is true now, or null when nothing replaces it.',
   'A retired claim stays as dated history so Waldo can say what used to be true. Retire only what the owner\'s own words show is over, never what only a mail, a calendar or a file suggests.',
 ];
@@ -1546,6 +1545,7 @@ export const NIGHTLY_MEMORY_INSTRUCTION = [
   'Add what the day showed that is still missing, mark claims the day repeated as seen, and dismiss follow-ups that are settled.',
   ...CLAIM_RULES,
   ...PIN_RULES,
+  ...RETIRE_RULES,
 ].join('\n');
 
 // The calendar and mail changes recorded since memory last read them, by the nightly run or the daytime pass. They are outside content:
@@ -1623,17 +1623,13 @@ const pinnedUsage = (store: ClaimStore): string => {
   return `Pinned blocks now: ${usage.join('; ')}.`;
 };
 
-// The nightly source pass may only add.
-export const SOURCE_CLAIMS_SCHEMA = {
-  type: 'object', additionalProperties: false, required: ['add'],
-  properties: { add: CLAIM_OPS_SCHEMA.properties.add },
-};
-// With the people map on, each claim the source pass adds may say who it is about, with the address the change shows.
+// Each claim the source pass adds may say who it is about, with the address the change shows.
 const SOURCE_PERSON = { type: 'object', additionalProperties: false, required: ['ref', 'name', 'role', 'relation', 'addresses'], properties: {
   ref: { type: ['integer', 'null'] }, name: { type: ['string', 'null'] }, role: { type: 'string', enum: ['subject', 'object', 'mention'] },
   relation: { type: ['string', 'null'] }, addresses: { type: 'array', items: { type: 'string' } } } };
 const SOURCE_PEOPLE_MAX = 4;
 const ADD_ITEM = CLAIM_OPS_SCHEMA.properties.add.items;
+// The nightly source pass may only add.
 export const SOURCE_PEOPLE_CLAIMS_SCHEMA = {
   type: 'object', additionalProperties: false, required: ['add'],
   properties: { add: { type: 'array', items: { ...ADD_ITEM, required: [...ADD_ITEM.required, 'people'], properties: { ...ADD_ITEM.properties, people: { type: 'array', maxItems: SOURCE_PEOPLE_MAX, items: SOURCE_PERSON } } } } },

@@ -13,7 +13,7 @@ import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 
-// Behind MEMORY_NIGHTLY_SOURCE_UPDATES, the nightly pass also reads the calendar and mail changes the update sweep recorded since its
+// The nightly pass also reads the calendar and mail changes the update sweep recorded since its
 // own mark. That is outside content: the pass may only add, and every claim it adds is untrusted.
 const HOUR = 3_600_000, DAY = 24 * HOUR;
 const model = vi.hoisted(() => ({ fail: false, asked: [] as string[], sources: [] as string[], promotion: '{"nodes":[],"edges":[],"promoted":[]}' }));
@@ -58,7 +58,7 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 type Run = Readonly<{ scheduler: Scheduler; state: DurableObjectState; fire: (id: string, at?: number) => Promise<void>; wake: (at: number) => Promise<void> }>;
-const withOwner = (name: string, flag: string | undefined, work: (run: Run) => Promise<void>) =>
+const withOwner = (name: string, work: (run: Run) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const realNow = Date.now;
     let now = NOW;
@@ -67,7 +67,7 @@ const withOwner = (name: string, flag: string | undefined, work: (run: Run) => P
     try {
       ensureSchema(state.storage); traceBook(state.storage.sql); claimStore(state.storage.sql);
       for (const [key, value] of Object.entries({ do_name: name, app_subject: String(appSubjectFor(name)), timezone: 'UTC', timezone_confirmed: true })) state.storage.kv.put(key, value);
-      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, MEMORY_NIGHTLY_SOURCE_UPDATES: flag });
+      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
       await (owner as unknown as { setup(channel: string): { ready: Promise<unknown> } }).setup('app').ready;
       state.storage.sql.exec('DELETE FROM schedule');
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
@@ -101,17 +101,8 @@ const seed = (state: DurableObjectState) => {
 };
 const claims = (state: DurableObjectState) => claimStore(state.storage.sql).claims();
 
-it('stays off unless switched on: no read of the changes, no call, no mark', async () => {
-  await withOwner('nightly-sources-off', undefined, async ({ state, fire }) => {
-    seed(state);
-    await fire(NIGHTLY_ID);
-    expect(model.asked).not.toContain('source_claims');
-    expect(state.storage.kv.get(NIGHTLY_SOURCES_THROUGH_KEY)).toBeUndefined();
-  });
-});
-
 it('reads the day\'s changes once, writes only untrusted claims, and moves its own mark without folding the day cards\' rows', async () => {
-  await withOwner('nightly-sources-on', '1', async ({ state, fire }) => {
+  await withOwner('nightly-sources-on', async ({ state, fire }) => {
     seed(state);
     const lines: string[] = [];
     const spy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')); });
@@ -146,7 +137,7 @@ it('reads the day\'s changes once, writes only untrusted claims, and moves its o
 });
 
 it('a failed read keeps the mark, so the next night reads the same changes', async () => {
-  await withOwner('nightly-sources-failed', '1', async ({ state, fire }) => {
+  await withOwner('nightly-sources-failed', async ({ state, fire }) => {
     seed(state);
     model.fail = true;
     await fire(NIGHTLY_ID);
@@ -160,7 +151,7 @@ it('a failed read keeps the mark, so the next night reads the same changes', asy
 });
 
 it('a change carrying a topic a forget still holds never reaches the model', async () => {
-  await withOwner('nightly-sources-held', '1', async ({ state, fire }) => {
+  await withOwner('nightly-sources-held', async ({ state, fire }) => {
     seed(state);
     const store = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
     store.purge([], new Date(NOW - DAY).toISOString(), ['design review']);
@@ -171,14 +162,8 @@ it('a change carrying a topic a forget still holds never reaches the model', asy
   });
 });
 
-it('ships off in production and on in staging', async () => {
-  // @ts-expect-error vite-only API
-  const raw = Object.values(import.meta.glob('../wrangler.jsonc', { query: '?raw', import: 'default', eager: true }))[0] as string;
-  expect(raw.match(/"MEMORY_NIGHTLY_SOURCE_UPDATES": "([^"]*)"/g)).toEqual(['"MEMORY_NIGHTLY_SOURCE_UPDATES": "0"', '"MEMORY_NIGHTLY_SOURCE_UPDATES": "1"']);
-});
-
 it('reads no constellation node drawn from health beside the changes, as for any job built from outside content', async () => {
-  await withOwner('nightly-sources-health-nodes', '1', async ({ state, fire }) => {
+  await withOwner('nightly-sources-health-nodes', async ({ state, fire }) => {
     seed(state);
     const store = claimStore(state.storage.sql);
     const at = new Date(NOW - 2 * DAY).toISOString();
@@ -194,7 +179,7 @@ it('reads no constellation node drawn from health beside the changes, as for any
 });
 
 it('end to end, a claim the pass wrote never puts a node in the every-turn block until the owner confirms it', async () => {
-  await withOwner('nightly-sources-nodes', '1', async ({ state, fire }) => {
+  await withOwner('nightly-sources-nodes', async ({ state, fire }) => {
     seed(state);
     await fire(NIGHTLY_ID);
     const store = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));

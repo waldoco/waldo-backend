@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { applyClaimOps, claimStore, CLAIM_OPS_SCHEMA, RETIRE_RULES, withoutBringUpLess } from '../src/memory/claims';
+import { applyClaimOps, claimStore, CLAIM_OPS_SCHEMA, NIGHTLY_MEMORY_INSTRUCTION, withoutBringUpLess } from '../src/memory/claims';
 import { recallForTurn } from '../src/memory/turn-recall';
 import { memoryHandlers } from '../src/tools/live/memory';
 import { outsideView } from '../src/memory/outside-view';
@@ -86,7 +86,7 @@ describe('the nightly retires a contradicted claim', () => {
 
   it('is offered to the model as a schema field and as rules that keep the old claim as history', () => {
     expect(CLAIM_OPS_SCHEMA.required).toContain('retire');
-    expect(RETIRE_RULES.join(' ')).toMatch(/never what only a mail/);
+    expect(NIGHTLY_MEMORY_INSTRUCTION).toMatch(/never what only a mail/);
   });
 });
 
@@ -117,19 +117,17 @@ describe('what used to be true', () => {
     expect(outsideView(store).replacedClaims(5)).toEqual([]);
   }));
 
-  it('read_memory returns the replaced facts, with their dates, only when the model asks and the deployment offers it', () => withStore(async (store, sql) => {
+  it('read_memory returns the replaced facts, with their dates, only when the model asks', () => withStore(async (store, sql) => {
     seedHistory(store);
-    const read = async (validity: boolean, args: object) => {
-      const tool = memoryHandlers({ sql, store, conversationRef: 'app:main', hideHistory: async () => undefined, ...(validity ? { validity } : {}) }).find(handler => handler.name === 'read_memory')!;
+    const read = async (args: object) => {
+      const tool = memoryHandlers({ sql, store, conversationRef: 'app:main', hideHistory: async () => undefined }).find(handler => handler.name === 'read_memory')!;
       const result = await tool.handle({ limit: 10, ...args } as never, {} as never) as { ok: boolean; data: { claims: { text: string; valid_to: string | null }[] } };
       return result.data.claims;
     };
-    expect((await read(true, { query: 'leeds' })).map(claim => claim.text)).toEqual([]);
-    expect((await read(true, { query: 'leeds', include_replaced: true })).map(claim => [claim.text, claim.valid_to])).toEqual([['Lives in Leeds', T2]]);
-    expect((await read(true, { include_replaced: true })).map(claim => claim.text).sort()).toEqual(['Lives in Leeds', 'Lives in Pune']);
-    expect((await read(false, { query: 'leeds', include_replaced: true })).map(claim => claim.text)).toEqual([]);
-    expect(Object.keys((await read(false, { query: 'pune' }))[0]!)).not.toContain('valid_to');
-    expect(Object.keys((await read(true, { query: 'pune' }))[0]!)).toEqual(expect.arrayContaining(['valid_from', 'valid_to']));
+    expect((await read({ query: 'leeds' })).map(claim => claim.text)).toEqual([]);
+    expect((await read({ query: 'leeds', include_replaced: true })).map(claim => [claim.text, claim.valid_to])).toEqual([['Lives in Leeds', T2]]);
+    expect((await read({ include_replaced: true })).map(claim => claim.text).sort()).toEqual(['Lives in Leeds', 'Lives in Pune']);
+    expect(Object.keys((await read({ query: 'pune' }))[0]!)).toEqual(expect.arrayContaining(['valid_from', 'valid_to']));
   }));
 });
 

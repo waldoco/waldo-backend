@@ -1,22 +1,15 @@
 import { env } from 'cloudflare:workers';
-import { withSwitches } from '../src/switches';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
-import config from '../wrangler.jsonc?raw';
-import { parseJsonc } from '../../../scripts/jsonc.mjs';
-import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { HEY144_GOALS_SCHEMA_MIGRATION } from '../src/do-schema';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 import { holdTopic } from './helpers/pending-topic';
 
-// The test pool loads the top-level (production) vars of wrangler.jsonc. The deployed staging Worker reads env.staging.vars,
-// so this owner object is built with the staging block's own forget-barrier value, and an app turn is run through it while a
-// forget is still cleaning.
+// An app turn run through the owner object while a forget is still cleaning.
 const OWNER_ID = '6d2f0a8e-41c7-4b9e-a3d5-8e1c7f2b9a04';
 const BASE = 'https://directory.fixture.invalid';
-const STAGING = (flatConfig(parseJsonc(config)) as { env: { staging: { vars: { WALDO_FORGET_BARRIER?: string } } } }).env.staging.vars;
 
 const model = vi.hoisted(() => ({ requests: [] as LLMGatewayRequest['request'][], calls: [] as { name: string; arguments: string }[], modes: [] as unknown[] }));
 vi.mock('../src/channels/telegram-turn', async load => {
@@ -52,7 +45,7 @@ const directory = () => vi.stubGlobal('fetch', async (input: RequestInfo | URL, 
   return new Response('unexpected', { status: 500 });
 });
 
-const readMemoryTurn = async (name: string, barrier: string | undefined) => {
+const readMemoryTurn = async (name: string) => {
   directory();
   return runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const memory = claimStore(state.storage.sql);
@@ -65,7 +58,7 @@ const readMemoryTurn = async (name: string, barrier: string | undefined) => {
     for (const statement of HEY144_GOALS_SCHEMA_MIGRATION.up) state.storage.sql.exec(statement);
     state.storage.sql.exec("INSERT INTO goals (id, user_id, description, created_at, updated_at) VALUES ('g1', ?, ?, '2026-10-21T08:00:00Z', '2026-10-21T08:00:00Z')", OWNER_ID, '{ "note": "less coffee" }');
     holdTopic(state.storage.sql, 'coffee', '2026-10-21T08:00:00Z');
-    const owner = new OwnerDO(state, { ...env, WALDO_FORGET_BARRIER: barrier, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const owner = new OwnerDO(state, { ...env, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     model.calls.push({ name: 'read_memory', arguments: JSON.stringify({ limit: 10 }) });
     const sent = await owner.fetch(new Request('https://owner.invalid/app/v1/chat/main/messages', { method: 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'c'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: 'client-what-do-you-remember', text: 'What do you remember about me?' }) }));
     expect(sent.status, await sent.clone().text()).toBe(202);
@@ -78,17 +71,10 @@ const readMemoryTurn = async (name: string, barrier: string | undefined) => {
   });
 };
 
-it('the staging Worker runs owner turns on the item rule: a held memory item is dropped and the rest is shown', async () => {
-  expect(STAGING.WALDO_FORGET_BARRIER).toBe('on');
-  const { modes, output } = await readMemoryTurn('forget-barrier-staging-env', STAGING.WALDO_FORGET_BARRIER);
+it('the owner object runs owner turns on the item rule: a held memory item is dropped and the rest is shown', async () => {
+  const { modes, output } = await readMemoryTurn('forget-barrier-staging-env');
   expect(modes).toEqual(['items']);
   expect(output).toContain('Climbs on Thursdays');
   expect(output).not.toMatch(/coffee/i);
   expect(JSON.stringify(model.requests), 'the held goal is no quest line in the prompt').not.toMatch(/coffee/i);
-});
-
-it('the production Worker keeps the earlier whole-read rule', async () => {
-  expect((withSwitches(env) as { WALDO_FORGET_BARRIER?: string }).WALDO_FORGET_BARRIER).toBe('off');
-  const { modes } = await readMemoryTurn('forget-barrier-production-env', (withSwitches(env) as { WALDO_FORGET_BARRIER?: string }).WALDO_FORGET_BARRIER);
-  expect(modes).toEqual(['reads']);
 });

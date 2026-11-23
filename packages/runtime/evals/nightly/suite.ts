@@ -12,7 +12,6 @@ import { runTrial, type TrialMetrics, type TrialRecord } from './trial';
 import type { MemoryMode } from './world';
 import type { EmbeddingRunner } from '../../src/memory/semantic-recall';
 import type { CompactionSettings } from '../../src/conversation/compaction';
-import type { ForgetBarrierMode } from '../../src/context-composer/forget-barrier';
 import type { VoiceJudge, VoiceVerdict } from './voice';
 
 export type NightlyRun = Readonly<{
@@ -36,7 +35,6 @@ export type NightlyRun = Readonly<{
   promptV2?: boolean;
   // Opens the route's second-provider step; the gateway must serve Anthropic requests for it to be taken.
   fallbackKey?: string;
-  forgetBarrier?: ForgetBarrierMode;
   // The staging profile and the subset spec the run used, named on the scorecard.
   profile?: 'staging';
   subset?: string;
@@ -45,7 +43,7 @@ export type NightlyRun = Readonly<{
   progress?: (card: ReturnType<typeof scorecard>) => void;
   // The memory the trials run with; the raw-history baseline when set to raw_history.
   memory?: MemoryMode;
-  // Option B's memory in every trial (MEMORY_SELECTION=1).
+  // Option B's memory in every trial, as every owner turn has it.
   memorySelection?: true;
   // Semantic recall on: each trial embeds over a runner from this.
   embeddings?: () => EmbeddingRunner;
@@ -90,7 +88,7 @@ export const runNightly = async (scenarios: readonly NightlyScenario[], run: Nig
       if (scenario.blocked) { outcomes.push('blocked'); continue; }
       if (run.budget.exhausted()) { outcomes.push('budget_exhausted'); continue; }
       const missed = run.ablationMisses?.() ?? 0;
-      const record = await runTrial(run.compaction ? { ...scenario, world: { ...scenario.world, compaction: run.compaction } } : scenario, { gateway: run.gateway(), budget: run.budget, ...(run.model ? { model: run.model } : {}), ...(run.toolSearch ? { toolSearch: true } : {}), ...(run.toolLoader ? { toolLoader: run.toolLoader } : {}), ...(run.promptV2 ? { promptV2: true } : {}), ...(run.fallbackKey ? { fallbackKey: run.fallbackKey } : {}), ...(run.forgetBarrier ? { forgetBarrier: run.forgetBarrier } : {}), ...(run.memory ? { memory: run.memory } : {}), ...(run.embeddings ? { embeddings: run.embeddings() } : {}), ...(run.memorySelection ? { memorySelection: true } : {}) });
+      const record = await runTrial(run.compaction ? { ...scenario, world: { ...scenario.world, compaction: run.compaction } } : scenario, { gateway: run.gateway(), budget: run.budget, ...(run.model ? { model: run.model } : {}), ...(run.toolSearch ? { toolSearch: true } : {}), ...(run.toolLoader ? { toolLoader: run.toolLoader } : {}), ...(run.promptV2 ? { promptV2: true } : {}), ...(run.fallbackKey ? { fallbackKey: run.fallbackKey } : {}), ...(run.memory ? { memory: run.memory } : {}), ...(run.embeddings ? { embeddings: run.embeddings() } : {}), ...(run.memorySelection ? { memorySelection: true } : {}) });
       metrics.push(record.metrics);
       if (record.status !== 'ran') { outcomes.push(record.status); if (record.error) errors.push(record.error); continue; }
       // A trial whose rules were not all dropped measured nothing about them.

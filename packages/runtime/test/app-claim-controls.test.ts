@@ -37,13 +37,13 @@ afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown> }; fetch(request: Request): Promise<Response> }>;
 type Ctx = Readonly<{ owner: Owner; state: DurableObjectState; name: string }>;
 
-const appOwner = async (name: string, check: (ctx: Ctx) => Promise<void>, on = true) => {
+const appOwner = async (name: string, check: (ctx: Ctx) => Promise<void>) => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql); ensureSchema(state.storage); traceBook(state.storage.sql);
     state.storage.kv.put('do_name', name);
     state.storage.kv.put('app_subject', String(appSubjectFor(name)));
     state.storage.kv.put('timezone', 'UTC');
-    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', ...(on ? { MEMORY_CLAIM_CONTROLS: '1' } : {}), OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined }) as unknown as Owner;
+    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined }) as unknown as Owner;
     await owner.setup('app').ready;
     try { await check({ owner, state, name }); } finally { await state.storage.deleteAlarm(); }
   });
@@ -85,15 +85,6 @@ it('shows who said each claim, where a kept look-up claim came from, and what ca
     expect((await detail(ctx, kept)).item).toMatchObject({ source_url: 'https://samrivera.dev/about' });
     for (const contract of ['controls=14', 'controls=2']) expect(await (await read(ctx, `memory_view=detail&id=memory:claim:${said}`, contract)).text()).not.toMatch(/held_as|bring_up|source_url|"actions"/);
   });
-});
-
-it('serves none of it, and refuses the actions, while the switch is off', async () => {
-  await appOwner('app-claim-switch-off', async ctx => {
-    const id = insert(ctx, 'Probably prefers mornings', { source: 'inferred', origin: 'agent' });
-    expect(await (await read(ctx, `memory_view=detail&id=memory:claim:${id}`, 'controls=15')).text()).not.toMatch(/held_as|bring_up|"actions"/);
-    expect((await send(ctx, 'claim.confirm', id)).status).toBe(400);
-    expect(claimRows(ctx)[0]).toMatchObject({ source: 'inferred' });
-  }, false);
 });
 
 it('refuses the new actions to a build below revision 15', async () => {

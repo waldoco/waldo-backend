@@ -77,11 +77,10 @@ const withExchange = <T>(name: string, run: (owner: Owner, state: DurableObjectS
 const page = async (owner: Owner, name: string, contract?: string) =>
   (await (await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main', { headers: { ...headers(name), ...(contract ? { 'x-waldo-app-contract': contract } : {}) } }))).json()) as { messages: Record<string, unknown>[] };
 const replyOf = async (owner: Owner, name: string, contract?: string) => (await page(owner, name, contract)).messages.find(message => message.role === 'assistant')!;
-const ON = { MEMORY_USED_SHOWN: '1' };
 
 beforeEach(() => { seen.prompts = []; seen.calls = []; });
 
-it('names the notes a turn looked at, only to chat revision 7 and only with the switch on', async () => {
+it('names the notes a turn looked at, only to chat revision 7', async () => {
   await withExchange('app-memory-used-golden', async (owner, state) => {
     const used = (await replyOf(owner, 'app-memory-used-golden', 'chat=7')).memory_used;
     expect(used).toEqual([{ id: 'memory:claim:1', text: 'Lives in Leeds near the canal' }]);
@@ -89,14 +88,14 @@ it('names the notes a turn looked at, only to chat revision 7 and only with the 
     expect(seen.prompts.some(prompt => prompt.includes('name the notes above you relied on'))).toBe(true);
     for (const contract of [undefined, 'chat=6', 'chat=3']) expect(await replyOf(owner, 'app-memory-used-golden', contract)).not.toHaveProperty('memory_used');
     expect(appHistoryResultV1Schema.safeParse({ messages: (await page(owner, 'app-memory-used-golden', 'chat=7')).messages, next_cursor: null }).success).toBe(true);
-  }, 1, ON);
+  });
 });
 
 const BEES = { text: 'Keeps bees on an allotment' };
 it('does not name a note nothing in the turn looked at', async () => {
   await withExchange('app-memory-used-control', async (owner) => {
     expect((await replyOf(owner, 'app-memory-used-control', 'chat=7')).memory_used).toEqual([{ id: 'memory:claim:1', text: 'Lives in Leeds near the canal' }]);
-  }, 1, ON, [BEES]);
+  }, 1, {}, [BEES]);
 });
 
 it('records a claim the model opened with read_memory, as the tool answers it', async () => {
@@ -104,7 +103,7 @@ it('records a claim the model opened with read_memory, as the tool answers it', 
   await withExchange('app-memory-used-read', async (owner, state) => {
     expect((await replyOf(owner, 'app-memory-used-read', 'chat=7')).memory_used).toEqual([{ id: 'memory:claim:1', text: 'Lives in Leeds near the canal' }, { id: 'memory:claim:2', text: 'Keeps bees on an allotment' }]);
     expect(state.storage.sql.exec('SELECT claim_ids FROM reply_memory_used').toArray()).toEqual([{ claim_ids: '[1,2]' }]);
-  }, 1, ON, [BEES]);
+  }, 1, {}, [BEES]);
 });
 
 it('never records or shows a health claim the model read', async () => {
@@ -113,7 +112,7 @@ it('never records or shows a health claim the model read', async () => {
     expect(seen.prompts.join(' ')).toContain('51 bpm');
     expect((await replyOf(owner, 'app-memory-used-health', 'chat=7')).memory_used).toEqual([{ id: 'memory:claim:1', text: 'Lives in Leeds near the canal' }]);
     expect(state.storage.sql.exec('SELECT claim_ids FROM reply_memory_used').toArray()).toEqual([{ claim_ids: '[1]' }]);
-  }, 1, ON, [{ text: 'Resting heart rate was 51 bpm last week', kind: 'health' }]);
+  }, 1, {}, [{ text: 'Resting heart rate was 51 bpm last week', kind: 'health' }]);
 });
 
 it('never records or shows a health claim recall brought into the turn', async () => {
@@ -121,7 +120,7 @@ it('never records or shows a health claim recall brought into the turn', async (
     expect(seen.prompts.join(' ')).toContain('51 bpm');
     expect((await replyOf(owner, 'app-memory-used-health-recall', 'chat=7')).memory_used).toEqual([{ id: 'memory:claim:1', text: 'Lives in Leeds near the canal' }]);
     expect(state.storage.sql.exec('SELECT claim_ids FROM reply_memory_used').toArray()).toEqual([{ claim_ids: '[1]' }]);
-  }, 1, ON, [{ text: 'Resting heart rate was 51 bpm near the Leeds canal', kind: 'health' }]);
+  }, 1, {}, [{ text: 'Resting heart rate was 51 bpm near the Leeds canal', kind: 'health' }]);
 });
 
 it('does not name a note the owner asked Waldo to bring up less, though the turn used it', async () => {
@@ -129,7 +128,7 @@ it('does not name a note the owner asked Waldo to bring up less, though the turn
     expect(seen.prompts.join(' ')).toContain('quiet canal habit');
     expect(await replyOf(owner, 'app-memory-used-quiet', 'chat=7')).toMatchObject({ memory_used: [{ id: 'memory:claim:1', text: 'Lives in Leeds near the canal' }] });
     expect(state.storage.sql.exec('SELECT claim_ids FROM reply_memory_used').toArray()).toEqual([{ claim_ids: '[1]' }]);
-  }, 1, ON, [{ text: 'A quiet canal habit near Leeds', quiet: true }]);
+  }, 1, {}, [{ text: 'A quiet canal habit near Leeds', quiet: true }]);
 });
 
 it('shows a recorded note only while it is not quieted: quiet drops it from the page, bring it back returns it', async () => {
@@ -141,14 +140,6 @@ it('shows a recorded note only while it is not quieted: quiet drops it from the 
     expect(state.storage.sql.exec('SELECT claim_ids FROM reply_memory_used').toArray()).toEqual([{ claim_ids: '[1]' }]);
     expect(store.bringUpLess(1, '2026-10-04T00:00:00.000Z', false)).toBe(true);
     expect((await replyOf(owner, 'app-memory-used-requiet', 'chat=7')).memory_used).toEqual([{ id: 'memory:claim:1', text: 'Lives in Leeds near the canal' }]);
-  }, 1, ON);
-});
-
-it('records and shows nothing while the switch is off', async () => {
-  await withExchange('app-memory-used-off', async (owner, state) => {
-    expect(await replyOf(owner, 'app-memory-used-off', 'chat=7')).not.toHaveProperty('memory_used');
-    expect(seen.prompts.some(prompt => prompt.includes('name the notes above you relied on'))).toBe(false);
-    expect(state.storage.sql.exec("SELECT name FROM sqlite_master WHERE name = 'reply_memory_used'").toArray().length === 0 || state.storage.sql.exec('SELECT * FROM reply_memory_used').toArray().length === 0).toBe(true);
   });
 });
 
@@ -158,7 +149,7 @@ it('stops naming a claim the owner forgot, and one a forget is still clearing', 
     expect((await replyOf(owner, 'app-memory-used-forgotten', 'chat=7')).memory_used).toHaveLength(1);
     store.purge([1], '2026-10-02T00:00:00.000Z');
     expect(await replyOf(owner, 'app-memory-used-forgotten', 'chat=7')).not.toHaveProperty('memory_used');
-  }, 1, ON);
+  });
 });
 
 describe('the book', () => {

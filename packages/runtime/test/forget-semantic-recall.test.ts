@@ -21,7 +21,7 @@ const inOwner = <R>(work: (world: World) => R | Promise<R>) =>
     const store = claimStore(sql, transaction);
     const ai = fakeEmbeddings();
     const background: Promise<unknown>[] = [];
-    const semantic = semanticRecallFromEnv({ MEMORY_SEMANTIC_RECALL: '1', AI: ai }, { sql, transaction, defer: (job) => background.push(job) })!;
+    const semantic = semanticRecallFromEnv({ AI: ai }, { sql, transaction, defer: (job) => background.push(job) })!;
     const handlers = memoryHandlers({ sql, store, transaction, conversationRef: CHAT, hideHistory: async () => undefined, semantic });
     const tool = async (name: string, args: unknown, ctx: MemoryToolContext) => { const handler = handlers.find((each) => each.name === name)!; return handler.handle(handler.schema.parse(args), ctx); };
     return work({ sql, store, semantic, ai, tool, settle: async () => { while (background.length) await background.shift(); } });

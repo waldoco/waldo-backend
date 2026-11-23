@@ -28,18 +28,6 @@
     "reason": "egress and privacy: looks the owner up on the web; production waits for the published privacy notice that discloses it",
     "removeBy": "2027-01-31"
   },
-  "OWNER_PROFILE": {
-    "disposition": "unconditional",
-    "batch": "memory"
-  },
-  "MEMORY_SEMANTIC_RECALL": {
-    "disposition": "unconditional",
-    "batch": "memory"
-  },
-  "MEMORY_SELECTION": {
-    "disposition": "unconditional",
-    "batch": "memory"
-  },
   "PHONE_SMS_VERIFY": {
     "disposition": "kept",
     "reason": "egress and spend: texts real phones through Twilio; production Twilio setup is a runbook step",
@@ -154,10 +142,6 @@
   "WALDO_COST_LEDGER_SYNC": {
     "disposition": "unconditional",
     "batch": "app-identity"
-  },
-  "WALDO_FORGET_BARRIER": {
-    "disposition": "unconditional",
-    "batch": "memory"
   },
   "WALDO_TOOL_SEARCH": {
     "disposition": "delete",
@@ -291,10 +275,6 @@
     "disposition": "unconditional",
     "batch": "health-context (after W3)"
   },
-  "PEOPLE_MAP": {
-    "disposition": "unconditional",
-    "batch": "memory"
-  },
   "DEVICE_PLACE": {
     "disposition": "unconditional",
     "batch": "device-google"
@@ -370,30 +350,10 @@
     "reason": "authority: acts without a card; stays a per-environment decision until production autonomy is ruled (ADR-0018 amendment)",
     "removeBy": "2027-01-31"
   },
-  "MEMORY_NIGHTLY_SOURCE_UPDATES": {
-    "disposition": "unconditional",
-    "batch": "memory"
-  },
-  "MEMORY_DAYTIME_CONSOLIDATOR": {
-    "disposition": "unconditional",
-    "batch": "memory"
-  },
-  "MEMORY_VALIDITY": {
-    "disposition": "unconditional",
-    "batch": "memory"
-  },
   "MEMORY_OUTSIDE_NOTES": {
     "disposition": "kept",
     "reason": "unfinished: off everywhere until the owner rules how widely a recalled outside note marks a turn",
     "removeBy": "2026-12-31"
-  },
-  "MEMORY_CLAIM_CONTROLS": {
-    "disposition": "unconditional",
-    "batch": "memory"
-  },
-  "MEMORY_USED_SHOWN": {
-    "disposition": "unconditional",
-    "batch": "memory"
   },
   "AGENT_MAIL_INBOUND": {
     "disposition": "kept",

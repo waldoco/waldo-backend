@@ -212,6 +212,6 @@ export const semanticRecall = ({ sql, transaction, embedder, sweepEmbedder = emb
 };
 export type SemanticRecall = ReturnType<typeof semanticRecall>;
 
-// Off unless the deploy sets MEMORY_SEMANTIC_RECALL=1 and binds Workers AI.
-export const semanticRecallFromEnv = (env: Readonly<{ MEMORY_SEMANTIC_RECALL?: string; MEMORY_OUTSIDE_NOTES?: string; AI?: EmbeddingRunner }>, deps: Omit<Parameters<typeof semanticRecall>[0], 'embedder' | 'sweepEmbedder' | 'outside'>): SemanticRecall | undefined =>
-  env.MEMORY_SEMANTIC_RECALL === '1' && env.AI ? semanticRecall({ ...deps, outside: env.MEMORY_OUTSIDE_NOTES === '1', embedder: workersAiEmbedder(env.AI), sweepEmbedder: workersAiEmbedder(env.AI, SWEEP_TIMEOUT_MS) }) : undefined;
+// Off unless the deploy binds Workers AI; without it recall keeps to words.
+export const semanticRecallFromEnv = (env: Readonly<{ MEMORY_OUTSIDE_NOTES?: string; AI?: EmbeddingRunner }>, deps: Omit<Parameters<typeof semanticRecall>[0], 'embedder' | 'sweepEmbedder' | 'outside'>): SemanticRecall | undefined =>
+  env.AI ? semanticRecall({ ...deps, outside: env.MEMORY_OUTSIDE_NOTES === '1', embedder: workersAiEmbedder(env.AI), sweepEmbedder: workersAiEmbedder(env.AI, SWEEP_TIMEOUT_MS) }) : undefined;

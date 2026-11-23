@@ -405,7 +405,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     ...(store ? workspaceToolHandlers(() => store, { origin: async () => null, durable: false }, undefined, { fileTools: true }) : []),
     ...taskToolHandlers({ book: jobs, now, timezone: () => TIMEZONE, surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined }),
     ...googleHandlers(google, desk, clock), connectServiceHandler(google), ...reminderHandlers(reminderBook), ...standingOrderHandlers(standingOrders),
-    ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async (texts) => scrubEpisodeTexts(sql, texts, FORGOTTEN), ...(semantic ? { semantic } : {}), validity: true }) : []),
+    ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async (texts) => scrubEpisodeTexts(sql, texts, FORGOTTEN), ...(semantic ? { semantic } : {}) }) : []),
     searchEpisodesHandler(episodes), ...search,
     getHealthHandler(healthReadBook(async (fn) => {
       if (fn === 'health_consent_list') return { consents: sharing === null ? [] : consentRows(sharing === 'shared' ? 'granted' : 'withdrawn') };

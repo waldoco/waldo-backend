@@ -113,16 +113,6 @@ describe('people map: memory', () => {
 
 
 
-  it('with the switch off links no one and says so, and reads and forgets answer that the people map is off', () => runInDurableObject(stub('off'), async (_instance, state) => {
-    const w = world(state, false);
-    const stored = await w.data('remember', { kind: 'fact', text: 'Sam is a friend', evidence_quote: 'Sam is a friend', on_date: '--03-14', people: [{ name: 'Sam', role: 'subject' }] }, w.ctx('Sam is a friend'));
-    expect(stored).toMatchObject({ status: 'stored', people_note: expect.stringContaining('people map') });
-    expect(stored).not.toHaveProperty('people');
-    expect(w.store.people.all()).toEqual([]);
-    expect(w.store.claims()[0]!.on_date).toBeNull();
-    expect(await w.call('read_memory', { people: true }, w.ctx('my people'))).toMatchObject({ ok: false, error: expect.stringContaining('people map') });
-    expect(await w.call('forget_memory', { person: 1, scope_note: 'Sam' }, w.ctx('forget Sam'))).toMatchObject({ ok: false, error: expect.stringContaining('people map') });
-  }));
 
   it('a turn that read outside content never changes who the owner\'s own notes are about', () => runInDurableObject(stub('taint'), async (_instance, state) => {
     const w = world(state);

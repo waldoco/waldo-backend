@@ -13,9 +13,9 @@ const NOW = Date.parse('2026-11-07T08:00:00Z');
 const mail = (from: string, subject: string): Change => ({ source: 'mail', kind: 'new', detail: JSON.stringify({ from, subject }) });
 const withStorage = <T>(name: string, work: (state: DurableObjectState) => Promise<T>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => work(state));
-const deps = (state: DurableObjectState, ask: () => Promise<string>, people = true) => ({
+const deps = (state: DurableObjectState, ask: () => Promise<string>) => ({
   kv: state.storage.kv, updates: updateBook(state.storage.sql), claims: claimStore(state.storage.sql, (work) => state.storage.transactionSync(work)),
-  transaction: <R>(work: () => R) => state.storage.transactionSync(work), timezone: 'UTC', now: () => NOW, health: true, people, ask, log: () => undefined,
+  transaction: <R>(work: () => R) => state.storage.transactionSync(work), timezone: 'UTC', now: () => NOW, health: true, ask, log: () => undefined,
 });
 const add = (text: string, evidence: string, people: unknown[]) => ({ kind: 'fact', text, source: 'inferred', evidence, touches_forgotten: false, aliases: [], aliases_touch_forgotten: false, area: null, people });
 const person = (over: Record<string, unknown>) => ({ ref: null, name: null, role: 'subject', relation: null, addresses: [], ...over });
@@ -41,7 +41,7 @@ describe('people from the source pass', () => {
     });
   });
 
-  it('keeps the newest last contact, touches only an exact address, and with the switch off links and touches no one', async () => {
+  it('keeps the newest last contact and touches only an exact address', async () => {
     await withStorage('people-sources-contact', async (state) => {
       const store = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
       store.add({ kind: 'fact', text: 'Sam is my brother', source: 'stated', evidence: 'Sam is my brother', origin: 'owner', source_ref: 'owner, m1' }, '2026-11-01T00:00:00Z');
@@ -54,16 +54,7 @@ describe('people from the source pass', () => {
       expect(store.people.heardFrom('sam@family.example', new Date(NOW - 5 * HOUR).toISOString())).toBe(0);
       expect(store.people.person(sam!)?.last_contact_at).toBe(new Date(NOW - 2 * HOUR).toISOString());
     });
-    await withStorage('people-sources-off', async (state) => {
-      const store = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
-      store.add({ kind: 'fact', text: 'Sam is my brother', source: 'stated', evidence: 'Sam is my brother', origin: 'owner', source_ref: 'owner, m1' }, '2026-11-01T00:00:00Z');
-      const [sam] = store.people.link(1, [{ name: 'Sam', role: 'subject', addresses: ['sam@family.example'] }], '2026-11-01T00:00:00Z');
-      updateBook(state.storage.sql).record('2026-11-07', NOW - HOUR, [mail('Sam <sam@family.example>', 'Dinner?')], null);
-      const reply = JSON.stringify({ add: [add('Sam hosts dinner on Fridays', 'Dinner?', [person({ ref: sam })])] });
-      expect(await consolidateSources(deps(state, async () => reply, false), 't')).toBe('consolidated');
-      expect(store.people.claimsOf(sam!).map((claim) => claim.text)).toEqual(['Sam is my brother']);
-      expect(store.people.person(sam!)?.last_contact_at).toBeNull();
-    });
+
   });
 
   it('shows the pass the people it may name by id, never one known only through body or mind claims', async () => {

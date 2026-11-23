@@ -57,10 +57,6 @@ export type AppControlsHost = Readonly<{
   agentMail?:AgentMailControlsDeps;
   // Which chats are linked to the owner now, for where Waldo writes first (controls revision 11); absent where it is not offered.
   chatLinks?():Promise<ChatLinks>;
-  // Whether this deployment serves the claim controls of controls revision 15 (MEMORY_CLAIM_CONTROLS); absent means it does not.
-  claimControls?:boolean;
-  // Whether this deployment keeps people (PEOPLE_MAP), and so serves controls revision 22's people view and its actions.
-  people?:boolean;
   // Controls revision 17: each connected Google account's picture address, by account id; absent means none are served.
   googlePictures?():Promise<ReadonlyMap<string,string>>;
   // Controls revision 17: every source of body readings Waldo lists on Connections; absent means the view carries none.
@@ -157,8 +153,8 @@ const wearablesOf=async(host:AppControlsHost)=>{
   if(!host.wearables)return {};
   try{return {wearables:await host.wearables()};}catch{return {};}
 };
-// Controls revision 15's claim controls are served to a build that asks for them, on a deployment that has them on.
-const claimControlsFor=(request:Request,host:AppControlsHost)=>host.claimControls===true&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_CLAIM_CONTROLS_REVISION;
+// Controls revision 15's claim controls are served to a build that asks for them.
+const claimControlsFor=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_CLAIM_CONTROLS_REVISION;
 const NEW_CLAIM_ACTIONS:ReadonlySet<string>=new Set(['claim.confirm','claim.forget','claim.dismiss','claim.quiet','claim.unquiet']);
 // Where a kept look-up finding came from: the page's own address, by the claim it became. The findings table exists once a look-up has run.
 const lookupUrlsOf=(sql:Pick<SqlStorage,'exec'>)=>sql.exec<{name:string}>("SELECT name FROM sqlite_master WHERE type='table' AND name='owner_findings'").toArray().length
@@ -176,7 +172,7 @@ const constellationData=(storage:DurableObjectStorage,paging:readonly (readonly 
 };
 // Controls revision 22: the people in the owner's memory. A person is listed while a claim about them is listed in the
 // constellation (so a forget still clearing hides them as it hides the claim); their claims are the constellation's own items.
-const peopleFor=(request:Request,host:AppControlsHost)=>host.people===true&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_PEOPLE_REVISION;
+const peopleFor=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_PEOPLE_REVISION;
 const peopleData=(request:Request,host:AppControlsHost,id?:string)=>{
   const store=claimStore(host.storage.sql),graph=readMemoryGraph(host.storage.sql,MEMORY_SCOPE);
   const listed=new Map(graph.claims.map(claim=>[claim.local_id,claim as unknown as Item]));
@@ -195,7 +191,7 @@ const peopleData=(request:Request,host:AppControlsHost,id?:string)=>{
   if(id!==undefined){
     const row=store.people.person(Number(id.split(':')[2])),found=row?shown(row):null;
     if(!found)return null;
-    const extras=claimControlsFor(request,host)?claimExtrasOf(host.storage.sql):undefined,pins=pinsOf(host.storage.sql);
+    const extras=claimControlsFor(request)?claimExtrasOf(host.storage.sql):undefined,pins=pinsOf(host.storage.sql);
     return {person:found.item,claims:found.claims.slice(0,APP_MEMORY_PAGE_MAX_V1).map(claim=>withoutLocalId(namesWebSources(request))(pinOf(pins,extras)(listed.get(claim.id)!)))};
   }
   const people=store.people.all().flatMap(row=>{const found=shown(row);return found?[found.item]:[];})
@@ -229,13 +225,13 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
       const {memory_view,cursor,limit,id,max_nodes,max_links}=query.data;
       const paging=Object.entries({view:memory_view,cursor,limit,id,max_nodes,max_links}).filter((entry):entry is [string,string]=>entry[1]!==undefined);
       let graph:ReturnType<typeof constellationData>;
-      try{graph=constellationData(host.storage,paging,showsPins(request),namesWebSources(request),claimControlsFor(request,host)?claimExtrasOf(host.storage.sql):undefined);}catch{return reply({error:'projection_unavailable'},503);}
+      try{graph=constellationData(host.storage,paging,showsPins(request),namesWebSources(request),claimControlsFor(request)?claimExtrasOf(host.storage.sql):undefined);}catch{return reply({error:'projection_unavailable'},503);}
       if(graph.status!==200||!graph.data)return reply({error:graph.error},graph.status);
       const data=graph.data.memory_view==='summary'&&host.welcome?{...graph.data,welcome:welcomeForRevision(request,host.welcome())}:graph.data,parsed=appControlProjectionV1Schema.safeParse({version:1,state:'available',view:'constellation',revision:await controlRevision(data),data});
       await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
     }
     if(query.data.view==='people'){
-      if(!peopleFor(request,host))return reply({error:'invalid_query'},400);
+      if(!peopleFor(request))return reply({error:'invalid_query'},400);
       let data:ReturnType<typeof peopleData>;
       try{data=peopleData(request,host,query.data.id);}catch{return reply({error:'projection_unavailable'},503);}
       if(data===null)return reply({error:'not_found'},404);
@@ -306,7 +302,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
   }
   // A person action runs as the console's memory action on the person it names, against the revision of that person's detail read.
   if(action.success&&action.data.view==='people'){
-    if(!peopleFor(request,host))return reply({error:'invalid_action'},400);
+    if(!peopleFor(request))return reply({error:'invalid_action'},400);
     // Only what the person offers now: confirm names someone Waldo only read about, never one the owner already knows.
     const offered=(()=>{try{const data=peopleData(request,host,action.data.id);return data&&'person' in data&&data.person?data.person.actions as readonly string[]:[];}catch{return [];}})();
     if(!offered.includes(action.data.action))return reply({error:'no_longer_eligible',message:'This action is no longer available. Refresh the records.'},409);
@@ -334,7 +330,7 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
   // detail read under revision 2, so a pin or an edit made elsewhere since makes it stale.
   if(action.success&&action.data.view==='constellation'){
     if(!showsPins(request))return reply({error:'invalid_action'},400);
-    const claimControls=claimControlsFor(request,host);
+    const claimControls=claimControlsFor(request);
     if(NEW_CLAIM_ACTIONS.has(action.data.action)&&!claimControls)return reply({error:'invalid_action'},400);
     // Only what the claim offers now: confirm names a claim Waldo inferred, never one the owner said.
     if(NEW_CLAIM_ACTIONS.has(action.data.action)&&!(claimExtrasOf(host.storage.sql).get(Number(action.data.id!.split(':')[2]))?.actions as readonly string[]|undefined)?.includes(action.data.action))return reply({error:'no_longer_eligible',message:'This action is no longer available. Refresh the records.'},409);
