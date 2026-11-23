@@ -323,8 +323,9 @@
     "batch": "health-context (after W3)"
   },
   "CALENDAR_UNDO_CANCEL": {
-    "disposition": "unconditional",
-    "batch": "device-google"
+    "disposition": "kept",
+    "reason": "Unfinished: the proofs that a cancel Waldo cannot put back stays a card (approvals undo check) run only with it off. Move them onto a connector that returns no cancelled version, then make it unconditional.",
+    "removeBy": "2026-12-31"
   },
   "AUTONOMY_OWN_CALENDAR": {
     "disposition": "kept",
