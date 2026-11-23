@@ -369,7 +369,7 @@ export async function runToolLoop(input: Readonly<{
     const run = (index: number) => {
       const { call, answer } = routed[index]!;
       if (healthFenced && (fencedCall(call) || fencedCall(calls[index]!))) return Promise.resolve(refusal(HEALTH_FENCE_ERROR, 'forbidden', 'health_fence'));
-      return answer ? Promise.resolve(answer) : input.remote ? input.remote.dispatch(call) : dispatchLoopTool(call, input);
+      return answer ? Promise.resolve(answer) : input.remote ? input.remote.dispatch(call) : dispatchLoopTool(call, { ...input, toolDeadline: deadline - FINAL_ANSWER_RESERVE_MS });
     };
     let batchLead = true;
     for (const [index, made] of calls.entries()) {
@@ -578,7 +578,7 @@ const refusal = (error: ToolError, code: string, reason?: string): LoopToolResul
 
 export async function dispatchLoopTool(
   call: LLMToolCall,
-  input: Readonly<{ handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']; ctx: ToolDispatcherContext; offload?: ToolOutputStore }>,
+  input: Readonly<{ handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']; ctx: ToolDispatcherContext; offload?: ToolOutputStore; toolDeadline?: number }>,
 ): Promise<LoopToolResult> {
   const name = toolNameSchema.safeParse(call.name);
   if (!name.success) return refusal(toolError('unknown_tool', `Unknown tool ${call.name}.`), 'invalid_args', 'unknown_tool');
@@ -588,7 +588,7 @@ export async function dispatchLoopTool(
   } catch {
     return refusal(toolError('invalid_json_args'), 'invalid_args', 'invalid_args');
   }
-  const result = await dispatchTool({ id: call.call_id, name: name.data, args }, input.ctx, { handlers: input.handlers, ...(input.offload === undefined ? {} : { offload: input.offload }) });
+  const result = await dispatchTool({ id: call.call_id, name: name.data, args }, input.ctx, { handlers: input.handlers, ...(input.offload === undefined ? {} : { offload: input.offload }), ...(input.toolDeadline === undefined ? {} : { toolDeadline: input.toolDeadline }) });
   // The untrusted marker crosses the model boundary on BOTH arms: a successful external result
   // keeps source_taint 'external' in the JSON the model reads, so provider text never presents
   // as internal truth (security review 2026-09-26); the failure arm keeps it for the same reason.

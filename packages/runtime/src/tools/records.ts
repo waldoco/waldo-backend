@@ -146,7 +146,7 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   search_mcp_tools: { brain: 'web', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read('searches stored tool definitions, refreshing a stale list with tools/list; runs no server tool') },
   read_drive: { brain: 'web', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, long: true, claim: null, replay: read() },
   search_connector: { brain: 'web', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: unknown(NO_HANDLER + ' (schema only)') },
-  propose_schedule: { brain: 'calendar', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: unknown('proposal handler not inspected') },
+  propose_schedule: { brain: 'calendar', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: unknown(NO_HANDLER + ' (schema only)') },
   search_tools: { brain: 'skills', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
   list_reminders: { brain: 'core', scope: 'allow', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
   read_tool_output: { brain: 'memory', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
