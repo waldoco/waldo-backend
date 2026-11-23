@@ -76,8 +76,11 @@ describe('a partial health block from the rows the producer writes', () => {
     const block = renderHealth(material);
     expect(block.startsWith('Partial health context:')).toBe(true);
     expect(block).toContain('Health Connect');
-    expect(block).toContain('no sleep was recorded for the night');
-    expect(block).toContain('Would fix it: wearing the watch or ring overnight');
+    // Sleep that has not synced yet reads the same as sleep never recorded, so the words cover both; each distinct fix is
+    // given once, and none assumes a phone app or a calendar not yet connected.
+    expect(block).toContain('no sleep has arrived for the night, either unrecorded or not synced yet');
+    expect(block).toContain('Would fix it: wearing the wearable overnight and letting it sync, and letting Waldo read sleep; connecting a calendar if none is connected; one already connected is read again on the next run.');
+    expect(block).not.toMatch(/phone's health settings/);
     expect(block).toContain('get_health');
     expect(block).not.toMatch(/Recovery zone|Form zone|Recovery: |readiness is|\d/);
     // The row records what is missing, never that steps arrived; the block does not claim it.
@@ -158,6 +161,10 @@ describe('a partial health block from the rows the producer writes', () => {
     }
     // A Load or sleep debt beside a withdrawn Recovery is still no block.
     expect(read(asRead({ ...stored, recovery: { reason: 'consent_withdrawn' } }))).toBeNull();
+    // A Recovery with a readable reason beside a withdrawn Load or sleep debt: the stored withdrawal alone holds the block back.
+    expect(read(asRead(stored))).not.toBeNull();
+    expect(read(asRead({ ...stored, weight: { reason: 'consent_withdrawn' } }))).toBeNull();
+    expect(read(asRead({ ...stored, sleep_debt: { state: 'unavailable', reason: 'consent_required' } }))).toBeNull();
     // The read RPC returns no context when the consent basis is not live.
     expect(await healthContextBook(async () => null, 'do-health', clock, undefined, undefined, { partial: true }).latest()).toBeNull();
   });
@@ -272,7 +279,7 @@ describe('the last scored day when the newest row has no Recovery', () => {
     expect(block.startsWith('Partial health context:')).toBe(true);
     expect(block).toMatch(/Day summary:.*yesterday.*Recovery solid/);
     expect(block).toMatch(/Day summary:.*Load moderate/);
-    expect(block).toContain('no sleep was recorded for the night');
+    expect(block).toContain('no sleep has arrived for the night, either unrecorded or not synced yet');
     expect(block).not.toMatch(/\d/);
     expect(block).not.toMatch(/Recovery zone|Form zone/);
     const input = JSON.stringify([{ role: 'system', content: `Before.\n\n${block}\n\nAfter.` }]);

@@ -109,7 +109,7 @@ describe('scores degrade, they do not gate', () => {
       'Partial health context: Recovery was not computed for this day, so there is no reading on the night; Form stands on the day alone.',
       expect.stringMatching(/^Form: (energized|steady|flagging|depleted), from steps, heart rate through the day without last night; confidence low\.$/),
     ]);
-    expect(block).toContain('Not computed: Recovery (no sleep was recorded for the night)');
+    expect(block).toContain('Not computed: Recovery (no sleep has arrived for the night, either unrecorded or not synced yet)');
     expect(block).not.toMatch(/Not computed:[^\n]*Form/);
     expect(block).not.toMatch(/\d/);
   });

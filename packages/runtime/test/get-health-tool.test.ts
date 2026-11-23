@@ -352,7 +352,30 @@ describe('get_health daytime heart rate variability', () => {
     expect(result.ok && result.data.state === 'available' && result.data.signals).toEqual([
       { signal: 'daytime_hrv', unit: 'ms', source: 'apple', method: 'sdnn', days: [{ day: '2026-10-12', value: 42.5 }] },
     ]);
-    expect(JSON.parse(String(calls[1]!.args.p_payload)).signals).toEqual(['hrv_window']);
+    expect(JSON.parse(String(calls[1]!.args.p_payload)).signals).toEqual(['hrv_window', 'sleep_duration']);
+  });
+  it('leaves out every hour whose middle falls while the owner was asleep, by any consented source\'s time asleep, in the day and the hours', async () => {
+    const at = (start: string, value: number) => reading('hrv_window', '2026-10-12', value, { method: 'sdnn', start_at: start, end_at: new Date(Date.parse(start) + 3_600_000).toISOString() });
+    const nap = reading('sleep_duration', '2026-10-12', 80, { method: 'asleep_duration', start_at: '2026-10-12T08:00:00Z', end_at: '2026-10-12T09:20:00Z' });
+    const hours = { ...series, sources: [
+      { source: 'apple', consent_epoch: 3, samples: [hour(3, 40, 'sdnn'), hour(4, 45, 'sdnn'), at('2026-10-11T20:00:00Z', 90), at('2026-10-12T00:15:00Z', 80), at('2026-10-12T08:00:00Z', 70), ...series.sources[0]!.samples] },
+      { source: 'samsung', consent_epoch: 3, samples: [nap] },
+    ] };
+    const { handler } = fake({ series: hours, consent: both(consent('granted', 'granted'), consent('granted', 'granted', 'samsung')) });
+    const daily = await handler.handle({ signals: ['daytime_hrv'], from: '2026-10-12', to: '2026-10-12', aggregation: 'daily' }, ctx);
+    expect(daily.ok && daily.data.state === 'available' && daily.data.signals[0]!.days).toEqual([{ day: '2026-10-12', value: 42.5 }]);
+    const hourly = await handler.handle({ signals: ['daytime_hrv'], from: '2026-10-12', to: '2026-10-12', aggregation: 'hourly' }, ctx);
+    expect(hourly.ok && hourly.data.state === 'available' && hourly.data.signals[0]!.hours?.map(entry => entry.value)).toEqual([40, 45]);
+    const unshared = fake({ series: hours });
+    const apple = await unshared.handler.handle({ signals: ['daytime_hrv'], from: '2026-10-12', to: '2026-10-12', aggregation: 'daily' }, ctx);
+    expect(apple.ok && apple.data.state === 'available' && apple.data.signals[0]!.days).toEqual([{ day: '2026-10-12', value: 51.7 }]);
+  });
+  it('keeps an hour beside time in bed that was not time asleep', async () => {
+    const lying = reading('hrv_window', '2026-10-12', 50, { method: 'sdnn', start_at: '2026-10-12T00:30:00Z', end_at: '2026-10-12T01:30:00Z' });
+    const hours = { ...series, sources: [{ source: 'apple', consent_epoch: 3, samples: [hour(3, 40, 'sdnn'), lying, ...series.sources[0]!.samples] }] };
+    const { handler } = fake({ series: hours });
+    const daily = await handler.handle({ signals: ['daytime_hrv'], from: '2026-10-12', to: '2026-10-12', aggregation: 'daily' }, ctx);
+    expect(daily.ok && daily.data.state === 'available' && daily.data.signals[0]!.days).toEqual([{ day: '2026-10-12', value: 45 }]);
   });
 });
 

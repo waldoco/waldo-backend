@@ -797,6 +797,33 @@ describe('ContextComposer', () => {
     expect(await createContextComposer(withHealth(zoned)).compose(trustedEnvelope(), RUNTIME_INPUTS)).toEqual({ ok: false, failure: { code: 'health_context_invalid' } });
   });
 
+  // A partial block also carries what is honest without Recovery: the day's drivers and today's energy windows, whose clock
+  // times are the block's only digits. Both go through the Scribe pass and reach the prompt.
+  it('composes a partial block with the day\'s drivers and energy windows through the Scribe pass', async () => {
+    const base = dependencies();
+    const partial = toContextHealthMaterial({
+      context: {
+        id: 'ctx-partial-day', day: '2026-07-15', compiled_at: '2026-07-15T11:00:00.000Z', basis: [{ source: 'health_connect', consent_epoch: 1 }],
+        recovery: { reason: 'missing_resting_signal' }, form: { reason: 'missing_resting_signal' }, weight: { reason: 'calendar_demand_unavailable' },
+        drivers: ['breathing rate above usual'], confidence: null, freshness: 'fresh', tags: [],
+        windows: [{ start: '09:30', end: '11:30', kind: 'peak' }, { start: '14:00', end: '15:30', kind: 'dip' }],
+      },
+      previous: null,
+    }, { timezone: 'UTC', now: () => new Date(SNAPSHOT_AT) }, undefined, { partial: true });
+    if (partial === null) throw new Error('partial fixture missing');
+    const composed = await createContextComposer({
+      ...base,
+      materials: { async load(request: Parameters<typeof base.materials.load>[0]) { return { ...(await base.materials.load(request)), health: partial } as never; } },
+    }).compose(trustedEnvelope(), RUNTIME_INPUTS);
+    expect(composed.ok, composed.ok ? undefined : composed.failure.code).toBe(true);
+    if (composed.ok) {
+      const block = composed.prompt.slice(composed.prompt.indexOf('Partial health context:'));
+      expect(block).toContain('Day summary: Drivers: breathing rate above usual.');
+      expect(block).toMatch(/09:30.{0,20}11:30/);
+      expect(block.split('\n\n')[0]).not.toMatch(/Recovery zone:|Form zone:/);
+    }
+  });
+
   it('composes the body data on hand through the Scribe pass, beside a partial row and alone', async () => {
     const base = dependencies();
     const clock = { timezone: 'UTC', now: () => new Date(SNAPSHOT_AT) };
