@@ -9,7 +9,7 @@ import { OpenAIResponsesAdapter, type OpenAIResponsesClient } from '../src/llm/o
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
 import { MESSAGING_BEHAVIOR, TOOL_SEARCH_LINE } from '../src/prompt/messaging-behavior';
-import { BRAIN_NAMESPACES, TOOL_RECORDS, brainTools } from '../src/tools/records';
+import { BRAIN_NAMESPACES, TOOL_RECORDS, brainTools, offeredPlacement } from '../src/tools/records';
 import { ensureSchema } from '../src/tracer/schema';
 import { toolDefinitions } from '../src/conversation/tool-loop';
 import { delegateTaskHandler } from '../src/conversation/subagent';
@@ -115,7 +115,8 @@ describe('the brain tool surface', () => {
     // A background task the model cannot see is one it never starts: off the core for the budget, its namespace line names it.
     expect(BRAIN_NAMESPACES[TOOL_RECORDS.start_task.brain as keyof typeof BRAIN_NAMESPACES]).toContain('start_task');
     for (const namespace of Object.keys(BRAIN_NAMESPACES)) {
-      const members = Object.values(TOOL_RECORDS).filter((record) => record.brain === namespace).length;
+      // The guide's limit is on the functions deferred into a namespace; a tool offered in full is never deferred into it.
+      const members = Object.entries(TOOL_RECORDS).filter(([name, record]) => record.brain === namespace && offeredPlacement(name) !== 'core').length;
       expect(members, namespace).toBeGreaterThan(0);
       expect(members, namespace).toBeLessThan(10);
     }

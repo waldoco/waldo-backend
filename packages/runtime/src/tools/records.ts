@@ -113,7 +113,7 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   offer_replies: { brain: 'reminders', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: unknown('keeps the answers in memory for the card this turn writes; a re-run of the turn writes the card again with whatever it offers then') },
   // claim null: an end says how the run closed, never that anything was done. A replay changes nothing: the run's end lives
   // only in the loop that chose it.
-  end_run: { brain: 'core', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read('ends the run in the loop that holds it; writes nothing') },
+  end_run: { brain: 'reminders', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read('ends the run in the loop that holds it; writes nothing') },
   react_to_message: { brain: 'core', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, long: false, claim: null, replay: { replay: 'provider_idempotent', basis: 'the commandId is fixed by the turn and the reaction, and the bridge mailbox and the host journal keep one command per commandId', evidence: { file: 'channels/imessage/final-outbox.ts', needle: 'wrx_' } } },
   attach_file: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, long: false, claim: null, replay: unknown('queues the file; the send after the reply is keyed only in the local effect ledger, WhatsApp cannot be asked whether an upload landed, so an unknown send is never retried') },
   // claim null: its not-sent outcomes are ok results too, so a done label would claim a send that never happened.
@@ -267,8 +267,9 @@ export const byToolName = (a: Readonly<{ name: string }>, b: Readonly<{ name: st
 // core. Off, every tool goes up front. Either way the list is in name order and namespaces in BRAIN_NAMESPACES order.
 // Where a turn offers a tool: its record's place, except finding and reading the owner's own connected tools, which are
 // why they connected them. Those are admitted only with a connection (tools/live/mcp.ts eligible), so when admitted they are
-// offered in full, outside the core's budget, rather than one tool-search hop away.
-const OFFERED_IN_FULL: ReadonlySet<string> = new Set(['search_mcp_tools', 'read_mcp_tool']);
+// offered in full, outside the core's budget, rather than one tool-search hop away. So is end_run, admitted only to a run
+// Waldo started, which must see how to end without a search.
+const OFFERED_IN_FULL: ReadonlySet<string> = new Set(['search_mcp_tools', 'read_mcp_tool', 'end_run']);
 export const offeredPlacement = (name: string): 'core' | BrainNamespace =>
   OFFERED_IN_FULL.has(name) ? 'core' : (TOOL_RECORDS as Partial<Record<string, ToolRecord>>)[name]?.brain ?? 'core';
 

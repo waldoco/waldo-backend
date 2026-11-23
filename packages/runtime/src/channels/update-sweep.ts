@@ -217,7 +217,8 @@ export const heldSection = (held: readonly HeldRow[], changes: readonly Change[]
 ].join('\n\n');
 
 // What the apply turn may choose with the day state: revise a day card that reached the owner today, or say an update, and
-// with either a push; or nothing ({}, or an end_run that sends nothing). The schema is the contract between the turn and the code that delivers it.
+// with either a push; or nothing ({}, or an end_run that sends nothing). The schema is the contract between the turn and the
+// code that delivers it.
 const UPDATE_TEXT_CHARS = 4_000;
 const effectText = z.string().trim().min(1).max(UPDATE_TEXT_CHARS);
 const dayCardIds = DAY_CARDS.map(card => card.id) as [string, ...string[]];
