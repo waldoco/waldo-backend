@@ -1,5 +1,5 @@
 import { createOwnerTurnContext, surfaceChatRef, type OwnerContextSources } from '../context-composer/owner-turn';
-import type { ContextHealthMaterial } from '../context-composer/types';
+import type { HealthRead } from '../context-composer/types';
 import type { TimelineSeed } from '../conversation/one-timeline';
 import { commonOwnerAuthority } from '../identity/common-owner-authority';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
@@ -39,7 +39,7 @@ const admit = async (host: ChatTimelineHost, scope: RunEffectScope, chat: Timeli
 
 // The turn's context leaves its chain to the default, the owner's own.
 export const whatsappTimelineContext = (host: ChatTimelineHost, active: () => Readonly<{ scope: RunEffectScope; admittedAt: number }> | null,
-  sources: Pick<OwnerContextSources, 'ownerProfile'> & Readonly<{ health(trace: string): Promise<ContextHealthMaterial | null> }>,
+  sources: Pick<OwnerContextSources, 'ownerProfile'> & Readonly<{ health(trace: string): Promise<HealthRead> }>,
   history: OwnerHistoryFactory, timelineSeed: TimelineSeed, joined: () => boolean): OwnerContextIntegration => ({
   contextHost: { prepare: async (turn, scope) => {
     // A turn left out keeps the WhatsApp chain it ran on before.
@@ -47,7 +47,7 @@ export const whatsappTimelineContext = (host: ChatTimelineHost, active: () => Re
     const running = active(), owner = bound(host, 'whatsapp');
     if (!running || scope !== running.scope || !owner || turn.conversationRef !== surfaceChatRef('whatsapp', owner.subject)) throw new ClosedRunError();
     // The composer runs on every tool round; one health read serves the whole turn.
-    let health: Promise<ContextHealthMaterial | null> | undefined;
+    let health: Promise<HealthRead> | undefined;
     return createOwnerTurnContext(await admit(host, scope, 'whatsapp', owner, running.admittedAt, turn.text),
       { health: () => health ??= sources.health(turn.traceId), ...(sources.ownerProfile ? { ownerProfile: sources.ownerProfile } : {}) });
   } },

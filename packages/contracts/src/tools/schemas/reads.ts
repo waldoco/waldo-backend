@@ -47,11 +47,17 @@ export const getHealthArgsSchema = z
     signals: z.array(healthReadSignalSchema).min(1).max(healthReadSignalSchema.options.length),
     from: healthReadDaySchema,
     to: healthReadDaySchema,
-    aggregation: z.enum(['daily', 'summary']).default('daily'),
+    // hourly: each hour's value of a signal read by the hour, over at most HEALTH_READ_MAX_HOURLY_DAYS days. nightly: each
+    // night's value of a signal read once a night, with when that night's reading began and ended (for sleep, falling asleep
+    // and waking).
+    aggregation: z.enum(['daily', 'summary', 'hourly', 'nightly']).default('daily'),
   })
   .refine((args) => dayOrdinal(args.from) <= dayOrdinal(args.to), { error: 'from must not be after to', path: ['to'] })
   .refine((args) => dayOrdinal(args.to) - dayOrdinal(args.from) < HEALTH_READ_MAX_DAYS, { error: `at most ${HEALTH_READ_MAX_DAYS} days`, path: ['to'] });
 export type GetHealthArgs = z.infer<typeof getHealthArgsSchema>;
+export const HEALTH_READ_MAX_HOURLY_DAYS = 2;
+// A wall-clock time in the owner's zone, to the minute, as the result's timezone reads it.
+const healthReadLocalTimeSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d$/);
 
 export const healthReadUnitSchema = z.enum(['minutes', 'ms', 'bpm', 'minute_of_day', 'ratio', 'percent', 'breaths_per_minute', 'celsius', 'ml_per_kg_min', 'count', 'kcal', 'kg', 'g']);
 // One workout as the watch measured it, from the same source as the workouts signal. A part the store holds in a shape this
@@ -89,6 +95,10 @@ export const getHealthResultSchema = z.discriminatedUnion('state', [
       days: z.array(z.strictObject({ day: healthReadDaySchema, value: z.number().nullable() })).optional(),
       // Null when no asked day has a value: nothing is invented.
       summary: z.strictObject({ mean: z.number().nullable(), min: z.number().nullable(), max: z.number().nullable(), days_with_value: z.int().nonnegative() }).optional(),
+      // An hourly read: each hour that has a value, oldest first, by its local start.
+      hours: z.array(z.strictObject({ at: healthReadLocalTimeSchema, value: z.number() })).max(HEALTH_READ_MAX_HOURLY_DAYS * 25).optional(),
+      // A nightly read: each night that has a value, oldest first, with its reading's local start and end.
+      nights: z.array(z.strictObject({ day: healthReadDaySchema, from: healthReadLocalTimeSchema, to: healthReadLocalTimeSchema, value: z.number() })).max(HEALTH_READ_MAX_DAYS).optional(),
     })).max(healthReadSignalSchema.options.length),
     // From the newest reading used: fresh within 36 hours, stale within 72, expired after (the source-data bounds of
     // ADR-0081 section 2).
