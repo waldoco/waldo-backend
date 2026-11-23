@@ -1,4 +1,4 @@
-// The second-message seam on the chat surfaces, with WALDO_SECOND_MESSAGE=1: WhatsApp's running turn is shown the owner's
+// The second-message seam on the chat surfaces: WhatsApp's running turn is shown the owner's
 // newer text at its next round, and a fold closes that text's row with no turn or reply of its own. A message with a file is
 // never offered. The model is the only fake (owner-do second-message seam; second-message.ts).
 import { env, runInDurableObject } from 'cloudflare:test';
@@ -36,7 +36,7 @@ const harness = (name: string, work: (world: { instance: OwnerDO; inbox: WhatsAp
       return Response.json({ messages: [{ id: `wamid.out.${sent.length}` }] });
     });
     const instance = new OwnerDO(state, { ...env, TELEGRAM_BOT_TOKEN: 'fictional-telegram-token', OPENAI_API_KEY: 'fictional-model-key',
-      WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id', WALDO_SECOND_MESSAGE: '1', ...extra });
+      WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id', ...extra });
     try { await work({ instance, inbox: new WhatsAppOwnerInbox(state.storage), sent, quoted }); } finally { await state.storage.deleteAlarm(); }
   });
 const post = (instance: OwnerDO, id: string, message: object) => instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {

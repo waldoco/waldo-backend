@@ -12,7 +12,7 @@ import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
-// WALDO_THINKING_REPLAY on an owner's own turn, as staging builds it: the turn's model thinks and reads twice, then answers.
+// Thinking replay on an owner's own turn, as staging builds it: the turn's model thinks and reads twice, then answers.
 // Each request the turn sends is put on the wire by the real adapter, and every request after the first must start with
 // the one before it unchanged (tools, system prompt and messages), so the thinking each round produced stays bound to an
 // unchanged prefix and the cache reads it back.
@@ -85,12 +85,6 @@ const unmarked = (value: unknown): unknown => {
   if (value === null || typeof value !== 'object') return value;
   return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'cache_control').map(([key, inner]) => [key, unmarked(inner)]));
 };
-
-it('staging turns the switch on', () => {
-  expect(STAGING.WALDO_THINKING_REPLAY).toBe('1');
-  const production = (flatConfig(parseJsonc(config)) as { vars: Record<string, string> }).vars;
-  expect(production.WALDO_THINKING_REPLAY).toBe('0');
-});
 
 it('an owner turn that reads twice sends each round as an unchanged extension of the one before, its thinking in place', async () => {
   const requests = await ownerTurn('thinking-prefix');

@@ -148,7 +148,7 @@ export const toolNameSchema = z.enum([
   'get_device_context',
   // get_weather: today's and tomorrow's weather where the owner's phones last were, from Apple Weather; offered while DEVICE_WEATHER is on.
   'get_weather',
-  // propose_calendar_plan: a day plan's new blocks on one card the owner approves in one tap; offered while CALENDAR_PLAN is on.
+  // propose_calendar_plan: a day plan's new blocks on one card the owner approves in one tap.
   'propose_calendar_plan',
   // set_quest: start or change one of the owner's quests (ADR-0064 GoalRecord); the owner's own chat turn only.
   'set_quest',

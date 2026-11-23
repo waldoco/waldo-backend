@@ -245,8 +245,8 @@ export async function runTaskAttempt(ticket: TaskTicket, deps: Readonly<{ brain:
 
 // The production model step: the owner's route policy on the model the brief asked for, through the scribe, with a call
 // timeout per round. A route that runs out of providers is unavailability, not the task failing.
-// strong: every task runs on the chat model, as it does with WALDO_LIGHT_CHAT on, where the owner's turns start on the lighter
-// one, and with WALDO_STRONG_ROLES on, where a reader job's findings decide what the owner is told.
+// strong: every task runs on the chat model. The task worker runs every task strong, since a reader job's findings decide
+// what the owner is told.
 export const taskModel = (access: OwnerModelAccess, gateway?: LLMGatewayAdapter, strong = false): TaskModel => {
   const health = access.health ?? new InMemoryCircuitBreaker();
   const { chat, auxiliary } = ownerModels(access);

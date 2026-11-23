@@ -57,7 +57,7 @@ afterEach(() => { vi.unstubAllGlobals(); world.requests = []; world.call = { nam
 it('the owner moves the Brief in chat: the daily time is kept, and the receipt comes back to say', async () => {
   const { pins } = await appTurn('chat-card-time-brief', 'send my brief at 7:10 every morning');
   expect(pins).toEqual({ 'card:brief': '07:10' });
-  expect(toolResult()).toContain('Saved. Your Brief comes at 7:10am.');
+  expect(toolResult()).toContain('Saved. Your Brief comes by 7:10am, earlier when you wake before then.');
   expect(world.requests).toHaveLength(2);
 });
 

@@ -6,7 +6,7 @@ import { resolveRunLoopAdapters } from '../src/llm/run-loop-adapters';
 import { getContextHandler } from '../src/tools/live/get-context';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
 
-// WALDO_THINKING_REPLAY. Anthropic's thinking guide: thinking blocks go back complete and unmodified with the tool results,
+// Thinking replay. Anthropic's thinking guide: thinking blocks go back complete and unmodified with the tool results,
 // and each one is bound to the system prompt, the tools and every message before it (tool_choice is outside that check).
 // The trace below runs the real tool loop through the real adapter on a recording client and asserts what each request put
 // on the wire: one tool list, one system prompt and one thinking setting from the first round through the closing one,

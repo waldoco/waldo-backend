@@ -140,14 +140,6 @@
     "disposition": "unconditional",
     "batch": "tasks"
   },
-  "WALDO_OWNER_FIRST": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
-  },
-  "WALDO_SECOND_MESSAGE": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
-  },
   "WHATSAPP_QUIET_MS": {
     "disposition": "knob"
   },
@@ -303,18 +295,6 @@
     "disposition": "unconditional",
     "batch": "device-google"
   },
-  "CALENDAR_COVERAGE": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
-  },
-  "FREE_WINDOW_OFFERS": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
-  },
-  "BLOCK_LIFECYCLE": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
-  },
   "ARRIVAL_LOOK": {
     "disposition": "unconditional",
     "batch": "device-google"
@@ -405,10 +385,6 @@
     "reason": "egress: Waldo's own mail address; production binds no sender and has no AGENT_MAIL_DOMAIN yet",
     "removeBy": "2027-01-31"
   },
-  "PLANNING_BRIEF": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
-  },
   "OWNER_SURFACE_DEFAULT": {
     "disposition": "unconditional",
     "batch": "delivery-proactive (after W4)"
@@ -425,27 +401,11 @@
     "disposition": "unconditional",
     "batch": "delivery-proactive (after W4)"
   },
-  "CAPACITY_PLAN": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
-  },
-  "TOMORROW_TODAY": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
-  },
   "CAPACITY_BUDGET": {
     "disposition": "unconditional",
     "batch": "turn-day-cards (after W2)"
   },
-  "WALDO_PROMPT_V2": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
-  },
   "NEXT_DUE_ALARM": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
-  },
-  "WHY_TRAIL": {
     "disposition": "unconditional",
     "batch": "turn-day-cards (after W2)"
   },
@@ -478,14 +438,6 @@
     "reason": "unfinished: off everywhere; the light chat step has no accepted eval",
     "removeBy": "2026-12-31"
   },
-  "WALDO_THINKING_REPLAY": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
-  },
-  "WALDO_STRONG_ROLES": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
-  },
   "GOOGLE_REALTIME_TRIAGE": {
     "disposition": "unconditional",
     "batch": "delivery-proactive (after W4)"
@@ -515,10 +467,6 @@
   "PROACTIVE_GAP_MIN": {
     "disposition": "knob"
   },
-  "PROACTIVE_ACT_AHEAD": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
-  },
   "PROACTIVE_BOTH_DEFAULT": {
     "disposition": "unconditional",
     "batch": "delivery-proactive (after W4)"
@@ -526,10 +474,6 @@
   "EVENT_PUSH": {
     "disposition": "unconditional",
     "batch": "delivery-proactive (after W4)"
-  },
-  "BRIEF_BODY_REVISION": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
   },
   "EVENT_PUSH_PER_DAY": {
     "disposition": "knob"
@@ -542,20 +486,12 @@
     "disposition": "unconditional",
     "batch": "delivery-proactive (after W4)"
   },
-  "PROACTIVE_INTERVENTIONS": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
-  },
   "PROACTIVE_REVIEW_EVERY_MIN": {
     "disposition": "knob"
   },
   "WHATS_NEW": {
     "disposition": "unconditional",
     "batch": "health-context (after W3)"
-  },
-  "WAKE_BRIEF": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
   },
   "WAKE_BRIEF_FRESH_MIN": {
     "disposition": "knob"
@@ -566,13 +502,5 @@
   "WORKOUT_WAKE": {
     "disposition": "unconditional",
     "batch": "health-context (after W3)"
-  },
-  "BRIEF_DAY_PLAN": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
-  },
-  "CALENDAR_PLAN": {
-    "disposition": "unconditional",
-    "batch": "turn-day-cards (after W2)"
   }
 }

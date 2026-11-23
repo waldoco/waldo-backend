@@ -6,7 +6,6 @@ import type { LoopToolResult } from '../conversation/tool-loop';
 import { modelProviderSetting } from '../llm/owner-routes';
 import { armAlarm } from '../scheduler/alarm-slot';
 import type { TaskTicket } from './jobs';
-import { lightChatEnabled } from '../channels/async-tools';
 import { runTaskAttempt, TaskBreaker, taskModel, type ProviderOutcome, type TaskBrainPort, type TaskClaim, type TaskOutcome, type TaskSpend } from './worker-loop';
 import { withSwitches } from '../switches';
 
@@ -57,8 +56,8 @@ export class TaskWorkerDO extends DurableObject<TelegramWebhookEnv> {
         heartbeat: (ticket) => owner.taskHeartbeat(ticket),
         spent: (ticket, events) => owner.taskSpent(ticket, events),
       };
-      const access = { openaiApiKey: this.env.OPENAI_API_KEY ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), primary: modelProviderSetting(this.env.WALDO_MODEL_PROVIDER), health: this.health, ...(this.env.WALDO_THINKING_REPLAY === '1' ? { thinkingReplay: true } : {}) };
-      outcome = await runTaskAttempt(held.ticket, { brain, model: taskModel(access, undefined, lightChatEnabled(this.env) || this.env.WALDO_STRONG_ROLES === '1'), health: this.health, sliceEnd: Date.now() + TASK_ALARM_SLICE_MS });
+      const access = { openaiApiKey: this.env.OPENAI_API_KEY ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), primary: modelProviderSetting(this.env.WALDO_MODEL_PROVIDER), health: this.health, thinkingReplay: true };
+      outcome = await runTaskAttempt(held.ticket, { brain, model: taskModel(access, undefined, true), health: this.health, sliceEnd: Date.now() + TASK_ALARM_SLICE_MS });
     } catch {
       outcome = 'lost';
     }

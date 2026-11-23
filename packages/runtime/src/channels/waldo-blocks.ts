@@ -2,7 +2,7 @@ import { fenced } from '../prompt/turn-prompt';
 import { localIso } from './reminders';
 import type { Change } from './update-cards';
 
-// Waldo's own blocks (BLOCK_LIFECYCLE): the protected time Waldo placed on the owner's calendar with their approval, read from
+// Waldo's own blocks: the protected time Waldo placed on the owner's calendar with their approval, read from
 // the approval ledger, the one record of what Waldo created (an applied create keeps its Google event id for undo). Each such
 // event also carries Waldo's private waldoBlock key on Google. A block the owner moved, renamed or deleted is theirs from then
 // on: the update sweep records that here, in its own transaction, and Waldo leaves it alone. Times and kinds reach a prompt; a

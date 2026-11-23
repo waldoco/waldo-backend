@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DAY_CARDS, dayCardPrompt, PLANNING_BRIEF_INSTRUCTION, SKIP_CARD } from '../src/prompt/day-cards';
 
-// PROACTIVE_ACT_AHEAD's day shape: the Check-in goes only when the plan slipped, and the Close ends Waldo's day. The prompts
+// The day shape: the Check-in goes only when the plan slipped, and the Close ends Waldo's day. The prompts
 // change; whether the plan slipped is the model's reading. These check which instruction a card carries, never its words.
 const context = { calendar: '(none)', ledger: '', today: '', updates: '' };
 const card = (id: string) => DAY_CARDS.find(entry => entry.id === id)!;

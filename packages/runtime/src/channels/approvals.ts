@@ -845,8 +845,6 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // The owner's standing grants: a calendar change one covers runs without a card. Only with the effect ledger. grant writes
   // the one the owner approved on a standing_grant card; without it such a card is never approvable here.
   grants?: Pick<StandingGrants, 'ownBlock' | 'enabled'> & Partial<Pick<StandingGrants, 'grant'>>;
-  // FREE_WINDOW_OFFERS: a calendar card marked as a free-window offer is labelled as one; off, it is an ordinary card.
-  freeWindowOffers?: () => boolean;
   // Whether the owner can approve a card shown here by telling Waldo to go ahead (APPROVE_IN_CHAT).
   approvesInChat?: () => boolean;
   // AUTONOMOUS_BY_DEFAULT: work the owner asked for runs with no card, and every card that remains is decided on the surface
@@ -1054,7 +1052,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (surface === 'app' || handsToApp || deps.appIdentity?.()) {
       try {
         const approvable = appReview(entry).full;
-        const part = appApprovalPart(appPartOf(entry, { actions: withDefer(entry, approvable ? approveActions(entry) : ['skip']), payload_digest: digest }, deps.freeWindowOffers?.() === true));
+        const part = appApprovalPart(appPartOf(entry, { actions: withDefer(entry, approvable ? approveActions(entry) : ['skip']), payload_digest: digest }, true));
         // The app may show only a card it can also decide: the approvals-list item must parse first.
         appApprovalV1Schema.parse({ approval_id: id, kind: part.kind, state: approvable ? 'open' : 'review_only', review: part.review, exact: exactFor(entry), payload_digest: digest, expires_at: part.expires_at, actions: part.actions, ...healthOf(entry) });
         inApp = { approvable };
@@ -1187,7 +1185,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   };
   // A live free-window offer asks its line on the approvals list too, with its answers named by what they do to the window.
   const offerWords = (entry: LedgerRow, actions: readonly string[]) => {
-    const offer = actions.includes('approve') ? offerOf(entry, deps.freeWindowOffers?.() === true) : null;
+    const offer = actions.includes('approve') ? offerOf(entry, true) : null;
     return offer ? { question: offer.line, labels: offerLabels(actions as AppApprovalPart['actions']) } : {};
   };
   const describeAny = (entry: LedgerRow) => {
@@ -2687,14 +2685,14 @@ export const appApprovalPartFor = (sql: SqlStorage, approvalId: string, approval
   return part.success && appApprovalKindShownAt(part.data.kind, approvalsRevision) ? part.data : null;
 };
 
-export const appApprovalParts = (sql: SqlStorage, approvalsRevision = APP_APPROVALS_CONTRACT_REVISION, chatRevision = 1, offersOn = false) => (parentId: string): AppApprovalCards => {
+export const appApprovalParts = (sql: SqlStorage, approvalsRevision = APP_APPROVALS_CONTRACT_REVISION, chatRevision = 1) => (parentId: string): AppApprovalCards => {
   if (!sql.exec('PRAGMA table_info(approval_presentations)').toArray().length) return { live: [], fallbacks: [] };
   const live: AppApprovalPart[] = [], fallbacks: string[] = [], withheld: string[] = [], offers: AppFreeWindowPart[] = [];
   let dropped = 0;
   for (const entry of sql.exec<LedgerRow & { approvable: number; payload_digest: string; retired_at: number | null }>("SELECT l.*, p.approvable, p.payload_digest, p.retired_at FROM approval_presentations p JOIN ledger l ON l.id = p.approval_id WHERE p.surface = 'app' AND p.message_ref = ? ORDER BY p.presented_at, l.id", `run:${parentId}`).toArray()) {
     try {
       const approvable = entry.status === 'open' && entry.approvable === 1 && appShowsInFull(entry);
-      const part = replyApprovalPartV1Schema.safeParse(appPartOf(entry, { actions: withDefer(entry, approvable ? approveActions(entry) : ['skip']), payload_digest: entry.payload_digest }, offersOn));
+      const part = replyApprovalPartV1Schema.safeParse(appPartOf(entry, { actions: withDefer(entry, approvable ? approveActions(entry) : ['skip']), payload_digest: entry.payload_digest }, true));
       if (!part.success) { dropped++; continue; }
       const waiting = entry.retired_at === null && (entry.status === 'open' || entry.status === 'review_only');
       const unread = waiting && !appApprovalKindShownAt(part.data.kind, approvalsRevision), text = unread ? `${part.data.fallback_text} ${UPDATE_TO_REVIEW}` : part.data.fallback_text;
@@ -2702,7 +2700,7 @@ export const appApprovalParts = (sql: SqlStorage, approvalsRevision = APP_APPROV
       if (unread) withheld.push(text);
       else if (waiting) {
         live.push(part.data);
-        const offer = offersOn && chatRevision >= APP_CHAT_FREE_WINDOW_REVISION ? freeWindowPartOf(entry, part.data) : null;
+        const offer = chatRevision >= APP_CHAT_FREE_WINDOW_REVISION ? freeWindowPartOf(entry, part.data) : null;
         if (offer) offers.push(offer);
       }
     } catch { dropped++; }

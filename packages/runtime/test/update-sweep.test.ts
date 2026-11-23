@@ -8,7 +8,7 @@ import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { updateBook, type UpdateBook } from '../src/channels/update-cards';
 import { triageTools, updateSweepApplier, updateSweepCheck, type SweepGate } from '../src/channels/update-sweep';
 import { interruptBook, INTERRUPTS_KEY, type InterruptLimits } from '../src/channels/interruptions';
-import { UPDATE_SWEEP_ACT_AHEAD_TEXT, UPDATE_SWEEP_JOB_TEXT } from '../src/prompt/machine-jobs';
+import { UPDATE_SWEEP_ACT_AHEAD_TEXT } from '../src/prompt/machine-jobs';
 import { channelStyle } from '../src/prompt/update-cards';
 import { numericHealthIn } from '../src/scribe/sanitiser';
 import { PUSHES } from '../src/channels/expo-push';
@@ -839,7 +839,7 @@ describe('the triage turn under the owner\'s interruption limits', () => {
   });
 });
 
-// PROACTIVE_ACT_AHEAD: the worker prepares the move; triage offers it on one card or stays silent. What matters is the model's.
+// The worker prepares the move; triage offers it on one card or stays silent. What matters is the model's.
 describe('acting ahead on an update', () => {
   const INVITE: TaskResult = { status: 'done', summary: 'An invite clashes with the deck block.',
     findings: [{ text: 'Krati invited the owner to a vendor call at 17:00, over their deck block.', source_ref: 'e-sync' }],
@@ -847,7 +847,7 @@ describe('acting ahead on an update', () => {
   const STYLE = channelStyle('chat');
   const acting = async (h: Harness, result: TaskResult, reply: unknown, setup: (a: TriageApply) => void = () => undefined) => {
     h.events.push(MOVED);
-    await h.check({ actAhead: true });
+    await h.check();
     report(h, result);
     const a = applyingTriage(h, undefined, { style: () => STYLE });
     a.reply.text = JSON.stringify(reply);
@@ -856,16 +856,11 @@ describe('acting ahead on an update', () => {
     return a;
   };
 
-  it('the worker is asked to prepare the move as well as judge; without the switch it only judges', async () => {
-    await withSweep(async (h) => {
-      h.events.push(MOVED);
-      await h.check({ actAhead: true });
-      expect(taskBrief(h.jobs()[0]!).goal).toBe(UPDATE_SWEEP_ACT_AHEAD_TEXT.goal);
-    });
+  it('the worker is asked to prepare the move as well as judge', async () => {
     await withSweep(async (h) => {
       h.events.push(MOVED);
       await h.check();
-      expect(taskBrief(h.jobs()[0]!).goal).toBe(UPDATE_SWEEP_JOB_TEXT.goal);
+      expect(taskBrief(h.jobs()[0]!).goal).toBe(UPDATE_SWEEP_ACT_AHEAD_TEXT.goal);
     });
   });
 

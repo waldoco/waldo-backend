@@ -32,7 +32,7 @@ export type NightlyRun = Readonly<{
   toolSearch?: boolean;
   // The harness's own loader (WALDO_TOOL_LOADER=harness): core tools up front, the rest through find_tools and use_tool.
   toolLoader?: 'harness';
-  // The behavior prompt's version 2 (WALDO_PROMPT_V2=1).
+  // The behavior prompt's version 2, as the owner object runs it.
   promptV2?: boolean;
   // Opens the route's second-provider step; the gateway must serve Anthropic requests for it to be taken.
   fallbackKey?: string;

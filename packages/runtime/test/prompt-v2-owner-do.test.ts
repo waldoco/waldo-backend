@@ -1,13 +1,9 @@
-// WALDO_PROMPT_V2 through the real owner object: an app turn's model request carries version 2 of the behavior prompt only
-// while the switch is "1", and the Worker config keeps it off until a judged run covers its scenarios. The model is
-// scripted, so this proves the switch reaches the request, not what a live model does with the text.
+// Version 2 of the behavior prompt through the real owner object: an app turn's model request carries it. The model is
+// scripted, so this proves the version reaches the request, not what a live model does with the text.
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LLMRequest } from '@waldo/contracts';
-import config from '../wrangler.jsonc?raw';
-import { parseJsonc } from '../../../scripts/jsonc.mjs';
-import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
 import { appSubjectFor } from '../src/channels/app-api';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
@@ -27,12 +23,11 @@ vi.mock('../src/channels/telegram-turn', async load => {
 const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '3f8a1c52-7d4e-4b19-a6c0-9e2d5b7f1a84';
-const PARSED = flatConfig(parseJsonc(config)) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
 const V2_SECTION = '\nBeing ahead of them\n';
 
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); model.requests = []; });
 
-const ownerTurn = async (name: string, promptV2: string): Promise<LLMRequest[]> => {
+const ownerTurn = async (name: string): Promise<LLMRequest[]> => {
   vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2030-11-04T09:00:00Z') });
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
@@ -50,7 +45,7 @@ const ownerTurn = async (name: string, promptV2: string): Promise<LLMRequest[]> 
     state.storage.kv.put('app_subject', String(appSubjectFor(name)));
     await state.storage.put('origin', 'https://fixture.invalid');
     const owner = new OwnerDO(state, { ...env, SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret',
-      OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, WALDO_PROMPT_V2: promptV2 });
+      OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     try {
       const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: `client-${name}`, text: 'what should I do this afternoon' }) }));
       expect(sent.status).toBe(202);
@@ -61,15 +56,10 @@ const ownerTurn = async (name: string, promptV2: string): Promise<LLMRequest[]> 
   });
 };
 
-describe('WALDO_PROMPT_V2 on the owner object', () => {
-  it.each([['1', true], ['0', false], [undefined, false]] as const)('switch %s: the app turn carries version 2: %s', async (value, expected) => {
-    const requests = await ownerTurn(`prompt-v2-${value ?? 'unset'}`, value as string);
+describe('the behavior prompt on the owner object', () => {
+  it('the app turn carries version 2', async () => {
+    const requests = await ownerTurn('prompt-v2');
     expect(requests.length).toBeGreaterThan(0);
-    for (const request of requests) expect(request.system?.includes(V2_SECTION)).toBe(expected);
-  });
-
-  it('is off in production until a judged run covers its scenarios, and on in staging', () => {
-    expect(PARSED.vars.WALDO_PROMPT_V2).toBe('0');
-    expect(PARSED.env.staging.vars.WALDO_PROMPT_V2).toBe('1');
+    for (const request of requests) expect(request.system?.includes(V2_SECTION)).toBe(true);
   });
 });

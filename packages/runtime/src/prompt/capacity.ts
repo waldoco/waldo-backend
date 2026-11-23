@@ -2,7 +2,7 @@ import { fence } from '../memory/claims';
 import { MEDICATION_MEMORY_RULE, SLEEP_NEED_MEMORY_RULE } from '../memory/health-rules';
 import { CAPACITY_CALIBRATION_INSTRUCTION } from './day-shaping';
 
-// CAPACITY_PLAN: Waldo learns how much real work the owner can do in a day and keep doing, and when they think best, and keeps
+// Waldo learns how much real work the owner can do in a day and keep doing, and when they think best, and keeps
 // it as one plain note in memory. The note shapes their deep work and their weekly reset. The judgment is the model's: code
 // hands it the note, their memory, their calendar's shape and their body's zone words, and keeps no rule of its own.
 export const CAPACITY_INSTRUCTION = [
@@ -40,11 +40,11 @@ export const capacityInput = (input: Readonly<{ now: string; note: string | null
   // Opens as the trace scrub's shared-health block does, so it is withheld whole wherever this text could be traced.
   `Shared health today, their body as zone words:\n${input.health ?? NO_SHARED_HEALTH}`,
   `The shape of their calendar, one line per day in their local time, each marked lived, under way or ahead:\n<calendar_shape>\n${input.calendar}\n</calendar_shape>`,
-  // BLOCK_LIFECYCLE: how Waldo's blocks and window offers went, for calibration.
+  // How Waldo's blocks and window offers went, for calibration.
   ...(input.blocks === undefined ? [] : [CAPACITY_CALIBRATION_INSTRUCTION, `Waldo's blocks and window offers over the last two weeks, and what became of each:\n<block_outcomes>\n${input.blocks || '- none'}\n</block_outcomes>`]),
 ].join('\n\n');
 
-// What the day cards read with CAPACITY_PLAN on. The note and the blocks travel as the job's context, never in the card's
+// What the day cards read for capacity planning. The note and the blocks travel as the job's context, never in the card's
 // own text, which the day_card trace keeps.
 export const capacityContext = (note: string | null, blocks: string): string => [
   note === null ? NO_NOTE : `${CAPACITY_NOTE_OPENING} what Waldo has learned about the owner's capacity, from memory:\n<capacity_note>\n${fence(note.replace(/\n\s*\n/g, '\n'))}\n</capacity_note>`,

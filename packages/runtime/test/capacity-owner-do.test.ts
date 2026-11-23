@@ -22,7 +22,7 @@ import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 
-// CAPACITY_PLAN on the owner object: the nightly pass keeps the capacity note, and the Brief and the Close plan from it. The
+// Capacity planning on the owner object: the nightly pass keeps the capacity note, and the Brief and the Close plan from it. The
 // model's answers are scripted; what is checked is what reaches it, what is kept and what goes out. Synthetic values only.
 type Call = Readonly<{ name: string; arguments: Record<string, unknown> }>;
 type Round = Readonly<{ calls: readonly Call[] }> | Readonly<{ text: string }>;
@@ -147,7 +147,7 @@ const store = (state: DurableObjectState) => claimStore(state.storage.sql, work 
 
 describe('the nightly capacity pass on the owner object', { timeout: 30_000 }, () => {
   it('keeps the note in memory, on the chat model, from the calendar\'s shape, and says no health is shared', async () => {
-    await owned('capacity-nightly-on', { CAPACITY_PLAN: '1' }, async ({ state, nightly, codes }) => {
+    await owned('capacity-nightly-on', {}, async ({ state, nightly, codes }) => {
       await nightly();
       expect(model.capacity).toHaveLength(1);
       expect(model.capacity[0]!.model).not.toBe(WALDO_AUXILIARY_MODEL);
@@ -161,7 +161,7 @@ describe('the nightly capacity pass on the owner object', { timeout: 30_000 }, (
 
   it('with health shared, the model reads it and nothing the owner object stores keeps it', async () => {
     health.shared = true;
-    await owned('capacity-nightly-health', { CAPACITY_PLAN: '1' }, async ({ nightly, stored }) => {
+    await owned('capacity-nightly-health', {}, async ({ nightly, stored }) => {
       await nightly();
       expect(model.capacity[0]!.input).toContain('Form zone:');
       expect(model.capacity[0]!.input).not.toContain(NO_SHARED_HEALTH);
@@ -170,13 +170,8 @@ describe('the nightly capacity pass on the owner object', { timeout: 30_000 }, (
     });
   });
 
-  it('asks nothing with the switch off, or with the owner\'s health notes off', async () => {
-    await owned('capacity-nightly-off', { CAPACITY_PLAN: '0' }, async ({ state, nightly, codes }) => {
-      await nightly();
-      expect(state.storage.kv.get(CAPACITY_NOTE_KEY)).toBeUndefined();
-      expect(codes('capacity')).toEqual([]);
-    });
-    await owned('capacity-nightly-notes-off', { CAPACITY_PLAN: '1' }, async ({ state, nightly, codes }) => {
+  it('asks nothing with the owner\'s health notes off', async () => {
+    await owned('capacity-nightly-notes-off', {}, async ({ state, nightly, codes }) => {
       setHealthMemory(state.storage.kv, 'off');
       await nightly();
       expect(codes('capacity')).toEqual(['health_notes_off']);
@@ -186,7 +181,7 @@ describe('the nightly capacity pass on the owner object', { timeout: 30_000 }, (
 
   it('the model reads what the owner asked to forget, and a note it marks as touching it is not kept', async () => {
     model.capacityReply = JSON.stringify({ note: 'Since the burnout, owner sustains one focus block a day.', touches_forgotten: true });
-    await owned('capacity-nightly-forgotten', { CAPACITY_PLAN: '1' }, async ({ state, nightly, codes }) => {
+    await owned('capacity-nightly-forgotten', {}, async ({ state, nightly, codes }) => {
       store(state).barrier('my burnout', '2030-03-04T09:00:00Z');
       await nightly();
       // As in every memory pass: the barrier list, whose topics are kept only as fingerprints.
@@ -198,7 +193,7 @@ describe('the nightly capacity pass on the owner object', { timeout: 30_000 }, (
 
   it('a model failure is logged and the night goes on', async () => {
     model.capacityReply = 'not json';
-    await owned('capacity-nightly-fails', { CAPACITY_PLAN: '1' }, async ({ state, nightly, codes }) => {
+    await owned('capacity-nightly-fails', {}, async ({ state, nightly, codes }) => {
       await nightly();
       expect(state.storage.sql.exec<{ ok: number }>("SELECT ok FROM trace_log WHERE hop = 'capacity'").toArray()).toEqual([{ ok: 0 }]);
       expect(state.storage.sql.exec<{ ok: number }>("SELECT ok FROM trace_log WHERE hop = 'machine_turn' AND trace = ?", `${NIGHTLY_ID}:${AT - 1000}`).toArray()).toEqual([{ ok: 1 }]);
@@ -213,7 +208,7 @@ describe('the planning Brief with CAPACITY_BUDGET', { timeout: 30_000 }, () => {
   const EXPENSES = { id: 'ev-expenses', title: 'Expense report', start: `${DAY}T17:00:00Z`, end: `${DAY}T18:00:00Z`, status: 'confirmed' };
   const LIGHT = { id: 'ev-dentist', title: 'Dentist', start: '2030-03-08T09:00:00Z', end: '2030-03-08T10:00:00Z', status: 'confirmed' };
   const MOVE = { action: 'move', event_id: EXPENSES.id, title: EXPENSES.title, start: '2030-03-08T13:30:00Z', end: '2030-03-08T14:30:00Z', reason: 'Today runs past what holds for you; Friday afternoon is light' };
-  const BUDGET = { CAPACITY_PLAN: '1', CAPACITY_BUDGET: '1', PLANNING_BRIEF: '1', PROACTIVE_GATE: '1' };
+  const BUDGET = { CAPACITY_BUDGET: '1', PROACTIVE_GATE: '1' };
   const brief = () => model.cards.find(asked => asked.request.includes('Scheduled card \\"The Daily Brief'))!;
   const weekReads = () => calendar.reads.filter(read => read.startsWith(TOMORROW));
 
@@ -238,15 +233,13 @@ describe('the planning Brief with CAPACITY_BUDGET', { timeout: 30_000 }, () => {
     });
   });
 
-  it('reads no week with the switch off, on the recap Brief, or with CAPACITY_PLAN off', async () => {
-    for (const [name, settings] of [['budget-off', { ...BUDGET, CAPACITY_BUDGET: '0' }], ['budget-recap', { ...BUDGET, PLANNING_BRIEF: '0' }], ['budget-no-plan', { ...BUDGET, CAPACITY_PLAN: '0' }]] as const) {
-      model.cards = []; calendar.reads = []; model.card = [{ text: 'The Daily Brief\nA long day.' }];
-      await owned(`capacity-${name}`, settings, async ({ card }) => {
-        await card('card:brief');
-        expect(weekReads(), name).toEqual([]);
-        expect(brief().request, name).not.toContain(JSON.stringify(CAPACITY_BUDGET_INSTRUCTION).slice(1, -1));
-      });
-    }
+  it('reads no week with the switch off', async () => {
+    model.cards = []; calendar.reads = []; model.card = [{ text: 'The Daily Brief\nA long day.' }];
+    await owned('capacity-budget-off', { ...BUDGET, CAPACITY_BUDGET: '0' }, async ({ card }) => {
+      await card('card:brief');
+      expect(weekReads()).toEqual([]);
+      expect(brief().request).not.toContain(JSON.stringify(CAPACITY_BUDGET_INSTRUCTION).slice(1, -1));
+    });
   });
 
   it('a move the owner turned down is in the next Brief\'s context, and a disconnected Google is one line, not two', async () => {
@@ -275,25 +268,19 @@ describe('the planning Brief with CAPACITY_BUDGET', { timeout: 30_000 }, () => {
   });
 });
 
-describe('the Brief and the Close with CAPACITY_PLAN', { timeout: 30_000 }, () => {
-  it('the Close reads the note as job context, in the chat role, and says tomorrow\'s shape; off, it reads neither', async () => {
+describe('the Brief and the Close with the capacity note', { timeout: 30_000 }, () => {
+  it('the Close reads the note as job context, in the chat role, and says tomorrow\'s shape', async () => {
     model.card = [{ text: 'The Close\nA good day. Tomorrow, hold nine to eleven for the deck.' }];
-    await owned('capacity-close-on', { CAPACITY_PLAN: '1' }, async ({ nightly, card }) => {
+    await owned('capacity-close-on', {}, async ({ nightly, card }) => {
       await nightly();
       await card('card:close');
       const asked = JSON.parse(model.cards[0]!.request) as { messages: readonly { content: string }[] };
       const content = String(asked.messages.at(-1)?.content);
       expect(content).toContain(NOTE);
-      expect(content).toContain(CAPACITY_LINES.close);
+      expect(content).toContain(TOMORROW_TODAY_INSTRUCTION);
       // The note travels as the job's context after the card's own text, which the day_card trace keeps.
       expect(content.indexOf(NOTE)).toBeGreaterThan(content.indexOf(PROSE_RULE));
       expect(model.cards[0]!.model).not.toBe(WALDO_AUXILIARY_MODEL);
-    });
-    model.cards = []; model.card = [{ text: 'The Close\nA good day.' }];
-    await owned('capacity-close-off', { CAPACITY_PLAN: '0' }, async ({ card }) => {
-      await card('card:close');
-      expect(model.cards[0]!.request).not.toContain(JSON.stringify(CAPACITY_LINES.close).slice(1, -1));
-      expect(model.cards[0]!.request).not.toContain('capacity_note');
     });
   });
 
@@ -301,7 +288,7 @@ describe('the Brief and the Close with CAPACITY_PLAN', { timeout: 30_000 }, () =
     const RESET = { action: 'create', title: 'Reset: long walk, no screens', start: `${DAY}T17:00:00Z`, end: `${DAY}T19:00:00Z`, block: 'rest', reason: 'Your week ran heavy; Saturday afternoon is the stretch you keep free' };
     model.card = [{ calls: [{ name: 'propose_calendar_change', arguments: RESET }] }, { text: 'The Daily Brief\nA heavy week behind you. I put a reset on a card for your yes.' },
       { text: 'The Close\nThe reset waits on your yes.' }];
-    await owned('capacity-brief-reset', { CAPACITY_PLAN: '1', PLANNING_BRIEF: '1', PROACTIVE_GATE: '1' }, async ({ state, card, approvals }) => {
+    await owned('capacity-brief-reset', { PROACTIVE_GATE: '1' }, async ({ state, card, approvals }) => {
       const book = interruptBook(state.storage.kv, { now: () => Date.now(), timezone: () => 'UTC', ownerSpokeSince: at => ownerSpokeSince(state.storage.sql, at) });
       await card('card:brief');
       expect(model.cards[0]!.tools).toContain('propose_calendar_change');
@@ -320,7 +307,7 @@ describe('the Brief and the Close with CAPACITY_PLAN', { timeout: 30_000 }, () =
   it('a note drawn from the body is not shown once the owner stops sharing health', async () => {
     health.shared = true;
     model.card = [{ text: 'The Close\nA good day.' }, { text: 'The Close\nA good day.' }];
-    await owned('capacity-close-revoked', { CAPACITY_PLAN: '1' }, async ({ nightly, card }) => {
+    await owned('capacity-close-revoked', {}, async ({ nightly, card }) => {
       await nightly();
       await card('card:close');
       expect(model.cards[0]!.request).toContain(NOTE);
@@ -334,20 +321,20 @@ describe('the Brief and the Close with CAPACITY_PLAN', { timeout: 30_000 }, () =
 
   it('without a note yet, the Brief is told so and no capacity is guessed', async () => {
     model.card = [{ text: 'The Daily Brief\nBoard review at three.' }];
-    await owned('capacity-brief-no-note', { CAPACITY_PLAN: '1' }, async ({ card }) => {
+    await owned('capacity-brief-no-note', {}, async ({ card }) => {
       await card('card:brief');
       expect(model.cards[0]!.request).toContain(NO_NOTE);
-      expect(model.cards[0]!.request).toContain(JSON.stringify(CAPACITY_LINES.brief).slice(1, -1));
+      expect(model.cards[0]!.request).toContain(JSON.stringify(CAPACITY_LINES.planningBrief).slice(1, -1));
     });
   });
 });
 
-// TOMORROW_TODAY: the Close names tomorrow's best hours and puts what would protect them on the owner's cards.
-describe('the Close with TOMORROW_TODAY', { timeout: 30_000 }, () => {
+// The Close names tomorrow's best hours and puts what would protect them on the owner's cards.
+describe('the Close that protects tomorrow', { timeout: 30_000 }, () => {
   const HOLD = { action: 'create', title: 'Deck', start: '2030-03-06T08:00:00Z', end: '2030-03-06T09:45:00Z', block: 'deep_work', reason: 'Your best hours are early and one block holds after a heavy day' };
-  it('raises a deep-work card in the chat role, under the owner\'s limits, and the calendar waits for yes; off, it offers no card', async () => {
+  it('raises a deep-work card in the chat role, under the owner\'s limits, and the calendar waits for yes', async () => {
     model.card = [{ calls: [{ name: 'propose_calendar_change', arguments: HOLD }] }, { text: 'The Close\nTomorrow your best stretch is before Standup; a block for it waits on your yes. Done for today.' }];
-    await owned('tomorrow-close-on', { TOMORROW_TODAY: '1', PROACTIVE_GATE: '1' }, async ({ state, card, approvals }) => {
+    await owned('tomorrow-close-on', { PROACTIVE_GATE: '1' }, async ({ state, card, approvals }) => {
       const book = interruptBook(state.storage.kv, { now: () => Date.now(), timezone: () => 'UTC', ownerSpokeSince: at => ownerSpokeSince(state.storage.sql, at) });
       await card('card:close');
       expect(model.cards[0]!.tools).toContain('propose_calendar_change');
@@ -358,19 +345,13 @@ describe('the Close with TOMORROW_TODAY', { timeout: 30_000 }, () => {
       expect(book.spent().count).toBe(0);
       expect(book.question()).toBeNull();
     });
-    model.cards = []; model.card = [{ text: 'The Close\nA good day.' }];
-    await owned('tomorrow-close-off', { TOMORROW_TODAY: '0' }, async ({ card, approvals }) => {
-      await card('card:close');
-      expect(model.cards[0]!.tools).not.toContain('propose_calendar_change');
-      expect(await approvals()).toEqual([]);
-    });
   });
 
   it('with health shared, refuses a card whose title carries a health word, and raises the clean one', async () => {
     health.shared = true;
     model.card = [{ calls: [{ name: 'propose_calendar_change', arguments: { ...HOLD, title: 'Low recovery focus' } }] },
       { calls: [{ name: 'propose_calendar_change', arguments: HOLD }] }, { text: 'The Close\nA block for the deck waits on your yes.' }];
-    await owned('tomorrow-close-egress', { TOMORROW_TODAY: '1' }, async ({ card, approvals }) => {
+    await owned('tomorrow-close-egress', {}, async ({ card, approvals }) => {
       await card('card:close');
       const cards = await approvals();
       expect(cards).toHaveLength(1);
@@ -381,7 +362,7 @@ describe('the Close with TOMORROW_TODAY', { timeout: 30_000 }, () => {
 
   it('without shared health, plans from the calendar and is told there is none', async () => {
     model.card = [{ text: 'The Close\nTomorrow is open before three.' }];
-    await owned('tomorrow-close-no-health', { TOMORROW_TODAY: '1' }, async ({ card }) => {
+    await owned('tomorrow-close-no-health', {}, async ({ card }) => {
       await card('card:close');
       expect(model.cards[0]!.request).toContain('No derived health context is available for this invocation.');
       expect(model.cards[0]!.tools).toContain('propose_calendar_change');
@@ -391,11 +372,11 @@ describe('the Close with TOMORROW_TODAY', { timeout: 30_000 }, () => {
 
 // The Close's card under the owner's own settings: quiet hours hold the Close, and a standing grant never applies a change a
 // card job proposes: the job reads outside text, so its run is not the owner's or Waldo's own.
-describe('TOMORROW_TODAY under the owner\'s settings', { timeout: 30_000 }, () => {
+describe('the Close\'s card under the owner\'s settings', { timeout: 30_000 }, () => {
   const HOLD = { action: 'create', title: 'Deck', start: '2030-03-06T08:00:00Z', end: '2030-03-06T09:45:00Z', block: 'deep_work', reason: 'Your best hours are early' };
   it('in quiet hours the Close waits: no model call and no card', async () => {
     model.card = [{ calls: [{ name: 'propose_calendar_change', arguments: HOLD }] }, { text: 'The Close\nA block waits on your yes.' }];
-    await owned('tomorrow-close-quiet', { TOMORROW_TODAY: '1', PROACTIVE_GATE: '1' }, async ({ state, card, approvals }) => {
+    await owned('tomorrow-close-quiet', { PROACTIVE_GATE: '1' }, async ({ state, card, approvals }) => {
       loopBook(state.storage.sql, { newId: () => 'fixture', now: () => Date.now() }).setProactivity({ quiet_start: '07:00', quiet_end: '09:00', volume: 'normal' });
       await card('card:close');
       expect(model.cards).toEqual([]);
@@ -406,7 +387,7 @@ describe('TOMORROW_TODAY under the owner\'s settings', { timeout: 30_000 }, () =
 
   it('with the day\'s interruptions spent and the gap not passed, the Close still goes with its card and is not charged', async () => {
     model.card = [{ calls: [{ name: 'propose_calendar_change', arguments: HOLD }] }, { text: 'The Close\nA block waits on your yes.' }];
-    await owned('tomorrow-close-spent', { TOMORROW_TODAY: '1', PROACTIVE_GATE: '1' }, async ({ state, card, approvals }) => {
+    await owned('tomorrow-close-spent', { PROACTIVE_GATE: '1' }, async ({ state, card, approvals }) => {
       const book = interruptBook(state.storage.kv, { now: () => Date.now(), timezone: () => 'UTC', ownerSpokeSince: at => ownerSpokeSince(state.storage.sql, at) });
       const spent = { day: book.spent().day, count: 2, urgent: 1, last: Date.now() - 60_000 };
       state.storage.kv.put(INTERRUPTS_KEY, spent);
@@ -419,7 +400,7 @@ describe('TOMORROW_TODAY under the owner\'s settings', { timeout: 30_000 }, () =
 
   it('with a live standing grant for Waldo\'s own blocks, the Close\'s block still waits on a card', async () => {
     model.card = [{ calls: [{ name: 'propose_calendar_change', arguments: HOLD }] }, { text: 'The Close\nA block waits on your yes.' }];
-    await owned('tomorrow-close-grant', { TOMORROW_TODAY: '1', AUTONOMY_OWN_CALENDAR: '1' }, async ({ state, card, approvals }) => {
+    await owned('tomorrow-close-grant', { AUTONOMY_OWN_CALENDAR: '1' }, async ({ state, card, approvals }) => {
       const grants = standingGrants(state.storage, { now: () => Date.now(), newId: () => 'g1', enabled: () => true, ownerRef: () => OWNER_ID });
       grants.grant({ scope: { class: 'calendar.move_own_block', account: 'owner@example.test', window: { from: '00:00', to: '23:59' }, weekdays: [0, 1, 2, 3, 4, 5, 6], min_lead_minutes: 5 },
         limits: { max_per_day: 5, timezone: 'UTC' }, valid_from: AT - 86_400_000, expires_at: AT + 30 * 86_400_000 }, 'app');

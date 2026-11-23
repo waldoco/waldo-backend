@@ -3,7 +3,7 @@ import { HEALTH_READ_TOOLS } from '../tools/loaded';
 import { OUTSIDE_TEXT_READS } from './check-back';
 import { parseUpdateEffects } from './update-sweep';
 
-// BRIEF_BODY_REVISION: today's first scored Recovery landed after the Daily Brief reached the owner, so the Brief was written
+// Today's first scored Recovery landed after the Daily Brief reached the owner, so the Brief was written
 // without the owner's body data. A row with no Recovery (steps and the calendar only) is not that data. One turn reads the
 // data against what the Brief said and decides whether the Brief should now read differently; code holds only when that turn
 // runs (once a day, first Recovery only, the Brief already sent) and how it lands.

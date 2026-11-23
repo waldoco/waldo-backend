@@ -162,7 +162,7 @@ describe('the Brief time, across clock changes', () => {
   });
 });
 
-describe('with WAKE_BRIEF, a Brief time the owner set is the latest it comes', () => {
+describe('with the wake Brief, a Brief time the owner set is the latest it comes', () => {
   const tz = 'Asia/Kolkata', day = '2026-11-06', at = (clock: string) => localToEpoch(`${day}T${clock}`, tz);
   it('a wake before it brings the Brief earlier, and nothing moves it later than the owner\'s time', async () => {
     await owner(tz, at('05:00'), async world => {

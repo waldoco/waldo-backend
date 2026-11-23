@@ -1,6 +1,6 @@
 import { fenced } from './turn-prompt';
 
-// How Waldo plans the owner's real day (CALENDAR_COVERAGE, FREE_WINDOW_OFFERS): intent the model reasons from, and the facts it
+// How Waldo plans the owner's real day: intent the model reasons from, and the facts it
 // reasons over. Code states what is connected, how recently each source was read, how full each weekday has been and whether
 // the phone calendar is shared; what counts as thin, which work deserves a window, whether to speak and which health move fits
 // are the model's. Code keeps only the owner's limits: consent, quiet hours, the interrupt budget, one question waiting.
@@ -55,18 +55,15 @@ export const PROTOCOL_INSTRUCTION = [
   'At most one move a day, and only when it fits a goal they stated or the shape of today; never onto a full day. A caffeine cutoff is a reminder in the plan\'s words, not a block. Say the reason in their terms ("your first call is at 9, so…"), in words, never a reading, score or number about their body. A calendar title carries no health word.',
 ].join(' ');
 
-// Health moves are offered only from the planning Brief, whose calendar proposals pass the deterministic health-word screen,
-// and only with FREE_WINDOW_OFFERS and CAPACITY_PLAN on; the caller adds that the owner shares their health.
-export const protocolMovesAllowed = (input: Readonly<{ brief: boolean; offers: boolean; capacityPlan: boolean }>): boolean => input.brief && input.offers && input.capacityPlan;
-
-// The lines a planning turn reads: coverage when it is on, the window protocol when offers are on, and the health moves only
-// when protocolMovesAllowed and the owner shares their health (a consent limit, held in code).
-export const dayShapingContext = (input: Readonly<{ coverage: CoverageFacts | null; offers: boolean; protocols: boolean; brief?: boolean }>): string => [
-  ...(input.coverage ? [coverageSection(input.coverage), input.brief ? COVERAGE_INSTRUCTION : `${COVERAGE_INSTRUCTION} ${COVERAGE_NOT_HERE}`] : []),
-  ...(input.offers ? [FREE_WINDOW_INSTRUCTION, ...(input.brief ? [BRIEF_WINDOWS] : []), ...(input.protocols ? [PROTOCOL_INSTRUCTION] : [])] : []),
+// The lines a planning turn reads: coverage, the window protocol, and the health moves only when `protocols` holds. The
+// caller sets it only for the planning Brief, whose calendar proposals pass the deterministic health-word screen, and only
+// while the owner shares their health (a consent limit, held in code).
+export const dayShapingContext = (input: Readonly<{ coverage: CoverageFacts; protocols: boolean; brief?: boolean }>): string => [
+  coverageSection(input.coverage), input.brief ? COVERAGE_INSTRUCTION : `${COVERAGE_INSTRUCTION} ${COVERAGE_NOT_HERE}`,
+  FREE_WINDOW_INSTRUCTION, ...(input.brief ? [BRIEF_WINDOWS] : []), ...(input.protocols ? [PROTOCOL_INSTRUCTION] : []),
 ].join('\n\n');
 
-// BLOCK_LIFECYCLE: Waldo looks after the blocks it placed, and learns from how they went.
+// Waldo looks after the blocks it placed, and learns from how they went.
 export const BLOCK_LIFECYCLE_INSTRUCTION = [
   'Look after the blocks Waldo placed (listed above). When a real meeting or commitment lands on one, offer to move the block with propose_calendar_change (action move, its event id) to the next window that suits it, never to delete it; the meeting stays where it is. A block that is no longer needed (its work got done, the reason went away) should not stay as busy time that keeps colleagues out: offer to cancel it.',
   'A block the owner changed themselves is theirs now: leave it alone, never move, cancel or comment on it.',

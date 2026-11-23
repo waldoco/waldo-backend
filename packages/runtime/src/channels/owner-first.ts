@@ -3,10 +3,9 @@ import { IMESSAGE_INBOX_DUE_KEY } from './imessage/owner-inbox';
 import { OWNER_INBOX_KEY, type InboxRecord } from './telegram-owner-inbox';
 
 // Owner messages before machine work. The alarm pass is one unit on the owner object's serial chain, so a message admitted
-// while it runs would wait behind every apply turn and day card left in it. With WALDO_OWNER_FIRST=1 the pass looks before
-// each machine turn: an owner message that can run now ends the pass, its machine work stays due for the next one, and the
-// owner's turn takes the chain. One writer still: the pass yields; nothing runs beside it.
-export const ownerFirst = (env: Readonly<{ WALDO_OWNER_FIRST?: string }>): boolean => env.WALDO_OWNER_FIRST === '1';
+// while it runs would wait behind every apply turn and day card left in it. The pass looks before each machine turn: an owner
+// message that can run now ends the pass, its machine work stays due for the next one, and the owner's turn takes the chain.
+// One writer still: the pass yields; nothing runs beside it.
 
 // Each surface inbox marks an admitted message due a moment after admission. A message whose wake was put off (its owner's
 // authority could not be read, a WhatsApp quiet window still open) is not waiting yet: counting it would end every pass early

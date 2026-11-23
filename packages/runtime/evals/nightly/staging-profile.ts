@@ -34,15 +34,11 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_TASK_STEER: gap('the owner\'s turn is offered steer_task to change a running background task; the trial runs no background workers'),
   WALDO_TASK_PICKUP: gap('a running owner turn is told when a background task finishes, and a report waits behind a card the owner can approve in words; the trial runs no background workers'),
   WALDO_TASK_NOTES: inert('background jobs that stop say so outside any turn, and a parked task retries once; the trial runs no background jobs'),
-  WALDO_OWNER_FIRST: gap('owner messages take the chain before queued machine turns; the trial runs one owner turn at a time with no machine work queued'),
-  WALDO_SECOND_MESSAGE: gap('a running owner turn is offered newer owner messages; the trial sends each step after the last one answered'),
   WALDO_ASYNC_TOOLS: gap('the owner turn holds no long tool and hands that work to start_task; the trial runs no task worker or report turn, so it keeps the long tools inline'),
   WALDO_ONE_TIMELINE: gap('the owner\'s WhatsApp turns share the app chat\'s chain; the trial runs the app surface only, so it never sees a WhatsApp turn in its history'),
   WALDO_JOB_OUTCOME_ROWS: gap('a background job stores a keyed stub in place of its prompt, so a later job turn on the same chain (the Close after the Brief) no longer reads the earlier job\'s prompt; app owner turns already did not, and the trial runs no job turn after another'),
   WALDO_LEAN_SCHEDULED: gap('a Waldo-first scheduled run (a day card, check-back, sweep or intervention) reads a lean view instead of the chat replay, and the day plan reads the shared health block; the trial\'s day cards and triage turns are not marked Waldo-first, so they read the full chat replay as with the switch off'),
   WALDO_LIGHT_CHAT: gap("the owner's reply takes a light step on the auxiliary model that answers quick chat or hands the turn to the chat model, and task workers run on the chat model; the profile's trials stay on the chat model, and the lc- scenarios run with it on"),
-  WALDO_THINKING_REPLAY: gap("a Claude turn replays its thinking across tool rounds, and every turn's closing round keeps its tool list; the live profile runs on OpenAI (a Claude staging is refused), so a trial sees only the kept tool list at a close"),
-  WALDO_STRONG_ROLES: gap('memory writes, background decisions, the day plan and planning runs move to the chat model; the trial runs owner turns, which it leaves unchanged'),
   WALDO_COMPACTION: mapped('the trial\'s chat runs on the canonical store with these compaction settings'),
   WALDO_STEPPED_WINDOW: mapped('the trial\'s chat history is windowed in steps under the same compaction settings'),
   WALDO_CONTEXT_CAPS: gap('caps the standing orders and quests a turn reads and clears tool results down to the latest few past a size (the context budget\'s settings); no trial holds that many orders or quests or runs that long a tool loop, so the trials read as they would with it on'),
@@ -75,19 +71,13 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   PROACTIVE_GAP_MIN: gap('the default gap between two unasked messages; no trial runs an unasked message'),
   PROACTIVE_OVER_TELEGRAM: gap('where unasked messages go for an owner still linked on Telegram; no trial runs an unasked message or a Telegram owner'),
   PROACTIVE_BOTH_DEFAULT: gap('where unasked messages go for an owner with WhatsApp bound; no trial runs an unasked message'),
-  BRIEF_BODY_REVISION: gap('the world writes no health row after the Brief, so a Brief revised for late body data is not modelled; staging has it on'),
   EVENT_PUSH: inert('the app push raised after an event notice reaches the app chat; no model turn runs for it'),
   EVENT_PUSH_PER_DAY: inert('the most event pushes in an owner\'s day; no model turn runs for them'),
-  PROACTIVE_ACT_AHEAD: gap('the sweep worker and triage are not run in a trial, and the day-card cases run the Check-in and Close as before'),
-  PROACTIVE_INTERVENTIONS: gap('Waldo\'s own look runs on the scheduler and the job lane, which a trial does not run; no case judges the look yet'),
   WHATS_NEW: gap('the what\'s new pass runs on the release wake and folds into day cards, neither of which a trial runs; with no announcement decided, an owner turn carries no what\'s new section'),
   PROACTIVE_REVIEW_EVERY_MIN: inert('how often the look is scheduled; a trial turn is not an alarm pass'),
-  WAKE_BRIEF: gap('no trial uploads a night or runs the wake turn; the Brief cases run at their planned time; staging has it on'),
   WAKE_BRIEF_FRESH_MIN: inert('how fresh a night\'s end must be to count as a wake; no trial uploads a night'),
   WAKE_BRIEF_TURNS_PER_DAY: inert('caps the wake turns a day; no trial runs one'),
   WORKOUT_WAKE: gap('no trial uploads a finished workout; the health-trigger cases wake on their own reasons; staging has it on'),
-  CALENDAR_PLAN: gap('no trial offers propose_calendar_plan or approves a day plan; staging has it on'),
-  BRIEF_DAY_PLAN: gap('the Brief cases run without the time-blocked plan; no case judges it yet; staging has it on'),
   MAIL_SOURCE_FOLLOWUPS: gap('the mail follow-up sweep is not run in a trial'),
   DRIVE_READS: gap(SYNTHETIC_TOOLS),
   OWNER_LOOKUP: gap('the look-up consent gate is not modelled; the world offers the look-up tool directly'),
@@ -101,22 +91,17 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   HEALTH_INVENTORY: gap('the world serves no inventory read, so no trial reads the body data on hand'),
   CALENDAR_UNDO_CANCEL: gap('no trial undoes a cancel; staging has it on'),
   NEXT_DUE_ALARM: inert('decides only whether an owner alarm with nothing due runs its pass; a trial turn is not an alarm pass'),
-  WHY_TRAIL: gap('no trial reads the steps behind a card; staging has it on'),
   AUTONOMY_OWN_CALENDAR: gap('no trial holds a standing grant, and this build creates none; staging has it on'),
   APPROVE_IN_CHAT: gap('no trial has the owner approve a shown card in words; staging has it on'),
   AUTONOMOUS_BY_DEFAULT: gap('the trial\'s tools are synthetic and raise no desk card, so an owner-asked run with no card is not modelled; staging has it on'),
   AUTONOMY_OWNER_TURNS: gap('the trial\'s tools are synthetic and raise no desk card, so an owner-started turn acting after an outside read is not modelled; staging has it on'),
   HEALTH_EASE_WORKOUT: gap('the world serves no workouts on the calendar; staging has it on'),
   HISTORY_ARCHIVE: gap('retention runs only past a hot table\'s cap, which a trial never reaches'),
-  WALDO_PROMPT_V2: mapped("'1' sends the trials the behavior prompt's version 2"),
   WALDO_WATCHDOG: inert('the progress watchdog checks running background jobs; the trial runs no background jobs'),
-  PLANNING_BRIEF: gap('the Brief cases run the recap Brief; no case judges a planning Brief yet; staging has it on'),
   OWNER_SURFACE_DEFAULT: inert('where a notice outside any turn goes and which surface the console and harness commands open on; each trial turn names its own surface'),
   APP_CHAT_ATTACHMENTS: gap('an app message may carry one voice note, photo or file through the shared media reader; the trial sends words only'),
   CONSOLE_HARNESS: inert('diagnostics, and for admins /fire and /langfuse, in the owner\'s console; the trial runs no console'),
   WHATSAPP_STOP: inert('a typed /stop on WhatsApp ends the running turn; the trial runs the app surface and sends no stop'),
-  CAPACITY_PLAN: gap('the nightly capacity pass is not run in a trial; the cap- case runs the Close with a seeded capacity note'),
-  TOMORROW_TODAY: gap('the Close cases run with the switch in their steps; a trial runs no approval of the cards it raises'),
   CAPACITY_BUDGET: gap('a trial turn does not read the staging vars for the Brief; the d6 case runs the planning Brief with a seeded capacity note and the week ahead'),
   WALDO_RECALL_CHAIN: gap('the trial\'s search_episodes runs without the recall chain, and its world keeps no runs, tasks or cards to link; test/recall-chain.test.ts measures it; staging has it on'),
   WALDO_FILE_TOOLS: gap('a trial turn carries no upload; the zip and meeting cases in the files nightly scenarios measure the tools, and test/upload-keeper.test.ts the keeping; staging has it on'),
@@ -127,9 +112,6 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   SCREEN_TIME: gap('the world serves no screen time and the trial offers no get_screen_time; staging has it on'),
   DEVICE_PLACE: gap('the world serves no device place and the trial offers no get_device_context; staging has it on'),
   DEVICE_CALENDAR: gap('the world serves no phone calendar and the trial offers no query_phone_calendar; staging has it on'),
-  CALENDAR_COVERAGE: gap('the coverage facts read Google calendars over two weeks and the phone calendar, which a trial world does not serve; no case judges the coverage question yet'),
-  FREE_WINDOW_OFFERS: gap('offers come from the update triage and the intervention look, which a trial does not run; no case judges a free-window offer yet'),
-  BLOCK_LIFECYCLE: gap('Waldo\'s blocks come from the approval ledger and the update sweep, which a trial does not run; no case judges the block lifecycle yet'),
   DEVICE_WEATHER: gap('the world serves no weather and the trial offers no get_weather; staging has it on once the WeatherKit secrets are set'),
   ARRIVAL_LOOK: gap('the world serves no device place, so no phone arrives anywhere; staging has it on'),
   ONBOARDING_LOOKUP: gap('no trial runs onboarding or the background owner look-up; staging has it on'),
@@ -216,21 +198,22 @@ export type StagingProfile = Readonly<{
   model: ModelName;
   toolLoader?: 'harness';
   toolSearch?: true;
-  promptV2: boolean;
+  promptV2: true;
   compaction: CompactionSettings;
   forgetBarrier: ForgetBarrierMode;
   memorySelection: boolean;
   semantic: boolean;
 }>;
 
-// The owner object's own precedence: the harness loader wins over provider tool search. The model is the chat model of the
+// The owner object's own precedence: the harness loader wins over provider tool search, and version 2 of the behavior
+// prompt always runs. The model is the chat model of the
 // provider staging runs.
 export const stagingProfile = (vars: StagingVars): StagingProfile => {
   const harness = vars.WALDO_TOOL_LOADER === 'harness';
   return {
     label: 'staging', model: OWNER_MODELS[modelProviderSetting(vars.WALDO_MODEL_PROVIDER)].chat,
     ...(harness ? { toolLoader: 'harness' as const } : vars.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true as const } : {}),
-    promptV2: vars.WALDO_PROMPT_V2 === '1',
+    promptV2: true,
     compaction: compactionSettings({ WALDO_COMPACTION: vars.WALDO_COMPACTION, WALDO_STEPPED_WINDOW: vars.WALDO_STEPPED_WINDOW, WALDO_CALL_CEILINGS: vars.WALDO_CALL_CEILINGS, WALDO_HISTORY_BUDGET_TOKENS: vars.WALDO_HISTORY_BUDGET_TOKENS, WALDO_STEPPED_WINDOW_TARGET: vars.WALDO_STEPPED_WINDOW_TARGET }),
     forgetBarrier: vars.WALDO_FORGET_BARRIER === 'on' ? 'items' : 'reads',
     memorySelection: vars.MEMORY_SELECTION === '1',

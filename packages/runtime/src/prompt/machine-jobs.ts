@@ -27,7 +27,7 @@ export const UPDATE_SWEEP_JOB_TEXT = {
   done_when: NOTHING_IS_NORMAL,
 } as const;
 
-// PROACTIVE_ACT_AHEAD: the worker also prepares what the owner would need, so the brain can offer it on one card. It drafts;
+// The update sweep's worker also prepares what the owner would need, so the brain can offer it on one card. It drafts;
 // it sends and changes nothing, and the brain decides whether anything reaches the owner at all.
 export const UPDATE_SWEEP_ACT_AHEAD_TEXT = {
   ...UPDATE_SWEEP_JOB_TEXT,
@@ -39,7 +39,7 @@ export const UPDATE_SWEEP_ACT_AHEAD_TEXT = {
   ].join(' '),
 } as const;
 
-// PROACTIVE_INTERVENTIONS: Waldo's own look across the owner's plate, with nothing new arriving. What is worth raising is
+// Waldo's own look across the owner's plate, with nothing new arriving. What is worth raising is
 // the brain's judgment; the worker only finds what is drifting.
 export const INTERVENTION_JOB_TEXT = {
   title: 'Look across the day',

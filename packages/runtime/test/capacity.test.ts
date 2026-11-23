@@ -8,7 +8,7 @@ import { BODY_WITHDRAWN, CAPACITY_LINES, capacityContext, capacityInput, NO_CALE
 import { scrubTraceHealth } from '../src/observability/trace-health-scrub';
 import { DAY_CARDS, dayCardPrompt } from '../src/prompt/day-cards';
 
-// CAPACITY_PLAN: the capacity note is the model's; these check what reaches it and what is kept, never its words. Every
+// The capacity note is the model's; these check what reaches it and what is kept, never its words. Every
 // title, note and zone word is synthetic.
 let sequence = 0;
 const inObject = (fn: (state: DurableObjectState) => Promise<void> | void) =>
@@ -260,7 +260,7 @@ describe('the note in a trace', () => {
   });
 });
 
-describe('the day cards with CAPACITY_PLAN', () => {
+describe('the day cards with capacity planning', () => {
   const context = { calendar: '(none)', ledger: '', today: '', updates: '' };
   const card = (id: string) => DAY_CARDS.find(entry => entry.id === id)!;
   const prompt = (id: string, capacity: boolean, planning = false) => dayCardPrompt(card(id), '2026-11-05T08:00', context, planning, false, capacity);

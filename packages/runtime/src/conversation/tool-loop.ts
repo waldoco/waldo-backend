@@ -180,7 +180,7 @@ export async function runToolLoop(input: Readonly<{
   // A machine turn's check, before each round after the first: true when the owner's own message is waiting, so the turn
   // closes as if its time were up (no more tools, one last answer) and the owner's turn takes the chain.
   yieldNow?: () => boolean;
-  // WALDO_THINKING_REPLAY: the closing round offers the same tool list as every round before it, so the request's prefix, and
+  // The closing round offers the same tool list as every round before it, so the request's prefix, and
   // the thinking bound to it, stay as sent; the newest result says no more tools, and a call made anyway is not run.
   // Not for a task worker's remote loop, whose report is itself a tool call.
   keepMenuToClose?: boolean;

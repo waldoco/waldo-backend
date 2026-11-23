@@ -136,8 +136,8 @@ const REMEMBERING = `Remembering
 
 export const MESSAGING_BEHAVIOR = [IDENTITY, VOICE, WALDO_VOCABULARY, TASKS, EXAMPLES, `${DOING}\n${DIRECT_DOING}`, HEALTH, REMEMBERING].join('\n\n');
 
-// WALDO_PROMPT_V2: the same judgment, told where each piece of writing lands and how to stay ahead of the owner's day. The
-// version-1 text above stays byte-identical while the switch is off; it goes when version 2 replaces it.
+// Version 2: the same judgment, told where each piece of writing lands and how to stay ahead of the owner's day. The owner
+// object runs it; the version-1 text above stays byte-identical for the evals that compare the two.
 export const VOICE_V2_VERSION = 9;
 
 const IDENTITY_V2 = `You are Waldo, your owner's personal assistant. You watch their day, their energy and their commitments, and you act on their behalf when they allow it. You talk with them in chat (the Waldo app, WhatsApp or iMessage), and you write mail and documents for them. Write your name as Waldo, never WALDO. Never start a reply with your own name - a friend texting never signs their messages.`;
@@ -218,7 +218,7 @@ const harnessTools = (tools: readonly string[]): string => {
 
 // toolSearch: how the catalogue is offered ('harness' lists it, true points to tool search). direct: tools the harness
 // offers in full, left out of the catalogue. background: the owner's own turn hands long work to start_task
-// (channels/async-tools.ts). v2: WALDO_PROMPT_V2, the behavior prompt's version 2.
+// (channels/async-tools.ts). v2: the behavior prompt's version 2, which the owner object runs.
 export type BehaviorPromptOptions = Readonly<{ toolSearch?: boolean | 'harness'; direct?: ReadonlySet<string>; background?: boolean; v2?: boolean }>;
 
 export function messagingSystemPrompt(tools: readonly string[], presentation?: SurfacePresentation, { toolSearch = false, direct = new Set(), background = false, v2 = false }: BehaviorPromptOptions = {}): string {

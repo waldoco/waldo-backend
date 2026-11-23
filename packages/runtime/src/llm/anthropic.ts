@@ -14,7 +14,7 @@ export type AnthropicAdapterOptions = Readonly<{
   client?: AnthropicMessagesClient;
   onResponseMetadata?: (metadata: AnthropicResponseMetadata) => void;
   firstTokenTimeoutMs?: number;
-  // WALDO_THINKING_REPLAY: replay each round's thinking blocks within a turn's tool loop.
+  // Replay each round's thinking blocks within a turn's tool loop.
   replayThinking?: boolean;
 }>;
 

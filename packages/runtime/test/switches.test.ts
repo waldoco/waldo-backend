@@ -16,9 +16,9 @@ describe('withSwitches', () => {
   });
 
   it('lets a name set on env win, reads a changed env afresh, and leaves an env without switches as it is', () => {
-    const raw: Record<string, unknown> = { WALDO_SWITCHES: { DEVICE_PLACE: '1', WALDO_OWNER_FIRST: '0' }, WALDO_OWNER_FIRST: '1', OTHER: 'x' };
+    const raw: Record<string, unknown> = { WALDO_SWITCHES: { DEVICE_PLACE: '1', OWNER_LOOKUP: '0' }, OWNER_LOOKUP: '1', OTHER: 'x' };
     const flat = withSwitches(raw) as Record<string, unknown>;
-    expect([flat.DEVICE_PLACE, flat.WALDO_OWNER_FIRST, flat.OTHER]).toEqual(['1', '1', 'x']);
+    expect([flat.DEVICE_PLACE, flat.OWNER_LOOKUP, flat.OTHER]).toEqual(['1', '1', 'x']);
     expect(withSwitches(flat)).toEqual(flat);
     raw.DEVICE_PLACE = '0';
     expect((withSwitches(raw) as Record<string, unknown>).DEVICE_PLACE).toBe('0');

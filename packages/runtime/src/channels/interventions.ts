@@ -9,7 +9,7 @@ import { nextDay, withinBudget, type DayWindow, type InterruptBook, type Interru
 import { localIso } from './reminders';
 import { triageTools } from './update-sweep';
 
-// PROACTIVE_INTERVENTIONS: beyond the day cards and the events that arrive, Waldo looks across the owner's plate on its own
+// Beyond the day cards and the events that arrive, Waldo looks across the owner's plate on its own
 // cadence and may raise something it noticed: drift, an anomaly, a change in health, work, commitments, tasks or backlog. A
 // reader worker finds what is drifting; the brain judges, in the chat role, whether any of it is worth one message or one
 // card. Code holds only the owner's limits (interruptions.ts): consent, quiet hours, the owner's day (from the Brief to the

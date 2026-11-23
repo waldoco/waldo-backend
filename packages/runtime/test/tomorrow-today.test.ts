@@ -42,7 +42,7 @@ describe('the owner\'s day around a clock change', () => {
   });
 });
 
-describe('the Close with TOMORROW_TODAY', () => {
+describe('the Close that protects tomorrow', () => {
   const context = { calendar: '(none)', ledger: '', today: '', updates: '' };
   const prompt = (id: string, capacity: boolean, tomorrow: boolean) => dayCardPrompt(card(id), '2026-11-05T21:30', context, false, false, capacity, tomorrow);
 

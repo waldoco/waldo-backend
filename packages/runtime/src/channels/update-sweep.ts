@@ -1,7 +1,7 @@
 import type { ToolName } from '@waldo/contracts';
 import { z } from 'zod';
 import type { GoogleClient } from '../connectors/google';
-import { machineResultText, UPDATE_SWEEP_ACT_AHEAD_TEXT, UPDATE_SWEEP_JOB_TEXT } from '../prompt/machine-jobs';
+import { machineResultText, UPDATE_SWEEP_ACT_AHEAD_TEXT } from '../prompt/machine-jobs';
 import { SKIP_UPDATE, triagePrompt, updateCardPrompt, updateEffectsPrompt, type TriageHold } from '../prompt/update-cards';
 import { taskBrief, type JobBook, type JobRow } from '../tasks/jobs';
 import { enqueueMachine, type MachineEnqueued, type MachineHandler, type MachineSpec } from '../tasks/machine';
@@ -42,8 +42,6 @@ export type SweepCheckDeps = Readonly<{
   // GOOGLE_REALTIME_TRIAGE: read exact deltas from the mail history and these calendars' sync tokens.
   delta?: DeltaSource;
   now: number; day: string; timezone: string; surface: string; sourceFollowups: boolean;
-  // PROACTIVE_ACT_AHEAD: the worker prepares the move (a drafted reply, a calendar change) as well as judging the changes.
-  actAhead?: boolean;
   // The day state: what each event was is kept, and two weeks ahead are read. titleDigest keys what is kept of a title.
   dayState?: Readonly<{ titleDigest: TitleDigest }>;
   gate(): SweepGate | null;
@@ -60,7 +58,7 @@ export type SweepCheckDeps = Readonly<{
   // DEVICE_CALENDAR: the changes between the owner's phone-calendar snapshots, taken once inside the transaction, judged with
   // the rest.
   phone?: Readonly<{ takeChanges(): readonly Change[] }>;
-  // BLOCK_LIFECYCLE: notes, in the same transaction, which of Waldo's blocks the owner just changed themselves.
+  // Notes, in the same transaction, which of Waldo's blocks the owner just changed themselves.
   blocks?: Readonly<{ observe(changes: readonly Change[]): void }>;
   // HELD_RAISE: a batch the gate holds waits on its record, and with the gate open this says whether Waldo may reach the owner
   // unasked now. When it may, the held batches ride in the tick's job, written even when nothing new came in.
@@ -109,7 +107,7 @@ export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepCheck
     // A held mail still pending comes back through its own row already; the worker reads each change once.
     const pendingRefs = new Set(analysis.flatMap(change => change.source_ref ? [change.source_ref] : []));
     const items = [...analysis, ...held.flatMap(row => row.changes).filter(change => !(change.source_ref && pendingRefs.has(change.source_ref)))];
-    const made = enqueueMachine(deps.jobs, updateSweepSpec(items, { key: held.length ? `${key}:raise:${recordId}` : key, recordId, surface: deps.surface, timezone: deps.timezone, now: deps.now, actAhead: deps.actAhead === true }), deps.held());
+    const made = enqueueMachine(deps.jobs, updateSweepSpec(items, { key: held.length ? `${key}:raise:${recordId}` : key, recordId, surface: deps.surface, timezone: deps.timezone, now: deps.now }), deps.held());
     if (made.code === 'held_topic') throw heldTopic;
     if (made.code === 'enqueued') { updates.take(held.map(row => row.id), recordId); deps.enqueued(made.job); }
     return { code: made.code, ...counts, job: made.job };
@@ -143,8 +141,8 @@ export const emitObserved = (subscribers: readonly ObservedSubscriber[], events:
   for (const event of events) for (const subscriber of subscribers) subscriber(event);
 };
 
-const updateSweepSpec = (analysis: readonly Change[], job: Readonly<{ key: string; recordId: number; surface: string; timezone: string; now: number; actAhead: boolean }>): MachineSpec => ({
-  job: 'update_sweep', scope: 'owner', key: job.key, surface: job.surface, text: job.actAhead ? UPDATE_SWEEP_ACT_AHEAD_TEXT : UPDATE_SWEEP_JOB_TEXT,
+const updateSweepSpec = (analysis: readonly Change[], job: Readonly<{ key: string; recordId: number; surface: string; timezone: string; now: number }>): MachineSpec => ({
+  job: 'update_sweep', scope: 'owner', key: job.key, surface: job.surface, text: UPDATE_SWEEP_ACT_AHEAD_TEXT,
   // Mail with a source is named by its thread ref, which the apply turn's own prompt already carries; the rest by the event
   // or message a reader opens it by, and a change recorded before those were kept by position.
   items: analysis.map((change, index) => ({ ref: change.source_ref ?? change.ref ?? `${change.source}-${index + 1}`, detail: `${change.source} ${change.kind}: ${changeDetail(change)}` })),
@@ -314,7 +312,7 @@ export type UpdateSweepApplyDeps = Readonly<{
     context(): Promise<Readonly<{ goals: string }>>;
     // How many approval cards were raised since `at`: what the turn offered with propose_action.
     cardsSince(at: number): number;
-    // PROACTIVE_ACT_AHEAD: the turn builds on the worker's prepared move, and writes for the surface the owner reads.
+    // The turn builds on the worker's prepared move, and writes for the surface the owner reads.
     actAhead?: Readonly<{ style(): string }>;
   }>;
 }>;

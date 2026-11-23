@@ -6,7 +6,7 @@ import type { LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
-// A second app message while the first one's turn runs, with WALDO_SECOND_MESSAGE=1: the running turn is shown the newer
+// A second app message while the first one's turn runs: the running turn is shown the newer
 // message at its next round and the model chooses fold, queue or stop_current with owner_message_heard. The model is scripted;
 // everything else is the real owner object. The trace is the model requests and the tool calls in them.
 const script = vi.hoisted(() => ({ choice: null as null | 'fold' | 'queue' | 'stop_current', release: null as null | (() => void), held: 0, requests: [] as string[], heard: [] as string[] }));
@@ -59,7 +59,7 @@ const withOwner = <T,>(name: string, work: (owner: Owner) => Promise<T>) => runI
   claimStore(state.storage.sql); ensureSchema(state.storage);
   state.storage.kv.put('do_name', name);
   const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-  const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, WALDO_SECOND_MESSAGE: '1' });
+  const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
   try { return await work(owner); } finally { script.release?.(); quiet.mockRestore(); await state.storage.deleteAlarm(); }
 });
 const send = async (owner: Owner, name: string, client: string, text: string) => {

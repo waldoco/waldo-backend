@@ -257,7 +257,7 @@ export const applyReplan = async (scheduler: Scheduler, book: DayPlanBook, timez
   return applyDayPlan(scheduler, book, timezone, now, ahead, true, enabled);
 };
 
-// WAKE_BRIEF: the owner's wearable shows a night that just ended. A Brief still to come today may go now, at an earlier time
+// The owner's wearable shows a night that just ended. A Brief still to come today may go now, at an earlier time
 // still to come, or at its planned time; it is never moved later, so an owner with no wearable, or whose health is not shared,
 // gets the Brief at its planned time. Whether this wake starts the day (a 03:00 waking, a nap) is the model's call; once
 // today's Brief has gone, a later wake has nothing to move.
@@ -330,7 +330,7 @@ export const setCardTime = async (deps: CardDeps & Readonly<{ enabled: boolean; 
 };
 
 // The owner's every-day Brief or Close time from the app, the console or chat, with the fixed receipt that says what changed.
-// wake: WAKE_BRIEF is on, so the Brief time is the latest it comes.
+// wake: a wake may bring the Brief earlier, so the Brief time is the latest it comes.
 export const ownerCardTime = async (deps: Parameters<typeof setCardTime>[0], card: (typeof APP_SCHEDULE_TIME_IDS_V1)[number], time: string, wake: boolean) => {
   const today = await setCardTime(deps, card, time, true);
   return today === 'unreadable' ? APP_SCHEDULE_RECEIPTS_V1.unavailable : appScheduleTimeReceiptV1({ card, time, today, noLaterThan: card === 'card:brief' && wake });

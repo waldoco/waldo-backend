@@ -5,7 +5,7 @@ import { budgetContext, capacityInput, NO_CALENDAR } from '../prompt/capacity';
 import { readCalendar } from './day-cards';
 import { localIso } from './reminders';
 
-// CAPACITY_PLAN: one capacity note per owner, kept in memory as a health claim so the owner's health-notes setting, the
+// One capacity note per owner, kept in memory as a health claim so the owner's health-notes setting, the
 // forget barrier and the numeric-health hold all apply to it. The key names the claim the nightly pass last wrote.
 export const CAPACITY_NOTE_KEY = 'capacity:claim_id';
 // Whether the note was written while the owner shared their health. A note that drew on the body is never shown once they stop.
@@ -177,7 +177,7 @@ export type CapacityPassDeps = Readonly<{
   health: () => Promise<string | null | 'unknown'>;
   google: () => Promise<GoogleClient | null>;
   ask: (input: string) => Promise<string>;
-  // BLOCK_LIFECYCLE: how Waldo's blocks and window offers went lately, for calibration.
+  // How Waldo's blocks and window offers went lately, for calibration.
   blocks?: () => string;
 }>;
 

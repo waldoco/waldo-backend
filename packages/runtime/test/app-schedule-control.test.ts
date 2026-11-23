@@ -26,7 +26,7 @@ type Directory = { whatsapp: 'linked' | 'not_linked' | 'down' };
 type App = (path: string, body?: unknown) => Promise<Response>;
 type World = { app: App; storage: DurableObjectStorage; directory: Directory };
 
-const fixture = async (run: (world: World) => Promise<void>, options: { revision?: number; bound?: boolean; wake?: boolean; confirmed?: boolean } = {}) => {
+const fixture = async (run: (world: World) => Promise<void>, options: { revision?: number; bound?: boolean; confirmed?: boolean } = {}) => {
   const name = `app-schedule-owner-${crypto.randomUUID()}`, stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   await runInDurableObject(stub, async (_unused, state) => {
     let hash: string | undefined, live = false;
@@ -56,7 +56,7 @@ const fixture = async (run: (world: World) => Promise<void>, options: { revision
     });
     const settings = { ...env, TELEGRAM_BOT_TOKEN: undefined, WALDO_OWNER_TELEGRAM_ID: undefined, OPENAI_API_KEY: 'synthetic-model-key', COMMON_OWNER_TASKS: '0', COMMON_BROWSER_REGISTRATION: undefined, WALDO_ENVIRONMENT: 'staging',
       WALDO_OWNER_DO_NAMESPACE: 'schedule-app-owner', WALDO_OWNER_TIMEZONE: 'UTC', SUPABASE_PROJECT_URL: DIRECTORY, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: SECRET,
-      WHATSAPP_ACCESS_TOKEN: 'synthetic-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: '100000000000001', GOOGLE_CLIENT_ID: undefined, GOOGLE_CLIENT_SECRET: undefined, WAKE_BRIEF: options.wake ? '1' : undefined };
+      WHATSAPP_ACCESS_TOKEN: 'synthetic-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: '100000000000001', GOOGLE_CLIENT_ID: undefined, GOOGLE_CLIENT_SECRET: undefined };
     // A set-up owner: the zone is confirmed, so the app's runtime arms the day's own jobs.
     state.storage.kv.put('timezone', 'UTC'); if (options.confirmed !== false) state.storage.kv.put('timezone_confirmed', true);
     const instance = new OwnerDO(state, settings as never);
@@ -100,7 +100,7 @@ it('lists the five schedules and the Brief and Close times; a build below 16 see
       { id: 'daily_brief', on: true, accepts: 'on_off', time: null, no_later_than: false }, { id: 'followups', on: true, accepts: 'on_off', time: null, no_later_than: false },
       { id: 'event_briefs', on: true, accepts: 'on_off', time: null, no_later_than: false }, { id: 'nightly', on: true, accepts: 'on_off', time: null, no_later_than: false },
       { id: 'heartbeat', on: true, accepts: 'on_off', time: null, no_later_than: false },
-      { id: 'card:brief', on: true, accepts: 'time', time: '08:00', no_later_than: false }, { id: 'card:close', on: true, accepts: 'time', time: '21:30', no_later_than: false },
+      { id: 'card:brief', on: true, accepts: 'time', time: '08:00', no_later_than: true }, { id: 'card:close', on: true, accepts: 'time', time: '21:30', no_later_than: false },
     ]);
   });
   await fixture(async ({ app, storage }) => {
@@ -152,23 +152,23 @@ it('a new Brief time moves today\'s Brief once, keeps it for every day, and a re
   await fixture(async ({ app, storage }) => {
     const day = await dayView(app);
     const saved = await set(app, 'card:brief', '07:10', day.revision, 'schedule-brief-0001');
-    expect([saved.status, receipt(saved.body), saved.body.duplicate]).toEqual([200, { state: 'recorded', message: 'Saved. Your Brief comes at 7:10am.' }, false]);
+    expect([saved.status, receipt(saved.body), saved.body.duplicate]).toEqual([200, { state: 'recorded', message: 'Saved. Your Brief comes by 7:10am, earlier when you wake before then.' }, false]);
     expect(due(storage, 'card:brief')).toBe(Date.parse('2026-11-06T07:10:00Z'));
     expect(dayPlanBook(storage.sql).pins()).toEqual({ 'card:brief': '07:10' });
     const replayed = await set(app, 'card:brief', '07:10', day.revision, 'schedule-brief-0001');
     expect([replayed.status, receipt(replayed.body), replayed.body.duplicate]).toEqual([200, receipt(saved.body), true]);
     const after = await dayView(app);
-    expect(after.data.schedule_controls!.find(row => row.id === 'card:brief')).toEqual({ id: 'card:brief', on: true, accepts: 'time', time: '07:10', no_later_than: false });
+    expect(after.data.schedule_controls!.find(row => row.id === 'card:brief')).toEqual({ id: 'card:brief', on: true, accepts: 'time', time: '07:10', no_later_than: true });
     expect(after.data.cards.find(card => card.id === 'card:brief')).toMatchObject({ time: '07:10', pin: '07:10' });
     // The old read is stale now: a change made since cannot be overwritten blind.
     expect((await set(app, 'card:close', '22:00', day.revision)).status).toBe(409);
-    expect(receipt((await set(app, 'card:brief', '07:10', after.revision)).body).message).toBe('Your Brief already comes at 7:10am.');
+    expect(receipt((await set(app, 'card:brief', '07:10', after.revision)).body).message).toBe('Your Brief already comes by 7:10am.');
   });
 });
 
 it('a time set just past now sends today\'s card now, once; the Close reads 9:30pm', async () => {
   await fixture(async ({ app, storage }) => {
-    expect(receipt((await set(app, 'card:brief', '04:30', (await dayView(app)).revision)).body).message).toBe("Saved. Your Brief comes at 4:30am. Today's is on its way now.");
+    expect(receipt((await set(app, 'card:brief', '04:30', (await dayView(app)).revision)).body).message).toBe("Saved. Your Brief comes by 4:30am, earlier when you wake before then. Today's is on its way now.");
     expect(due(storage, 'card:brief')).toBe(NOW);
     expect(receipt((await set(app, 'card:close', '21:30', (await dayView(app)).revision)).body).message).toBe('Saved. Your Close comes at 9:30pm.');
   });
@@ -185,16 +185,16 @@ it('before the owner confirms their zone, a new time is kept and the receipt say
   await fixture(async ({ app, storage }) => {
     const day = await dayView(app);
     expect(day.data.schedule_controls!.find(row => row.id === 'card:brief')?.on).toBe(true);
-    expect(receipt((await set(app, 'card:brief', '07:10', day.revision)).body).message).toBe('Saved. Your Brief comes at 7:10am. Your day cards start once you confirm your time zone.');
+    expect(receipt((await set(app, 'card:brief', '07:10', day.revision)).body).message).toBe('Saved. Your Brief comes by 7:10am, earlier when you wake before then. Your day cards start once you confirm your time zone.');
     expect(dayPlanBook(storage.sql).pins()).toEqual({ 'card:brief': '07:10' });
   }, { confirmed: false });
 });
 
-it('with WAKE_BRIEF, the Brief time is the latest it comes, in the receipt and the projection', async () => {
+it('the Brief time is the latest it comes, in the receipt and the projection', async () => {
   await fixture(async ({ app }) => {
     expect(receipt((await set(app, 'card:brief', '07:10', (await dayView(app)).revision)).body).message).toBe('Saved. Your Brief comes by 7:10am, earlier when you wake before then.');
     expect((await dayView(app)).data.schedule_controls!.find(row => row.id === 'card:brief')?.no_later_than).toBe(true);
-  }, { wake: true });
+  });
 });
 
 it('refuses an unknown schedule, a time for an on/off schedule and a malformed time with the fixed refusal, changing nothing', async () => {

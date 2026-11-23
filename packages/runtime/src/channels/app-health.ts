@@ -32,7 +32,7 @@ export type AppHealthInput = Readonly<{
   notifySamples?: (woke?: boolean, workout?: boolean) => Promise<void>;
   // WORKOUT_WAKE: on, an upload with a workout that just ended tells the owner's object so. Absent, no upload says so.
   workoutWake?: boolean;
-  // WAKE_BRIEF: how fresh a night's end must be to tell the owner's object they just woke. Absent, no upload says so.
+  // How fresh a night's end must be to tell the owner's object they just woke. Absent, no upload says so.
   wakeFreshMs?: number;
   // Tells the owner's object that their stated sleep need changed, so it recomputes their rows on it.
   notifySettings?: () => Promise<void>;

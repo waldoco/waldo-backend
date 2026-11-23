@@ -1,6 +1,6 @@
 import { healthSampleV1Schema } from '../../../contracts/src/app/health-ingest';
 
-// WAKE_BRIEF: how recently a night must have ended for an upload or a wearable sync to count as "the owner just woke".
+// How recently a night must have ended for an upload or a wearable sync to count as "the owner just woke".
 // Background delivery can lag the watch by up to two hours (ADR-0010), so the default leaves room for that; a night that
 // ended longer ago is old news. Deployment config, in minutes.
 export const wakeFreshMs = (raw: string | undefined): number => {
