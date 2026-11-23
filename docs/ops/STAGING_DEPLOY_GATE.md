@@ -14,6 +14,30 @@ reports what is running without comparing.
 Each line is `PASS`, `FAIL` or `UNAVAILABLE`, then `GATE PASS` (exit 0), `GATE FAIL` (exit 1) or
 `GATE INCOMPLETE` (exit 2: nothing failed, but a section had no credential).
 
+## Release train
+
+By owner ruling (19 November 2026), merged fixes reach staging turned on, one deploy a day, with one owner go per deploy
+rather than per switch.
+
+1. **Cut.** The train is the ready PRs into `beta-mvp` at the day's cut. A PR is ready when its full `verify` is green at
+   its head and its review is done.
+2. **Merge in a conflict-safe order.** Config, guard and docs PRs first; then PRs whose files are disjoint from each
+   other; then stacks, base first. After each merge, the next PR merges `beta-mvp` into its branch (never a force-push
+   or rebase of a pushed branch) and its `verify` runs again. A PR whose merge conflicts, or whose `verify` fails after
+   the merge, leaves this train for the next one.
+3. **New behaviour is on.** A PR adds no switch that is off in staging. A new switch is allowed only for risky authority
+   or egress, or unfinished work, and its row in [`switch-inventory.json`](switch-inventory.json) is `kept` with a reason
+   and a removal date. `guard-switches-binding` fails on a switch with no row.
+4. **Eval.** Before the deploy, run the eval gate on the train's tip when any PR in it changes prompts, routing, models,
+   delivery, memory or the agent loop.
+5. **One owner go.** The train's record lists the PRs and their SHAs, the tip SHA, the switches it turns on, the eval
+   result and the rollback Worker. The owner's go on that record covers the deploy.
+6. **Record the rollback Worker.** Before deploying, read the live staging version id (the gate's `worker-version`) and
+   write it in the record as the rollback target. After the deploy, the gate prints the rollback command for it.
+7. **Done means seen on the real path.** A fix is done when a staging trace on the path owners use shows it, not when a
+   unit test passes. For anything that changes what the model sees or may call, the closing evidence is the trace of one
+   owner chat turn and one scheduled run on the deployed SHA, named in the issue that closes.
+
 ## Is it healthy?
 
 These probes send no credential. The staging Worker is `waldo-runtime-staging.piyushfulper3210.workers.dev`
