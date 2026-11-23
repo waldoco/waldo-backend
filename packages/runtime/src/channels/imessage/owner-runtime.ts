@@ -111,7 +111,7 @@ export const iMessageTurnText = (record: Pick<IMessageInboxRecord, 'text' | 'med
   record.text || iMessageMediaNotes(record.media?.files ?? []).map(note => note.text).join('\n');
 
 /** Owner context for one running iMessage record: surfaceOwnerAdmission re-reads authority whenever its last matching read has aged out. */
-export const iMessageOwnerContext = async (host: OwnerHost, record: IMessageInboxRecord, scope: RunEffectScope, sources: Pick<OwnerContextSources, 'ownerProfile'> = {}) => {
+export const iMessageOwnerContext = async (host: OwnerHost, record: IMessageInboxRecord, scope: RunEffectScope, sources: Pick<OwnerContextSources, 'ownerProfile' | 'health'> = {}) => {
   const lookup = async () => {
     scope.admit();
     const a = await currentIMessageAuthority(host.env, record);
