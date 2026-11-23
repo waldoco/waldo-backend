@@ -131,15 +131,15 @@ describe('a Brief keeps what it learned when it read only the owner\'s own data'
   });
 });
 
-// What else changes for a Brief that starts clean: it closes an owner's loop still ahead as an owner turn would, with no card,
-// where a Brief that read someone else's text needs the owner's card for it (passed-loops.test.ts).
-describe('a clean Brief\'s other inward writes', () => {
-  it('closes a loop still ahead without a card', async () => {
+// Only what the Brief keeps follows the data. Its actions still go to the owner's card, as they did when every Brief read as
+// outside text: closing a loop still ahead waits on the card even when the Brief read only the owner's own data.
+describe('a Brief of the owner\'s own data still asks before it acts', () => {
+  it('closing a loop still ahead waits on the owner\'s card', async () => {
     const kept = await briefFires('brief-closes-ahead', 'app', false, (sql) => {
       const loop = loopBook(sql, { newId: () => '1', now: () => AT }).open({ title: 'Renew the passport', due: '2026-12-10' });
       fixture.call = { name: 'close_loop', args: { id: loop.id, outcome: 'done' } };
     });
-    expect(kept.loops).toEqual(['done']);
-    expect(fixture.results.join('\n')).not.toContain('taint_needs_approval');
+    expect(kept.loops).toEqual(['open']);
+    expect(fixture.results.join('\n')).toContain('taint_needs_approval');
   });
 });
