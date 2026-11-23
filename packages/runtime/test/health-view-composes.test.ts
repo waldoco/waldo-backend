@@ -28,10 +28,11 @@ const ROW: HealthContextRow = {
   previous: null,
 };
 const EVERY_KIND = healthSignalV1Schema.options;
-const materialFor = async (kinds: readonly string[]) => {
+const SOURCES = ['apple', 'oura', 'whoop', 'samsung', 'health_connect'] as const;
+const materialFor = async (kinds: readonly string[], sources: readonly string[] = ['apple'], row: HealthContextRow | null = ROW) => {
   const call = async (fn: string) => {
-    if (fn === 'health_context_read') return ROW;
-    if (fn === 'health_inventory_read') return { sources: [{ source: 'apple', kinds: kinds.map(signal => ({ signal, newest_at: ago(2), days: 25 })) }] };
+    if (fn === 'health_context_read') return row;
+    if (fn === 'health_inventory_read') return { sources: sources.map(source => ({ source, kinds: kinds.map(signal => ({ signal, newest_at: ago(2), days: 25 })) })) };
     throw new Error(`unexpected rpc ${fn}`);
   };
   const material = await healthContextBook(call, 'owner-every-kind', clock, undefined, undefined, { partial: true, inventory: true }).latest();
@@ -52,8 +53,8 @@ const chatAdmission = () => ownerMessageAdmission({
   allowedDoNames: ['owner-demo'], provider: 'telegram' as const, subject: '1001', text: 'How am I doing today?',
   occurrenceKey: 'chat:every-kind', occurredAt: Date.now() - 1, now: Date.now,
 });
-const compose = async (admission: Parameters<typeof createOwnerTurnContext>[0], kinds: readonly string[]) => {
-  const material = await materialFor(kinds);
+const compose = async (admission: Parameters<typeof createOwnerTurnContext>[0], kinds: readonly string[], sources?: readonly string[], row?: HealthContextRow | null) => {
+  const material = await materialFor(kinds, sources, row);
   const context = createOwnerTurnContext(admission, { health: async () => material });
   return context.composer.compose(context.invocation, { ...context.snapshot(), canary_tokens: CANARIES, replay_context_ref: null });
 };
@@ -66,12 +67,20 @@ describe('the health view composes for an owner whose phone sends every kind', (
     // The last kind of the inventory, so the whole list reached the prompt.
     expect(composed.prompt).toContain(`${HEALTH_SIGNALS[EVERY_KIND.at(-1)!].words} (`);
   });
+  // The longest inventory the schema admits: every kind, each from every source, beside a score row and with no score row at all.
+  it.each([['a score row', ROW], ['no score row', null]] as const)('from every source, with %s', async (_row, row) => {
+    for (const admit of [briefAdmission, chatAdmission]) {
+      const composed = await compose(await admit(), EVERY_KIND, SOURCES, row);
+      expect(composed.ok, JSON.stringify(composed)).toBe(true);
+      if (!composed.ok) return;
+      expect(composed.prompt).toContain(`${HEALTH_SIGNALS[EVERY_KIND.at(-1)!].words} (`);
+    }
+  });
 });
 
 // The largest view each schema admits: every optional piece present and every list at its longest. Each passes the Scribe for
 // the system prompt, so the destination's caps cover whatever the schema lets a view hold; a schema that grows past them fails
 // here, not in an owner's run.
-const SOURCES = ['apple', 'oura', 'whoop', 'samsung', 'health_connect'] as const;
 const shared = {
   authority: 'backend', provenance_refs: ['a', 'b', 'c', 'd'].map(c => `hpr_${c.repeat(32)}`), destination_eligibility: derivedHealthDestinationEligibilitySchema.options,
   baseline_state: { recovery: 'personal', form: 'personal', load: 'provisional' }, sleep_debt: { amount: 'some', trend: 'building' },

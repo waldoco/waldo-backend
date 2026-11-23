@@ -21,7 +21,8 @@ export type MemoryToolContext = ToolDispatcherContext & {
   memoryTurn?: Readonly<{ ownerId: string; conversationRef: string; current: MemoryOwnerTurn; recent: readonly MemoryOwnerTurn[] }>;
   // Set by the host for a run Waldo started (a Brief, a check-back, a reminder): no owner message to ground a note in, so a
   // note it saves is Waldo's own read, with this run as its source.
-  memoryRun?: Readonly<{ ownerId: string; conversationRef: string; runId: string }>;
+  // ownText: the run's prompt held only the owner's own text, though the run started tainted for its actions' sake.
+  memoryRun?: Readonly<{ ownerId: string; conversationRef: string; runId: string; ownText?: true }>;
   // Set by the host for a model call built from outside content: memory reads go through the same fence as its memory block.
   memoryOutside?: boolean;
   // Set by the host for the owner's own turn: the check outside the turn's model (memory/owner-words-check).
@@ -123,7 +124,9 @@ export const memoryHandlers = (deps: Dependencies): ToolHandler<any, unknown, Me
     const texts = [args.text, args.evidence_quote, ...(args.aliases ?? [])];
     if (texts.some(blocked)) return fail('This memory matches a forget barrier.');
     if (args.kind === 'health' || texts.some(text => text.includes(HEALTH_SPAN_MARKER) || numericHealthIn(text))) return fail('A run Waldo started keeps no health note: the owner\'s health is read live when it is needed, never kept in memory from here.');
-    const outside = ctx.toolArgSourceTaint === 'external';
+    // A run whose prompt was the owner's own text reads as outside only once a tool read someone else's: the loop adds that
+    // read's origin to the one it started with ('*'), so an origin past the first is a read.
+    const outside = ctx.toolArgSourceTaint === 'external' && !(run.ownText === true && (ctx.taintOrigins?.length ?? 2) <= 1);
     if (outside && store.outsideNotes !== true) return fail('This run read outside content (mail, a web page or a connected tool), so it keeps no note from it.');
     const known = store.claims().find(row => normalizeForGrounding(row.text) === normalizeForGrounding(args.text));
     if (known) return success({ id: known.id, status: 'duplicate' });
