@@ -200,7 +200,7 @@ describe('the wake prompt', () => {
   });
 });
 
-describe('the Brief lays out the day (BRIEF_DAY_PLAN)', () => {
+describe('the Brief lays out the day', () => {
   const card = (id: string) => DAY_CARDS.find(entry => entry.id === id)!;
   const context = { calendar: '{"title":"Investor call","start":"2026-11-04T15:00:00+05:30","end":"2026-11-04T15:45:00+05:30"}', ledger: '', today: '', updates: '' };
 

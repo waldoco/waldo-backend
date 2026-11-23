@@ -290,7 +290,7 @@ describe('WHOOP webhooks as hints', () => {
     expect(h.produced.count).toBe(1);
   });
 
-  it('says a night just ended, only the yes, when WAKE_BRIEF gives it a window and the hint committed a fresh night', async () => {
+  it('says a night just ended, only the yes, when it has a wake window and the hint committed a fresh night', async () => {
     const wokes: (boolean | undefined)[] = [];
     const produce = async (woke?: boolean) => { wokes.push(woke); };
     const fresh = await connected({ produce, wakeFreshMs: 3 * 3_600_000 });

@@ -1,7 +1,7 @@
 import type { CoverageFacts } from '../prompt/day-shaping';
 import type { DeviceCalendarBook } from './device-calendar';
 
-// The facts the coverage judgment reasons from (CALENDAR_COVERAGE): which accounts are connected and when each calendar was last
+// The facts the coverage judgment reasons from: which accounts are connected and when each calendar was last
 // read, whether the phone calendar is shared, and how many events each weekday held over the last two weeks. Counts and times
 // only: no title, attendee or calendar id. Whether that looks like the owner's whole day is the model's call.
 export const COVERAGE_DAYS = 14;

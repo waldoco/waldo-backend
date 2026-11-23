@@ -274,7 +274,7 @@ export type ConsoleView = Readonly<{
   ledger: string;
   proactivity: Proactivity;
   schedules: SchedulePreferences;
-  // WAKE_BRIEF: a wake may bring the Brief earlier than its time, so the owner's Brief time is the latest it comes.
+  // A wake may bring the Brief earlier than its time, so the owner's Brief time is the latest it comes.
   wakeBrief?: boolean;
   // The owner's "Just do it" choice and whether this Waldo acts on it (act-without-asking). Absent from a view that does not say.
   actWithoutAsking?: Readonly<{ on: boolean; available: boolean }>;

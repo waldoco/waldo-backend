@@ -12,7 +12,7 @@ import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 import { presenceAuthority } from './helpers/directory-presence';
 
-// The wake Brief on the real owner object (WAKE_BRIEF): the Worker or a WHOOP sync says only that a night just ended, and a
+// The wake Brief on the real owner object: the Worker or a WHOOP sync says only that a night just ended, and a
 // Brief still to come gets one model turn on its own queue: now, earlier, or keep. Never later. The night's own times never
 // reach the owner object or the model, and nothing the owner object keeps or logs is labelled a wake: the wake turn's rows read as
 // a day re-plan, so their times say nothing of when the owner woke. Google, the health plane and the model are fakes; nothing
@@ -52,7 +52,7 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 
 const CONFIG = { ...env, WALDO_OWNER_TELEGRAM_ID: undefined, WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture',
   GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', WALDO_ROUTER_HMAC_SECRET: SECRET, SUPABASE_PROJECT_URL: 'https://edge.test',
-  SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WAKE_BRIEF: '1', CALENDAR_GROUNDED_PREP: '0' };
+  SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', CALENDAR_GROUNDED_PREP: '0' };
 const reply = (time: string) => JSON.stringify({ cards: [{ id: 'card:brief', time, reason: 'model reason' }] });
 
 const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
@@ -318,14 +318,6 @@ describe('the wake Brief falls back to the planned time', () => {
       preference(state, 'daily_brief', false);
       await notice('07:05');
     });
-    expect(world.wakes).toEqual([]);
-  });
-
-  it('with WAKE_BRIEF off, a wake notice changes nothing', async () => {
-    await withOwner(async ({ due, notice }) => {
-      await notice('07:05');
-      expect(due()).toBe(at('08:00'));
-    }, { ...CONFIG, WAKE_BRIEF: '0' });
     expect(world.wakes).toEqual([]);
   });
 

@@ -1,4 +1,4 @@
-// The planning Brief (PLANNING_BRIEF), through the real owner object on the app: the Brief asks one question with answers to
+// The planning Brief, through the real owner object on the app: the Brief asks one question with answers to
 // tap, the owner's answer is an ordinary turn that puts a change on an approval card, and the calendar changes only on yes.
 // The model is scripted, so these prove the path (tools offered, cards raised, what reaches the owner and when), not the
 // judgment; whether a live model plans well is the judged eval's. Every reading and event is synthetic.
@@ -190,7 +190,7 @@ describe('the planning Brief on the app', { timeout: 30_000 }, () => {
     // The Brief is offered its proposal tools directly on either loader; the owner's own turn loads a deferred one as usual.
     model.brief = [{ calls: [{ name: 'offer_replies', arguments: { choices: ANSWERS } }] }, { text: QUESTION }];
     model.owner = [...via(harness, 'propose_calendar_change', BLOCK), { text: 'It is on a card for your yes.' }];
-    await owned(`planning-brief-ask-${loader}`, { PLANNING_BRIEF: '1', ...(harness ? { WALDO_TOOL_LOADER: 'harness' } : {}) }, async ({ state, brief, say, history, approvals, decide, hops }) => {
+    await owned(`planning-brief-ask-${loader}`, { ...(harness ? { WALDO_TOOL_LOADER: 'harness' } : {}) }, async ({ state, brief, say, history, approvals, decide, hops }) => {
       await brief();
       // The Brief planned with the planning instruction, could raise cards and offer answers, and was told no health is shared.
       expect(model.briefAsked[0]).toContain(PLANNING_BRIEF_INSTRUCTION);
@@ -230,7 +230,7 @@ describe('the planning Brief on the app', { timeout: 30_000 }, () => {
     calendar.events = [STARTUP, { id: 'ev-review', title: 'Board review', start: `${DAY}T09:00:00Z`, end: `${DAY}T12:00:00Z`, status: 'confirmed' }, { id: 'ev-sync', title: 'Team sync', start: `${DAY}T12:00:00Z`, end: `${DAY}T14:30:00Z`, status: 'confirmed' }];
     const MOVE = { action: 'move', event_id: 'ev-sync', title: 'Team sync', start: `${DAY}T17:00:00Z`, end: `${DAY}T18:00:00Z`, reason: 'Free the afternoon before Startup time' };
     model.brief = [{ calls: [{ name: 'propose_calendar_change', arguments: MOVE }] }, { text: 'The Brief\nBack to back until 4:45. I put moving Team sync to 5 on a card for your yes.' }];
-    await owned('planning-brief-full-day', { PLANNING_BRIEF: '1' }, async ({ brief, history, approvals }) => {
+    await owned('planning-brief-full-day', {}, async ({ brief, history, approvals }) => {
       await brief();
       expect(model.briefAsked[0]).toContain('Board review');
       const [card] = await approvals();
@@ -246,7 +246,7 @@ describe('the planning Brief on the app', { timeout: 30_000 }, () => {
     calendar.events = [];
     model.brief = [{ calls: [{ name: 'search_communication', arguments: { query: 'SYNTH-OTHER' } }] }, { calls: [{ name: 'offer_replies', arguments: { choices: ['Deep work', 'Admin catch-up'] } }] },
       { text: 'The Brief\nNothing on the calendar today, and I checked: nothing is owed. What should today be for?' }];
-    await owned('planning-brief-empty-day', { PLANNING_BRIEF: '1' }, async ({ state, brief, history, approvals }) => {
+    await owned('planning-brief-empty-day', {}, async ({ state, brief, history, approvals }) => {
       state.storage.sql.exec("INSERT INTO loops (id, title, status, created_at) VALUES ('loop-synth', 'SYNTH-OTHER room booking', 'open', ?)", AT - 86_400_000);
       await brief();
       expect(model.briefAsked[0]).toContain('No events.');
@@ -266,7 +266,7 @@ describe('the planning Brief on the app', { timeout: 30_000 }, () => {
     const EASE = { action: 'create', title: 'Buffer', start: `${DAY}T13:00:00Z`, end: `${DAY}T14:00:00Z`, block: 'rest', reason: 'A lighter hour before Startup time' };
     model.brief = [{ calls: [{ name: 'propose_calendar_change', arguments: EASE }, { name: 'offer_replies', arguments: { choices: ['Keep it light', 'Push through'] } }] },
       { text: 'The Brief\nA low day on your scores, so keep the morning gentle. I put a buffer before Startup time on a card for your yes. How do you want to take today?' }];
-    await owned('planning-brief-health', { PLANNING_BRIEF: '1' }, async ({ state, brief, history, approvals }) => {
+    await owned('planning-brief-health', {}, async ({ state, brief, history, approvals }) => {
       await brief();
       expect(model.briefRequests[0]).toContain('Form zone:');
       expect(model.briefRequests[0]).not.toContain(NO_HEALTH);
@@ -290,7 +290,7 @@ describe('the planning Brief on the app', { timeout: 30_000 }, () => {
     const base = { action: 'create', start: `${DAY}T13:00:00Z`, end: `${DAY}T14:00:00Z`, block: 'rest', reason: 'A lighter hour before Startup time' };
     model.brief = [{ calls: [{ name: 'propose_calendar_change', arguments: { ...base, ...fields } }] },
       { calls: [{ name: 'propose_calendar_change', arguments: { ...base, title: 'Buffer' } }] }, { text: 'The Brief\nI put a buffer before Startup time on a card for your yes.' }];
-    await owned(`planning-brief-egress-${fields.title.length}-${Object.keys(fields).length}`, { PLANNING_BRIEF: '1' }, async ({ brief, approvals, hops }) => {
+    await owned(`planning-brief-egress-${fields.title.length}-${Object.keys(fields).length}`, {}, async ({ brief, approvals, hops }) => {
       await brief();
       expect(model.briefRequests[0]).toContain(`Form zone: ${SHOWN_ZONE}.`);
       expect(model.results.some(result => result.includes('"code":"rejected"'))).toBe(true);
@@ -306,7 +306,7 @@ describe('the planning Brief on the app', { timeout: 30_000 }, () => {
   it('without health shared, still keeps the general health words off the calendar', async () => {
     const base = { action: 'create', start: `${DAY}T13:00:00Z`, end: `${DAY}T14:00:00Z`, block: 'rest', reason: 'A lighter hour' };
     model.brief = [{ calls: [{ name: 'propose_calendar_change', arguments: { ...base, title: 'Sleep in' } }] }, { text: 'The Brief\nNo change today.' }];
-    await owned('planning-brief-egress-unshared', { PLANNING_BRIEF: '1' }, async ({ brief, approvals }) => {
+    await owned('planning-brief-egress-unshared', {}, async ({ brief, approvals }) => {
       await brief();
       expect(model.results.some(result => result.includes('"code":"rejected"'))).toBe(true);
       expect(await approvals()).toEqual([]);
@@ -316,7 +316,7 @@ describe('the planning Brief on the app', { timeout: 30_000 }, () => {
   it('refuses its calendar proposal when the health context cannot be read to check it', async () => {
     health.unreadable = true;
     model.brief = [{ calls: [{ name: 'propose_calendar_change', arguments: { ...BLOCK, title: 'Deck' } }] }, { text: 'The Brief\nNo change today.' }];
-    await owned('planning-brief-egress-unreadable', { PLANNING_BRIEF: '1' }, async ({ brief, approvals }) => {
+    await owned('planning-brief-egress-unreadable', {}, async ({ brief, approvals }) => {
       await brief();
       expect(model.results.some(result => result.includes('"code":"rejected"'))).toBe(true);
       expect(await approvals()).toEqual([]);
@@ -326,7 +326,7 @@ describe('the planning Brief on the app', { timeout: 30_000 }, () => {
 
   it('without a calendar grant still plans and asks, and is offered no calendar change', async () => {
     model.brief = [{ calls: [{ name: 'offer_replies', arguments: { choices: ['Deck', 'Something else'] } }] }, { text: 'The Brief\nGoogle is not connected, so I cannot see your calendar. What matters most today?' }];
-    await owned('planning-brief-no-grant', { PLANNING_BRIEF: '1' }, async ({ brief, history }) => {
+    await owned('planning-brief-no-grant', {}, async ({ brief, history }) => {
       await brief();
       expect(model.briefAsked[0]).toContain('Google is not connected');
       expect(model.briefTools[0]).toContain('offer_replies');
@@ -335,22 +335,6 @@ describe('the planning Brief on the app', { timeout: 30_000 }, () => {
     }, false);
   });
 
-  it('with the switch off is the recap Brief: its instruction, no answers to tap and no calendar change offered', async () => {
-    for (const [name, settings] of [['planning-brief-off', { PLANNING_BRIEF: '0' }], ['planning-brief-unset', {}]] as const) {
-      model.brief = [{ calls: [{ name: 'offer_replies', arguments: { choices: ['Deck'] } }] }, { text: 'The Brief\nOne event today: Startup time at 3.' }];
-      model.briefTools = []; model.briefAsked = []; model.results = [];
-      await owned(name, settings, async ({ brief, history, say }) => {
-        await brief();
-        expect(model.briefAsked[0]).toContain(DAY_CARDS[0]!.instruction);
-        expect(model.briefAsked[0]).not.toContain(PLANNING_BRIEF_INSTRUCTION);
-        expect(model.briefTools[0]).not.toContain('offer_replies');
-        expect(model.briefTools[0]).not.toContain('propose_calendar_change');
-        expect(briefRow(await history()).parts.map(part => part.type)).toEqual(['text']);
-        await say('thanks');
-        expect(model.ownerTools.at(-1)).not.toContain('offer_replies');
-      });
-    }
-  });
 });
 
 // PROACTIVE_GATE: the Brief's answers to tap are the day's one question in flight, until the owner says anything.
@@ -358,7 +342,7 @@ describe('the Brief\'s question under the owner\'s limits', { timeout: 30_000 },
   it('opens the question when it offers answers, and the owner\'s next message, on the real index, closes it', async () => {
     model.brief = [{ calls: [{ name: 'offer_replies', arguments: { choices: ANSWERS } }] }, { text: 'The Brief\nYour morning is open. What do you want done?' }];
     model.owner = [{ text: 'On it.' }];
-    await owned('planning-brief-question-gate', { PLANNING_BRIEF: '1', PROACTIVE_GATE: '1' }, async ({ state, brief, say }) => {
+    await owned('planning-brief-question-gate', { PROACTIVE_GATE: '1' }, async ({ state, brief, say }) => {
       const book = interruptBook(state.storage.kv, { now: () => Date.now(), timezone: () => 'UTC', ownerSpokeSince: at => ownerSpokeSince(state.storage.sql, at) });
       await brief();
       expect(book.question()).toMatchObject({ ref: `card:brief:${DAY}` });
@@ -368,40 +352,32 @@ describe('the Brief\'s question under the owner\'s limits', { timeout: 30_000 },
     });
   });
 
-  it('with the switch off the Brief opens no question', async () => {
+  it('without the owner\'s limits the Brief opens no question', async () => {
     model.brief = [{ calls: [{ name: 'offer_replies', arguments: { choices: ANSWERS } }] }, { text: 'The Brief\nYour morning is open. What do you want done?' }];
-    await owned('planning-brief-question-off', { PLANNING_BRIEF: '1', PROACTIVE_GATE: '0' }, async ({ state, brief }) => {
+    await owned('planning-brief-question-off', { PROACTIVE_GATE: '0' }, async ({ state, brief }) => {
       await brief();
       expect(state.storage.kv.get('proactive_question_v1')).toBeUndefined();
     });
   });
 });
 
-// PROACTIVE_ACT_AHEAD: the day shape the owner approved. The Check-in offers its one decision on a card, like the planning Brief,
+// The day shape the owner approved. The Check-in offers its one decision on a card, like the planning Brief,
 // in the chat role; whether the plan slipped, and so whether it says anything, is the model's.
-describe('the day shape (PROACTIVE_ACT_AHEAD)', { timeout: 30_000 }, () => {
-  it('the Check-in may put its decision on a card, in the chat role; with the switch off it reads and writes only', async () => {
+describe('the day shape', { timeout: 30_000 }, () => {
+  it('the Check-in may put its decision on a card, in the chat role', async () => {
     const MOVE = { action: 'move', event_id: 'ev-startup', title: 'Startup time', start: `${DAY}T17:00:00Z`, end: `${DAY}T18:45:00Z`, reason: 'The deck block slipped; this gives it the afternoon' };
     model.brief = [{ calls: [{ name: 'propose_calendar_change', arguments: MOVE }] }, { text: 'Check-in\nThe deck block slipped. Moving Startup time to 5 gives it back; it is on a card.' }];
-    await owned('day-shape-midday-on', { PROACTIVE_ACT_AHEAD: '1' }, async ({ card, approvals }) => {
+    await owned('day-shape-midday-on', {}, async ({ card, approvals }) => {
       await card('card:midday');
       expect(model.briefTools[0]).toContain('propose_calendar_change');
       expect(await approvals()).toMatchObject([{ kind: 'calendar_change', state: 'open' }]);
       expect(calendar.moved).toBe(0);
     });
-    const on = model.briefModels[0];
-    model.briefTools = []; model.briefModels = []; model.brief = [{ text: 'SKIP' }];
-    await owned('day-shape-midday-off', { PROACTIVE_ACT_AHEAD: '0' }, async ({ card, approvals }) => {
-      await card('card:midday');
-      expect(model.briefTools[0]).not.toContain('propose_calendar_change');
-      expect(await approvals()).toEqual([]);
-    });
-    expect(model.briefModels[0]).not.toBe(on);
   });
 
   it('a Check-in that finds the plan holding sends nothing', async () => {
     model.brief = [{ text: 'SKIP' }];
-    await owned('day-shape-midday-holding', { PROACTIVE_ACT_AHEAD: '1' }, async ({ card, history, approvals }) => {
+    await owned('day-shape-midday-holding', {}, async ({ card, history, approvals }) => {
       await card('card:midday');
       expect((await history()).messages).toEqual([]);
       expect(await approvals()).toEqual([]);
@@ -409,9 +385,9 @@ describe('the day shape (PROACTIVE_ACT_AHEAD)', { timeout: 30_000 }, () => {
   });
 });
 
-// PROACTIVE_INTERVENTIONS: Waldo's own look is a patrol entry beside the health trigger's. Its tick starts one reader job when
+// Waldo's own look is a patrol entry beside the health trigger's. Its tick starts one reader job when
 // something could still reach the owner, and none when the owner said no to unasked messages.
-describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () => {
+describe('Waldo\'s own look', { timeout: 30_000 }, () => {
   const tick = async (state: DurableObjectState, owner: Steps['owner']) => {
     state.storage.sql.exec('DELETE FROM schedule');
     await new Scheduler(state.storage.sql, state.storage, productionDeps())
@@ -423,7 +399,7 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
   const looks = (state: DurableObjectState) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM task_jobs WHERE origin = 'machine:intervention'").one().n;
 
   it('the tick starts one reader job; the health trigger keeps its own patrol entry', async () => {
-    await owned('intervention-tick-on', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner, hops }) => {
+    await owned('intervention-tick-on', { PROACTIVE_GATE: '1' }, async ({ state, owner, hops }) => {
       await tick(state, owner);
       expect(looks(state)).toBe(1);
       expect(hops()).toContain('intervention_review');
@@ -431,20 +407,20 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
     });
   });
 
-  it('with the owner\'s no to unasked messages, or the switch off, the tick starts nothing', async () => {
-    await owned('intervention-tick-declined', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
+  it('with the owner\'s no to unasked messages, or without their limits, the tick starts nothing', async () => {
+    await owned('intervention-tick-declined', { PROACTIVE_GATE: '1' }, async ({ state, owner }) => {
       loopBook(state.storage.sql, { newId: () => 'l', now: () => AT }).setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', followups: false });
       await tick(state, owner);
       expect(looks(state)).toBe(0);
     });
-    await owned('intervention-tick-off', { PROACTIVE_INTERVENTIONS: '0' }, async ({ state, owner }) => {
+    await owned('intervention-tick-off', { PROACTIVE_GATE: '0' }, async ({ state, owner }) => {
       await tick(state, owner);
       expect(looks(state)).toBe(0);
     });
   });
 
   it('each tick arms the next look inside the owner\'s day: on its cadence by day, at the next Brief after the Close', async () => {
-    await owned('intervention-next-look', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
+    await owned('intervention-next-look', { PROACTIVE_GATE: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
       const armed = () => state.storage.sql.exec<{ due_at: number; recurrence_json: string | null }>('SELECT due_at, recurrence_json FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray();
       await tick(state, owner);
       expect(armed()).toEqual([{ due_at: AT + 120 * 60_000, recurrence_json: null }]);
@@ -459,12 +435,12 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
     });
   });
 
-  it('a phone that moved brings the look to now, and the look it starts knows why; off, or for a forged notice, nothing moves', async () => {
+  it('a phone that moved brings the look to now, and the look it starts knows why; without the owner\'s limits, or for a forged notice, nothing moves', async () => {
     const moved = async (owner: Steps['owner'], name: string, sig?: string) => owner.fetch(new Request('https://telegram-owner/app/v1/internal/place-moved', { method: 'POST', body: '{}',
       headers: { 'content-type': 'application/json', 'x-waldo-do-name': name, 'x-waldo-moved-sig': sig ?? await routerSignature(directory.WALDO_ROUTER_HMAC_SECRET, 0, `placemoved.${name}`) } }));
     const armed = (state: DurableObjectState) => state.storage.sql.exec<{ due_at: number; payload_json: string }>('SELECT due_at, payload_json FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray()
       .map(row => ({ due_at: row.due_at, moved: (JSON.parse(row.payload_json) as Record<string, string>).cause_id ?? null }));
-    await owned('intervention-moved', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
+    await owned('intervention-moved', { PROACTIVE_GATE: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
       expect(armed(state).map(row => row.moved)).toEqual([null]);
       expect((await moved(owner, 'intervention-moved', 'forged')).status).toBe(403);
       expect(armed(state).map(row => row.moved)).toEqual([null]);
@@ -490,7 +466,7 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
         expect(armed(state)).toEqual([{ due_at: AT + 121 * 60_000, moved: 'place_moved' }]);
       } finally { Date.now = later; }
     });
-    await owned('intervention-moved-same-hour', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
+    await owned('intervention-moved-same-hour', { PROACTIVE_GATE: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
       state.storage.kv.put('owner_alarm_last_v1', 1);
       state.storage.sql.exec('DELETE FROM schedule');
       await new Scheduler(state.storage.sql, state.storage, productionDeps())
@@ -504,7 +480,7 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
       const hour = Date.parse(new Date(AT).toISOString().slice(0, 13) + ':00:00Z') + 3_600_000;
       expect(armed(state)).toEqual([{ due_at: hour, moved: 'place_moved' }]);
     });
-    await owned('intervention-moved-off', { PROACTIVE_INTERVENTIONS: '0' }, async ({ state, owner }) => {
+    await owned('intervention-moved-off', { PROACTIVE_GATE: '0' }, async ({ state, owner }) => {
       expect((await moved(owner, 'intervention-moved-off')).status).toBe(200);
       expect(armed(state)).toEqual([]);
     });
@@ -515,7 +491,7 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
       headers: { 'content-type': 'application/json', 'x-waldo-do-name': name, 'x-waldo-arrived-sig': sig ?? await routerSignature(directory.WALDO_ROUTER_HMAC_SECRET, 0, `placearrived.${place}.${name}`) } }));
     const armed = (state: DurableObjectState) => state.storage.sql.exec<{ due_at: number; payload_json: string }>('SELECT due_at, payload_json FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray()
       .map(row => ({ due_at: row.due_at, cause: (JSON.parse(row.payload_json) as Record<string, string>).cause_id ?? null }));
-    await owned('intervention-arrived', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120', ARRIVAL_LOOK: '1' }, async ({ state, owner }) => {
+    await owned('intervention-arrived', { PROACTIVE_GATE: '1', PROACTIVE_REVIEW_EVERY_MIN: '120', ARRIVAL_LOOK: '1' }, async ({ state, owner }) => {
       expect((await arrived(owner, 'intervention-arrived', 'gym', 'forged')).status).toBe(403);
       expect((await arrived(owner, 'intervention-arrived', 'office')).status).toBe(403);
       expect(armed(state).map(row => row.cause)).toEqual([null]);
@@ -528,14 +504,14 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
       expect(briefs.map(row => (JSON.parse(row.brief_json) as { machine: { refs: string[] } }).machine.refs)).toEqual([['now', 'arrived_gym']]);
       expect(armed(state)).toEqual([{ due_at: AT + 120 * 60_000, cause: null }]);
     });
-    await owned('intervention-arrived-off', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
+    await owned('intervention-arrived-off', { PROACTIVE_GATE: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
       expect((await arrived(owner, 'intervention-arrived-off', 'home')).status).toBe(200);
       expect(armed(state).map(row => row.cause)).toEqual([null]);
     });
   });
 
   it('turning the heartbeat off drops the look, and turning it back on arms it again at once', async () => {
-    await owned('intervention-heartbeat-toggle', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
+    await owned('intervention-heartbeat-toggle', { PROACTIVE_GATE: '1' }, async ({ state, owner }) => {
       const armed = () => state.storage.sql.exec('SELECT 1 FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray().length;
       const set = (value: 'on' | 'off') => (owner.setup('app') as unknown as { act(action: Readonly<{ action: 'schedule.set'; id: string; value: string }>): Promise<unknown> }).act({ action: 'schedule.set', id: 'heartbeat', value });
       expect(armed()).toBe(1);
@@ -547,7 +523,7 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
   });
 
   it('with the owner\'s heartbeat off, the look ends at its tick and is not armed again', async () => {
-    await owned('intervention-heartbeat-off', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
+    await owned('intervention-heartbeat-off', { PROACTIVE_GATE: '1' }, async ({ state, owner }) => {
       state.storage.sql.exec('DELETE FROM schedule');
       await armInterventionReview(new Scheduler(state.storage.sql, state.storage, productionDeps()), AT - 1000);
       const sql = state.storage.sql;

@@ -10,9 +10,7 @@ import type { ToolDispatcherContext } from '../tools/dispatcher';
 // it, and it closes without a turn of its own), queue (it keeps its own turn after this one) or stop_current (it replaces
 // this task: it closes like a fold, and this turn drops what it was doing and its one reply answers the newer message, with no
 // line about the stop). A message the model never answers stays queued, so nothing is lost and nothing is folded without the
-// model saying so. Off unless WALDO_SECOND_MESSAGE=1.
-
-export const secondMessageEnabled = (env: Readonly<{ WALDO_SECOND_MESSAGE?: string }>): boolean => env.WALDO_SECOND_MESSAGE === '1';
+// model saying so.
 
 export type WaitingMessage = Readonly<{ id: string; text: string; at: number }>;
 // The running owner turn's chat on its surface: the owner's newer messages there still waiting to run, oldest first, and the

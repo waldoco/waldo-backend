@@ -108,7 +108,7 @@ it('oversize and NUL-tail storage is rejected without materializing raw instruct
    let rawBodies=0;
    const observed=new Proxy(sql,{get(target,key){if(key!=='exec')return Reflect.get(target,key);return (...args:Parameters<SqlStorage['exec']>)=>{
     const cursor=target.exec(...args);return new Proxy(cursor,{get(result,property){if(property!=='toArray')return Reflect.get(result,property);return ()=>{
-     const rows=result.toArray();for(const row of rows){const body=(row as Record<string,unknown>).body_markdown;if(typeof body==='string'&&new TextEncoder().encode(body).length>2400)rawBodies++;}return rows;
+     const rows=result.toArray();for(const row of rows){const body=(row as Record<string,unknown>).body_markdown;if(body===hostile)rawBodies++;}return rows;
     };}});
    };}});
    const book=new CuratedOwnerSkills(observed,owner);

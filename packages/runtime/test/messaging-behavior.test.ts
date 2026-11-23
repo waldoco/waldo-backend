@@ -236,7 +236,7 @@ describe('the rules that pulled against each other are gone', () => {
   });
 });
 
-// Version 2 (WALDO_PROMPT_V2) is judged by the nightly scenarios its rules map to (evals/nightly/rules.ts), not by its words;
+// Version 2 is judged by the nightly scenarios its rules map to (evals/nightly/rules.ts), not by its words;
 // these hold only what a prompt must be on every surface: unchanged by the sanitiser, no rule said twice, inside its budget.
 describe('messagingSystemPrompt, version 2', () => {
   const v2Prompts = (): readonly (readonly [string, string])[] => [

@@ -57,7 +57,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown>; desk: { approvals(now: number): Promise<readonly AppApprovalV1[]> } }; alarm(): Promise<void>; serial(work: () => Promise<void>): Promise<void> }>;
 type Brief = Readonly<{ approvals: readonly AppApprovalV1[]; rows: readonly Record<string, SqlStorageValue>[]; dayWhy: ReturnType<typeof dayCardsWhy>; readAt: number; offered: string }>;
 
-const brief = async (name: string, trail: '1' | '0', why: (claim: number) => unknown[]): Promise<Brief> => {
+const brief = async (name: string, why: (claim: number) => unknown[]): Promise<Brief> => {
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   return runInDurableObject(stub, async (_instance, state) => {
     const originalNow = Date.now;
@@ -71,7 +71,7 @@ const brief = async (name: string, trail: '1' | '0', why: (claim: number) => unk
       claimStore(state.storage.sql).add({ kind: 'goal', text: 'Run the half marathon in December', source: 'stated', evidence: '"I want to run the half"', origin: 'owner', source_ref: 'owner, app-1' }, '2026-10-20T08:00:00Z');
       const claim = state.storage.sql.exec<{ id: number }>('SELECT id FROM claims ORDER BY id DESC LIMIT 1').one().id;
       fixture.why = why(claim);
-      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, WHY_TRAIL: trail }) as unknown as Owner;
+      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined }) as unknown as Owner;
       await owner.setup('app').ready;
       await owner.serial(async () => undefined);
       state.storage.sql.exec('DELETE FROM schedule');
@@ -100,7 +100,7 @@ const CLAIMED = (claim: number) => [
 
 describe('the Brief proposes with the steps behind it', () => {
   it('keeps the steps its reads stand behind, on the card and on the Brief, and drops the one nothing read', async () => {
-    const { approvals, rows, dayWhy, readAt, offered } = await brief('why-brief', '1', CLAIMED);
+    const { approvals, rows, dayWhy, readAt, offered } = await brief('why-brief', CLAIMED);
     expect(offered).toContain('"why"');
     expect(rows).toHaveLength(1);
     const [card] = approvals;
@@ -120,7 +120,7 @@ describe('the Brief proposes with the steps behind it', () => {
   });
 
   it('a card whose every step stands on nothing carries no trail, and neither does the Brief', async () => {
-    const { approvals, dayWhy } = await brief('why-brief-none', '1', () => [
+    const { approvals, dayWhy } = await brief('why-brief-none', () => [
       { verb: 'checked', label: 'Found the 3pm clash', source: { kind: 'calendar_event', ref: 'evt-3pm' } },
     ]);
     expect(approvals).toHaveLength(1);
@@ -129,20 +129,12 @@ describe('the Brief proposes with the steps behind it', () => {
   });
 
   it('a step whose line carries a health reading is dropped, and never stored', async () => {
-    const { approvals, rows } = await brief('why-brief-health', '1', claim => [
+    const { approvals, rows } = await brief('why-brief-health', claim => [
       { verb: 'read', label: 'Read your goal for the half', source: { kind: 'memory_node', ref: String(claim) } },
       { verb: 'read', label: 'HRV 38 ms, so an easy run', source: { kind: 'memory_node', ref: String(claim) } },
       { verb: 'read', label: 'Recovery at 42, so the run moves', source: { kind: 'memory_node', ref: String(claim) } },
     ]);
     expect(JSON.stringify(rows)).not.toMatch(/38 ms|at 42/);
     expect(approvals[0]!.why?.map(step => step.label)).toEqual(['Read your goal for the half']);
-  });
-
-  it('with the switch off the tool takes no steps: its definition is as before and a call carrying them proposes nothing', async () => {
-    const { approvals, rows, dayWhy, offered } = await brief('why-brief-off', '0', CLAIMED);
-    expect(offered).not.toContain('"why"');
-    expect(rows).toHaveLength(0);
-    expect(approvals).toHaveLength(0);
-    expect(dayWhy.size).toBe(0);
   });
 });

@@ -11,7 +11,7 @@ import type { Scheduler } from '../src/scheduler/multiplexer';
 import { jobBook } from '../src/tasks/jobs';
 import { enqueueMachine } from '../src/tasks/machine';
 
-// PROACTIVE_INTERVENTIONS: Waldo's own look across the owner's plate. The model judges what is worth raising; code holds only
+// Waldo's own look across the owner's plate. The model judges what is worth raising; code holds only
 // the owner's limits. A fake turn stands in for the model, and these check what was delivered, held and charged, never words.
 const NOW = Date.parse('2026-11-05T10:00:00Z');
 const LIMITS: InterruptLimits = { perDay: 1, urgentPerDay: 1, gapMs: 60 * 60_000 };

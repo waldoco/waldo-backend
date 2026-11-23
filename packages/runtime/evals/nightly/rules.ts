@@ -92,7 +92,7 @@ export const RULE_COVERAGE: readonly RuleCoverage[] = [
 const NARRATION = ['nr04-plan-after-all-of-it', 'nr05-mail-answer-not-a-sample', 'nr06-honest-unknown-that-matters'];
 const TONE = ['d1-brief-good-day-one-line', 'tn01-go-friday-loose-saturday', 'tn02-protect-holiday', 'tn03-oxygen-quiet-then-loop'];
 
-// Version 2 of the behavior prompt (WALDO_PROMPT_V2) keeps the version-1 rules that still read the same and carries the voice
+// Version 2 of the behavior prompt keeps the version-1 rules that still read the same and carries the voice
 // guide's character, tone, words and health gate in its own lines; each new rule names the scenarios that exercise it, or
 // the hard line it holds.
 const V2_DROPPED = new Set(['Every message passes six tests', 'When one source fails and others worked', 'Stop only after several genuinely different attempts', 'Short, with someone there', 'Ask almost nothing', 'You are Alfred in a modern register', 'Plain words and contractions', 'Wit is dry and once',

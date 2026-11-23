@@ -68,7 +68,7 @@ describe('a committed ingest asks the owner\'s object to recompute', () => {
     expect(await verifiedHealthSamples(toOwner[0]!, SECRET, name => name === 'owner-1')).toEqual({ cause: 'readings', woke: false, workout: false });
   });
 
-  it('says a night just ended with WAKE_BRIEF on, and nothing more; off, or for an old night, the notice is as before', async () => {
+  it('says a night just ended, and nothing more; for an old night the notice is as before', async () => {
     ownerAnswer = () => Response.json({ ok: true });
     const ended = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000).toISOString();
     const night = (minutesAgo: number) => ({ ...batch, samples: [{ sample_id: 'sleep-1', revision: 1_760_000_000, signal: 'sleep_duration', unit: 'minutes', value: 420,
@@ -80,12 +80,10 @@ describe('a committed ingest asks the owner\'s object to recompute', () => {
       await Promise.all(d.work);
       return toOwner[0]!.clone().json();
     };
-    expect(await sent(night(20), { WAKE_BRIEF: '1' })).toEqual({ woke: true });
-    expect(await sent(night(20), { WAKE_BRIEF: '0' })).toEqual({});
-    expect(await sent(night(20), {})).toEqual({});
-    expect(await sent(night(200), { WAKE_BRIEF: '1' })).toEqual({});
-    expect(await sent(night(200), { WAKE_BRIEF: '1', WAKE_BRIEF_FRESH_MIN: '240' })).toEqual({ woke: true });
-    expect(await sent(batch, { WAKE_BRIEF: '1' })).toEqual({});
+    expect(await sent(night(20), {})).toEqual({ woke: true });
+    expect(await sent(night(200), {})).toEqual({});
+    expect(await sent(night(200), { WAKE_BRIEF_FRESH_MIN: '240' })).toEqual({ woke: true });
+    expect(await sent(batch, {})).toEqual({});
   });
 
   it('asks nothing for a replayed, empty or refused batch', async () => {

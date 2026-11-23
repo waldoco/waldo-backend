@@ -1,4 +1,4 @@
-// The planning Brief (PLANNING_BRIEF) for an owner whose only surface is WhatsApp, through the real owner object, outbox and
+// The planning Brief for an owner whose only surface is WhatsApp, through the real owner object, outbox and
 // window layer. WhatsApp shows no answers to tap here, so the Brief is not offered them and asks in words; a change it raises
 // goes out as WhatsApp's own approval card, and the calendar changes only when the owner approves it. The model is scripted.
 import { env } from 'cloudflare:workers';
@@ -85,7 +85,7 @@ describe('the planning Brief on WhatsApp', { timeout: 30_000 }, () => {
       const plans = dayPlanBook(state.storage.sql);
       for (const card of ['card:midday', 'card:close'] as const) plans.save(today(), { card, time: null, reason: 'planned by the fixture' });
       plans.save(today(), { card: 'card:brief', time: '00:00', reason: 'planned by the fixture' });
-      const owner = new OwnerDO(state, { ...env, ...directory, ...whatsapp, ...google, PLANNING_BRIEF: '1', TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture',
+      const owner = new OwnerDO(state, { ...env, ...directory, ...whatsapp, ...google, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture',
         WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined } as never);
       const passes = async (count: number) => { for (let pass = 0; pass < count; pass++) { await owner.alarm(); await state.storage.deleteAlarm(); await new Promise(resolve => setTimeout(resolve, 300)); } };
       try {

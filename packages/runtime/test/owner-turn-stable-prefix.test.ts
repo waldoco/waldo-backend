@@ -27,7 +27,7 @@ const presentation = (surface: string): SurfacePresentation => ({ surface, deliv
 
 // The provider caches a prompt by its exact leading bytes, so a system prompt that moves bills every later call in full.
 // Everything current for one message (clock, memory, open loops, health, connections) rides that message instead.
-// Version 2 of the behavior prompt (WALDO_PROMPT_V2) holds to the same: its text is as stable as version 1's.
+// Version 2 of the behavior prompt holds to the same: its text is as stable as version 1's.
 describe.each([
   ['telegram', undefined, false],
   ['app', presentation('app'), false],

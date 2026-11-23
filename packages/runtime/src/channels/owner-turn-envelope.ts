@@ -61,9 +61,9 @@ export type OwnerResponder = Readonly<{
   // `turnContext` reaches the model with `said` on this turn only; it is never stored with the conversation.
   // `ownerModel` runs the job on the model the owner's own turn uses (still clamped past the spend ceiling): true for a job
   // that answers the owner's own message late. 'decides' is a job that decides something for the owner (meeting prep, a
-  // check-back, a mail follow-up, a standing order): on the chat model with WALDO_STRONG_ROLES, else the auxiliary one.
+  // check-back, a mail follow-up, a standing order): on the chat model with strongRoles, else the auxiliary one.
   // 'plans' is a planning run (a day card's plan, the intervention look, triage): on the chat model, at PLANNING_EFFORT
-  // with WALDO_STRONG_ROLES.
+  // with strongRoles.
   // `attachments` reach the model with `said` on this turn only, as an owner turn's files do; they are never stored.
   // `waldoFirst` marks a run Waldo starts on a schedule (a day card, a check-back, a sweep, an intervention), never one that
   // answers the owner: with WALDO_LEAN_SCHEDULED it reads the lean scheduled view instead of the chat replay.
@@ -73,7 +73,7 @@ export type OwnerResponder = Readonly<{
   consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>, policy?: Readonly<{ health: boolean }>): Promise<Readonly<{ done: boolean; detail: string }>>;
   // The model's reply over the day's calendar and mail changes (outside content), applied by the caller. Absent on fakes.
   sourceClaims?(trace: string, updates: string, policy?: Readonly<{ health: boolean; people?: boolean }>): Promise<string>;
-  // CAPACITY_PLAN: the model's raw answer keeping the owner's capacity note, applied by the caller. Absent on fakes.
+  // The model's raw answer keeping the owner's capacity note, applied by the caller. Absent on fakes.
   capacity?(trace: string, input: string): Promise<string>;
   migrate(trace: string, input: string, policy?: Readonly<{ health: boolean }>): Promise<string>;
   // With a gate, promote makes no model call when the memory it would read has the digest `last`, and hands the digest of

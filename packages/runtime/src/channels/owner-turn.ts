@@ -276,7 +276,7 @@ export const createOwnerResponder = (
   const promptV2 = access.promptV2 === true;
   const circuitBreaker = access.health ?? new InMemoryCircuitBreaker();
   const policy = ownerRoutePolicy(model, model, access);
-  // WALDO_STRONG_ROLES: every run that writes the owner's memory (flush, nightly, sources, migration, welcome, constellation)
+  // strongRoles: every run that writes the owner's memory (flush, nightly, sources, migration, welcome, constellation)
   // runs on the chat model, and the day plan does too, at PLANNING_EFFORT. A background job's caller says which of its runs
   // decide or plan (prompt's ownerModel). Thread titles, progress notes, reactions and compaction stay on the auxiliary
   // model: they word or summarise, and decide nothing the owner's memory or day keeps.

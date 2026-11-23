@@ -428,7 +428,7 @@ describe('propose_calendar_plan', () => {
   });
 });
 
-describe('the planning Brief offers the plan card only with CALENDAR_PLAN on', () => {
+describe('the planning Brief offers the plan card only with planCard', () => {
   const brief = DAY_CARDS.find(card => card.id === 'card:brief')!;
   const context = { calendar: 'No events.', ledger: '', today: '', updates: '' };
   it('adds the plan card rule to the planning Brief, and off leaves every prompt as it was', () => {

@@ -3,7 +3,7 @@ import { TOOL_REPLAY_CLASS } from '../src/hooks/tool-replay-class';
 import { BRIEF_BODY_TOOLS, briefBodyAfter, briefBodyBefore, briefBodyPrompt, briefBodyRevision, recoveryScored } from '../src/channels/brief-revision';
 import { HEALTH_READ_TOOLS } from '../src/tools/loaded';
 
-// BRIEF_BODY_REVISION: the first Recovery scored for today, after the Daily Brief reached the owner, has the Brief looked at
+// The first Recovery scored for today, after the Daily Brief reached the owner, has the Brief looked at
 // once more. Code decides when that turn runs; the turn decides whether the Brief reads differently. Every value is synthetic.
 const DAY = '2030-03-04';
 const before = (over: Partial<Parameters<typeof briefBodyBefore>[0]> = {}) =>

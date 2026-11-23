@@ -56,7 +56,7 @@ export const OWNER_MODELS: Readonly<Record<ModelProvider, Readonly<{ chat: Model
 export const reasoningEffortSchema = z.enum(['low', 'medium', 'high']);
 export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>;
 // The effort a planning run (the day plan, a day card's planning turn, the intervention look, triage) asks of the chat
-// model under WALDO_STRONG_ROLES, in place of the model's own. Anthropic's effort guide puts intelligence-sensitive work at
+// model, in place of the model's own. Anthropic's effort guide puts intelligence-sensitive work at
 // high or above; each run keeps one effort for all its rounds, since an effort change re-bills the request's cache.
 export const PLANNING_EFFORT: ReasoningEffort = 'high';
 

@@ -41,8 +41,8 @@ export type Step =
   // The owner's derived health moves zone and the health trigger runs, with one structured model call.
   | Readonly<{ health_change: true }>
   // One of the day's cards runs now, as the owner object writes it: the production prompt over the world's calendar.
-  // capacity: CAPACITY_PLAN's note, handed to the card as the job's context, as the owner object does.
-  // tomorrow: TOMORROW_TODAY's Close, offered its card tools as the owner object offers them.
+  // capacity: the capacity note, handed to the card as the job's context, as the owner object does.
+  // tomorrow: the Close that protects tomorrow's best hours, offered its card tools as the owner object offers them.
   // budget: CAPACITY_BUDGET's planning Brief, which also reads the rest of the week and is offered its card tools.
   | Readonly<{ card: CardId; capacity?: string; tomorrow?: true; budget?: true }>
   | Readonly<{ mail_arrives: SeedMail }>

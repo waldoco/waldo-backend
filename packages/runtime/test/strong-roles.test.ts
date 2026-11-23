@@ -8,10 +8,10 @@ import { durableConversationStore } from '../src/channels/conversation-store';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
 
-// WALDO_STRONG_ROLES. Before: the nightly memory writer, the day plan and every background job a caller did not mark run on
-// the auxiliary model (Haiku on Claude), and no run asks for more effort than its model's own. After: a run that writes
+// Strong roles. Without them the nightly memory writer, the day plan and every background job a caller did not mark run on
+// the auxiliary model (Haiku on Claude), and no run asks for more effort than its model's own. With them a run that writes
 // memory or decides something runs on the chat model (Sonnet), and a planning run asks the chat model for PLANNING_EFFORT.
-// With the switch off nothing moves.
+// The owner object always asks for them.
 const NO_OPS = '{"add":[],"corrections":[],"retire":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}';
 type Seen = Readonly<{ kind: string; model: ModelName; effort?: string }>;
 

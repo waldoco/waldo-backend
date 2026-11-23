@@ -441,7 +441,7 @@ const loggedCalendarRead = <T>(operation: QueryCalendarArgs['operation'], result
 };
 
 // ownerName: the name the owner gave, whose first word signs every email Waldo writes for them.
-// CALENDAR_PLAN: the day's new blocks on one card. It only proposes; the owner's tap adds every block or none.
+// The day's new blocks on one card. It only proposes; the owner's tap adds every block or none.
 export const calendarPlanHandler = (google: GoogleAccess, desk: EffectDesk & Pick<ApprovalDesk, 'proposeCalendarPlan'>, clock: OwnerClock, calendarEgress?: CalendarEgressScreen) => ({
   name: 'propose_calendar_plan',
   description: "Propose a day plan's new blocks of time on one card, so the owner adds them all to their own calendar in one tap. Give the day and each block in their local time, in order; leave out events already on the calendar. No one is invited. Nothing is added until they approve. A title goes to Google: keep any mention of health out of it.",

@@ -27,7 +27,7 @@ const FRIDAY: readonly SeedEvent[] = [
   event('cd-sat', 'Breakfast with Mira', '26', '09:00', '10:00'),
 ];
 
-// CAPACITY_PLAN: Thursday's Close after a heavy day, with what Waldo has learned of the owner's capacity, and Friday ahead.
+// Thursday's Close after a heavy day, with what Waldo has learned of the owner's capacity, and Friday ahead.
 const HEAVY_THURSDAY: readonly SeedEvent[] = [
   event('cp-sync', 'Leads sync', '24', '09:00', '10:30'),
   event('cp-hiring', 'Hiring panel', '24', '11:00', '13:00'),
@@ -96,7 +96,7 @@ export const CARD_SCENARIOS: readonly NightlyScenario[] = [
     receipts: [sawHealth, noReading, readOnly],
   },
   {
-    // As staging runs it, with CAPACITY_PLAN and TOMORROW_TODAY on: the Close reads the capacity note and may raise cards.
+    // As the owner object runs it: the Close reads the capacity note and may raise cards.
     id: 'd4-close-tomorrow-deep-work', title: 'The Close puts tomorrow\'s best focus hours on a card from the owner\'s capacity, after a heavy low day', pain: 'judgment', start: at('24', '21:30'), world: { events: HEAVY_THURSDAY, health: LOW },
     steps: [{ health: 'shared' }, { card: 'card:close', capacity: CAPACITY_NOTE, tomorrow: true }],
     rubric: {

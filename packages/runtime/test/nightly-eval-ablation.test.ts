@@ -19,7 +19,7 @@ describe('the behaviour rule inventory', () => {
     expect((await rule('Every message passes six tests')).kind).toBe('mapped');
   });
 
-  // Version 2 (WALDO_PROMPT_V2) has its own map: every entry names exactly one of its rules, the hard lines stay boundaries,
+  // Version 2 has its own map: every entry names exactly one of its rules, the hard lines stay boundaries,
   // and each rule its two new sections add is mapped to scenarios or held as a boundary.
   it('maps the rules of the behavior prompt version 2', async () => {
     const system = evalBehaviourPrompt(true);
