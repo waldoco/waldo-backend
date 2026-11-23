@@ -3,7 +3,7 @@ import { numericHealthIn } from '../scribe/sanitiser';
 import { pushNotificationSchema, type PushNotification } from '../../../contracts/src/ui/notification';
 
 // Expo's push service, which delivers through APNs and FCM. The directory releases only tokens registered under expo.
-const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
+export const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 // Each push has a fixed line per trigger and the ids the app opens, never health or email content. An approval push names
 // the approval it opens, which the caller adds; the text never says what it suggests or why. A prep or update push may carry
 // a body code writes in place of its fixed line, naming a meeting by pushTitle and its time (channels/event-briefs.ts
@@ -77,7 +77,7 @@ export type OwnerPushDeps = Readonly<{
   proactivePerDay?(): number;
 }>;
 
-const readTargets = (value: unknown): readonly PushTarget[] => {
+export const readTargets = (value: unknown): readonly PushTarget[] => {
   if (!Array.isArray(value) || value.length > MAX_TARGETS) throw new Error('push targets unavailable');
   return value.map(row => {
     const target = row as Partial<PushTarget>;
@@ -86,7 +86,7 @@ const readTargets = (value: unknown): readonly PushTarget[] => {
     return { installation_id: target.installation_id, device_epoch: target.device_epoch!, token: target.token };
   });
 };
-const unregistered = (ticket: unknown) => {
+export const unregistered = (ticket: unknown) => {
   const answer = ticket as { status?: unknown; details?: { error?: unknown } } | null;
   return answer?.status === 'error' && answer.details?.error === 'DeviceNotRegistered';
 };
