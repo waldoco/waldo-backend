@@ -435,7 +435,7 @@ describe('the recall chain\'s tool descriptions', () => {
   // A description the model request schema refuses fails every request that carries the tool, not only the recall.
   it('fit the model request schema with the chain on and off', () => {
     const chain = {} as never;
-    for (const handler of [searchEpisodesHandler({} as never), searchEpisodesHandler({} as never, chain), searchHistoryHandler({} as never, () => undefined, undefined), searchHistoryHandler({} as never, () => undefined, chain)]) {
+    for (const handler of [searchEpisodesHandler({} as never), searchEpisodesHandler({} as never, chain), searchHistoryHandler({} as never, () => null, undefined), searchHistoryHandler({} as never, () => null, chain)]) {
       expect(llmToolSchema.safeParse({ name: handler.name, description: handler.description, parameters: {} }).success, `${handler.name}: ${handler.description.length} characters`).toBe(true);
     }
   });
