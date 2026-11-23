@@ -57,8 +57,8 @@ test('every switch has an inventory row, and every kept or deleted switch says w
     [(c, inv) => { delete c.vars.WALDO_SWITCHES.MEDICATIONS; delete c.env.staging.vars.WALDO_SWITCHES.MEDICATIONS; }, 'inventory row "MEDICATIONS" names no switch'],
     [(c, inv) => { delete inv.MEDICATIONS.removeBy; }, '"MEDICATIONS" is kept with no removeBy'],
     [(c, inv) => { delete inv.MEDICATIONS.reason; }, '"MEDICATIONS" is kept with no reason'],
-    [(c, inv) => { inv.CALENDAR_UNDO_CANCEL.disposition = 'maybe'; }, 'disposition "maybe"'],
-    [(c, inv) => { delete inv.CALENDAR_UNDO_CANCEL.batch; }, '"CALENDAR_UNDO_CANCEL" is unconditional with no batch'],
+    [(c, inv) => { inv.WALDO_OWNER_FIRST.disposition = 'maybe'; }, 'disposition "maybe"'],
+    [(c, inv) => { delete inv.WALDO_OWNER_FIRST.batch; }, '"WALDO_OWNER_FIRST" is unconditional with no batch'],
   ];
   for (const [mutate, expected] of cases) {
     const c = clone(), inv = structuredClone(inventory);
