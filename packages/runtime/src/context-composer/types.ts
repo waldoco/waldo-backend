@@ -275,6 +275,8 @@ export type ContextCompositionResult =
       skillPrompt?: string;
       // The admitted health rendering inside prompt, for callers that build their own system prompt.
       healthPrompt?: string;
+      // The owner's health view was left out of this run for its size; the prompt says so in words. The caller logs it.
+      health_withheld?: 'oversize';
       checkpoint: RuntimeContextCheckpoint;
       evidence: ContextCompositionEvidence;
     }>

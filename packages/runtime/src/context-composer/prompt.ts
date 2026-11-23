@@ -131,7 +131,7 @@ export function assembleReasonsPrompt(
   selected: readonly Skill[],
   recall: ContextRecallSnapshot,
   health: ContextHealthMaterial | null,
-  healthUnreadable = false,
+  healthAbsent?: HealthAbsence,
 ): ReasonsPrompt {
   const invocationLabel = invocation.runtime_binding.variant === null
     ? invocation.runtime_binding.trigger
@@ -151,7 +151,7 @@ export function assembleReasonsPrompt(
     .join(REASONS_LAYER_JOIN);
   const operations = [
     renderMemoryContext(recall.status === 'partial' ? renderRecall(recall.result, [], NO_CONFLICT_AUTHORITY) : RECALL_NOT_RUN),
-    renderHealth(health, healthUnreadable),
+    renderHealth(health, healthAbsent),
     renderWorkspace(materials.workspace),
     renderToolOutputs(materials.tool_outputs, materials.tool_outputs_omitted),
   ].join(REASONS_LAYER_JOIN);
@@ -192,8 +192,13 @@ function renderMemoryContext(recall: string): string {
 // Which material a health block is: a partial view carries no zone, and its narrative none either.
 export const isPartialHealth = (health: ContextHealthMaterial): health is PartialHealthMaterial => 'availability' in health.view;
 
-export function renderHealth(health: ContextHealthMaterial | null, unreadable = false): string {
-  if (health === null && unreadable) {
+// Why a run has no health block though the owner may share health: the read failed, or the view was left out of this turn.
+export type HealthAbsence = 'unreadable' | 'withheld';
+export function renderHealth(health: ContextHealthMaterial | null, absent?: HealthAbsence): string {
+  if (health === null && absent === 'withheld') {
+    return "The owner's derived body view is not in this turn: it was too large to admit, so it was left out. That says nothing about whether they share health data or how their body is, so say nothing about their body from this turn's context. If get_health is in your function list, call it before saying anything about their body.";
+  }
+  if (health === null && absent === 'unreadable') {
     return 'Derived health context could not be read just now: the read failed. That says nothing about whether the owner shares health data, so do not tell them you cannot see it or that they share none. If get_health is in your function list, call it before saying anything about their body; if it fails too, say the read failed.';
   }
   if (health === null) return 'No derived health context is available for this invocation.';

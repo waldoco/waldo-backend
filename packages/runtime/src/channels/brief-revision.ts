@@ -1,5 +1,6 @@
 import type { ToolName } from '@waldo/contracts';
 import { HEALTH_READ_TOOLS } from '../tools/loaded';
+import { OUTSIDE_TEXT_READS } from './check-back';
 import { parseUpdateEffects } from './update-sweep';
 
 // BRIEF_BODY_REVISION: today's first scored Recovery landed after the Daily Brief reached the owner, so the Brief was written
@@ -12,8 +13,9 @@ export const BRIEF_BODY_KEY = 'brief_body_revision_v1';
 export type BriefBodyCode = 'row_before' | 'row_unread' | 'no_model_health' | 'unscored' | 'quiet' | 'not_reaching_out' | 'left' | 'invalid' | 'revised' | 'failed';
 
 // The turn reads the owner's health the way their other turns do, and get_health too, which holds the readings the day's
-// scores do not use. Reads only: the turn changes nothing but the Brief it returns.
-export const BRIEF_BODY_TOOLS: readonly ToolName[] = [...new Set([...HEALTH_READ_TOOLS, 'get_health'])] as ToolName[];
+// scores do not use, plus the reads every outside-text job holds (memory, past conversation, calendar, mail), so it can weigh
+// the body data against what the day holds. Reads only: the turn changes nothing but the Brief it returns.
+export const BRIEF_BODY_TOOLS: readonly ToolName[] = [...new Set([...OUTSIDE_TEXT_READS, ...HEALTH_READ_TOOLS, 'get_health'])] as ToolName[];
 
 // A stored pillar holds a score only when it names a zone; an unavailable one holds a reason alone.
 export const recoveryScored = (pillar: unknown): boolean =>

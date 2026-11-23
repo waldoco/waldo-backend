@@ -498,7 +498,7 @@ export async function runToolLoop(input: Readonly<{
               ? '\n[budget: under 15 s of tool time left this turn - finish the step you are on, then answer with what is done and what is left]'
               : '';
       const replayNote = previous && !previous.ok
-        ? '\n[repeat: cached failure from this turn; no new tool execution]'
+        ? '\n[repeat: cached failure from this turn; no new tool execution. Change the call or take another route instead of repeating it.]'
         : '';
       const json = JSON.stringify(result);
       let unchangedNote = '';
