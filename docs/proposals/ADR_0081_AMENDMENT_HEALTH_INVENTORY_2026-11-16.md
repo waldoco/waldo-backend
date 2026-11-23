@@ -321,3 +321,24 @@ These rulings fix the details this draft left open.
 5. **Depth.** Answered by the owner's direction: the always-on block stays words; `get_health` returns figures for the turn,
    never stored or logged. A comparison against the owner's usual returned by the read tool falls under the same rule. Helper
    runs stay without health reads for now; that is revisited only with a use that needs it.
+
+## Slice 2: the inventory read and finer grains (Ansh, 16 November)
+
+Built behind `HEALTH_INVENTORY` (on in staging with `HEALTH_PARTIAL_CONTEXT`, off in production).
+
+- **A live read, not a producer `present` list.** `waldo.health_inventory_read` answers, per source whose storage and
+  model-use grants are both live, each stored kind with readings in the owner's last thirty local days: its newest reading time
+  and its days. No value, method, payload key or sample id leaves it (pgTAP through the real ingest). Chosen over the producer's
+  `present` list (design (a) above) because it is current at every turn rather than at the last recompute, needs no change to
+  `health_context_write` (which three open pull requests also re-create), and covers owners with readings but no score row.
+- **In words.** The reader merges a kind across sources and renders each as its plain name, its grain (hourly, nightly, daily,
+  per session, per reading), how recent its newest reading is, and how regularly it arrived. No digit reaches the block; the
+  trace health scrub withholds it with the rest of the block; the composer's Scribe pass admits it.
+- **No score row is no longer a dead end.** An owner with readings and no stored row gets a partial block made of the inventory
+  alone, aged by its newest reading.
+- **A failed inventory read** leaves the block as the row makes it and logs `health inventory read failed`; it never fails
+  the turn.
+- **Grains.** `get_health` takes `hourly` (each hour of a kind read by the hour, at most two days) and `nightly` (each night's
+  reading with its local start and end: for sleep, falling asleep and waking). The names each takes come from the signal
+  registry's grains; any other name is refused before the store is read. `daytime_hrv` reads `hrv_window`, the one stored kind
+  the tool could not read.

@@ -48,6 +48,10 @@ export type OwnerTurnEnvelope = Readonly<{
 }>;
 // When a reminder was due and when it fires, in the owner's local time, for the model to judge: one that fires hours late says so.
 export type ReminderTiming = Readonly<{ due: string; now: string; timezone: string }>;
+// The owner's own message a job answers late (a retry after every provider failed): the run holds what that owner turn would
+// have held, the owner-only tools and memory grounded in these words, under the taint the message carried. text is empty when
+// the message held health details and was not kept.
+export type LateOwnerMessage = Readonly<{ text: string; messageRef: string; conversationRef: string; surface: string; receivedAt: number }>;
 // What a background job runs on (OwnerResponder.prompt's ownerModel).
 export type OwnerJobModel = boolean | 'decides' | 'plans';
 export type OwnerResponder = Readonly<{
@@ -63,7 +67,7 @@ export type OwnerResponder = Readonly<{
   // `attachments` reach the model with `said` on this turn only, as an owner turn's files do; they are never stored.
   // `waldoFirst` marks a run Waldo starts on a schedule (a day card, a check-back, a sweep, an intervention), never one that
   // answers the owner: with WALDO_LEAN_SCHEDULED it reads the lean scheduled view instead of the chat replay.
-  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string, sourceTaint?: 'external', ownerModel?: OwnerJobModel, attachments?: readonly LLMAttachment[], directTools?: readonly ToolName[], waldoFirst?: boolean): Promise<string>;
+  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string, sourceTaint?: 'external', ownerModel?: OwnerJobModel, attachments?: readonly LLMAttachment[], directTools?: readonly ToolName[], waldoFirst?: boolean, lateOwner?: LateOwnerMessage): Promise<string>;
   // done is false when the conversation was not consolidated and must be offered again.
   // policy.health false keeps no health notes from this pass, or from the migration.
   consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>, policy?: Readonly<{ health: boolean }>): Promise<Readonly<{ done: boolean; detail: string }>>;
