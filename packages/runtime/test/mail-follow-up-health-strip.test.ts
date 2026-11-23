@@ -91,7 +91,7 @@ it('a mail follow-up is written with the owner\'s health logs, but no stored cop
       expect(followup).toContain('~640 kcal, estimate');
       expect(followup).toContain('run, 37 min');
       const stored = storedText(state);
-      expect(stored).toContain('Mail follow-up check');
+      expect(stored).not.toContain('Mail follow-up check');
       expect(stored).not.toContain('640 kcal');
       expect(stored).not.toContain('37 min');
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }

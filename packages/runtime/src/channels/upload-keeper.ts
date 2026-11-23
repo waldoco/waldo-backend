@@ -2,7 +2,7 @@ import { LIMITS, mimeForName, WorkspaceError, type Provenance, type WorkspaceSto
 import { workspaceOperationId } from '../tools/live/workspace-operation';
 import { ClosedRunError } from './run-effect-scope';
 
-// Every file the owner sends is kept in their workspace (WALDO_FILE_TOOLS), whether or not the model can read its type,
+// Every file the owner sends is kept in their workspace, whether or not the model can read its type,
 // so later turns and the file tools can open it. The bytes no longer ride only on the turn that received them.
 export type KeepFile = Readonly<{
   bytes: Uint8Array; filename: string; mime: string | null;

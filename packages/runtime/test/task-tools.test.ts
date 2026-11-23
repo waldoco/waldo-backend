@@ -25,7 +25,7 @@ const withTools = <T,>(work: (h: Harness) => Promise<T>): Promise<T> =>
     const book = jobBook(state.storage.sql, { now: () => clock.now, newId: () => (n += 1).toString(16).padStart(12, '0'), newToken: () => `tok-${n += 1}` });
     const fenced: string[] = [], log: TurnLogEntry[] = [], woken: number[] = [];
     const [start, cancel, check, steer] = taskToolHandlers({
-      book, now: () => clock.now, timezone: () => 'Europe/London', surface: 'app', steer: true,
+      book, now: () => clock.now, timezone: () => 'Europe/London', surface: 'app',
       wake: async due => { woken.push(due); }, fence: id => { fenced.push(id); }, log: entry => { log.push(entry); },
     });
     return work({ book, start: start as Handler<StartTaskArgs>, cancel: cancel as Handler<CancelTaskArgs>, check: check as Handler<CheckTaskArgs>, steer: steer as Handler<SteerTaskArgs>, fenced, log, woken, clock });
@@ -383,13 +383,6 @@ describe('steer_task', () => {
       const id = await startedId(h);
       for (let i = 0; i < TASK_MAX_STEERS; i += 1) expect(await h.steer.handle(correction(id), ctx({ toolCallId: `s${i}` }))).toMatchObject({ ok: true });
       expect(await h.steer.handle(correction(id), ctx({ toolCallId: 'over' }))).toMatchObject({ ok: false, code: 'rate_limited', error: expect.stringMatching(/cancel_task.*start_task/) });
-    });
-  });
-
-  it('off, the tool is not offered', async () => {
-    await withTools(async (h) => {
-      const names = taskToolHandlers({ book: h.book, now: () => T0, timezone: () => 'UTC', surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined }).map(handler => handler.name);
-      expect(names).toEqual(['start_task', 'cancel_task', 'check_task']);
     });
   });
 });

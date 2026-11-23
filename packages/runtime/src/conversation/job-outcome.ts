@@ -18,5 +18,3 @@ export const sameJobPrompt = async (stored: string | undefined, said: string): P
 
 export const jobPromptStub = (entry: ConversationEntry, key: string): ConversationEntry =>
   ({ ...entry, modelPayload: key, appPayload: '', modelProjection: { mode: 'omit' } });
-
-export const jobOutcomeRowsEnabled = (env: Readonly<{ WALDO_JOB_OUTCOME_ROWS?: string }>): boolean => env.WALDO_JOB_OUTCOME_ROWS === '1';

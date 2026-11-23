@@ -11,7 +11,7 @@ export const TELEGRAM_DOWNLOAD_LIMIT_BYTES = 20 * 1024 * 1024;
 export type TelegramFileDownloader = (fileId: string) => Promise<Uint8Array>;
 // signal: when given, the provider's request ends with it, so a turn cut short leaves no transcription still running.
 export type Transcriber = (audio: Uint8Array, filename: string, mimeType: string, signal?: AbortSignal) => Promise<string>;
-// keep: present with WALDO_FILE_TOOLS on. Every photo and document is then downloaded and kept in the owner's workspace,
+// keep: when present, every photo and document is downloaded and kept in the owner's workspace,
 // whatever its type; the model still gets the readable ones attached.
 // keeper: the host's factory for it, bound to the running turn's scope.
 export type MediaReaders = Readonly<{ download?: TelegramFileDownloader; transcribe?: Transcriber; keep?: UploadKeeper; keeper?: (scope: RunEffectScope) => UploadKeeper }>;

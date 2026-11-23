@@ -108,7 +108,7 @@ describe('a tainted owner turn starting background work', () => {
   }));
 
   it('a steer written in a tainted owner turn takes the web from a reader task the owner started cleanly', () => withBook(async (book) => {
-    const [start, , , steer] = taskToolHandlers({ book, now: () => T0, timezone: () => 'UTC', surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined, steer: true });
+    const [start, , , steer] = taskToolHandlers({ book, now: () => T0, timezone: () => 'UTC', surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined });
     expect(steer!.name).toBe('steer_task');
     expect(await start!.handle(research('reader') as never, ownerTurn({ toolCallId: 'c-start' }))).toMatchObject({ ok: true });
     const job = book.open().find((row) => row.kind === 'task')!;
@@ -120,7 +120,7 @@ describe('a tainted owner turn starting background work', () => {
   }));
 
   it('a steer the owner approved on its card keeps the web, as an approved brief does; an unapproved one still takes it', () => withBook(async (book) => {
-    const [start, , , steer] = taskToolHandlers({ book, now: () => T0, timezone: () => 'UTC', surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined, steer: true });
+    const [start, , , steer] = taskToolHandlers({ book, now: () => T0, timezone: () => 'UTC', surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined });
     expect(await start!.handle(research('reader') as never, ownerTurn({ toolCallId: 'c-start' }))).toMatchObject({ ok: true });
     const job = book.open().find((row) => row.kind === 'task')!;
     const approved = await steer!.handle({ job_id: job.id, instruction: 'Also look up the third signup.', mode: 'enqueue' } as never,

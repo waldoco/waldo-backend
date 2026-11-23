@@ -234,11 +234,11 @@ describe('scheduled reminders for a Telegram-linked owner', () => {
 });
 
 describe('the episode index after a scheduled app message', () => {
-  it.each([['app-only', { app: 'own' }, []], ['telegram-copy', { telegram: true, app: 'own' }, [{ chat_id: 7, text: REMINDER_TEXT }]]] as const)('holds the reply once, as Waldo, next to its machine prompt (%s)', async (label, identity, copies) => {
+  it.each([['app-only', { app: 'own' }, []], ['telegram-copy', { telegram: true, app: 'own' }, [{ chat_id: 7, text: REMINDER_TEXT }]]] as const)('holds the reply once, as Waldo, and no copy of its machine prompt (%s)', async (label, identity, copies) => {
     const outcome = await driveAlarm(`scheduled-episodes-${label}`, identity);
     expect(outcome.transcript).toEqual([{ role: 'assistant', surface: 'app', text: REMINDER_TEXT }]);
     expect(outcome.episodes.filter(episode => episode.text === REMINDER_TEXT)).toEqual([{ speaker: 'waldo', text: REMINDER_TEXT }]);
-    expect(outcome.episodes.map(episode => episode.speaker).sort()).toEqual(['system', 'waldo']);
+    expect(outcome.episodes.map(episode => episode.speaker)).toEqual(['waldo']);
     expect(wire.telegramSent).toEqual(copies);
   });
 });

@@ -109,7 +109,7 @@ export const toolNameSchema = z.enum([
   'workspace_search',
   'workspace_write',
   'workspace_render',
-  // extract_archive: unpack a workspace zip into a folder beside it (WALDO_FILE_TOOLS).
+  // extract_archive: unpack a workspace zip into a folder beside it.
   'extract_archive',
   'skills_list',
   'skills_install',
@@ -160,7 +160,7 @@ export const toolNameSchema = z.enum([
   'check_task',
   // query_phone_calendar: the events on the owner's phone calendars as the phone last sent them; offered while DEVICE_CALENDAR is on.
   'query_phone_calendar',
-  // steer_task: change a running background task's work, as a correction or an addition, keeping its id (WALDO_TASK_STEER).
+  // steer_task: change a running background task's work, as a correction or an addition, keeping its id.
   'steer_task',
   // show_chart: a chart in the owner's app reply (the app.v1 chart_series part), with words for a build that draws none.
   'show_chart',

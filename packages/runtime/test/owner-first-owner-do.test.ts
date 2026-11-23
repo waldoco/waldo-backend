@@ -19,7 +19,10 @@ vi.mock('../src/channels/telegram-turn', async load => {
     const done = (text: string) => ({ ok: true as const, data: { model: request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
     if (request.response_format) return done('{}');
     const said = String(request.messages.at(-1)?.content ?? '');
-    const turn = said.includes('what time is it') ? 'owner' : said.includes('First report') ? 'report:first' : said.includes('Second report') ? 'report:second' : 'other';
+    // A report reads what was said since its task finished, and an owner turn is told which tasks finished while it ran, so
+    // a report is known by its own opening line.
+    const report = said.includes('A background task you started has finished');
+    const turn = report && said.includes('First report') ? 'report:first' : report && said.includes('Second report') ? 'report:second' : said.includes('what time is it') ? 'owner' : 'other';
     if (model.turns.at(-1) !== turn) model.turns.push(turn);
     if (turn === 'report:first' && model.held === 0) { model.held = 1; await new Promise<void>(resolve => { model.release = resolve; }); }
     return done(turn === 'owner' ? 'It is noon.' : 'The research is in.');

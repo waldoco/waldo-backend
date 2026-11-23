@@ -149,8 +149,6 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" gives owner turns the behavior prompt's version 2: writing guidance per medium (chat, mail, documents) and how to
   // stay ahead of the owner's day. Off unless "1".
   WALDO_PROMPT_V2?: string;
-  // "1": the progress watchdog checks running background jobs in the owner's alarm pass and its console read reports enabled.
-  WALDO_WATCHDOG?: string;
   AUTONOMY_OWN_CALENDAR?: string;
   // "1" lets an owner alarm that finds no kept wake due run nothing, with no directory call, and re-arm for the earliest one.
   // Off unless "1".
@@ -212,8 +210,6 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // and logs per-source counts; anything else keeps the deletes.
   HISTORY_ARCHIVE?: string;
   WALDO_RECALL_CHAIN?: string;
-  // '1': every owner upload is kept in the workspace, and extract_archive is offered.
-  WALDO_FILE_TOOLS?: string;
   // 'on' cuts only the forgotten words and items from the model's view while a forget finishes; anything else keeps the
   // earlier rule, which withholds a whole read that mentions the topic.
   WALDO_FORGET_BARRIER?: string;
@@ -250,20 +246,12 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WHATSAPP_QUIET_MS?: string;
   // '1' joins WhatsApp texts the owner sends close together into one turn and drops a reply newer text overtook; unset or anything else keeps one turn per message.
   WHATSAPP_REPLY_MERGE?: string;
-  // "1": a task worker's step that needs the owner raises its card at once and the job waits, then resumes with the answer (tasks/brain.ts).
-  WALDO_TASK_ASK?: string;
-  WALDO_TASK_STEER?: string;
-  WALDO_TASK_PICKUP?: string;
-  // "1": a machine job that stops tells the owner, and a task parked for a crash or an outage runs once more first (tasks/lane.ts).
-  WALDO_TASK_NOTES?: string;
   // "1": an owner message waiting to run takes the chain before the alarm pass starts its next machine turn (owner-first.ts).
   WALDO_OWNER_FIRST?: string;
   // "1": a running owner turn sees the owner's newer messages on its chat and answers each with owner_message_heard (second-message.ts).
   WALDO_SECOND_MESSAGE?: string;
   // "1": the owner's own turn holds no long tool; long work goes to start_task, and workers' browser steps leave the owner's chain (async-tools.ts).
   WALDO_ASYNC_TOOLS?: string;
-  // "1": a background job's request row keeps only a key, never the job's prompt (conversation/job-outcome.ts).
-  WALDO_JOB_OUTCOME_ROWS?: string;
   // "1": a Waldo-first scheduled run (day card, check-back, update sweep, intervention) reads a lean view: its own event, the
   // composed context and the last few rows of the owner's exchange instead of the chat replay, under one tool menu and a
   // 1-hour cached head shared by every scheduled job kind (channels/owner-turn.ts).

@@ -405,7 +405,7 @@ describe('agent mail inbound', () => {
       const parts = request.input.flatMap(item => Array.isArray(item.content) ? item.content as { type: string; filename?: string }[] : []);
       expect(parts.filter(part => part.type === 'input_file').map(part => part.filename)).toEqual(['invoice-1.pdf', 'invoice-2.pdf', 'invoice-3.pdf', 'invoice-4.pdf']);
       expect(mailText()).toContain('invoice-5.pdf (application/pdf)');
-      expect(mailText()).toContain('tool.exe (application/octet-stream, a type Waldo cannot read)');
+      expect(mailText()).toContain('tool.exe (application/octet-stream)');
     });
   });
 

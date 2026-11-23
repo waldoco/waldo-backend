@@ -1,12 +1,7 @@
 import { expect, it } from 'vitest';
 import { literalTextRedactor, redactConversationEntry } from '@waldo/contracts';
 import { sha256Hex } from '../src/context-composer/canonical';
-import { jobOutcomeRowsEnabled, jobPromptKey, jobPromptStub, sameJobPrompt } from '../src/conversation/job-outcome';
-
-it('the switch is on only for exactly "1"', () => {
-  expect(jobOutcomeRowsEnabled({ WALDO_JOB_OUTCOME_ROWS: '1' })).toBe(true);
-  for (const value of [undefined, '', '0', 'true', ' 1', 'on']) expect(jobOutcomeRowsEnabled({ WALDO_JOB_OUTCOME_ROWS: value })).toBe(false);
-});
+import { jobPromptKey, jobPromptStub, sameJobPrompt } from '../src/conversation/job-outcome';
 
 it('a stub keeps the row\'s links and drops its text from both views; equal prompts share a key, different ones do not', async () => {
   const row = { id: 'card:brief:1', ownerId: 'o', chatId: 'c', parentId: 'p', threadAnchorId: null, surface: 'agent', modelPayload: 'the whole job prompt', appPayload: 'the whole job prompt',

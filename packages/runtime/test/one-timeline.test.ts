@@ -370,7 +370,7 @@ describe('one owner timeline across the app and WhatsApp', { timeout: 30_000 }, 
   });
 
   it('the Brief, which lands in the app transcript, is in the owner\'s next WhatsApp turn', async () => {
-    await withOwner('one-timeline-brief', { ...ON, WALDO_JOB_OUTCOME_ROWS: '1' }, async (owner, state, _restart, alarm) => {
+    await withOwner('one-timeline-brief', ON, async (owner, state, _restart, alarm) => {
       dayPlanBook(state.storage.sql).save(new Date().toISOString().slice(0, 10), { card: 'card:brief', time: '00:00', reason: 'planned by the fixture' });
       await new Scheduler(state.storage.sql, state.storage, productionDeps())
         .schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: Date.now() - 1000, dueAt: Date.now() - 1000, recurrence: null });

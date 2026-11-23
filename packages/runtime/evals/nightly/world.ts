@@ -93,7 +93,7 @@ export type WorldSeed = Readonly<{
   approvals?: readonly SeedApproval[];
   // propose_action is offered, as in a job that read outside text: each card it raises is recorded, never run.
   actions?: true;
-  // The owner's private workspace, in memory, with the production workspace tools and WALDO_FILE_TOOLS on. An upload step
+  // The owner's private workspace, in memory, with the production workspace tools. An upload step
   // keeps its file here through the production keeper.
   files?: true;
   // The owner's meal and workout log, with the production log tools; each entry is recorded as a health.log effect.
@@ -402,7 +402,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
   };
   const offered = [
     ...(seed.meals ? healthLogHandlers(mealBook) : []),
-    ...(store ? workspaceToolHandlers(() => store, { origin: async () => null, durable: false }, undefined, { fileTools: true }) : []),
+    ...(store ? workspaceToolHandlers(() => store, { origin: async () => null, durable: false }) : []),
     ...taskToolHandlers({ book: jobs, now, timezone: () => TIMEZONE, surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined }),
     ...googleHandlers(google, desk, clock), connectServiceHandler(google), ...reminderHandlers(reminderBook), ...standingOrderHandlers(standingOrders),
     ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async (texts) => scrubEpisodeTexts(sql, texts, FORGOTTEN), ...(semantic ? { semantic } : {}), validity: true }) : []),

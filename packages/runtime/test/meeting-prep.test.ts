@@ -11,7 +11,8 @@ import type { CalendarPrepReceipt } from '../src/channels/telegram-final-outbox'
 import type { TaskHost } from '../src/tasks/brain';
 import { jobBook, taskBrief, type JobBook, type JobRow } from '../src/tasks/jobs';
 import { runJobsLane } from '../src/tasks/lane';
-import { enqueueMachine, HEALTH_DETAIL_DROPPED } from '../src/tasks/machine';
+import { enqueueMachine, HEALTH_DETAIL_DROPPED, machineStoppedNote } from '../src/tasks/machine';
+import { PARK_WORDS } from '../src/prompt/fixed-lines';
 
 // Meeting prep as a machine job. A meeting the owner organized or accepted gets a reader job that may read their mail for
 // it; the brain's existing prep decision then runs on what the worker found, with the delivery admission in its commit. An
@@ -141,7 +142,7 @@ describe('the prep sweep writes a machine job for an accepted meeting', () => {
 // The applier over the real job book; the decision and the delivery are fakes that record what they were given.
 const applying = (h: Harness, reply = JSON.stringify({ kind: 'notify', text: 'Prep: budget first.' }), admitted = true) => applyingWith(h, {}, reply, admitted);
 const applyingWith = (h: Harness, over: Partial<MeetingPrepApplyDeps>, reply = JSON.stringify({ kind: 'notify', text: 'Prep: budget first.' }), admitted = true) => {
-  const decided: string[] = [], delivered: { id: string; receipt: CalendarPrepReceipt }[] = [], log: TurnLogEntry[] = [];
+  const decided: string[] = [], delivered: { id: string; receipt: CalendarPrepReceipt }[] = [], log: TurnLogEntry[] = [], notes: string[] = [];
   const held = { code: null as 'held_quiet' | 'held_volume' | 'held_preference' | null };
   const handler = meetingPrepApplier({
     briefs: eventBriefs(h.sql, 'UTC'), timezone: 'UTC', now: Date.now, held: () => held.code,
@@ -153,9 +154,10 @@ const applyingWith = (h: Harness, over: Partial<MeetingPrepApplyDeps>, reply = J
   const host = { fence: () => undefined, cancelled: () => undefined, busy: () => new Set<string>() } as unknown as TaskHost;
   const refuse = async (): Promise<never> => { throw new Error('a machine job took the owner task path'); };
   return {
-    decided, delivered, log, held,
+    decided, delivered, log, held, notes,
     lane: () => runJobsLane({ book: h.book, host, now: Date.now, timezone: 'UTC', surface: 'app', quiet: () => false, log: entry => { log.push(entry); }, startWorker: async () => undefined,
-      turn: refuse, applyTools: () => { throw new Error('a machine job reached applyTools()'); }, deliver: refuse, room: () => true, heldTopics: () => [], ...NO_REPLAYS,
+      turn: refuse, applyTools: () => { throw new Error('a machine job reached applyTools()'); },
+      deliver: async (_id, _trace, text, commit) => { h.storage.transactionSync(commit); notes.push(text); }, room: () => true, heldTopics: () => [], ...NO_REPLAYS,
       machine: { meeting_prep: handler } }),
   };
 };
@@ -340,7 +342,9 @@ describe('applying a prep job', () => {
       const [job] = h.jobs();
       h.book.startAttempt(job!.id);
       h.book.park(job!.id, 'provider_unavailable');
-      await applying(h).lane();
+      const a = applying(h);
+      await a.lane();
+      expect(a.notes).toEqual([machineStoppedNote('meeting_prep', PARK_WORDS.provider_unavailable)]);
       await h.sweep({ now: h.now + 10 * 60_000 });
       expect(h.jobs()).toHaveLength(2);
     });

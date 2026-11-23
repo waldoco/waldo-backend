@@ -1,7 +1,4 @@
 import { env } from 'cloudflare:workers';
-import config from '../wrangler.jsonc?raw';
-import { parseJsonc } from '../../../scripts/jsonc.mjs';
-import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { LLMToolTurn, ToolName } from '@waldo/contracts';
@@ -345,7 +342,7 @@ describe('the parked report', () => {
         book, host, now: () => book.get(ticket.jobId)!.updated_at, timezone: 'UTC', surface: 'app', quiet: () => false, log: () => undefined,
         startWorker: async () => undefined, turn: async (_job, _trace, text) => { texts.push(text); return 'Told.'; },
         applyTools: () => ['search_communication'] as ToolName[], deliver: async (_id, _trace, _text, commit) => { commit(); }, room: () => true,
-        heldTopics: () => [], startReplay: () => undefined, approvals: { replays: () => [], replayReceipt: () => '', settleReplay: () => false }, followUp: true,
+        heldTopics: () => [], startReplay: () => undefined, approvals: { replays: () => [], replayReceipt: () => '', settleReplay: () => false },
       };
       await runJobsLane(deps);
       expect(texts.some(text => text.includes(PARK_WORDS.no_progress))).toBe(true);
@@ -402,18 +399,18 @@ describe('the console watchdog read', () => {
       rounds(ticket, JUDGE_EVERY_MS / MIN);
       verdicts.push({ verdict: 'drifting', action: 'nudge' });
       await watch({ lateMs: LANE_LATE_MS * 2 });
-      const view = watchdogView(sql, clock.at, true);
+      const view = watchdogView(sql, clock.at);
       expect(watchdogViewSchema.parse(view)).toEqual(view);
       expect(view.counts_24h).toEqual({ drifting: 1, lane_late: 1 });
       expect(view.judgments_last_hour).toBe(1);
       expect(view.recent.find(row => row.code === 'drifting')).toMatchObject({ job_id: ticket.jobId, job_kind: 'task', action: 'nudge', job_status: 'running', park_reason: null });
       expect(JSON.stringify(view).toLowerCase()).not.toContain('supplier');
       const limited = { at: 0 };
-      const answer = await consoleWatchdog({ request: new Request(`https://w.test${DASHBOARD_WATCHDOG_PATH}`), sql, now: clock.at, enabled: true, limited: () => (limited.at += 1, null) });
+      const answer = await consoleWatchdog({ request: new Request(`https://w.test${DASHBOARD_WATCHDOG_PATH}`), sql, now: clock.at, limited: () => (limited.at += 1, null) });
       expect(answer.status).toBe(200);
       expect(limited.at).toBe(1);
-      expect((await consoleWatchdog({ request: new Request(`https://w.test${DASHBOARD_WATCHDOG_PATH}?x=1`), sql, now: clock.at, enabled: true, limited: () => null })).status).toBe(400);
-      expect((await consoleWatchdog({ request: new Request(`https://w.test${DASHBOARD_WATCHDOG_PATH}`, { method: 'POST' }), sql, now: clock.at, enabled: true, limited: () => null })).status).toBe(405);
+      expect((await consoleWatchdog({ request: new Request(`https://w.test${DASHBOARD_WATCHDOG_PATH}?x=1`), sql, now: clock.at, limited: () => null })).status).toBe(400);
+      expect((await consoleWatchdog({ request: new Request(`https://w.test${DASHBOARD_WATCHDOG_PATH}`, { method: 'POST' }), sql, now: clock.at, limited: () => null })).status).toBe(405);
     });
   });
 });
@@ -422,18 +419,10 @@ describe('the console watchdog read for an owner the watchdog never ran for', ()
   it('answers an empty view and creates no tables', async () => {
     await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`task-watchdog-${seq += 1}`)), async (_instance, state) => {
       const sql = state.storage.sql;
-      const answer = await consoleWatchdog({ request: new Request(`https://w.test${DASHBOARD_WATCHDOG_PATH}`), sql, now: T0, enabled: false, limited: () => null });
+      const answer = await consoleWatchdog({ request: new Request(`https://w.test${DASHBOARD_WATCHDOG_PATH}`), sql, now: T0, limited: () => null });
       expect(answer.status).toBe(200);
-      expect(watchdogViewSchema.parse(await answer.json())).toMatchObject({ enabled: false, last_check_at: null, open: [], recent: [], counts_24h: {} });
+      expect(watchdogViewSchema.parse(await answer.json())).toMatchObject({ enabled: true, last_check_at: null, open: [], recent: [], counts_24h: {} });
       expect(sql.exec("SELECT name FROM sqlite_master WHERE name LIKE 'watchdog%'").toArray()).toEqual([]);
     });
-  });
-});
-
-describe('WALDO_WATCHDOG in the Worker config', () => {
-  it('is off in production and on in staging', () => {
-    const parsed = flatConfig(parseJsonc(config)) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
-    expect(parsed.vars.WALDO_WATCHDOG).toBe('0');
-    expect(parsed.env.staging.vars.WALDO_WATCHDOG).toBe('1');
   });
 });

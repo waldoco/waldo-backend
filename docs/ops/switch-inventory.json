@@ -124,22 +124,6 @@
     "disposition": "unconditional",
     "batch": "delivery-proactive (after W4)"
   },
-  "WALDO_TASK_ASK": {
-    "disposition": "unconditional",
-    "batch": "tasks"
-  },
-  "WALDO_TASK_STEER": {
-    "disposition": "unconditional",
-    "batch": "tasks"
-  },
-  "WALDO_TASK_PICKUP": {
-    "disposition": "unconditional",
-    "batch": "tasks"
-  },
-  "WALDO_TASK_NOTES": {
-    "disposition": "unconditional",
-    "batch": "tasks"
-  },
   "WALDO_OWNER_FIRST": {
     "disposition": "unconditional",
     "batch": "turn-day-cards (after W2)"
@@ -453,15 +437,7 @@
     "disposition": "unconditional",
     "batch": "memory"
   },
-  "WALDO_FILE_TOOLS": {
-    "disposition": "unconditional",
-    "batch": "tasks"
-  },
   "WALDO_ASYNC_TOOLS": {
-    "disposition": "unconditional",
-    "batch": "tasks"
-  },
-  "WALDO_JOB_OUTCOME_ROWS": {
     "disposition": "unconditional",
     "batch": "tasks"
   },
@@ -493,10 +469,6 @@
   "HELD_RAISE": {
     "disposition": "unconditional",
     "batch": "delivery-proactive (after W4)"
-  },
-  "WALDO_WATCHDOG": {
-    "disposition": "unconditional",
-    "batch": "tasks"
   },
   "PROACTIVE_GATE": {
     "disposition": "unconditional",

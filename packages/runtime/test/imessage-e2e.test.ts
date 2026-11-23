@@ -2047,12 +2047,11 @@ it('an iMessage-only owner\'s background task reports on iMessage, and its worke
 
 // The task finishes, the owner's next iMessage turn already tells them the result, and then the jobs lane applies the report.
 // The report turn reads that iMessage exchange from the episode index, so the model can see the owner was told and send nothing.
-it('with WALDO_TASK_PICKUP on, an iMessage task report reads the iMessage exchange since the task finished, and its SKIP sends nothing more', async () => {
+it('an iMessage task report reads the iMessage exchange since the task finished, and its SKIP sends nothing more', async () => {
   const w = await world();
   await iMessageOnly(w);
-  type Rpc = { env: Record<string, unknown>; taskClaim(...args: unknown[]): Promise<unknown>; taskReport(...args: unknown[]): Promise<string> };
+  type Rpc = { taskClaim(...args: unknown[]): Promise<unknown>; taskReport(...args: unknown[]): Promise<string> };
   const jobId = await runInDurableObject(w.ownerStub, async (instance, state) => {
-    (instance as unknown as Rpc).env.WALDO_TASK_PICKUP = '1';
     const book = jobBook(state.storage.sql, { now: Date.now, newId: () => 'imsgtask0002', newToken: () => 'tok-imsg-2' });
     const { job } = book.create({ kind: 'task', profile: 'reader', idempotencyKey: 'imsg-turn:call-2', origin: 'imsg-turn', surface: 'imessage',
       brief: { title: 'Inbox since Monday', goal: 'Find client mail that waits on a reply.', context: '', done_when: 'Who waits.', effort: 'standard', timezone: 'UTC', started_at: Date.now() },

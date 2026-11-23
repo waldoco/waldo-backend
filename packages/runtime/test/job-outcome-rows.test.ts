@@ -99,12 +99,11 @@ const ownerSays = async (owner: Owner, name: string, clientId: string, text: str
   expect(sent.status).toBe(202);
   await vi.waitFor(async () => expect((await appChat(owner, name)).filter(message => message.text === REPLY_TEXT)).toHaveLength(1), { timeout: 10_000, interval: 20 });
 };
-const ON = { WALDO_JOB_OUTCOME_ROWS: '1' } as const;
 
 describe('a background job leaves its outcome in the owner\'s chain, never its prompt', () => {
   it('a day card on a chain with no history adds one outcome row the owner can read, and no stored copy of its prompt', async () => {
     const name = 'job-outcome-golden';
-    await withAppOwner(name, ON, async (owner, state) => {
+    await withAppOwner(name, {}, async (owner, state) => {
       await dueBrief(state);
       await owner().alarm();
       expect(await appChat(owner(), name)).toEqual([{ role: 'assistant', text: CARD_TEXT }]);
@@ -118,7 +117,7 @@ describe('a background job leaves its outcome in the owner\'s chain, never its p
 
   it('the owner\'s next turn reads the card it was sent, not the card\'s prompt', async () => {
     const name = 'job-outcome-next-turn';
-    await withAppOwner(name, ON, async (owner, state) => {
+    await withAppOwner(name, {}, async (owner, state) => {
       await dueBrief(state);
       await owner().alarm();
       await ownerSays(owner(), name, 'outcome-next-0001', 'Thanks, anything else today?');
@@ -130,7 +129,7 @@ describe('a background job leaves its outcome in the owner\'s chain, never its p
 
   it('a job retried after a crash, with the same id and text, replays its saved outcome and asks no model again', async () => {
     const name = 'job-outcome-replay';
-    await withAppOwner(name, ON, async (owner) => {
+    await withAppOwner(name, {}, async (owner) => {
       type Host = Readonly<{ setup(channel: 'app'): Readonly<{ owner: number; macFollowup: (...args: unknown[]) => Promise<string> }>; asOwnerJob<T>(job: string, key: string, work: () => Promise<T>): Promise<T> }>;
       const host = owner() as unknown as Host, runtime = host.setup('app');
       const job = 'Report this Mac result briefly: the export finished.';
@@ -145,21 +144,12 @@ describe('a background job leaves its outcome in the owner\'s chain, never its p
 
   it('a card whose model call fails leaves nothing in the chain', async () => {
     const name = 'job-outcome-failed';
-    await withAppOwner(name, ON, async (owner, state) => {
+    await withAppOwner(name, {}, async (owner, state) => {
       model.fail = true;
       await dueBrief(state);
       await owner().alarm().catch(() => undefined);
       expect(await appChat(owner(), name)).toEqual([]);
       expect(storedText(state)).not.toContain(jobPrompt(model.requests[0]!));
-    });
-  });
-
-  it('with the switch off, a day card is stored as it was before: its prompt as a row under the card', async () => {
-    const name = 'job-outcome-off';
-    await withAppOwner(name, {}, async (owner, state) => {
-      await dueBrief(state);
-      await owner().alarm();
-      expect(chainText(state)).toContain(jobPrompt(model.requests[0]!));
     });
   });
 });

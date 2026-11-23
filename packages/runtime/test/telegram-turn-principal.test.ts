@@ -222,10 +222,13 @@ it('a reminder the alarm fires lands on the Telegram chain, and the next directo
     expect(await send(970001, { text: 'Is the dentist booked for Friday?' })).toBe('awaiting_delivery');
     await remind('call the plumber');
     expect(await send(970002, { text: 'What did you just remind me about?' })).toBe('awaiting_delivery');
-    for (const seen of ['Is the dentist booked for Friday?', 'call the plumber']) expect(model.requests.at(-1)).toContain(seen);
+    expect(model.requests.at(-1)).toContain('Is the dentist booked for Friday?');
     const rows = await chain();
-    const reminder = [...rows.values()].find(row => row.modelPayload.includes('call the plumber'))!;
-    expect(reminder).toMatchObject({ chatId: 'telegram-42', parentId: 'tg-970001-reply' });
+    // The reminder's job prompt is kept as a keyed stub: the chain holds its place and its reply, never its prompt.
+    const reminder = [...rows.values()].find(row => row.parentId === 'tg-970001-reply')!;
+    expect(reminder).toMatchObject({ chatId: 'telegram-42' });
+    expect(reminder.modelPayload).not.toContain('call the plumber');
+    expect(model.requests.at(-1)).not.toContain('call the plumber');
     expect(rows.get('tg-970002')).toMatchObject({ chatId: 'telegram-42', ownerId: PRINCIPAL, parentId: `${reminder.id}-reply` });
   });
 });

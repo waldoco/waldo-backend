@@ -9,11 +9,12 @@ import { numericHealthIn, sanitise } from '../src/scribe/sanitiser';
 import { noteDue, taskHost, type TaskHost, type TaskHostDeps } from '../src/tasks/brain';
 import { isMachine, jobBook, MACHINE_MAX_RUNNING, MACHINE_SETTLED_KEPT, MACHINE_SETTLED_KEPT_MS, TASK_MAX_OPEN, TASK_MAX_RUNNING, TASK_SETTLED_KEPT, taskBrief, type JobBook, type TaskBrief } from '../src/tasks/jobs';
 import { runJobsLane, type JobsLaneDeps } from '../src/tasks/lane';
-import { enqueueMachine, HEALTH_DETAIL_DROPPED, workerRouteDown, type MachineApplier, type MachineEnqueued, type MachineSpec } from '../src/tasks/machine';
+import { enqueueMachine, HEALTH_DETAIL_DROPPED, machineStoppedNote, workerRouteDown, type MachineApplier, type MachineEnqueued, type MachineSpec } from '../src/tasks/machine';
 import { InMemoryCircuitBreaker } from '../src/llm/provider';
 import { ClosedRunError } from '../src/channels/run-effect-scope';
 import { taintedCallNeedsOwnerApproval } from '../src/hooks/registry';
 import { MACHINE_READER, TASK_PROFILE_SPECS } from '../src/tasks/profiles';
+import { PARK_WORDS } from '../src/prompt/fixed-lines';
 import { runningTasksLine, taskToolHandlers } from '../src/tasks/tools';
 import { taskBriefText } from '../src/tasks/worker-loop';
 import type { ToolDispatcherContext } from '../src/tools/dispatcher';
@@ -370,16 +371,16 @@ describe('applying a machine job', () => {
     }
   });
 
-  it('a parked machine job settles silently: no notice, no turn, no delivery', async () => {
+  it('a parked machine job tells the owner it stopped, with no turn and no applier', async () => {
     await withBook(async (h) => {
       const made = enqueue(h.book, spec());
       expect(h.book.park(made.job.id, 'provider_unavailable')).toBe(true);
       const l = lane(h, { heartbeat: async () => { throw new Error('a parked machine job reached its applier'); } });
       await runJobsLane(l.deps());
       expect(l.turns).toEqual([]);
-      expect(l.sent.size).toBe(0);
+      expect([...l.sent.values()]).toEqual([machineStoppedNote('heartbeat', PARK_WORDS.provider_unavailable)]);
       expect(h.book.get(made.job.id)).toMatchObject({ status: 'parked', park_reason: 'provider_unavailable' });
-      expect(hops(l.log, 'machine_parked')).toMatchObject([{ code: 'provider_unavailable', ok: false }]);
+      expect(hops(l.log, 'machine_parked')).toMatchObject([{ code: 'provider_unavailable', ok: false, detail: 'noted' }]);
       expect(hops(l.log, 'task_parked_notice')).toHaveLength(0);
     });
   });

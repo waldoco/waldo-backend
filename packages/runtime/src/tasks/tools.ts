@@ -30,13 +30,10 @@ export type TaskToolDeps = Readonly<{
   conversationRef?(ctx: ToolDispatcherContext): string | null;
   // Stops a cancelled job's worker and drops its browser session.
   fence(jobId: string): void;
-  // WALDO_TASK_STEER: steer_task is offered.
-  steer?: boolean;
   log(entry: TurnLogEntry): void;
 }>;
 
 export const taskToolHandlers = (deps: TaskToolDeps) => [
-  ...[
   {
     name: 'start_task',
     description: 'Background work while you keep talking, for work that will take minutes: long backlogs, many sources, web errands. The worker sees this brief, never this conversation; it cannot message, change or approve, and reports once. Need the answer in this reply, in about a minute? Use delegate_task.',
@@ -131,8 +128,7 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
       };
     },
   } satisfies ToolHandler<CheckTaskArgs, unknown, ToolDispatcherContext>,
-  ],
-  ...(deps.steer ? [{
+  {
     name: 'steer_task',
     description: 'Change a background task while it runs; it keeps its id. Its worker never sees this chat, so say everything the change needs. interrupt for a correction (it is going the wrong way, or the owner changed their mind): the worker stops after the step it is on and continues with this. enqueue for an addition: the worker finishes what it is doing, then does this before it reports.',
     schema: steerTaskArgsSchema,
@@ -164,7 +160,7 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
       const webWithheld = outside && !approved && holdsPrivateAndEgress(row.profile ? TASK_PROFILE_SPECS[row.profile].tools : []);
       return { ok: true as const, data: { job_id, title, mode, steered: true, ...(webWithheld ? { note: 'This change came after outside content, so the task goes on without the web: it keeps the owner\'s mail, calendar and files.' } : {}) }, source_taint: null };
     },
-  } satisfies ToolHandler<SteerTaskArgs, unknown, ToolDispatcherContext>] : []),
+  } satisfies ToolHandler<SteerTaskArgs, unknown, ToolDispatcherContext>,
 ];
 
 // The work is never invisible: the owner hears it started where they asked, and its report or early ending comes back there.

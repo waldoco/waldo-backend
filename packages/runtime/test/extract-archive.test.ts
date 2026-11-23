@@ -6,12 +6,12 @@ import { workspaceToolHandlers } from '../src/tools/live/workspace';
 import { TOOL_RECORDS } from '../src/tools/records';
 
 const id = (n: number) => `abcdefab-cdef-4abc-8abc-${n.toString(16).padStart(12, '0')}`;
-const setup = async (fileTools = true) => {
+const setup = async () => {
   let state: WorkspaceState = { binding: null, files: [], bodies: [], operations: [] }; let n = 10; const objects = new Map<string, Uint8Array>();
   const store = await workspaceStore({ binding: { ownerId: id(1), environment: 'test', namespace: 'ns', doName: 'owner', doId: 'do', stateVersion: 1, mappingVersion: 1 }, admit: async () => ({ status: 'ok' }),
     metadata: { transaction(f) { const s = structuredClone(state); const r = f(s); state = s; return r; } },
     bodies: { put: async (b, v) => { objects.set(b.blob_id, v); }, get: async b => objects.get(b.blob_id) ?? null, remove: async b => { objects.delete(b.blob_id); } }, now: () => 0, newId: () => id(n++) });
-  const handlers = workspaceToolHandlers(async () => store, { origin: async () => null, durable: true }, undefined, { fileTools });
+  const handlers = workspaceToolHandlers(async () => store, { origin: async () => null, durable: true });
   const tool = (name: string) => handlers.find(h => h.name === name);
   const ctx = (call: string) => ({ authenticatedUserId: 'owner', turnId: 'turn', toolCallId: call }) as never;
   const zipUpload = async (files: Record<string, string>, provenance: Provenance = 'owner_upload') => {
@@ -22,9 +22,8 @@ const setup = async (fileTools = true) => {
 };
 
 describe('extract_archive', () => {
-  it('is offered only with WALDO_FILE_TOOLS on, beside the existing workspace tools', async () => {
-    expect((await setup(true)).handlers.map(h => h.name)).toEqual(expect.arrayContaining(['workspace_list', 'workspace_read', 'workspace_search', 'workspace_write', 'workspace_render', 'extract_archive']));
-    expect((await setup(false)).handlers.map(h => h.name)).not.toContain('extract_archive');
+  it('is offered beside the existing workspace tools', async () => {
+    expect((await setup()).handlers.map(h => h.name)).toEqual(expect.arrayContaining(['workspace_list', 'workspace_read', 'workspace_search', 'workspace_write', 'workspace_render', 'extract_archive']));
   });
 
   it('unpacks, then list and read reach the unpacked text', async () => {
@@ -63,13 +62,10 @@ describe('extract_archive', () => {
     expect(await w.tool('extract_archive')!.handle({ file_id: zip.file_id, revision: 1 } as never, w.ctx('x2'))).toMatchObject({ ok: false, code: 'not_found' });
   });
 
-  it('workspace_read describes a binary file when the switch is on, and keeps the old refusal when off', async () => {
-    for (const on of [true, false]) {
-      const w = await setup(on); const zip = await w.zipUpload({ 'a.txt': 'alpha' });
-      const read: any = await w.tool('workspace_read')!.handle({ file_id: zip.file_id, revision: 1 } as never, w.ctx('r1'));
-      if (on) expect(read).toMatchObject({ ok: true, data: { text: null, binary: { mime: 'application/zip', detected: 'zip archive' } } });
-      else expect(read).toMatchObject({ ok: false, code: 'invalid_args' });
-    }
+  it('workspace_read describes a binary file', async () => {
+    const w = await setup(); const zip = await w.zipUpload({ 'a.txt': 'alpha' });
+    const read: any = await w.tool('workspace_read')!.handle({ file_id: zip.file_id, revision: 1 } as never, w.ctx('r1'));
+    expect(read).toMatchObject({ ok: true, data: { text: null, binary: { mime: 'application/zip', detected: 'zip archive' } } });
   });
 
   it('has a schema the runtime cap matches, owner-turn permission, and an idempotent record', () => {

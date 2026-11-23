@@ -89,7 +89,6 @@ import { RECEIPT_TOOLS, receiptUrl } from '../conversation/artifact-link-guard';
 import { ownerFirst, ownerHold, ownerMessageWaiting } from './owner-first';
 import { secondMessageEnabled, secondMessages, type OwnerChat } from './second-message';
 import { asyncToolsEnabled, lightChatEnabled, lightChatRoles } from './async-tools';
-import { jobOutcomeRowsEnabled } from '../conversation/job-outcome';
 import { oneTimelineEnabled, timelineSeed } from '../conversation/one-timeline';
 import { compactChatTimeline, whatsappTimelineContext, type ChatTimelineHost, type TimelineChat } from './whatsapp-timeline';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, TELEGRAM_TURN_DEADLINE_MS, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
@@ -810,16 +809,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       askCurrent: (row, approvalId, argsDigest) => self.setup(row.surface as ChannelKind).desk.replayCurrent(approvalId, argsDigest),
       settleAsk: (row, approvalId, status) => { self.setup(row.surface as ChannelKind).desk.settleReplay(approvalId, status); },
       providerHealth: self.providerHealth,
-      nudge: (jobId, seq) => self.env.WALDO_WATCHDOG === '1' ? watchdogStore(self.ctx.storage.sql).nudgeFor(jobId, seq) : null,
+      nudge: (jobId, seq) => watchdogStore(self.ctx.storage.sql).nudgeFor(jobId, seq),
       admitted: () => self.taskOwnerAdmitted(),
       // The owner look-up runs only while the owner's yes counts: a withdrawal, a new notice or the switch turned off stops it.
       lapsed: row => row.origin === LOOKUP_ORIGIN && !consentLedger(self.ctx.storage.sql, consentSwitches(self.env)).active('owner_lookup'),
       heldTopics: () => heldTopicsOf(claimStore(self.ctx.storage.sql)),
       replayApproval: (surface, brief, scope) => self.setup(surface as ChannelKind).replayApproval(brief, scope),
-      // With WALDO_TASK_ASK=1, a worker's browser step held for the owner raises its card now, on the job's surface; the job
+      // A worker's browser step held for the owner raises its card now, on the job's surface; the job
       // resumes once the owner decides, and an approved step runs in its resumed attempt. The card is raised on the serial chain, as every card is: its desk write and its sends never interleave with a turn's.
       askOwner: async (row, call) => {
-        if (self.env.WALDO_TASK_ASK !== '1' || !BROWSER_TOOLS.has(call.name as ToolName)) return null;
+        if (!BROWSER_TOOLS.has(call.name as ToolName)) return null;
         const args = JSON.parse(call.arguments || '{}') as Record<string, unknown>;
         const args_digest = await sha256Hex(stableJson(args));
         return self.serial(() => self.setup(row.surface as ChannelKind).desk.proposeTaintedAction({ tool: call.name, args, args_digest,
@@ -3122,7 +3121,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       limited: kind => this.consoleRateLimited(kind),
       run: command => this.consoleCommand(command),
       ledger: async () => { const runtime = this.setup(this.ownerSurface()); await runtime.ready; return runtime.ledger(); } });
-    if (url.pathname === DASHBOARD_WATCHDOG_PATH) return consoleWatchdog({ request, sql: this.ctx.storage.sql, now: Date.now(), enabled: this.env.WALDO_WATCHDOG === '1', limited: () => this.consoleRateLimited('read') });
+    if (url.pathname === DASHBOARD_WATCHDOG_PATH) return consoleWatchdog({ request, sql: this.ctx.storage.sql, now: Date.now(), limited: () => this.consoleRateLimited('read') });
     if (url.pathname === '/console/browser-handoff') return this.ownerBrowser.consoleHandoff(request,session.csrf,async()=>{const fresh=await access.session(sessionCookie(request), renews);if(!fresh||fresh.csrf!==session.csrf)throw new Error('console session expired');});
     if (url.pathname === CONSOLE_DEVICES_PATH && request.method === 'GET') {
       const owner = this.ctx.storage.kv.get<string>('do_name') ?? '';
@@ -3864,7 +3863,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         ownerSubject: String(runtime.owner), doName: doName ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] }, work => this.ctx.storage.transactionSync(() => { work(); commit(); })),
       room: () => this.machineRoom(alarmEnd),
       log: code => console.log(JSON.stringify({ hop: 'agent_mail_turn', code })),
-      ...(this.env.WALDO_FILE_TOOLS === '1' && doName ? { keep: uploadKeeper(() => workspaceOwnerHost(this.env, this.ctx.storage, this.ctx.id.toString(), doName), doName, 'provider_import', 'mail') } : {}),
+      ...(doName ? { keep: uploadKeeper(() => workspaceOwnerHost(this.env, this.ctx.storage, this.ctx.id.toString(), doName), doName, 'provider_import', 'mail') } : {}),
     });
     await this.rearmEveryWake();
   }
@@ -3983,17 +3982,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // A task's own approved card has no replay job: the task settles it when its step ends.
         approvals: { replays: () => this.asks.replays(runtime.desk),
           replayReceipt: (id, status, message) => runtime.desk.replayReceipt(id, status, message), settleReplay: (id, status) => runtime.desk.settleReplay(id, status) },
-        followUp: this.env.WALDO_TASK_NOTES === '1',
-        // Read whatever the switch says, so a job already waiting when the switch is turned off still resumes.
         askedCard: id => this.asks.card(runtime.desk, id),
-        ...(this.env.WALDO_TASK_PICKUP === '1' ? { held: (chat: string | undefined) => cardWaitsIn(runtime.desk.wordsAwaited(), chat),
-          recentExchange: (since: number) => recentExchange(episodeIndex(storage.sql), since) } : {}),
+        held: chat => cardWaitsIn(runtime.desk.wordsAwaited(), chat),
+        recentExchange: since => recentExchange(episodeIndex(storage.sql), since),
       });
       next = ran;
-      if (this.env.WALDO_WATCHDOG === '1') {
-        const parked = await this.watchProgress(jobs, runtime, started - due, alarmEnd);
-        if (parked !== null) next = next === null ? parked : Math.min(next, parked);
-      }
+      const parked = await this.watchProgress(jobs, runtime, started - due, alarmEnd);
+      if (parked !== null) next = next === null ? parked : Math.min(next, parked);
     } finally {
       this.scheduledAppDelivery = previous;
       const armed = await storage.get<number | null>(TASK_JOBS_DUE_KEY);
@@ -5260,7 +5255,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return workspaceOwnerHost(this.env, storage, this.ctx.id.toString(), identity.get<string>('do_name'), fetch, scope, ctx?.assertTaskSourceCurrent);
     };
     const workspaceLinks = { origin: async () => await storage.get<string>('origin') ?? null, durable: Boolean(this.env.ARTIFACTS) };
-    const workspaceTools = workspaceToolHandlers(openWorkspace, workspaceLinks, effects, { fileTools: this.env.WALDO_FILE_TOOLS === '1' });
+    const workspaceTools = workspaceToolHandlers(openWorkspace, workspaceLinks, effects);
     // Files go out with the reply only where the reply is a direct send that can carry them. Elsewhere the model shares
     // the owner link from the file's receipt.
     const attachmentRoutes: Record<ChannelKind, AttachmentSend | null> = {
@@ -5439,13 +5434,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const profileView = this.env.OWNER_PROFILE === '1';
     // The owner's newer messages on the running turn's chat, offered to that turn at each round; nothing while the switch is off.
     const newerOwnerMessages = () => this.secondMessages.round();
-    const finishedTasks = this.env.WALDO_TASK_PICKUP === '1' ? (since: number) => finishedTasksNote(this.jobs(), since) : undefined;
+    const finishedTasks = (since: number) => finishedTasksNote(this.jobs(), since);
     // The owner's chat turn as a router (async-tools.ts): long work goes to tasks, and the reply may start on the light role.
     // Tools offered in the function list per owner: what the model loaded lately, the phone tools when the app is bound (it is
     // their source), and the health reads while the owner shares body data.
     const loadedTools = loadedToolsBook(storage.kv);
     const promotedTools = () => [...loadedTools.names(Date.now()), ...(this.appBound() ? PHONE_TOOLS : []), ...(healthSharedLately(storage.kv, Date.now()) ? HEALTH_READ_TOOLS : [])];
-    const router = { asyncTools: asyncToolsEnabled(this.env), lightChat: lightChatEnabled(this.env), lightRoles: lightChatRoles(this.env), jobOutcomeRows: jobOutcomeRowsEnabled(this.env), machineTime: () => this.machineTime(), leanScheduled: this.env.WALDO_LEAN_SCHEDULED === '1',
+    const router = { asyncTools: asyncToolsEnabled(this.env), lightChat: lightChatEnabled(this.env), lightRoles: lightChatRoles(this.env), machineTime: () => this.machineTime(), leanScheduled: this.env.WALDO_LEAN_SCHEDULED === '1',
       promotedTools, noteLoaded: (names: readonly string[]) => loadedTools.note(names, Date.now()),
       waldoSent: () => deliveredLately(finalOutbox.records(), Date.now()) };
     const forgetPass = () => this.forgetPurgeJob().run();
@@ -5487,7 +5482,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const modelAccess: OwnerModelAccess = { openaiApiKey: key ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), primary: modelProviderSetting(this.env.WALDO_MODEL_PROVIDER), health: this.providerHealth, onAttempts, held: () => this.openHold().held() };
     const responder = createTelegramResponder(
       { ...modelAccess, floorReply: retryFloor, ...(this.env.WALDO_TOOL_LOADER === 'harness' ? { toolLoader: 'harness' as const } : this.env.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true } : {}), ...(this.env.WALDO_PROMPT_V2 === '1' ? { promptV2: true } : {}), ...(this.env.WALDO_THINKING_REPLAY === '1' ? { thinkingReplay: true } : {}), ...(this.env.WALDO_STRONG_ROLES === '1' ? { strongRoles: true } : {}), ...(contextCaps ? { contextCaps: budget } : {}), ...(callCeilings ? { callCeilings: budget } : {}) }, legacyStore, memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe, ...(this.env.WALDO_FILE_TOOLS === '1' ? { keeper: (runScope: RunEffectScope) => uploadKeeper(() => openWorkspace({ runScope }), identity.get<string>('do_name') ?? String(owner)) } : {}) }, clock, replayHandlers = surfaceHandlers([...workspaceTools, ...reminderHandlers(book), ...(meds ? medicationHandlers(meds) : []), ...healthLogHandlers(healthLogs), ...(this.env.HEALTH_COACHING === '1' ? [sleepNeedHandler(payload => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', 'settings_write', payload), () => this.setup('app').healthSamples('settings'))] : []), getHealthHandler(healthRead, clock), ...(this.env.SCREEN_TIME === '1' ? [getScreenTimeHandler(screenTimeReadBook(signedRpc(this.env), identity.get<string>('do_name') ?? null), clock)] : []), ...(this.env.DEVICE_PLACE === '1' ? [getDeviceContextHandler(deviceContextReadBook(signedRpc(this.env), identity.get<string>('do_name') ?? null), clock)] : []), ...(this.env.DEVICE_CALENDAR === '1' ? [queryPhoneCalendarHandler(phoneCalendarReader(this.deviceCalendar(), google), clock)] : []), ...weatherTools(this.env, signedRpc(this.env), identity.get<string>('do_name') ?? null, clock, typeof caches === 'undefined' ? null : cacheApiWeatherCache(caches.default)), ...standingOrderHandlers(orders), questHandler(quests), ...experimentHandlers(quests, readZones), ...(this.env.AUTONOMY_OWN_CALENDAR === '1' ? autonomyHandlers(grants, desk, { now: () => deps.now(), timezone: () => clock.timezone, surface: channel,
+      { download, transcribe: selectTranscriber(this.env)?.transcribe, keeper: (runScope: RunEffectScope) => uploadKeeper(() => openWorkspace({ runScope }), identity.get<string>('do_name') ?? String(owner)) }, clock, replayHandlers = surfaceHandlers([...workspaceTools, ...reminderHandlers(book), ...(meds ? medicationHandlers(meds) : []), ...healthLogHandlers(healthLogs), ...(this.env.HEALTH_COACHING === '1' ? [sleepNeedHandler(payload => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', 'settings_write', payload), () => this.setup('app').healthSamples('settings'))] : []), getHealthHandler(healthRead, clock), ...(this.env.SCREEN_TIME === '1' ? [getScreenTimeHandler(screenTimeReadBook(signedRpc(this.env), identity.get<string>('do_name') ?? null), clock)] : []), ...(this.env.DEVICE_PLACE === '1' ? [getDeviceContextHandler(deviceContextReadBook(signedRpc(this.env), identity.get<string>('do_name') ?? null), clock)] : []), ...(this.env.DEVICE_CALENDAR === '1' ? [queryPhoneCalendarHandler(phoneCalendarReader(this.deviceCalendar(), google), clock)] : []), ...weatherTools(this.env, signedRpc(this.env), identity.get<string>('do_name') ?? null, clock, typeof caches === 'undefined' ? null : cacheApiWeatherCache(caches.default)), ...standingOrderHandlers(orders), questHandler(quests), ...experimentHandlers(quests, readZones), ...(this.env.AUTONOMY_OWN_CALENDAR === '1' ? autonomyHandlers(grants, desk, { now: () => deps.now(), timezone: () => clock.timezone, surface: channel,
         account: async requested => (await google.client('calendar', undefined, undefined, requested).catch(() => null))?.account?.email ?? null }) : []), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...(this.env.APPROVE_IN_CHAT === '1' || this.env.AUTONOMOUS_BY_DEFAULT === '1' ? [approveShownHandler(desk)] : []), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
         // Owner-ruled OTP parity (September 27, 2026): the extracted artifact goes to the owner
         // as a direct message - fixed copy, no model involvement, and the send is never logged
@@ -5506,7 +5501,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           context.runScope?.admit();
           return this.forgetPurgeJob().track(texts);
         },
-      }), ...ownerLookupHandlers({ store: findingStore(storage.sql, memory, consentLedger(storage.sql, consentSwitches(this.env)), deps.now), pages: this.lookupPages, transaction: work => storage.transactionSync(work) }), ...(this.env.WALDO_FILE_TOOLS === '1' ? importHandlers({ open: openWorkspace, store: memory, sql: storage.sql, transaction: work => storage.transactionSync(work), ...(semantic ? { semantic } : {}) }) : []), ...(webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? [observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch, () => clock.timezone), this.lookupPages)] : []), observeReads(this.ownerBrowser.read(browsePageHandler(undefined, undefined, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))), this.lookupPages), this.ownerBrowser.act(this.ownerBrowser.guard(browserTaskHandler({ legacy: browseActHandler(undefined, undefined, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
+      }), ...ownerLookupHandlers({ store: findingStore(storage.sql, memory, consentLedger(storage.sql, consentSwitches(this.env)), deps.now), pages: this.lookupPages, transaction: work => storage.transactionSync(work) }), ...importHandlers({ open: openWorkspace, store: memory, sql: storage.sql, transaction: work => storage.transactionSync(work), ...(semantic ? { semantic } : {}) }), ...(webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? [observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch, () => clock.timezone), this.lookupPages)] : []), observeReads(this.ownerBrowser.read(browsePageHandler(undefined, undefined, this.env.OPENAI_API_KEY, fetch, browserPublicReadConfiguration(this.env))), this.lookupPages), this.ownerBrowser.act(this.ownerBrowser.guard(browserTaskHandler({ legacy: browseActHandler(undefined, undefined, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), host: context => this.browserTasks.resolve(context.authenticatedUserId, context.assertTaskSourceCurrent), propose: async (payload, context) => {
         if (!context.assertTaskSourceCurrent) throw Error('browser task source unavailable');
         await context.assertTaskSourceCurrent();
         const [ownerKey] = await currentTaskOwnerKeys(); await context.assertTaskSourceCurrent();
@@ -5527,7 +5522,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         context.runScope?.admit();
         if (!auth || auth.do_name !== doName || !auth.capabilities.includes(input.class) || identity.get<string>('do_name') !== doName) return { accepted: false, reason: 'unavailable' };
         return this.env.DEVICE_BRIDGE_DO.get(this.env.DEVICE_BRIDGE_DO.idFromName(device.device_id)).enqueueCommand({ ...input, owner_id: auth.owner_id, device_id: device.device_id });
-      } }), ...loopHandlers(loops, closableIn, this.env.PROACTIVE_GATE === '1'), ...schedulePreferenceHandlers(schedPrefs, async () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable: await armableNow(), cancelMachine, alongHeartbeat: lookFollows, sweepCarriesUpdates }), (card, time) => ownerCardTime(cardTimeDeps(Date.now()), card, time, this.env.WAKE_BRIEF === '1'), (zone) => confirmZone(zone, Date.now(), undefined, true)), ...taskToolHandlers({ book: this.jobs(), now: Date.now, timezone: () => clock.timezone, surface: channel, wake: due => armTaskJobsWake(storage, due), fence: id => this.tasks.cancelled(id), log, steer: this.env.WALDO_TASK_STEER === '1',
+      } }), ...loopHandlers(loops, closableIn, this.env.PROACTIVE_GATE === '1'), ...schedulePreferenceHandlers(schedPrefs, async () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable: await armableNow(), cancelMachine, alongHeartbeat: lookFollows, sweepCarriesUpdates }), (card, time) => ownerCardTime(cardTimeDeps(Date.now()), card, time, this.env.WAKE_BRIEF === '1'), (zone) => confirmZone(zone, Date.now(), undefined, true)), ...taskToolHandlers({ book: this.jobs(), now: Date.now, timezone: () => clock.timezone, surface: channel, wake: due => armTaskJobsWake(storage, due), fence: id => this.tasks.cancelled(id), log,
         // A task started by an app thread's own turn (the call's run scope is that message's attempt) reports in that thread.
         conversationRef: ctx => { const record = this.activeApp; return record && ctx.runScope?.runId === record.id && ctx.runScope.attempt === record.attempt && threadOfChain(record.conversationRef) ? record.conversationRef : null; } })]), undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; }, approvableHere: () => desk.approvableHere() }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now()); const trails = forgetTrails(this.ctx.storage.sql, texts) + dayPlanBook(this.ctx.storage.sql).forgetWhy(texts); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + trails + titles.remaining }; }), undefined,
       (opt) => opt ? [openLoopsPrompt(loops, clock.timezone, opt.loopsRoom, false, Date.now()), runningTasksLine(this.jobs(), Date.now()),
@@ -5549,13 +5544,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         noteUnfinished:(line,scope)=>this.appInbox.noteLanded(scope.runId,scope.attempt,line),
         }),jobHost:this.jobHostFor(admission=>ownerChainRef('app',admission.invocation.verified_authority.principal_ref)),
         // An app job runs on the owner's main chain; the memory tools are bound to the app chat, the one the owner's turns write from.
-        memoryChat:(chain,principal)=>chain===ownerChainRef('app',principal)?surfaceChatRef('app',owner):chain,ownerProfile:google.nameLine,watchStatus,connectors,dayCards,loopIsSourceBound:loops.sourceBound,loopHasPassed:id=>loops.passed(id,Date.now(),clock.timezone),promptOwnText:trace=>ownTextRuns.has(trace),...memoryHooks,turnCharts:(id:string)=>turnCharts.take(id),...(spend ? { spend } : {}),forgetBarrier,forgetPass,profileView,newerOwnerMessages,...(finishedTasks ? { finishedTasks } : {}),...router} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
+        memoryChat:(chain,principal)=>chain===ownerChainRef('app',principal)?surfaceChatRef('app',owner):chain,ownerProfile:google.nameLine,watchStatus,connectors,dayCards,loopIsSourceBound:loops.sourceBound,loopHasPassed:id=>loops.passed(id,Date.now(),clock.timezone),promptOwnText:trace=>ownTextRuns.has(trace),...memoryHooks,turnCharts:(id:string)=>turnCharts.take(id),...(spend ? { spend } : {}),forgetBarrier,forgetPass,profileView,newerOwnerMessages,finishedTasks,...router} : channel === 'imessage' ? {contextHost:{prepare:async (turn,scope)=>{
         const record=this.activeIMessage;
         if(!record||record.id!==scope.runId||record.attempt!==scope.attempt||turn.text!==iMessageTurnText(record))throw new ClosedRunError();
         return iMessageOwnerContext(this.imessageHost,record,scope,{ownerProfile:google.nameLine});
       }},history:context=>({...indexedConversationStore(canonicalOwnerConversationStore(this.ctx.storage,context,undefined,undefined,uncompacted),episodes,()=>Date.now()),recalls:recallReach(this.ctx.storage.kv,context.invocation.verified_authority.principal_ref,null)}),
       // Scheduled jobs for an owner whose only surface is iMessage run as the owner the pass admitted.
-      jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus,connectors,dayCards,loopIsSourceBound:loops.sourceBound,loopHasPassed:id=>loops.passed(id,Date.now(),clock.timezone),promptOwnText:trace=>ownTextRuns.has(trace),...memoryHooks,...(spend ? { spend } : {}),forgetBarrier,forgetPass,profileView,newerOwnerMessages,...(finishedTasks ? { finishedTasks } : {}),...router} : {...(telegramContext ?? timelineContext),jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus,connectors,dayCards,loopIsSourceBound:loops.sourceBound,loopHasPassed:id=>loops.passed(id,Date.now(),clock.timezone),promptOwnText:trace=>ownTextRuns.has(trace),...memoryHooks,...(spend ? { spend } : {}),forgetBarrier,forgetPass,profileView,newerOwnerMessages,...(finishedTasks ? { finishedTasks } : {}),...router,newerOwnerInput:scope=>this.whatsappOvertaken(scope)},
+      jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus,connectors,dayCards,loopIsSourceBound:loops.sourceBound,loopHasPassed:id=>loops.passed(id,Date.now(),clock.timezone),promptOwnText:trace=>ownTextRuns.has(trace),...memoryHooks,...(spend ? { spend } : {}),forgetBarrier,forgetPass,profileView,newerOwnerMessages,finishedTasks,...router} : {...(telegramContext ?? timelineContext),jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus,connectors,dayCards,loopIsSourceBound:loops.sourceBound,loopHasPassed:id=>loops.passed(id,Date.now(),clock.timezone),promptOwnText:trace=>ownTextRuns.has(trace),...memoryHooks,...(spend ? { spend } : {}),forgetBarrier,forgetPass,profileView,newerOwnerMessages,finishedTasks,...router,newerOwnerInput:scope=>this.whatsappOvertaken(scope)},
     );
     // A job prompt built on the ledger: the owner's health logs reach the model as this turn's context.
     // Every job here runs tainted: an action or a standing change it wants goes to the owner's card, as in an owner turn that

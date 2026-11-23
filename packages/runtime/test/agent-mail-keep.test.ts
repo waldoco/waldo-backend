@@ -11,7 +11,7 @@ const raw = (boundary = 'b0') => new TextEncoder().encode([
   `--${boundary}`, 'Content-Type: application/zip; name="bundle.zip"', 'Content-Disposition: attachment; filename="bundle.zip"', 'Content-Transfer-Encoding: base64', '', btoa('PK\x03\x04fixture'),
   `--${boundary}--`, ''].join('\r\n'));
 
-describe('mail attachments with WALDO_FILE_TOOLS on', () => {
+describe('mail attachments kept in the workspace', () => {
   it('keeps every attachment, keyed by the mail row, and names where each went', async () => {
     const kept: KeepFile[] = [];
     const keep = vi.fn(async (file: KeepFile) => { kept.push(file); return { status: 'saved' as const, path: `mail/f/${file.filename}`, file_id: `id-${kept.length}`, revision: 1 }; });

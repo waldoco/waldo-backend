@@ -37,7 +37,6 @@ export type IMessageEnv = OwnerDirectoryEnv & PhotonEnv & PublicOriginEnv & Read
   IMESSAGE_MEDIA?: string;
   /** "1": a voice note sent alone is fetched from Photon and transcribed. Otherwise it gets one reply to type it or use the app. */
   IMESSAGE_VOICE?: string;
-  WALDO_FILE_TOOLS?: string;
 }> & PhotonMediaEnv & TranscriberEnv;
 
 /** Composition gate: every piece must be present, otherwise the connector is disabled (no fallback). */

@@ -9,7 +9,7 @@ import { isMachine, jobCheckpoint, taskBrief, type JobBook, type JobRow } from '
 import { FINISH_TASK } from './profiles';
 
 // The progress watchdog: a check on running background work, made by the brain in its alarm pass and apart from the worker
-// doing the work (WALDO_WATCHDOG). Liveness is recorded as facts and re-checked each pass until it clears: a lost lease, a
+// doing the work. Liveness is recorded as facts and re-checked each pass until it clears: a lost lease, a
 // provider outage, a worker that stopped checkpointing, a jobs lane that ran late. The lane stays the one retry owner for those. Whether
 // a worker is getting closer to its brief is the model's judgment: a cheap model reads the brief, the steps and the timings
 // and says progressing, looping or drifting, and whether to nudge or park. The watchdog acts only through the job book: a
