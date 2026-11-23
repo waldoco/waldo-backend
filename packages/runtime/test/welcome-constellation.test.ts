@@ -6,7 +6,6 @@ import { applyPromotion, claimStore, textFingerprint, turnMemoryPrompt, type Cla
 import { nodeConfirmation, nodeSources } from '../src/memory/node-sources';
 import { readMemoryGraph } from '../src/channels/memory-graph';
 import { barrierMemory } from '../src/context-composer/forget-barrier';
-import { ownerProfilePrompt } from '../src/memory/owner-profile';
 import {
   confirmWelcomeNode, correctWelcomeNode, runWelcome, WELCOME_HEALTH_NOT_SHARED, WELCOME_MAX_NODES, WELCOME_SCHEMA, WELCOME_STAGE_BUDGET_MS, welcomeBuild, welcomeSupportIds,
   type StageInput, type WelcomeDeps, type WelcomeStage,
@@ -409,13 +408,12 @@ describe('welcome nodes: what reads them', () => {
       const { build, claims, deps: d } = deps(sql, transaction, { answers: { health: answer(healthNode()), calendar: answer(calendarNode()), mail: answer(hostile) } });
       build.start();
       await runWelcome(d);
-      for (const prompt of [turnMemoryPrompt(claims, 'hi'), ownerProfilePrompt(claims, 'hi')]) {
-        const block = constellation(prompt);
-        expect(block).toContain('Late weekend sleeper');
-        expect(prompt).not.toContain('stranger address');
-        expect(prompt).not.toContain('Monday planning ritual');
-        expect(block).toContain('2 more of Waldo\'s reads');
-      }
+      const prompt = turnMemoryPrompt(claims, 'hi');
+      const waiting = constellation(prompt);
+      expect(waiting).toContain('Late weekend sleeper');
+      expect(prompt).not.toContain('stranger address');
+      expect(prompt).not.toContain('Monday planning ritual');
+      expect(waiting).toContain('2 more of Waldo\'s reads');
       const id = claims.nodes().find((row) => row.label === 'Monday planning ritual')!.id;
       expect(confirmWelcomeNode(claims, id, new Date(T0).toISOString())).toBe(true);
       const block = constellation(turnMemoryPrompt(claims, 'hi'));

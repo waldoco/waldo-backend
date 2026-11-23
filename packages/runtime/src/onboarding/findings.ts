@@ -47,7 +47,6 @@ const shown = (row: Row): AppFindingV1 => ({ finding_id: row.id, category: row.c
 const UNCONFIRMED_MS = APP_FINDING_UNCONFIRMED_DAYS_V1 * 86_400_000;
 // A kept or corrected finding's claim carries this ref, so a reader can tell what the owner kept from the look-up.
 const LOOKUP_REF_PREFIX = 'owner, look-up ';
-export const isLookupRef = (ref: string | null | undefined): boolean => typeof ref === 'string' && ref.startsWith(LOOKUP_REF_PREFIX);
 
 // Findings about the owner from the public web. They are external content, kept apart from owner memory: no owner turn's
 // prompt carries one until the owner keeps or corrects it, which turns it into an owner claim through the claim store. The

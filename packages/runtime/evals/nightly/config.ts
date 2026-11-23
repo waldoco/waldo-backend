@@ -49,8 +49,8 @@ const withAblation = (run: NightlyRun, env: Env): NightlyRun => {
   return { ...run, gateway: () => ablating(run.gateway(), ids, () => { misses += 1; }), candidate: ablationLabel(run.candidate, ids), ablationMisses: () => misses };
 };
 
-// WALDO_EVAL_PROFILE=staging runs the staging Worker's turn shape (staging-profile.ts): its tool loader, compaction and forget
-// barrier from wrangler.jsonc, and the Anthropic fallback the owner route takes when the first model fails. The profile and
+// WALDO_EVAL_PROFILE=staging runs the staging Worker's turn shape (staging-profile.ts): its tool loader and compaction from
+// wrangler.jsonc, semantic recall and memory selection, and the Anthropic fallback the owner route takes when the first model fails. The profile and
 // the two settings it would contradict are never set together, so a card is never half one and half the other.
 const profileOf = (env: Env, vars: () => StagingVars): StagingProfile | undefined => {
   const named = env.WALDO_EVAL_PROFILE;
@@ -77,7 +77,7 @@ const baseConfig = (env: Env, stagingVars: () => StagingVars): NightlyRun => {
   if (![undefined, 'on', 'off'].includes(env.WALDO_EVAL_PROMPT_V2)) throw new Error('WALDO_EVAL_PROMPT_V2 must be on or off');
   const promptV2 = env.WALDO_EVAL_PROMPT_V2 === undefined ? profile?.promptV2 === true : env.WALDO_EVAL_PROMPT_V2 === 'on';
   const menu = {
-    ...(profile ? { ...(profile.toolSearch ? { toolSearch: true } : {}), ...(profile.toolLoader ? { toolLoader: profile.toolLoader } : {}), forgetBarrier: profile.forgetBarrier, profile: profile.label }
+    ...(profile ? { ...(profile.toolSearch ? { toolSearch: true } : {}), ...(profile.toolLoader ? { toolLoader: profile.toolLoader } : {}), profile: profile.label }
       : toolSearch ? { toolSearch: true } : {}),
     ...(promptV2 ? { promptV2: true } : {}),
   };
@@ -85,15 +85,15 @@ const baseConfig = (env: Env, stagingVars: () => StagingVars): NightlyRun => {
   // for the app; the scorecard names it so the two runs are never mixed up.
   const compaction: Readonly<{ compaction?: CompactionSettings }> = profile ? (profile.compaction.enabled ? { compaction: profile.compaction } : {})
     : env.WALDO_EVAL_COMPACTION === 'on' ? { compaction: compactionSettings({ WALDO_COMPACTION: 'on' }) } : {};
-  // WALDO_EVAL_SEMANTIC=on runs every trial with semantic recall on, as MEMORY_SEMANTIC_RECALL=1 does for an owner: a
+  // WALDO_EVAL_SEMANTIC=on runs every trial with semantic recall on, as an owner object with Workers AI bound does: a
   // recorded run over the concept fake, a live one over Workers AI (CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN). The card
   // names it, so a run with the leg is never compared as one without.
   if (![undefined, 'on', 'off'].includes(env.WALDO_EVAL_SEMANTIC)) throw new Error('WALDO_EVAL_SEMANTIC must be on or off');
-  const semantic = profile ? profile.semantic : env.WALDO_EVAL_SEMANTIC === 'on';
-  // WALDO_EVAL_MEMORY_SELECTION=on shows every trial option B's memory, as MEMORY_SELECTION=1 does for an owner; the card
+  const semantic = profile !== undefined || env.WALDO_EVAL_SEMANTIC === 'on';
+  // WALDO_EVAL_MEMORY_SELECTION=on shows every trial option B's memory, as every owner turn does; the card
   // names it, so the two ways of choosing memory are compared, never mixed.
   if (![undefined, 'on', 'off'].includes(env.WALDO_EVAL_MEMORY_SELECTION)) throw new Error('WALDO_EVAL_MEMORY_SELECTION must be on or off');
-  const memorySelection = profile ? profile.memorySelection : env.WALDO_EVAL_MEMORY_SELECTION === 'on';
+  const memorySelection = profile !== undefined || env.WALDO_EVAL_MEMORY_SELECTION === 'on';
   const memory = env.WALDO_EVAL_MEMORY ?? 'claims';
   if (memory !== 'claims' && memory !== 'raw_history') throw new Error('WALDO_EVAL_MEMORY must be claims or raw_history');
   if (semantic && memory === 'raw_history') throw new Error('raw_history has no claim store for semantic recall to embed');

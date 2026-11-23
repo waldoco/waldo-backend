@@ -5,7 +5,7 @@ import type { TurnLogEntry } from './owner-turn-types';
 import { localIso } from './reminders';
 import { changeLines, type Change, type UpdateBook } from './update-cards';
 
-// The nightly pass's read of the calendar and mail changes the update sweep recorded, behind MEMORY_NIGHTLY_SOURCE_UPDATES.
+// The nightly pass's read of the calendar and mail changes the update sweep recorded.
 // It keeps its own mark and never folds a row, so the day cards still read every change they would have. A change carrying a
 // topic an unfinished forget still holds never reaches the model; a finished forget is a content-free barrier, enforced at
 // admission as for every writer. The model call runs outside any transaction; the adds and the mark then commit together, so
@@ -46,8 +46,6 @@ export type SourcesDeps = Readonly<{
   timezone: string;
   now: () => number;
   health: boolean;
-  // PEOPLE_MAP: the pass may say who a claim is about, and new mail from a person's address is their last contact.
-  people?: boolean;
   // One model call over the changes text; its reply is applied here.
   ask: (updates: string) => Promise<string>;
   log: (entry: TurnLogEntry) => void;
@@ -89,13 +87,14 @@ export const consolidateSources = async (deps: SourcesDeps, trace: string, calls
       const detail = deps.transaction(() => {
         if (!settle(last)) return null;
         const at = new Date(deps.now()).toISOString();
-        // The new mail this batch read, not held by a forget: whom each came from, and when.
-        const heard = deps.people ? rows.filter((row) => row.at <= last).flatMap((row) => row.changes.filter((change) => !held(change.detail)).flatMap((change) => {
+        // The new mail this batch read, not held by a forget: whom each came from, and when. The pass may say who a claim is
+        // about, and new mail from a person's address is their last contact.
+        const heard = rows.filter((row) => row.at <= last).flatMap((row) => row.changes.filter((change) => !held(change.detail)).flatMap((change) => {
           const mail = newMail(change, row.at);
           const address = mail ? fromAddress(mail.from) : null;
           return mail && address ? [{ address, at: new Date(mail.at).toISOString() }] : [];
-        })) : [];
-        const scope = deps.people ? { refs: new Set(knownPeople(deps.claims).map((row) => row.id)), addresses: new Set(heard.map((mail) => mail.address)) } : undefined;
+        }));
+        const scope = { refs: new Set(knownPeople(deps.claims).map((row) => row.id)), addresses: new Set(heard.map((mail) => mail.address)) };
         const detail = applyClaimOps(deps.claims, ops, at, `outside content, ${trace}`, undefined, { shared: updates, outside: true, sharedParts: parts }, false, undefined, undefined, undefined, scope);
         for (const mail of heard) deps.claims.people.heardFrom(mail.address, mail.at);
         return detail;

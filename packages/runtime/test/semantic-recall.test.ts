@@ -181,13 +181,13 @@ describe('semantic recall read path', () => {
   it('with outside notes on, a note learned from outside content is embedded and found by meaning, but only by a store that recalls such notes', async () => {
     await inOwner(async ({ sql, store, ai }) => {
       owned(store, 'Cafe on 4th Cross has the best latte', 'fact', 'untrusted');
-      const semantic = semanticRecallFromEnv({ MEMORY_SEMANTIC_RECALL: '1', MEMORY_OUTSIDE_NOTES: '1', AI: ai }, { sql, transaction: (fn) => fn() })!;
+      const semantic = semanticRecallFromEnv({ MEMORY_OUTSIDE_NOTES: '1', AI: ai }, { sql, transaction: (fn) => fn() })!;
       expect(await semantic.sync()).toEqual({ embedded: 1, withheld: 0 });
       const ask = (claims: Pick<ClaimStore, 'recall'>) => recallForTurn({ claims, question: 'an espresso somewhere', room: 100_000, holds: nothingHeld, semantic: semantic.near });
       expect((await ask(store)).text).toBe('');
       expect((await ask(outsideView(withOutsideNotes(store)))).text).toContain('best latte');
       // Off, the same note is neither embedded nor ranked.
-      const off = semanticRecallFromEnv({ MEMORY_SEMANTIC_RECALL: '1', AI: ai }, { sql, transaction: (fn) => fn() })!;
+      const off = semanticRecallFromEnv({ AI: ai }, { sql, transaction: (fn) => fn() })!;
       expect(await off.near('an espresso somewhere')).toEqual([]);
     });
   });
@@ -287,7 +287,7 @@ describe('semantic recall sweep after a failure', () => {
       owned(store, DENTIST);
       const ai = fakeEmbeddings();
       const slow = { run: async (...args: Parameters<FakeEmbeddings['run']>) => { await new Promise((resolve) => setTimeout(resolve, EMBED_TIMEOUT_MS + 100)); return ai.run(...args); } };
-      const semantic = semanticRecallFromEnv({ MEMORY_SEMANTIC_RECALL: '1', AI: slow }, { sql, transaction: (fn) => fn() })!;
+      const semantic = semanticRecallFromEnv({ AI: slow }, { sql, transaction: (fn) => fn() })!;
       const [query, sweep] = await Promise.allSettled([semantic.near('my dentist'), semantic.sync()]);
       expect(query).toEqual({ status: 'rejected', reason: new Error('embedding timed out') });
       expect(sweep).toEqual({ status: 'fulfilled', value: { embedded: 1, withheld: 0 } });
@@ -407,21 +407,12 @@ describe('semantic recall wiring', () => {
     });
   });
 
-  it('is off unless the flag is 1 and Workers AI is bound', async () => {
+  it('is off unless Workers AI is bound', async () => {
     await inOwner(async ({ sql }) => {
       const deps = { sql, transaction: <T>(fn: () => T) => fn() };
-      const ai = fakeEmbeddings();
-      expect(semanticRecallFromEnv({ AI: ai }, deps)).toBeUndefined();
-      expect(semanticRecallFromEnv({ MEMORY_SEMANTIC_RECALL: '0', AI: ai }, deps)).toBeUndefined();
-      expect(semanticRecallFromEnv({ MEMORY_SEMANTIC_RECALL: '1' }, deps)).toBeUndefined();
-      expect(semanticRecallFromEnv({ MEMORY_SEMANTIC_RECALL: '1', AI: ai }, deps)).toBeDefined();
+      expect(semanticRecallFromEnv({}, deps)).toBeUndefined();
+      expect(semanticRecallFromEnv({ AI: fakeEmbeddings() }, deps)).toBeDefined();
     });
-  });
-
-  it('ships off in production and on in staging', async () => {
-    // @ts-expect-error vite-only API
-    const raw = Object.values(import.meta.glob('../wrangler.jsonc', { query: '?raw', import: 'default', eager: true }))[0] as string;
-    expect(raw.match(/"MEMORY_SEMANTIC_RECALL": "([^"]*)"/g)).toEqual(['"MEMORY_SEMANTIC_RECALL": "0"', '"MEMORY_SEMANTIC_RECALL": "1"']);
   });
 
   it('fuses ranked lists by reciprocal rank, counting an item in both once', () => {

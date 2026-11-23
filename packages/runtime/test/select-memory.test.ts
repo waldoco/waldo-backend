@@ -188,7 +188,7 @@ describe('selectMemory', () => {
   });
 });
 
-describe('the owner turn, with MEMORY_SELECTION on and off', () => {
+describe('the owner turn, with memory selection and without', () => {
   const turnContext = async (store: ClaimStore, selection: boolean, text: string, sql?: SqlStorage) => {
     const requests: LLMGatewayRequest[] = [];
     const gateway: LLMGatewayAdapter = { complete: async (request) => {

@@ -173,9 +173,6 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   SCREEN_TIME?: string;
   // '1': app owner turns are offered show_health_chart, and app chat reads at chat=11 draw health charts from a live read.
   HEALTH_CHARTS?: string;
-  // '1': memory keeps people (who claims are about, rings, dates that come round); read_memory reads them and forget_memory
-  // forgets one person. Off unless '1'.
-  PEOPLE_MAP?: string;
   // "1" serves /app/v1/device-context (the owner's place consent and the latest coarse place per phone) and offers
   // get_device_context, which reads each phone's zone and city. Off unless "1".
   DEVICE_PLACE?: string;
@@ -214,9 +211,6 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   WALDO_RECALL_CHAIN?: string;
   // '1': every owner upload is kept in the workspace, and extract_archive is offered.
   WALDO_FILE_TOOLS?: string;
-  // 'on' cuts only the forgotten words and items from the model's view while a forget finishes; anything else keeps the
-  // earlier rule, which withholds a whole read that mentions the topic.
-  WALDO_FORGET_BARRIER?: string;
   SMALLEST_AI_API_KEY?: string;
   BRAVE_SEARCH_API_KEY?: string;
   // A5 artifact bodies; absent in tests/local, bound in wrangler (r2_buckets).
@@ -299,10 +293,6 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   GMAIL_PUSH_PROJECT?: string;
   MCP_READ_INTENTS?: string;
   DRIVE_READS?: string;
-  // "1" with Workers AI bound adds the meaning leg to memory recall; anything else keeps recall to words.
-  MEMORY_SEMANTIC_RECALL?: string;
-  // "1" shows the model the memory it chose (pins, what is new since the nightly review, recall stubs) instead of the newest facts.
-  MEMORY_SELECTION?: string;
   AI?: EmbeddingRunner;
   // "1" offers the in-app terms and privacy notice; anything else holds them back, until the owner approves their copy.
   APP_AGREEMENTS?: string;
@@ -314,16 +304,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" runs the second welcome build: sources in order over the constellation so far, look-up findings as Waldo's read, and
   // late sources read once; anything else keeps the first build.
   WELCOME_V2?: string;
-  // "1" gives every owner turn the owner profile view (memory/owner-profile.ts) in place of the pinned blocks; anything else keeps them.
-  OWNER_PROFILE?: string;
-  MEMORY_NIGHTLY_SOURCE_UPDATES?: string;
-  // "1" with MEMORY_NIGHTLY_SOURCE_UPDATES also "1": mail and calendar changes reach memory the same day (memory/consolidator.ts).
-  MEMORY_DAYTIME_CONSOLIDATOR?: string;
-  MEMORY_VALIDITY?: string;
   // "1": an owner turn also recalls notes learned from mail and calendar, shown as not the owner's words; a turn that recalls one is marked as carrying outside content (memory/claims.ts withOutsideNotes).
   MEMORY_OUTSIDE_NOTES?: string;
-  MEMORY_CLAIM_CONTROLS?: string;
-  MEMORY_USED_SHOWN?: string;
   // Opt-in only after mixed-inbox privacy and live usefulness acceptance.
   MAIL_SOURCE_FOLLOWUPS?: string;
   // Calendar-only prep remains off until controlled owner-path acceptance.

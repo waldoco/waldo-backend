@@ -62,7 +62,7 @@ export const coreMemory = (store: ClaimStore, room: number, reviewed: Reviewed):
   return parts.join('\n');
 };
 
-// MEMORY_SELECTION=1: the owner turn shows option B, judging what is new as of this turn.
+// The owner turn shows option B, judging what is new as of this turn.
 export type MemorySelection = Readonly<{ reviewed(): Reviewed }>;
 // How long selection waits for recall: the lexical path alone, or one embedding call when the meaning leg is on. The
 // embedding call gives up on its own timer first, so a slow one fails only that leg and the lines found by words still arrive.

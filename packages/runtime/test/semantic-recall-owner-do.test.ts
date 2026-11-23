@@ -63,7 +63,7 @@ const appTurn = async (name: string, extra: Readonly<Record<string, string>> = {
     expect(memory.pin(1, 'facts', 1)).toBe(true);
     ai = fakeEmbeddings();
     await semanticRecall({ sql, transaction, embedder: workersAiEmbedder(ai) }).sync();
-    const owner = new OwnerDO(state, { ...env, MEMORY_SEMANTIC_RECALL: '1', AI: ai, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, ...extra });
+    const owner = new OwnerDO(state, { ...env, AI: ai, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, ...extra });
     const sent = await owner.fetch(new Request('https://owner.invalid/app/v1/chat/main/messages', { method: 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'c'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: 'client-dentist', text: 'When is my dentist appointment?' }) }));
     expect(sent.status, await sent.clone().text()).toBe(202);
     const { message_id: id } = await sent.json() as { message_id: string };
@@ -106,7 +106,7 @@ it('keeps a failed sweep\'s retry time in the owner object\'s KV, where every ru
     const ai = fakeEmbeddings();
     ai.fail = true;
     const before = Date.now();
-    const owner = new OwnerDO(state, { ...env, MEMORY_SEMANTIC_RECALL: '1', AI: ai, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const owner = new OwnerDO(state, { ...env, AI: ai, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     const sent = await owner.fetch(new Request('https://owner.invalid/app/v1/chat/main/messages', { method: 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'c'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: 'client-retry', text: 'Anything on today?' }) }));
     expect(sent.status, await sent.clone().text()).toBe(202);
     await vi.waitFor(() => expect(state.storage.kv.get<number>(SWEEP_RETRY_KEY)).toBeGreaterThanOrEqual(before + SWEEP_RETRY_MS), { timeout: 10_000, interval: 20 });

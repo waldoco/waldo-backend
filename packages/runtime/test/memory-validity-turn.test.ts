@@ -6,8 +6,7 @@ import type { LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
-// MEMORY_VALIDITY through a real owner turn: a fact that was replaced reaches the model dated and marked as over only when
-// the switch is on.
+// Memory validity through a real owner turn: a fact that was replaced reaches the model dated and marked as over.
 const REPLY = 'Synthetic reply marker quartz-heron';
 const seen = vi.hoisted(() => ({ prompts: [] as string[] }));
 vi.mock('../src/channels/telegram-turn', async load => {
@@ -50,12 +49,12 @@ afterEach(() => { vi.unstubAllGlobals(); });
 const headers = (name: string) => ({ 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' });
 type Owner = InstanceType<typeof OwnerDO>;
 // One owner with `exchanges` exchanges in main chat; `run` gets the owner object, its storage and the newest pair's ids.
-const withExchange = <T>(name: string, run: (owner: Owner, state: DurableObjectState, ids: Readonly<{ mine: string; reply: string }>) => Promise<T>, exchanges = 1, config: object = {}) =>
+const withExchange = <T>(name: string, run: (owner: Owner, state: DurableObjectState, ids: Readonly<{ mine: string; reply: string }>) => Promise<T>, exchanges = 1) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql); ensureSchema(state.storage);
     state.storage.kv.put('do_name', name);
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, ...config });
+    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     const seed = claimStore(state.storage.sql, work => state.storage.transactionSync(work));
     seed.add({ kind: 'fact', text: 'Lives in Leeds near the canal', source: 'stated', evidence: 'synthetic', origin: 'owner', source_ref: 'owner, seed' }, '2026-09-01T00:00:00.000Z');
     seed.correct(1, { kind: 'fact', text: 'Lives in Pune near the river', source: 'stated', evidence: 'synthetic', origin: 'owner', source_ref: 'owner, seed2' }, '2026-10-12T21:00:00.000Z');
@@ -75,13 +74,9 @@ const withExchange = <T>(name: string, run: (owner: Owner, state: DurableObjectS
 beforeEach(() => { seen.prompts = []; });
 const sawHistory = () => seen.prompts.some(prompt => prompt.includes('NO LONGER TRUE') && prompt.includes('Leeds'));
 
-it('shows the model a replaced fact, dated and marked as over, when the switch is on', async () => {
+it('shows the model a replaced fact, dated and marked as over', async () => {
   await withExchange('validity-on', async () => {
     expect(sawHistory()).toBe(true);
     expect(seen.prompts.some(prompt => prompt.includes('held until 2026-10-12'))).toBe(true);
-  }, 1, { MEMORY_VALIDITY: '1' });
-});
-
-it('shows it nothing of the kind when the switch is off', async () => {
-  await withExchange('validity-off', async () => { expect(sawHistory()).toBe(false); });
+  });
 });

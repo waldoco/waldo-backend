@@ -7,7 +7,6 @@ import type { ChatChannels } from '../src/channels/chat-channel-links';
 import { appOnboardingRequest, ownerOnboardingHost, type OwnerOnboardingDeps } from '../src/channels/app-onboarding';
 import { APP_CONTRACT_HEADER } from '../../contracts/src/app/core';
 import { claimStore, turnMemoryPrompt } from '../src/memory/claims';
-import { ownerProfilePrompt } from '../src/memory/owner-profile';
 import { numericHealthIn } from '../src/scribe/sanitiser';
 import { consentLedger, CURRENT_CONSENT_VERSION } from '../src/onboarding/consent-ledger';
 import { findingStore } from '../src/onboarding/findings';
@@ -271,7 +270,7 @@ describe('setup answers, onboarding revision 2', () => {
     expect(facts(storage).map(claim => ({ text: claim.text, origin: claim.origin, source: claim.source, grounded: claim.verification_status, pinned: claim.pinned !== null })))
       .toEqual(expect.arrayContaining(TEXTS.map(text => ({ text, origin: 'owner', source: 'stated', grounded: 'owner-grounded', pinned: true }))));
     expect(facts(storage)).toHaveLength(8);
-    for (const prompt of [turnMemoryPrompt(store(storage), 'anything'), ownerProfilePrompt(store(storage), 'anything')]) for (const text of TEXTS) expect(prompt).toContain(text);
+    for (const text of TEXTS) expect(turnMemoryPrompt(store(storage), 'anything')).toContain(text);
   }, { agreementsOffered: false }));
 
   it('keeps the picks about the owner\'s body apart, as health, so a path that leaves health out leaves them out', () => owner(async ({ storage, send }) => {
@@ -299,7 +298,7 @@ describe('setup answers, onboarding revision 2', () => {
     expect(facts(storage).filter(claim => claim.source_ref?.includes('spots') || claim.source_ref?.includes('low')).map(claim => claim.text)).toEqual(['Where it is hardest for them: getting to sleep.']);
   }, { agreementsOffered: false }));
 
-  it('keeps every answer in both pinned views at its longest', () => owner(async ({ storage, send }) => {
+  it('keeps every answer in the pinned blocks at its longest', () => owner(async ({ storage, send }) => {
     const words = (topic: string) => `${topic} ${'and so on '.repeat(40)}`.slice(0, 280).trim();
     const longest = {
       name: 'A'.repeat(80), day: { shape: 'varies', own_words: words('day') }, slips: { picked: ['replies', 'overlaps', 'promises', 'breaks', 'evenings'], own_words: words('slips') }, wearable: 'garmin',
@@ -309,10 +308,9 @@ describe('setup answers, onboarding revision 2', () => {
     };
     expect((await send(ANSWERS, { request_id: `setup-more-${request++}`, ...longest }, 'POST', REVISION_2)).status).toBe(200);
     expect(facts(storage)).toHaveLength(13);
-    for (const prompt of [turnMemoryPrompt(store(storage), 'anything'), ownerProfilePrompt(store(storage), 'anything')]) {
-      for (const claim of facts(storage)) expect(prompt).toContain(claim.text);
-      expect(prompt).not.toContain('not shown here');
-    }
+    const prompt = turnMemoryPrompt(store(storage), 'anything');
+    for (const claim of facts(storage)) expect(prompt).toContain(claim.text);
+    expect(prompt).not.toContain('not shown here');
   }, { agreementsOffered: false }));
 
   it('takes the longest answers in characters JSON spells out, past the cap the other onboarding routes keep', () => owner(async ({ send }) => {
@@ -379,7 +377,6 @@ describe('setup answers, onboarding revision 2', () => {
     expect(numericHealthIn(claim!.text)).toBe(true);
     expect([claim!.text, claim!.pinned]).toEqual([`What happens when they run low, in their own words at setup on 1970-01-01: "${said}"`, null]);
     expect(turnMemoryPrompt(store(storage), 'anything')).not.toContain(said);
-    expect(ownerProfilePrompt(store(storage), 'anything')).not.toContain(said);
   }, { agreementsOffered: false }));
 
   it('keeps a reading stated in any answer\'s own words as health, so recall that leaves health out never returns it', () => owner(async ({ storage, send }) => {
@@ -410,7 +407,7 @@ describe('setup answers, onboarding revision 2', () => {
     await send(ANSWERS, { request_id: `setup-more-${request++}`, ...MORE }, 'POST', REVISION_2);
     const memory = store(storage);
     memory.purge(facts(storage).map(claim => claim.id), new Date(5_000).toISOString());
-    for (const prompt of [turnMemoryPrompt(memory, 'anything'), ownerProfilePrompt(memory, 'anything')]) for (const text of TEXTS) expect(prompt).not.toContain(text);
+    for (const text of TEXTS) expect(turnMemoryPrompt(memory, 'anything')).not.toContain(text);
     const after = await send(ANSWERS, { request_id: `setup-more-${request++}`, name: 'Asha' }, 'POST', REVISION_2);
     expect((await after.json() as { held: unknown }).held).toEqual({ ...NONE, name: true });
   }, { agreementsOffered: false }));
@@ -442,7 +439,7 @@ describe('setup answers, onboarding revision 4', () => {
       'Where it is hardest for them: promises at work slipping.': ['fact', 'facts'],
       [TRAIN_TEXT]: ['routine', 'facts'],
     });
-    for (const prompt of [turnMemoryPrompt(store(storage), 'anything'), ownerProfilePrompt(store(storage), 'anything')]) expect(prompt).toContain(TRAIN_TEXT);
+    expect(turnMemoryPrompt(store(storage), 'anything')).toContain(TRAIN_TEXT);
     // The background decision's view, owner claims that are not health, still sees when they train.
     const memory = store(storage), noHealth = (claim: { origin: string | null; kind: string }) => claim.origin === 'owner' && claim.kind !== 'health';
     const decision = turnMemoryPrompt({ ...memory, claims: (status?: string) => memory.claims(status).filter(noHealth), recall: (...args: Parameters<typeof memory.recall>) => memory.recall(...args).filter(noHealth) }, 'anything');
@@ -476,10 +473,9 @@ describe('setup answers, onboarding revision 4', () => {
     const claim = facts(storage).find(fact => fact.text.includes(said));
     expect([claim!.text, claim!.kind, claim!.pinned]).toEqual([`Usually trains: at weekends. In their own words at setup on 1970-01-01: "${said}"`, 'health', null]);
     expect(turnMemoryPrompt(store(storage), 'anything')).not.toContain(said);
-    expect(ownerProfilePrompt(store(storage), 'anything')).not.toContain(said);
   }, { agreementsOffered: false }));
 
-  it('keeps every answer in both pinned views at its longest, training included', () => owner(async ({ storage, send }) => {
+  it('keeps every answer in the pinned blocks at its longest, training included', () => owner(async ({ storage, send }) => {
     const words = (topic: string) => `${topic} ${'and so on '.repeat(40)}`.slice(0, 280).trim();
     const longest = {
       name: 'A'.repeat(80), day: { shape: 'varies', own_words: words('day') }, slips: { picked: ['replies', 'overlaps', 'promises', 'breaks', 'evenings'], own_words: words('slips') }, wearable: 'garmin',
@@ -490,10 +486,9 @@ describe('setup answers, onboarding revision 4', () => {
     };
     expect((await send(ANSWERS, { request_id: `setup-train-${request++}`, ...longest }, 'POST', REVISION_4)).status).toBe(200);
     expect(facts(storage)).toHaveLength(14);
-    for (const prompt of [turnMemoryPrompt(store(storage), 'anything'), ownerProfilePrompt(store(storage), 'anything')]) {
-      for (const claim of facts(storage)) expect(prompt).toContain(claim.text);
-      expect(prompt).not.toContain('not shown here');
-    }
+    const prompt = turnMemoryPrompt(store(storage), 'anything');
+    for (const claim of facts(storage)) expect(prompt).toContain(claim.text);
+    expect(prompt).not.toContain('not shown here');
   }, { agreementsOffered: false }));
 
   it('takes the longest answers in characters JSON spells out under the answers route cap', () => owner(async ({ send }) => {

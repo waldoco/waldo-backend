@@ -7,7 +7,6 @@ import { OWNER_MODELS, type ModelName } from '@waldo/contracts';
 import { parseJsonc } from '../../../../scripts/jsonc.mjs';
 import { flatVars } from '../../../../scripts/wrangler-vars.mjs';
 import { compactionSettings, type CompactionSettings } from '../../src/conversation/compaction';
-import type { ForgetBarrierMode } from '../../src/context-composer/forget-barrier';
 import { modelProviderSetting } from '../../src/llm/owner-routes';
 
 export type StagingVars = Readonly<Record<string, string>>;
@@ -59,9 +58,6 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_QUESTS_CHARS: gap('the WALDO_CONTEXT_CAPS cap on quests; no trial holds that many'),
   WALDO_WHATS_NEW_CHARS: gap('the cap on an owner turn\'s what\'s new section; no trial holds announcements'),
   WALDO_TIMEZONE_ASK: gap('adds a line to a turn whose time zone the owner has not confirmed; every trial runs on a fixed zone, so no trial sees it'),
-  WALDO_FORGET_BARRIER: mapped("'on' is the 'items' barrier, any other value the earlier 'reads' rule"),
-  MEMORY_SELECTION: mapped("'1' shows the trials option B's memory: the pins, what is new since the nightly review, recall stubs"),
-  MEMORY_SEMANTIC_RECALL: mapped("'1' runs the trials with semantic recall on, over the run's embedder"),
 
   WALDO_STREAM_REPLIES: gap('the trial calls respond directly and shows no streamed draft; streaming changes delivery, not the words [inference]'),
   CALENDAR_GROUNDED_PREP: gap('proactive prep jobs are not run; the eval runs the day cards as scenario steps'),
@@ -91,7 +87,6 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   MAIL_SOURCE_FOLLOWUPS: gap('the mail follow-up sweep is not run in a trial'),
   DRIVE_READS: gap(SYNTHETIC_TOOLS),
   OWNER_LOOKUP: gap('the look-up consent gate is not modelled; the world offers the look-up tool directly'),
-  OWNER_PROFILE: gap('the profile view is not rendered in a trial'),
   MCP_READ_INTENTS: gap(SYNTHETIC_TOOLS),
   WALDO_MCP_SERVERS: gap('the world seeds its own connected tool server'),
   WALDO_EGRESS_ALLOWLIST: gap('the world has no network, so the egress boundary is held by its own tests, not by a trial'),
@@ -123,7 +118,6 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   MEDICATIONS: gap('no trial tracks a medicine; staging has it off until the gate turns it on with migration 20261101040000'),
   BROWSER_FORM_SUBMIT: gap('no trial drives the owner browser to a form; staging has it on for the owner\'s Google Forms run'),
   HEALTH_CHARTS: gap('a trial turn has no app chat read to draw a chart in; test/show-health-chart.test.ts measures the tool and the live read; staging has it on'),
-  PEOPLE_MAP: gap('the trial memory holds no people; test/people-map.test.ts measures the store, the reads and forgetting a person; staging has it on'),
   SCREEN_TIME: gap('the world serves no screen time and the trial offers no get_screen_time; staging has it on'),
   DEVICE_PLACE: gap('the world serves no device place and the trial offers no get_device_context; staging has it on'),
   DEVICE_CALENDAR: gap('the world serves no phone calendar and the trial offers no query_phone_calendar; staging has it on'),
@@ -143,12 +137,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   HEALTH_PASSIVE_LOAD: gap('the passive day load is served to the app only; the model never reads it and the world serves synthetic health; staging lists apple and health_connect, and it acts only once HEALTH_DAY_LOAD is on after migrations 20261116110000 and 20261116110200'),
   HEALTH_STRESS_CURVE: gap('the stress curve is served to the app only; the model never reads it and the world serves synthetic health; staging has it on since migration 20261116110100 was applied (19 Nov 2026)'),
   HEALTH_FORM_CURVE: inert('the measured Form curve is read only by the app\'s calendar day; no turn is sent it'),
-  MEMORY_NIGHTLY_SOURCE_UPDATES: gap('the nightly memory pass is not run in a trial'),
-  MEMORY_CLAIM_CONTROLS: inert('the app\'s claim controls (confirm, forget, dismiss, bring up less) are an app read; the trial runs no app controls'),
-  MEMORY_VALIDITY: gap('the trial turns on recall of replaced facts and read_memory include_replaced, as staging has them; the nightly pass that retires a contradicted claim is not run in a trial'),
   MEMORY_OUTSIDE_NOTES: gap('recall of notes learned from mail and calendar is not turned on in a trial'),
-  MEMORY_USED_SHOWN: inert('the app shows which notes a reply looked at; the trial reads no app history'),
-  MEMORY_DAYTIME_CONSOLIDATOR: gap('the daytime memory pass is not run in a trial'),
   WALDO_IMESSAGE_PROGRESS: gap('iMessage progress notes; the trial runs the app surface; staging has them off'),
   IMESSAGE_MEDIA: gap('iMessage media; the trial runs the app surface'),
   IMESSAGE_STOP: inert('a typed /stop on iMessage ends the running turn; the trial runs the app surface and sends no stop'),
@@ -218,9 +207,6 @@ export type StagingProfile = Readonly<{
   toolSearch?: true;
   promptV2: boolean;
   compaction: CompactionSettings;
-  forgetBarrier: ForgetBarrierMode;
-  memorySelection: boolean;
-  semantic: boolean;
 }>;
 
 // The owner object's own precedence: the harness loader wins over provider tool search. The model is the chat model of the
@@ -232,8 +218,5 @@ export const stagingProfile = (vars: StagingVars): StagingProfile => {
     ...(harness ? { toolLoader: 'harness' as const } : vars.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true as const } : {}),
     promptV2: vars.WALDO_PROMPT_V2 === '1',
     compaction: compactionSettings({ WALDO_COMPACTION: vars.WALDO_COMPACTION, WALDO_STEPPED_WINDOW: vars.WALDO_STEPPED_WINDOW, WALDO_CALL_CEILINGS: vars.WALDO_CALL_CEILINGS, WALDO_HISTORY_BUDGET_TOKENS: vars.WALDO_HISTORY_BUDGET_TOKENS, WALDO_STEPPED_WINDOW_TARGET: vars.WALDO_STEPPED_WINDOW_TARGET }),
-    forgetBarrier: vars.WALDO_FORGET_BARRIER === 'on' ? 'items' : 'reads',
-    memorySelection: vars.MEMORY_SELECTION === '1',
-    semantic: vars.MEMORY_SEMANTIC_RECALL === '1',
   };
 };

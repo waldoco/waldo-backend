@@ -135,7 +135,7 @@ export const recallForTurn = async ({ claims, episodes, question, previous, room
   // The meaning leg for claims, when semantic recall is on. It ranks; claims.recall still decides what may be returned.
   semantic?: RecallNear;
   stubs?: boolean;
-  // MEMORY_VALIDITY: facts a later one replaced that match these words join, dated and marked as no longer true.
+  // Facts a later one replaced that match these words join, dated and marked as no longer true.
   replaced?: boolean;
   // The turn has already read outside content some other way (an earlier message in its chat, a quote, a forward).
   marked?: boolean;

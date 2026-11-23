@@ -9,7 +9,6 @@ import { capacityContext } from '../../src/prompt/capacity';
 import { OUTSIDE_TEXT_JOB_TOOLS } from '../../src/channels/check-back';
 import { inboundTurn, ownerWords } from '../../src/channels/owner-inbound-turn';
 import type { TurnLogEntry } from '../../src/channels/telegram-listener';
-import type { ForgetBarrierMode } from '../../src/context-composer/forget-barrier';
 import type { LLMGatewayAdapter } from '../../src/llm/provider';
 import type { FloorTurn } from '../../src/llm/owner-routes';
 import { modelCost } from '../../src/llm/pricing';
@@ -125,7 +124,7 @@ const metricsOf = ({ groups, ...meter }: Meter, lightRoutes: readonly string[]):
 // The forget barrier runs as staging runs it ('items') unless a trial asks for the earlier rule. toolLoader 'harness' is the
 // staging loader; fallbackKey opens the route's second-provider step, which the gateway must then be able to serve.
 // embeddings turns semantic recall on.
-export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName; toolSearch?: boolean; toolLoader?: 'harness'; fallbackKey?: string; memory?: MemoryMode; forgetBarrier?: ForgetBarrierMode; embeddings?: EmbeddingRunner; memorySelection?: boolean; promptV2?: boolean }>): Promise<TrialRecord> => {
+export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway: LLMGatewayAdapter; budget: CallBudget; model?: ModelName; toolSearch?: boolean; toolLoader?: 'harness'; fallbackKey?: string; memory?: MemoryMode; embeddings?: EmbeddingRunner; memorySelection?: boolean; promptV2?: boolean }>): Promise<TrialRecord> => {
   const world = evalWorld(scenario.world, scenario.start, deps.memory, deps.embeddings);
   await world.ready;
   const entries: TurnLogEntry[] = [];
@@ -145,7 +144,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
   const seededReviewed = (claim: Readonly<{ id: number }>) => seeded.has(claim.id);
   const responder = createTelegramResponder({ openaiApiKey: 'eval-key', floorReply, ...(deps.fallbackKey ? { anthropicApiKey: deps.fallbackKey } : {}), ...(deps.toolLoader ? { toolLoader: deps.toolLoader } : deps.toolSearch ? { toolSearch: true } : {}), ...(deps.promptV2 ? { promptV2: true } : {}) }, world.conversation, world.memory, (entry) => entries.push(entry), {}, world.clock,
     world.handlers, model, false, undefined, async () => true, metered(shown, deps.budget, outage, meter), undefined, undefined, undefined, undefined,
-    WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app', undefined, { forgetBarrier: deps.forgetBarrier ?? 'items', memoryValidity: true, skills: skills.capability, ...(scenario.light_chat ? { lightChat: true } : {}), ...(world.semantic ? { semanticRecall: world.semantic } : {}), ...(world.connectors ? { connectors: world.connectors } : {}), ...(deps.memorySelection ? { memorySelection: { reviewed: () => seededReviewed } } : {}) });
+    WALDO_AUXILIARY_MODEL, undefined, world.health, undefined, 'app', undefined, { forgetBarrier: 'items', skills: skills.capability, ...(scenario.light_chat ? { lightChat: true } : {}), ...(world.semantic ? { semanticRecall: world.semantic } : {}), ...(world.connectors ? { connectors: world.connectors } : {}), ...(deps.memorySelection ? { memorySelection: { reviewed: () => seededReviewed } } : {}) });
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
   const transcript: JudgeInput['transcript'][number][] = [];
   let status: TrialRecord['status'] = 'ran';

@@ -6,7 +6,7 @@ import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 import { NIGHTLY_THROUGH_KEY } from '../src/channels/episodes';
 
-// MEMORY_SELECTION=1 through the owner object: an app turn (a nested responder on a run scope) shows option B, judging what
+// Memory selection through the owner object: an app turn (a nested responder on a run scope) shows option B, judging what
 // is new by the nightly's own consolidated-through mark. Synthetic fixtures only.
 const OWNER_ID = '3b8e2f4a-7c1d-4e9a-b6f0-2d5c8a1e7f39';
 const BASE = 'https://directory.fixture.invalid';
@@ -43,7 +43,7 @@ const directory = () => vi.stubGlobal('fetch', async (input: RequestInfo | URL, 
   return new Response('unexpected', { status: 500 });
 });
 
-const appTurn = async (name: string, selection: string) => {
+const appTurn = async (name: string) => {
   directory();
   return runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const memory = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
@@ -55,7 +55,7 @@ const appTurn = async (name: string, selection: string) => {
     memory.add({ kind: 'fact', text: 'The owner moved the grocery run to Thursdays', evidence: 'grocery', source: 'stated', origin: 'owner', source_ref: 'owner, tg-3' }, '2026-10-31T08:00:00Z');
     expect(memory.pin(1, 'profile', 1)).toBe(true);
     state.storage.kv.put(NIGHTLY_THROUGH_KEY, Date.parse('2026-10-30T22:00:00Z'));
-    const owner = new OwnerDO(state, { ...env, MEMORY_SELECTION: selection, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const owner = new OwnerDO(state, { ...env, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     const sent = await owner.fetch(new Request('https://owner.invalid/app/v1/chat/main/messages', { method: 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'c'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: `client-${name}`, text: 'What is on this week?' }) }));
     expect(sent.status, await sent.clone().text()).toBe(202);
     const { message_id: id } = await sent.json() as { message_id: string };
@@ -66,17 +66,10 @@ const appTurn = async (name: string, selection: string) => {
   });
 };
 
-it('with MEMORY_SELECTION=1, an app turn shows the pin and what is new since the nightly, not the reviewed fact', async () => {
-  const shown = await appTurn('select-memory-owner-do-on', '1');
+it('an app turn shows the pin and what is new since the nightly, not the reviewed fact', async () => {
+  const shown = await appTurn('select-memory-owner-do-on');
   expect(shown).toContain('owner_new');
   expect(shown).toContain('grocery run to Thursdays');
   expect(shown).toContain('goes by Sam');
   expect(shown).not.toContain('spare key');
-});
-
-it('with MEMORY_SELECTION=0, the same turn shows the newest facts as before', async () => {
-  const shown = await appTurn('select-memory-owner-do-off', '0');
-  expect(shown).toContain('owner_recent');
-  expect(shown).toContain('spare key');
-  expect(shown).not.toContain('owner_new');
 });

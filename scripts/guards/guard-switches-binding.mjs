@@ -8,7 +8,10 @@
 // 2. WALDO_SWITCHES holds string values only, shares no name with a flat var, and stays under Cloudflare's 5 KB
 //    per-variable cap.
 // 3. Flat vars plus the secrets the production runbook names stay at or under BINDING_BUDGET in every environment.
-// 4. Nothing below a seam reads an env that skipped it: every Durable Object or entrypoint class passes
+// 4. Every switch has a row in docs/ops/switch-inventory.json and every row names a switch still in the config, so a
+//    switch made unconditional leaves both together. A kept switch carries its reason and a removal date. A removal date
+//    already past is reported, not failed, so the guard's result never depends on the clock.
+// 5. Nothing below a seam reads an env that skipped it: every Durable Object or entrypoint class passes
 //    withSwitches(env) to super, the Worker's default export flattens in each handler, and no module imports env
 //    from cloudflare:workers or reads process.env.
 
@@ -91,6 +94,28 @@ export const checkConfig = (cfg, secretNames) => {
   return { bad, counts };
 };
 
+const DISPOSITIONS = new Set(['unconditional', 'kept', 'delete', 'knob']);
+
+export const checkInventory = (cfg, inventory, today) => {
+  const bad = [], overdue = [];
+  const declared = new Set([cfg?.vars, ...Object.values(cfg?.env ?? {}).map((block) => block?.vars)]
+    .flatMap((vars) => Object.keys(vars?.WALDO_SWITCHES ?? {})));
+  for (const name of declared) if (!Object.hasOwn(inventory, name)) bad.push(`switch "${name}" has no row in docs/ops/switch-inventory.json`);
+  for (const [name, row] of Object.entries(inventory)) {
+    if (!declared.has(name)) bad.push(`inventory row "${name}" names no switch in wrangler.jsonc; delete the row with the switch`);
+    if (!DISPOSITIONS.has(row?.disposition)) { bad.push(`inventory row "${name}" has disposition "${row?.disposition}"`); continue; }
+    if (row.disposition === 'unconditional' && !row.batch) bad.push(`inventory row "${name}" is unconditional with no batch`);
+    if (row.disposition === 'kept' || row.disposition === 'delete') {
+      if (!row.reason) bad.push(`inventory row "${name}" is ${row.disposition} with no reason`);
+    }
+    if (row.disposition === 'kept') {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(row.removeBy ?? '')) bad.push(`inventory row "${name}" is kept with no removeBy date (YYYY-MM-DD)`);
+      else if (row.removeBy < today) overdue.push(`${name} (${row.removeBy})`);
+    }
+  }
+  return { bad, overdue };
+};
+
 const requireRuntimeDependency = createRequire(new URL('../../packages/runtime/package.json', import.meta.url));
 
 // Classes whose constructor need not flatten: the retired declarations read nothing, and the lazy forwarder hands its
@@ -169,11 +194,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const cfg = parseJsonc(readFileSync(join(root, 'packages/runtime/wrangler.jsonc'), 'utf8'));
   const secrets = runbookSecretNames(readFileSync(join(root, 'docs/ops/PRODUCTION_ALPHA_RUNBOOK_2026-10-22.md'), 'utf8'));
   const { bad, counts } = checkConfig(cfg, secrets);
-  bad.push(...checkSources(sourceFiles(root)));
+  const inventory = checkInventory(cfg, JSON.parse(readFileSync(join(root, 'docs/ops/switch-inventory.json'), 'utf8')), new Date().toISOString().slice(0, 10));
+  bad.push(...inventory.bad, ...checkSources(sourceFiles(root)));
   if (bad.length) {
     process.stderr.write(`${NAME}: ${bad.join('; ')}\n`);
     process.exit(1);
   }
   const switches = Object.keys(cfg.vars?.WALDO_SWITCHES ?? {}).length;
+  if (inventory.overdue.length) console.log(`${NAME}: kept switches past their removal date: ${inventory.overdue.join(', ')}`);
   console.log(`${NAME}: ok (bindings, flat vars plus ${secrets.length} runbook secrets: ${counts.join(', ')}; budget ${BINDING_BUDGET}; WALDO_SWITCHES ${switches} names)`);
 }

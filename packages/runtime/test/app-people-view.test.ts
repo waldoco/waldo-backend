@@ -31,13 +31,13 @@ afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown> }; fetch(request: Request): Promise<Response> }>;
 type Ctx = Readonly<{ owner: Owner; state: DurableObjectState; name: string }>;
-const appOwner = async (name: string, flags: Record<string, string>, check: (ctx: Ctx) => Promise<void>) => {
+const appOwner = async (name: string, check: (ctx: Ctx) => Promise<void>) => {
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql); ensureSchema(state.storage); traceBook(state.storage.sql);
     state.storage.kv.put('do_name', name);
     state.storage.kv.put('app_subject', String(appSubjectFor(name)));
     state.storage.kv.put('timezone', 'UTC');
-    const owner = new OwnerDO(state, { ...env, ...directory, ...flags, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined }) as unknown as Owner;
+    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined }) as unknown as Owner;
     await owner.setup('app').ready;
     try { await check({ owner, state, name }); } finally { await state.storage.deleteAlarm(); }
   });
@@ -69,8 +69,8 @@ const seed = ({ state }: Ctx) => {
   return { store, priya: priya!, dana: dana! };
 };
 
-it('lists the people in memory and one person with their claims; a build below 22, or the switch off, is refused the view', async () => {
-  await appOwner('app-people-read', { PEOPLE_MAP: '1' }, async ctx => {
+it('lists the people in memory and one person with their claims; a build below 22 is refused the view', async () => {
+  await appOwner('app-people-read', async ctx => {
     const { priya, dana } = seed(ctx);
     const list = await people(ctx);
     if (!('people' in list.data)) throw Error('expected the list');
@@ -87,14 +87,10 @@ it('lists the people in memory and one person with their claims; a build below 2
     expect((await read(ctx, '', 'controls=21')).status).toBe(400);
     expect((await act(ctx, { action: 'person.ring', id: `memory:person:${dana}`, value: 'close', revision: one.revision }, 'controls=21')).status).toBe(400);
   });
-  await appOwner('app-people-off', {}, async ctx => {
-    seed(ctx);
-    expect((await read(ctx)).status).toBe(400);
-  });
 });
 
 it('takes the owner\'s word on a person: confirm, rename and ring stand over Waldo\'s, and forget takes them and what memory held about them', async () => {
-  await appOwner('app-people-act', { PEOPLE_MAP: '1' }, async ctx => {
+  await appOwner('app-people-act', async ctx => {
     const { store, priya, dana } = seed(ctx);
     const revisionOf = async (id: number) => (await people(ctx, `&id=memory:person:${id}`)).revision;
     expect((await act(ctx, { action: 'person.confirm', id: `memory:person:${dana}`, revision: await revisionOf(dana) })).body).toMatchObject({ receipt: { state: 'recorded' } });
@@ -126,7 +122,7 @@ it('takes a person action only in the people view, naming one person, with the v
 });
 
 it('confirms only that the owner knows someone, once; renames keep the old name; forget takes the person, their claims and every name', async () => {
-  await appOwner('app-people-owner-word', { PEOPLE_MAP: '1' }, async ctx => {
+  await appOwner('app-people-owner-word', async ctx => {
     const { store, priya, dana } = seed(ctx);
     const detail = async (id: number) => people(ctx, `&id=memory:person:${id}`);
     // A list revision is not a person's read.
@@ -152,9 +148,5 @@ it('confirms only that the owner knows someone, once; renames keep the old name;
     expect(ctx.state.storage.sql.exec('SELECT * FROM claim_links WHERE entity_id = ?', dana).toArray()).toEqual([]);
     expect(store.people.person(priya)).toBeDefined();
     expect((await act(ctx, { action: 'person.forget', id: `memory:person:${dana}`, revision: listed.revision })).status).toBe(409);
-  });
-  await appOwner('app-people-act-off', {}, async ctx => {
-    const { dana } = seed(ctx);
-    expect((await act(ctx, { action: 'person.forget', id: `memory:person:${dana}`, revision: 'a'.repeat(64) })).status).toBe(400);
   });
 });

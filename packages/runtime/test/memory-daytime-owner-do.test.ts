@@ -43,9 +43,8 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 beforeEach(() => { fixture.mail = []; fixture.calendar = []; model.sources = []; model.instructions = []; });
 afterEach(() => { vi.restoreAllMocks(); });
 
-type Flags = Readonly<{ daytime?: string; sources?: string }>;
 type Run = Readonly<{ state: DurableObjectState; scheduler: Scheduler; clock: { at: number }; sweep(trace: string): Promise<void>; wake(at: number): Promise<void> }>;
-const withOwner = (name: string, flags: Flags, work: (run: Run) => Promise<void>) =>
+const withOwner = (name: string, work: (run: Run) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const realNow = Date.now;
     const clock = { at: NINE };
@@ -57,8 +56,7 @@ const withOwner = (name: string, flags: Flags, work: (run: Run) => Promise<void>
       await state.storage.put('origin', 'https://fixture.invalid');
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'fixture', scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/gmail.readonly'] }]);
       claimStore(state.storage.sql).add({ kind: 'fact', text: 'Lives in Pune', source: 'stated', evidence: '"I live in Pune"', origin: 'owner', source_ref: 'owner, tg-1' }, new Date(NINE - 86_400_000).toISOString());
-      const owner = new OwnerDO(state, { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:fixture', OPENAI_API_KEY: 'fixture', GOOGLE_CLIENT_ID: 'daytime-fixture', GOOGLE_CLIENT_SECRET: 'fixture',
-        MEMORY_DAYTIME_CONSOLIDATOR: flags.daytime, MEMORY_NIGHTLY_SOURCE_UPDATES: flags.sources });
+      const owner = new OwnerDO(state, { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:fixture', OPENAI_API_KEY: 'fixture', GOOGLE_CLIENT_ID: 'daytime-fixture', GOOGLE_CLIENT_SECRET: 'fixture' });
       const runtime = (owner as unknown as { setup(channel: string): { ready: Promise<unknown>; updateCheck(trace: string): Promise<void> } }).setup('telegram');
       await runtime.ready;
       state.storage.sql.exec('DELETE FROM schedule');
@@ -71,10 +69,9 @@ const withOwner = (name: string, flags: Flags, work: (run: Run) => Promise<void>
 const mailFromAsha = () => { fixture.mail = [{ thread_id: 't9', id: 'm1', from: 'Asha <asha@example.com>', subject: 'Design review Friday; resting heart rate 48 from the watch', snippet: 'Can we do Friday?', at: '2026-10-31T09:00:00Z' }]; };
 const armedAt = (scheduler: Scheduler) => { const found = scheduler.lookup(MEMORY_DAYTIME_ID); return found.state === 'entry' ? found.entry.due_at : null; };
 const runs = (state: DurableObjectState) => state.storage.sql.exec<{ kind: string; status: string; summary: string }>("SELECT kind, status, summary FROM background_runs WHERE kind = 'memory_daytime'").toArray();
-const ON: Flags = { daytime: '1', sources: '1' };
 
 it('a 09:00 mail is an untrusted candidate the same morning; the hint only armed the pass', async () => {
-  await withOwner('memory-daytime-golden', ON, async ({ state, scheduler, clock, sweep, wake }) => {
+  await withOwner('memory-daytime-golden', async ({ state, scheduler, clock, sweep, wake }) => {
     const logged: TurnLogEntry[] = [];
     vi.spyOn(console, 'log').mockImplementation((line: unknown) => { if (typeof line === 'string' && line.startsWith('{')) logged.push(JSON.parse(line) as TurnLogEntry); });
     mailFromAsha();
@@ -105,23 +102,8 @@ it('a 09:00 mail is an untrusted candidate the same morning; the hint only armed
   });
 });
 
-it.each([
-  ['the daytime flag off', { daytime: '0', sources: '1' }],
-  ['the source pass off', { daytime: '1', sources: '0' }],
-] as const)('with %s, a change arms nothing, and a pass already armed makes no call', async (_label, flags) => {
-  await withOwner(`memory-daytime-${flags.daytime}-${flags.sources}`, flags, async ({ state, scheduler, clock, sweep, wake }) => {
-    mailFromAsha();
-    await sweep('changed');
-    expect(armedAt(scheduler)).toBeNull();
-    await scheduler.schedule({ id: MEMORY_DAYTIME_ID, kind: 'dreaming', payloadRefs: { id: MEMORY_DAYTIME_ID }, occurrenceAt: clock.at, dueAt: clock.at, recurrence: null });
-    await wake(clock.at + 1_000);
-    expect(model.sources).toEqual([]);
-    expect(runs(state)).toEqual([]);
-  });
-});
-
 it('an owner who turned the memory pass off gets no daytime pass either', async () => {
-  await withOwner('memory-daytime-pref-off', ON, async ({ state, scheduler, clock, sweep, wake }) => {
+  await withOwner('memory-daytime-pref-off', async ({ state, scheduler, clock, sweep, wake }) => {
     state.storage.sql.exec("INSERT OR REPLACE INTO schedule_preferences (kind, enabled) VALUES ('nightly', 0)");
     mailFromAsha();
     await sweep('changed');

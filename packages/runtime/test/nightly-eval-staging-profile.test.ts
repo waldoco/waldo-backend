@@ -44,9 +44,9 @@ describe('the staging profile', () => {
     for (const [name, cls] of Object.entries(STAGING_VAR_CLASSES)) expect(cls.why.length, name).toBeGreaterThan(10);
   });
 
-  it('reads staging as it is deployed: the harness loader, compaction on, the items forget barrier, semantic recall, memory selection, the chat model', () => {
+  it('reads staging as it is deployed: the harness loader, compaction on, the chat model', () => {
     const profile = stagingProfile(STAGING);
-    expect(profile).toMatchObject({ label: 'staging', model: OWNER_MODELS[modelProviderSetting(STAGING.WALDO_MODEL_PROVIDER)].chat, toolLoader: 'harness', forgetBarrier: 'items', semantic: true, memorySelection: true });
+    expect(profile).toMatchObject({ label: 'staging', model: OWNER_MODELS[modelProviderSetting(STAGING.WALDO_MODEL_PROVIDER)].chat, toolLoader: 'harness' });
     expect(profile.compaction.enabled).toBe(true);
     expect(profile.toolSearch).toBeUndefined();
   });
@@ -55,13 +55,10 @@ describe('the staging profile', () => {
     expect(stagingProfile({ ...STAGING, WALDO_TOOL_LOADER: 'off', WALDO_TOOL_SEARCH: 'on' })).toMatchObject({ toolSearch: true });
     expect(stagingProfile({ ...STAGING, WALDO_TOOL_LOADER: 'harness', WALDO_TOOL_SEARCH: 'on' }).toolSearch).toBeUndefined();
     expect(stagingProfile({ ...STAGING, WALDO_TOOL_LOADER: 'off', WALDO_TOOL_SEARCH: 'off' }).toolLoader).toBeUndefined();
-    expect(stagingProfile({ ...STAGING, WALDO_FORGET_BARRIER: 'off' }).forgetBarrier).toBe('reads');
     expect(stagingProfile({ ...STAGING, WALDO_COMPACTION: 'off' }).compaction.enabled).toBe(false);
     // The history budget and the stepped target are the deploy's own, read as the Worker reads them.
     const tuned = stagingProfile({ ...STAGING, WALDO_CALL_CEILINGS: '1', WALDO_HISTORY_BUDGET_TOKENS: '14000', WALDO_STEPPED_WINDOW_TARGET: '0.7' }).compaction;
     expect([tuned.budgetTokens, tuned.steppedTarget]).toEqual([14_000, 0.7]);
-    expect(stagingProfile({ ...STAGING, MEMORY_SELECTION: '1' }).memorySelection).toBe(true);
-    expect(stagingProfile({ ...STAGING, MEMORY_SELECTION: '0' }).memorySelection).toBe(false);
   });
 
   it('runs the chat model of the provider staging runs, and a live run refuses a Claude staging it cannot judge apart', () => {
@@ -73,17 +70,12 @@ describe('the staging profile', () => {
       expect(() => nightlyConfig({ ...LIVE, ...CLOUDFLARE }, claude), value).toThrow(/staging runs Claude/);
     }
   });
-
-  it('runs semantic recall when staging turns it on, and not otherwise', () => {
-    expect(stagingProfile({ ...STAGING, MEMORY_SEMANTIC_RECALL: '1' }).semantic).toBe(true);
-    expect(stagingProfile({ ...STAGING, MEMORY_SEMANTIC_RECALL: '0' }).semantic).toBe(false);
-  });
 });
 
 describe('the staging profile in the run settings', () => {
-  it('turns the loader, compaction, the forget barrier, semantic recall, memory selection and the fallback route on, and names them on the card', () => {
+  it('turns the loader, compaction, semantic recall, memory selection and the fallback route on, and names them on the card', () => {
     const run = nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_PROFILE: 'staging' });
-    expect(run).toMatchObject({ toolLoader: 'harness', forgetBarrier: 'items', profile: 'staging', memorySelection: true, candidate: 'recorded+staging+semantic+selection+prompt_v2' });
+    expect(run).toMatchObject({ toolLoader: 'harness', profile: 'staging', memorySelection: true, candidate: 'recorded+staging+semantic+selection+prompt_v2' });
     expect(run.embeddings).toBeTypeOf('function');
     expect(run.compaction?.enabled).toBe(true);
     expect(run.fallbackKey).toBeTypeOf('string');
@@ -91,7 +83,7 @@ describe('the staging profile in the run settings', () => {
 
   it('leaves the default run exactly as it was', () => {
     const run = nightlyConfig({ WALDO_EVAL_MODE: 'recorded' });
-    for (const key of ['toolLoader', 'forgetBarrier', 'profile', 'fallbackKey', 'compaction', 'toolSearch', 'embeddings', 'memorySelection']) expect(run).not.toHaveProperty(key);
+    for (const key of ['toolLoader', 'profile', 'fallbackKey', 'compaction', 'toolSearch', 'embeddings', 'memorySelection']) expect(run).not.toHaveProperty(key);
     expect(run.candidate).toBe('recorded');
   });
 
@@ -117,17 +109,15 @@ describe('the staging profile in the run settings', () => {
     expect(() => nightlyConfig({ ...plain, WALDO_EVAL_JUDGE_MODEL: WALDO_CHAT_FALLBACK_MODEL })).not.toThrow();
   });
 
-  it('gives the trials an embedder when staging turns semantic recall on, and names the leg on the card', () => {
-    const on = () => ({ ...OPENAI_STAGING(), MEMORY_SEMANTIC_RECALL: '1', MEMORY_SELECTION: '0' });
-    const recorded = nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_PROFILE: 'staging' }, on);
-    expect(recorded.candidate).toBe('recorded+staging+semantic+prompt_v2');
+  it('gives the staging trials an embedder, and names the leg on the card', () => {
+    const recorded = nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_PROFILE: 'staging' }, OPENAI_STAGING);
+    expect(recorded.candidate).toBe('recorded+staging+semantic+selection+prompt_v2');
     expect(recorded.embeddings).toBeTypeOf('function');
-    expect(() => nightlyConfig(LIVE, on)).toThrow(/CLOUDFLARE_ACCOUNT_ID is required/);
-    expect(() => nightlyConfig({ ...LIVE, CLOUDFLARE_ACCOUNT_ID: 'acct' }, on)).toThrow(/CLOUDFLARE_API_TOKEN is required/);
-    const live = nightlyConfig({ ...LIVE, ...CLOUDFLARE }, on);
-    expect(live.candidate).toBe(`${WALDO_CHAT_MODEL}+staging+semantic+prompt_v2`);
+    expect(() => nightlyConfig(LIVE, OPENAI_STAGING)).toThrow(/CLOUDFLARE_ACCOUNT_ID is required/);
+    expect(() => nightlyConfig({ ...LIVE, CLOUDFLARE_ACCOUNT_ID: 'acct' }, OPENAI_STAGING)).toThrow(/CLOUDFLARE_API_TOKEN is required/);
+    const live = nightlyConfig({ ...LIVE, ...CLOUDFLARE }, OPENAI_STAGING);
+    expect(live.candidate).toBe(`${WALDO_CHAT_MODEL}+staging+semantic+selection+prompt_v2`);
     expect(live.embeddings).toBeTypeOf('function');
-    expect(nightlyConfig({ ...LIVE, ...CLOUDFLARE }, () => ({ ...on(), MEMORY_SEMANTIC_RECALL: '0' })).embeddings).toBeUndefined();
   });
 
   it('turns the leg on outside the profile only when asked, and never under a card it would mislabel', () => {
@@ -138,8 +128,8 @@ describe('the staging profile in the run settings', () => {
     expect(() => nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_PROFILE: 'staging', WALDO_EVAL_SEMANTIC: 'on' })).toThrow(/leave .*WALDO_EVAL_SEMANTIC and WALDO_EVAL_MEMORY_SELECTION unset/);
   });
 
-  it('shows the trials option B\'s memory when staging selects it, or when asked outside the profile, and names it on the card', () => {
-    expect(nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_PROFILE: 'staging' }, () => ({ ...STAGING, MEMORY_SELECTION: '1', MEMORY_SEMANTIC_RECALL: '0' }))).toMatchObject({ memorySelection: true, candidate: 'recorded+staging+selection+prompt_v2' });
+  it('shows the trials option B\'s memory under the staging profile, or when asked outside it, and names it on the card', () => {
+    expect(nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_PROFILE: 'staging' })).toMatchObject({ memorySelection: true, candidate: 'recorded+staging+semantic+selection+prompt_v2' });
     expect(nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_MEMORY_SELECTION: 'on' })).toMatchObject({ memorySelection: true, candidate: 'recorded+selection' });
     expect(nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_MEMORY_SELECTION: 'off' })).not.toHaveProperty('memorySelection');
     expect(() => nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_MEMORY_SELECTION: 'yes' })).toThrow(/must be on or off/);

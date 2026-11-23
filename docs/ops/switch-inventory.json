@@ -1,0 +1,538 @@
+{
+  "CALENDAR_GROUNDED_PREP": {
+    "disposition": "unconditional",
+    "batch": "delivery-proactive (after W4)"
+  },
+  "PREP_PUSH_NAMES": {
+    "disposition": "unconditional",
+    "batch": "delivery-proactive (after W4)"
+  },
+  "WALDO_DAY_STATE": {
+    "disposition": "unconditional",
+    "batch": "delivery-proactive (after W4)"
+  },
+  "UPDATE_PUSH_NAMES": {
+    "disposition": "unconditional",
+    "batch": "delivery-proactive (after W4)"
+  },
+  "DRIVE_READS": {
+    "disposition": "unconditional",
+    "batch": "device-google"
+  },
+  "APP_AGREEMENTS": {
+    "disposition": "unconditional",
+    "batch": "app-identity"
+  },
+  "OWNER_LOOKUP": {
+    "disposition": "kept",
+    "reason": "egress and privacy: looks the owner up on the web; production waits for the published privacy notice that discloses it",
+    "removeBy": "2027-01-31"
+  },
+  "PHONE_SMS_VERIFY": {
+    "disposition": "kept",
+    "reason": "egress and spend: texts real phones through Twilio; production Twilio setup is a runbook step",
+    "removeBy": "2027-01-31"
+  },
+  "PHONE_SMS_COUNTRIES": {
+    "disposition": "knob"
+  },
+  "PHONE_SMS_DAILY_LIMIT": {
+    "disposition": "knob"
+  },
+  "CONSOLE_GOOGLE_SIGNIN": {
+    "disposition": "kept",
+    "reason": "unfinished: off everywhere; needs the callback on Supabase's redirect allow list",
+    "removeBy": "2026-12-31"
+  },
+  "APP_ID_TOKEN_SIGNIN": {
+    "disposition": "unconditional",
+    "batch": "app-identity"
+  },
+  "OPEN_SIGNUP": {
+    "disposition": "kept",
+    "reason": "authority and spend: lets strangers create owners; on only where the cohort and spend caps are ruled",
+    "removeBy": "2027-01-31"
+  },
+  "OPEN_SIGNUP_DAILY_CAP": {
+    "disposition": "knob"
+  },
+  "OPEN_SIGNUP_TOTAL_CAP": {
+    "disposition": "knob"
+  },
+  "OPEN_SIGNUP_SPEND_CEILING_USD": {
+    "disposition": "knob"
+  },
+  "OWNER_SPEND_CEILING_USD": {
+    "disposition": "knob"
+  },
+  "MAIL_SOURCE_FOLLOWUPS": {
+    "disposition": "unconditional",
+    "batch": "delivery-proactive (after W4)"
+  },
+  "MCP_READ_INTENTS": {
+    "disposition": "unconditional",
+    "batch": "device-google"
+  },
+  "IMESSAGE_CONNECTOR_ENABLED": {
+    "disposition": "kept",
+    "reason": "egress: iMessage relay; production has no Photon project or connector policy yet",
+    "removeBy": "2027-01-31"
+  },
+  "IMESSAGE_MEDIA": {
+    "disposition": "unconditional",
+    "batch": "imessage"
+  },
+  "IMESSAGE_STOP": {
+    "disposition": "unconditional",
+    "batch": "imessage"
+  },
+  "LANGFUSE_RETENTION_SWEEP": {
+    "disposition": "kept",
+    "reason": "unfinished: \"dry\" only counts; deletes in Langfuse need a reviewed live run",
+    "removeBy": "2026-12-31"
+  },
+  "IMESSAGE_VOICE": {
+    "disposition": "unconditional",
+    "batch": "imessage"
+  },
+  "WALDO_IMESSAGE_PROGRESS": {
+    "disposition": "kept",
+    "reason": "unfinished: progress notes are off everywhere (\"0\"); ship or delete",
+    "removeBy": "2026-12-31"
+  },
+  "WHATSAPP_REPLY_BUTTONS": {
+    "disposition": "unconditional",
+    "batch": "delivery-proactive (after W4)"
+  },
+  "WHATSAPP_LIST_CARDS": {
+    "disposition": "unconditional",
+    "batch": "delivery-proactive (after W4)"
+  },
+  "WHATSAPP_REPLY_MERGE": {
+    "disposition": "unconditional",
+    "batch": "delivery-proactive (after W4)"
+  },
+  "WALDO_TASK_ASK": {
+    "disposition": "unconditional",
+    "batch": "tasks"
+  },
+  "WALDO_TASK_STEER": {
+    "disposition": "unconditional",
+    "batch": "tasks"
+  },
+  "WALDO_TASK_PICKUP": {
+    "disposition": "unconditional",
+    "batch": "tasks"
+  },
+  "WALDO_TASK_NOTES": {
+    "disposition": "unconditional",
+    "batch": "tasks"
+  },
+  "WALDO_OWNER_FIRST": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  },
+  "WALDO_SECOND_MESSAGE": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  },
+  "WHATSAPP_QUIET_MS": {
+    "disposition": "knob"
+  },
+  "WALDO_COST_LEDGER_SYNC": {
+    "disposition": "unconditional",
+    "batch": "app-identity"
+  },
+  "WALDO_TOOL_SEARCH": {
+    "disposition": "delete",
+    "reason": "off everywhere and superseded by WALDO_TOOL_LOADER \"harness\"; delete with the loader batch"
+  },
+  "WALDO_TOOL_LOADER": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  },
+  "WALDO_COMPACTION": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
+  "WALDO_STEPPED_WINDOW": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
+  "WALDO_CONTEXT_CAPS": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
+  "WALDO_COMPACTION_WAKE": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
+  "WALDO_CALL_CEILINGS": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
+  "WALDO_HISTORY_BUDGET_TOKENS": {
+    "disposition": "knob"
+  },
+  "WALDO_CHAT_CEILING_TOKENS": {
+    "disposition": "knob"
+  },
+  "WALDO_JOB_CEILING_TOKENS": {
+    "disposition": "knob"
+  },
+  "WALDO_HARD_CEILING_TOKENS": {
+    "disposition": "knob"
+  },
+  "WALDO_STEPPED_WINDOW_TARGET": {
+    "disposition": "knob"
+  },
+  "WALDO_TOOL_RESULTS_CLEAR_AT_CHARS": {
+    "disposition": "knob"
+  },
+  "WALDO_TOOL_RESULTS_KEEP_LATEST": {
+    "disposition": "knob"
+  },
+  "WALDO_STANDING_ORDERS_CHARS": {
+    "disposition": "knob"
+  },
+  "WALDO_QUESTS_CHARS": {
+    "disposition": "knob"
+  },
+  "WALDO_WHATS_NEW_CHARS": {
+    "disposition": "knob"
+  },
+  "WALDO_TIMEZONE_ASK": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
+  "WALDO_STREAM_REPLIES": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  },
+  "HEALTH_PROVISIONAL_SCORES": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
+  "HEALTH_SOLO_NOTICE": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
+  "HEALTH_PARTIAL_CONTEXT": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
+  "HEALTH_INVENTORY": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
+  "HEALTH_TRAINING_LOAD": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
+  "HEALTH_SCORE_PARTS": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
+  "HEALTH_USUAL": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
+  "HEALTH_DAY_LOAD": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
+  "HEALTH_PASSIVE_LOAD": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
+  "HEALTH_STRESS_CURVE": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
+  "HEALTH_FORM_CURVE": {
+    "disposition": "kept",
+    "reason": "unfinished: off everywhere; Form curve not yet accepted",
+    "removeBy": "2026-12-31"
+  },
+  "HEALTH_COACHING": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
+  "HEALTH_ACTIONS": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
+  "MEDICATIONS": {
+    "disposition": "kept",
+    "reason": "safety: medicine reminders stay off where no code-level dosing check exists (HEY-297)",
+    "removeBy": "2026-12-31"
+  },
+  "SCREEN_TIME": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
+  "HEALTH_CHARTS": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
+  "DEVICE_PLACE": {
+    "disposition": "unconditional",
+    "batch": "device-google"
+  },
+  "DEVICE_CALENDAR": {
+    "disposition": "unconditional",
+    "batch": "device-google"
+  },
+  "CALENDAR_COVERAGE": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  },
+  "FREE_WINDOW_OFFERS": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  },
+  "BLOCK_LIFECYCLE": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  },
+  "ARRIVAL_LOOK": {
+    "disposition": "unconditional",
+    "batch": "device-google"
+  },
+  "DEVICE_WEATHER": {
+    "disposition": "unconditional",
+    "batch": "device-google"
+  },
+  "BROWSER_FORM_SUBMIT": {
+    "disposition": "kept",
+    "reason": "egress and authority: submits a form to a third-party site from the owner's browser",
+    "removeBy": "2027-01-31"
+  },
+  "HISTORY_ARCHIVE": {
+    "disposition": "kept",
+    "reason": "unfinished: \"dry\" only counts; moving history needs a reviewed live run",
+    "removeBy": "2026-12-31"
+  },
+  "ONBOARDING_LOOKUP": {
+    "disposition": "kept",
+    "reason": "egress and privacy: looks the owner up on the web; production waits for the published privacy notice that discloses it",
+    "removeBy": "2027-01-31"
+  },
+  "WELCOME_V2": {
+    "disposition": "unconditional",
+    "batch": "app-identity"
+  },
+  "HEALTH_EASE_WORKOUT": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
+  "CALENDAR_UNDO_CANCEL": {
+    "disposition": "unconditional",
+    "batch": "device-google"
+  },
+  "AUTONOMY_OWN_CALENDAR": {
+    "disposition": "kept",
+    "reason": "authority: acts without a card; stays a per-environment decision until production autonomy is ruled (ADR-0018 amendment)",
+    "removeBy": "2027-01-31"
+  },
+  "APPROVE_IN_CHAT": {
+    "disposition": "kept",
+    "reason": "authority: acts without a card; stays a per-environment decision until production autonomy is ruled (ADR-0018 amendment)",
+    "removeBy": "2027-01-31"
+  },
+  "AUTONOMOUS_BY_DEFAULT": {
+    "disposition": "kept",
+    "reason": "authority: acts without a card; stays a per-environment decision until production autonomy is ruled (ADR-0018 amendment)",
+    "removeBy": "2027-01-31"
+  },
+  "AUTONOMY_OWNER_TURNS": {
+    "disposition": "kept",
+    "reason": "authority: acts without a card; stays a per-environment decision until production autonomy is ruled (ADR-0018 amendment)",
+    "removeBy": "2027-01-31"
+  },
+  "MEMORY_OUTSIDE_NOTES": {
+    "disposition": "kept",
+    "reason": "unfinished: off everywhere until the owner rules how widely a recalled outside note marks a turn",
+    "removeBy": "2026-12-31"
+  },
+  "AGENT_MAIL_INBOUND": {
+    "disposition": "kept",
+    "reason": "egress: Waldo's own mail address; production binds no sender and has no AGENT_MAIL_DOMAIN yet",
+    "removeBy": "2027-01-31"
+  },
+  "AGENT_MAIL_SEND": {
+    "disposition": "kept",
+    "reason": "egress: Waldo's own mail address; production binds no sender and has no AGENT_MAIL_DOMAIN yet",
+    "removeBy": "2027-01-31"
+  },
+  "PLANNING_BRIEF": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  },
+  "OWNER_SURFACE_DEFAULT": {
+    "disposition": "unconditional",
+    "batch": "delivery-proactive (after W4)"
+  },
+  "APP_CHAT_ATTACHMENTS": {
+    "disposition": "unconditional",
+    "batch": "app-identity"
+  },
+  "CONSOLE_HARNESS": {
+    "disposition": "unconditional",
+    "batch": "app-identity"
+  },
+  "WHATSAPP_STOP": {
+    "disposition": "unconditional",
+    "batch": "delivery-proactive (after W4)"
+  },
+  "CAPACITY_PLAN": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  },
+  "TOMORROW_TODAY": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  },
+  "CAPACITY_BUDGET": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  },
+  "WALDO_PROMPT_V2": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  },
+  "NEXT_DUE_ALARM": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  },
+  "WHY_TRAIL": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  },
+  "WALDO_RECALL_CHAIN": {
+    "disposition": "unconditional",
+    "batch": "memory"
+  },
+  "WALDO_FILE_TOOLS": {
+    "disposition": "unconditional",
+    "batch": "tasks"
+  },
+  "WALDO_ASYNC_TOOLS": {
+    "disposition": "unconditional",
+    "batch": "tasks"
+  },
+  "WALDO_JOB_OUTCOME_ROWS": {
+    "disposition": "unconditional",
+    "batch": "tasks"
+  },
+  "WALDO_LEAN_SCHEDULED": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  },
+  "WALDO_ONE_TIMELINE": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  },
+  "WALDO_LIGHT_CHAT": {
+    "disposition": "kept",
+    "reason": "unfinished: off everywhere; the light chat step has no accepted eval",
+    "removeBy": "2026-12-31"
+  },
+  "WALDO_THINKING_REPLAY": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  },
+  "WALDO_STRONG_ROLES": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  },
+  "GOOGLE_REALTIME_TRIAGE": {
+    "disposition": "unconditional",
+    "batch": "delivery-proactive (after W4)"
+  },
+  "HELD_RAISE": {
+    "disposition": "unconditional",
+    "batch": "delivery-proactive (after W4)"
+  },
+  "WALDO_WATCHDOG": {
+    "disposition": "unconditional",
+    "batch": "tasks"
+  },
+  "PROACTIVE_GATE": {
+    "disposition": "unconditional",
+    "batch": "delivery-proactive (after W4)"
+  },
+  "SEPARATE_TOGGLES": {
+    "disposition": "unconditional",
+    "batch": "delivery-proactive (after W4)"
+  },
+  "PROACTIVE_INTERRUPTS_PER_DAY": {
+    "disposition": "knob"
+  },
+  "PROACTIVE_URGENT_PER_DAY": {
+    "disposition": "knob"
+  },
+  "PROACTIVE_GAP_MIN": {
+    "disposition": "knob"
+  },
+  "PROACTIVE_ACT_AHEAD": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  },
+  "PROACTIVE_BOTH_DEFAULT": {
+    "disposition": "unconditional",
+    "batch": "delivery-proactive (after W4)"
+  },
+  "EVENT_PUSH": {
+    "disposition": "unconditional",
+    "batch": "delivery-proactive (after W4)"
+  },
+  "BRIEF_BODY_REVISION": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  },
+  "EVENT_PUSH_PER_DAY": {
+    "disposition": "knob"
+  },
+  "PROACTIVE_OVER_TELEGRAM": {
+    "disposition": "unconditional",
+    "batch": "delivery-proactive (after W4)"
+  },
+  "REENGAGE_PROACTIVE": {
+    "disposition": "unconditional",
+    "batch": "delivery-proactive (after W4)"
+  },
+  "PROACTIVE_INTERVENTIONS": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  },
+  "PROACTIVE_REVIEW_EVERY_MIN": {
+    "disposition": "knob"
+  },
+  "WHATS_NEW": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
+  "WAKE_BRIEF": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  },
+  "WAKE_BRIEF_FRESH_MIN": {
+    "disposition": "knob"
+  },
+  "WAKE_BRIEF_TURNS_PER_DAY": {
+    "disposition": "knob"
+  },
+  "WORKOUT_WAKE": {
+    "disposition": "unconditional",
+    "batch": "health-context (after W3)"
+  },
+  "BRIEF_DAY_PLAN": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  },
+  "CALENDAR_PLAN": {
+    "disposition": "unconditional",
+    "batch": "turn-day-cards (after W2)"
+  }
+}

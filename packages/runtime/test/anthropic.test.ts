@@ -9,7 +9,7 @@ import {
 } from '@waldo/contracts';
 import { AnthropicMessagesAdapter } from '../src/llm/anthropic';
 import type { LLMGatewayRequest } from '../src/llm/provider';
-import { CLAIM_OPS_SCHEMA, PROMOTION_SCHEMA, SOURCE_CLAIMS_SCHEMA } from '../src/memory/claims';
+import { CLAIM_OPS_SCHEMA, PROMOTION_SCHEMA, SOURCE_PEOPLE_CLAIMS_SCHEMA } from '../src/memory/claims';
 import { DAY_PLAN_SCHEMA } from '../src/prompt/day-cards';
 import { OWNER_SKILL_PROCEDURES_LEAD, withOwnerSkillProcedures } from '../src/prompt/messaging-behavior';
 import { WELCOME_SCHEMA } from '../src/onboarding/welcome';
@@ -617,7 +617,7 @@ describe('AnthropicMessagesAdapter structured output', () => {
   });
 
   it('sends every owner-path output schema in a shape the API accepts', async () => {
-    for (const [name, schema] of Object.entries({ CLAIM_OPS_SCHEMA, SOURCE_CLAIMS_SCHEMA, PROMOTION_SCHEMA, DAY_PLAN_SCHEMA, WELCOME_SCHEMA, reaction: reactionSchema(['👍', '🙏']) })) {
+    for (const [name, schema] of Object.entries({ CLAIM_OPS_SCHEMA, SOURCE_PEOPLE_CLAIMS_SCHEMA, PROMOTION_SCHEMA, DAY_PLAN_SCHEMA, WELCOME_SCHEMA, reaction: reactionSchema(['👍', '🙏']) })) {
       expect(refusedIn(schema as Record<string, unknown>).length > 0 || name !== 'CLAIM_OPS_SCHEMA', `${name} no longer carries a refused bound; the scan below proves nothing for it`).toBe(true);
       expect(refusedIn(await sentSchema(schema as Record<string, unknown>)), name).toEqual([]);
     }
