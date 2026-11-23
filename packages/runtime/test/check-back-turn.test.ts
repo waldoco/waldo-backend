@@ -123,7 +123,7 @@ const looksThen = (reply: string, extra: (asked: string) => Call[] = () => []) =
   request.tool_turns?.length ? { text: reply } : { text: '', calls: [{ call_id: 'look', name: 'get_context', arguments: '{}' }, ...extra(asked)] };
 
 describe('a due reminder runs a fresh check-back turn', () => {
-  it('reads the current state with read-only tools and sends what it found, not the stored note', async () => {
+  it('reads the current state and sends what it found, not the stored note; it holds the tools to do what the owner asked, never memory writes', async () => {
     await withOwner('check-back-reminder', async (owner, state) => {
       await dueReminder(state);
       fixture.script = looksThen(FOUND);
@@ -132,7 +132,9 @@ describe('a due reminder runs a fresh check-back turn', () => {
       expect(first!.messages.at(-1)!.content).toContain(NOTE);
       expect(first!.messages.at(-1)!.content).not.toContain('Send the reminder briefly');
       expect(offered(first!)).toEqual(expect.arrayContaining(['get_context', 'read_memory', 'search_episodes']));
-      for (const effect of ['send_email', 'draft_email', 'set_reminder', 'open_loop', 'remember', 'browse_act']) expect(offered(first!)).not.toContain(effect);
+      // A reminder the owner set may do what they asked for at that time; a send goes on their card (owner-reminder-tools.test.ts).
+      expect(offered(first!)).toEqual(expect.arrayContaining(['set_reminder', 'propose_action']));
+      for (const write of ['remember', 'forget_memory']) expect(offered(first!)).not.toContain(write);
       expect(second!.tool_turns?.map(turn => turn.call.name)).toEqual(['get_context']);
       await transportPass(owner, state);
       expect(wire.sent).toEqual([FOUND]);
@@ -311,7 +313,8 @@ describe('a past-due loop Waldo took on runs a fresh check-back turn from the he
       expect(first!.messages.at(-1)!.content).toContain(loop.id);
       expect(first!.messages.at(-1)!.content).toContain('due 2026-10-03 08:30, passed less than an hour ago');
       expect(offered(first!)).toEqual(expect.arrayContaining(['get_context', 'read_memory', 'close_loop', 'propose_action']));
-      for (const effect of ['send_email', 'set_reminder', 'open_loop', 'remember', 'start_task', 'cancel_task']) expect(offered(first!)).not.toContain(effect);
+      // remember is held: what the check-back learned is kept as Waldo's own note (waldo-run-memory.test.ts).
+      for (const effect of ['send_email', 'set_reminder', 'open_loop', 'forget_memory', 'start_task', 'cancel_task']) expect(offered(first!)).not.toContain(effect);
       expect(checkBackRequests()[1]!.tool_turns!.find(turn => turn.call.call_id === 'close')!.output).toContain('"closed":true');
       expect(state.storage.sql.exec('SELECT status FROM loops WHERE id = ?', loop.id).toArray()).toEqual([{ status: 'done' }]);
       expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM ledger WHERE kind = 'tainted_action'").one()).toEqual({ n: 0 });

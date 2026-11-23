@@ -3959,8 +3959,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (!workers) throw new Error('task workers are not configured');
           await workers.get(workers.idFromName(taskWorkerName(this.ctx.id.toString(), ticket))).start({ owner: this.ctx.id.toString(), ticket });
         },
-        turn: (job, trace, text, current, sourceTaint, toolNames) => this.asOwnerJob(job, trace, () =>
-          runtime.macFollowup(trace, runtime.owner, text, async (_hop, work) => work(), toolNames, current, undefined, undefined, sourceTaint ?? undefined, job === 'retry_turn')),
+        turn: (job, trace, text, current, sourceTaint, toolNames, lateOwner) => this.asOwnerJob(job, trace, () =>
+          runtime.macFollowup(trace, runtime.owner, text, async (_hop, work) => work(), toolNames, current, undefined, undefined, sourceTaint ?? undefined, job === 'retry_turn', undefined, undefined, undefined, lateOwner)),
         applyTools: () => runtime.toolHandlers().map(handler => handler.name as ToolName).filter(name => name !== 'start_task' && name !== 'cancel_task' && name !== 'steer_task'),
         deliver: async (id, trace, text, commit, conversationRef, askedIn) => {
           // Work the owner asked for on WhatsApp answers in their WhatsApp chat while that number is still bound; everything

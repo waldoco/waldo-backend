@@ -404,7 +404,7 @@
           "HEALTH_PROVISIONAL_SCORES": "1",
           "HEALTH_SOLO_NOTICE": "1",
           "HEALTH_PARTIAL_CONTEXT": "1",
-          "HEALTH_INVENTORY": "1",
+          "HEALTH_INVENTORY": "0",
           "HEALTH_TRAINING_LOAD": "1",
           "HEALTH_SCORE_PARTS": "1",
           "HEALTH_USUAL": "1",

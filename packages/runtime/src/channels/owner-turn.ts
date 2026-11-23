@@ -25,7 +25,7 @@ import { THREAD_TITLE_FORMAT, THREAD_TITLE_INSTRUCTION, threadOfChain } from './
 import { PROGRESS_NOTE_FORMAT, PROGRESS_NOTE_INSTRUCTION } from './progress-pacer';
 import type { LoopEventLike } from '../hooks/claim-hook';
 import { delegateTaskHandler, runChildLoop, SUBAGENT_SYSTEM_PROMPT, withDelegation } from '../conversation/subagent';
-import { CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS, reminderCheckBackText } from './check-back';
+import { OUTSIDE_TEXT_JOB_TOOLS, reminderCheckBackText } from './check-back';
 import { inMemoryToolOutputStore } from '../conversation/tool-output-store';
 import { readToolOutputHandler } from '../tools/read-tool-output';
 import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
@@ -102,6 +102,7 @@ export const EVERY_RUN_TOOLS: readonly string[] = ['skills_load', 'read_tool_out
 const EXTERNAL_REACH_TOOLS = new Set(['execute_action', 'delete_message', 'restore_message']);
 export const ownerToolApproval = ({ tool }: { tool: string }): boolean => !EXTERNAL_REACH_TOOLS.has(tool);
 export const OWNER_TURN_ONLY_TOOLS: ReadonlySet<string> = toolsWhere((record) => record.ownerTurnOnly);
+const WORKSPACE_TOOLS: ReadonlySet<string> = toolsWhere((record) => record.brain === 'workspace');
 // Past the owner's monthly spend ceiling these are held: each bills browser or sandbox time on top of the model call.
 export const PAID_RUNG_TOOLS: ReadonlySet<string> = toolsWhere((record) => record.paid);
 // The refusal a held paid tool returns: what still works comes from the catalogue, the reset day from the clock.
@@ -340,7 +341,7 @@ export const createOwnerResponder = (
     ownerId: safety.authenticatedUserId, conversationRef: activeOwnerTurn.conversationRef,
     current: { message_ref: activeOwnerTurn.messageRef?.id ?? activeOwnerTurn.traceId, ...memoryView(activeOwnerTurn.parts) },
     recent: [...recentOwnerTurns.values()].filter(turn => !barrier().holds(turn.text)).concat(control.heard().map((steer, index) => ({ message_ref: `${traceId}-steer-${index}`, text: steer.text, sourceQuoteRanges: steer.foreignRanges, steer: true as const }))),
-  } } : {}) });
+  } } : !ownerTurnActive ? { memoryRun: { ownerId: safety.authenticatedUserId, conversationRef: windowingRef, runId: traceId } } : {}) });
   let expectedProcedure: string | undefined;
   const complete = async (trace: string, purpose: string, systemPrompt: string | SystemPrompt, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName, callScope?: RunEffectScope, light = false, hostedSearch = true) => {
     await assertCurrent();
@@ -484,7 +485,7 @@ export const createOwnerResponder = (
   const ask = async (...args: Parameters<typeof complete>) => (await complete(...args)).text;
   const dayPlanHealth = async (trace: string): Promise<string> => {
     const shared = await health?.(trace) ?? null;
-    return shared === 'unreadable' ? renderHealth(null, true) : shared ? `${SHARED_HEALTH_LABEL}\n${renderHealth(shared)}` : renderHealth(null);
+    return shared === 'unreadable' ? renderHealth(null, 'unreadable') : shared ? `${SHARED_HEALTH_LABEL}\n${renderHealth(shared)}` : renderHealth(null);
   };
   const control = turnControl();
   const tree = new ConversationTree();
@@ -561,10 +562,18 @@ export const createOwnerResponder = (
   const contextInputs = () => ({ ...(context?.snapshot() ?? localTrustedBriefTurnSnapshot()), canary_tokens: CANARIES, replay_context_ref: null });
   // The store a turn reads its chain from carries the settings it read under, so the view and the trigger agree with it.
   const compaction = conversationStore?.compaction ?? COMPACTION;
+  // A health view left out of a run for its size is logged once a turn, by a fixed code and nothing of the view.
+  let healthWithheldNoted = false;
+  const noteHealthWithheld = (trace: string, composed: Readonly<{ health_withheld?: 'oversize' }>) => {
+    if (!composed.health_withheld || healthWithheldNoted) return;
+    healthWithheldNoted = true;
+    log({ trace, hop: 'health_context', ms: 0, ok: false, code: `withheld_${composed.health_withheld}` });
+  };
   const path = new JoinedConversationPath(composer, {
     complete: async (request) => {
       await assertCurrent();
         const trace = traceId;
+      noteHealthWithheld(trace, request.composition);
       // Capture-mode probe turns run on the stripped handler set; delegation wraps that
       // same set so probe confinement applies to children too (children are read-only by
       // construction, and the strip list is not widened here).
@@ -576,7 +585,10 @@ export const createOwnerResponder = (
       const offered: readonly string[] | undefined = leanRun ? SCHEDULED_MENU : backgroundToolNames;
       // A run that holds any tool can get a result too long to show, which points at read_tool_output, so it holds that too.
       const pointsBack = offered === undefined || offered.length > 0;
-      const { handlers: admittedHandlers, report: eligibility } = await eligibleHandlers(handlers.filter(handler => (offered === undefined || offered.includes(handler.name) || handler.name === 'skills_load' || (handler.name === 'read_tool_output' && pointsBack)) && (!OWNER_TURN_ONLY_TOOLS.has(handler.name) || activeOwnerTurn !== undefined) && !(asyncTools() && OWNER_TURN_LONG_TOOLS.has(handler.name)) && (!['remember', 'forget_memory'].includes(handler.name) || (activeOwnerTurn && activeOwnerTurn.memoryWrites !== false && !probeGuard?.suppressMemory))));
+      // The owner's workspace opens only inside a live owner run's scope (owner-do openWorkspace), so a run that holds every tool
+      // without one (the owner's reminder) is not offered workspace tools it could never run.
+      const workspaceShut = offered === undefined && !ownerTurnActive && activeOwnerTurn === undefined && privateRunScope === undefined;
+      const { handlers: admittedHandlers, report: eligibility } = await eligibleHandlers(handlers.filter(handler => (offered === undefined || offered.includes(handler.name) || handler.name === 'skills_load' || (handler.name === 'read_tool_output' && pointsBack)) && (!OWNER_TURN_ONLY_TOOLS.has(handler.name) || activeOwnerTurn !== undefined) && !(workspaceShut && WORKSPACE_TOOLS.has(handler.name)) && !(asyncTools() && OWNER_TURN_LONG_TOOLS.has(handler.name)) && (!['remember', 'forget_memory'].includes(handler.name) || (activeOwnerTurn ? activeOwnerTurn.memoryWrites !== false : handler.name === 'remember' && !ownerTurnActive && backgroundToolNames !== undefined) && !probeGuard?.suppressMemory)));
       await assertCurrent();
       const turnDirect: ReadonlySet<string> = new Set([...backgroundDirect, ...(privateOwner?.promotedTools?.() ?? [])]);
       if (eligibility.not_connected + eligibility.not_configured + eligibility.check_failed > 0) log({ trace, hop: 'tool_eligibility', ms: Date.now() - eligibilityStarted, ok: true, detail: `not_connected=${eligibility.not_connected} not_configured=${eligibility.not_configured} check_failed=${eligibility.check_failed}` });
@@ -598,7 +610,7 @@ export const createOwnerResponder = (
         return { ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
           await assertFresh();
           const retainedRead = ['read_memory', 'search_episodes', 'search_history', 'read_tool_output'].includes(handler.name);
-                  if (backgroundToolNames !== undefined && handler.name === 'open_loop' && (args === null || typeof args !== 'object' || !('source_ref' in args) || typeof args.source_ref !== 'string')) {
+                  if (backgroundToolNames !== undefined && !activeOwnerTurn && handler.name === 'open_loop' && (args === null || typeof args !== 'object' || !('source_ref' in args) || typeof args.source_ref !== 'string')) {
             return { ok: false, code: 'invalid_args', error: 'Background mail follow-up requires an observed source_ref.', source_taint: null };
           }
           const removal = handler.name === 'forget_memory' && args && typeof args === 'object' ? args as { topic?: string; claim_ids?: number[] } : undefined;
@@ -744,6 +756,7 @@ export const createOwnerResponder = (
           // Owner memory gets the room left in the FINAL system prompt (after the skill wrapper), because the sanitiser drops an oversize one whole.
           const composed = context ? await composer.compose(invocation, contextInputs()) : undefined;
           if (composed && !composed.ok) throw new Error(`owner context failed: ${composed.failure.code}`);
+          if (composed) noteHealthWithheld(trace, composed);
           // A composed owner context carries this line in its identity; a turn or job without one (no directory) reads it here.
           const ownerProfileLine = context ? undefined : (await privateOwner?.ownerProfile?.()) ?? undefined;
           await assertCurrent();
@@ -1278,10 +1291,16 @@ export const createOwnerResponder = (
       if (asOwner !== undefined) return asOwner;
       await restored();
       pending = undefined;
-      return converse(id, conversationRef, reminderCheckBackText(note, timing), time, false, surface, CHECK_BACK_TOOLS);
+      // A reminder the owner set carries what they asked for at this time ("at 6, send Sam the deck"), so it runs on the chat
+      // model with every tool a Waldo-started run may hold: anything that reaches another person goes on the owner's card, and
+      // once it reads outside content the taint gate holds as in any turn. Its note is Waldo's wording of the request, not the
+      // owner's own words, so it grounds no memory as theirs. A reminder set while reading outside content runs elsewhere.
+      backgroundOwnerModel = true;
+      try { return await converse(id, conversationRef, reminderCheckBackText(note, timing), time, false, surface); }
+      finally { backgroundOwnerModel = false; }
     },
-    async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments, directTools, waldoFirst) {
-      const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments, directTools, waldoFirst), conversationRef);
+    async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments, directTools, waldoFirst, lateOwner) {
+      const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments, directTools, waldoFirst, lateOwner), conversationRef);
       if (asOwner !== undefined) return asOwner;
       backgroundSourceTaint = sourceTaint ?? null;
       backgroundOwnerModel = ownerModel === true || ownerModel === 'plans' || (ownerModel === 'decides' && strongRoles);
@@ -1324,8 +1343,17 @@ export const createOwnerResponder = (
         // Lean only where the caller marked the run Waldo-first and its own tools sit inside the shared menu.
         leanRun = waldoFirst === true && privateOwner?.leanScheduled === true && fitsScheduledMenu(jobTools);
         backgroundDirect = new Set(leanRun ? SCHEDULED_DIRECT : [...(directTools ?? []), ...LOOK_BACK_DIRECT]);
+        // A late answer to the owner's own message runs as that message's turn would have: its owner-only tools, memory grounded in
+        // its words, the owner's say-so for inward writes. It stays a machine turn otherwise, so it is stored as Waldo's run, never
+        // as a new owner message, and a provider outage defers it through its job instead of promising another retry.
+        if (lateOwner) {
+          activeOwnerTurn = { traceId: id, conversationRef: lateOwner.conversationRef, surface: lateOwner.surface, text: lateOwner.text,
+            parts: lateOwner.text ? [{ authorship: 'owner', text: lateOwner.text }] : [], messageRef: { id: lateOwner.messageRef, conversationRef: lateOwner.conversationRef }, memoryWrites: true };
+          ownerTurnStartedAt = lateOwner.receivedAt;
+        }
         return await converse(id, conversationRef, said, time, false, surface, jobTools);
-      } finally { backgroundCurrent = undefined; transientDecision = false; promptContext = ''; backgroundSourceTaint = null; backgroundOwnerModel = false; planningRun = false; pending = undefined; backgroundDirect = NO_DIRECT; leanRun = false; leanRecentBytes = 0; }
+      } finally {
+        if (lateOwner) activeOwnerTurn = undefined; backgroundCurrent = undefined; transientDecision = false; promptContext = ''; backgroundSourceTaint = null; backgroundOwnerModel = false; planningRun = false; pending = undefined; backgroundDirect = NO_DIRECT; leanRun = false; leanRecentBytes = 0; }
     },
     async consolidate(trace, day, sides, policy) {
       const asOwner = await asOwnerJob(trace, job => job.consolidate(trace, day, sides, policy));

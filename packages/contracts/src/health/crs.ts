@@ -194,6 +194,16 @@ export type PartialHealthNarrative = z.infer<typeof partialHealthNarrativeSchema
 export const derivedHealthDestinationViewSchema = z.union([formHealthViewSchema, recoveryHealthViewSchema, partialHealthViewSchema]);
 export type DerivedHealthDestinationView = z.infer<typeof derivedHealthDestinationViewSchema>;
 
+// How large a derived health view can be, read from its own closed schemas: the most fields any view carries, its longest list
+// (the inventory, one entry per kind Waldo stores) and how deep it nests. A health view is the only structured payload the
+// system prompt accepts, so the Scribe's caps for that destination are these: the schema is the bound, and a view the schema
+// admits is never refused for its size. A test builds the largest view the schemas admit and checks it fits.
+export const DERIVED_HEALTH_VIEW_BOUNDS = {
+  fields: Math.max(...[formHealthViewSchema, recoveryHealthViewSchema, partialHealthViewSchema].map((schema) => Object.keys(schema.shape).length)),
+  items: healthSignalV1Schema.options.length,
+  depth: 4,
+} as const;
+
 // The sensor-named pillar key must never sit directly against a numeric literal in non-test
 // code (health-data firewall), so its coefficient lives behind a module const.
 const HRV_FORM_WEIGHT = 0.35;
