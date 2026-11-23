@@ -15,8 +15,7 @@ import { basisSources, driverPhrases, HEALTH_WAKE_REASONS, type HealthWakeReason
 
 // The health trigger. A change on the owner's current day (a zone change reported by the derived-row writer, or a wake the
 // recompute found in the stored rows; both value-free) marks the day pending; one scheduled evaluation then decides, with the
-// model, whether the change meets a coming decision. On a day with nothing coming, and only where HEALTH_SOLO_NOTICE is
-// on, the model instead decides whether the change is worth one short note, sent as an update card. Code
+// model, whether the change meets a coming decision. On a day with nothing coming, the model instead decides whether the change is worth one short note, sent as an update card. Code
 // decides only what must be guaranteed: consent, quiet hours, the owner's opt-out, the interrupt budget, dedupe and the
 // pilot's false-alarm accounting. Whether the change matters is the model's call, and how many cards a day the owner
 // gets is the delivery gate's budget for proposed adjustments. Nothing here stores a health value or a
@@ -283,19 +282,15 @@ const mentions = (text: string, words: readonly string[]): boolean => {
 const zoneLine = (zones: Zones): string =>
   `recovery ${zones.recovery ?? 'unavailable'}, form ${zones.form ?? 'unavailable'}, load ${zones.load ?? 'unavailable'}`;
 
-export const HEALTH_TRIGGER_FORMAT = { name: 'health_proposal', schema: { type: 'object', additionalProperties: false, required: ['kind', 'action', 'item', 'start', 'end', 'title', 'block', 'notify_guests', 'reason'], properties: {
+export const HEALTH_TRIGGER_FORMAT = { name: 'health_proposal', schema: { type: 'object', additionalProperties: false, required: ['kind', 'action', 'item', 'start', 'end', 'title', 'block', 'notify_guests', 'reason', 'rename_to'], properties: {
   kind: { type: 'string', enum: ['propose', 'no_op'] },
   action: { type: ['string', 'null'], enum: ['move', 'cancel', 'create', null] },
   item: { type: ['string', 'null'] }, start: { type: ['string', 'null'] }, end: { type: ['string', 'null'] }, title: { type: ['string', 'null'] },
   block: { type: ['string', 'null'], enum: ['rest', 'deep_work', null] },
   notify_guests: { type: ['boolean', 'null'] }, reason: { type: 'string' },
+  // A move may also rename the event, to swap a hard workout for an easier one in its slot.
+  rename_to: { type: ['string', 'null'] },
 } } };
-
-// With workout easing on, a move may also rename the event, so the answer carries rename_to as well.
-export const healthTriggerFormat = (easeWorkout: boolean): HealthDecisionFormat => !easeWorkout ? HEALTH_TRIGGER_FORMAT : { ...HEALTH_TRIGGER_FORMAT, schema: {
-  ...HEALTH_TRIGGER_FORMAT.schema, required: [...HEALTH_TRIGGER_FORMAT.schema.required, 'rename_to'],
-  properties: { ...HEALTH_TRIGGER_FORMAT.schema.properties, rename_to: { type: ['string', 'null'] } },
-} };
 
 type Refs = ReadonlyMap<string, ComingItem>;
 const refsOf = (items: readonly ComingItem[]): Refs => {
@@ -342,8 +337,7 @@ export const healthTriggerPrompt = (input: Readonly<{
   view: HealthTriggerView; items: readonly ComingItem[]; now: number; timezone: string; feedback: Readonly<Record<string, number>>; earlier?: readonly EarlierProposal[];
   // Why this evaluation runs. None, or a zone change among them, reads as a zone change.
   reasons?: readonly HealthWakeReason[];
-  easeWorkout?: boolean;
-  // HEALTH_ACTIONS: the reviewed protocols Waldo reasons from, and how far ahead the items reach.
+  // The reviewed protocols Waldo reasons from, and how far ahead the items reach.
   protocols?: string; through?: string;
 }>): string => {
   const { view, now, timezone, feedback } = input;
@@ -372,9 +366,9 @@ export const healthTriggerPrompt = (input: Readonly<{
     ...protocolLines(input.protocols),
     'Decide whether this change meets a coming decision where waiting would make the day worse: a hard meeting, a long drive, a deadline. If one change to the plan would clearly help, propose exactly one: move or cancel one listed event by its ref, or create one block of protected time, as rest (a break, recovery or a lighter stretch) or deep_work (focused work). Otherwise return no_op. A proposal the owner skips costs their trust, so when it is not clearly worth an interruption, return no_op.',
     ...((input.reasons ?? []).includes('workout_ended') ? ['Look at the rest of today and this evening with recovery in mind. Propose a change only when one clearly helps; a finished workout on its own needs none.'] : []),
-    ...(input.easeWorkout ? ["A training session or workout on the calendar is a coming decision too. When today calls for less, you may swap a hard session for an easier one in the same slot (hard intervals for an easy run, a heavy lift for a walk or mobility): action move with the event's own start and end, and rename_to the easier session's name. You may also move it to a better time. Whether an event is a workout, and how hard it is, is your call from its title and the owner's goals."] : []),
+    "A training session or workout on the calendar is a coming decision too. When the owner's state calls for less, you may swap a hard session for an easier one in the same slot (hard intervals for an easy run, a heavy lift for a walk or mobility): action move with the event's own start and end, and rename_to the easier session's name. You may also move it to a better time. Whether an event is a workout, and how hard it is, is your call from its title and the owner's goals.",
     'Never diagnose or alarm, and never mention medicine. The reason is one short line for the owner, at most 200 characters, and may use the zone words. A title you write goes to Google, where others can see it: keep any mention of health, sleep or zones out of it (for example "Focus block" or "Buffer"). Times are owner-local ISO (YYYY-MM-DDTHH:MM). notify_guests says whether Google should email the guests of a moved or cancelled event.',
-    `Return only JSON: kind (propose or no_op), action (move, cancel or create; null for no_op), item (the ref for move or cancel, else null), start and end (for move and create, else null), title (create only, else null), block (rest or deep_work for a create, else null), notify_guests (true or false when the event has guests, else null), ${input.easeWorkout ? 'rename_to (move only: the new name, which goes to Google like a title; else null), ' : ''}reason (empty for no_op).`,
+    `Return only JSON: kind (propose or no_op), action (move, cancel or create; null for no_op), item (the ref for move or cancel, else null), start and end (for move and create, else null), title (create only, else null), block (rest or deep_work for a create, else null), notify_guests (true or false when the event has guests, else null), rename_to (move only: the new name, which goes to Google like a title; else null), reason (empty for no_op).`,
   ].join('\n\n');
 };
 
@@ -435,7 +429,7 @@ export const ownerInstant = (local: string, timezone: string): number | null => 
 };
 
 // The model's answer, checked against what it was shown. Anything that does not fit is refused, never repaired.
-export const parseHealthDecision = (raw: string, items: readonly ComingItem[], now: number, timezone: string, reasonMax = REASON_MAX, renames = false): HealthDecision => {
+export const parseHealthDecision = (raw: string, items: readonly ComingItem[], now: number, timezone: string, reasonMax = REASON_MAX): HealthDecision => {
   const value = record(JSON.parse(raw));
   if (!value || (value.kind !== 'propose' && value.kind !== 'no_op')) throw new Error('invalid health decision');
   if (value.kind === 'no_op') return { kind: 'no_op' };
@@ -453,7 +447,7 @@ export const parseHealthDecision = (raw: string, items: readonly ComingItem[], n
     return { kind: 'propose', args: parsed.data };
   };
   const renameTo = typeof value.rename_to === 'string' ? value.rename_to.trim() : value.rename_to ?? null;
-  if (renameTo !== null && (!renames || value.action !== 'move' || typeof renameTo !== 'string' || !renameTo || renameTo.length > TITLE_MAX)) throw new Error('invalid health decision rename');
+  if (renameTo !== null && (value.action !== 'move' || typeof renameTo !== 'string' || !renameTo || renameTo.length > TITLE_MAX)) throw new Error('invalid health decision rename');
   if (value.action === 'create') {
     const title = typeof value.title === 'string' ? value.title.trim() : '';
     if (!title || title.length > TITLE_MAX) throw new Error('invalid health decision title');
@@ -510,11 +504,10 @@ export type HealthTriggerDeps = Readonly<{
   charge(eventId: string): void;
   decide(id: string, prompt: string, format: HealthDecisionFormat): Promise<string>;
   propose(args: ProposeCalendarChangeArgs, operationRef: string): Promise<string>;
-  // The note on a day with nothing coming. Without it, or with it off, such a day stays silent. held names why an update
+  // The note on a day with nothing coming. Without it, such a day stays silent. held names why an update
   // card could not go out now (the owner's update-card preferences, the Close already sent, the surface's window), or is
   // null. deliver queues the note under its id and runs commit in the same transaction as that write.
   soloNotice?: Readonly<{
-    enabled(): boolean;
     held(): string | null;
     deliver(id: string, text: string, commit: () => void): Promise<void>;
   }>;
@@ -522,9 +515,7 @@ export type HealthTriggerDeps = Readonly<{
   notify?(approvalId: string): Promise<void>;
   reschedule(at: number): Promise<void>;
   log(line: Readonly<{ hop: 'health_trigger'; ok: boolean; code: HealthTriggerOutcome; mode?: HealthTriggerMode }>): void;
-  // Whether a hard workout may be swapped for an easier one in its slot (a move that renames it).
-  easeWorkout?(): boolean;
-  // HEALTH_ACTIONS: the reviewed protocols the decision reasons from, and the end of what it reads ahead (through the owner's
+  // The reviewed protocols the decision reasons from, and the end of what it reads ahead (through the owner's
   // next day, so tonight can be planned around tomorrow's first commitment).
   actions?: Readonly<{ protocols: string; until(now: number): number; through: string }>;
 }>;
@@ -571,7 +562,7 @@ const evaluate = async (deps: HealthTriggerDeps): Promise<HealthTriggerOutcome> 
     if (!items.length) {
       const solo = deps.soloNotice;
       // A finished workout asks only whether to reshape what is left of the day, and nothing is.
-      if (!solo?.enabled() || (reasons.length > 0 && reasons.every(reason => reason === 'workout_ended'))) { book.clear(started); return done('nothing_coming'); }
+      if (!solo || (reasons.length > 0 && reasons.every(reason => reason === 'workout_ended'))) { book.clear(started); return done('nothing_coming'); }
       if (mode === 'live' && book.noticedOn(localDay)) return finish('duplicate');
       if (mode === 'live' && solo.held() !== null) return finish('notice_held');
       const admitted = mode === 'live' ? deps.admit(budgetKey) : null;
@@ -600,10 +591,9 @@ const evaluate = async (deps: HealthTriggerDeps): Promise<HealthTriggerOutcome> 
     if (admission?.verdict === 'wait') { await deps.reschedule(admission.until); return done('held_cooldown', mode); }
     if (admission?.verdict === 'spent') { book.clear(started); return done('budget_gate', mode); }
     const asking = mode === 'live' && book.shouldAsk(started);
-    const easeWorkout = deps.easeWorkout?.() === true;
-    const prompt = healthTriggerPrompt({ view, items, now: started, timezone, feedback: book.feedback(started), earlier: book.proposedOn(localDay), reasons, easeWorkout, ...actions });
+    const prompt = healthTriggerPrompt({ view, items, now: started, timezone, feedback: book.feedback(started), earlier: book.proposedOn(localDay), reasons, ...actions });
     let decision: HealthDecision;
-    try { decision = parseHealthDecision(await deps.decide(id, prompt, healthTriggerFormat(easeWorkout)), items, started, timezone, asking ? REASON_MAX - HEALTH_KEEP_ASKING.length - 1 : REASON_MAX, easeWorkout); }
+    try { decision = parseHealthDecision(await deps.decide(id, prompt, HEALTH_TRIGGER_FORMAT), items, started, timezone, asking ? REASON_MAX - HEALTH_KEEP_ASKING.length - 1 : REASON_MAX); }
     catch (error) { if (error instanceof SyntaxError || (error instanceof Error && error.message.startsWith('invalid health decision'))) return finish('invalid'); throw error; }
     if (decision.kind === 'no_op') return finish('no_op');
     if (!calendarEgressClear(decision.args, healthWordsOf(view))) return finish('egress_refused');

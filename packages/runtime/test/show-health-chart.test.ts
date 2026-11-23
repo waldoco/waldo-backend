@@ -160,7 +160,7 @@ it('an app turn that charts the owner\'s HRV stores the query, and each chat=11 
   claimStore(state.storage.sql); ensureSchema(state.storage);
   state.storage.kv.put('do_name', name);
   const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-  const owner = new OwnerDO(state, { ...env, ...directory, HEALTH_CHARTS: '1', TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+  const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
   seen.calls = [{ name: 'show_health_chart', arguments: JSON.stringify(QUERY) }];
   try {
     const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers: headers(name), body: JSON.stringify({ client_message_id: 'health-chart-01', text: 'How has my HRV been this week?' }) }));
@@ -189,14 +189,14 @@ it('an app turn that charts the owner\'s HRV stores the query, and each chat=11 
   } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
 }));
 
-it('two charts of one query each keep their words, one read serves both and consent is read once; a failed read or the switch off is words, never a failed page', () => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('health-chart-pair')), async (_instance, state) => {
+it('two charts of one query each keep their words, one read serves both and consent is read once; a failed read is words, never a failed page', () => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('health-chart-pair')), async (_instance, state) => {
   const name = 'health-chart-pair';
   claimStore(state.storage.sql); ensureSchema(state.storage);
   state.storage.kv.put('do_name', name);
   const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
   const logged = vi.spyOn(console, 'log');
-  const make = (flag: string) => new OwnerDO(state, { ...env, ...directory, HEALTH_CHARTS: flag, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
-  const owner = make('1');
+  const make = () => new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+  const owner = make();
   seen.calls = [{ name: 'show_health_chart', arguments: JSON.stringify(QUERY) }, { name: 'show_health_chart', arguments: JSON.stringify({ ...QUERY, title: 'Three nights', alt_text: 'Steady climb.' }) }];
   try {
     const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers: headers(name), body: JSON.stringify({ client_message_id: 'health-chart-02', text: 'Chart my HRV twice' }) }));
@@ -216,9 +216,5 @@ it('two charts of one query each keep their words, one read serves both and cons
     expect(failed.text).toBe(`${REPLY}\n\n${QUERY.alt_text}\n\nSteady climb.`);
     expect(logged.mock.calls.map(call => String(call[0])).some(line => line.includes('"hop":"app_health_chart"') && line.includes('"code":"read_failed"'))).toBe(true);
     for (const night of NIGHTS) expect(logged.mock.calls.map(call => String(call[0])).join('\n')).not.toContain(String(night.value));
-    seen.broken = false;
-    const off = await read(make('0'));
-    expect(off.parts.some(part => part.type === 'chart_series')).toBe(false);
-    expect(off.text).toBe(`${REPLY}\n\n${QUERY.alt_text}\n\nSteady climb.`);
   } finally { quiet.mockRestore(); logged.mockRestore(); await state.storage.deleteAlarm(); }
 }));

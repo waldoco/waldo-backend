@@ -73,7 +73,7 @@ let sequence = 0;
 const printed: string[] = [];
 beforeEach(() => {
   plane.rows.clear(); plane.debt.clear(); plane.drivers.clear(); plane.consent = true; plane.event = REVIEW; plane.requests = []; printed.length = 0;
-  plane.calls = []; plane.written = []; plane.settings = null;
+  plane.calls = []; plane.written = []; plane.settings = { sleep_need_minutes: null, updated_at: null };
   plane.decision = move;
   for (const day of [-3, -2]) plane.rows.set(addDays(TODAY, day), { recovery: pillar, form: pillar, weight: { reason: 'calendar_demand_unavailable' } });
   vi.useFakeTimers({ toFake: ['Date'], now: NOW });
@@ -122,7 +122,7 @@ const withOwner = (work: (o: { state: DurableObjectState; upload(): Promise<void
     const owner = new OwnerDO(state, config as never) as unknown as Owner;
     const owners = { idFromName: (name: string) => name as never, get: () => ({ fetch: (request: Request) => owner.fetch(request) }) };
     const upload = () => notifyOwnerHealthSamples(owners, SECRET, doName);
-    // An upload whose readings include a workout that just ended (WORKOUT_WAKE).
+    // An upload whose readings include a workout that just ended.
     const finished = () => notifyOwnerHealthSamples(owners, SECRET, doName, 'readings', false, true);
     const pass = async () => { await armAlarm(state.storage, Date.now()); await state.storage.deleteAlarm(); state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm(); };
     // One upload and the recompute window it arms, run through the real scheduler.
@@ -210,10 +210,8 @@ describe('a wake beyond a zone change, on the owner object', () => {
   });
 });
 
-// The owner's stated sleep need on the owner object's recompute: read only with the coaching switch on, and every row computed
-// on it. Every value is synthetic.
-describe('a finished workout on the owner object (WORKOUT_WAKE)', () => {
-  const ON = { ...CONFIG, WORKOUT_WAKE: '1' };
+// The owner's stated sleep need on the owner object's recompute: read, and every row computed on it. Every value is synthetic.
+describe('a finished workout on the owner object', () => {
   const WORDS = 'The owner just finished a workout.';
   it('wakes the health trigger once that day; the model sees the workout in words and the day ahead, and decides', async () => {
     await withOwner(async ({ state, pass, finished }) => {
@@ -238,7 +236,7 @@ describe('a finished workout on the owner object (WORKOUT_WAKE)', () => {
       expect(triggerEntry(state)).toEqual([]);
       expect(evaluations()).toHaveLength(1);
       for (const leak of LEAKS) expect(dump(state), leak).not.toContain(leak);
-    }, ON);
+    });
   });
 
   it('never calls a workout "just finished" hours later, when the wake could not read the row at the time', async () => {
@@ -254,7 +252,7 @@ describe('a finished workout on the owner object (WORKOUT_WAKE)', () => {
       expect(wakes(state).filter(wake => wake.reason === 'workout_ended')).toEqual([]);
       await pass();
       for (const request of evaluations()) expect(JSON.stringify(request.request)).not.toContain(WORDS);
-    }, ON);
+    });
   });
 
   it('stays silent when the model finds nothing to change', async () => {
@@ -266,38 +264,23 @@ describe('a finished workout on the owner object (WORKOUT_WAKE)', () => {
       await pass();
       expect(evaluations()).toHaveLength(1);
       expect(runs(state)).toMatchObject([{ local_day: TODAY, outcome: 'no_op' }]);
-    }, ON);
+    });
   });
 
-  it('wakes nothing with the switch off, or while the owner\'s health proposals are off', async () => {
-    const finishedThenRecomputed = async ({ finished, pass }: { finished(): Promise<void>; pass(): Promise<void> }) => {
-      await finished();
-      vi.setSystemTime(Date.now() + HEALTH_RECOMPUTE_WINDOW_MS);
-      await pass();
-    };
-    await withOwner(async (o) => {
-      await finishedThenRecomputed(o);
-      expect([wakes(o.state), triggerEntry(o.state), evaluations()]).toEqual([[], [], []]);
-    });
+  it('wakes nothing while the owner\'s health proposals are off', async () => {
     await withOwner(async (o) => {
       o.state.storage.sql.exec('CREATE TABLE IF NOT EXISTS schedule_preferences (kind TEXT PRIMARY KEY, enabled INTEGER NOT NULL)');
       o.state.storage.sql.exec("INSERT INTO schedule_preferences (kind, enabled) VALUES ('health_proposals', 0)");
-      await finishedThenRecomputed(o);
+      await o.finished();
+      vi.setSystemTime(Date.now() + HEALTH_RECOMPUTE_WINDOW_MS);
+      await o.pass();
       expect([wakes(o.state), triggerEntry(o.state), evaluations()]).toEqual([[], [], []]);
-    }, ON);
+    });
   });
 });
 
 describe('the stated sleep need on the owner object', () => {
-  it('reads no settings with the coaching switch off', async () => {
-    await withOwner(async ({ recompute }) => {
-      await recompute();
-      expect(plane.written.length).toBeGreaterThan(0);
-      expect(plane.calls).not.toContain('health_settings_read');
-    });
-  });
-
-  it('computes on the stated need with it on, and writes nothing when the settings read fails', async () => {
+  it('computes on the stated need, and writes nothing when the settings read fails', async () => {
     plane.settings = { sleep_need_minutes: 480, updated_at: '2026-10-01T08:00:00.000Z' };
     await withOwner(async ({ recompute }) => {
       await recompute();
@@ -305,11 +288,11 @@ describe('the stated sleep need on the owner object', () => {
       const debts = plane.written.map(row => row.sleep_debt as { state?: string; need_basis?: string } | undefined).filter(debt => debt?.state === 'available');
       expect(debts.length).toBeGreaterThan(0);
       for (const debt of debts) expect(debt!.need_basis).toBe('owner_confirmed');
-    }, { ...CONFIG, HEALTH_PROVISIONAL_SCORES: '1', HEALTH_COACHING: '1' });
+    });
     plane.settings = { error: 'not_linked' }; plane.written = [];
     await withOwner(async ({ recompute }) => {
       await recompute();
       expect(plane.written).toEqual([]);
-    }, { ...CONFIG, HEALTH_PROVISIONAL_SCORES: '1', HEALTH_COACHING: '1' });
+    });
   });
 });

@@ -27,7 +27,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
 });
 const { OwnerDO } = await import('../src/channels/owner-do');
 
-const appTurn = (name: string, ask: string, setup: Readonly<{ confirmed?: boolean; askSwitch?: string }> = {}) => {
+const appTurn = (name: string, ask: string, setup: Readonly<{ confirmed?: boolean }> = {}) => {
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
@@ -44,7 +44,7 @@ const appTurn = (name: string, ask: string, setup: Readonly<{ confirmed?: boolea
     state.storage.kv.put('do_name', name);
     state.storage.kv.put('timezone', 'UTC');
     if (setup.confirmed) state.storage.kv.put('timezone_confirmed', true);
-    const owner = new OwnerDO(state, { ...env, ...(setup.askSwitch ? { WALDO_TIMEZONE_ASK: setup.askSwitch } : {}), SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const owner = new OwnerDO(state, { ...env, SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     try {
       const sent = await owner.fetch(new Request('https://telegram-owner/app/v1/chat/main/messages', { method: 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'a'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: `client-${name}`, text: ask }) }));
       expect(sent.status).toBe(202);
@@ -111,13 +111,10 @@ it('when the directory does not keep the zone, the owner object does not apply i
   expect(toolResult()).toMatch(/rejected/);
 });
 
-it('with WALDO_TIMEZONE_ASK on, a turn whose zone is not confirmed says so; a confirmed zone, or the switch off, does not', async () => {
-  await appTurn('chat-timezone-ask-on', 'what is on today?', { askSwitch: '1' });
+it('a turn whose zone is not confirmed says so; a confirmed zone does not', async () => {
+  await appTurn('chat-timezone-ask-on', 'what is on today?');
   expect(firstRequest()).toContain(ZONE_UNCONFIRMED);
   world.requests = [];
-  await appTurn('chat-timezone-ask-confirmed', 'what is on today?', { askSwitch: '1', confirmed: true });
-  expect(firstRequest()).not.toContain(ZONE_UNCONFIRMED);
-  world.requests = [];
-  await appTurn('chat-timezone-ask-off', 'what is on today?');
+  await appTurn('chat-timezone-ask-confirmed', 'what is on today?', { confirmed: true });
   expect(firstRequest()).not.toContain(ZONE_UNCONFIRMED);
 });

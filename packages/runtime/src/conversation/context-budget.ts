@@ -3,16 +3,16 @@
 // a valid size of its kind reads as the default, rather than stopping every owner object over one typo; ignoredSettings
 // names those for the log, and context-budget.test.ts holds both deployed configs to valid values.
 export type ContextBudget = Readonly<{
-  // WALDO_CALL_CEILINGS: a chat's history, the conversation layer of a call aiming at the chat ceiling.
+  // A chat's history, the conversation layer of a call aiming at the chat ceiling.
   historyTokens: number;
-  // WALDO_CALL_CEILINGS: what a reply call's whole input aims at, by call class, and the point past which a turn's earlier
+  // What a reply call's whole input aims at, by call class, and the point past which a turn's earlier
   // tool results are cleared.
   chatCeilingTokens: number;
   jobCeilingTokens: number;
   hardCeilingTokens: number;
-  // WALDO_STEPPED_WINDOW: the share of the history budget a stepped cut keeps.
+  // The share of the history budget a stepped cut keeps.
   steppedTarget: number;
-  // WALDO_CONTEXT_CAPS: past this many characters of tool results, every result but the latest few is cleared; and the
+  // Past this many characters of tool results, every result but the latest few is cleared; and the
   // characters of standing orders and of quests a turn reads.
   clearAtChars: number;
   keepLatest: number;

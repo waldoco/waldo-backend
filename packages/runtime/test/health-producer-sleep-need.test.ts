@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { produceHealthScores, type ProducerDeps } from '../src/health/producer';
-import { computeDailyScores, dailyScoresFor } from '../src/health/scores';
+import { computeDailyScores, provisionalDailyScores } from '../src/health/scores';
 
 // The owner's stated sleep need in the producer. It reaches the score engine only when the coaching switch hands the producer
 // a settings reader, and a change of need is never told to the health trigger as a change in the body. Every value is synthetic.
@@ -49,7 +49,7 @@ describe('producer: the owner\'s stated sleep need', () => {
   });
 
   it('computes the late days it backfills on the stated need too', async () => {
-    const provisional = dailyScoresFor('1');
+    const provisional = provisionalDailyScores;
     const { writes } = await run({ readSettings: settings(480), readHistory: async () => ({ unavailable: 'no_readings' }), compute: input => { expect(input.sleepNeedMinutes).toBe(480); return provisional(input); } });
     const late = writes.filter(row => row.backfilled === true);
     const bases = late.map(row => (row.sleep_debt as Record<string, unknown> | undefined)?.need_basis).filter(basis => basis !== undefined);
@@ -118,7 +118,7 @@ describe('producer: a need saved while it runs', () => {
       const w = world(), late: unknown[] = [];
       w.need.answers = [{ sleep_need_minutes: null, updated_at: null }];
       w.need.current = second as never;
-      const deps = { ...w.deps([]), compute: dailyScoresFor('1'), readHistory: async () => ({ unavailable: 'no_readings' }) };
+      const deps = { ...w.deps([]), compute: provisionalDailyScores, readHistory: async () => ({ unavailable: 'no_readings' }) };
       const settings = deps.readSettings!;
       deps.readSettings = async () => { const answer = await settings(); if (answer instanceof Error) throw answer; return answer; };
       const writeContext = deps.writeContext;

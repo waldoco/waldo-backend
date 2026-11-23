@@ -58,6 +58,7 @@ beforeEach(() => {
       return Response.json({ owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
     }
     if (fn === 'health_context_read') { wire.asked.push(fn); return Response.json(null); }
+    if (fn === 'health_inventory_read') { wire.asked.push(fn); return Response.json({ sources: [] }); }
     if (/^https:\/\/api\.telegram\.org\/bot[^/]+\/sendMessage$/.test(url)) {
       const sent = JSON.parse(String(init?.body)) as { chat_id: number; text: string };
       wire.telegramSent.push({ chat_id: sent.chat_id, text: sent.text });

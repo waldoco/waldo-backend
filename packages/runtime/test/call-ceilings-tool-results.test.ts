@@ -9,7 +9,7 @@ import { TOOL_OUTPUT_LIMIT } from '../src/conversation/tool-loop';
 import { CONTEXT_BUDGET, type ContextBudget } from '../src/conversation/context-budget';
 
 // An owner turn whose message is long reads one long thread after another, through the real responder. With
-// WALDO_CALL_CEILINGS, once the results would carry the call past its hard ceiling, every result but the newest is cleared;
+// the call ceilings, once the results would carry the call past its hard ceiling, every result but the newest is cleared;
 // without it the turn halves its results as before, later and less.
 const allowed = (name: ToolName) => triggerTypeSchema.options.filter(trigger => TOOL_PERMISSIONS[trigger].includes(name));
 const ROUNDS = 12;
@@ -33,7 +33,7 @@ const clearingIn = (callCeilings: ContextBudget | undefined) => runInDurableObje
   return { firstCleared: firstCleared && kept(firstCleared), at: firstCleared?.length };
 });
 
-it('with WALDO_CALL_CEILINGS a long owner turn clears every tool result but the newest at the hard ceiling', async () => {
+it('with the call ceilings a long owner turn clears every tool result but the newest at the hard ceiling', async () => {
   const ceiling = await clearingIn(CONTEXT_BUDGET);
   const plain = await clearingIn(undefined);
   expect(ceiling.firstCleared).toBe(1);

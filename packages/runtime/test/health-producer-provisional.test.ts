@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { dailyScoresFor } from '../src/health/scores';
+import { computeDailyScores, provisionalDailyScores } from '../src/health/scores';
 import type { DailyScores } from '../src/health/scores/types';
 import { goldenProducerCases, producerPayloads, type GoldenProducerCase } from './support/health-golden';
 
 // The derived row the producer writes with provisional scores on: the label and provenance on each available pillar, the
 // confidence from coverage and the chosen source, and the sleep debt as its second version. Synthetic owners only.
 type Row = Record<string, Record<string, unknown>> & { day: string; basis: { source: string }[] };
-const rowsWith = async (spec: GoldenProducerCase, flag: string | undefined): Promise<Row[]> =>
-  (await producerPayloads(dailyScoresFor(flag), spec)).map(payload => JSON.parse(payload) as Row);
-const rows = (spec: GoldenProducerCase) => rowsWith(spec, '1');
-const rowsOff = (spec: GoldenProducerCase) => rowsWith(spec, undefined);
+const rowsWith = async (spec: GoldenProducerCase, compute: typeof computeDailyScores): Promise<Row[]> =>
+  (await producerPayloads(compute, spec)).map(payload => JSON.parse(payload) as Row);
+const rows = (spec: GoldenProducerCase) => rowsWith(spec, provisionalDailyScores);
+const rowsOff = (spec: GoldenProducerCase) => rowsWith(spec, computeDailyScores);
 const round3 = (value: number) => Math.round(value * 1000) / 1000;
 const SOURCE_CONFIDENCE = { apple: 1, oura: 0.85, whoop: 0.8, health_connect: 0.6, samsung: 0.6 } as const;
 const PILLARS = ['recovery', 'form', 'weight'] as const;
@@ -34,7 +34,7 @@ describe('provisional rows: pillars', () => {
   it('write confidence as coverage times the confidence of the source the row was computed from', async () => {
     for (const [source, factor] of Object.entries(SOURCE_CONFIDENCE)) {
       const computed = new Map<string, DailyScores>();
-      const base = dailyScoresFor('1');
+      const base = provisionalDailyScores;
       const payloads = await producerPayloads(input => { const out = base(input); computed.set(input.targetDay, out); return out; }, { nights: 25, source, calendar: true });
       expect(payloads.length).toBeGreaterThan(0);
       for (const row of payloads.map(payload => JSON.parse(payload) as Row)) {
@@ -70,7 +70,7 @@ describe('provisional rows: which sources may be accepted', () => {
   const pillarsOf = (row: Row) => [row.recovery!, row.form!, row.weight!].filter(p => !('reason' in p));
   const captured = async (spec: GoldenProducerCase) => {
     const computed = new Map<string, DailyScores>();
-    const base = dailyScoresFor('1');
+    const base = provisionalDailyScores;
     const payloads = await producerPayloads(input => { const out = base(input); computed.set(input.targetDay, out); return out; }, spec);
     return { rows: payloads.map(payload => JSON.parse(payload) as Row), computed };
   };
@@ -126,7 +126,7 @@ describe('provisional rows: sleep debt', () => {
 
 describe('provisional rows: a confidence that is not a number', () => {
   it('is refused, never written as a null', async () => {
-    const base = dailyScoresFor('1');
+    const base = provisionalDailyScores;
     const nan = (input: Parameters<typeof base>[0]) => { const out = base(input); return out.recovery.state === 'available' ? { ...out, recovery: { ...out.recovery, coverage: Number.NaN } } : out; };
     const payloads = await producerPayloads(nan, goldenProducerCases.apple_mature_with_calendar!);
     expect(payloads).toEqual([]);
@@ -135,7 +135,7 @@ describe('provisional rows: a confidence that is not a number', () => {
 
 describe('provisional rows off: a coverage that is not a number', () => {
   it('is written as a null confidence, as it always was, and never refuses the row', async () => {
-    const base = dailyScoresFor(undefined);
+    const base = computeDailyScores;
     const nan = (input: Parameters<typeof base>[0]) => { const out = base(input); return out.recovery.state === 'available' ? { ...out, recovery: { ...out.recovery, coverage: Number.NaN } } : out; };
     const written = (await producerPayloads(nan, goldenProducerCases.apple_mature_with_calendar!)).map(payload => JSON.parse(payload) as Row);
     expect(written.length).toBeGreaterThan(0);

@@ -39,9 +39,9 @@ export type FloorPromise = Readonly<{ promise(turn: FloorTurn): string }>;
 export type OwnerModelAccess = Readonly<{ openaiApiKey: string; anthropicApiKey?: string; primary?: ModelProvider; floorReply?: boolean | FloorPromise; health?: CircuitBreaker; toolSearch?: boolean; toolLoader?: 'harness';
   // WALDO_PROMPT_V2: the owner path's behavior prompt version 2 (prompt/messaging-behavior.ts).
   promptV2?: boolean;
-  // WALDO_CONTEXT_CAPS: an owner turn clears its tool results down to the latest few once they pass a size.
+  // An owner turn clears its tool results down to the latest few once they pass a size.
   contextCaps?: Pick<ContextBudget, 'clearAtChars' | 'keepLatest'>;
-  // WALDO_CALL_CEILINGS: each call is measured against its class's ceiling, and an owner turn clears earlier tool results
+  // Each call is measured against its class's ceiling, and an owner turn clears earlier tool results
   // once they would carry the call past the hard ceiling.
   callCeilings?: Pick<ContextBudget, 'chatCeilingTokens' | 'jobCeilingTokens' | 'hardCeilingTokens'>;
   // WALDO_THINKING_REPLAY: Claude's thinking is replayed through a turn's tool loop, which keeps one tool list to its close.

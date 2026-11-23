@@ -45,8 +45,8 @@ import { wakeFreshMs, wakeNoteStillFresh, workoutStillFresh } from '../health/wa
 import { dispatchProviderCall, HEALTH_PROVIDER_PATH, verifiedProviderCall } from '../health/providers/provider-route';
 import { whoopOwner, WHOOP_SYNC_EVERY_MS, WHOOP_SYNC_ID, type WhoopOwner } from '../health/providers/whoop-owner';
 import { whoopConfig } from '../health/providers/whoop-routes';
-import { dailyScoresFor } from '../health/scores';
-import { passiveLoadSources } from '../health/producer';
+import { provisionalDailyScores } from '../health/scores';
+import { PASSIVE_LOAD_SOURCES } from '../health/producer';
 import { invokeHealth } from './app-health';
 import { calendarEgressRuns, comingItemsFrom, healthCardBudget, healthTriggerBook, healthTriggerDueAt, healthTriggerView, healthWordsOf, runHealthTrigger, healthNoticeCurrent, HEALTH_TRIGGER_ID, type HealthTriggerOutcome } from '../health/trigger';
 import { ownerJobAdmission, surfaceOwnerAdmission, type SurfaceOwnerBinding } from '../identity/surface-owner-admission';
@@ -387,7 +387,7 @@ type OwnerRuntime = Readonly<{
   // The owner's derived health rows: asked for by each upload that changed a reading and each wearable sync, and recomputed
   // once for every window of asks.
   // `woke` says the readings carry a night that just ended (WAKE_BRIEF), which may move today's Brief; `workout` that they
-  // carry a workout that just ended (WORKOUT_WAKE), which may reshape the rest of the day.
+  // carry a workout that just ended, which may reshape the rest of the day.
   healthSamples(cause?: HealthRecomputeCause, woke?: boolean, workout?: boolean): Promise<void>;
   healthRecompute(): Promise<void>;
   // BRIEF_BODY_REVISION: today's body data landed after the Brief reached the owner; one turn decides whether it now reads differently.
@@ -560,7 +560,7 @@ const whatsappQuietMs = (value: string | undefined): number => {
 };
 
 
-// When an upload last said a workout just ended (WORKOUT_WAKE): held until a recompute hands it to the trigger, and ignored
+// When an upload last said a workout just ended: held until a recompute hands it to the trigger, and ignored
 // once it is no longer fresh.
 const WORKOUT_NOTED_KEY = 'health_workout_noted_v1';
 const NIGHT_NOTED_KEY = 'health_night_noted_v1';
@@ -1198,9 +1198,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
     }
     // A message already waiting runs first; the compaction after the last of them catches up.
-    if (ran && oneTimelineEnabled(this.env) && compactionSettings(this.env).enabled && consoleAuth(this.env) !== null && this.chatsOnTimeline()
+    if (ran && oneTimelineEnabled(this.env) && consoleAuth(this.env) !== null && this.chatsOnTimeline()
       && !(await this.inbox.records()).some(record => record.state === 'admitted')) {
-      await this.compactTimeline('telegram', alarmEnd);
+      await this.askCompaction({ chat: 'telegram' });
     }
   }
 
@@ -1515,7 +1515,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const sql = this.ctx.storage.sql;
     return { admit: () => this.admitOwnerJob(), chain,
       // The job reads the book the owner's chat turns read: the custody key their rows were seeded under.
-      skills: (owner, turnId, assertCurrent) => createJobSkillCapability(sql, { owner, custodyKey: seededSkillCustody(sql) ?? owner, turnId, trigger: 'user_message', ownerText: '', assertCurrent, catalog: curatedCatalog(this.env.HEALTH_ACTIONS === '1', this.env.CALENDAR_COVERAGE === '1' || this.env.FREE_WINDOW_OFFERS === '1') }) };
+      skills: (owner, turnId, assertCurrent) => createJobSkillCapability(sql, { owner, custodyKey: seededSkillCustody(sql) ?? owner, turnId, trigger: 'user_message', ownerText: '', assertCurrent, catalog: curatedCatalog(this.env.CALENDAR_COVERAGE === '1' || this.env.FREE_WINDOW_OFFERS === '1') }) };
   }
 
   // A chat turn (WhatsApp, Telegram) runs on the owner's own chain only while the owner's proactive work lands in their app
@@ -2064,7 +2064,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       timezone:()=>this.setup('app').timezone,
       produce:(woke,workout)=>this.setup('app').healthSamples('readings',woke,workout),
       ...(this.env.WAKE_BRIEF==='1'?{wakeFreshMs:wakeFreshMs(this.env.WAKE_BRIEF_FRESH_MIN)}:{}),
-      ...(this.env.WORKOUT_WAKE==='1'?{workoutWake:true as const}:{}),
       arm:async at=>{await this.setup('app').scheduler.schedule({id:WHOOP_SYNC_ID,kind:'provider_sync',occurrenceAt:at,dueAt:at,payloadRefs:{id:WHOOP_SYNC_ID},recurrence:{type:'interval',every_ms:WHOOP_SYNC_EVERY_MS,phase_ms:at%WHOOP_SYNC_EVERY_MS}});},
       disarm:async()=>{await this.setup('app').scheduler.cancelReadable(WHOOP_SYNC_ID);},
       log:line=>this.setup('app').log({trace:`whoop:${Date.now()}`,hop:line.hop,ms:0,ok:line.ok,code:line.code}),
@@ -2193,7 +2192,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const rated=appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'chat')>=APP_CHAT_RATING_REVISION;
       const shows=this.env.MEMORY_USED_SHOWN==='1'&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'chat')>=APP_CHAT_MEMORY_USED_REVISION;
       const charts=appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'chat')>=APP_CHAT_CHART_REVISION;
-      const healthCharts=this.env.HEALTH_CHARTS==='1'&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'chat')>=APP_CHAT_HEALTH_CHART_REVISION;
+      const healthCharts=appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'chat')>=APP_CHAT_HEALTH_CHART_REVISION;
       try{return Response.json(await this.appChatPage(name,hash,undefined,url.searchParams.get('cursor'),Number(url.searchParams.get('limit')??20),at,rated,appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'approvals'),shows,charts,healthCharts,appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'chat')),{headers:{'cache-control':'no-store'}});}
       catch(error){logAppReadFailure('app_history_read',at.step,error);return fail(503);}
     }
@@ -2494,19 +2493,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     // Named after the queue drains, so a message already queued never waits on a title.
     for(const [thread,rows] of untitled){try{await this.titleThread(thread,rows);}catch{console.error(JSON.stringify({hop:'thread_title',ok:false,code:'unavailable'}));}}
-    // Compacted last, once every reply is delivered and its run settled. A message already waiting goes first: its own
-    // reply asks again.
-    for(const record of compactable.values()){
-      if(this.compactionWake()){if(compactionSettings(this.env).enabled)await this.askCompaction({app:{id:record.id,owner:record.owner,sessionHash:record.sessionHash,conversationRef:record.conversationRef,threadRevision:record.threadRevision}});continue;}
-      if(this.appInbox.records().some(row=>row.state==='admitted'))break;await this.compactApp(record,alarmEnd);
-    }
+    // A drain that makes chains due leaves their compaction to a later alarm pass of its own, so the pass that ran the
+    // owner's turns never also waits on a summary call.
+    for(const record of compactable.values())await this.askCompaction({app:{id:record.id,owner:record.owner,sessionHash:record.sessionHash,conversationRef:record.conversationRef,threadRevision:record.threadRevision}});
     await this.rearmWithSchedule();
   }
   // A chain's compaction job, after the turn that made it due. Its own scope and deadline, the owner admitted again through
-  // the session the turn ran under, and the thread's fence; off unless WALDO_COMPACTION=on. Anything that ends it early
+  // the session the turn ran under, and the thread's fence. Anything that ends it early
   // writes no summary, and the chain's next eligible reply asks again; one the alarm pass has no room for says so.
   private async compactApp(record: AppCompaction, alarmEnd?: number): Promise<'no_time' | undefined> {
-    if(!compactionSettings(this.env).enabled)return;
     const started=Date.now(),deadline=started+COMPACTION_BUDGET_MS;
     if(alarmEnd!==undefined&&alarmEnd<deadline)return 'no_time';
     const runtime=this.setup('app'),trace=`compaction:${record.id}`,abort=new AbortController(),timer=setTimeout(()=>abort.abort(),COMPACTION_BUDGET_MS);
@@ -2524,16 +2519,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   // The owner's chain after their turns on a chat surface on the timeline. An app, WhatsApp or Telegram message admitted
   // meanwhile stops it, as it stops the app's own compaction.
-  private async compactTimeline(chat: TimelineChat, alarmEnd?: number, inline = !this.compactionWake()): Promise<'no_time' | undefined> {
-    if (!inline) { await this.askCompaction({ chat }); return; }
+  private async compactTimeline(chat: TimelineChat, alarmEnd?: number): Promise<'no_time' | undefined> {
     const abort = new AbortController();
     this.compactionAbort = abort;
     try { return await compactChatTimeline(this.chatTimelineHost(), chat, this.setup(chat), abort, alarmEnd); }
     finally { if (this.compactionAbort === abort) this.compactionAbort = undefined; }
   }
-  // WALDO_COMPACTION_WAKE: a drain that makes chains due leaves their compaction to a later alarm pass of its own, so the pass
-  // that ran the owner's turns never also waits on a summary call.
-  private compactionWake(): boolean { return this.env.WALDO_COMPACTION_WAKE === '1'; }
   // A chain asked for again replaces its earlier ask, so it waits for the pass after the turn that asked last.
   private async askCompaction(asked: Readonly<{ app?: AppCompaction; chat?: TimelineChat }>): Promise<void> {
     const kv = this.ctx.storage.kv, pending = kv.get<CompactionPending>(COMPACTION_PENDING_KEY) ?? { app: [], chats: [] }, at = Date.now();
@@ -2557,7 +2548,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     for (const entry of pending.chats.filter(entry => entry.at < passStart)) {
       if ((await this.inbox.records()).some(record => record.state === 'admitted') || this.whatsappInbox().records().some(record => record.state === 'admitted')
-        || await this.compactTimeline(entry.chat, alarmEnd, true) === 'no_time') left.chats.push(entry);
+        || await this.compactTimeline(entry.chat, alarmEnd) === 'no_time') left.chats.push(entry);
     }
     // Written only once the work is done: a pass cut off before here leaves every request for the next one.
     kv.delete(COMPACTION_DUE_KEY);
@@ -2703,8 +2694,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (!overtaken && inbox.settle(record, completed)) await this.whatsappNotice(record);
       ran ||= completed;
     }
-    if (ran && oneTimelineEnabled(this.env) && compactionSettings(this.env).enabled && consoleAuth(this.env) !== null && this.chatsOnTimeline()) {
-      await this.compactTimeline('whatsapp', alarmEnd);
+    if (ran && oneTimelineEnabled(this.env) && consoleAuth(this.env) !== null && this.chatsOnTimeline()) {
+      await this.askCompaction({ chat: 'whatsapp' });
     }
   }
   private chatTimelineHost(): ChatTimelineHost {
@@ -4437,7 +4428,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return !auth || !doName || auth.saveSettings(doName, settings);
     };
     const clock = { get timezone() { return identity.get<string>('timezone') ?? fallbackZone; }, now: () => new Date(deps.now()),
-      ...(this.env.WALDO_TIMEZONE_ASK === '1' ? { confirmed: () => identity.get<boolean>('timezone_confirmed') === true } : {}) };
+      confirmed: () => identity.get<boolean>('timezone_confirmed') === true };
     const book = reminderBook(this.ctx.storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
     const meds = this.env.MEDICATIONS === '1'
       ? medicationBook(this.ctx.storage.sql, scheduler, clock, (operation, payload) => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', operation, payload))
@@ -4451,7 +4442,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const healthContext = healthContextBook(signedRpc(this.env), identity.get<string>('do_name') ?? null, clock,
       (error, trace) => log({ trace: trace ?? `health:${channel}`, hop: 'health_context', ms: 0, ok: false, error: String(error), code: 'read_failed' }),
       (present, trace, partial) => { if (present) noteHealthShared(identity, Date.now()); log({ trace: trace ?? `health:${channel}`, hop: 'health_context', ms: 0, ok: true, code: partial ? 'partial' : present ? 'present' : 'absent' }); },
-      { partial: this.env.HEALTH_PARTIAL_CONTEXT === '1', inventory: this.env.HEALTH_INVENTORY === '1' },
+      { partial: true, inventory: true },
     );
     const baseCall = channel === 'app'
       ? appCaller(() => this.scheduledAppDelivery)
@@ -4981,7 +4972,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       knownParty: knownPartyLookup({ mail: account => google.client('mail', undefined, undefined, account), contacts: account => google.client('contacts', undefined, undefined, account) }),
       conversationRef: () => this.activeApp?.conversationRef,
       ownerMessageAt: () => this.activeApp?.admittedAt ?? this.activeWhatsApp?.admittedAt ?? this.activeIMessage?.admittedAt,
-      surface: channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work), writesFirstNow, renames: this.env.HEALTH_EASE_WORKOUT === '1', undoCancels: this.env.CALENDAR_UNDO_CANCEL === '1',
+      surface: channel, appLink: appApprovalLink, commit: work => storage.transactionSync(work), writesFirstNow, undoCancels: this.env.CALENDAR_UNDO_CANCEL === '1',
       // A card closed in a turn that read outside text: the desk's own words reach the owner's main chat once, through the outbox.
       notice: (key, text) => finalOutbox.enqueue({ id: key, trace: key, payload: { chat_id: owner, text }, notice: true, ownerSubject: String(owner),
         doName: storage.kv.get<string>('do_name') ?? '', expiresAt: deps.now() + 86_400_000 }),
@@ -5050,12 +5041,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // Chats that do not compact still read under the deploy's window settings: the stepped window and the history budget.
     const uncompacted = { ...compactionSettings(this.env), enabled: false };
     const kv = durableConversationStore(storage, uncompacted);
-    // WALDO_CONTEXT_CAPS: the always-on standing orders and quests are capped, and an owner turn's tool results are cleared
-    // down to the latest few past a size. The sizes, and the call ceilings', are the deploy's context budget.
+    // The always-on standing orders and quests are capped, and an owner turn's tool results are cleared down to the latest
+    // few past a size. The sizes, and the call ceilings', are the deploy's context budget.
     const budget = contextBudget(this.env), ignored = ignoredSettings(this.env);
     if (ignored.length) console.log(JSON.stringify({ hop: 'context_budget', ok: false, code: 'setting_ignored', detail: ignored.join(',') }));
-    const contextCaps = this.env.WALDO_CONTEXT_CAPS === '1';
-    const callCeilings = this.env.WALDO_CALL_CEILINGS === '1';
     const plans = dayPlanBook(storage.sql);
     // MEMORY_OUTSIDE_NOTES: the turn also recalls notes learned from mail and calendar, shown as not the owner's words.
     const ownerClaims = claimStore(storage.sql, (work) => storage.transactionSync(work));
@@ -5273,7 +5262,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // A chart is the app reply's chart_series part, so the app is the one surface that offers it.
     const turnCharts = turnChartBook();
     const chartTools = SURFACE_CAPABILITIES_V1[channel].charts === 'native'
-      ? [showChartHandler(turnCharts), ...(this.env.HEALTH_CHARTS === '1' ? [showHealthChartHandler(turnCharts, args => getHealthHandler(healthRead, clock).handle(args, {} as never))] : [])] : [];
+      ? [showChartHandler(turnCharts), showHealthChartHandler(turnCharts, args => getHealthHandler(healthRead, clock).handle(args, {} as never))] : [];
     // The planning Brief's answers to tap, offered only on a surface that draws them as chips on the row (today the app).
     const planningBrief = this.env.PLANNING_BRIEF === '1';
     // PROACTIVE_ACT_AHEAD: the approved day shape, and update triage that builds on the worker's prepared move.
@@ -5296,7 +5285,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const assertSkillOwnerCurrent = async () => { scope.admit(); };
       // The receipt read runs on every tool round; one failure line per turn keeps the bounded trace table readable.
       let receiptsUnavailableLogged = false;
-      const capability = createScopedCuratedSkillCapability(storage.sql, { owner: skillOwner, custodyKey: seededSkillCustody(storage.sql) ?? custodyFallback, catalog: curatedCatalog(this.env.HEALTH_ACTIONS === '1', this.env.CALENDAR_COVERAGE === '1' || this.env.FREE_WINDOW_OFFERS === '1'), turnId: turn.traceId,
+      const capability = createScopedCuratedSkillCapability(storage.sql, { owner: skillOwner, custodyKey: seededSkillCustody(storage.sql) ?? custodyFallback, catalog: curatedCatalog(this.env.CALENDAR_COVERAGE === '1' || this.env.FREE_WINDOW_OFFERS === '1'), turnId: turn.traceId,
         trigger: 'user_message', ownerText: turn.text, assertCurrent: assertSkillOwnerCurrent, assertDispatch }, scope);
       return Object.freeze({ ...capability, ...(admission ? { admission } : {}), taskContext: async (assertSourceCurrent?: () => Promise<void>) => {
         await assertSkillOwnerCurrent();
@@ -5486,8 +5475,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const modelAccess: OwnerModelAccess = { openaiApiKey: key ?? '', ...(this.env.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: this.env.ANTHROPIC_API_KEY }), primary: modelProviderSetting(this.env.WALDO_MODEL_PROVIDER), health: this.providerHealth, onAttempts, held: () => this.openHold().held() };
     const responder = createTelegramResponder(
-      { ...modelAccess, floorReply: retryFloor, ...(this.env.WALDO_TOOL_LOADER === 'harness' ? { toolLoader: 'harness' as const } : this.env.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true } : {}), ...(this.env.WALDO_PROMPT_V2 === '1' ? { promptV2: true } : {}), ...(this.env.WALDO_THINKING_REPLAY === '1' ? { thinkingReplay: true } : {}), ...(this.env.WALDO_STRONG_ROLES === '1' ? { strongRoles: true } : {}), ...(contextCaps ? { contextCaps: budget } : {}), ...(callCeilings ? { callCeilings: budget } : {}) }, legacyStore, memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe, ...(this.env.WALDO_FILE_TOOLS === '1' ? { keeper: (runScope: RunEffectScope) => uploadKeeper(() => openWorkspace({ runScope }), identity.get<string>('do_name') ?? String(owner)) } : {}) }, clock, replayHandlers = surfaceHandlers([...workspaceTools, ...reminderHandlers(book), ...(meds ? medicationHandlers(meds) : []), ...healthLogHandlers(healthLogs), ...(this.env.HEALTH_COACHING === '1' ? [sleepNeedHandler(payload => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', 'settings_write', payload), () => this.setup('app').healthSamples('settings'))] : []), getHealthHandler(healthRead, clock), ...(this.env.SCREEN_TIME === '1' ? [getScreenTimeHandler(screenTimeReadBook(signedRpc(this.env), identity.get<string>('do_name') ?? null), clock)] : []), ...(this.env.DEVICE_PLACE === '1' ? [getDeviceContextHandler(deviceContextReadBook(signedRpc(this.env), identity.get<string>('do_name') ?? null), clock)] : []), ...(this.env.DEVICE_CALENDAR === '1' ? [queryPhoneCalendarHandler(phoneCalendarReader(this.deviceCalendar(), google), clock)] : []), ...weatherTools(this.env, signedRpc(this.env), identity.get<string>('do_name') ?? null, clock, typeof caches === 'undefined' ? null : cacheApiWeatherCache(caches.default)), ...standingOrderHandlers(orders), questHandler(quests), ...experimentHandlers(quests, readZones), ...(this.env.AUTONOMY_OWN_CALENDAR === '1' ? autonomyHandlers(grants, desk, { now: () => deps.now(), timezone: () => clock.timezone, surface: channel,
+      { ...modelAccess, floorReply: retryFloor, ...(this.env.WALDO_TOOL_LOADER === 'harness' ? { toolLoader: 'harness' as const } : this.env.WALDO_TOOL_SEARCH === 'on' ? { toolSearch: true } : {}), ...(this.env.WALDO_PROMPT_V2 === '1' ? { promptV2: true } : {}), ...(this.env.WALDO_THINKING_REPLAY === '1' ? { thinkingReplay: true } : {}), ...(this.env.WALDO_STRONG_ROLES === '1' ? { strongRoles: true } : {}), contextCaps: budget, callCeilings: budget }, legacyStore, memory, log,
+      { download, transcribe: selectTranscriber(this.env)?.transcribe, ...(this.env.WALDO_FILE_TOOLS === '1' ? { keeper: (runScope: RunEffectScope) => uploadKeeper(() => openWorkspace({ runScope }), identity.get<string>('do_name') ?? String(owner)) } : {}) }, clock, replayHandlers = surfaceHandlers([...workspaceTools, ...reminderHandlers(book), ...(meds ? medicationHandlers(meds) : []), ...healthLogHandlers(healthLogs), sleepNeedHandler(payload => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', 'settings_write', payload), () => this.setup('app').healthSamples('settings')), getHealthHandler(healthRead, clock), getScreenTimeHandler(screenTimeReadBook(signedRpc(this.env), identity.get<string>('do_name') ?? null), clock), ...(this.env.DEVICE_PLACE === '1' ? [getDeviceContextHandler(deviceContextReadBook(signedRpc(this.env), identity.get<string>('do_name') ?? null), clock)] : []), ...(this.env.DEVICE_CALENDAR === '1' ? [queryPhoneCalendarHandler(phoneCalendarReader(this.deviceCalendar(), google), clock)] : []), ...weatherTools(this.env, signedRpc(this.env), identity.get<string>('do_name') ?? null, clock, typeof caches === 'undefined' ? null : cacheApiWeatherCache(caches.default)), ...standingOrderHandlers(orders), questHandler(quests), ...experimentHandlers(quests, readZones), ...(this.env.AUTONOMY_OWN_CALENDAR === '1' ? autonomyHandlers(grants, desk, { now: () => deps.now(), timezone: () => clock.timezone, surface: channel,
         account: async requested => (await google.client('calendar', undefined, undefined, requested).catch(() => null))?.account?.email ?? null }) : []), ...exportTool, ...artifactHandlers(artifacts, artifactDelivery(artifacts, async () => await storage.get<string>('origin') ?? null, Boolean(this.env.ARTIFACTS && this.env.RESPONSIBILITY_RATE_LIMITER))), ...googleTaskHandlers(desk), ...approvalHandlers(desk), ...(this.env.APPROVE_IN_CHAT === '1' || this.env.AUTONOMOUS_BY_DEFAULT === '1' ? [approveShownHandler(desk)] : []), ...googleHandlers(google, desk, clock, async (from, artifacts) => {
         // Owner-ruled OTP parity (September 27, 2026): the extracted artifact goes to the owner
         // as a direct message - fixed copy, no model involvement, and the send is never logged
@@ -5532,7 +5521,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         conversationRef: ctx => { const record = this.activeApp; return record && ctx.runScope?.runId === record.id && ctx.runScope.attempt === record.attempt && threadOfChain(record.conversationRef) ? record.conversationRef : null; } })]), undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; }, approvableHere: () => desk.approvableHere() }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now()); const trails = forgetTrails(this.ctx.storage.sql, texts) + dayPlanBook(this.ctx.storage.sql).forgetWhy(texts); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + trails + titles.remaining }; }), undefined,
       (opt) => opt ? [openLoopsPrompt(loops, clock.timezone, opt.loopsRoom, false, Date.now()), runningTasksLine(this.jobs(), Date.now()),
         // "What's new?" in the owner's own turns: what is recent and still live by its switch, while feature news is on.
-        whatsNewSection(newsOn() ? announced.recent(Date.now() - WHATS_NEW_WINDOW_MS).filter(row => switchOn(declaredSwitch(this.env, row.capability))) : [], budget.whatsNewChars)].filter(Boolean).join('\n\n') : [standingOrdersPrompt(orders, ...(contextCaps ? [budget.standingOrdersChars] : [])), questsPrompt(quests, ...(contextCaps ? [budget.questsChars] : []))].filter(Boolean).join('\n\n'), runs, undefined,
+        whatsNewSection(newsOn() ? announced.recent(Date.now() - WHATS_NEW_WINDOW_MS).filter(row => switchOn(declaredSwitch(this.env, row.capability))) : [], budget.whatsNewChars)].filter(Boolean).join('\n\n') : [standingOrdersPrompt(orders, budget.standingOrdersChars), questsPrompt(quests, budget.questsChars)].filter(Boolean).join('\n\n'), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
       undefined, channel, ({ telegram: telegramSkillHost, app: appSkillHost, imessage: imessageSkillHost, whatsapp: whatsappSkillHost } satisfies Record<ChannelKind, OwnerSkillHost>)[channel],
@@ -6034,18 +6023,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const recompute = healthRecompute({ scheduler, now: Date.now, ownerZone: () => clock.timezone, producer: {
       readSeries: range => healthRpc('series_read', JSON.stringify(range)), writeContext: payload => healthRpc('context_write', payload),
       readScores: day => healthRpc('scores_read', JSON.stringify({ day })), readHistory: days => healthRpc('scores_history', JSON.stringify({ days })),
-      compute: dailyScoresFor(this.env.HEALTH_PROVISIONAL_SCORES), trainingLoad: this.env.HEALTH_TRAINING_LOAD === '1', scoreParts: this.env.HEALTH_SCORE_PARTS === '1', usual: this.env.HEALTH_USUAL === '1', dayLoad: this.env.HEALTH_DAY_LOAD === '1', passiveLoad: passiveLoadSources(this.env.HEALTH_PASSIVE_LOAD), stressCurve: this.env.HEALTH_STRESS_CURVE === '1', formCurve: this.env.HEALTH_FORM_CURVE === '1', readCurves: () => healthRpc('form_curves_read', '{}'),
-      ...(this.env.HEALTH_COACHING === '1' ? { readSettings: () => healthRpc('settings_read', '{}') } : {}), readDemand: range => this.setup('app').calendarDemand(range), onZoneChange: healthChanged,
+      compute: provisionalDailyScores, trainingLoad: true, scoreParts: true, usual: true, dayLoad: true, passiveLoad: PASSIVE_LOAD_SOURCES, stressCurve: true, formCurve: this.env.HEALTH_FORM_CURVE === '1', readCurves: () => healthRpc('form_curves_read', '{}'),
+      readSettings: () => healthRpc('settings_read', '{}'), readDemand: range => this.setup('app').calendarDemand(range), onZoneChange: healthChanged,
     }, forgetDemand: day => forgetDemandDay(storage.sql, day, Date.now()),
       wakes: { enabled: () => schedPrefs.enabled('health_proposals'), woken: healthWoken,
-        readContext: readModelHealth, noted: startedAt => (this.env.WORKOUT_WAKE === '1' && workoutStillFresh(storage.kv.get(WORKOUT_NOTED_KEY), startedAt) ? ['workout_ended'] : []) } });
+        readContext: readModelHealth, noted: startedAt => (workoutStillFresh(storage.kv.get(WORKOUT_NOTED_KEY), startedAt) ? ['workout_ended'] : []) } });
     // An upload or a wearable sync changed the readings; an empty welcome health stage reads them once more.
     // A new stated need changes no reading, so it never spends the welcome's one retry for late health data.
     const healthSamples = async (cause: HealthRecomputeCause = 'readings', woke = false, workout = false) => {
-      // WORKOUT_WAKE: a workout just ended. The time is noted before the recompute is asked for, so a recompute already due
+      // A workout just ended. The time is noted before the recompute is asked for, so a recompute already due
       // still finds it; the first one that starts after it and finds today's row hands it to the health trigger, so the
       // trigger never reads the day before the workout.
-      if (workout && this.env.WORKOUT_WAKE === '1') storage.kv.put(WORKOUT_NOTED_KEY, Date.now());
+      if (workout) storage.kv.put(WORKOUT_NOTED_KEY, Date.now());
       // WAKE_BRIEF: the night is noted now and the wake waits for the recompute this upload arms, since the Brief moved to now
       // would otherwise be written from the rows as they were before the upload.
       if (woke && this.env.WAKE_BRIEF === '1') storage.kv.put(NIGHT_NOTED_KEY, Date.now());
@@ -6113,11 +6102,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const current = async () => { if (!schedPrefs.enabled('health_proposals')) throw new Error('health proposals turned off'); };
       const gateBudget = healthCardBudget(calendarGate, String(owner), timezone, Date.now);
       const budget = interrupts ? drawingOn(gateBudget, interrupts.book, interrupts.limits, interrupts.reopens) : gateBudget;
-      const healthActions = this.env.HEALTH_ACTIONS === '1' ? CURATED_PACK_SKILLS.find(skill => skill.name === 'health-protocols')?.body_markdown ?? null : null;
+      const healthActions = CURATED_PACK_SKILLS.find(skill => skill.name === 'health-protocols')?.body_markdown ?? null;
       // The run and its model call each close their own trace with a machine_turn root, so the trace exporter flushes both.
       const started = Date.now();
       let outcome: HealthTriggerOutcome = 'failed';
-      try { outcome = await runHealthTrigger({ book: healthBook, now: Date.now, newId: () => crypto.randomUUID(), timezone, easeWorkout: () => this.env.HEALTH_EASE_WORKOUT === '1',
+      try { outcome = await runHealthTrigger({ book: healthBook, now: Date.now, newId: () => crypto.randomUUID(), timezone,
         enabled: () => schedPrefs.enabled('health_proposals'), modeSetting: () => schedPrefs.healthMode(), proactivity: () => loops.proactivity(),
         readHealth: async () => (rpc && doName ? rpc('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName }) : null),
         comingItems: async (from, to) => {
@@ -6137,7 +6126,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         },
         propose: (args, operationRef) => desk.propose(args, undefined, operationRef), notify: approvalId => push('approval', approvalId),
         // A day with nothing coming: a note, as an update card under the update cards' own gate, and recorded for the next main card.
-        soloNotice: { enabled: () => this.env.HEALTH_SOLO_NOTICE === '1', held: () => sweepGate(localIso(Date.now(), timezone).slice(0, 10)),
+        soloNotice: { held: () => sweepGate(localIso(Date.now(), timezone).slice(0, 10)),
           deliver: async (id, text, commit) => {
             if (finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
             const recordId = updates.record(localIso(Date.now(), timezone).slice(0, 10), Date.now(), [], null);

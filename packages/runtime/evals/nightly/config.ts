@@ -15,7 +15,7 @@ import { liveVoiceJudge } from './voice';
 import { judgeModeOf } from './dimensions';
 import { readStagingVars, stagingProfile, type StagingProfile, type StagingVars } from './staging-profile';
 import type { MemoryMode } from './world';
-import { compactionSettings, type CompactionSettings } from '../../src/conversation/compaction';
+import { COMPACTION, type CompactionSettings } from '../../src/conversation/compaction';
 import { fakeEmbeddings } from '../../src/testing/fake-embeddings';
 import { workersAiRest } from './embeddings';
 import type { NightlyRun } from './suite';
@@ -81,10 +81,10 @@ const baseConfig = (env: Env, stagingVars: () => StagingVars): NightlyRun => {
       : toolSearch ? { toolSearch: true } : {}),
     ...(promptV2 ? { promptV2: true } : {}),
   };
-  // WALDO_EVAL_COMPACTION=on runs every trial's chat on the canonical store with compaction on, as WALDO_COMPACTION=on does
-  // for the app; the scorecard names it so the two runs are never mixed up.
-  const compaction: Readonly<{ compaction?: CompactionSettings }> = profile ? (profile.compaction.enabled ? { compaction: profile.compaction } : {})
-    : env.WALDO_EVAL_COMPACTION === 'on' ? { compaction: compactionSettings({ WALDO_COMPACTION: 'on' }) } : {};
+  // WALDO_EVAL_COMPACTION=on runs every trial's chat on the canonical store with compaction on, under the plain window and
+  // the default budget; the scorecard names it so the two runs are never mixed up.
+  const compaction: Readonly<{ compaction?: CompactionSettings }> = profile ? { compaction: profile.compaction }
+    : env.WALDO_EVAL_COMPACTION === 'on' ? { compaction: { ...COMPACTION, enabled: true } } : {};
   // WALDO_EVAL_SEMANTIC=on runs every trial with semantic recall on, as MEMORY_SEMANTIC_RECALL=1 does for an owner: a
   // recorded run over the concept fake, a live one over Workers AI (CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN). The card
   // names it, so a run with the leg is never compared as one without.

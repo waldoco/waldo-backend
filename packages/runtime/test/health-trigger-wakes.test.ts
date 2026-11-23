@@ -369,7 +369,7 @@ describe('a finished workout at the trigger', () => {
   it('writes no note on a day with nothing coming, since there is nothing left to reshape', async () => {
     await withTrigger(async ({ deps, prompts }) => {
       const delivered: string[] = [];
-      const soloNotice = { enabled: () => true, held: () => null, deliver: async (_id: string, text: string, commit: () => void) => { delivered.push(text); commit(); } };
+      const soloNotice = { held: () => null, deliver: async (_id: string, text: string, commit: () => void) => { delivered.push(text); commit(); } };
       deps().book.markOnce(DAY, NOW - 60_000, 'workout_ended');
       const run = await runHealthTrigger(deps({ comingItems: async () => [], soloNotice, decide: async (_id, prompt) => { prompts.push(prompt); return JSON.stringify({ kind: 'notice', text: 'Easy evening.' }); } }));
       expect([run, prompts, delivered]).toEqual(['nothing_coming', [], []]);

@@ -96,6 +96,7 @@ beforeEach(() => {
       return Response.json({ written: true, changed });
     }
     if (fn === 'assert_channel_presence' || fn === 'set_owner_settings') return Response.json(true);
+    if (fn === 'health_settings_read') return Response.json({ sleep_need_minutes: null, updated_at: null });
     return fn ? Response.json(null) : new Response('unexpected', { status: 500 });
   });
 });
@@ -120,8 +121,9 @@ const withOwner = (work: (o: { owner: Owner; state: DurableObjectState; upload()
   });
 };
 const entry = (state: DurableObjectState, id = HEALTH_RECOMPUTE_ID) => state.storage.sql.exec<{ kind: string; due_at: number; status: string; attempts: number }>('SELECT kind, due_at, status, attempts FROM schedule WHERE id = ?', id).toArray()[0] ?? null;
-// A recompute reads the month for its scores, and beside it the night's vital signals; this counts the scores' reads.
-const seriesReads = (vitals: boolean) => plane.calls.filter(call => call.fn === 'health_series_read' && Array.isArray(call.payload.signals) && call.payload.signals.includes('respiratory_rate') === vitals);
+// A recompute reads the month for its scores, and beside it the night's vital signals and the passive load's bins; this counts
+// the scores' reads.
+const seriesReads = (vitals: boolean) => plane.calls.filter(call => call.fn === 'health_series_read' && Array.isArray(call.payload.signals) && !call.payload.signals.includes('heart_rate_bins_window') && call.payload.signals.includes('respiratory_rate') === vitals);
 const reads = () => seriesReads(false);
 const writtenDays = () => plane.calls.filter(call => call.fn === 'health_context_write').map(call => call.payload.day);
 const pending = (state: DurableObjectState) => state.storage.sql.exec<{ day: string }>("SELECT day FROM health_trigger_pending").toArray().map(row => row.day);

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../src/health/scores/day-load', () => ({ dayLoad: () => { throw new Error('load failed for 78.4'); } }));
 vi.mock('../src/health/scores/stress-curve', () => ({ stressCurve: () => { throw new Error('stress failed for 71'); } }));
 const { produceHealthScores } = await import('../src/health/producer');
-const { dailyScoresFor } = await import('../src/health/scores');
+const { provisionalDailyScores } = await import('../src/health/scores');
 
 const TODAY = '2026-03-20';
 const day = (n: number) => new Date(Date.parse(`${TODAY}T00:00:00Z`) - n * 86_400_000).toISOString().slice(0, 10);
@@ -35,7 +35,7 @@ describe('two computations that throw', () => {
     const outcome = await produceHealthScores({
       readSeries: async range => ({ access: 'granted', read_at: `${TODAY}T14:30:00.000123Z`, sources: [{ source: 'apple', consent_epoch: 3, truncated: false, samples: samples.filter(e => range.signals.includes(String(e.signal))) }] }),
       writeContext: async payload => { rows.push(JSON.parse(payload) as Record<string, unknown>); return { written: true }; },
-      compute: dailyScoresFor('1'), dayLoad: true, stressCurve: true,
+      compute: provisionalDailyScores, dayLoad: true, stressCurve: true,
     }, { now: Date.parse(`${TODAY}T14:30:00Z`), timezone: 'UTC' });
     expect(outcome).toBe('written');
     expect(rows.map(row => row.day).sort()).toEqual([day(1), TODAY]);

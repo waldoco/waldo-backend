@@ -3,9 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
 import { presenceAuthority } from './helpers/directory-presence';
 
-// get_screen_time through the whole owner object, against a fake health plane that answers waldo.screen_time_days_read. The tool
-// is offered only while SCREEN_TIME is on; on, the model's call reaches one signed read for the agent purpose and the stored days
-// come back to the model in that turn, and nowhere else. Every value is synthetic.
+// get_screen_time through the whole owner object, against a fake health plane that answers waldo.screen_time_days_read. The
+// model's call reaches one signed read for the agent purpose and the stored days come back to the model in that turn, and
+// nowhere else. Every value is synthetic.
 const proof = vi.hoisted(() => ({ outputs: [] as unknown[][], replies: [] as string[], requests: [] as string[], rpc: [] as { fn: string; payload: string }[], answer: null as unknown }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
   const format = input.text?.format?.name;
@@ -43,14 +43,13 @@ const declared = (tools: unknown): boolean => Array.isArray(tools) && tools.some
 const offered = () => proof.requests.some(request => declared((JSON.parse(request) as { tools?: unknown }).tools));
 const text = (update_id: number, words: string) => ({ update_id, message: { message_id: update_id, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: words } });
 
-const withOwner = async (flag: string | undefined, body: (deliver: (update: unknown) => Promise<void>, state: DurableObjectState) => Promise<void>) => {
+const withOwner = async (body: (deliver: (update: unknown) => Promise<void>, state: DurableObjectState) => Promise<void>) => {
   const name = `screen-time-${crypto.randomUUID()}`, stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   await runInDurableObject(stub, async (_unused, state) => {
     const originalNow = Date.now;
     let now = Date.parse('2026-11-03T06:00:00Z');
     Date.now = () => now;
-    const owner = new OwnerDO(state, { ...env, ...directory, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_EGRESS_ALLOWLIST: '*', WALDO_TOOL_OFFLOAD: '0', COMMON_OWNER_TASKS: '0', BROWSER: undefined,
-      ...(flag === undefined ? {} : { SCREEN_TIME: flag }) } as never);
+    const owner = new OwnerDO(state, { ...env, ...directory, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_EGRESS_ALLOWLIST: '*', WALDO_TOOL_OFFLOAD: '0', COMMON_OWNER_TASKS: '0', BROWSER: undefined } as never);
     state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7'); state.storage.kv.put('origin', 'https://owner.fixture.invalid');
     const deliver = async (update: unknown) => {
       expect((await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify(update) }))).status).toBe(200);
@@ -64,23 +63,9 @@ const summary = { day: '2026-11-02', timezone: 'UTC', platform: 'android', cover
 const range = { from: '2026-10-27', to: '2026-11-02' };
 
 describe('get_screen_time through the owner object', () => {
-  it('is not offered while SCREEN_TIME is off', async () => {
-    for (const flag of [undefined, '0']) {
-      await withOwner(flag, async deliver => {
-        proof.outputs.push([call('st-off', 'get_screen_time', range)], []);
-        proof.replies.push('', 'I can\'t see that.');
-        await deliver(text(600, 'How much was I on my phone last week?'));
-        expect(offered(), String(flag)).toBe(false);
-        expect(toolOutput('st-off'), String(flag)).not.toContain('"ok":true');
-        expect(proof.rpc.filter(entry => entry.fn.startsWith('screen_time_')), String(flag)).toEqual([]);
-      });
-      proof.requests = []; proof.rpc = [];
-    }
-  });
-
-  it('on, the model reads the stored days through one signed read for the agent purpose, and nothing keeps them', async () => {
+  it('the model reads the stored days through one signed read for the agent purpose, and nothing keeps them', async () => {
     proof.answer = { days: [{ device_id: '0c9d6a7e-1f2b-4c3d-8e9f-0a1b2c3d4e5f', device: 1, received_at: '2026-11-03T01:00:00.000Z', summary }] };
-    await withOwner('1', async (deliver, state) => {
+    await withOwner(async (deliver, state) => {
       proof.outputs.push([call('st-on', 'get_screen_time', range)], []);
       proof.replies.push('', 'About six hours yesterday.');
       await deliver(text(601, 'How much was I on my phone yesterday?'));

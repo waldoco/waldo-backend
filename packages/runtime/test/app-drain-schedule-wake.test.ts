@@ -56,6 +56,8 @@ it('an app message leaves the alarm for the owner\'s next scheduled job in place
   await withReminder(name, async (owner, state, armed) => {
     const { message_id: id } = await (await send(owner, name, 'wake-client-0001')).json() as { message_id: string };
     await vi.waitFor(() => expect(state.storage.kv.get<{ state: string }>(`app:inbox-record:${id}`)?.state).toBe('completed'), { timeout: 10_000, interval: 20 });
+    // The turn asks for its chain's compaction in a pass of its own; that pass leaves the reminder's alarm.
+    await owner.alarm();
     await vi.waitFor(async () => expect(await state.storage.getAlarm()).toBe(armed), { timeout: 5_000, interval: 20 });
   });
 });
@@ -68,6 +70,7 @@ it('a repeated send of a message already answered, which drains nothing, leaves 
     await vi.waitFor(() => expect(state.storage.kv.get<{ state: string }>(`app:inbox-record:${id}`)?.state).toBe('completed'), { timeout: 10_000, interval: 20 });
     const serial = owner as unknown as { serial(work: () => Promise<void>): Promise<void> };
     await serial.serial(async () => undefined);
+    await owner.alarm();
     await new Scheduler(state.storage.sql, state.storage, productionDeps()).rearm();
     expect(await state.storage.getAlarm()).toBe(armed);
     const again = await send(owner, name, 'wake-client-0002');

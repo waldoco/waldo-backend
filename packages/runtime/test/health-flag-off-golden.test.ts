@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeDailyScores, dailyScoresFor } from '../src/health/scores';
+import { computeDailyScores } from '../src/health/scores';
 import golden from './fixtures/health-flag-off-golden.json';
 import { goldenProducerCases, goldenScoreInputs, producerPayloads } from './support/health-golden';
 
@@ -17,11 +17,5 @@ describe('provisional scores off: identity with the earlier engine and producer'
     const spec = goldenProducerCases[name]!;
     const expected = (golden.rows as Record<string, string[]>)[name]!;
     expect(await producerPayloads(computeDailyScores, spec)).toEqual(expected);
-    for (const flag of [undefined, '', '0', 'true', 'on', ' 1']) expect(await producerPayloads(dailyScoresFor(flag), spec)).toEqual(expected);
-  });
-
-  it('only the exact value "1" turns the switch on', () => {
-    expect(dailyScoresFor('1')).not.toBe(computeDailyScores);
-    for (const flag of [undefined, '', '0', 'true', 'on', ' 1', '01']) expect(dailyScoresFor(flag)).toBe(computeDailyScores);
   });
 });

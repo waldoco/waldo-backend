@@ -93,6 +93,7 @@ beforeEach(() => {
       return Response.json(row ? { scores: { day: String(payload.day), timezone: 'UTC', compiled_at: new Date().toISOString(), freshness: 'fresh', ...row } } : { unavailable: 'no_readings' });
     }
     if (fn === 'health_scores_history') return Response.json({ unavailable: 'no_readings' });
+    if (fn === 'health_settings_read') return Response.json({ sleep_need_minutes: null, updated_at: null });
     // The model-use consented read: with that consent withdrawn it returns nothing.
     if (fn === 'health_context_read') {
       if (world.contextFails) return new Response('synthetic outage', { status: 500 });

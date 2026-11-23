@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import { provisionDoSchema } from '../src/do-schema';
-import { CuratedOwnerSkills, CURATED_PREPARATION_SKILL, byteUpperBoundSkillBudget } from '../src/skills/curated-owner';
+import { CuratedOwnerSkills, CURATED_PREPARATION_SKILL, CURATED_SKILLS, byteUpperBoundSkillBudget } from '../src/skills/curated-owner';
 
 const canaries = ['0123456789abcdef','fedcba9876543210','0011223344556677'];
 const owner = 'owner-a';
@@ -108,7 +108,7 @@ it('oversize and NUL-tail storage is rejected without materializing raw instruct
    let rawBodies=0;
    const observed=new Proxy(sql,{get(target,key){if(key!=='exec')return Reflect.get(target,key);return (...args:Parameters<SqlStorage['exec']>)=>{
     const cursor=target.exec(...args);return new Proxy(cursor,{get(result,property){if(property!=='toArray')return Reflect.get(result,property);return ()=>{
-     const rows=result.toArray();for(const row of rows){const body=(row as Record<string,unknown>).body_markdown;if(typeof body==='string'&&new TextEncoder().encode(body).length>2400)rawBodies++;}return rows;
+     const rows=result.toArray();for(const row of rows){const body=(row as Record<string,unknown>).body_markdown;if(typeof body==='string'&&new TextEncoder().encode(body).length>2400&&!CURATED_SKILLS.some(s=>s.body_markdown===body))rawBodies++;}return rows;
     };}});
    };}});
    const book=new CuratedOwnerSkills(observed,owner);

@@ -11,9 +11,7 @@ const CREDENTIAL = `owner-1.${'a'.repeat(32)}.sig`;
 const auth = { readAppCredential: async (credential: string) => (credential === CREDENTIAL ? 'owner-1' : null) } as unknown as ConsoleAuth;
 
 const limiterKeys: string[] = [];
-let screenTime: string | undefined = '1';
 const env = () => ({
-  ...(screenTime === undefined ? {} : { SCREEN_TIME: screenTime }),
   OWNER_DO: { idFromName: (n: string) => n, get: () => ({ fetch: async () => Response.json({ forwarded: true }) }) },
   RESPONSIBILITY_RATE_LIMITER: { limit: async ({ key }: { key: string }) => { limiterKeys.push(key); return { success: true }; } },
   SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET,
@@ -24,7 +22,7 @@ const rpcs: Rpc[] = [];
 let rpcResult: unknown = {};
 const logged: string[] = [];
 beforeEach(() => {
-  rpcs.length = 0; limiterKeys.length = 0; logged.length = 0; rpcResult = {}; screenTime = '1';
+  rpcs.length = 0; limiterKeys.length = 0; logged.length = 0; rpcResult = {};
   vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
     rpcs.push({ fn: url.split('/rpc/')[1]!, body: JSON.parse(String(init.body)) });
     if (rpcResult instanceof Error) throw rpcResult;
@@ -50,12 +48,7 @@ const upload = { request_id: 'st-ingest-0001', expected_epoch: 1, device_id: DEV
 const consent = (purpose: string, status = 'granted') => ({ purpose, version: 1, status, epoch: 1, granted_at: '2026-11-01T08:00:00.000Z', withdrawn_at: null });
 
 describe('app screen-time routes', () => {
-  it('are not there while SCREEN_TIME is off, and need a credential before anything', async () => {
-    screenTime = undefined;
-    expect((await get('/app/v1/screen-time/consents')).status).toBe(404);
-    screenTime = '0';
-    expect((await post('/app/v1/screen-time/days', upload)).status).toBe(404);
-    screenTime = '1';
+  it('need a credential before anything', async () => {
     const anonymous = await handleApp(new Request('https://w.test/app/v1/screen-time/consents'), env(), auth);
     expect(anonymous!.status).toBe(401);
     expect(rpcs).toEqual([]);

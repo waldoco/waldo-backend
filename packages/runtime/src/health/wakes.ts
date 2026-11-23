@@ -6,7 +6,7 @@ import { STEADY_SCORE_MOVE } from './scores/zones';
 // What changed in the owner's stored derived rows, decided from the rows alone and never recomputed. Code answers only
 // "did something change that is worth the model's look"; whether it is worth telling the owner stays the model's call.
 // Nothing here keeps a reading, a driver phrase or a figure: a result is a reason code.
-// workout_ended is the one reason not read from the rows: the upload said a workout just ended (WORKOUT_WAKE).
+// workout_ended is the one reason not read from the rows: the upload said a workout just ended.
 export type HealthWakeReason = 'zone_change' | 'sleep_debt_building' | 'driver_appeared' | 'driver_far' | 'load_jump' | 'workout_ended';
 export const HEALTH_WAKE_REASONS: readonly HealthWakeReason[] = ['zone_change', 'workout_ended', 'driver_appeared', 'driver_far', 'load_jump', 'sleep_debt_building'];
 

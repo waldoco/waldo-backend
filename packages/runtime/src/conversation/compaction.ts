@@ -4,8 +4,8 @@ import { CONTEXT_BUDGET, contextBudget } from './context-budget';
 import { CONVERSATION_INPUT_BUDGET_TOKENS, estimateMessageTokens, steppedWindowStart, windowModelMessages, type ConversationWindowStats } from './window';
 
 // A compaction row summarises the oldest part of a chain so the model's view becomes [summary] + [a verbatim tail]; the
-// transcript the owner sees keeps every row. These are the defaults, off: a deploy turns compaction on with
-// WALDO_COMPACTION=on, and off means no trigger and no view rule, the plain window exactly as before.
+// transcript the owner sees keeps every row. These are the plain settings, with no compaction and the plain window; an
+// owner's object runs compactionSettings.
 export const COMPACTION = {
   enabled: false,
   budgetTokens: CONVERSATION_INPUT_BUDGET_TOKENS,
@@ -18,7 +18,7 @@ export const COMPACTION = {
   maxOutputTokens: 2_000,
   // On the one timeline, a row written on a chat surface other than the app is named with it in the model's view.
   surfaceLabels: false,
-  // WALDO_STEPPED_WINDOW: the window cuts in steps and holds its start between them (steppedWindowStart), instead of
+  // The window cuts in steps and holds its start between them (steppedWindowStart), instead of
   // dropping the oldest row every turn once the chain outgrows the budget; a cut keeps `steppedTarget` of the budget.
   steppedWindow: false,
   steppedTarget: CONTEXT_BUDGET.steppedTarget,
@@ -35,12 +35,11 @@ const labelled = (settings: CompactionSettings) => (entry: ConversationEntry): C
   return entry.modelProjection.mode === 'replace' ? { ...entry, modelProjection: { mode: 'replace', payload: label + entry.modelProjection.payload } }
     : { ...entry, modelPayload: label + entry.modelPayload };
 };
-// Only the exact values "on" and "1" turn these on, so an unset or mistyped deploy var keeps the plain window. Under
-// WALDO_CALL_CEILINGS a chat's history is held to the history budget, the conversation layer of a chat call.
-export const compactionSettings = (env: Readonly<{ WALDO_COMPACTION?: string; WALDO_STEPPED_WINDOW?: string; WALDO_CALL_CEILINGS?: string; WALDO_HISTORY_BUDGET_TOKENS?: string; WALDO_STEPPED_WINDOW_TARGET?: string }>): CompactionSettings => {
+// An owner's object compacts, cuts its window in steps, and holds a chat's history to the history budget, the conversation
+// layer of a chat call.
+export const compactionSettings = (env: Readonly<{ WALDO_HISTORY_BUDGET_TOKENS?: string; WALDO_STEPPED_WINDOW_TARGET?: string }>): CompactionSettings => {
   const budget = contextBudget(env);
-  return { ...COMPACTION, enabled: env.WALDO_COMPACTION === 'on', steppedWindow: env.WALDO_STEPPED_WINDOW === '1', steppedTarget: budget.steppedTarget,
-    ...(env.WALDO_CALL_CEILINGS === '1' ? { budgetTokens: budget.historyTokens } : {}) };
+  return { ...COMPACTION, enabled: true, steppedWindow: true, steppedTarget: budget.steppedTarget, budgetTokens: budget.historyTokens };
 };
 
 export const COMPACTION_SUPERSEDED_MARKER = '[superseded summary]';

@@ -36,8 +36,8 @@ describe('the staging profile', () => {
 
   it('goes red on a staging variable nobody classified, and on a classification whose variable is gone', () => {
     expect(unclassifiedVars({ ...STAGING, WALDO_NEW_TURN_FLAG: 'on' })).toEqual(['WALDO_NEW_TURN_FLAG']);
-    const { WALDO_COMPACTION: _removed, ...without } = STAGING;
-    expect(staleClasses(without)).toEqual(['WALDO_COMPACTION']);
+    const { WALDO_TOOL_LOADER: _removed, ...without } = STAGING;
+    expect(staleClasses(without)).toEqual(['WALDO_TOOL_LOADER']);
   });
 
   it('gives every classification a reason', () => {
@@ -56,9 +56,8 @@ describe('the staging profile', () => {
     expect(stagingProfile({ ...STAGING, WALDO_TOOL_LOADER: 'harness', WALDO_TOOL_SEARCH: 'on' }).toolSearch).toBeUndefined();
     expect(stagingProfile({ ...STAGING, WALDO_TOOL_LOADER: 'off', WALDO_TOOL_SEARCH: 'off' }).toolLoader).toBeUndefined();
     expect(stagingProfile({ ...STAGING, WALDO_FORGET_BARRIER: 'off' }).forgetBarrier).toBe('reads');
-    expect(stagingProfile({ ...STAGING, WALDO_COMPACTION: 'off' }).compaction.enabled).toBe(false);
     // The history budget and the stepped target are the deploy's own, read as the Worker reads them.
-    const tuned = stagingProfile({ ...STAGING, WALDO_CALL_CEILINGS: '1', WALDO_HISTORY_BUDGET_TOKENS: '14000', WALDO_STEPPED_WINDOW_TARGET: '0.7' }).compaction;
+    const tuned = stagingProfile({ ...STAGING, WALDO_HISTORY_BUDGET_TOKENS: '14000', WALDO_STEPPED_WINDOW_TARGET: '0.7' }).compaction;
     expect([tuned.budgetTokens, tuned.steppedTarget]).toEqual([14_000, 0.7]);
     expect(stagingProfile({ ...STAGING, MEMORY_SELECTION: '1' }).memorySelection).toBe(true);
     expect(stagingProfile({ ...STAGING, MEMORY_SELECTION: '0' }).memorySelection).toBe(false);
@@ -96,9 +95,8 @@ describe('the staging profile in the run settings', () => {
   });
 
   it('takes the variables from the file it is given, not from a list of its own', () => {
-    const run = nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_PROFILE: 'staging' }, () => ({ ...STAGING, WALDO_TOOL_LOADER: 'off', WALDO_COMPACTION: 'off' }));
+    const run = nightlyConfig({ WALDO_EVAL_MODE: 'recorded', WALDO_EVAL_PROFILE: 'staging' }, () => ({ ...STAGING, WALDO_TOOL_LOADER: 'off' }));
     expect(run.toolLoader).toBeUndefined();
-    expect(run.compaction).toBeUndefined();
   });
 
   it('refuses a profile that is not staging, and settings the profile would contradict', () => {

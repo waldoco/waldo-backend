@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { healthRecompute } from '../src/health/recompute';
-import { dailyScoresFor } from '../src/health/scores';
+import { computeDailyScores } from '../src/health/scores';
 import { detectHealthWakes, healthSnapshot, type HealthWakeReason } from '../src/health/wakes';
 
 // A change of the owner's stated sleep need is not a change in their body, on any wake path. The engine that writes no debt
@@ -13,7 +13,7 @@ const at = (day: string, hour: number) => `${day}T${String(hour).padStart(2, '0'
 const noonOf = (day: string) => Date.parse(`${day}T12:00:00Z`);
 
 type Need = { minutes: number | null; changedAt: number | null; reads: number; failRead: number };
-const world = (nights: (day: string) => number, engine: string | undefined) => {
+const world = (nights: (day: string) => number, engine: typeof computeDailyScores) => {
   const rows = new Map<string, Record<string, unknown>>(), woken: [string, readonly HealthWakeReason[]][] = [];
   const clock = { at: noonOf(addDays(TODAY, -10)) }, need: Need = { minutes: null, changedAt: null, reads: 0, failRead: 0 };
   const today = () => new Date(clock.at).toISOString().slice(0, 10);
@@ -30,7 +30,7 @@ const world = (nights: (day: string) => number, engine: string | undefined) => {
       writeContext: async payload => { const row = JSON.parse(payload); rows.set(row.day, { ...row, compiled_at: new Date(clock.at).toISOString() }); return { written: true, changed: [] }; },
       readScores: async day => scores(day),
       readSettings: async () => { need.reads += 1; if (need.reads === need.failRead) throw new Error('settings unreadable'); return { sleep_need_minutes: need.minutes, updated_at: need.changedAt === null ? null : new Date(need.changedAt).toISOString() }; },
-      compute: dailyScoresFor(engine),
+      compute: engine,
     },
     wakes: {
       enabled: () => true,
@@ -54,7 +54,7 @@ describe('a change of the stated sleep need never wakes the trigger as sleep deb
   const nights = (day: string) => (day === TODAY ? 330 : 400);
 
   it('stays asleep when rows computed before the change meet rows computed after it, on every later recompute that day', async () => {
-    const run = world(nights, '0');
+    const run = world(nights, computeDailyScores);
     await run.runOn(addDays(TODAY, -2));
     expect([run.debt(addDays(TODAY, -3)), run.debt(addDays(TODAY, -2))].map(d => d?.need_basis)).toEqual(['own_average', 'own_average']);
     run.state(540);
@@ -65,7 +65,7 @@ describe('a change of the stated sleep need never wakes the trigger as sleep deb
   });
 
   it('stays asleep when a stated need is replaced by another, which the rows themselves cannot tell apart', async () => {
-    const run = world(nights, '0');
+    const run = world(nights, computeDailyScores);
     run.state(420);
     await run.runOn(addDays(TODAY, -2));
     run.state(540);
@@ -75,7 +75,7 @@ describe('a change of the stated sleep need never wakes the trigger as sleep deb
 
   it('still wakes on debt that builds night after night on one need', async () => {
     const shrinking = (day: string) => ({ [TODAY]: 300, [addDays(TODAY, -1)]: 330 } as Record<string, number>)[day] ?? 400;
-    const run = world(shrinking, '0');
+    const run = world(shrinking, computeDailyScores);
     run.state(540);
     await run.runOn(addDays(TODAY, -2));
     await run.runOn(TODAY);
@@ -83,7 +83,7 @@ describe('a change of the stated sleep need never wakes the trigger as sleep deb
   });
 
   it('fails the recompute when the need cannot be read again before today\'s row, so the scheduler retries it', async () => {
-    const run = world(nights, '0');
+    const run = world(nights, computeDailyScores);
     run.state(540);
     run.need.failRead = run.need.reads + 2;
     run.clock.at = noonOf(TODAY);
@@ -96,7 +96,7 @@ describe('a change of the stated sleep need never wakes the trigger as sleep deb
 
   it('asks no debt question when the need cannot be read after the rows are written', async () => {
     const shrinking = (day: string) => ({ [TODAY]: 300, [addDays(TODAY, -1)]: 330 } as Record<string, number>)[day] ?? 400;
-    const run = world(shrinking, '0');
+    const run = world(shrinking, computeDailyScores);
     run.state(540);
     await run.runOn(addDays(TODAY, -2));
     // The run reads the need to compute on and again before today's row; the third read is the wake check's.

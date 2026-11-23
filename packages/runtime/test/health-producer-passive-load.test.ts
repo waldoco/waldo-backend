@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { healthDayLoadV1Schema } from '../../contracts/src/app/health-ingest';
-import { passiveLoadSources, produceHealthScores, type ProducerDeps } from '../src/health/producer';
-import { dailyScoresFor } from '../src/health/scores';
+import { produceHealthScores, type ProducerDeps } from '../src/health/producer';
+import { provisionalDailyScores } from '../src/health/scores';
 
-// What the producer writes of the passive day load: v2 for a listed phone source beside HEALTH_DAY_LOAD, v1 otherwise, the rest of
+// What the producer writes of the passive day load: v2 for a listed phone source beside the day load, v1 otherwise, the rest of
 // every row unchanged. Synthetic owners only; the clock is 14:30 UTC on 20 March 2026. Each day: asleep 23:00-07:00 at 55 bpm,
 // awake hours sitting at 70-80 with a stand-up minute at 95 and 100 steps; hourly maxima 160, and 190, 188, 186 on days 1-3.
 const TODAY = '2026-03-20';
@@ -47,22 +47,11 @@ const rowsOf = async (extra: Partial<ProducerDeps>, series: ReturnType<typeof se
       return { ...series, sources: series.sources.map(s => ({ ...s, samples: s.samples.filter(e => range.signals.includes(String(e.signal))) })) };
     },
     writeContext: async payload => { rows.push(JSON.parse(payload) as Row); return { written: true }; },
-    compute: dailyScoresFor('1'), ...extra,
+    compute: provisionalDailyScores, ...extra,
   }, { now: NOW, timezone: 'UTC' });
   return { rows, asked, today: rows.find(row => row.day === TODAY)! };
 };
 const without = ({ day_load: _l, ...rest }: Row) => rest;
-
-describe('the HEALTH_PASSIVE_LOAD switch value', () => {
-  it('is off for "0", empty or unset, and lists only phone transports', () => {
-    expect(passiveLoadSources('0')).toEqual([]);
-    expect(passiveLoadSources('')).toEqual([]);
-    expect(passiveLoadSources(undefined)).toEqual([]);
-    expect(passiveLoadSources('apple')).toEqual(['apple']);
-    expect(passiveLoadSources(' apple , health_connect,samsung ')).toEqual(['apple', 'health_connect', 'samsung']);
-    expect(passiveLoadSources('whoop,1,apple')).toEqual(['apple']);
-  });
-});
 
 describe('producer: the passive day load', () => {
   it('writes a v2 load for a listed source, with its parts and that day\'s v1 load beside it, and every other key as before', async () => {
@@ -74,7 +63,7 @@ describe('producer: the passive day load', () => {
     expect(v2.rows.map(without)).toEqual(v1.rows.map(without));
     expect(v2.asked).toContainEqual(['heart_rate_bins_window', 'steps_window']);
   });
-  it('writes exactly v1 for a source that is not listed, and reads no bins with HEALTH_DAY_LOAD off', async () => {
+  it('writes exactly v1 for a source that is not listed, and reads no bins without the day load', async () => {
     const v1 = await rowsOf({ dayLoad: true });
     expect((await rowsOf({ dayLoad: true, passiveLoad: ['samsung'] })).rows).toEqual(v1.rows);
     const off = await rowsOf({ passiveLoad: ['apple'] });

@@ -1,19 +1,14 @@
 import { env } from 'cloudflare:workers';
-import { withSwitches } from '../src/switches';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { ConversationEntry } from '@waldo/contracts';
-import config from '../wrangler.jsonc?raw';
-import { parseJsonc } from '../../../scripts/jsonc.mjs';
-import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { canonicalOwnerConversationStore } from '../src/conversation/canonical-owner-store';
 import { claimStore } from '../src/memory/claims';
 import { ensureSchema } from '../src/tracer/schema';
 
-// An owner's app chat holds a live summary of its oldest rows. One real app turn runs through an OwnerDO built with the
-// WALDO_COMPACTION value a deployed Worker reads, and the request the model receives shows whether the summary replaced
-// the rows it covers.
+// An owner's app chat holds a live summary of its oldest rows. One real app turn runs through an OwnerDO, and the request
+// the model receives shows that the summary replaced the rows it covers.
 const OWNER_ID = '6d2f0a8e-41c7-4b9e-a3d5-8e1c7f2b9a04';
 const BASE = 'https://directory.fixture.invalid';
 const PRINCIPAL = `prn_${OWNER_ID.replaceAll('-', '')}`;
@@ -21,7 +16,6 @@ const TENANT = `ten_${OWNER_ID.replaceAll('-', '')}`;
 const CHAT = `owner:${PRINCIPAL}`;
 const NEXT = 'What is on today?';
 const SUMMARY = 'Owner instructions:\n- The owner prefers harbour walks.';
-const DEPLOYED = (flatConfig(parseJsonc(config)) as { vars: { WALDO_COMPACTION?: string } }).vars.WALDO_COMPACTION;
 
 const model = vi.hoisted(() => ({ requests: [] as LLMGatewayRequest['request'][] }));
 vi.mock('../src/channels/telegram-api', async load => {
@@ -82,8 +76,8 @@ const seed = async (state: DurableObjectState) => {
   }, null);
 };
 
-// What one app turn sends the model for its reply, as the Worker's environment built with `switchValue` would run it.
-const turnRequest = async (name: string, switchValue: string | undefined) => {
+// What one app turn sends the model for its reply.
+const turnRequest = async (name: string) => {
   directory();
   return runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql);
@@ -91,7 +85,7 @@ const turnRequest = async (name: string, switchValue: string | undefined) => {
     state.storage.kv.put('do_name', name);
     await state.storage.put('origin', 'https://fixture.invalid');
     await seed(state);
-    const owner = new OwnerDO(state, { ...env, WALDO_COMPACTION: switchValue, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const owner = new OwnerDO(state, { ...env, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     const sent = await owner.fetch(new Request('https://owner.invalid/app/v1/chat/main/messages', { method: 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'c'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: 'client-what-is-on-today', text: NEXT }) }));
     expect(sent.status, await sent.clone().text()).toBe(202);
     const { message_id: id } = await sent.json() as { message_id: string };
@@ -102,17 +96,8 @@ const turnRequest = async (name: string, switchValue: string | undefined) => {
   });
 };
 
-it('the deployed Worker setting is off, and an app turn on it sends the covered rows verbatim, never the summary', async () => {
-  expect(DEPLOYED).toBe('off');
-  expect((withSwitches(env) as { WALDO_COMPACTION?: string }).WALDO_COMPACTION).toBe(DEPLOYED);
-  const sent = await turnRequest('compaction-wiring-deployed', DEPLOYED);
-  for (const text of [asked(0), answered(0), asked(1), answered(1), recent, NEXT]) expect(sent).toContain(text);
-  expect(sent).not.toContain('harbour walks');
-  expect(sent).not.toContain('summary of');
-});
-
-it('an app turn with the switch on reads the summary first and leaves out the rows it covers', async () => {
-  const sent = await turnRequest('compaction-wiring-on', 'on');
+it('an app turn reads the summary first and leaves out the rows it covers', async () => {
+  const sent = await turnRequest('compaction-wiring-on');
   expect(sent.indexOf('harbour walks')).toBeGreaterThanOrEqual(0);
   expect(sent.indexOf('harbour walks')).toBeLessThan(sent.indexOf('Middle question'));
   for (const text of [asked(0), answered(0), asked(1), answered(1)]) expect(sent).not.toContain(text);

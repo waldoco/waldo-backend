@@ -118,7 +118,7 @@ beforeEach(() => {
     if (fn === 'common_owner_authority') return presenceAuthority(OWNER_ID, init?.body);
     if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: body.p_do_name, state_version: 1, admission_revision: '5' });
     // A recompute reads the scores' readings and, beside them, the night's vital signals for the drivers.
-    if (fn === 'health_series_read') { world.trace.push((payload.signals as string[] | undefined)?.includes('respiratory_rate') ? 'vitals_read' : 'series_read'); return Response.json(series(String(payload.to))); }
+    if (fn === 'health_series_read') { const signals = payload.signals as string[] | undefined; world.trace.push(signals?.includes('respiratory_rate') ? 'vitals_read' : signals?.includes('heart_rate_bins_window') ? 'bins_read' : 'series_read'); return Response.json(series(String(payload.to))); }
     if (fn === 'health_scores_read') {
       const day = String(payload.day), row = world.rows.get(day);
       world.trace.push(`scores_read:${day}`);
@@ -150,6 +150,7 @@ beforeEach(() => {
       });
     }
     if (fn === 'assert_channel_presence' || fn === 'set_owner_settings') return Response.json(true);
+    if (fn === 'health_settings_read') return Response.json({ sleep_need_minutes: null, updated_at: null });
     return fn ? Response.json(null) : new Response('unexpected', { status: 500 });
   });
 });
@@ -223,7 +224,7 @@ describe('the owner object backfills from one read of the stored days', () => {
       expect(world.trace.filter(step => step.startsWith('history_read:'))).toEqual(['history_read:{"days":90}']);
       expect(world.trace.filter(step => step.startsWith('scores_read:') && step.slice('scores_read:'.length) < addDays(TODAY, -1))).toEqual([]);
       expect(world.trace.filter(step => step.startsWith('context_write:')).length).toBeGreaterThan(2);
-    }, true, { ...CONFIG, HEALTH_PROVISIONAL_SCORES: '1' });
+    });
   });
 });
 
@@ -250,10 +251,10 @@ describe('Weight follows the day', () => {
       expect(entry(o.state, HEALTH_TRIGGER_ID)).not.toBeNull();
       await o.pass();
       expect((world.rows.get(TODAY)!.weight as Record<string, unknown>).zone).not.toBe(weightBefore);
-      // The trace: one recompute (one read of the readings and one of the vitals, one fresh read of today's busy minutes beside it), Weight the
-      // only pillar that moved, then one evaluation of that change.
+      // The trace: one recompute (one read of the readings, one of the vitals and one of the passive load's bins, one fresh read of
+      // today's busy minutes beside it), Weight the only pillar that moved, then one evaluation of that change.
       const count = (step: string) => world.trace.filter(seen => seen === step).length;
-      expect([count('series_read'), count('vitals_read'), count('free_busy'), count('health_evaluation')]).toEqual([1, 1, 1, 1]);
+      expect([count('series_read'), count('vitals_read'), count('bins_read'), count('free_busy'), count('health_evaluation')]).toEqual([1, 1, 1, 1, 1]);
       expect(world.trace.filter(step => step.startsWith('context_write'))).toEqual([`context_write:${addDays(TODAY, -1)}:none`, `context_write:${TODAY}:weight`]);
       expect(world.trace.indexOf(`context_write:${TODAY}:weight`)).toBeLessThan(world.trace.indexOf('health_evaluation'));
       expect(runs(o.state)).toEqual([{ mode: 'live', outcome: 'proposed' }]);

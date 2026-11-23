@@ -13,9 +13,7 @@ const auth = { readAppCredential: async (credential: string) => (credential === 
 
 const limiterKeys: string[] = [];
 let limiterAllows = true;
-let coaching: string | undefined;
 const env = () => ({
-  ...(coaching === undefined ? {} : { HEALTH_COACHING: coaching }),
   OWNER_DO: { idFromName: (n: string) => n, get: () => ({ fetch: async () => Response.json({ forwarded: true }) }) },
   RESPONSIBILITY_RATE_LIMITER: { limit: async ({ key }: { key: string }) => { limiterKeys.push(key); return { success: limiterAllows }; } },
   SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'fictional-public-key', WALDO_ROUTER_HMAC_SECRET: SECRET,
@@ -25,7 +23,7 @@ type Rpc = { fn: string; body: Record<string, unknown> };
 const rpcs: Rpc[] = [];
 let rpcResult: unknown = {};
 beforeEach(() => {
-  rpcs.length = 0; limiterKeys.length = 0; limiterAllows = true; rpcResult = {}; coaching = undefined;
+  rpcs.length = 0; limiterKeys.length = 0; limiterAllows = true; rpcResult = {};
   vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
     rpcs.push({ fn: url.split('/rpc/')[1]!, body: JSON.parse(String(init.body)) });
     if (rpcResult instanceof Error) throw rpcResult;
@@ -485,17 +483,6 @@ describe('app health settings', () => {
   const put = (body: unknown, path = '/app/v1/health/settings', extra: Record<string, string> = headers()) => handleApp(new Request(`https://w.test${path}`, {
     method: 'PUT', headers: { 'content-type': 'application/json', ...extra }, body: typeof body === 'string' ? body : JSON.stringify(body),
   }), env(), auth) as Promise<Response>;
-  beforeEach(() => { coaching = '1'; });
-
-  it('is not served while the coaching switch is off: 404 as an unknown path, with no database call', async () => {
-    for (const value of [undefined, '0', 'true']) {
-      coaching = value;
-      expect((await get('/app/v1/health/settings')).status, String(value)).toBe(404);
-      expect((await put({ sleep_need_minutes: 480 })).status, String(value)).toBe(404);
-    }
-    expect(rpcs).toEqual([]);
-  });
-
   it('writes only after the credential and the owner\'s health budget, and for the session\'s owner alone', async () => {
     expect((await put({ sleep_need_minutes: 480 }, undefined, {})).status).toBe(401);
     expect(limiterKeys).toEqual([]);
@@ -736,27 +723,26 @@ describe('app health scores: revision 4', () => {
   });
 });
 
-describe('a finished workout in an upload (WORKOUT_WAKE)', () => {
+describe('a finished workout in an upload', () => {
   // The owner's object answers the notice; what it was told is kept, and nothing else.
   const told: unknown[] = [];
-  const workoutEnv = (on: boolean) => ({ ...(env() as object), ...(on ? { WORKOUT_WAKE: '1' } : {}),
+  const workoutEnv = () => ({ ...(env() as object),
     OWNER_DO: { idFromName: (n: string) => n, get: () => ({ fetch: async (request: Request) => { if (new URL(request.url).pathname.endsWith('/health-samples')) told.push(await request.json()); return Response.json({ ok: true }); } }) } }) as never;
-  const upload = async (endedMinutesAgo: number, on: boolean) => {
+  const upload = async (endedMinutesAgo: number) => {
     told.length = 0;
     const end = Date.now() - endedMinutesAgo * 60_000, start = end - 45 * 60_000;
     const run = { sample_id: 'HK:run-1', revision: 0, signal: 'workout', unit: 'minutes', activity: 'running', value: 45, start_at: new Date(start).toISOString(), end_at: new Date(end).toISOString(), day: new Date(end).toISOString().slice(0, 10), utc_offset_minutes: 0 };
     rpcResult = { ...receipt, accepted: 1 };
     const deferred: Promise<unknown>[] = [];
-    const response = await handleApp(new Request('https://w.test/app/v1/health/ingest', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ ...batch, samples: [run] }) }), workoutEnv(on), auth, work => { deferred.push(work); });
+    const response = await handleApp(new Request('https://w.test/app/v1/health/ingest', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ ...batch, samples: [run] }) }), workoutEnv(), auth, work => { deferred.push(work); });
     await Promise.all(deferred);
     return { status: response?.status, told: [...told] };
   };
   it('tells the owner\'s object a workout just ended, with that word alone', async () => {
-    expect(await upload(10, true)).toEqual({ status: 200, told: [{ workout: true }] });
+    expect(await upload(10)).toEqual({ status: 200, told: [{ workout: true }] });
   });
-  it('says nothing of an old workout, or with the switch off', async () => {
-    expect(await upload(240, true)).toEqual({ status: 200, told: [{}] });
-    expect(await upload(10, false)).toEqual({ status: 200, told: [{}] });
+  it('says nothing of an old workout', async () => {
+    expect(await upload(240)).toEqual({ status: 200, told: [{}] });
   });
   it('counts only a workout the ingest took: one it rejected, or a replayed upload, says nothing', async () => {
     const end = Date.now() - 10 * 60_000;
@@ -766,7 +752,7 @@ describe('a finished workout in an upload (WORKOUT_WAKE)', () => {
       told.length = 0;
       rpcResult = { ...receipt, ...answer };
       const deferred: Promise<unknown>[] = [];
-      await handleApp(new Request('https://w.test/app/v1/health/ingest', { method: 'POST', headers: headers({ 'content-type': 'application/json', 'x-waldo-app-contract': 'health=3' }), body: JSON.stringify({ ...batch, samples: [steps, run] }) }), workoutEnv(true), auth, work => { deferred.push(work); });
+      await handleApp(new Request('https://w.test/app/v1/health/ingest', { method: 'POST', headers: headers({ 'content-type': 'application/json', 'x-waldo-app-contract': 'health=3' }), body: JSON.stringify({ ...batch, samples: [steps, run] }) }), workoutEnv(), auth, work => { deferred.push(work); });
       await Promise.all(deferred);
       return [...told];
     };

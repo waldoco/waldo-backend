@@ -62,6 +62,7 @@ beforeEach(() => {
     if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: JSON.parse(String(init?.body)).p_do_name, state_version: 1, admission_revision: '2' });
     if (fn === 'assert_channel_presence') return Response.json(true);
     if (fn === 'health_context_read' || fn === 'health_plane' || fn === 'presence_hint') return Response.json(null);
+    if (fn === 'health_inventory_read') return Response.json({ sources: [] });
     if (fn === 'health_log_recent' || fn === 'google_connections' || fn === 'connections_list') return Response.json([]);
     if (url === 'https://graph.facebook.com/v26.0/fictional-phone-id/messages') {
       const body = JSON.parse(String(init?.body)) as { to: string; type: string; text?: { body: string } };

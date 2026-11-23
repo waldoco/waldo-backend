@@ -4,7 +4,6 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
-import { COMPACTION } from '../src/conversation/compaction';
 import { handleWhatsAppWebhook } from '../src/channels/whatsapp-webhook';
 import type { OwnerDirectory } from '../src/identity/owner-directory';
 import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
@@ -76,17 +75,14 @@ it('each WhatsApp chat turn starts with the tools, system prompt and history the
   });
 }, 60_000);
 
-// Past the budget, the plain window drops the oldest row on every turn, so no turn starts with what the one before it sent.
-// The stepped window cuts once and holds its start, so only the turns that cut break the prefix.
-it.each([['1', 2], [undefined, 9]] as const)('past its budget, a WhatsApp chat with WALDO_STEPPED_WINDOW=%s breaks the prefix on at most %i of 9 turns', async (stepped, most) => {
-  const doName = `cache-prefix-long-${stepped ?? 'off'}`;
-  const budget = COMPACTION.budgetTokens;
-  Object.assign(COMPACTION, { budgetTokens: 4_286 });
+// Past the budget, the stepped window cuts once and holds its start, so only the turns that cut break the prefix.
+it('past its budget, a WhatsApp chat breaks the prefix on at most 2 of 9 turns', async () => {
+  const doName = 'cache-prefix-long';
   calls.length = 0;
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName)), async (_instance, state) => {
     const net = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ messages: [{ id: 'wamid.out' }] }));
     const logs = vi.spyOn(console, 'log');
-    const instance = new OwnerDO(state, { ...env, ...(stepped ? { WALDO_STEPPED_WINDOW: stepped } : {}), OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' });
+    const instance = new OwnerDO(state, { ...env, WALDO_HISTORY_BUDGET_TOKENS: '4286', OPENAI_API_KEY: 'fictional-model-key', WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id' });
     try {
       const said = Array.from({ length: 14 }, (_, index) => `Note ${index}: ${'the venue changed again and the caterer needs the final count by Thursday. '.repeat(20)}`);
       for (const [index, text] of said.entries()) await deliver(instance, `wamid.long.${index}`, text, doName);
@@ -98,11 +94,10 @@ it.each([['1', 2], [undefined, 9]] as const)('past its budget, a WhatsApp chat w
         const history = later[turn - 1]!.input!.slice(0, -1);
         if (JSON.stringify(later[turn]!.input!.slice(0, history.length)) !== JSON.stringify(history)) broken += 1;
       }
-      expect(broken).toBeLessThanOrEqual(most);
-      if (stepped) expect(broken).toBeGreaterThan(0);
-      else expect(broken).toBeGreaterThan(5);
+      expect(broken).toBeLessThanOrEqual(2);
+      expect(broken).toBeGreaterThan(0);
       // The trace says which turns moved their history window: exactly the turns that broke the prefix.
       expect(replyShapes(logs).slice(5).filter((shape) => shape.history_moved).length).toBe(broken);
-    } finally { Object.assign(COMPACTION, { budgetTokens: budget }); logs.mockRestore(); net.mockRestore(); await state.storage.deleteAlarm(); }
+    } finally { logs.mockRestore(); net.mockRestore(); await state.storage.deleteAlarm(); }
   });
 }, 120_000);

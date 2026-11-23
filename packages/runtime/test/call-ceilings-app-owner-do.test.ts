@@ -1,4 +1,4 @@
-// The app chat through a real owner object, on the canonical store with compaction and WALDO_CALL_CEILINGS on: the window
+// The app chat through a real owner object, on the canonical store with compaction and the call ceilings: the window
 // holds the chat to the conversation layer's budget, while the summary that replaces what leaves it still reads well past
 // that budget, so a smaller window compacts sooner without summarising less.
 import { env } from 'cloudflare:workers';
@@ -76,14 +76,16 @@ const ownerFor = async (name: string, state: DurableObjectState) => {
   ensureSchema(state.storage);
   state.storage.kv.put('do_name', name);
   await state.storage.put('origin', 'https://fixture.invalid');
-  return new OwnerDO(state, { ...env, WALDO_COMPACTION: 'on', WALDO_CALL_CEILINGS: '1', SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+  return new OwnerDO(state, { ...env, SUPABASE_PROJECT_URL: BASE, SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
 };
-// One app turn, run until its inbox record settles and the serial work queued behind it (the compaction) has finished.
+// One app turn, run until its inbox record settles, then the alarm pass that runs the compaction it made due.
 const turn = async (owner: InstanceType<typeof OwnerDO>, state: DurableObjectState, name: string, text: string) => {
   const sent = await owner.fetch(new globalThis.Request('https://owner.invalid/app/v1/chat/main/messages', { method: 'POST', headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'c'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ client_message_id: `client-${text.replace(/\W+/g, '-')}`, text }) }));
   expect(sent.status, await sent.clone().text()).toBe(202);
   const id = (await sent.json() as { message_id: string }).message_id;
   await vi.waitFor(() => expect(state.storage.kv.get<{ state: string }>(`app:inbox-record:${id}`)?.state).toBe('completed'), { timeout: 15_000, interval: 20 });
+  await (owner as unknown as { serial(work: () => Promise<void>): Promise<void> }).serial(async () => undefined);
+  await owner.alarm();
   await (owner as unknown as { serial(work: () => Promise<void>): Promise<void> }).serial(async () => undefined);
 };
 const tokens = (request: LLMGatewayRequest['request']) => new TextEncoder().encode(JSON.stringify(request.messages)).byteLength / 4;

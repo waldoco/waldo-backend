@@ -33,19 +33,7 @@
   // every tool on every round, and is the rollback.
   // WALDO_TOOL_LOADER: "harness" sends the core tools plus find_tools and use_tool on any provider, with the rest named in
   // the system prompt's tool catalogue; it wins over WALDO_TOOL_SEARCH. "off" is the rollback.
-  // WALDO_COMPACTION: "on" summarises the oldest part of a long app chat into one row the model reads first; "off" keeps
-  // the plain window, and is the rollback.
-  // WALDO_STEPPED_WINDOW: "1" cuts a chat's history in steps once it outgrows the budget and holds the start between cuts,
-  // so the provider reads the same leading history from its cache turn after turn; "0" drops the oldest row every turn, and
-  // is the rollback.
-  // WALDO_CONTEXT_CAPS: "1" caps the standing orders and quests every turn reads (the rest named, or listed by title) and
-  // clears a turn's tool results down to the latest few past a size (the context budget below); "0" is the rollback.
-  // WALDO_COMPACTION_WAKE: "1" runs a compaction in its own alarm pass after the one that ran the owner's turns; "0" runs
-  // it at the end of that pass, and is the rollback.
-  // WALDO_CALL_CEILINGS: "1" holds every chat's history to the history budget (31,429 tokens by default), the conversation
-  // layer of a chat call, clears a turn's earlier tool results once its tool turns would carry the call past the hard
-  // ceiling, and logs each call against its class's ceiling; "0" is the rollback.
-  // The context budget's sizes (src/conversation/context-budget.ts), read while those switches are on: the history budget,
+  // The context budget's sizes (src/conversation/context-budget.ts): the history budget,
   // the chat, job and hard ceilings in tokens, the share of the budget a stepped cut keeps, and the caps' clear-at characters,
   // results kept, and standing-order and quest characters. Each is fixed per deploy so the cached prefix holds; a value that
   // is not a valid size reads as its default.
@@ -53,8 +41,6 @@
   // intervention) its own event, the composed context and the last six rows of the owner's exchange instead of the chat
   // replay, offers every such run one tool menu (each still calls only its own) so the cached head is shared, keeps that
   // head an hour, and gives the day plan and wake decision the shared health block; "0" is the rollback.
-  // WALDO_TIMEZONE_ASK: "1" tells a turn whose time zone the owner has not confirmed to ask for it when it fits; "0" is the
-  // rollback.
   // WALDO_SWITCHES: every feature switch and tuning knob, one JSON var, because Cloudflare caps a Worker at 128 vars and
   // secrets together. Each entry seam flattens it into env (src/switches.ts). A new switch goes in it, as a string, in
   // both environments; only the vars guard-switches-binding.mjs lists stay flat.
@@ -125,11 +111,6 @@
       "WALDO_FORGET_BARRIER": "off",
       "WALDO_TOOL_SEARCH": "off",
       "WALDO_TOOL_LOADER": "off",
-      "WALDO_COMPACTION": "off",
-      "WALDO_STEPPED_WINDOW": "0",
-      "WALDO_CONTEXT_CAPS": "0",
-      "WALDO_COMPACTION_WAKE": "0",
-      "WALDO_CALL_CEILINGS": "0",
       "WALDO_HISTORY_BUDGET_TOKENS": "31429",
       "WALDO_CHAT_CEILING_TOKENS": "57143",
       "WALDO_JOB_CEILING_TOKENS": "35714",
@@ -140,24 +121,9 @@
       "WALDO_STANDING_ORDERS_CHARS": "3000",
       "WALDO_QUESTS_CHARS": "3000",
       "WALDO_WHATS_NEW_CHARS": "1200",
-      "WALDO_TIMEZONE_ASK": "0",
       "WALDO_STREAM_REPLIES": "off",
-      "HEALTH_PROVISIONAL_SCORES": "0",
-      "HEALTH_SOLO_NOTICE": "0",
-      "HEALTH_PARTIAL_CONTEXT": "0",
-      "HEALTH_INVENTORY": "0",
-      "HEALTH_TRAINING_LOAD": "0",
-      "HEALTH_SCORE_PARTS": "0",
-      "HEALTH_USUAL": "0",
-      "HEALTH_DAY_LOAD": "0",
-      "HEALTH_PASSIVE_LOAD": "0",
-      "HEALTH_STRESS_CURVE": "0",
       "HEALTH_FORM_CURVE": "0",
-      "HEALTH_COACHING": "0",
-      "HEALTH_ACTIONS": "0",
       "MEDICATIONS": "0",
-      "SCREEN_TIME": "0",
-      "HEALTH_CHARTS": "0",
       "PEOPLE_MAP": "0",
       "DEVICE_PLACE": "0",
       "DEVICE_CALENDAR": "0",
@@ -170,7 +136,6 @@
       "HISTORY_ARCHIVE": "0",
       "ONBOARDING_LOOKUP": "0",
       "WELCOME_V2": "0",
-      "HEALTH_EASE_WORKOUT": "0",
       "CALENDAR_UNDO_CANCEL": "0",
       "AUTONOMY_OWN_CALENDAR": "0",
       "APPROVE_IN_CHAT": "0",
@@ -225,7 +190,6 @@
       "WAKE_BRIEF": "0",
       "WAKE_BRIEF_FRESH_MIN": "180",
       "WAKE_BRIEF_TURNS_PER_DAY": "3",
-      "WORKOUT_WAKE": "0",
       "BRIEF_DAY_PLAN": "0",
       "CALENDAR_PLAN": "0"
     }
@@ -383,11 +347,6 @@
           "WALDO_FORGET_BARRIER": "on",
           "WALDO_TOOL_SEARCH": "off",
           "WALDO_TOOL_LOADER": "harness",
-          "WALDO_COMPACTION": "on",
-          "WALDO_STEPPED_WINDOW": "1",
-          "WALDO_CONTEXT_CAPS": "1",
-          "WALDO_COMPACTION_WAKE": "1",
-          "WALDO_CALL_CEILINGS": "1",
           "WALDO_HISTORY_BUDGET_TOKENS": "31429",
           "WALDO_CHAT_CEILING_TOKENS": "57143",
           "WALDO_JOB_CEILING_TOKENS": "35714",
@@ -398,24 +357,9 @@
           "WALDO_STANDING_ORDERS_CHARS": "3000",
           "WALDO_QUESTS_CHARS": "3000",
           "WALDO_WHATS_NEW_CHARS": "1200",
-          "WALDO_TIMEZONE_ASK": "1",
           "WALDO_STREAM_REPLIES": "on",
-          "HEALTH_PROVISIONAL_SCORES": "1",
-          "HEALTH_SOLO_NOTICE": "1",
-          "HEALTH_PARTIAL_CONTEXT": "1",
-          "HEALTH_INVENTORY": "1",
-          "HEALTH_TRAINING_LOAD": "1",
-          "HEALTH_SCORE_PARTS": "1",
-          "HEALTH_USUAL": "1",
-          "HEALTH_DAY_LOAD": "1",
-          "HEALTH_PASSIVE_LOAD": "apple,health_connect",
-          "HEALTH_STRESS_CURVE": "1",
           "HEALTH_FORM_CURVE": "0",
-          "HEALTH_COACHING": "1",
-          "HEALTH_ACTIONS": "1",
           "MEDICATIONS": "1",
-          "SCREEN_TIME": "1",
-          "HEALTH_CHARTS": "1",
           "PEOPLE_MAP": "1",
           "DEVICE_PLACE": "1",
           "DEVICE_CALENDAR": "1",
@@ -428,7 +372,6 @@
           "HISTORY_ARCHIVE": "dry",
           "ONBOARDING_LOOKUP": "1",
           "WELCOME_V2": "1",
-          "HEALTH_EASE_WORKOUT": "1",
           "CALENDAR_UNDO_CANCEL": "1",
           "AUTONOMY_OWN_CALENDAR": "1",
           "APPROVE_IN_CHAT": "1",
@@ -483,7 +426,6 @@
           "WAKE_BRIEF": "1",
           "WAKE_BRIEF_FRESH_MIN": "180",
           "WAKE_BRIEF_TURNS_PER_DAY": "3",
-          "WORKOUT_WAKE": "1",
           "BRIEF_DAY_PLAN": "1",
           "CALENDAR_PLAN": "1"
         }

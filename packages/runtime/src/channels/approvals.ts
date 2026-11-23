@@ -838,8 +838,6 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // Whether this desk's surface lets Waldo write first now (WhatsApp, only within 24 hours of the owner's last message). A card
   // it refuses while it does not waits for the owner's next message there; without this, a refused card is a failed presentation.
   writesFirstNow?: () => boolean;
-  // Whether a move may also rename the event (rename_to), to swap one thing for another in its slot.
-  renames?: boolean;
   // Whether a cancel can be undone, by putting the event back on the version the cancel left.
   undoCancels?: boolean;
   // The owner's standing grants: a calendar change one covers runs without a card. Only with the effect ledger. grant writes
@@ -2453,7 +2451,6 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         .map(entry => ({ approval_id: entry.id, args: (JSON.parse(entry.payload_json) as TaintedActionProposal).args }));
     },
     async propose(p, turnKey, operationRef, options = {}) {
-      if (p.rename_to && !deps.renames) throw new Error('Renaming an event is not available yet: propose a move or a cancel instead.');
       const originRunRef = deps.currentRunRef?.();
       if (proposalTurn !== turnKey) { calendarProposals.clear(); proposalTurn = turnKey; }
       const digest = turnKey === undefined ? undefined : await sha256Hex(JSON.stringify(

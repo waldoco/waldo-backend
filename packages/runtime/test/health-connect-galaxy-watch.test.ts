@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { healthIngestV1Schema } from '../../contracts/src/app/health-ingest';
 import { produceHealthScores } from '../src/health/producer';
-import { dailyScoresFor } from '../src/health/scores';
+import { provisionalDailyScores } from '../src/health/scores';
 
 // A Galaxy Watch through Samsung Health and Health Connect, as the app's Health Connect normalizer uploads it: Samsung
 // Health named as each reading's writer, a night's time asleep and midpoint, and an hourly heart-rate window, with no HRV,
@@ -42,7 +42,7 @@ const asRead = (s: Sample): Sample => {
 };
 
 type Row = Record<string, any>;
-const produce = async (samples: readonly Sample[], compute = dailyScoresFor('1')): Promise<Row[]> => {
+const produce = async (samples: readonly Sample[], compute = provisionalDailyScores): Promise<Row[]> => {
   const written: Row[] = [];
   const read = samples.map(asRead);
   await produceHealthScores({
@@ -120,7 +120,7 @@ describe('another app\'s night through Health Connect', () => {
     expect(LATER).not.toBe(hour.value);
     const rival: Sample = { ...hour, origin: origin(OTHER), value: LATER };
     const seen: (number | null)[] = [];
-    const scores = dailyScoresFor('1');
+    const scores = provisionalDailyScores;
     await produce([...base.slice(0, asleepHour + 1), rival, ...base.slice(asleepHour + 1)], input => {
       const bucket = input.days.find(d => d.day === TODAY)?.hourly.find(b => b.startAt === iso(local(TODAY, 3)));
       if (input.targetDay === TODAY && bucket) seen.push(bucket.heartRate);

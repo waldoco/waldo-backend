@@ -26,7 +26,7 @@ export const sleepJustEnded = (samples: readonly unknown[], now: number, freshMs
 export const wakeNoteStillFresh = (notedAt: unknown, runStartedAt: number, freshMs: number): boolean =>
   typeof notedAt === 'number' && notedAt <= runStartedAt && runStartedAt - notedAt <= freshMs;
 
-// WORKOUT_WAKE: how recently a workout must have ended for an upload to count as "the owner just finished one". The phone
+// How recently a workout must have ended for an upload to count as "the owner just finished one". The phone
 // can deliver hours late (ADR-0010), and a workout that ended longer ago has already shaped the day it was in.
 export const WORKOUT_FRESH_MS = 180 * 60_000;
 // Whether these samples carry a workout that ended just now. Only the yes leaves; its time, type and detail never do.

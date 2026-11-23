@@ -3,16 +3,12 @@ import config from '../wrangler.jsonc?raw';
 import { parseJsonc } from '../../../scripts/jsonc.mjs';
 import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
 
-// The provisional-scores switch is on for staging only, for the synthetic one-owner check; production stays off. The staging values around it are
-// asserted too, so a merge that takes one side of the vars line cannot silently revert them.
+// The health and device switches still declared, each with its staging and production values, so a merge that takes one side
+// of the vars line cannot silently revert them.
 type Vars = Readonly<Record<string, string>>;
 const parsed = flatConfig(parseJsonc(config)) as { vars: Vars; env: { staging: { vars: Vars } } };
 
-describe('HEALTH_PROVISIONAL_SCORES in the Worker config', () => {
-  it('is on for staging and off for production', () => {
-    expect(parsed.vars.HEALTH_PROVISIONAL_SCORES).toBe('0');
-    expect(parsed.env.staging.vars.HEALTH_PROVISIONAL_SCORES).toBe('1');
-  });
+describe('the Worker config', () => {
   it('leaves the staging vars the gate turned on as they are', () => {
     expect(parsed.env.staging.vars.APP_AGREEMENTS).toBe('1');
     expect(parsed.env.staging.vars.OWNER_LOOKUP).toBe('1');
@@ -25,38 +21,10 @@ describe('HEALTH_PROVISIONAL_SCORES in the Worker config', () => {
   });
 });
 
-describe('HEALTH_SOLO_NOTICE in the Worker config', () => {
-  it('is on for staging and off for production', () => {
-    expect(parsed.vars.HEALTH_SOLO_NOTICE).toBe('0');
-    expect(parsed.env.staging.vars.HEALTH_SOLO_NOTICE).toBe('1');
-  });
-});
-
 describe('HEALTH_FORM_CURVE in the Worker config', () => {
   it('is declared off for staging and production, until the privacy review ADR-0081 asks for has passed', () => {
     expect(parsed.vars.HEALTH_FORM_CURVE).toBe('0');
     expect(parsed.env.staging.vars.HEALTH_FORM_CURVE).toBe('0');
-  });
-});
-
-describe('HEALTH_TRAINING_LOAD in the Worker config', () => {
-  it('is on for staging, which deploys with migration 20261031170000, and off for production', () => {
-    expect(parsed.vars.HEALTH_TRAINING_LOAD).toBe('0');
-    expect(parsed.env.staging.vars.HEALTH_TRAINING_LOAD).toBe('1');
-  });
-});
-
-describe('HEALTH_COACHING in the Worker config', () => {
-  it('is on for staging, which deploys with migrations 20261101000000 and 20261101020000, and off for production', () => {
-    expect(parsed.vars.HEALTH_COACHING).toBe('0');
-    expect(parsed.env.staging.vars.HEALTH_COACHING).toBe('1');
-  });
-});
-
-describe('HEALTH_EASE_WORKOUT in the Worker config', () => {
-  it('is off in production and on in staging, which runs the redeployed connector-proxy function', () => {
-    expect(parsed.vars.HEALTH_EASE_WORKOUT).toBe('0');
-    expect(parsed.env.staging.vars.HEALTH_EASE_WORKOUT).toBe('1');
   });
 });
 
@@ -121,44 +89,6 @@ describe('WAKE_BRIEF, BRIEF_DAY_PLAN and CALENDAR_PLAN in the Worker config', ()
   it('are off in production and on in staging, with the wake limits declared in both', () => {
     for (const name of ['WAKE_BRIEF', 'BRIEF_DAY_PLAN', 'CALENDAR_PLAN']) expect([name, parsed.vars[name], parsed.env.staging.vars[name]]).toEqual([name, '0', '1']);
     for (const vars of [parsed.vars, parsed.env.staging.vars]) expect([vars.WAKE_BRIEF_FRESH_MIN, vars.WAKE_BRIEF_TURNS_PER_DAY]).toEqual(['180', '3']);
-  });
-});
-
-describe('WORKOUT_WAKE in the Worker config', () => {
-  it('is off in production until a judged trial uploads a finished workout, and on in staging', () => {
-    expect([parsed.vars.WORKOUT_WAKE, parsed.env.staging.vars.WORKOUT_WAKE]).toEqual(['0', '1']);
-  });
-});
-
-describe('HEALTH_PASSIVE_LOAD in the Worker config', () => {
-  it('is off in production and lists the phone sources whose cadence is known in staging, where it acts only once HEALTH_DAY_LOAD is on', () => {
-    expect(parsed.vars.HEALTH_PASSIVE_LOAD).toBe('0');
-    expect(parsed.env.staging.vars.HEALTH_PASSIVE_LOAD).toBe('apple,health_connect');
-  });
-});
-
-describe('HEALTH_DAY_LOAD and HEALTH_STRESS_CURVE in the Worker config', () => {
-  it('keeps the day load off in production and on in staging, where migration 20261116110000 is applied (19 Nov 2026)', () => {
-    expect([parsed.vars.HEALTH_DAY_LOAD, parsed.env.staging.vars.HEALTH_DAY_LOAD]).toEqual(['0', '1']);
-  });
-  it('keeps the stress curve off in production and on in staging, where migration 20261116110100 is applied (19 Nov 2026)', () => {
-    expect([parsed.vars.HEALTH_STRESS_CURVE, parsed.env.staging.vars.HEALTH_STRESS_CURVE]).toEqual(['0', '1']);
-  });
-});
-
-describe('HEALTH_SCORE_PARTS and HEALTH_USUAL in the Worker config', () => {
-  it('are off in production and on in staging, where migration 20261116100000 is applied (19 Nov 2026)', () => {
-    for (const name of ['HEALTH_SCORE_PARTS', 'HEALTH_USUAL']) {
-      expect(parsed.vars[name], name).toBe('0');
-      expect(parsed.env.staging.vars[name], name).toBe('1');
-    }
-  });
-});
-
-describe('SCREEN_TIME in the Worker config', () => {
-  it('is on in staging, where migration 20261103120000 is applied (4 Nov 2026), and off in production', () => {
-    expect(parsed.vars.SCREEN_TIME).toBe('0');
-    expect(parsed.env.staging.vars.SCREEN_TIME).toBe('1');
   });
 });
 

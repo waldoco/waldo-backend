@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { healthDayLoadV1Schema, healthStressCurveV1Schema } from '../../contracts/src/app/health-ingest';
 import { produceHealthScores, type ProducerDeps } from '../src/health/producer';
-import { dailyScoresFor } from '../src/health/scores';
+import { provisionalDailyScores } from '../src/health/scores';
 
 // What the producer writes of the day load and the stress curve: each behind its own switch, beside the scores,
 // computed from the same readings and changing none of them. Synthetic owners only; the clock is 14:30 UTC on 20 March 2026.
@@ -45,7 +45,7 @@ const rowsOf = async (spec: Shape, extra: Partial<ProducerDeps> = {}, series: un
   const outcome = await produceHealthScores({
     readSeries: async range => (!Array.isArray(typed.sources) ? series : { ...typed, sources: typed.sources.map(s => ({ ...s, samples: s.samples.filter(e => range.signals.includes(String(e.signal))) })) }),
     writeContext: async payload => { rows.push(JSON.parse(payload) as Row); return { written: true }; },
-    compute: dailyScoresFor('1'), ...extra,
+    compute: provisionalDailyScores, ...extra,
   }, { now, timezone: 'UTC' });
   return { rows, outcome };
 };

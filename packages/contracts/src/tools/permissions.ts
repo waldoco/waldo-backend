@@ -142,7 +142,7 @@ export const toolNameSchema = z.enum([
   'offer_replies',
   // search_history: the owner's past runs, tasks, scheduled runs and decided cards, hot and archived; owner turns only, read-only.
   'search_history',
-  // get_screen_time: the owner's daily screen-time summaries as their phone sent them; offered while SCREEN_TIME is on.
+  // get_screen_time: the owner's daily screen-time summaries as their phone sent them.
   'get_screen_time',
   // get_device_context: each of the owner's phones' time zone and city as the phone last sent them; offered while DEVICE_PLACE is on.
   'get_device_context',
@@ -165,7 +165,7 @@ export const toolNameSchema = z.enum([
   // show_chart: a chart in the owner's app reply (the app.v1 chart_series part), with words for a build that draws none.
   'show_chart',
   // show_health_chart: a chart of the owner's own readings in their app reply; the reply keeps the query, never the values,
-  // and the app's read draws it live. Offered while HEALTH_CHARTS is on.
+  // and the app's read draws it live.
   'show_health_chart',
   // read_import/import_memories: the owner's own messages in a ChatGPT or Claude export they uploaded, and what Waldo keeps
   // from them as its read, quoted from the owner's words, until the owner confirms it. Owner chat turns only.

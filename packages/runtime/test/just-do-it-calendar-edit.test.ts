@@ -108,7 +108,7 @@ const appTurn = async (label: string, switches: Record<string, string>, startedA
   return out!;
 };
 
-const STAGING = { AUTONOMOUS_BY_DEFAULT: '1', AUTONOMY_OWNER_TURNS: '1', HEALTH_EASE_WORKOUT: '1', CALENDAR_UNDO_CANCEL: '1', AUTONOMY_OWN_CALENDAR: '1', APPROVE_IN_CHAT: '1' };
+const STAGING = { AUTONOMOUS_BY_DEFAULT: '1', AUTONOMY_OWNER_TURNS: '1', CALENDAR_UNDO_CANCEL: '1', AUTONOMY_OWN_CALENDAR: '1', APPROVE_IN_CHAT: '1' };
 
 it('an app turn: the owner renames their own block that began an hour ago, after recalling notes from shared documents: made with no card, with an undo', async () => {
   const run = await appTurn('jdi-rename', STAGING);
@@ -153,7 +153,7 @@ const deskHarness = (state: DurableObjectState, surface: 'whatsapp' | 'imessage'
     moveEvent: async (_id: string, start: string, end: string, _etag: string, _marker: string, o?: { title?: string }) => { moved.push(o?.title ?? ''); event = { ...event, start, end, title: o?.title ?? event.title, etag: 'v2' }; return event; },
   } as unknown as GoogleClient;
   const desk = approvalDesk(state.storage.sql, {
-    owner: 447700900123, surface, appIdentity: () => true, appLink: appApprovalLink, renames: true,
+    owner: 447700900123, surface, appIdentity: () => true, appLink: appApprovalLink,
     autonomous: () => options.choice !== false, ownerTurns: () => true, ownerMessageAt: () => NOW,
     call: async (method: string, body: object) => { if (method === 'sendMessage') cards.push((body as { text: string }).text); return { messages: [{ id: `${surface}.card-${cards.length}` }] }; },
     google: async () => client, newId: () => `${++n}`, now: () => clock, timezone: 'UTC', log: () => undefined,
