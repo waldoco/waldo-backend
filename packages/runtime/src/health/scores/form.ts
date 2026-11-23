@@ -64,22 +64,32 @@ const throughMinute = (day: DayRecord, minute: number | null): DayRecord =>
 const formHours = (day: DayRecord, provisional: boolean): DayRecord =>
   ({ ...day, hourly: day.hourly.filter(bucket => bucket.heartRate !== null || bucket.hrvReadings.length > 0 || bucket.daylightMinutes !== null || bucket.movementMinutes !== null || (provisional && (bucket.steps ?? null) !== null)) });
 
-export const formScore = (record: DayRecord, earlier: readonly DayRecord[], sleepNeedMinutes: number | null, asOf: string | null, provisional = false, degrade = false, detail = false): FormResult => {
-  const target = formHours(record, provisional), prior = earlier.map(day => formHours(day, provisional));
-  const outcome = provisional ? provisionalRecoveryBasis(target, prior, sleepNeedMinutes, degrade) : recoveryBasis(target, prior, sleepNeedMinutes);
-  // The degraded rule reads the day's own parts when Recovery has none; Recovery's reason stands only if they add nothing either.
-  if ('reason' in outcome && !degrade) return { state: 'unavailable', reason: outcome.reason };
-  const recovery: RecoveryBasis = 'reason' in outcome ? { components: [], signals: [], days: [], hrvMethod: null } : outcome;
-  const degraded = 'reason' in outcome || outcome.sleepOnly === true;
-  if (target.hourly.length === 0) return { state: 'unavailable', reason: 'intraday_inputs_unavailable' };
-  // The day's data horizon: the end of its newest hour. A day still running needs that horizon recent; a finished day is
-  // judged on the hours it has, so a recompute the next morning does not turn it stale.
+// What Form reads of a day read at `asOf`, or null when the day holds no hour of its own. The day's data horizon is the end of its
+// newest hour. A day still running needs that horizon recent; a finished day is judged on the hours it has, so a recompute the
+// next morning does not turn it stale. Only the current hour grows, so the newest hour, while the read falls inside it, is left
+// out on both sides until it ends: `settled` is the instant the day's hours are taken through.
+export const formReading = (record: DayRecord, asOf: string | null, provisional: boolean): Readonly<{ stale: boolean; settled: number }> | null => {
+  const target = formHours(record, provisional);
+  if (target.hourly.length === 0) return null;
   const { end } = localDayWindow(target.day, target.timezone);
   const horizon = Math.max(...target.hourly.map(bucket => Date.parse(bucket.startAt))) + HOUR_MS;
-  if (asOf !== null && Date.parse(asOf) < end && Date.parse(asOf) - horizon > FRESH_HOURS * HOUR_MS) return { state: 'unavailable', reason: 'stale_inputs' };
-  // Only the current hour grows, so the newest hour, while the read falls inside it, is left out on both sides until it ends.
+  const stale = asOf !== null && Date.parse(asOf) < end && Date.parse(asOf) - horizon > FRESH_HOURS * HOUR_MS;
   const filling = asOf !== null && Date.parse(asOf) >= horizon - HOUR_MS && Date.parse(asOf) < horizon;
-  const settled = filling ? horizon - HOUR_MS : horizon;
+  return { stale, settled: filling ? horizon - HOUR_MS : horizon };
+};
+
+export const formScore = (record: DayRecord, earlier: readonly DayRecord[], sleepNeedMinutes: number | null, asOf: string | null, provisional = false, detail = false): FormResult => {
+  const target = formHours(record, provisional), prior = earlier.map(day => formHours(day, provisional));
+  const outcome = provisional ? provisionalRecoveryBasis(target, prior, sleepNeedMinutes) : recoveryBasis(target, prior, sleepNeedMinutes);
+  // Provisional Form reads the day's own parts when Recovery has none; Recovery's reason stands only if they add nothing either.
+  if ('reason' in outcome && !provisional) return { state: 'unavailable', reason: outcome.reason };
+  const recovery: RecoveryBasis = 'reason' in outcome ? { components: [], signals: [], days: [], hrvMethod: null } : outcome;
+  const degraded = 'reason' in outcome || outcome.sleepOnly === true;
+  const reading = formReading(target, asOf, provisional);
+  if (reading === null) return { state: 'unavailable', reason: 'intraday_inputs_unavailable' };
+  if (reading.stale) return { state: 'unavailable', reason: 'stale_inputs' };
+  const { settled } = reading;
+  const { end } = localDayWindow(target.day, target.timezone);
   const cutoff = settled >= end ? null : wallMinute(settled, target.timezone);
   const sameHours = (day: DayRecord) => throughMinute(day, cutoff);
   const today = sameHours(target);
@@ -169,7 +179,9 @@ export const formScore = (record: DayRecord, earlier: readonly DayRecord[], slee
       // Steps fill movement's part when they stand in for it, so the shares still make the whole score.
       const asPart = (name: string) => (name === 'steps' ? 'movement' : name);
       const ownParts = components.filter(component => !component.name.startsWith('recovery.')).map(component => ({ ...component, name: asPart(component.name) }));
-      const rows = partRows(PART_ORDER.form, [fromTheNight(scaled), ...ownParts], new Map([...absent].map(([name, reason]) => [asPart(name), reason])));
+      // A Form the degraded rule made without Recovery has no night part: it is shown missing, with Recovery's reason in the parts' words.
+      if (scaled.length === 0 && 'reason' in outcome) absent.set('from_the_night', outcome.reason === 'baseline_immature' ? 'baseline_immature' : 'no_reading');
+      const rows = partRows(PART_ORDER.form, [...(scaled.length ? [fromTheNight(scaled)] : []), ...ownParts], new Map([...absent].map(([name, reason]) => [asPart(name), reason])));
       return { parts: rows, usual: components.flatMap(component => (component.usual ? [component.usual] : [])) };
     })() : {};
     return { state: 'available', score, zone: formZone(score), coverage, hrv_method: recovery.hrvMethod, used, baseline: labelOf(own, usedPrior), ...asked,

@@ -345,7 +345,7 @@ Built behind `HEALTH_INVENTORY` (on in staging with `HEALTH_PARTIAL_CONTEXT`, of
 
 ## Slice 3: scores degrade, they do not gate (Ansh, 16 November)
 
-Built behind `HEALTH_SCORES_DEGRADE` (staging on, production off), on the provisional engine only.
+Part of the provisional engine itself, with no switch of its own (owner ruling of 19 Nov: ship turned on); production follows `HEALTH_PROVISIONAL_SCORES`.
 
 - **Recovery stands on the night's sleep** when no overnight heart signal arrived or none has a baseline yet: `recovery.v6`,
   written `candidate_unaccepted`, coverage 0.5 (sleep's share) times the source's confidence. Without the night there is still no

@@ -364,10 +364,12 @@ it('with the switch off, or on a machine turn, the reply runs on the strong role
     expect('stream' in requests[0]!).toBe(true);
     expect(hops.map((entry) => entry.hop)).not.toContain('light_route');
   }
-  // A machine turn runs on the auxiliary model as it always has, with its own tools and no hand-over.
-  const machine = fake({ [LIGHT_ROLE]: () => ({ text: 'Time to stretch.' }) });
+  // A machine turn (the owner's reminder, which runs on the chat model so it can do what was asked) takes no light step and
+  // no hand-over.
+  const machine = fake({ [STRONG_ROLE]: () => ({ text: 'Time to stretch.' }) });
   const hops: TurnLogEntry[] = [];
   await responder(machine.gateway, { log: (entry) => hops.push(entry) }).remind('light-machine', 'app-main', 'Stretch', time);
+  expect(machine.models()).toEqual([STRONG_ROLE]);
   expect(machine.requests.flatMap((request) => (request.request.tools ?? []).map((tool) => tool.name))).not.toContain('escalate');
   expect(hops.map((entry) => entry.hop)).not.toContain('light_route');
 });
