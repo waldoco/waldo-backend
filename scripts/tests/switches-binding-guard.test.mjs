@@ -2,13 +2,15 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { BINDING_BUDGET, checkConfig, checkSources, runbookSecretNames } from '../guards/guard-switches-binding.mjs';
+import { BINDING_BUDGET, FLAT_VARS, checkConfig, checkInventory, checkSources, runbookSecretNames, shippedSwitches } from '../guards/guard-switches-binding.mjs';
 import { parseJsonc } from '../jsonc.mjs';
 import { flatConfig } from '../wrangler-vars.mjs';
 
 const root = new URL('../../', import.meta.url);
 const config = parseJsonc(readFileSync(new URL('packages/runtime/wrangler.jsonc', root), 'utf8'));
 const secrets = runbookSecretNames(readFileSync(new URL('docs/ops/PRODUCTION_ALPHA_RUNBOOK_2026-10-22.md', root), 'utf8'));
+const inventory = JSON.parse(readFileSync(new URL('docs/ops/switch-inventory.json', root), 'utf8'));
+const shipped = shippedSwitches(readFileSync(new URL('packages/runtime/src/switches.ts', root), 'utf8'));
 const clone = () => structuredClone(config);
 
 test('the runbook names the deployed secrets, an upper bound on what Cloudflare counts', () => {
@@ -49,6 +51,31 @@ export class SomeDO extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) { super(${superArgs}); }
 }`;
 
+test('every switch has an inventory row, and every kept or deleted switch says why', () => {
+  assert.deepEqual(checkInventory(config, inventory, '2026-11-23', shipped).bad, []);
+  const cases = [
+    [(c, inv) => { c.env.staging.vars.WALDO_SWITCHES.NEW_THING = '1'; }, 'switch "NEW_THING" has no row'],
+    [(c, inv) => { delete c.vars.WALDO_SWITCHES.DEVICE_PLACE; delete c.env.staging.vars.WALDO_SWITCHES.DEVICE_PLACE; }, 'inventory row "DEVICE_PLACE" names no switch'],
+    [(c, inv) => { delete inv.MEDICATIONS.removeBy; }, '"MEDICATIONS" is kept with no removeBy'],
+    [(c, inv) => { delete inv.MEDICATIONS.reason; }, '"MEDICATIONS" is kept with no reason'],
+    [(c, inv) => { inv.DEVICE_PLACE.disposition = 'maybe'; }, 'disposition "maybe"'],
+    [(c, inv) => { delete inv.DEVICE_PLACE.batch; }, '"DEVICE_PLACE" is unconditional with no batch'],
+    [(c, inv, ship) => { ship.delete('DEVICE_PLACE'); }, '"DEVICE_PLACE" is unconditional but not in SHIPPED_SWITCHES'],
+  ];
+  for (const [mutate, expected] of cases) {
+    const c = clone(), inv = structuredClone(inventory), ship = new Set(shipped);
+    mutate(c, inv, ship);
+    const { bad } = checkInventory(c, inv, '2026-11-23', ship);
+    assert.ok(bad.some((line) => line.includes(expected)), `${expected}: ${bad.join('; ')}`);
+  }
+});
+
+test('a kept switch past its removal date is reported and does not fail', () => {
+  const { bad, overdue } = checkInventory(config, inventory, '2099-01-01', shipped);
+  assert.deepEqual(bad, []);
+  assert.ok(overdue.some((line) => line.startsWith('MEDICATIONS ')), overdue.join(', '));
+});
+
 test('a Durable Object or entrypoint that does not flatten its env, or any other way around the seam, fails', () => {
   assert.deepEqual(checkSources([{ path: 'src/some-do.ts', text: doClass('ctx, withSwitches(env)') }]), []);
   assert.match(checkSources([{ path: 'src/some-do.ts', text: doClass('ctx, env') }]).join(), /class SomeDO must call super\(ctx, withSwitches\(env\)\)/);
@@ -83,6 +110,10 @@ test('the move kept every var the Worker reads, by name and value, in both envir
   const before = parseJsonc(old.stdout), now = flatConfig(config);
   assert.equal(Object.keys(before.vars).length, 109);
   for (const [label, was, is] of [['production', before.vars, now.vars], ['staging', before.env.staging.vars, now.env.staging.vars], ['previews', before.previews.vars, now.previews.vars]]) {
-    for (const [name, value] of Object.entries(was)) assert.deepEqual([label, name, is[name]], [label, name, CHANGED_SINCE[label]?.[name] ?? value]);
+    for (const [name, value] of Object.entries(was)) {
+      // A switch made unconditional or deleted leaves the config and the inventory together (checkInventory).
+      if (!(name in is) && !FLAT_VARS.has(name) && !Object.hasOwn(inventory, name)) continue;
+      assert.deepEqual([label, name, is[name]], [label, name, CHANGED_SINCE[label]?.[name] ?? value]);
+    }
   }
 });

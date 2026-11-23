@@ -67,7 +67,7 @@ Secret names only. No value appears in this repo, in this document or in any com
 | R2 `ARTIFACTS` | bucket `waldo-artifacts` | bucket `waldo-artifacts`, the same name | Its own bucket (P2). On one account the name is the same bucket. |
 | Rate limiter `RESPONSIBILITY_RATE_LIMITER` | namespace `1001`, 120 per 60 s | namespace `1001` | Its own namespace (P2). Same id on one account means shared counters across Workers [cited: [Cloudflare rate limit binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/)]. |
 | Browser Rendering `BROWSER` | bound | forbidden by guard | none (owner ruling) |
-| Workers AI `AI`, Vectorize `VECTORIZE` (`waldo-recall`) | bound | none (guard forbids top level) | none. No source file reads them [source]. |
+| Workers AI `AI`, Vectorize `VECTORIZE` (`waldo-recall`) | bound | none (guard forbids top level) | Undecided. `memory/semantic-recall.ts` reads `AI` (the meaning leg of recall, inert without it); no source file reads `VECTORIZE`. See ruling R9 in [PRODUCTION_DRIFT_2026-11-23.md](PRODUCTION_DRIFT_2026-11-23.md). |
 | Assets | `../dashboard-app/dist` | same | same |
 | Observability | logs on, invocation logs off, query strings redacted, traces off | same | same (guarded) |
 | Routes / custom domain | `staging.heywaldo.in` (custom domain) and `workers.dev`, which webhooks still post to; `WALDO_PUBLIC_ORIGIN` is `https://staging.heywaldo.in` | none | One custom domain with `WALDO_PUBLIC_ORIGIN` set to it (S6, P2). Every stored-origin writer goes through `publicOrigin()` (`connectors/public-origin.ts`), so a second live host cannot flip the owner DO's origin. Browser page loads on another host move to the configured one (`channels/canonical-host.ts`). |
@@ -80,6 +80,8 @@ Cloudflare allows a Worker 128 variables, secrets and text vars counted together
 The table below names each var as the runtime reads it. Identity, origin, provider config and the privacy and security controls the dry run reads stay flat; `scripts/guards/guard-switches-binding.mjs` lists them with their reasons (`FLAT_VARS`). Everything else, every new switch included, goes in `WALDO_SWITCHES`, with the same name, as a string, in both environments.
 
 The guard also caps bindings at 118 per environment: the flat vars plus every secret named in §1.3's table, which is an upper bound on what is deployed (at `1808c6ed` the table named 40 secrets, while Cloudflare counted 32). It refuses a `WALDO_SWITCHES` over 4,500 bytes, under Cloudflare's 5 KB per variable, and any env read that skips the seam: a Durable Object or entrypoint whose constructor does not call `super(ctx, withSwitches(env))`, a default-export handler that does not flatten, `env` imported from `cloudflare:workers`, or `process.env` outside `src/cli`. A new secret needs a row in §1.3, so the count stays honest.
+
+Each switch's disposition (unconditional, kept with a removal date, or delete) is in [SWITCH_INVENTORY.md](SWITCH_INVENTORY.md), and the values production differs on, with a recommendation each, are in [PRODUCTION_DRIFT_2026-11-23.md](PRODUCTION_DRIFT_2026-11-23.md). Where the "Staging" and "Production today" columns below disagree with `wrangler.jsonc`, the config is right.
 
 | Var | Staging | Production today | Production for the alpha |
 | --- | --- | --- | --- |

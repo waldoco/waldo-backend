@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import config from '../wrangler.jsonc?raw';
 import { parseJsonc } from '../../../scripts/jsonc.mjs';
 import { flatVars } from '../../../scripts/wrangler-vars.mjs';
-import { withSwitches } from '../src/switches';
+import { SHIPPED_SWITCHES, declaredSwitch, withSwitches } from '../src/switches';
 
 describe('withSwitches', () => {
   it('gives the Worker every var wrangler.jsonc declares, by name and value, the switches flattened out of WALDO_SWITCHES', () => {
@@ -31,5 +31,16 @@ describe('withSwitches', () => {
     for (const bad of ['{"DEVICE_PLACE":', '[]', 'null', '"on"', ['1'], { DEVICE_PLACE: 1 }, { DEVICE_PLACE: true }, null, 7]) {
       expect(() => withSwitches({ WALDO_SWITCHES: bad }), JSON.stringify(bad)).toThrow(/WALDO_SWITCHES/);
     }
+  });
+});
+
+describe('declaredSwitch', () => {
+  it('reads a declared switch, reads a shipped one as on once it is no longer declared, and reads nothing else', () => {
+    expect(SHIPPED_SWITCHES.has('DEVICE_PLACE')).toBe(true);
+    expect(declaredSwitch({ WALDO_SWITCHES: { DEVICE_PLACE: '0' } }, 'DEVICE_PLACE')).toBe('0');
+    expect(declaredSwitch({ WALDO_SWITCHES: { MEDICATIONS: '0' } }, 'DEVICE_PLACE')).toBe('1');
+    expect(declaredSwitch({}, 'DEVICE_PLACE')).toBe('1');
+    expect(declaredSwitch({ WALDO_SWITCHES: { MEDICATIONS: '0' }, OPENAI_API_KEY: 'sk' }, 'OPENAI_API_KEY')).toBeUndefined();
+    expect(declaredSwitch({ WALDO_SWITCHES: {} }, 'MEDICATIONS')).toBeUndefined();
   });
 });
