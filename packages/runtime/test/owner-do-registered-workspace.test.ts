@@ -118,6 +118,7 @@ async function proof(work: (h: {
           message = `common.owner.${args.p_locator}`; break;
         case 'health_context_read': expect(args.p_do_name).toBe(name); message = `healthctx.read.${name}`; break;
         case 'health_log_recent': expect(args.p_do_name).toBe(name); message = `health.recent.${name}.${args.p_limit}`; break;
+        case 'cost_ledger_add': return Response.json(1);
         default: unexpected.push(url); throw new Error(`local fixture denies unexpected signed RPC: ${fn}`);
       }
       expect(args.p_sig).toBe(await routerSignature(fixtureEnv.WALDO_ROUTER_HMAC_SECRET, args.p_at, message));

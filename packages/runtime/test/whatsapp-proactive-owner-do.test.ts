@@ -59,6 +59,8 @@ beforeEach(() => {
       if (wire.stall && body.text?.body === wire.stall.text) { wire.stall.reached(); await wire.stall.until; }
       return Response.json({ messaging_product: 'whatsapp', contacts: [{ input: body.to, wa_id: body.to.replace(/^\+/, '') }], messages: [{ id: `wamid.out.${wire.wamid}` }] });
     }
+    // The turn's spend, synced to the cost ledger after it.
+    if (url.endsWith('/rest/v1/rpc/cost_ledger_add')) return Response.json(1);
     wire.other.push(url);
     return new Response('unexpected', { status: 500 });
   });

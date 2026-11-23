@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { appSubjectFor } from '../src/channels/app-api';
 import type { AppInboxRecord } from '../src/channels/app-inbox';
 import { claimStore } from '../src/memory/claims';
+import { consentLedger, CURRENT_CONSENT_VERSION } from '../src/onboarding/consent-ledger';
 import { ensureSchema } from '../src/tracer/schema';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 
@@ -38,6 +39,13 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
+// The owner accepted the terms and privacy notice, so the onboarding routes after them are open.
+const agreed = (sql: SqlStorage) => {
+  const consent = consentLedger(sql, { lookupOffered: false });
+  consent.attestAge(1);
+  for (const purpose of ['terms', 'privacy_notice'] as const) consent.grant(purpose, CURRENT_CONSENT_VERSION[purpose], 1);
+};
+
 it('setup answers saved from the app are owner facts in the next app turn\'s system prompt', async () => {
   const name = 'setup-answers-app-owner';
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
@@ -45,6 +53,7 @@ it('setup answers saved from the app are owner facts in the next app turn\'s sys
     ensureSchema(state.storage);
     state.storage.kv.put('do_name', name);
     state.storage.kv.put('app_subject', String(appSubjectFor(name)));
+    agreed(state.storage.sql);
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     const app = (path: string, body: unknown) => owner.fetch(new Request(`https://telegram-owner${path}`, { method: 'POST',

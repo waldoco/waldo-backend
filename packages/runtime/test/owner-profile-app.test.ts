@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { appSubjectFor } from '../src/channels/app-api';
 import type { AppInboxRecord } from '../src/channels/app-inbox';
 import { applyClaimOps, claimStore } from '../src/memory/claims';
+import { consentLedger, CURRENT_CONSENT_VERSION } from '../src/onboarding/consent-ledger';
 import { ensureSchema } from '../src/tracer/schema';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 
@@ -38,11 +39,18 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
+// The owner accepted the terms and privacy notice, so the onboarding routes after them are open.
+const agreed = (sql: SqlStorage) => {
+  const consent = consentLedger(sql, { lookupOffered: false });
+  consent.attestAge(1);
+  for (const purpose of ['terms', 'privacy_notice'] as const) consent.grant(purpose, CURRENT_CONSENT_VERSION[purpose], 1);
+};
 const turnProfile = async (name: string, flag: string | undefined) => runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
   const claims = claimStore(state.storage.sql);
   ensureSchema(state.storage);
   state.storage.kv.put('do_name', name);
   state.storage.kv.put('app_subject', String(appSubjectFor(name)));
+  agreed(state.storage.sql);
   for (const [i, [kind, text]] of [['preference', 'Likes plans written as a short list'], ['health', 'On 22 Oct said resting HR was 52']].entries())
     applyClaimOps(claims, ops([{ kind, text, source: 'stated', evidence: `owner, tg-${i}: "${text}"`, touches_forgotten: false }]), '2026-10-26T04:00:00.000Z', `owner, tg-${i}`, undefined, { owner: text });
   const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);

@@ -7,6 +7,7 @@ import { HEALTH_MEMORY_KEY } from '../src/channels/health-memory';
 import { claimStore } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
+import { consentLedger, CURRENT_CONSENT_VERSION } from '../src/onboarding/consent-ledger';
 import { ensureSchema } from '../src/tracer/schema';
 import type { LLMGatewayRequest } from '../src/llm/provider';
 
@@ -53,11 +54,19 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
+// The owner accepted the terms and privacy notice, so the onboarding routes after them are open.
+const agreed = (sql: SqlStorage) => {
+  const consent = consentLedger(sql, { lookupOffered: false });
+  consent.attestAge(1);
+  for (const purpose of ['terms', 'privacy_notice'] as const) consent.grant(purpose, CURRENT_CONSENT_VERSION[purpose], 1);
+};
+
 it('setup done in the app starts one welcome build for an app-only owner who has not chatted, and it writes Waldo\'s read', async () => {
   const name = `welcome-owner-${crypto.randomUUID()}`;
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql);
     ensureSchema(state.storage);
+    agreed(state.storage.sql);
     state.storage.kv.put('do_name', name);
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
@@ -126,6 +135,7 @@ it('health that lands after the welcome build read none is read once more on the
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql);
     ensureSchema(state.storage);
+    agreed(state.storage.sql);
     state.storage.kv.put('do_name', name);
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
@@ -159,6 +169,7 @@ it('with no upload, the night takes an empty health stage up once more', async (
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql);
     ensureSchema(state.storage);
+    agreed(state.storage.sql);
     state.storage.kv.put('do_name', name);
     // The night runs only once the owner's zone is confirmed.
     state.storage.kv.put('timezone', 'UTC'); state.storage.kv.put('timezone_confirmed', true);
@@ -184,6 +195,7 @@ it('an owner who keeps health out of memory gets a build that reads no health an
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql);
     ensureSchema(state.storage);
+    agreed(state.storage.sql);
     state.storage.kv.put('do_name', name);
     state.storage.kv.put(HEALTH_MEMORY_KEY, false);
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -210,6 +222,7 @@ it('each welcome stage closes its model call\'s trace with a machine root, one t
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql);
     ensureSchema(state.storage);
+    agreed(state.storage.sql);
     state.storage.kv.put('do_name', name);
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const owner = new OwnerDO(state, { ...env, ...directory, ...LANGFUSE, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
