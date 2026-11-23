@@ -438,8 +438,9 @@
     "batch": "memory"
   },
   "WALDO_ASYNC_TOOLS": {
-    "disposition": "unconditional",
-    "batch": "tasks"
+    "disposition": "kept",
+    "reason": "Unfinished: on, owner turns lose browse_page, browse_act, read_drive and delegate_task, and the owner-browser custody, stop-fencing and desk-approval tests drive browse_act from an owner turn. Rewrite those proofs through task workers, then make it unconditional.",
+    "removeBy": "2026-12-31"
   },
   "WALDO_LEAN_SCHEDULED": {
     "disposition": "unconditional",
