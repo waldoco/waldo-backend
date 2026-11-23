@@ -50,8 +50,8 @@
   // results kept, and standing-order and quest characters. Each is fixed per deploy so the cached prefix holds; a value that
   // is not a valid size reads as its default.
   // WALDO_LEAN_SCHEDULED: "1" sends a Waldo-first scheduled run (a day card, a loop check-back, an update sweep, an
-  // intervention) its own event, the composed context and the last six rows of the owner's exchange instead of the chat
-  // replay, offers every such run one tool menu (each still calls only its own) so the cached head is shared, keeps that
+  // intervention) its own event, the composed context, the owner's exchange and the day's sends within the chat's history
+  // budget instead of the chat replay, offers every such run one tool menu (each still calls only its own) so the cached head is shared, keeps that
   // head an hour, and gives the day plan and wake decision the shared health block; "0" is the rollback.
   // WALDO_TIMEZONE_ASK: "1" tells a turn whose time zone the owner has not confirmed to ask for it when it fits; "0" is the
   // rollback.

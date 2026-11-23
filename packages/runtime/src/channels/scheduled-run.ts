@@ -1,6 +1,7 @@
 import { conversationModelMessages, type ConversationEntry, type ConversationModelMessage, type ConversationTree, type ToolName } from '@waldo/contracts';
 import { LOOP_CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS } from './check-back';
 import { toolsWhere } from '../tools/records';
+import { windowModelMessages } from '../conversation/window';
 import type { FinalRecord } from './telegram-final-outbox';
 
 // A Waldo-first scheduled run (a day card, a loop check-back, an update sweep, an intervention) offers this one menu whatever
@@ -22,22 +23,6 @@ export const SCHEDULED_MENU: readonly ToolName[] = [...new Set<ToolName>([...LOO
 export const fitsScheduledMenu = (tools: readonly string[] | undefined): tools is readonly ToolName[] =>
   tools !== undefined && tools.every((name) => OWNER_TURN_ONLY.has(name as ToolName) || (SCHEDULED_MENU as readonly string[]).includes(name));
 
-// What a scheduled run reads of the conversation instead of the chat replay, chosen by where each row came from, never by
-// matching a reply's text: a scheduled run's own answer (a card, a sweep's or an intervention's decision) is the model's raw
-// output, not what the owner received, so it is never read here whatever its shape.
-// - The owner's exchange: the owner's last messages, each with the answer to it.
-// - What Waldo sent: the messages the owner object's outbox delivered to the owner (host-supplied).
-// Counted apart, so neither crowds the other out.
-export const RECENT_OWNER_MESSAGES = 3;
-// The most of Waldo's sent messages a run reads: a day's worth (the day cards, the looks, the follow-ups), so a look can see
-// what it already said hours ago behind the cards that went since.
-export const RECENT_SENT_MESSAGES = 8;
-// The newest are read whole; older ones of the day only by their opening, enough to know it was said.
-export const WHOLE_SENT_MESSAGES = 3;
-export const OLDER_SENT_MAX_CHARS = 300;
-// Enough of each row for its gist, so one long Brief does not fill the run. Rows are cut as they are rendered, after the forget
-// barrier has judged them whole, so a cut can never split a held topic past it.
-export const RECENT_ROW_MAX_CHARS = 1_500;
 // What a run Waldo started is told about the rest of the owner's history, which it reads with its own tools when the work
 // needs it: whether to look, and for what, is the model's call.
 export const LOOK_BACK = 'Only the newest of your conversation with the owner is shown here. Everything they said before, on every surface (the app, WhatsApp, email, iMessage), is in search_episodes, and what you know about them is in read_memory. When this work touches something the owner may have talked about before (a project, a person, a plan, a promise), search for it before you write, and use what you find.';
@@ -46,40 +31,46 @@ const shown = (entry: ConversationEntry) => entry.role !== 'compaction' && entry
 // Rows written before roles were stored name their reply by id.
 const roleOf = (entry: ConversationEntry) => entry.role ?? (entry.id.endsWith('-reply') ? 'assistant' : 'user');
 
-export const recentExchange = (tree: ConversationTree, currentId: string): Readonly<{ messages: readonly ConversationModelMessage[]; readOutside: boolean }> => {
+// What a scheduled run reads of the conversation instead of the chat replay, chosen by where each row came from, never by
+// matching a reply's text: a scheduled run's own answer (a card, a sweep's or an intervention's decision) is the model's raw
+// output, not what the owner received, so it is never read here whatever its shape.
+// - The owner's exchange: the owner's messages, each with the answer to it.
+// - What Waldo sent: the messages the owner object's outbox delivered to the owner in the last day (host-supplied).
+// Both are held to the history budget a chat turn's conversation is held to, so a run Waldo starts sees as much of the owner's
+// conversation as their own turn does. The day's sends are read first, so a long chat never pushes out what Waldo already said
+// today; the exchange takes the rest of the budget, newest first. Rows are read whole, as chat reads them.
+const recentExchange = (tree: ConversationTree, currentId: string, budgetTokens: number): Readonly<{ messages: readonly ConversationModelMessage[]; readOutside: boolean }> => {
+  if (budgetTokens <= 0) return { messages: [], readOutside: false };
   const before = tree.path(currentId).slice(0, -1).filter(shown);
-  const asked = before.filter((entry) => roleOf(entry) === 'user' && entry.inputOrigin === 'owner').slice(-RECENT_OWNER_MESSAGES);
-  const ids = new Set(asked.map((entry) => entry.id));
-  const kept = before.filter((entry) => ids.has(entry.id) || (roleOf(entry) === 'assistant' && entry.parentId !== null && ids.has(entry.parentId)));
-  return { messages: conversationModelMessages(kept), readOutside: kept.some((entry) => entry.readOutside === true) };
+  const asked = new Set(before.filter((entry) => roleOf(entry) === 'user' && entry.inputOrigin === 'owner').map((entry) => entry.id));
+  const kept = before.filter((entry) => asked.has(entry.id) || (roleOf(entry) === 'assistant' && entry.parentId !== null && asked.has(entry.parentId)));
+  const messages = windowModelMessages(conversationModelMessages(kept), budgetTokens).messages;
+  // Only the rows the window kept can carry what Waldo read elsewhere into this run.
+  const shownRows = kept.slice(kept.length - messages.length);
+  return { messages, readOutside: shownRows.some((entry) => entry.readOutside === true) };
 };
 
-// Cut on a whole code point, so a cut never leaves half a surrogate pair.
-const gist = (text: string, max = RECENT_ROW_MAX_CHARS): string => {
-  if (text.length <= max) return text;
-  const end = /[\uD800-\uDBFF]/.test(text[max - 1]!) ? max - 1 : max;
-  return `${text.slice(0, end)}…`;
+export type SentMessage = Readonly<{ at: number; text: string }>;
+export type LeanWindow = Readonly<{ exchange: ReturnType<typeof recentExchange>; sent: readonly SentMessage[] }>;
+export const leanWindow = (tree: ConversationTree, currentId: string, sent: readonly SentMessage[], budgetTokens: number): LeanWindow => {
+  const sentWindow = sent.length ? windowModelMessages(sent.map((message) => ({ role: 'assistant' as const, content: message.text })), budgetTokens) : null;
+  const keptSent = sentWindow ? sent.slice(sent.length - sentWindow.messages.length) : [];
+  return { sent: keptSent, exchange: recentExchange(tree, currentId, budgetTokens - (sentWindow?.stats.estimated_tokens ?? 0)) };
 };
 
 export const recentExchangeText = (messages: readonly ConversationModelMessage[]): string =>
-  messages.map((message) => `${message.role === 'assistant' ? 'Waldo' : 'Owner'}: ${gist(message.content)}`).join('\n');
+  messages.map((message) => `${message.role === 'assistant' ? 'Waldo' : 'Owner'}: ${message.content}`).join('\n');
 
 export const sentText = (sent: readonly Readonly<{ at: string; text: string }>[]): string =>
-  sent.map((message) => `[${message.at}] ${gist(message.text)}`).join('\n');
+  sent.map((message) => `[${message.at}] ${message.text}`).join('\n');
 
 // What the outbox delivered to the owner in the last day, oldest first: a surface's confirmation (delivered), or its acceptance
-// where it confirms arrival later (WhatsApp). A record a forget reached is not read.
-// day (OWNER_CLOSES_MAIL_ITEMS): the whole day's sends, so a look does not say again what it said before the cards that went
-// since, and also a send whose arrival is unknown (a part went out but no confirmation came): the owner may have read it, so it
-// counts as said, marked as unconfirmed. Without it, the newest whole messages only, confirmed or accepted.
+// where it confirms arrival later (WhatsApp), and a send whose arrival is unknown (a part went out but no confirmation came): the
+// owner may have read it, so it counts as said, marked as unconfirmed. A record a forget reached is not read.
 const SENT_WITHIN_MS = 24 * 3_600_000;
 export const UNCONFIRMED_MARK = '(delivery not confirmed) ';
-export const deliveredLately = (records: readonly FinalRecord[], now: number, day = false): readonly Readonly<{ at: number; text: string }>[] => {
-  const said = records.filter((record) => (record.status === 'delivered' || record.status === 'accepted' || (day && record.status === 'quarantined'))
+export const deliveredLately = (records: readonly FinalRecord[], now: number): readonly SentMessage[] =>
+  records.filter((record) => (record.status === 'delivered' || record.status === 'accepted' || record.status === 'quarantined')
     && !record.forgotten && record.payload.text.trim() !== '' && now - (record.deliveredAt ?? record.createdAt) < SENT_WITHIN_MS)
     .map((record) => ({ at: record.deliveredAt ?? record.createdAt, text: `${record.status === 'quarantined' ? UNCONFIRMED_MARK : ''}${record.payload.text}` }))
     .sort((a, b) => a.at - b.at);
-  if (!day) return said.slice(-WHOLE_SENT_MESSAGES);
-  const kept = said.slice(-RECENT_SENT_MESSAGES);
-  return kept.map((message, index) => index < kept.length - WHOLE_SENT_MESSAGES ? { ...message, text: gist(message.text, OLDER_SENT_MAX_CHARS) } : message);
-};

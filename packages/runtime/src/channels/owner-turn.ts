@@ -74,7 +74,7 @@ import { toolOutputLedger } from '../conversation/tool-output-ledger';
 import { replyGate, withReplyStream } from '../conversation/reply-gate';
 import { recordSharedHealth, type TrailRead } from '../tools/why-trail';
 import { localIso } from './reminders';
-import { fitsScheduledMenu, LOOK_BACK, LOOK_BACK_DIRECT, RECENT_SENT_MESSAGES, recentExchange, recentExchangeText, SCHEDULED_DIRECT, SCHEDULED_MENU, sentText } from './scheduled-run';
+import { fitsScheduledMenu, leanWindow, LOOK_BACK, LOOK_BACK_DIRECT, recentExchangeText, SCHEDULED_DIRECT, SCHEDULED_MENU, sentText } from './scheduled-run';
 
 const TURN_ONLY_OUTPUT = JSON.stringify({ retained: false, reason: 'turn_only_output' });
 // What find_tools returned, or a tool outside the core list the model reached by name: either stays offered next turn.
@@ -811,8 +811,9 @@ export const createOwnerResponder = (
           // A lean scheduled run reads the owner's own exchange and what Waldo delivered to the owner instead of the replayed
           // chain (scheduled-run.ts). The current message rides last in each so the barrier, which always keeps a view's last
           // message, judges every row before it. Delivered messages may carry what Waldo read elsewhere, so they read as outside.
-          const recent = leanRun ? recentExchange(tree, trace) : undefined;
-          const sent = leanRun ? (privateOwner?.waldoSent?.() ?? []).slice(-RECENT_SENT_MESSAGES) : [];
+          const lean = leanRun ? leanWindow(tree, trace, privateOwner?.waldoSent?.() ?? [], compaction.budgetTokens) : undefined;
+          const recent = lean?.exchange;
+          const sent = lean?.sent ?? [];
           if (sent.length) (loopCtx as { carriedOutside?: boolean }).carriedOutside = true;
           if (recent?.readOutside) (loopCtx as { carriedOutside?: boolean }).carriedOutside = true;
           const cut = applyForgetBarrier({
