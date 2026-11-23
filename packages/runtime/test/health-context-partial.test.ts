@@ -279,7 +279,7 @@ describe('the last scored day when the newest row has no Recovery', () => {
     expect(block.startsWith('Partial health context:')).toBe(true);
     expect(block).toMatch(/Day summary:.*yesterday.*Recovery solid/);
     expect(block).toMatch(/Day summary:.*Load moderate/);
-    expect(block).toContain('no sleep was recorded for the night');
+    expect(block).toContain('no sleep has arrived for the night, either unrecorded or not synced yet');
     expect(block).not.toMatch(/\d/);
     expect(block).not.toMatch(/Recovery zone|Form zone/);
     const input = JSON.stringify([{ role: 'system', content: `Before.\n\n${block}\n\nAfter.` }]);
