@@ -556,11 +556,12 @@ export const reviewMailFollowup = async (deps: Readonly<{
   if (!deps.allowed) return false;
   const loop = deps.loops.reviewDue(localIso(deps.now + 60 * 60_000, deps.timezone).slice(0, 16), deps.timezone, deps.now)[0];
   if (!loop?.source_ref || !loop.due) return false;
-  const { mailFollowupPrompt, SKIP_UPDATE } = await import('../prompt/update-cards');
+  const { mailFollowupPrompt } = await import('../prompt/update-cards');
+  const { sendsNothing } = await import('../conversation/run-end');
   const text = (await deps.prompt(mailFollowupPrompt(localIso(deps.now, deps.timezone), loop, await deps.ledger()))).trim();
   const receipt = { loopId: loop.id, due: loop.due, sourceRef: loop.source_ref, timezone: deps.timezone, messageId: loop.source_message_id! };
   if (!deps.loops.reviewEligible(receipt, deps.timezone)) return false;
-  if (!text || text === SKIP_UPDATE) { deps.loops.reviewSkipped(receipt, deps.now); return false; }
+  if (!text || sendsNothing(text)) { deps.loops.reviewSkipped(receipt, deps.now); return false; }
   await deps.enqueue(text, receipt);
   return true;
 };

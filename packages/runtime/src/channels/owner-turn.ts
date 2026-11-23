@@ -19,6 +19,7 @@ import type { ConversationModelMessage, RunOrigin } from '@waldo/contracts';
 import { BUDGET_CHARS_PER_TOKEN, MODEL_CONTEXT_MAX_CHARS, PLANNING_EFFORT } from '@waldo/contracts';
 import { PROBE_STRIPPED_TOOLS } from './probe-turn';
 import { runToolLoop, type ToolLoopEvent } from '../conversation/tool-loop';
+import { END_RUN_TOOL } from '../conversation/run-end';
 import { healthInContext } from '../conversation/health-fence';
 import { proposalApplied, turnReceipt } from '../hooks/receipt-line';
 import { THREAD_TITLE_FORMAT, THREAD_TITLE_INSTRUCTION, threadOfChain } from './app-threads';
@@ -98,7 +99,7 @@ const SHARED_HEALTH_LABEL = "Shared health today (derived by the app from the ow
 const NO_DIRECT: ReadonlySet<string> = new Set();
 // Tools a run holds whatever its job names: a reviewed procedure reaches nothing, and read_tool_output pages only this run's
 // own stored results, which its other tools' answers point at.
-export const EVERY_RUN_TOOLS: readonly string[] = ['skills_load', 'read_tool_output'];
+export const EVERY_RUN_TOOLS: readonly string[] = ['skills_load', 'read_tool_output', END_RUN_TOOL];
 const EXTERNAL_REACH_TOOLS = new Set(['execute_action', 'delete_message', 'restore_message']);
 export const ownerToolApproval = ({ tool }: { tool: string }): boolean => !EXTERNAL_REACH_TOOLS.has(tool);
 export const OWNER_TURN_ONLY_TOOLS: ReadonlySet<string> = toolsWhere((record) => record.ownerTurnOnly);
@@ -588,7 +589,7 @@ export const createOwnerResponder = (
       // The owner's workspace opens only inside a live owner run's scope (owner-do openWorkspace), so a run that holds every tool
       // without one (the owner's reminder) is not offered workspace tools it could never run.
       const workspaceShut = offered === undefined && !ownerTurnActive && activeOwnerTurn === undefined && privateRunScope === undefined;
-      const { handlers: admittedHandlers, report: eligibility } = await eligibleHandlers(handlers.filter(handler => (offered === undefined || offered.includes(handler.name) || handler.name === 'skills_load' || (handler.name === 'read_tool_output' && pointsBack)) && (!OWNER_TURN_ONLY_TOOLS.has(handler.name) || activeOwnerTurn !== undefined) && !(workspaceShut && WORKSPACE_TOOLS.has(handler.name)) && !(asyncTools() && OWNER_TURN_LONG_TOOLS.has(handler.name)) && (!['remember', 'forget_memory'].includes(handler.name) || (activeOwnerTurn ? activeOwnerTurn.memoryWrites !== false : handler.name === 'remember' && !ownerTurnActive && backgroundToolNames !== undefined) && !probeGuard?.suppressMemory)));
+      const { handlers: admittedHandlers, report: eligibility } = await eligibleHandlers(handlers.filter(handler => (offered === undefined || offered.includes(handler.name) || handler.name === 'skills_load' || handler.name === END_RUN_TOOL || (handler.name === 'read_tool_output' && pointsBack)) && (handler.name !== END_RUN_TOOL || !ownerTurnActive) && (!OWNER_TURN_ONLY_TOOLS.has(handler.name) || activeOwnerTurn !== undefined) && !(workspaceShut && WORKSPACE_TOOLS.has(handler.name)) && !(asyncTools() && OWNER_TURN_LONG_TOOLS.has(handler.name)) && (!['remember', 'forget_memory'].includes(handler.name) || (activeOwnerTurn ? activeOwnerTurn.memoryWrites !== false : handler.name === 'remember' && !ownerTurnActive && backgroundToolNames !== undefined) && !probeGuard?.suppressMemory)));
       await assertCurrent();
       const turnDirect: ReadonlySet<string> = new Set([...backgroundDirect, ...(privateOwner?.promotedTools?.() ?? [])]);
       if (eligibility.not_connected + eligibility.not_configured + eligibility.check_failed > 0) log({ trace, hop: 'tool_eligibility', ms: Date.now() - eligibilityStarted, ok: true, detail: `not_connected=${eligibility.not_connected} not_configured=${eligibility.not_configured} check_failed=${eligibility.check_failed}` });
@@ -932,6 +933,9 @@ export const createOwnerResponder = (
           if (event.call.name === 'read_memory' && event.ok) for (const claim of readClaimIds(event.output)) usedClaims.add(claim);
           if (!loaded) pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: event.taint, origin: ownerTurnActive && !probeGuard?.stripLiveTools ? 'owner' : 'machine', summary: turnOnlyOutput.has(event.call.name) ? TURN_ONLY_OUTPUT : event.output, ...(thread ? { thread } : {}) });
         },
+        // How the run closed, on every return: the root hop's outcome alone cannot tell a run that chose silence from one that
+        // had nothing to say.
+        onRunEnd: (end) => log({ trace, hop: 'run_end', ms: 0, ok: end.reason !== 'no_reply', code: end.reason, ...(end.why ? { detail: end.why } : {}) }),
         ...(offerConnect ? { onConnect: offerConnect } : {}),
       });
     },

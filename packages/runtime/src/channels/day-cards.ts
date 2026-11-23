@@ -3,7 +3,8 @@ import { appWhy, storedWhy } from '../tools/why-trail';
 import { whyCarries } from './approvals';
 import type { AppWhyV1 } from '../../../contracts/src/app/why';
 import { turnMemoryPrompt, type ClaimStore } from '../memory/claims';
-import { DAY_CARDS, dayCardPrompt, SKIP_CARD, type CardId, type DayCard } from '../prompt/day-cards';
+import { DAY_CARDS, dayCardPrompt, type CardId, type DayCard } from '../prompt/day-cards';
+import { sendsNothing } from '../conversation/run-end';
 import { calendarPromptProjection, type CalendarItem, type GoogleClient } from '../connectors/google';
 import { QUARANTINE_AFTER_ATTEMPTS, type Scheduler } from '../scheduler/multiplexer';
 import { ModelUnavailableError } from '../llm/provider';
@@ -589,7 +590,7 @@ export const composeDayCard = async (
   return build({ ledger: '', today: '', updates: '' });
 };
 
-export const isSkip = (text: string): boolean => text.trim() === SKIP_CARD;
+export const isSkip = sendsNothing;
 
 // The Main chat row each card was delivered to is kept on its day_plan row. A build before that kept today's in one KV
 // entry, which is still read for its own day, so the day it deploys keeps the cards delivered before it.
