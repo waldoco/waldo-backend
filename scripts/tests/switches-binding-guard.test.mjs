@@ -99,6 +99,7 @@ test('every handler of the Worker\'s default export flattens its env', () => {
 // which a later change set on purpose.
 const BEFORE_MOVE = '1808c6ed83c9d84be2b4ae36ad05e9d27343b772';
 const CHANGED_SINCE = {
+  production: { WALDO_MODEL_PROVIDER: 'anthropic' },
   staging: { OPEN_SIGNUP: '1', PHONE_SMS_VERIFY: '1', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en', MEDICATIONS: '1',
     WHATSAPP_PROACTIVE_TEMPLATE: 'waldo_proactive_update', WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE: 'en', OPEN_SIGNUP_SPEND_CEILING_USD: '50' },
 };
@@ -111,6 +112,8 @@ test('the move kept every var the Worker reads, by name and value, in both envir
     for (const [name, value] of Object.entries(was)) {
       // A switch made unconditional or deleted leaves the config and the inventory together (checkInventory).
       if (!(name in is) && !FLAT_VARS.has(name) && !Object.hasOwn(inventory, name)) continue;
+      // A production switch that now equals staging's was aligned on purpose (docs/ops/PRODUCTION_DRIFT_2026-11-23.md).
+      if (label === 'production' && !FLAT_VARS.has(name) && is[name] === now.env.staging.vars[name]) continue;
       assert.deepEqual([label, name, is[name]], [label, name, CHANGED_SINCE[label]?.[name] ?? value]);
     }
   }
