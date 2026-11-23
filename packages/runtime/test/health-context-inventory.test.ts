@@ -139,7 +139,7 @@ describe('the health inventory in words', () => {
 // model's call; these check only that it is told.
 describe('how fresh the body data is, in the block', () => {
   const at = (iso: string) => ({ timezone: TZ, now: () => new Date(Date.parse(iso)) });
-  const scored = (day: string, compiledAt: string): HealthContextRow => ({ ...FULL_ROW, context: { ...FULL_ROW.context, id: `ctx-${day}`, day, compiled_at: compiledAt } });
+  const scored = (day: string, compiledAt: string): HealthContextRow => ({ ...FULL_ROW, context: { ...FULL_ROW.context!, id: `ctx-${day}`, day, compiled_at: compiledAt } });
   const blockAt = async (clockAt: ReturnType<typeof at>, row: HealthContextRow, kinds: readonly { signal: string; newest_at: string; days: number }[]) => {
     const call = async (fn: string) => (fn === 'health_context_read' ? row : { sources: [{ source: 'apple', kinds }] });
     return renderHealth(readable(await healthContextBook(call, 'do-x', clockAt, undefined, undefined, { partial: true, inventory: true }).latest()));
