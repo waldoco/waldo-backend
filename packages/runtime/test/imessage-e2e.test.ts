@@ -38,6 +38,7 @@ import { reconnectNoticeText } from '../src/connectors/google-reconnect';
 import { CONNECT_BUTTON_SENT } from '../src/tools/live/connect-text';
 import { unfinishedReply } from '../src/conversation/tool-loop';
 import { MAIL_ONLY_GOOGLE } from './helpers/google-grant';
+import { AUTONOMY_OFF } from './helpers/autonomy-off';
 
 // Scripted model: every non-structured responses.create call is one owner turn.
 // A progress_note call is the progress writer: it answers the next scripted note, after progressHold if one is set.
@@ -208,6 +209,8 @@ it('a signed direct message runs one genuine owner turn and its frozen reply rea
 // An owner turn that proposes moving the 3pm: the numbered card goes out on iMessage ahead of the turn's reply, and both
 // are delivered. Runs under a faked Date the caller set to t0.
 const cardTurn = async (w: Awaited<ReturnType<typeof world>>, t0: number) => {
+  // The card is the approval path, which runs only with the autonomy switches off; the Worker config this owner was built from has them on.
+  await runInDurableObject(w.ownerStub, async instance => { Object.assign((instance as unknown as { env: object }).env, AUTONOMY_OFF); });
   await runInDurableObject(w.ownerStub, async (_i, state) => { await state.storage.put('origin', 'https://imessage.fixture.invalid'); await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', scopes: null, refresh_token: 'fictional-not-a-token' }]); });
   proof.outputs.push([{ type: 'function_call', call_id: 'move-3pm', name: 'propose_calendar_change', arguments: JSON.stringify({ action: 'move', event_id: 'ev-3pm', title: 'Design review', start: '2030-01-02T16:00:00Z', end: '2030-01-02T17:00:00Z', reason: 'Owner asked to move it to 4' }) }], []);
   await replyFor(w, 'Move my 3pm to 4');

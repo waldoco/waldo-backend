@@ -11,6 +11,15 @@ import { IMessageOwnerInbox } from '../src/channels/imessage/owner-inbox';
 import { HEALTH_SPAN_MARKER } from '../src/scribe/sanitiser';
 import { fixtureDirectory, type FixtureOwner } from './helpers/imessage-fixture-directory';
 import { SimulatedHost, type Delivery } from './helpers/imessage-sim-host';
+import { AUTONOMY_OFF } from './helpers/autonomy-off';
+// The cards below prove the approval path, which runs only with the autonomy switches off. The Worker builds each owner object
+// from its own bindings, so the off set is laid over them here for every owner object in this file.
+vi.mock('../src/channels/owner-do', async load => {
+  const original = await load<typeof import('../src/channels/owner-do')>();
+  return { ...original, OwnerDO: class extends original.OwnerDO {
+    constructor(ctx: DurableObjectState, env: ConstructorParameters<typeof original.OwnerDO>[1]) { super(ctx, { ...env, ...AUTONOMY_OFF }); }
+  } };
+});
 
 // tools: each owner model call's tool names. before: work run at the start of the next owner model calls, in order.
 const proof = vi.hoisted(() => ({ turns: [] as string[], tools: [] as string[][], reply: 'Scripted owner reply.', outputs: [] as any[][], before: [] as (() => Promise<unknown>)[] }));
