@@ -307,15 +307,7 @@ describe('the health-only note on the owner object', () => {
     }
   });
 
-  it('holds the note, before any model call, once the Close has gone out or the owner turned update cards off', async () => {
-    await withOwner(async ({ state, pass, notify }) => {
-      dayPlanBook(state.storage.sql).sent('2026-10-21', 'card:close');
-      await notify();
-      await pass();
-      expect([notices().length, queued(state)]).toEqual([0, []]);
-      expect(runs(state)).toMatchObject([{ outcome: 'notice_held' }]);
-    }, ON);
-    fixture.requests = [];
+  it('holds the note, before any model call, once the owner turned update cards off', async () => {
     await withOwner(async ({ state, pass, notify }) => {
       loopBook(state.storage.sql, { newId: () => 'fixture', now: () => Date.now() }).setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', followups: false });
       await notify();

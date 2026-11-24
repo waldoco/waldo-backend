@@ -82,10 +82,11 @@ describe('an event notification to a directory-backed owner', () => {
 
   // The egress gate must keep failing closed on the event route exactly as it does for replies. The directory
   // call count tells the branches apart: the local checks block without a call, the presence recheck makes one.
-  // A blocked send never left the Worker, so the event is recorded as not sent, and the blocked line names the branch.
-  const refusals: ReadonlyArray<readonly [string, Record<string, string | boolean>, () => void, number, EgressBlock]> = [
-    ['no Telegram subject is bound (owner resolves to 0)', { do_name: 'do-x' }, () => { directory.presences.add(presence('do-x', '7')); }, 0, 'owner_unbound'],
-    ['the owner unlinked Telegram', { do_name: 'do-x', telegram_subject: '7', telegram_unlinked: true }, () => { directory.presences.add(presence('do-x', '7')); }, 0, 'unlinked'],
+  // A blocked send never left the Worker, so the event is recorded as not sent, and the blocked line names the branch. An
+  // owner not linked on Telegram is not reached there at all: the event goes to the app, which no directory admits here.
+  const refusals: ReadonlyArray<readonly [string, Record<string, string | boolean>, () => void, number, EgressBlock | null]> = [
+    ['no Telegram subject is bound (owner resolves to 0)', { do_name: 'do-x' }, () => { directory.presences.add(presence('do-x', '7')); }, 0, null],
+    ['the owner unlinked Telegram', { do_name: 'do-x', telegram_subject: '7', telegram_unlinked: true }, () => { directory.presences.add(presence('do-x', '7')); }, 0, null],
     ['the directory says the subject was rebound away', { do_name: 'do-x', telegram_subject: '7' }, () => undefined, 1, 'presence_inactive'],
     ['the directory is unreachable', { do_name: 'do-x', telegram_subject: '7' }, () => { directory.outage = true; }, 1, 'presence_unavailable'],
     ['the DO has no do_name to assert presence for', { telegram_subject: '7' }, () => undefined, 0, 'presence_inactive'],
@@ -96,7 +97,7 @@ describe('an event notification to a directory-backed owner', () => {
     expect(wire.sends).toEqual([]);
     expect(directory.asked).toBe(directoryCalls);
     expect(outcome.hops).toEqual([
-      { hop: 'telegram_send', ok: false, skipped: 'blocked', method: 'sendMessage', reason },
+      ...(reason ? [{ hop: 'telegram_send', ok: false, skipped: 'blocked', method: 'sendMessage', reason }] : []),
       expect.objectContaining({ hop: 'event_ingress', ok: false, code: 'notification_blocked' }),
     ]);
   });

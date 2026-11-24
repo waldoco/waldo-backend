@@ -91,18 +91,18 @@ describe('whatsapp ingress normalization', () => {
 });
 
 describe('whatsapp telegram shim', () => {
-  it('sendMessage maps to a Cloud API text send; approval buttons flatten to reply instructions', async () => {
+  it('sendMessage maps to a Cloud API text send; approval buttons no interactive form holds flatten to reply instructions', async () => {
     const graph = vi.fn(async () => Response.json({ messages: [{ id: 'wamid.out' }] }));
     const shim = whatsappTelegramShim('tok', 'pn1', '15550001111', graph as unknown as typeof fetch);
     await shim('sendMessage', {
       chat_id: 15550001111, text: 'Send this email?',
-      reply_markup: { inline_keyboard: [[{ text: 'Send it', callback_data: 'a:p1' }, { text: 'Not now', callback_data: 's:p1' }]] },
+      reply_markup: { inline_keyboard: [[{ text: 'Send it to the whole list', callback_data: 'a:p1' }, { text: 'Not now', callback_data: 's:p1' }]] },
     });
     const [url, init] = graph.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('https://graph.facebook.com/v26.0/pn1/messages');
     const body = JSON.parse(String(init.body));
     expect(body.to).toBe('+15550001111');
-    expect(body.text.body).toBe('Send this email?\n\n- Send it: reply "a:p1"\n- Not now: reply "s:p1"');
+    expect(body.text.body).toBe('Send this email?\n\n- Send it to the whole list: reply "a:p1"\n- Not now: reply "s:p1"');
     expect(JSON.stringify(body)).not.toContain('tok');
   });
 

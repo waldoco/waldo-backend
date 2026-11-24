@@ -80,8 +80,8 @@ beforeEach(() => {
     if (fn === 'assert_channel_presence') return Response.json(true);
     if (fn === 'health_context_read') return Response.json(null);
     if (url === 'https://graph.facebook.com/v26.0/fictional-phone-id/messages') {
-      const body = JSON.parse(String(init?.body)) as { to: string; type: string; template?: { name: string }; text?: { body: string } };
-      const event = body.type === 'template' ? `template:${body.template!.name}` : `text:${body.text!.body}`;
+      const body = JSON.parse(String(init?.body)) as { to: string; type: string; template?: { name: string }; text?: { body: string }; interactive?: { body: { text: string } } };
+      const event = body.type === 'template' ? `template:${body.template!.name}` : body.type === 'interactive' ? `card:${body.interactive!.body.text}` : `text:${body.text!.body}`;
       wire.wamid += 1;
       wire.events.push(event); wire.ids.set(event, `wamid.out.${wire.wamid}`);
       return Response.json({ messaging_product: 'whatsapp', contacts: [{ input: body.to, wa_id: body.to.replace(/^\+/, '') }], messages: [{ id: `wamid.out.${wire.wamid}` }] });
@@ -93,7 +93,8 @@ afterEach(() => { vi.unstubAllGlobals(); });
 
 type Approval = { id: string; kind: string; status: string };
 type Shown = { surface: string; message_ref: string; approvable: number; presented_at: number };
-const isCard = (id: string) => (event: string) => event.startsWith('text:Send this email?') && event.includes(`waldo://approvals/${id}`);
+// A card goes out with its choices to tap.
+const isCard = (id: string) => (event: string) => event.startsWith('card:Send this email?') && event.includes(`waldo://approvals/${id}`);
 
 // Unless a test says otherwise the owner last wrote 30 hours ago, so the window is closed. Today's cards are already planned, so
 // the runtime's boot neither plans nor arms them: only the standing order fires.

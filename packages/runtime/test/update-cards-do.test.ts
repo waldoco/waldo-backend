@@ -91,7 +91,7 @@ vi.mock('../src/channels/telegram-api', async load => {
 });
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
-  return { ...original, createTelegramResponder: () => ({ prompt: async (_id: string, _chat: number, text: string) => { updateFixture.prompts.push(text); return 'Calendar update: Lunch added.'; } }) };
+  return { ...original, createTelegramResponder: () => ({ prompt: async (_id: string, _chat: number, text: string) => { updateFixture.prompts.push(text); return JSON.stringify({ say: 'Calendar update: Lunch added.' }); } }) };
 });
 const { OwnerDO: UpdateOwner } = await import('../src/channels/owner-do');
 const { loopBook: updateLoops } = await import('../src/channels/loops');
@@ -116,11 +116,12 @@ it.each(['normal', 'low', 'quiet', 'off', 'closed'] as const)('updates without a
       updateFixture.changed = true;
       await runtime.updateCheck('changed');
       // Only an open gate writes a sweep job; its worker reports (stood in for here), the next pass applies it, and the pass
-      // after sends the card it queued.
-      expect(reportMachineJobs(state.storage.sql)).toHaveLength(mode === 'normal' ? 1 : 0);
+      // after sends the card it queued. A Close already sent holds nothing.
+      const open = mode === 'normal' || mode === 'closed';
+      expect(reportMachineJobs(state.storage.sql)).toHaveLength(open ? 1 : 0);
       await applyAndSend(owner as unknown as { alarm(): Promise<void> }, state.storage.kv);
       expect(updatePlans(state.storage.sql).read('2026-10-08').some(row => row.card === 'card:brief' && row.sent)).toBe(false);
-      expect(updateFixture.sent.filter(text => text === 'Calendar update: Lunch added.')).toHaveLength(mode === 'normal' ? 1 : 0);
+      expect(updateFixture.sent.filter(text => text === 'Calendar update: Lunch added.')).toHaveLength(open ? 1 : 0);
       // The card goes through the final outbox, whose payload carries no buttons, and counts as pushed once delivered.
       if (mode === 'normal') {
         expect(updateFixture.markups).toEqual([undefined]);
