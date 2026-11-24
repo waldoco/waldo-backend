@@ -71,7 +71,7 @@ it.each([
       state.storage.kv.put('timezone_confirmed', true);
       await state.storage.put('origin', 'https://fixture.invalid');
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
-      const owner = new OwnerDO(state, { ...env, ...directory, CALENDAR_GROUNDED_PREP: '1', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture',
+      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture',
         WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', WALDO_OWNER_TELEGRAM_ID: undefined, GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' }) as unknown as Owner;
       await owner.setup('app').ready;
       const sweep = async () => {

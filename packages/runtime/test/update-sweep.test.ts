@@ -363,9 +363,9 @@ describe('the owner turning the sweep off', () => {
 // With the day state the apply turn answers with typed effects: revise a day card that already reached the owner, say an
 // update, push with either, or nothing. Code holds the owner's quiet hours and which cards reached them; the model judges
 // what is worth it.
-type DayApply = Apply & Readonly<{ effects: { id: string; text: string; revision?: string; push?: string; inPlace?: true }[]; chose: string[]; quiet: { on: boolean }; named: { on: boolean }; settled: { n: number } }>;
+type DayApply = Apply & Readonly<{ effects: { id: string; text: string; revision?: string; push?: string; inPlace?: true }[]; chose: string[]; quiet: { on: boolean }; settled: { n: number } }>;
 const applyingDay = (h: Harness, delivered: readonly string[] = ['card:brief'], surface = 'app'): DayApply => {
-  const turns: Apply['turns'] = [], effects: DayApply['effects'] = [], chose: string[] = [], quiet = { on: false }, named = { on: true }, settled = { n: 0 };
+  const turns: Apply['turns'] = [], effects: DayApply['effects'] = [], chose: string[] = [], quiet = { on: false }, settled = { n: 0 };
   const reply = { text: '{}' }, log: TurnLogEntry[] = [];
   const handler = updateSweepApplier({
     updates: h.updates, timezone: 'UTC', now: () => h.clock.at, sourceFollowups: () => true, gate: () => h.gate.code,
@@ -375,14 +375,14 @@ const applyingDay = (h: Harness, delivered: readonly string[] = ['card:brief'], 
     deliver: async (id, _trace, text, _recordId, commit, effect) => { h.storage.transactionSync(() => { commit(); effects.push({ id, text, ...effect }); }); },
     dayState: {
       quiet: () => quiet.on, cards: () => 'Today\'s cards: The Daily Brief reached them in the app at 08:00.', delivered: card => delivered.includes(card), revisesCards: surface === 'app',
-      named: () => named.on, chose: (_trace, code) => { chose.push(code); },
+      chose: (_trace, code) => { chose.push(code); },
       settled: () => { settled.n += 1; },
     },
   });
   const host = { fence: () => undefined, cancelled: () => undefined, busy: () => new Set<string>() } as unknown as TaskHost;
   const refuse = async (): Promise<never> => { throw new Error('a machine job took the owner task path'); };
   return {
-    turns, delivered: [], reply, log, effects, chose, quiet, named, settled,
+    turns, delivered: [], reply, log, effects, chose, quiet, settled,
     lane: () => runJobsLane({ book: h.book, host, now: () => h.clock.at, timezone: 'UTC', surface: 'app', quiet: () => false, log: entry => { log.push(entry); }, startWorker: async () => undefined,
       turn: refuse, applyTools: () => { throw new Error('a machine job reached applyTools()'); }, deliver: refuse, room: () => true, heldTopics: () => [], ...NO_REPLAYS,
       machine: { update_sweep: handler } }).then(() => undefined),
@@ -411,14 +411,13 @@ describe('applying a sweep job with the day state', () => {
 
   it('the push never carries what the turn read or wrote: health in its findings and its card, a mail, an unknown event', async () => {
     const READ_HEALTH: TaskResult = { ...FOUND, findings: [{ text: 'Recovery is low today and resting HR was 48 bpm.', source_ref: 'event:e-sync' }] };
-    for (const [push, named, expected] of [[{ event: 'e-sync' }, true, 'Sync with Krati at 5pm changed'], [{ event: 'e-sync' }, false, PUSHES.update.body],
-      [{ event: 'e-other' }, true, PUSHES.update.body], [{}, true, PUSHES.update.body]] as const) await withSweep(async (h) => {
+    for (const [push, expected] of [[{ event: 'e-sync' }, 'Sync with Krati at 5pm changed'],
+      [{ event: 'e-other' }, PUSHES.update.body], [{}, PUSHES.update.body]] as const) await withSweep(async (h) => {
       h.events.push(MOVED);
       h.mail.push({ ...MAIL, snippet: 'Your HRV 38 ms looks fine.' });
       await h.check();
       report(h, READ_HEALTH);
       const a = applyingDay(h);
-      a.named.on = named;
       a.reply.text = JSON.stringify({ revise: { card: 'card:brief', text: 'Recovery is low today, and your sync with Krati moved to 17:00.' }, push });
       await a.lane();
       expect(a.effects[0]!.push).toBe(expected);
@@ -559,7 +558,7 @@ describe('applying a sweep job with the day state', () => {
 // the daily interrupt budget and its cooldown, and the one-notification rule; the outcome of act is what the turn raised.
 type TriageApply = DayApply & Readonly<{ tools: (readonly string[] | undefined)[]; cards: { raised: number; whenOffered?: boolean }; goals: { asked: number } }>;
 const applyingTriage = (h: Harness, interruptions?: Parameters<typeof updateSweepApplier>[0]['interruptions'], actAhead?: Readonly<{ style(): string }>, holds?: true): TriageApply => {
-  const turns: Apply['turns'] = [], effects: DayApply['effects'] = [], chose: string[] = [], quiet = { on: false }, named = { on: true }, settled = { n: 0 };
+  const turns: Apply['turns'] = [], effects: DayApply['effects'] = [], chose: string[] = [], quiet = { on: false }, settled = { n: 0 };
   const reply = { text: '{}' }, log: TurnLogEntry[] = [], tools: (readonly string[] | undefined)[] = [], cards: TriageApply['cards'] = { raised: 0 }, goals = { asked: 0 };
   let raisedAt = Number.POSITIVE_INFINITY;
   const handler = updateSweepApplier({
@@ -577,7 +576,7 @@ const applyingTriage = (h: Harness, interruptions?: Parameters<typeof updateSwee
     ...(interruptions ? { interruptions } : {}), ...(holds ? { holds } : {}),
     dayState: {
       quiet: () => quiet.on, cards: () => 'Today\'s cards: The Daily Brief reached them in the app at 08:00.', delivered: card => card === 'card:brief', revisesCards: true,
-      named: () => named.on, chose: (_trace, code) => { chose.push(code); }, settled: () => { settled.n += 1; },
+      chose: (_trace, code) => { chose.push(code); }, settled: () => { settled.n += 1; },
     },
     triage: {
       context: async () => { goals.asked += 1; return { goals: '- Ship the Q4 board deck by Friday' }; },
@@ -588,7 +587,7 @@ const applyingTriage = (h: Harness, interruptions?: Parameters<typeof updateSwee
   const host = { fence: () => undefined, cancelled: () => undefined, busy: () => new Set<string>() } as unknown as TaskHost;
   const refuse = async (): Promise<never> => { throw new Error('a machine job took the owner task path'); };
   return {
-    turns, delivered: [], reply, log, effects, chose, quiet, named, settled, tools, cards, goals,
+    turns, delivered: [], reply, log, effects, chose, quiet, settled, tools, cards, goals,
     lane: () => runJobsLane({ book: h.book, host, now: () => h.clock.at, timezone: 'UTC', surface: 'app', quiet: () => false, log: entry => { log.push(entry); }, startWorker: async () => undefined,
       turn: refuse, applyTools: () => { throw new Error('a machine job reached applyTools()'); }, deliver: refuse, room: () => true, heldTopics: () => [], ...NO_REPLAYS,
       machine: { update_sweep: handler } }).then(() => undefined),
@@ -719,7 +718,7 @@ describe('the triage turn', () => {
   });
 });
 
-// PROACTIVE_GATE: the owner's own limits replace triage's budget. The model may call a batch urgent to go past the budget from a
+// The owner's own limits replace triage's budget. The model may call a batch urgent to go past the budget from a
 // small allowance, never past quiet hours or a question still waiting; a message that asks sets the one question in flight.
 describe('the triage turn under the owner\'s interruption limits', () => {
   const limits: InterruptLimits = { perDay: 1, urgentPerDay: 1, gapMs: 60 * 60_000 };

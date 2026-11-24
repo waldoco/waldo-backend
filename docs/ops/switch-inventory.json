@@ -1,20 +1,4 @@
 {
-  "CALENDAR_GROUNDED_PREP": {
-    "disposition": "unconditional",
-    "batch": "delivery-proactive (after W4)"
-  },
-  "PREP_PUSH_NAMES": {
-    "disposition": "unconditional",
-    "batch": "delivery-proactive (after W4)"
-  },
-  "WALDO_DAY_STATE": {
-    "disposition": "unconditional",
-    "batch": "delivery-proactive (after W4)"
-  },
-  "UPDATE_PUSH_NAMES": {
-    "disposition": "unconditional",
-    "batch": "delivery-proactive (after W4)"
-  },
   "DRIVE_READS": {
     "disposition": "unconditional",
     "batch": "device-google"
@@ -77,10 +61,6 @@
   "OWNER_SPEND_CEILING_USD": {
     "disposition": "knob"
   },
-  "MAIL_SOURCE_FOLLOWUPS": {
-    "disposition": "unconditional",
-    "batch": "delivery-proactive (after W4)"
-  },
   "MCP_READ_INTENTS": {
     "disposition": "unconditional",
     "batch": "device-google"
@@ -112,17 +92,10 @@
     "reason": "unfinished: progress notes are off everywhere (\"0\"); ship or delete",
     "removeBy": "2026-12-31"
   },
-  "WHATSAPP_REPLY_BUTTONS": {
-    "disposition": "unconditional",
-    "batch": "delivery-proactive (after W4)"
-  },
-  "WHATSAPP_LIST_CARDS": {
-    "disposition": "unconditional",
-    "batch": "delivery-proactive (after W4)"
-  },
   "WHATSAPP_REPLY_MERGE": {
-    "disposition": "unconditional",
-    "batch": "delivery-proactive (after W4)"
+    "disposition": "kept",
+    "reason": "Its off path carries WALDO_SECOND_MESSAGE's owner-object proofs in test/whatsapp-second-message-owner-do.test.ts (both replies sent in order, the eviction notice quoting the interrupted message), which merging rewrites.",
+    "removeBy": "2026-12-31"
   },
   "WALDO_TASK_ASK": {
     "disposition": "unconditional",
@@ -409,10 +382,6 @@
     "disposition": "unconditional",
     "batch": "turn-day-cards (after W2)"
   },
-  "OWNER_SURFACE_DEFAULT": {
-    "disposition": "unconditional",
-    "batch": "delivery-proactive (after W4)"
-  },
   "APP_CHAT_ATTACHMENTS": {
     "disposition": "unconditional",
     "batch": "app-identity"
@@ -420,10 +389,6 @@
   "CONSOLE_HARNESS": {
     "disposition": "unconditional",
     "batch": "app-identity"
-  },
-  "WHATSAPP_STOP": {
-    "disposition": "unconditional",
-    "batch": "delivery-proactive (after W4)"
   },
   "CAPACITY_PLAN": {
     "disposition": "unconditional",
@@ -487,24 +452,23 @@
     "batch": "turn-day-cards (after W2)"
   },
   "GOOGLE_REALTIME_TRIAGE": {
-    "disposition": "unconditional",
-    "batch": "delivery-proactive (after W4)"
+    "disposition": "kept",
+    "reason": "Its delta reads and per-calendar watches need Google fakes with mailDelta, calendarDelta and changedEventsPage across the owner-object suites before it can be the only path.",
+    "removeBy": "2026-12-31"
   },
   "HELD_RAISE": {
-    "disposition": "unconditional",
-    "batch": "delivery-proactive (after W4)"
+    "disposition": "kept",
+    "reason": "It acts only with GOOGLE_REALTIME_TRIAGE, which stays a switch until its fixtures can run the delta path.",
+    "removeBy": "2026-12-31"
   },
   "WALDO_WATCHDOG": {
     "disposition": "unconditional",
     "batch": "tasks"
   },
-  "PROACTIVE_GATE": {
-    "disposition": "unconditional",
-    "batch": "delivery-proactive (after W4)"
-  },
   "SEPARATE_TOGGLES": {
-    "disposition": "unconditional",
-    "batch": "delivery-proactive (after W4)"
+    "disposition": "kept",
+    "reason": "Its off path is the only proof that the owner turning the sweep off cancels its open job and fences the worker's late report (test/update-sweep.test.ts, the owner turning the sweep off).",
+    "removeBy": "2026-12-31"
   },
   "PROACTIVE_INTERRUPTS_PER_DAY": {
     "disposition": "knob"
@@ -519,14 +483,6 @@
     "disposition": "unconditional",
     "batch": "turn-day-cards (after W2)"
   },
-  "PROACTIVE_BOTH_DEFAULT": {
-    "disposition": "unconditional",
-    "batch": "delivery-proactive (after W4)"
-  },
-  "EVENT_PUSH": {
-    "disposition": "unconditional",
-    "batch": "delivery-proactive (after W4)"
-  },
   "BRIEF_BODY_REVISION": {
     "disposition": "unconditional",
     "batch": "turn-day-cards (after W2)"
@@ -535,12 +491,9 @@
     "disposition": "knob"
   },
   "PROACTIVE_OVER_TELEGRAM": {
-    "disposition": "unconditional",
-    "batch": "delivery-proactive (after W4)"
-  },
-  "REENGAGE_PROACTIVE": {
-    "disposition": "unconditional",
-    "batch": "delivery-proactive (after W4)"
+    "disposition": "kept",
+    "reason": "Telegram is being retired: its off path is the app-with-Telegram-copy delivery that test/app-first-routing.test.ts proves, which goes with Telegram rather than being rewritten onto the on path here.",
+    "removeBy": "2026-12-31"
   },
   "PROACTIVE_INTERVENTIONS": {
     "disposition": "unconditional",

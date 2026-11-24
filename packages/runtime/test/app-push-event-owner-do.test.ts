@@ -12,8 +12,8 @@ import { ensureSchema } from '../src/tracer/schema';
 
 // An event notice for an app owner reaches Main chat, then raises one push with the event trigger and its fixed line: never the
 // event's own title, which an outside sender wrote. An owner whose notices go to WhatsApp or Telegram gets the message itself.
-// The push is an unasked message: it holds in quiet hours and on the owner's no (follow-ups off, volume low), and with
-// PROACTIVE_GATE it waits on the owner's limits and spends from them.
+// The push is an unasked message: it holds in quiet hours and on the owner's no (follow-ups off, volume low), and it
+// waits on the owner's limits and spends from them.
 const EXPO_TOKEN = 'ExponentPushToken[synthetic-fixture-token]';
 const INSTALLATION = '0f1e2d3c-4b5a-4968-8776-655443322110';
 const OWNER_ID = '3a4b5c6d-7e8f-4a0b-8c1d-2e3f4a5b6c7d';
@@ -70,7 +70,7 @@ const withOwner = (name: string, run: (owner: Owner, state: DurableObjectState) 
       await state.storage.put('origin', 'https://fixture.invalid');
       if (proactivity) loopBook(state.storage.sql, { newId: () => 'fixture', now: Date.now }).setProactivity(proactivity);
       const owner = new OwnerDO(state, { ...env, ...directory, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined,
-        EXPO_ACCESS_TOKEN: 'synthetic-expo-access', OWNER_SURFACE_DEFAULT: '1', EVENT_PUSH: '1', ...(telegram ? { TELEGRAM_BOT_TOKEN: '7:synthetic-fixture' } : {}), ...extra }) as unknown as Owner;
+        EXPO_ACCESS_TOKEN: 'synthetic-expo-access', ...(telegram ? { TELEGRAM_BOT_TOKEN: '7:synthetic-fixture' } : {}), ...extra }) as unknown as Owner;
       await owner.setup(telegram ? 'telegram' : 'app').ready;
       await run(owner, state);
     } finally { await state.storage.deleteAlarm(); }
@@ -106,11 +106,10 @@ const settle = () => new Promise(resolve => setTimeout(resolve, 50));
 const noon = { quiet_start: null, quiet_end: null, volume: 'normal' } as const;
 
 it.each([
-  ['the switch is off', { env: { EVENT_PUSH: '0' } }, null],
   ['quiet hours', { proactivity: { ...noon, quiet_start: '11:00', quiet_end: '13:00' } }, 'quiet'],
   ['volume low', { proactivity: { ...noon, volume: 'low' } }, 'held_consent'],
   ['follow-ups off', { proactivity: { ...noon, followups: false } }, 'held_consent'],
-  ['no unasked messages a day, under the owner\'s limits', { env: { PROACTIVE_GATE: '1' }, proactivity: { ...noon, interruptions_per_day: 0 } }, 'held_budget'],
+  ['no unasked messages a day, under the owner\'s limits', { proactivity: { ...noon, interruptions_per_day: 0 } }, 'held_budget'],
 ] as const)('no event push when %s', async (_case, setup, code) => {
   const logs = vi.spyOn(console, 'log');
   try {
@@ -118,8 +117,7 @@ it.each([
       expect((await event(owner, 'push-held')).status).toBe(200);
       await settle();
       expect(wire.pushes).toEqual([]);
-      if (code) expect(pushCodes(logs)).toEqual([code]);
-      else expect(pushCodes(logs)).toEqual([]);
+      expect(pushCodes(logs)).toEqual([code]);
     }, setup);
   } finally { logs.mockRestore(); }
 });
@@ -145,6 +143,6 @@ it('under the owner\'s limits, an event push spends one unasked message, and a s
       await settle();
       expect(wire.pushes).toHaveLength(1);
       expect(pushCodes(logs)).toEqual(['sent', 'held_budget']);
-    }, { env: { PROACTIVE_GATE: '1' }, proactivity: { ...noon, interruptions_per_day: 1 } });
+    }, { proactivity: { ...noon, interruptions_per_day: 1 } });
   } finally { logs.mockRestore(); }
 });

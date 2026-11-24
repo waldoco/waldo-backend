@@ -38,7 +38,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
       : format === 'claim_ops' ? JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null })
       : content.includes('[Meeting prep decision') ? (fixture.duringPrep?.(), JSON.stringify({ kind: 'notify', text: PREP_TEXT }))
       : content.includes('[Mail follow-up check') ? FOLLOWUP_TEXT
-      : content.includes('[Update check') ? UPDATE_TEXT : 'SKIP';
+      : content.includes('[Update check') ? JSON.stringify({ say: UPDATE_TEXT }) : 'SKIP';
     return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
@@ -94,7 +94,7 @@ const withAppOwner = async (name: string, confirmed: boolean, run: (owner: Owner
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only',
         scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/gmail.readonly'] }]);
       const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC',
-        WALDO_OWNER_TELEGRAM_ID: undefined, GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', MAIL_SOURCE_FOLLOWUPS: '1', CALENDAR_GROUNDED_PREP: undefined, ...flags }) as unknown as Owner;
+        WALDO_OWNER_TELEGRAM_ID: undefined, GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', ...flags }) as unknown as Owner;
       await owner.setup('app').ready;
       ctx.built = schedule(state);
       state.storage.sql.exec('DELETE FROM schedule');
@@ -197,24 +197,6 @@ describe('event-brief work for an owner who only uses the app', () => {
 
   // Production runs with grounded prep off. The legacy sweep sends straight to the chat with no outbox, so it never runs on
   // the app; the update check after it still does.
-  it('with grounded prep off, no event brief is sent on the app, and the update card still reaches the app chat', async () => {
-    await withAppOwner('app-briefs-legacy-off', true, async (owner, state, ctx) => {
-      fixture.event = { id: 'event-1', title: 'Design review', status: 'confirmed', start: `${DAY}T09:30:00Z`, end: `${DAY}T10:00:00Z`, all_day: false,
-        description: 'Bring the onboarding mocks.', attendee_names: ['Pat'], attendees: 3, etag: 'r1' } as CalendarItem;
-      dayPlanBook(state.storage.sql).sent(DAY, 'card:brief');
-      updateBook(state.storage.sql).mark('calendar_since', AT - 3_600_000);
-      fixture.changes = [{ id: 'event-2', title: 'Changed event', status: 'confirmed', start: `${DAY}T11:00:00Z`, end: `${DAY}T11:30:00Z`, all_day: false, description: '', etag: 'r2',
-        created: new Date(AT - 86_400_000).toISOString() } as CalendarChange];
-      await dueSweep(state);
-      await sweepPass(owner, state);
-      await cardPasses(owner, state, ctx);
-      expect(await appChat(owner, 'app-briefs-legacy-off')).toEqual([{ role: 'assistant', text: UPDATE_TEXT }]);
-      expect(state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM event_briefs').one().n).toBe(0);
-      expect(fixture.requests.filter(sent => sent.includes('Design review'))).toEqual([]);
-    }, { CALENDAR_GROUNDED_PREP: '0' });
-    expect(wire.telegramSent).toBe(0);
-  });
-
   it.each([['unlinks the app', 'app_unlinked', true], ['binds another app account', 'app_subject', '1']] as const)('queues no prep when the owner %s while it is being decided', async (_case, key, value) => {
     await withAppOwner(`app-briefs-prep-${key}`, true, async (owner, state, ctx) => {
       fixture.event = { id: 'event-1', title: 'Design review', status: 'confirmed', start: `${DAY}T09:30:00Z`, end: `${DAY}T10:00:00Z`, all_day: false,

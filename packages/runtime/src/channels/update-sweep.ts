@@ -154,8 +154,7 @@ const updateSweepSpec = (analysis: readonly Change[], job: Readonly<{ key: strin
 // What an update push says, written by code from the calendar change the turn chose by its event id: the meeting's title as
 // pushTitle shows it and its new local time, or the fixed line. Nothing the model wrote reaches it, so nothing the turn read
 // (mail, an invite's description or location, the health log, what its tools returned) can either. A mail, a change the job
-// does not hold, a title pushTitle will not show, a start that does not parse, and every change while the owner has not turned
-// named updates on, give the fixed line.
+// does not hold, a title pushTitle will not show and a start that does not parse give the fixed line.
 const LOCAL_DATE = (timezone: string) => new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: timezone });
 const pushWhen = (item: Readonly<Record<string, unknown>>, timezone: string, now: number): Readonly<{ day: string | null; time: string | null }> | null => {
   const start = typeof item.start === 'string' ? item.start : '';
@@ -171,9 +170,9 @@ const pushWhen = (item: Readonly<Record<string, unknown>>, timezone: string, now
   const local = localIso(at, timezone);
   return { day: local.slice(0, 10) === today ? null : LOCAL_DATE(timezone).format(at), time: clockWords(local.slice(11, 16)) };
 };
-export const updatePushLine = (changes: readonly Change[], event: string | undefined, rules: Readonly<{ named: boolean; timezone: string; now: number }>): string => {
+export const updatePushLine = (changes: readonly Change[], event: string | undefined, rules: Readonly<{ timezone: string; now: number }>): string => {
   const fixed = PUSHES.update.body;
-  const change = rules.named && event ? changes.find(change => change.source === 'calendar' && change.ref === `event:${event}`) : undefined;
+  const change = event ? changes.find(change => change.source === 'calendar' && change.ref === `event:${event}`) : undefined;
   if (!change) return fixed;
   let item: Record<string, unknown>;
   try { item = JSON.parse(change.detail) as Record<string, unknown>; } catch { return fixed; }
@@ -297,18 +296,16 @@ export type UpdateSweepApplyDeps = Readonly<{
     revisesCards: boolean;
     // Whether a day card reached the owner today, so it can be revised.
     delivered(card: string): boolean;
-    // Whether the owner turned named update pushes on (updatePushLine).
-    named(): boolean;
     chose(trace: string, code: UpdateEffectCode | TriageCode): void;
     // The job settled, however it ended: changes that arrived while it was open can be read now, not at the next poll.
     settled(): void;
   }>;
   // HELD_RAISE (with triage): a batch held now waits on its record, and the held batches a job took are judged with it.
   holds?: true;
-  // PROACTIVE_GATE: the owner's interruption limits, shared with every unasked message, replace triage's own budget.
+  // The owner's interruption limits, shared with every unasked message, replace triage's own budget.
   // closed: outside the owner's day (before their Brief or from their Close on), which, like quiet hours, nothing unasked goes past.
   interruptions?: Readonly<{ book: InterruptBook; limits(): InterruptLimits; closed(): boolean }>;
-  // GOOGLE_REALTIME_TRIAGE, with the day state: the apply turn triages the batch.
+  // GOOGLE_REALTIME_TRIAGE: the apply turn triages the batch.
   triage?: Readonly<{
     // What the turn reads beside the batch: the owner's goals, from their memory.
     context(): Promise<Readonly<{ goals: string }>>;
@@ -362,7 +359,7 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
       if (!effect) return skip('none');
       if (quiet && effect === 'say') return skip('say+quiet');
       // A push goes only from a surface that raises one; elsewhere the message is the notification.
-      const push = chosen.push && !quiet && day.revisesCards ? updatePushLine(changes, chosen.push.event, { named: day.named(), timezone: deps.timezone, now: deps.now() }) : undefined;
+      const push = chosen.push && !quiet && day.revisesCards ? updatePushLine(changes, chosen.push.event, { timezone: deps.timezone, now: deps.now() }) : undefined;
       day.chose(io.trace, `${effect}${quiet ? '+quiet' : push ? '+push' : ''}`);
       await deps.deliver(`update:${row.id}`, io.trace, chosen.revise?.text ?? chosen.say!, recordId!, commit,
         { ...(chosen.revise ? { revision: chosen.revise.card, ...(effect === 'revise' ? { inPlace: true as const } : {}) } : {}), ...(push ? { push } : {}) });
@@ -419,7 +416,7 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
       return 'delivered' as const;
     }
     // A push goes only from a surface that raises one; elsewhere the message is the notification.
-    const push = chosen.push && day.revisesCards ? updatePushLine(changes, chosen.push.event, { named: day.named(), timezone: deps.timezone, now: deps.now() }) : undefined;
+    const push = chosen.push && day.revisesCards ? updatePushLine(changes, chosen.push.event, { timezone: deps.timezone, now: deps.now() }) : undefined;
     day.chose(io.trace, !interrupts ? 'revise' : interrupts && charge() === 'urgent' ? 'tell+urgent' : push ? 'tell+push' : 'tell');
     // A tell folds the held batches only once it reaches the owner (UpdateBook.pushed): one that never goes leaves them for the next card.
     const raise = held.length ? { outcome: 'raise_told' as const, work: () => deps.updates.release(recordId, false) } : null;

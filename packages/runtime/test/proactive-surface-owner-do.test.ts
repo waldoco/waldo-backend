@@ -57,7 +57,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     const text = format === 'task_source_scope' ? '{"decision":"retain","sources":[]}'
       : format === 'claim_ops' ? JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null })
       : content.includes('[Meeting prep decision') ? JSON.stringify({ kind: 'notify', text: PREP_TEXT })
-      : content.includes('[Update check') ? UPDATE_TEXT
+      : content.includes('[Update check') ? JSON.stringify({ say: UPDATE_TEXT })
       : content.includes('[Scheduled card') ? CARD_TEXT
       : content.includes('[Reminder due now') ? fixture.reminderText ?? REMINDER_TEXT
       : content.includes('[Standing order due now') ? ORDER_TEXT
@@ -154,7 +154,7 @@ const withOwner = async (name: string, run: (owner: Owner, state: DurableObjectS
         scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/gmail.readonly'] }]);
       const owner = new OwnerDO(state, { ...env, ...directory, ...whatsapp, TELEGRAM_BOT_TOKEN: telegram ? '7:synthetic-fixture' : undefined, OPENAI_API_KEY: 'synthetic-fixture',
         WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret',
-        MAIL_SOURCE_FOLLOWUPS: '1', CALENDAR_GROUNDED_PREP: '1', ...extra }) as unknown as Owner;
+        ...extra }) as unknown as Owner;
       for (const [channel, on] of [['app', app], ['whatsapp', bound], ['telegram', telegram]] as const) if (on) await owner.setup(channel).ready;
       state.storage.sql.exec('DELETE FROM schedule');
       wire.whatsapp = []; wire.telegram = [];
@@ -215,7 +215,7 @@ const unlinkWhatsApp = (owner: Owner, state: DurableObjectState) => rebindWhatsA
 
 // Each outbox pass waits for a record that falls due 250 ms after it is queued, so these run past the 5 s default.
 describe('the app only, the default', { timeout: 20_000 }, () => {
-  it('the Brief reaches the app chat, nothing goes to WhatsApp, and the directory is never asked about WhatsApp', async () => {
+  it('with the app chosen, the Brief reaches the app chat, nothing goes to WhatsApp, and the directory is never asked about WhatsApp', async () => {
     let asked = 0;
     await withOwner('surface-app-brief', async (owner, state, ctx) => {
       const counted = globalThis.fetch;
@@ -229,7 +229,7 @@ describe('the app only, the default', { timeout: 20_000 }, () => {
       expect(await said(owner, ctx)).toEqual([{ role: 'assistant', text: CARD_TEXT }]);
       expect(wire.whatsapp).toEqual([]);
       expect(outbox(state)).toEqual([]);
-    });
+    }, { surface: 'app' });
     expect(asked).toBe(0);
   });
 
@@ -536,7 +536,7 @@ describe('the template a closed window is knocked with', { timeout: 20_000 }, ()
     await withOwner('knock-event', async (owner) => {
       expect((await event(owner, 'knock-ev')).status).toBe(200);
       expect(wire.whatsapp).toEqual(['template:waldo_proactive_update']);
-    }, { app: false, surface: 'whatsapp', window: 'closed', env: { OWNER_SURFACE_DEFAULT: '1' } });
+    }, { app: false, surface: 'whatsapp', window: 'closed' });
   });
 });
 
@@ -607,13 +607,14 @@ describe('falling back to the app', { timeout: 20_000 }, () => {
   });
 });
 
-// The rule: the default sends to the app when the owner has an app binding, and otherwise to the owner's only bound surface;
+// The rule: the default sends to the app when the owner has an app binding, with a WhatsApp copy when that is bound too, and
+// otherwise to the owner's only bound surface;
 // an explicit choice overrides the default; a chosen surface that is not bound falls back to the one that is, so nothing is
 // lost. An owner with neither surface gets nothing.
 describe('where the Brief goes, for each setting and each binding', { timeout: 20_000 }, () => {
   const bindings = { both: { app: true, whatsapp: true }, app: { app: true, whatsapp: false }, whatsapp: { app: false, whatsapp: true }, neither: { app: false, whatsapp: false } } as const;
   const cases: readonly (readonly [keyof typeof bindings, string | undefined, readonly string[], readonly string[]])[] = [
-    ['both', undefined, [CARD_TEXT], []],
+    ['both', undefined, [CARD_TEXT], [`text:${CARD_TEXT}`]],
     ['both', 'app', [CARD_TEXT], []],
     ['both', 'whatsapp', [], [`text:${CARD_TEXT}`]],
     ['both', 'both', [CARD_TEXT], [`text:${CARD_TEXT}`]],
@@ -703,12 +704,10 @@ describe('owners the setting does not route', { timeout: 20_000 }, () => {
   });
 });
 
-// PROACTIVE_BOTH_DEFAULT: an owner with the app and a bound WhatsApp who chose nothing gets proactive work on both; a stored
-// choice wins, and the switch off leaves the app as the default. The app's message is the one that settles the job; WhatsApp
+// An owner with the app and a bound WhatsApp who chose nothing gets proactive work on both; a stored choice wins. The app's message is the one that settles the job; WhatsApp
 // gets one copy of it, which the owner's reply on WhatsApp never repeats or settles a second time.
-describe('both surfaces by default (PROACTIVE_BOTH_DEFAULT)', { timeout: 20_000 }, () => {
-  const on = { PROACTIVE_BOTH_DEFAULT: '1' };
-  it('the switch on, the owner having chosen nothing: the Brief reaches the app once and WhatsApp gets one copy, sent once', async () => {
+describe('both surfaces by default', { timeout: 20_000 }, () => {
+  it('the owner having chosen nothing: the Brief reaches the app once and WhatsApp gets one copy, sent once', async () => {
     await withOwner('both-default-on', async (owner, state, ctx) => {
       await dueBrief(state);
       await schedulePass(owner, state);
@@ -722,41 +721,30 @@ describe('both surfaces by default (PROACTIVE_BOTH_DEFAULT)', { timeout: 20_000 
       for (let pass = 0; pass < 2; pass += 1) await outboxPass(owner, state, ctx);
       expect(wire.whatsapp).toEqual([`text:${CARD_TEXT}`]);
       expect(await said(owner, ctx)).toEqual([{ role: 'assistant', text: CARD_TEXT }]);
-    }, { env: on });
+    });
   });
 
   it.each([
     ['an explicit app', 'app'],
     ['an explicit WhatsApp only', 'whatsapp'],
-  ] as const)('the switch on, %s stored: the stored choice wins', async (_what, surface) => {
+  ] as const)('%s stored: the stored choice wins', async (_what, surface) => {
     await withOwner(`both-default-stored-${surface}`, async (owner, state, ctx) => {
       await dueBrief(state);
       await schedulePass(owner, state);
       for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
       expect((await said(owner, ctx)).map(message => message.text)).toEqual(surface === 'app' ? [CARD_TEXT] : []);
       expect(wire.whatsapp).toEqual(surface === 'app' ? [] : [`text:${CARD_TEXT}`]);
-    }, { env: on, surface });
+    }, { surface });
   });
 
-  it('the switch off, the owner having chosen nothing: the app alone, as before', async () => {
-    await withOwner('both-default-off', async (owner, state, ctx) => {
-      await dueBrief(state);
-      await schedulePass(owner, state);
-      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
-      expect((await said(owner, ctx)).map(message => message.text)).toEqual([CARD_TEXT]);
-      expect(wire.whatsapp).toEqual([]);
-      expect(copies(state)).toEqual([]);
-    }, { env: { PROACTIVE_BOTH_DEFAULT: '0' } });
-  });
-
-  it('the switch on, no WhatsApp bound: the app alone', async () => {
+  it('no WhatsApp bound: the app alone', async () => {
     await withOwner('both-default-unbound', async (owner, state, ctx) => {
       await dueBrief(state);
       await schedulePass(owner, state);
       for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
       expect((await said(owner, ctx)).map(message => message.text)).toEqual([CARD_TEXT]);
       expect(wire.whatsapp).toEqual([]);
-    }, { env: on, whatsapp: false });
+    }, { whatsapp: false });
   });
 
   it('the owner writing on WhatsApp after the app got the Brief gets the waiting copy once, and the app keeps its one message', async () => {
@@ -772,15 +760,14 @@ describe('both surfaces by default (PROACTIVE_BOTH_DEFAULT)', { timeout: 20_000 
       expect(wire.whatsapp).toEqual(['template:waldo_proactive_update', `text:${CARD_TEXT}`]);
       expect(await said(owner, ctx)).toEqual([{ role: 'assistant', text: CARD_TEXT }]);
       expect(briefPlan(state)).toMatchObject({ sent: true, state: 'sent' });
-    }, { env: on, window: 'closed' });
+    }, { window: 'closed' });
   });
 
-  it('the console shows both while nothing is chosen under the switch, and an explicit app stays app', async () => {
+  it('the console shows both while nothing is chosen, and an explicit app stays app', async () => {
     const root = 'https://telegram-owner';
     const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName('both-default-console'));
-    // The owner object's env is the suite's shared one: the switch is put back when the test ends.
     const token = await runInDurableObject(stub, (instance, state) => {
-      Object.assign((instance as unknown as { env: Record<string, unknown> }).env, { TELEGRAM_BOT_TOKEN: '123:synthetic', OPENAI_API_KEY: 'synthetic-key', ...whatsapp, ...on });
+      Object.assign((instance as unknown as { env: Record<string, unknown> }).env, { TELEGRAM_BOT_TOKEN: '123:synthetic', OPENAI_API_KEY: 'synthetic-key', ...whatsapp });
       state.storage.kv.put('do_name', 'both-default-console');
       bindWhatsAppNumber(state.storage.kv, SUBJECT);
       return consoleAccess(state.storage).grant();
@@ -792,9 +779,8 @@ describe('both surfaces by default (PROACTIVE_BOTH_DEFAULT)', { timeout: 20_000 
       body: new URLSearchParams({ csrf: first.csrf, revision: first.revision, view: 'day', action: 'proactive_surface.set', value: 'app', request_id: 'both-default-request-01' }) });
     expect(await chose.json()).toMatchObject({ receipt: { state: 'recorded' } });
     expect((await read()).data.proactive_surface.value).toBe('app');
-    await runInDurableObject(stub, (instance, state) => {
+    await runInDurableObject(stub, (_instance, state) => {
       expect(state.storage.kv.get(PROACTIVE_SURFACE_KEY)).toBe('app');
-      delete (instance as unknown as { env: Record<string, unknown> }).env.PROACTIVE_BOTH_DEFAULT;
     });
   });
 });
@@ -819,7 +805,7 @@ describe('revisions and quiet hours under both surfaces', { timeout: 20_000 }, (
       expect(copies(state)).toEqual([]);
       expect(wire.whatsapp).toEqual([]);
       expect(interrupts(state)).toBeNull();
-    }, { env: { PROACTIVE_BOTH_DEFAULT: '1', PROACTIVE_GATE: '1' } });
+    });
   });
 
   it('a revision that was a message in the app (not in place) is copied, but only once the owner\'s quiet hours end', async () => {
@@ -832,7 +818,7 @@ describe('revisions and quiet hours under both surfaces', { timeout: 20_000 }, (
       ctx.now = AT + 61 * 60_000;
       for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
       expect(wire.whatsapp).toEqual([`text:${UPDATE_TEXT}`]);
-    }, { env: { PROACTIVE_BOTH_DEFAULT: '1' } });
+    });
   });
 
   it('with no quiet hours an update message is copied at once, as before', async () => {
@@ -840,7 +826,7 @@ describe('revisions and quiet hours under both surfaces', { timeout: 20_000 }, (
       await queueUpdate(owner, ctx, {});
       for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
       expect(wire.whatsapp).toEqual([`text:${UPDATE_TEXT}`]);
-    }, { env: { PROACTIVE_BOTH_DEFAULT: '1' } });
+    });
   });
 });
 
@@ -858,22 +844,11 @@ describe('the knock for proactive work outside the 24-hour window', { timeout: 2
     }, { surface: 'both', window: 'closed' });
   });
 
-  it('with no proactive template, a waiting Brief copy sends no template at all, even with the reply template configured', async () => {
-    await withOwner('knock-proactive-unconfigured', async (owner, state, ctx) => {
-      await dueBrief(state);
-      await schedulePass(owner, state);
-      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
-      expect(wire.whatsapp).toEqual([]);
-      expect(copies(state).map(record => record.status)).toEqual(['pending']);
-      expect((await said(owner, ctx)).map(message => message.text)).toEqual([CARD_TEXT]);
-    }, { surface: 'both', window: 'closed', env: { WHATSAPP_PROACTIVE_TEMPLATE: '', WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE: '' } });
-  });
-
-  // REENGAGE_PROACTIVE: with no proactive template approved, Waldo's own work knocks with the approved re-engage template, and
+  // With no proactive template approved, Waldo's own work knocks with the approved re-engage template, and
   // the app, which has the message, pushes once for the closed window unless it already pushed since the window closed.
-  const REENGAGE = { REENGAGE_PROACTIVE: '1', WHATSAPP_PROACTIVE_TEMPLATE: '', WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE: '', EXPO_ACCESS_TOKEN: 'synthetic-expo-access' };
+  const REENGAGE = { WHATSAPP_PROACTIVE_TEMPLATE: '', WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE: '', EXPO_ACCESS_TOKEN: 'synthetic-expo-access' };
 
-  it('with the re-engage knock on and no proactive template, a waiting reminder copy knocks with the re-engage template once, and the app pushes once', async () => {
+  it('with no proactive template, a waiting reminder copy knocks with the re-engage template once, and the app pushes once', async () => {
     await withOwner('knock-reengage-reminder', async (owner, state, ctx) => {
       await dueReminder(state);
       await schedulePass(owner, state);
@@ -919,7 +894,7 @@ describe('the knock for proactive work outside the 24-hour window', { timeout: 2
       for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
       expect(wire.pushes).toEqual(['event']);
       expect(state.storage.kv.get(INTERRUPTS_KEY)).toBeUndefined();
-    }, { surface: 'both', window: 'closed', env: { ...REENGAGE, PROACTIVE_GATE: '1' } });
+    }, { surface: 'both', window: 'closed', env: REENGAGE });
   });
 
   it('with the re-engage knock on, a push on an earlier day of the same closed window does not stand for today\'s copy', async () => {
@@ -1022,16 +997,6 @@ describe('the knock for proactive work outside the 24-hour window', { timeout: 2
     }, { surface: 'both', window: 'closed', env: REENGAGE });
   });
 
-  it('with the re-engage knock off, a waiting reminder copy neither knocks nor pushes', async () => {
-    await withOwner('knock-reengage-off', async (owner, state, ctx) => {
-      await dueReminder(state);
-      await schedulePass(owner, state);
-      for (let pass = 0; pass < 3; pass += 1) await outboxPass(owner, state, ctx);
-      expect({ whatsapp: wire.whatsapp, pushes: wire.pushes }).toEqual({ whatsapp: [], pushes: [] });
-      expect((await said(owner, ctx)).map(message => message.text)).toEqual([REMINDER_TEXT]);
-    }, { surface: 'both', window: 'closed', env: { ...REENGAGE, REENGAGE_PROACTIVE: '0' } });
-  });
-
   it('a reminder the owner asked for still knocks with the reply template', async () => {
     await withOwner('knock-reply-reminder', async (owner, state, ctx) => {
       await dueReminder(state);
@@ -1070,17 +1035,17 @@ describe('the console control', () => {
   it('reads the setting with what the owner can be reached on, and saves a new value against a fresh read', async () => {
     await withConsole('surface-console-save', async (stub, token) => {
       const before = await read(stub, token);
-      expect(before.data.proactive_surface).toEqual({ value: 'app', app_linked: false, whatsapp_linked: true, imessage_linked: false, telegram_linked: false });
-      const saved = await post(stub, token, before, { value: 'both', request_id: 'surface-request-01' });
+      expect(before.data.proactive_surface).toEqual({ value: 'both', app_linked: false, whatsapp_linked: true, imessage_linked: false, telegram_linked: false });
+      const saved = await post(stub, token, before, { value: 'app', request_id: 'surface-request-01' });
       expect(saved.status).toBe(200);
       expect(await saved.json()).toMatchObject({ receipt: { state: 'recorded' }, duplicate: false });
       const after = await read(stub, token);
-      expect(after.data.proactive_surface).toMatchObject({ value: 'both' });
+      expect(after.data.proactive_surface).toMatchObject({ value: 'app' });
       expect(after.revision).not.toBe(before.revision);
-      await runInDurableObject(stub, (_instance, state) => expect(state.storage.kv.get(PROACTIVE_SURFACE_KEY)).toBe('both'));
+      await runInDurableObject(stub, (_instance, state) => expect(state.storage.kv.get(PROACTIVE_SURFACE_KEY)).toBe('app'));
       // A request against the read before the change is stale.
       expect((await post(stub, token, before, { value: 'whatsapp', request_id: 'surface-request-02' })).status).toBe(409);
-      expect((await read(stub, token)).data.proactive_surface).toMatchObject({ value: 'both' });
+      expect((await read(stub, token)).data.proactive_surface).toMatchObject({ value: 'app' });
     });
   });
 
@@ -1118,21 +1083,21 @@ describe('the console control', () => {
     await withConsole('surface-console-unlinked', async (stub, token) => {
       await runInDurableObject(stub, (_instance, state) => { state.storage.kv.put('whatsapp_unlinked', true); });
       const before = await read(stub, token);
-      expect(before.data.proactive_surface).toMatchObject({ value: 'app', whatsapp_linked: false });
+      expect(before.data.proactive_surface).toMatchObject({ value: 'both', whatsapp_linked: false });
       for (const [value, id] of [['whatsapp', 'surface-request-05'], ['both', 'surface-request-06']] as const) {
         const refused = await post(stub, token, before, { value, request_id: id });
         expect([refused.status, (await refused.json() as { receipt: unknown }).receipt]).toEqual([409, APP_PROACTIVE_SURFACE_RECEIPTS_V1.whatsapp_not_linked]);
       }
       await runInDurableObject(stub, (_instance, state) => expect(state.storage.kv.get(PROACTIVE_SURFACE_KEY)).toBeUndefined());
       const kept = await post(stub, token, before, { value: 'app', request_id: 'surface-request-07' });
-      expect((await kept.json() as { receipt: unknown }).receipt).toEqual(APP_PROACTIVE_SURFACE_RECEIPTS_V1.unchanged);
+      expect((await kept.json() as { receipt: unknown }).receipt).toEqual(APP_PROACTIVE_SURFACE_RECEIPTS_V1.saved);
     });
   });
 
   it('with the directory: what it says decides the read and the action alike, and a directory that cannot say shows the binding but refuses as unchecked', async () => {
     await withConsole('surface-console-directory', async (stub, token) => {
       const linked = await read(stub, token);
-      expect(linked.data.proactive_surface).toMatchObject({ value: 'app', whatsapp_linked: true });
+      expect(linked.data.proactive_surface).toMatchObject({ value: 'both', whatsapp_linked: true });
       wire.hint = 'not_linked';
       const unlinked = await read(stub, token);
       expect(unlinked.data.proactive_surface).toMatchObject({ whatsapp_linked: false });
@@ -1159,7 +1124,7 @@ describe('the console control', () => {
       expect(unknown.status).toBe(409);
       expect(await unknown.json()).toMatchObject({ receipt: { state: 'rejected' } });
       expect((await post(stub, token, { ...before, csrf: 'wrong' }, { value: 'whatsapp', request_id: 'surface-request-04' })).status).toBe(403);
-      expect((await read(stub, token)).data.proactive_surface).toMatchObject({ value: 'app' });
+      expect((await read(stub, token)).data.proactive_surface).toMatchObject({ value: 'both' });
       await runInDurableObject(stub, (_instance, state) => expect(state.storage.kv.get(PROACTIVE_SURFACE_KEY)).toBeUndefined());
     });
   });

@@ -138,7 +138,7 @@ describe('heartbeat tick (H1, scheduler-owned run history)', () => {
     });
   });
 
-  // PROACTIVE_GATE: the ceiling follows the owner's daily budget for unasked messages: normal's six, low's two, the owner's own
+  // The ceiling follows the owner's daily budget for unasked messages: normal's six, low's two, the owner's own
   // number, 0 included, and no count at high.
   const capped = async (perDay: number, loopsDue: number) => {
     let sent: string[] = [];

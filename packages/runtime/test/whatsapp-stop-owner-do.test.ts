@@ -1,4 +1,4 @@
-// The owner's explicit stop on WhatsApp (WHATSAPP_STOP): a typed /stop, the same control Telegram has, stops the running turn
+// The owner's explicit stop on WhatsApp: a typed /stop, the same control Telegram has, stops the running turn
 // at once, even while it waits on a long call, and stops the owner's background browser work as Telegram's does. Anything
 // else the owner writes meanwhile is the model's to weigh (the second-message desk); no wording is read as a stop. The
 // owner's messages still waiting ahead of the /stop are stopped with it; what they write after it runs as usual.
@@ -58,14 +58,14 @@ afterEach(() => { world.release(); vi.unstubAllGlobals(); });
 
 type Owner = InstanceType<typeof OwnerDO>;
 const message = (id: string, text: string, forwarded = false) => ({ from: SUBJECT, id, timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: text }, ...(forwarded ? { context: { forwarded: true } } : {}) });
-const owner = (name: string, switches: Record<string, string>, run: (o: Owner, state: DurableObjectState, admit: (m: object) => Promise<number>, stops: () => number) => Promise<void>) =>
+const owner = (name: string, run: (o: Owner, state: DurableObjectState, admit: (m: object) => Promise<number>, stops: () => number) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     claimStore(state.storage.sql); ensureSchema(state.storage); traceBook(state.storage.sql);
     state.storage.kv.put('do_name', name);
     state.storage.kv.put('whatsapp_subject', SUBJECT);
     await state.storage.put('origin', 'https://waldo.fixture.invalid');
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const o = new OwnerDO(state, { ...env, ...directory, ...whatsapp, TELEGRAM_BOT_TOKEN: undefined, WALDO_OWNER_TELEGRAM_ID: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', ...switches } as never);
+    const o = new OwnerDO(state, { ...env, ...directory, ...whatsapp, TELEGRAM_BOT_TOKEN: undefined, WALDO_OWNER_TELEGRAM_ID: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC' } as never);
     const stopped = vi.spyOn(o as unknown as { stopOwnerWork(): Promise<void> }, 'stopOwnerWork');
     const admit = async (m: object) => (await o.fetch(new Request('https://telegram-owner/whatsapp-admit', { method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ messages: [m] }) }))).status;
     try { await run(o, state, admit, () => stopped.mock.calls.length); } finally { world.release(); quiet.mockRestore(); await state.storage.deleteAlarm(); }
@@ -76,7 +76,7 @@ const rows = (state: DurableObjectState) => [...state.storage.kv.list<{ wamid: s
 
 describe('a typed /stop on WhatsApp', { timeout: 30_000 }, () => {
   it('stops the running turn at once, tells the owner, and the late reply never goes out; /stop runs no turn of its own', async () => {
-    await owner('wa-stop-running', { WHATSAPP_STOP: '1' }, async (o, state, admit, stops) => {
+    await owner('wa-stop-running', async (o, state, admit, stops) => {
       expect(await admit(message('wamid.in.long', 'Plan my whole week in detail'))).toBe(200);
       const draining = drainWhatsAppTurns(o);
       await vi.waitFor(() => expect(world.started).toBe(1), { timeout: 10_000, interval: 20 });
@@ -95,7 +95,7 @@ describe('a typed /stop on WhatsApp', { timeout: 30_000 }, () => {
   });
 
   it('stops the messages waiting behind the running turn, not what the owner writes after the /stop', async () => {
-    await owner('wa-stop-queued', { WHATSAPP_STOP: '1' }, async (o, state, admit) => {
+    await owner('wa-stop-queued', async (o, state, admit) => {
       expect(await admit(message('wamid.in.long', 'Plan my whole week in detail'))).toBe(200);
       const draining = drainWhatsAppTurns(o);
       await vi.waitFor(() => expect(world.started).toBe(1), { timeout: 10_000, interval: 20 });
@@ -113,7 +113,7 @@ describe('a typed /stop on WhatsApp', { timeout: 30_000 }, () => {
   });
 
   it('does not stop an approval tap waiting behind the running turn: a decision is not a message, and it still runs', async () => {
-    await owner('wa-stop-keeps-tap', { WHATSAPP_STOP: '1' }, async (o, state, admit) => {
+    await owner('wa-stop-keeps-tap', async (o, state, admit) => {
       expect(await admit(message('wamid.in.long', 'Plan my whole week in detail'))).toBe(200);
       const draining = drainWhatsAppTurns(o);
       await vi.waitFor(() => expect(world.started).toBe(1), { timeout: 10_000, interval: 20 });
@@ -125,7 +125,7 @@ describe('a typed /stop on WhatsApp', { timeout: 30_000 }, () => {
   });
 
   it('sent before the turn began stops the waiting message: it never runs, and the owner is told', async () => {
-    await owner('wa-stop-before-claim', { WHATSAPP_STOP: '1' }, async (o, state, admit) => {
+    await owner('wa-stop-before-claim', async (o, state, admit) => {
       expect(await admit(message('wamid.in.long', 'Plan my whole week in detail'))).toBe(200);
       expect(await admit(message('wamid.in.stop', '/stop'))).toBe(200);
       world.release();
@@ -138,7 +138,7 @@ describe('a typed /stop on WhatsApp', { timeout: 30_000 }, () => {
 
   it('still stops, and Meta still gets its 200, when WhatsApp refuses the notice', async () => {
     world.refuseNotice = true;
-    await owner('wa-stop-notice-refused', { WHATSAPP_STOP: '1' }, async (o, state, admit) => {
+    await owner('wa-stop-notice-refused', async (o, state, admit) => {
       expect(await admit(message('wamid.in.long', 'Plan my whole week in detail'))).toBe(200);
       const draining = drainWhatsAppTurns(o);
       await vi.waitFor(() => expect(world.started).toBe(1), { timeout: 10_000, interval: 20 });
@@ -153,7 +153,7 @@ describe('a typed /stop on WhatsApp', { timeout: 30_000 }, () => {
   });
 
   it('stops a turn already claimed but not yet under way, read from the inbox rather than the turn in memory', async () => {
-    await owner('wa-stop-claimed-gap', { WHATSAPP_STOP: '1' }, async (o, state, admit) => {
+    await owner('wa-stop-claimed-gap', async (o, state, admit) => {
       expect(await admit(message('wamid.in.long', 'Plan my whole week in detail'))).toBe(200);
       // Claimed, as a drain does before the turn starts: nothing in memory names it yet.
       expect(new WhatsAppOwnerInbox(state.storage).claimNext(Date.now() + 60_000)?.wamid).toBe('wamid.in.long');
@@ -169,7 +169,7 @@ describe('a typed /stop on WhatsApp', { timeout: 30_000 }, () => {
   });
 
   it('lands in the very commit that admits the /stop', async () => {
-    await owner('wa-stop-in-commit', { WHATSAPP_STOP: '1' }, async (_o, state, admit) => {
+    await owner('wa-stop-in-commit', async (_o, state, admit) => {
       expect(await admit(message('wamid.in.long', 'Plan my whole week in detail'))).toBe(200);
       // Each commit is numbered; the inbox's admit and stop say which commit they ran in.
       let commit = 0, current = 0;
@@ -188,7 +188,7 @@ describe('a typed /stop on WhatsApp', { timeout: 30_000 }, () => {
   });
 
   it('still tells the owner and answers Meta when stopping background work fails after the commit', async () => {
-    await owner('wa-stop-background-fails', { WHATSAPP_STOP: '1' }, async (o, state, admit) => {
+    await owner('wa-stop-background-fails', async (o, state, admit) => {
       expect(await admit(message('wamid.in.long', 'Plan my whole week in detail'))).toBe(200);
       vi.spyOn(o as unknown as { stopOwnerWork(): Promise<void> }, 'stopOwnerWork').mockRejectedValue(new Error('synthetic failure after the commit'));
       expect(await admit(message('wamid.in.stop', '/stop'))).toBe(200);
@@ -201,7 +201,7 @@ describe('a typed /stop on WhatsApp', { timeout: 30_000 }, () => {
   });
 
   it('with nothing running stops background work and answers that nothing is running, as before', async () => {
-    await owner('wa-stop-idle', { WHATSAPP_STOP: '1' }, async (o, _state, admit, stops) => {
+    await owner('wa-stop-idle', async (o, _state, admit, stops) => {
       expect(await admit(message('wamid.in.stop', '/stop'))).toBe(200);
       expect(stops()).toBe(1);
       await drainWhatsAppTurns(o);
@@ -210,7 +210,7 @@ describe('a typed /stop on WhatsApp', { timeout: 30_000 }, () => {
   });
 
   it('forwarded, or in other words, stops nothing: other words are the model\'s to weigh', async () => {
-    await owner('wa-stop-not-a-control', { WHATSAPP_STOP: '1' }, async (o, state, admit, stops) => {
+    await owner('wa-stop-not-a-control', async (o, state, admit, stops) => {
       expect(await admit(message('wamid.in.long', 'Plan my whole week in detail'))).toBe(200);
       const draining = drainWhatsAppTurns(o);
       await vi.waitFor(() => expect(world.started).toBe(1), { timeout: 10_000, interval: 20 });
@@ -223,20 +223,6 @@ describe('a typed /stop on WhatsApp', { timeout: 30_000 }, () => {
       expect(world.sent.map(sent => sent.text)).toContain(LATE);
       expect(rows(state)).toEqual(expect.arrayContaining([['wamid.in.fwd', 'completed'], ['wamid.in.words', 'completed']]));
       expect(rows(state)).toEqual(expect.arrayContaining([['wamid.in.long', 'completed']]));
-    });
-  });
-
-  it('with the switch off waits its turn as it always has: the running reply goes out, then nothing is running', async () => {
-    await owner('wa-stop-off', { WHATSAPP_STOP: '0' }, async (o, _state, admit, stops) => {
-      expect(await admit(message('wamid.in.long', 'Plan my whole week in detail'))).toBe(200);
-      const draining = drainWhatsAppTurns(o);
-      await vi.waitFor(() => expect(world.started).toBe(1), { timeout: 10_000, interval: 20 });
-      expect(await admit(message('wamid.in.stop', '/stop'))).toBe(200);
-      expect(stops()).toBe(0);
-      world.release();
-      await draining;
-      await drainWhatsAppTurns(o);
-      expect(world.sent.map(sent => sent.text)).toEqual([LATE, 'Nothing is running right now.']);
     });
   });
 });

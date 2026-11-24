@@ -5,7 +5,7 @@ import type { Change, ChangeBefore } from '../src/channels/update-cards';
 
 // The update push is written by code from the calendar change the turn chose: its title and its new time, nothing the model
 // wrote. A title is the one outside text it carries, so a title shaped like a host or address, or carrying a health value,
-// gives the fixed line, as does a mail, a change the job does not hold, and every change while names are off.
+// gives the fixed line, as does a mail and a change the job does not hold.
 const NOW = Date.parse('2026-10-20T09:00:00Z');
 const BEFORE: ChangeBefore = { start: '2026-10-20T10:00:00Z', end: '2026-10-20T10:30:00Z', all_day: false, title_changed: false };
 const event = (over: Record<string, unknown> = {}, kind: Change['kind'] = 'changed', before: ChangeBefore | undefined = BEFORE): Change => ({
@@ -14,8 +14,8 @@ const event = (over: Record<string, unknown> = {}, kind: Change['kind'] = 'chang
     description: 'Recovery is low today, keep it light', location: 'Krati\'s office', ...over }),
 });
 const MAIL: Change = { source: 'mail', kind: 'new', ref: 'message:m-1', detail: JSON.stringify({ from: 'Asha', subject: 'Quote signed', snippet: 'resting HR 48' }) };
-const line = (changes: readonly Change[], id = 'e-sync', over: Partial<{ named: boolean; timezone: string; now: number }> = {}) =>
-  updatePushLine(changes, id, { named: true, timezone: 'UTC', now: NOW, ...over });
+const line = (changes: readonly Change[], id = 'e-sync', over: Partial<{ timezone: string; now: number }> = {}) =>
+  updatePushLine(changes, id, { timezone: 'UTC', now: NOW, ...over });
 
 describe('the update push line', () => {
   it('golden: names a moved meeting and its new local time', () => {
@@ -43,8 +43,7 @@ describe('the update push line', () => {
     expect(london('2026-10-25T15:00:00Z')).toBe('Sync with Krati moved to 3pm');
   });
 
-  it('is the fixed line while names are off, for a mail, for a change the job does not hold, and for one without a title', () => {
-    expect(line([event()], 'e-sync', { named: false })).toBe(PUSHES.update.body);
+  it('is the fixed line for a mail, for a change the job does not hold, and for one without a title', () => {
     expect(line([MAIL], 'm-1')).toBe(PUSHES.update.body);
     expect(line([MAIL, event()], 'e-other')).toBe(PUSHES.update.body);
     expect(line([event({ title: '' }, 'cancelled')])).toBe(PUSHES.update.body);

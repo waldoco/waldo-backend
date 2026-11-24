@@ -73,7 +73,7 @@ export type OwnerPushDeps = Readonly<{
   held?(kind: PushKind): string | null;
   spent?(kind: PushKind): void;
   eventPerDay?: number;
-  // PROACTIVE_GATE: the owner's daily budget for unasked messages, which raises the proactive ceiling up to the backstop.
+  // The owner's daily budget for unasked messages, which raises the proactive ceiling up to the backstop.
   proactivePerDay?(): number;
 }>;
 

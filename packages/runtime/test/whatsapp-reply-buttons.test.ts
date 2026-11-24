@@ -1,5 +1,5 @@
-// WHATSAPP_REPLY_BUTTONS: a card whose buttons fit WhatsApp's reply buttons goes out as one interactive message, and a tap
-// comes back through the same synthesized callback a typed "a:p12" does. Anything that does not fit keeps the text form.
+// A card whose buttons fit WhatsApp's reply buttons goes out as one interactive message, and a tap
+// comes back through the same synthesized callback a typed "a:p12" does. Anything that fits neither reply buttons nor a list keeps the text form.
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
@@ -16,36 +16,33 @@ const HOUR = 60 * 60_000;
 
 const graph = () => vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ messages: [{ id: 'wamid.out' }], contacts: [{ wa_id: SUBJECT }] }));
 const bodies = (fetcher: ReturnType<typeof graph>) => fetcher.mock.calls.map(([, init]) => JSON.parse(String(init?.body)) as Record<string, any>);
-const shim = (fetcher: ReturnType<typeof graph>, replyButtons: boolean) => whatsappTelegramShim('tok', 'pn1', SUBJECT, fetcher as unknown as typeof fetch, { replyButtons });
+const shim = (fetcher: ReturnType<typeof graph>) => whatsappTelegramShim('tok', 'pn1', SUBJECT, fetcher as unknown as typeof fetch);
 const keyboard = (...buttons: [string, string][]) => ({ inline_keyboard: [buttons.map(([text, callback_data]) => ({ text, callback_data }))] });
 
 describe('a card sent with reply buttons', () => {
   it('goes out as one interactive message with up to three reply buttons whose ids are the card callbacks', async () => {
     const fetcher = graph();
-    await shim(fetcher, true)('sendMessage', { chat_id: OWNER, text: 'Move the 10:30 to 11:00?', reply_markup: keyboard(['Do it', 'a:p1'], ['Not now', 'd:p1'], ["Don't do this", 's:p1']) });
+    await shim(fetcher)('sendMessage', { chat_id: OWNER, text: 'Move the 10:30 to 11:00?', reply_markup: keyboard(['Do it', 'a:p1'], ['Not now', 'd:p1'], ["Don't do this", 's:p1']) });
     expect(bodies(fetcher)).toEqual([{ messaging_product: 'whatsapp', to: `+${SUBJECT}`, type: 'interactive', interactive: { type: 'button', body: { text: 'Move the 10:30 to 11:00?' },
       action: { buttons: [{ type: 'reply', reply: { id: 'a:p1', title: 'Do it' } }, { type: 'reply', reply: { id: 'd:p1', title: 'Not now' } }, { type: 'reply', reply: { id: 's:p1', title: "Don't do this" } }] } } }]);
   });
 
   it('keeps the quoted message and tells the sent-text listener the card\'s words once', async () => {
     const fetcher = graph(), heard: [string, string][] = [];
-    const call = whatsappTelegramShim('tok', 'pn1', SUBJECT, fetcher as unknown as typeof fetch, { replyButtons: true, onSent: (id, text) => heard.push([id, text]) });
+    const call = whatsappTelegramShim('tok', 'pn1', SUBJECT, fetcher as unknown as typeof fetch, { onSent: (id, text) => heard.push([id, text]) });
     await call('sendMessage', { chat_id: OWNER, text: 'Send it?', turn_reply: true, quote_message_id: 'wamid.in', reply_markup: keyboard(['Send it', 'a:p2']) });
     expect(bodies(fetcher)[0]).toMatchObject({ type: 'interactive', context: { message_id: 'wamid.in' } });
     expect(heard).toEqual([['wamid.out', 'Send it?']]);
   });
 
   it.each([
-    ['the switch is off', false, 'Send this email?', keyboard(['Send it', 'a:p1'], ['Not now', 'd:p1'])],
-    ['it needs four buttons', true, 'Move it?', keyboard(['Do it', 'a:p1'], ['Modify', 'e:p1'], ['Not now', 'd:p1'], ["Don't do this", 's:p1'])],
-    ['a button is a link', true, 'Connect Google?', { inline_keyboard: [[{ text: 'Connect Google', url: 'https://example.test/connect' }]] }],
-    ['a title is longer than 20 characters', true, 'Send it?', keyboard(['Send it to everyone on the list', 'a:p1'])],
-    ['two buttons share a title', true, 'Send it?', keyboard(['Skip', 's:p1'], ['Skip', 'd:p1'])],
-    ['an id is not a card callback', true, 'Send it?', keyboard(['Send it', 'send:everything'])],
-    ['the words run past 1,024 characters', true, 'x'.repeat(WHATSAPP_REPLY_BODY_MAX + 1), keyboard(['Do it', 'a:p1'])],
-  ] as const)('stays text with reply instructions when %s', async (_why, on, text, markup) => {
+    ['a button is a link', 'Connect Google?', { inline_keyboard: [[{ text: 'Connect Google', url: 'https://example.test/connect' }]] }],
+    ['a title is longer than 20 characters', 'Send it?', keyboard(['Send it to everyone on the list', 'a:p1'])],
+    ['two buttons share a title', 'Send it?', keyboard(['Skip', 's:p1'], ['Skip', 'd:p1'])],
+    ['an id is not a card callback', 'Send it?', keyboard(['Send it', 'send:everything'])],
+  ] as const)('stays text with reply instructions when %s', async (_why, text, markup) => {
     const fetcher = graph();
-    await shim(fetcher, on)('sendMessage', { chat_id: OWNER, text, reply_markup: markup });
+    await shim(fetcher)('sendMessage', { chat_id: OWNER, text, reply_markup: markup });
     const [sent] = bodies(fetcher);
     expect(sent!.type).toBe('text');
     expect(sent!.text.body.startsWith(text.slice(0, 20))).toBe(true);
@@ -53,7 +50,7 @@ describe('a card sent with reply buttons', () => {
 
   it('is exactly 1,024 characters at the limit and one interactive message', async () => {
     const fetcher = graph();
-    await shim(fetcher, true)('sendMessage', { chat_id: OWNER, text: 'x'.repeat(WHATSAPP_REPLY_BODY_MAX), reply_markup: keyboard(['Do it', 'a:p1']) });
+    await shim(fetcher)('sendMessage', { chat_id: OWNER, text: 'x'.repeat(WHATSAPP_REPLY_BODY_MAX), reply_markup: keyboard(['Do it', 'a:p1']) });
     expect(bodies(fetcher).map(body => body.type)).toEqual(['interactive']);
   });
 
@@ -62,7 +59,7 @@ describe('a card sent with reply buttons', () => {
     const kv = { get: <T>(key: string) => map.get(key) as T | undefined, put: (key: string, value: unknown) => { map.set(key, value); }, delete: (key: string) => map.delete(key),
       list: <T>({ prefix }: { prefix: string }) => [...map].filter(([key]) => key.startsWith(prefix)) as unknown as Iterable<[string, T]> };
     kv.put('wa_last_inbound_ms', NOW - 30 * HOUR);
-    const call = whatsappWindowCaller(shim(fetcher, true), { kv, template: { name: 'waldo_update_ready', language: 'en' }, now: () => clock.now, log: () => undefined });
+    const call = whatsappWindowCaller(shim(fetcher), { kv, template: { name: 'waldo_update_ready', language: 'en' }, now: () => clock.now, log: () => undefined });
     await call('sendMessage', { chat_id: OWNER, text: 'Move the 10:30?', reply_markup: keyboard(['Do it', 'a:p9'], ['Not now', 'd:p9']) });
     expect(bodies(fetcher).map(body => body.type)).toEqual(['template']);
     kv.put('wa_last_inbound_ms', clock.now);
@@ -78,7 +75,7 @@ describe('Meta refusing the interactive form', () => {
   const card = { chat_id: OWNER, text: 'Move the 10:30?', reply_markup: keyboard(['Do it', 'a:p1'], ['Not now', 'd:p1']) };
   it('falls back to the text form once, with the reply instructions, on a definite refusal', async () => {
     const fetcher = refusing(400, 131009);
-    const ack = await shim(fetcher as ReturnType<typeof graph>, true)('sendMessage', card);
+    const ack = await shim(fetcher as ReturnType<typeof graph>)('sendMessage', card);
     expect(bodies(fetcher as ReturnType<typeof graph>).map(body => body.type)).toEqual(['interactive', 'text']);
     expect(bodies(fetcher as ReturnType<typeof graph>)[1]!.text.body).toBe('Move the 10:30?\n\n- Do it: reply "a:p1"\n- Not now: reply "d:p1"');
     expect(ack).toMatchObject({ messages: [{ id: 'wamid.text' }] });
@@ -86,7 +83,7 @@ describe('Meta refusing the interactive form', () => {
   it('does not resend after a server error or a timeout, which may have gone out, nor for the window, which the window layer owns', async () => {
     for (const [status, code] of [[500, 1], [400, 131047]] as const) {
       const fetcher = refusing(status, code);
-      await expect(shim(fetcher as ReturnType<typeof graph>, true)('sendMessage', card)).rejects.toBeInstanceOf(WhatsAppApiError);
+      await expect(shim(fetcher as ReturnType<typeof graph>)('sendMessage', card)).rejects.toBeInstanceOf(WhatsAppApiError);
       expect(bodies(fetcher as ReturnType<typeof graph>).map(body => body.type)).toEqual(['interactive']);
     }
   });
@@ -139,7 +136,7 @@ const journey = (name: string, work: (f: { desk: ReturnType<typeof approvalDesk>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`${name}-${crypto.randomUUID()}`)), async (_instance, state) => {
     const { kv, sql } = state.storage, fetcher = graph(), ran: string[] = [];
     kv.put('wa_last_inbound_ms', NOW - HOUR);
-    const call = whatsappWindowCaller(shim(fetcher, true), { kv, template: null, now: () => NOW, log: () => undefined });
+    const call = whatsappWindowCaller(shim(fetcher), { kv, template: null, now: () => NOW, log: () => undefined });
     let n = 0;
     const desk = approvalDesk(sql, { owner: OWNER, surface: 'whatsapp', call, writesFirstNow: () => whatsappWindowOpen(kv, NOW), google: async () => null, newId: () => `w${++n}`, now: () => NOW,
       timezone: 'UTC', log: () => undefined, commit: work => state.storage.transactionSync(work), appIdentity: () => true,

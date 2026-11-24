@@ -50,7 +50,7 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 const OWNER_ID = '7c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e70';
 const SUBJECT = '15550007777';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
-const whatsapp = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en', WHATSAPP_REPLY_BUTTONS: '1' };
+const whatsapp = { WHATSAPP_ACCESS_TOKEN: 'fictional-whatsapp-token', WHATSAPP_PHONE_NUMBER_ID: 'fictional-phone-id', WHATSAPP_REENGAGE_TEMPLATE: 'waldo_update_ready', WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE: 'en' };
 const google = { GOOGLE_CLIENT_ID: 'trace-fixture', GOOGLE_CLIENT_SECRET: 'fictional-secret' };
 
 beforeEach(() => {

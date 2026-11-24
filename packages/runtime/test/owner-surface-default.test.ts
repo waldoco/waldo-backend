@@ -1,5 +1,5 @@
 // A caller with no surface of its own (the console, Google consent, an event, the owner's runs) reaches the owner on the
-// surface they actually have (OWNER_SURFACE_DEFAULT), not on Telegram by default. The deploy here has no Telegram bot at all.
+// surface they actually have, not on Telegram by default. The deploy here has no Telegram bot at all.
 // The model is scripted, the directory and Google answer from fixtures, and WhatsApp's Graph API is the wire.
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
@@ -104,7 +104,7 @@ const console$ = async (owner: Owner, state: DurableObjectState) => {
   const cookie = `waldo_console=${await consoleAccess(state.storage).grant()}`;
   return (path: string, init: RequestInit = {}) => owner.fetch(new Request(`https://owner${path}`, { ...init, headers: { cookie, ...init.headers } }));
 };
-const ON = { OWNER_SURFACE_DEFAULT: '1' }, OFF = { OWNER_SURFACE_DEFAULT: '0' };
+const ON = {};
 const whatsappOnly = { whatsapp_subject: WA_SUBJECT, wa_last_inbound_ms: Date.now() - 60 * 60_000 };
 
 describe('an owner whose only surface is WhatsApp, on a deploy with no Telegram bot', { timeout: 30_000 }, () => {
@@ -155,15 +155,6 @@ describe('an owner whose only surface is WhatsApp, on a deploy with no Telegram 
     });
   });
 
-  it('with the switch off, keeps today\'s Telegram default: the console cannot open a runtime and nothing is sent anywhere', async () => {
-    await ownerOn('surface-whatsapp-off', whatsappOnly, OFF, async (owner, state) => {
-      const consoleAt = await console$(owner, state);
-      expect((await consoleAt(DASHBOARD_OVERVIEW_PATH)).status).toBe(503);
-      expect(world.texts).toEqual([]);
-      expect(telegram.sends).toEqual([]);
-    });
-  });
-
   it('holds an event that arrives outside WhatsApp\'s window for the owner, and records it as held, not as sent or unknown', async () => {
     await ownerOn('surface-whatsapp-held', { whatsapp_subject: WA_SUBJECT, wa_last_inbound_ms: Date.now() - 30 * 60 * 60_000 }, ON, async (owner, state) => {
       expect((await event(owner, 'wa-held')).status).toBe(200);
@@ -176,7 +167,7 @@ describe('an owner whose only surface is WhatsApp, on a deploy with no Telegram 
 });
 
 describe('a harness command an owner sends on WhatsApp, on a deploy with no Telegram bot', { timeout: 30_000 }, () => {
-  it('is answered on WhatsApp with the switch on', async () => {
+  it('is answered on WhatsApp', async () => {
     await ownerOn('surface-whatsapp-harness', { whatsapp_subject: WA_SUBJECT, wa_last_inbound_ms: Date.now() - 60_000 }, ON, async (owner) => {
       const admitted = await owner.fetch(new Request('https://telegram-owner/whatsapp-admit', { method: 'POST', headers: { 'x-waldo-whatsapp-subject': WA_SUBJECT },
         body: JSON.stringify({ messages: [{ from: WA_SUBJECT, id: 'wamid.in.trace', timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: '/trace' } }] }) }));
@@ -189,7 +180,7 @@ describe('a harness command an owner sends on WhatsApp, on a deploy with no Tele
   });
 });
 
-describe('the surface a caller without one reaches, with the switch on', () => {
+describe('the surface a caller without one reaches', () => {
   it('follows the owner\'s own choice of surface for proactive work over the app-first default', async () => {
     const name = 'surface-chose-whatsapp';
     await ownerOn(name, { app_subject: String(appSubjectFor(name)), ...whatsappOnly, [PROACTIVE_SURFACE_KEY]: 'whatsapp' }, ON, async (owner, state) => {

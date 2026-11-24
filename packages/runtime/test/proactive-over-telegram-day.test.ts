@@ -40,7 +40,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     if (request.response_format) return reply(request.response_format.name === 'task_source_scope' ? '{"decision":"retain","sources":[]}' : '{}');
     const last = JSON.stringify(request.messages.at(-1)?.content ?? '');
     return reply(last.includes('[Reminder due now') ? REMINDER : last.includes('[Check-back due now') ? CHECK_BACK
-      : last.includes('A background task you started has finished') ? REPORT : last.includes('[Update check,') ? UPDATE : REPLY);
+      : last.includes('A background task you started has finished') ? REPORT : last.includes('[Update check,') ? JSON.stringify({ say: UPDATE }) : REPLY);
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
 });
@@ -119,7 +119,7 @@ const ownerOn = (name: string, identity: Record<string, string | number | boolea
   });
 
 const TELEGRAM = { TELEGRAM_BOT_TOKEN: '7:synthetic-fixture' };
-const ON = { OWNER_SURFACE_DEFAULT: '1', PROACTIVE_OVER_TELEGRAM: '1', ...TELEGRAM }, OFF = { OWNER_SURFACE_DEFAULT: '1', ...TELEGRAM };
+const ON = { PROACTIVE_OVER_TELEGRAM: '1', ...TELEGRAM }, OFF = { ...TELEGRAM };
 const linked = (name: string, extra: Record<string, string | number | boolean> = {}) =>
   ({ telegram_subject: '7', app_subject: String(appSubjectFor(name)), timezone: 'UTC', timezone_confirmed: true, ...extra });
 const withWhatsApp = { whatsapp_subject: WA_SUBJECT, wa_last_inbound_ms: Date.now() - 60 * 60_000 };

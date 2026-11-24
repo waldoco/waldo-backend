@@ -54,7 +54,7 @@ it.each([
     Date.now = () => now;
     fixture.reply = reply; fixture.sent = [];
     fixture.event = { id: 'event-1', title: 'Design review', status: 'confirmed', start: '2026-10-03T10:30:00+05:30', end: '2026-10-03T11:00:00+05:30', all_day: false, description: 'Bring the onboarding mocks', etag: 'r1' };
-    const owner = new OwnerDO(state, { ...env, CALENDAR_GROUNDED_PREP: '1', LANGFUSE_CAPTURE_TEXT: undefined, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' });
+    const owner = new OwnerDO(state, { ...env, LANGFUSE_CAPTURE_TEXT: undefined, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' });
     state.storage.kv.put('do_name', name); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');
     // With no calendar grant the sweep still runs on a mail grant, and finds no calendar to prep from.

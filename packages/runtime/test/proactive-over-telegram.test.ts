@@ -97,7 +97,7 @@ const eventOutcome = (state: DurableObjectState) => ({
 });
 
 const TELEGRAM = { TELEGRAM_BOT_TOKEN: '7:synthetic-fixture' };
-const ON = { OWNER_SURFACE_DEFAULT: '1', PROACTIVE_OVER_TELEGRAM: '1', ...TELEGRAM }, OFF = { OWNER_SURFACE_DEFAULT: '1', ...TELEGRAM };
+const ON = { PROACTIVE_OVER_TELEGRAM: '1', ...TELEGRAM }, OFF = { ...TELEGRAM };
 const linked = (name: string, extra: Record<string, string | number | boolean> = {}) =>
   ({ telegram_subject: '7', app_subject: String(appSubjectFor(name)), timezone: 'UTC', timezone_confirmed: true, ...extra });
 const withWhatsApp = { whatsapp_subject: WA_SUBJECT, wa_last_inbound_ms: Date.now() - 60 * 60_000 };
@@ -218,16 +218,6 @@ describe('Waldo\'s own sends for an owner still linked on Telegram', { timeout: 
       await day(owner, state);
       expect(world.texts.filter(text => text.includes(REPLY))).not.toEqual([]);
       expect(telegram.sends).toEqual([]);
-    });
-  });
-
-  it('the switch acts only with OWNER_SURFACE_DEFAULT on, so one switch alone never splits where an owner\'s sends go', async () => {
-    const name = 'choice-surface-default-off';
-    await ownerOn(name, linked(name), { ...ON, OWNER_SURFACE_DEFAULT: '0' }, async (owner, state) => {
-      expect((await event(owner, 'split-ev')).status).toBe(200);
-      await day(owner, state);
-      expect(telegram.sends.filter(method => method === 'sendMessage').length).toBeGreaterThan(1);
-      expect(appRows(state)).not.toContain('Event - uptime: Deploy finished');
     });
   });
 

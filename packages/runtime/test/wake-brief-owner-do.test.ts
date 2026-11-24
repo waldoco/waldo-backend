@@ -52,7 +52,7 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 
 const CONFIG = { ...env, WALDO_OWNER_TELEGRAM_ID: undefined, WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture',
   GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', WALDO_ROUTER_HMAC_SECRET: SECRET, SUPABASE_PROJECT_URL: 'https://edge.test',
-  SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WAKE_BRIEF: '1', CALENDAR_GROUNDED_PREP: '0' };
+  SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WAKE_BRIEF: '1' };
 const reply = (time: string) => JSON.stringify({ cards: [{ id: 'card:brief', time, reason: 'model reason' }] });
 
 const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
