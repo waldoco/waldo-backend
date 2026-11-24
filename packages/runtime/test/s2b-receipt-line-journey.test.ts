@@ -34,7 +34,7 @@ it.each(['effect-turn', 'read-only-turn'])('S2b receipt line on the owner reply:
     let now = Date.parse('2026-10-03T06:59:00Z');
     Date.now = () => now;
     fixture.event = false; fixture.mail = false; fixture.loopId = ''; fixture.sent = []; fixture.prompts = [];
-    const config = { ...env, MAIL_SOURCE_FOLLOWUPS: undefined, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };
+    const config = { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };
     let owner = new OwnerDO(state, config);
     state.storage.kv.put('do_name', 'synthetic-mail-owner'); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');

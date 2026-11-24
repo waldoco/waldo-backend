@@ -62,16 +62,16 @@ const templateOf = (name: string | undefined, language: string | undefined): Wha
 export const whatsappTemplateConfig = (env: Readonly<{ WHATSAPP_REENGAGE_TEMPLATE?: string; WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string }>): WhatsAppTemplate | null =>
   templateOf(env.WHATSAPP_REENGAGE_TEMPLATE, env.WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE);
 // The knock for a message the owner did not ask for (a day card, an update): its own approved template, whose words do not say
-// the owner asked for anything. The reply template stands in for it only under REENGAGE_PROACTIVE (whatsappTemplates).
+// the owner asked for anything. The reply template stands in for it when none is approved (whatsappTemplates).
 export const whatsappProactiveTemplateConfig = (env: Readonly<{ WHATSAPP_PROACTIVE_TEMPLATE?: string; WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE?: string }>): WhatsAppTemplate | null =>
   templateOf(env.WHATSAPP_PROACTIVE_TEMPLATE, env.WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE);
 export type WhatsAppTemplates = Readonly<{ reply: WhatsAppTemplate | null; proactive: WhatsAppTemplate | null }>;
-// This deploy's knocks. With REENGAGE_PROACTIVE on and no proactive template approved, Waldo's own work knocks with the
-// approved re-engage template, whose words the owner ruled fit a message they did not ask for.
+// This deploy's knocks. With no proactive template approved, Waldo's own work knocks with the approved re-engage template,
+// whose words the owner ruled fit a message they did not ask for.
 export const whatsappTemplates = (env: Readonly<{ WHATSAPP_REENGAGE_TEMPLATE?: string; WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string; WHATSAPP_PROACTIVE_TEMPLATE?: string;
-  WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE?: string; REENGAGE_PROACTIVE?: string }>): WhatsAppTemplates => {
+  WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE?: string }>): WhatsAppTemplates => {
   const reply = whatsappTemplateConfig(env);
-  return { reply, proactive: whatsappProactiveTemplateConfig(env) ?? (env.REENGAGE_PROACTIVE === '1' ? reply : null) };
+  return { reply, proactive: whatsappProactiveTemplateConfig(env) ?? reply };
 };
 // The template that fits what is waiting. A reply may knock with the proactive template when it is the only one approved,
 // since its words are true of anything; Waldo's own initiative never knocks with words that say the owner asked. With no

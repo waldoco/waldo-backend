@@ -36,7 +36,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     const name = request.request.response_format?.name;
     const text = name === 'task_source_scope' ? '{"decision":"retain","sources":[]}'
       : name === 'claim_ops' ? JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [] })
-      : UPDATE_TEXT;
+      : JSON.stringify({ say: UPDATE_TEXT });
     return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };
@@ -93,12 +93,12 @@ it('an update card is written with the owner\'s health logs, no stored copy of i
       const update = fixture.requests.find(request => request.includes('Changed event'));
       expect(update).toContain('~640 kcal, estimate');
       expect(update).toContain('run, 37 min');
-      // The apply turn holds the sweep's tools (here without source follow-ups: read, and ask on a card), never the owner's
+      // The apply turn holds the sweep's tools (with source follow-ups: read, and open a follow-up loop), never the owner's
       // apply list. Choosing a reviewed skill reaches nothing, so it is the one addition every job has.
       const offered = ((JSON.parse(update!) as { tools?: { name: string }[] }).tools ?? []).map(tool => tool.name);
-      expect(offered).toContain('propose_action');
+      expect(offered).toContain('open_loop');
       expect(offered).toContain('skills_load');
-      for (const tool of offered.filter(name => !EVERY_RUN_TOOLS.includes(name))) expect(updateSweepTools(false)).toContain(tool);
+      for (const tool of offered.filter(name => !EVERY_RUN_TOOLS.includes(name))) expect(updateSweepTools(true)).toContain(tool);
       const stored = storedText(state);
       expect(stored).toContain('Changed event');
       expect(stored).not.toContain('640 kcal');

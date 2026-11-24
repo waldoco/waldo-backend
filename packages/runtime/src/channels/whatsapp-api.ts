@@ -105,12 +105,7 @@ export const WA_LAST_INBOUND_ID_KEY = 'wa_last_inbound_id';
 // onSent hears each part of what Waldo wrote to the owner, with its wamid, so a later reaction or swipe-reply naming it can be
 // read: a turn's own reply, and whatever the delivery outbox sends (the Brief, Check-in and Close, reminders, follow-ups,
 // notices). Direct system sends (sign-in and connect links among them) are never heard.
-export type WhatsAppShimOptions = Readonly<{ lastInbound?: () => string | null; now?: () => number; onSent?: (id: string, text: string) => void;
-  // WHATSAPP_REPLY_BUTTONS: a card whose buttons fit WhatsApp's reply buttons goes out as one interactive message.
-  replyButtons?: boolean;
-  // WHATSAPP_LIST_CARDS: a card those buttons cannot hold goes out as one interactive list: four choices, words past the reply
-  // buttons' 1,024 characters (up to the list's 4,096), or reply buttons off.
-  listCards?: boolean }>;
+export type WhatsAppShimOptions = Readonly<{ lastInbound?: () => string | null; now?: () => number; onSent?: (id: string, text: string) => void }>;
 
 // Meta's limits for an interactive reply-buttons message, read on 6 Nov 2026 from
 // https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/interactive-reply-buttons-messages
@@ -140,15 +135,15 @@ const choicesWithin = (buttons: readonly ShimButton[], max: number, titleMax: nu
   const fits = choices.every(choice => !choice.url && CALLBACK_ID.test(choice.id) && choice.id.length <= idMax && choice.title !== '' && choice.title.length <= titleMax);
   return fits && new Set(choices.map(choice => choice.title)).size === choices.length ? choices.map(({ id, title }) => ({ id, title })) : null;
 };
-// The interactive body for a card: reply buttons when they hold it, a list when list cards are on and it holds it; null when it
-// must go as text.
-const interactiveCard = (text: string, buttons: readonly ShimButton[], options: WhatsAppShimOptions): { type: 'interactive'; interactive: object } | null => {
+// The interactive body for a card: reply buttons when they hold it, else a list when it holds it (four choices, or words past
+// the reply buttons' 1,024 characters up to the list's 4,096); null when it must go as text.
+const interactiveCard = (text: string, buttons: readonly ShimButton[]): { type: 'interactive'; interactive: object } | null => {
   const body = text.trim();
   if (body === '') return null;
-  const replies = options.replyButtons === true && body.length <= WHATSAPP_REPLY_BODY_MAX
+  const replies = body.length <= WHATSAPP_REPLY_BODY_MAX
     ? choicesWithin(buttons, WHATSAPP_REPLY_BUTTONS_MAX, WHATSAPP_REPLY_BUTTON_TITLE_MAX, WHATSAPP_REPLY_BUTTON_ID_MAX) : null;
   if (replies) return { type: 'interactive', interactive: { type: 'button', body: { text: body }, action: { buttons: replies.map(reply => ({ type: 'reply', reply })) } } };
-  const rows = options.listCards === true && body.length <= WHATSAPP_LIST_BODY_MAX
+  const rows = body.length <= WHATSAPP_LIST_BODY_MAX
     ? choicesWithin(buttons, WHATSAPP_LIST_ROWS_MAX, WHATSAPP_LIST_ROW_TITLE_MAX, WHATSAPP_LIST_ROW_ID_MAX) : null;
   return rows ? { type: 'interactive', interactive: { type: 'list', body: { text: body }, action: { button: 'Choose', sections: [{ title: 'Your choices', rows }] } } } : null;
 };
@@ -188,7 +183,7 @@ export const whatsappTelegramShim = (token: string, phoneNumberId: string, to: s
       const buttons = (b.reply_markup?.inline_keyboard ?? []).flat().filter((x) => x.callback_data || x.url);
       // One interactive message carries the whole card: it is a single message, so a longer text or any button it cannot hold
       // keeps the text-with-instructions form, which every WhatsApp client shows.
-      const interactive = interactiveCard(b.fallback_text ?? b.text, buttons, options);
+      const interactive = interactiveCard(b.fallback_text ?? b.text, buttons);
       if (interactive) {
         // Meta refusing the interactive form (a 4xx that is not the window's 131047) falls back to the text form once, so the
         // owner still gets the card. A timeout or a 5xx may have gone out, and a window refusal must reach the window layer: both propagate.

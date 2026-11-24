@@ -353,26 +353,18 @@ describe('the planning Brief on the app', { timeout: 30_000 }, () => {
   });
 });
 
-// PROACTIVE_GATE: the Brief's answers to tap are the day's one question in flight, until the owner says anything.
+// The Brief's answers to tap are the day's one question in flight, until the owner says anything.
 describe('the Brief\'s question under the owner\'s limits', { timeout: 30_000 }, () => {
   it('opens the question when it offers answers, and the owner\'s next message, on the real index, closes it', async () => {
     model.brief = [{ calls: [{ name: 'offer_replies', arguments: { choices: ANSWERS } }] }, { text: 'The Brief\nYour morning is open. What do you want done?' }];
     model.owner = [{ text: 'On it.' }];
-    await owned('planning-brief-question-gate', { PLANNING_BRIEF: '1', PROACTIVE_GATE: '1' }, async ({ state, brief, say }) => {
+    await owned('planning-brief-question-gate', { PLANNING_BRIEF: '1' }, async ({ state, brief, say }) => {
       const book = interruptBook(state.storage.kv, { now: () => Date.now(), timezone: () => 'UTC', ownerSpokeSince: at => ownerSpokeSince(state.storage.sql, at) });
       await brief();
       expect(book.question()).toMatchObject({ ref: `card:brief:${DAY}` });
       expect(book.spent().count).toBe(0);
       await say(ANSWERS[0]!);
       expect(book.question()).toBeNull();
-    });
-  });
-
-  it('with the switch off the Brief opens no question', async () => {
-    model.brief = [{ calls: [{ name: 'offer_replies', arguments: { choices: ANSWERS } }] }, { text: 'The Brief\nYour morning is open. What do you want done?' }];
-    await owned('planning-brief-question-off', { PLANNING_BRIEF: '1', PROACTIVE_GATE: '0' }, async ({ state, brief }) => {
-      await brief();
-      expect(state.storage.kv.get('proactive_question_v1')).toBeUndefined();
     });
   });
 });
@@ -423,7 +415,7 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
   const looks = (state: DurableObjectState) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM task_jobs WHERE origin = 'machine:intervention'").one().n;
 
   it('the tick starts one reader job; the health trigger keeps its own patrol entry', async () => {
-    await owned('intervention-tick-on', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner, hops }) => {
+    await owned('intervention-tick-on', { PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner, hops }) => {
       await tick(state, owner);
       expect(looks(state)).toBe(1);
       expect(hops()).toContain('intervention_review');
@@ -432,7 +424,7 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
   });
 
   it('with the owner\'s no to unasked messages, or the switch off, the tick starts nothing', async () => {
-    await owned('intervention-tick-declined', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
+    await owned('intervention-tick-declined', { PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
       loopBook(state.storage.sql, { newId: () => 'l', now: () => AT }).setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', followups: false });
       await tick(state, owner);
       expect(looks(state)).toBe(0);
@@ -444,7 +436,7 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
   });
 
   it('each tick arms the next look inside the owner\'s day: on its cadence by day, at the next Brief after the Close', async () => {
-    await owned('intervention-next-look', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
+    await owned('intervention-next-look', { PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
       const armed = () => state.storage.sql.exec<{ due_at: number; recurrence_json: string | null }>('SELECT due_at, recurrence_json FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray();
       await tick(state, owner);
       expect(armed()).toEqual([{ due_at: AT + 120 * 60_000, recurrence_json: null }]);
@@ -464,7 +456,7 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
       headers: { 'content-type': 'application/json', 'x-waldo-do-name': name, 'x-waldo-moved-sig': sig ?? await routerSignature(directory.WALDO_ROUTER_HMAC_SECRET, 0, `placemoved.${name}`) } }));
     const armed = (state: DurableObjectState) => state.storage.sql.exec<{ due_at: number; payload_json: string }>('SELECT due_at, payload_json FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray()
       .map(row => ({ due_at: row.due_at, moved: (JSON.parse(row.payload_json) as Record<string, string>).cause_id ?? null }));
-    await owned('intervention-moved', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
+    await owned('intervention-moved', { PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
       expect(armed(state).map(row => row.moved)).toEqual([null]);
       expect((await moved(owner, 'intervention-moved', 'forged')).status).toBe(403);
       expect(armed(state).map(row => row.moved)).toEqual([null]);
@@ -490,7 +482,7 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
         expect(armed(state)).toEqual([{ due_at: AT + 121 * 60_000, moved: 'place_moved' }]);
       } finally { Date.now = later; }
     });
-    await owned('intervention-moved-same-hour', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
+    await owned('intervention-moved-same-hour', { PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
       state.storage.kv.put('owner_alarm_last_v1', 1);
       state.storage.sql.exec('DELETE FROM schedule');
       await new Scheduler(state.storage.sql, state.storage, productionDeps())
@@ -515,7 +507,7 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
       headers: { 'content-type': 'application/json', 'x-waldo-do-name': name, 'x-waldo-arrived-sig': sig ?? await routerSignature(directory.WALDO_ROUTER_HMAC_SECRET, 0, `placearrived.${place}.${name}`) } }));
     const armed = (state: DurableObjectState) => state.storage.sql.exec<{ due_at: number; payload_json: string }>('SELECT due_at, payload_json FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray()
       .map(row => ({ due_at: row.due_at, cause: (JSON.parse(row.payload_json) as Record<string, string>).cause_id ?? null }));
-    await owned('intervention-arrived', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120', ARRIVAL_LOOK: '1' }, async ({ state, owner }) => {
+    await owned('intervention-arrived', { PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120', ARRIVAL_LOOK: '1' }, async ({ state, owner }) => {
       expect((await arrived(owner, 'intervention-arrived', 'gym', 'forged')).status).toBe(403);
       expect((await arrived(owner, 'intervention-arrived', 'office')).status).toBe(403);
       expect(armed(state).map(row => row.cause)).toEqual([null]);
@@ -528,14 +520,14 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
       expect(briefs.map(row => (JSON.parse(row.brief_json) as { machine: { refs: string[] } }).machine.refs)).toEqual([['now', 'arrived_gym']]);
       expect(armed(state)).toEqual([{ due_at: AT + 120 * 60_000, cause: null }]);
     });
-    await owned('intervention-arrived-off', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
+    await owned('intervention-arrived-off', { PROACTIVE_INTERVENTIONS: '1', PROACTIVE_REVIEW_EVERY_MIN: '120' }, async ({ state, owner }) => {
       expect((await arrived(owner, 'intervention-arrived-off', 'home')).status).toBe(200);
       expect(armed(state).map(row => row.cause)).toEqual([null]);
     });
   });
 
   it('turning the heartbeat off drops the look, and turning it back on arms it again at once', async () => {
-    await owned('intervention-heartbeat-toggle', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
+    await owned('intervention-heartbeat-toggle', { PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
       const armed = () => state.storage.sql.exec('SELECT 1 FROM schedule WHERE id = ?', INTERVENTION_REVIEW_ID).toArray().length;
       const set = (value: 'on' | 'off') => (owner.setup('app') as unknown as { act(action: Readonly<{ action: 'schedule.set'; id: string; value: string }>): Promise<unknown> }).act({ action: 'schedule.set', id: 'heartbeat', value });
       expect(armed()).toBe(1);
@@ -547,7 +539,7 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
   });
 
   it('with the owner\'s heartbeat off, the look ends at its tick and is not armed again', async () => {
-    await owned('intervention-heartbeat-off', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
+    await owned('intervention-heartbeat-off', { PROACTIVE_INTERVENTIONS: '1' }, async ({ state, owner }) => {
       state.storage.sql.exec('DELETE FROM schedule');
       await armInterventionReview(new Scheduler(state.storage.sql, state.storage, productionDeps()), AT - 1000);
       const sql = state.storage.sql;

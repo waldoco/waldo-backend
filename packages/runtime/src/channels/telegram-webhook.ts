@@ -109,19 +109,12 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" makes the morning Brief a planning turn: it may put up to three changes on approval cards and offer answers to tap for
   // one question. The other cards, and the Brief with it off, are unchanged. Off unless "1".
   PLANNING_BRIEF?: string;
-  // "1" sends what has no surface of its own (the console, Google consent, an event notice, the owner's runs) to the surface
-  // the owner has: Telegram only while they are linked there on a deploy that runs it, else the app, WhatsApp or iMessage.
-  // Off: Telegram, as before.
-  OWNER_SURFACE_DEFAULT?: string;
   // "1" lets the app attach one voice note, photo or file to a chat message (APP_CHAT_UPLOAD_PATH). Off, the upload route is
   // not there and a send that names an attachment is refused.
   APP_CHAT_ATTACHMENTS?: string;
   // "1" serves the commands Telegram took in the console (DASHBOARD_HARNESS_PATH), so none needs Telegram: the owner's
   // diagnostics (/trace /e2e /usage /heldrows /ledger), and for admins /langfuse and /fire. Off, the route is not there.
   CONSOLE_HARNESS?: string;
-  // "1" lets a typed /stop on WhatsApp stop the running turn at once and the owner's background work, as on Telegram. Off, it
-  // waits its turn as any message does.
-  WHATSAPP_STOP?: string;
   // "1" lets a typed /stop on iMessage stop the running turn, the messages waiting ahead of it and the owner's background work.
   // Off, it runs as any message does.
   IMESSAGE_STOP?: string;
@@ -287,10 +280,6 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // The approved re-engagement template (WhatsApp Manager) sent when the 24-hour window is closed; unset holds without knocking.
   WHATSAPP_REENGAGE_TEMPLATE?: string;
   WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE?: string;
-  // '1': a card whose buttons fit WhatsApp's three reply buttons goes out as an interactive message; any other card stays text.
-  WHATSAPP_REPLY_BUTTONS?: string;
-  /** "1": an approval card WhatsApp's reply buttons cannot hold goes out as one interactive list instead of typed codes. */
-  WHATSAPP_LIST_CARDS?: string;
   // The approved template for a message the owner did not ask for (a day card, an update); unset, such a message waits without a knock.
   WHATSAPP_PROACTIVE_TEMPLATE?: string;
   WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE?: string;
@@ -324,28 +313,17 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   MEMORY_OUTSIDE_NOTES?: string;
   MEMORY_CLAIM_CONTROLS?: string;
   MEMORY_USED_SHOWN?: string;
-  // Opt-in only after mixed-inbox privacy and live usefulness acceptance.
-  MAIL_SOURCE_FOLLOWUPS?: string;
-  // Calendar-only prep remains off until controlled owner-path acceptance.
-  CALENDAR_GROUNDED_PREP?: string;
-  // '1' lets a prep note's app push name the meeting and its start; anything else sends the fixed line.
-  PREP_PUSH_NAMES?: string;
-  // '1' turns on the day state: the update sweep keeps what each event was, reads two weeks ahead, and its apply turn may
-  // revise a delivered day card or push. Anything else keeps the update card as it was.
-  WALDO_DAY_STATE?: string;
-  // '1' (with the day state) reads exact Google deltas from history ids and sync tokens across every calendar the owner reads,
-  // watches each, and triages each batch: act, tell, brief or silent. Anything else keeps the update sweep as it was.
+  // '1' reads exact Google deltas from history ids and sync tokens across every calendar the owner reads, watches each, and
+  // triages each batch: act, tell, brief or silent. Anything else keeps the update sweep as it was.
   GOOGLE_REALTIME_TRIAGE?: string;
   // '1' (with GOOGLE_REALTIME_TRIAGE) keeps a batch held while Waldo could not reach the owner on its update row, and judges it
   // again, once, at the first sweep that may speak. Anything else leaves it for the next day card, as before.
   HELD_RAISE?: string;
-  // '1' puts every unasked message (triage's act and tell, health proposals) under one set of owner limits: quiet hours, one
-  // question waiting, a daily budget the owner can change, the gap between two, and a small urgent allowance past the budget.
-  // Anything else keeps each kind's own budget. The three numbers below are the deployment's defaults.
-  PROACTIVE_GATE?: string;
   // '1': each owner-facing schedule toggle gates only what its label says. Notes before events off stops meeting prep, not the
   // sweep that carries the update cards, and follow-ups off no longer holds those cards. Anything else keeps the old coupling.
   SEPARATE_TOGGLES?: string;
+  // The deployment's defaults for the owner limits every unasked message is under (triage's act and tell, health proposals):
+  // quiet hours, one question waiting, a daily budget the owner can change, the gap between two, and a small urgent allowance.
   PROACTIVE_INTERRUPTS_PER_DAY?: string;
   PROACTIVE_URGENT_PER_DAY?: string;
   PROACTIVE_GAP_MIN?: string;
@@ -353,10 +331,6 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // it on one card or stays silent, in the chat role, writing for the owner's surface; and the day shape the owner approved
   // (a Check-in only when the plan slipped, with its decision on a card; a Close that ends the day). Anything else: as before.
   PROACTIVE_ACT_AHEAD?: string;
-  // An owner who chose no proactive surface and has WhatsApp bound gets proactive work on the app and WhatsApp both.
-  PROACTIVE_BOTH_DEFAULT?: string;
-  // '1' has an event notice that reaches the app chat raise one push, under quiet hours and the owner's own limits.
-  EVENT_PUSH?: string;
   // "1": when today's first health row is written after the Daily Brief reached the owner, one turn reads it against the Brief
   // and may revise it (in place where cards can be edited). Once a day. Off unless "1".
   BRIEF_BODY_REVISION?: string;
@@ -364,18 +338,13 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   EVENT_PUSH_PER_DAY?: string;
   // "1": Waldo's own sends follow the owner's choice among their other surfaces even while Telegram is linked.
   PROACTIVE_OVER_TELEGRAM?: string;
-  // '1': with no proactive template approved, Waldo's own work outside WhatsApp's window knocks with the re-engage template;
-  // and, whichever template knocks, a copy the window keeps raises one app push per closed window.
-  REENGAGE_PROACTIVE?: string;
-  // '1' (with PROACTIVE_GATE) has Waldo look across the owner's plate on its own every PROACTIVE_REVIEW_EVERY_MIN minutes
+  // '1' has Waldo look across the owner's plate on its own every PROACTIVE_REVIEW_EVERY_MIN minutes
   // (default 180, at least 30) and raise drift or an anomaly it judges worth one message or card, under the owner's limits.
   PROACTIVE_INTERVENTIONS?: string;
   PROACTIVE_REVIEW_EVERY_MIN?: string;
   // '1': on the first wake of each release, the owner's Waldo reads the team's announcements and decides how and whether to
   // tell its owner about each new capability that is live for them (announcements.ts). Off unless "1".
   WHATS_NEW?: string;
-  // '1' lets an update push say what changed (titles, times, names), checked at the send; anything else sends the fixed line.
-  UPDATE_PUSH_NAMES?: string;
   WALDO_EGRESS_ALLOWLIST?: string;
 }> & PhoneSmsEnv;
 

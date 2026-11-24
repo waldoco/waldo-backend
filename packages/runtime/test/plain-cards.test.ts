@@ -19,7 +19,7 @@ const research = { profile: 'reader', title: 'Five new signups', goal: 'Find eac
 
 const whatsappDesk = (state: DurableObjectState, extra: Partial<Parameters<typeof approvalDesk>[1]> = {}) => {
   const graph = vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ messages: [{ id: `wamid.${graph.mock.calls.length}` }], contacts: [{ wa_id: String(OWNER) }] }));
-  const call = whatsappTelegramShim('tok', 'pn1', String(OWNER), graph as unknown as typeof fetch, { replyButtons: true });
+  const call = whatsappTelegramShim('tok', 'pn1', String(OWNER), graph as unknown as typeof fetch);
   let n = 0;
   const desk = approvalDesk(state.storage.sql, {
     owner: OWNER, surface: 'whatsapp', call, appLink: appApprovalLink, appIdentity: () => true, writesFirstNow: () => true,

@@ -119,21 +119,16 @@ describe('set_proactivity: interruptions_per_day', () => {
   });
 });
 
-// With PROACTIVE_GATE off (production) nothing holds the owner's number, so set_proactivity neither offers nor takes it and
-// the ledger line never shows one: the tool and the line are what they were before the gate.
-describe('set_proactivity with the gate off', () => {
+describe('set_proactivity', () => {
   const SETTINGS = { quiet_start: '22:00', quiet_end: '07:00', volume: 'normal' as const };
-  it('offers and takes no daily number, and a stored one is neither shown nor returned', async () => {
+  it('takes the owner\'s daily number, and the ledger line shows it', async () => {
     await withKv(async (state) => {
       const loops = loopBook(state.storage.sql, { newId: () => 'l', now: () => NOW });
-      const tool = (limits: boolean) => loopHandlers(loops, undefined, limits).find(handler => handler.name === 'set_proactivity')!;
-      expect(tool(false).schema.safeParse({ ...SETTINGS, interruptions_per_day: 1 }).success).toBe(false);
-      expect(tool(true).schema.safeParse({ ...SETTINGS, interruptions_per_day: 1 }).success).toBe(true);
-      loops.setProactivity({ ...SETTINGS, interruptions_per_day: 1 });
-      const off = await tool(false).handle(tool(false).schema.parse(SETTINGS) as never);
-      expect(off.ok && 'interruptions_per_day' in (off.data as object)).toBe(false);
-      expect(proactivityLine(loops.proactivity())).toBe('Proactivity: volume normal; quiet hours 22:00-07:00');
-      expect(proactivityLine(loops.proactivity(), true)).toBe('Proactivity: volume normal; quiet hours 22:00-07:00; 1 unasked messages a day');
+      const tool = loopHandlers(loops).find(handler => handler.name === 'set_proactivity')!;
+      expect(tool.schema.safeParse({ ...SETTINGS, interruptions_per_day: 1 }).success).toBe(true);
+      const set = await tool.handle(tool.schema.parse({ ...SETTINGS, interruptions_per_day: 1 }) as never);
+      expect(set.ok && (set.data as { interruptions_per_day?: number }).interruptions_per_day).toBe(1);
+      expect(proactivityLine(loops.proactivity())).toBe('Proactivity: volume normal; quiet hours 22:00-07:00; 1 unasked messages a day');
     });
   });
 });

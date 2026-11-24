@@ -38,7 +38,7 @@ it('actual default owner mail followup', async () => {
     let now = Date.parse('2026-10-03T06:59:00Z');
     Date.now = () => now;
     fixture.mail = false; fixture.loopId = ''; fixture.sent = []; fixture.prompts = [];
-    const config = { ...env, MAIL_SOURCE_FOLLOWUPS: '1', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };
+    const config = { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };
     let owner = new OwnerDO(state, config);
     state.storage.kv.put('do_name', 'synthetic-mail-owner'); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');
@@ -73,14 +73,11 @@ it('actual default owner mail followup', async () => {
       now += 1000; await owner.alarm();
       expect(fixture.sent.filter(text => text.startsWith('Have you handled'))).toHaveLength(0);
       expect(state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)!.find(r => r.mailFollowup)?.status).toBe('pending');
-      loops.setProactivity({ quiet_start: '20:00', quiet_end: '08:00', volume: 'normal' });
-      config.MAIL_SOURCE_FOLLOWUPS = '0';
-      owner = new OwnerDO(state, config);
+      loops.setProactivity({ quiet_start: '20:00', quiet_end: '08:00', volume: 'normal', followups: false });
       now += 600_000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm();
       expect(fixture.sent.filter(text => text.startsWith('Have you handled'))).toHaveLength(0);
       expect(state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)!.find(r => r.mailFollowup)?.status).toBe('pending');
-      config.MAIL_SOURCE_FOLLOWUPS = '1';
-      owner = new OwnerDO(state, config);
+      loops.setProactivity({ quiet_start: '20:00', quiet_end: '08:00', volume: 'normal', followups: true });
       now += 600_000; state.storage.kv.put('owner_alarm_last_v1', 0); await owner.alarm();
       expect(fixture.sent.filter(text => text.startsWith('Have you handled'))).toHaveLength(1);
       await incoming('done');

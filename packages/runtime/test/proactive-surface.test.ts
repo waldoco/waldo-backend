@@ -32,46 +32,41 @@ describe('the owner\'s proactive surface setting', () => {
   });
 });
 
-describe('the default under PROACTIVE_BOTH_DEFAULT', () => {
+describe('the default', () => {
   it('is both for an owner with WhatsApp bound who has chosen nothing, and the app otherwise', () => {
     const kv = memoryKv();
-    expect(proactiveSurface(kv, true)).toBe('app');
+    expect(proactiveSurface(kv)).toBe('app');
     kv.put('whatsapp_subject', '15550001111');
-    expect(proactiveSurface(kv, false)).toBe('app');
-    expect(proactiveSurface(kv, true)).toBe('both');
+    expect(proactiveSurface(kv)).toBe('both');
     kv.put(PROACTIVE_SURFACE_KEY, 'junk');
-    expect(proactiveSurface(kv, true)).toBe('both');
+    expect(proactiveSurface(kv)).toBe('both');
   });
 
   it('never overrides a stored choice, the app included', () => {
     const kv = memoryKv();
     kv.put('whatsapp_subject', '15550001111');
-    for (const value of PROACTIVE_SURFACES) { kv.put(PROACTIVE_SURFACE_KEY, value); expect(proactiveSurface(kv, true)).toBe(value); }
+    for (const value of PROACTIVE_SURFACES) { kv.put(PROACTIVE_SURFACE_KEY, value); expect(proactiveSurface(kv)).toBe(value); }
   });
 
-  it('stores the owner\'s choice of the shown default, so it outlives the switch; with the switch off nothing changes', () => {
+  it('stores the owner\'s choice of the shown default, so it outlives a later change of default', () => {
     const links = { whatsapp: true, imessage: false };
     const kv = memoryKv();
     kv.put('whatsapp_subject', '15550001111');
-    expect(chooseProactiveSurface(kv, 'app', links, true)).toBe('saved');
+    expect(chooseProactiveSurface(kv, 'app', links)).toBe('saved');
     expect(kv.map.get(PROACTIVE_SURFACE_KEY)).toBe('app');
     const fresh = memoryKv();
     fresh.put('whatsapp_subject', '15550001111');
-    expect(chooseProactiveSurface(fresh, 'both', links, true)).toBe('saved');
+    expect(chooseProactiveSurface(fresh, 'both', links)).toBe('saved');
     expect(fresh.map.get(PROACTIVE_SURFACE_KEY)).toBe('both');
-    expect(chooseProactiveSurface(fresh, 'both', links, true)).toBe('unchanged');
-    const off = memoryKv();
-    expect(chooseProactiveSurface(off, 'app', links, false)).toBe('unchanged');
-    expect(off.map.has(PROACTIVE_SURFACE_KEY)).toBe(false);
+    expect(chooseProactiveSurface(fresh, 'both', links)).toBe('unchanged');
   });
 
   it('reads as a chat wherever a chat gets the same message, since the chat has no card beside it', () => {
     const kv = memoryKv();
     kv.put('whatsapp_subject', '15550001111');
-    expect(proactiveReads(kv, true)).toBe('chat');
-    expect(proactiveReads(kv, false)).toBe('cards');
-    kv.put(PROACTIVE_SURFACE_KEY, 'both');
-    expect(proactiveReads(kv, false)).toBe('cards');
+    expect(proactiveReads(kv)).toBe('chat');
+    kv.put(PROACTIVE_SURFACE_KEY, 'app');
+    expect(proactiveReads(kv)).toBe('cards');
   });
 });
 
@@ -125,6 +120,7 @@ describe('choosing the surface from the app or the console', () => {
 
   it('says unchanged for the surface already in use, and refuses a value it does not know without storing it', () => {
     const kv = memoryKv();
+    expect(chooseProactiveSurface(kv, 'app', links(null, null))).toBe('saved');
     expect(chooseProactiveSurface(kv, 'app', links(null, null))).toBe('unchanged');
     expect(chooseProactiveSurface(kv, 'both', links(true, false))).toBe('saved');
     expect(chooseProactiveSurface(kv, 'both', links(true, false))).toBe('unchanged');
@@ -180,13 +176,11 @@ describe('where proactive work goes', () => {
 });
 
 describe('how the owner reads proactive work', () => {
-  it('beside the cards in the app and alone in a chat; with the switch on, alone wherever a chat also gets the same message', () => {
+  it('beside the cards in the app, and alone wherever a chat also gets the same message', () => {
     const kv = memoryKv();
     expect(proactiveReads(kv)).toBe('cards');
     const reads = (setting: ProactiveSurface) => { setProactiveSurface(kv, setting); return proactiveReads(kv); };
-    expect(PROACTIVE_SURFACES.map(reads)).toEqual(['cards', 'chat', 'cards', 'cards']);
-    const readsWithSwitch = (setting: ProactiveSurface) => { setProactiveSurface(kv, setting); return proactiveReads(kv, true); };
-    expect(PROACTIVE_SURFACES.map(readsWithSwitch)).toEqual(['cards', 'chat', 'chat', 'chat']);
+    expect(PROACTIVE_SURFACES.map(reads)).toEqual(['cards', 'chat', 'chat', 'chat']);
   });
 });
 

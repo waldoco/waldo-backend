@@ -68,7 +68,7 @@ const onSurface = (name: string, surface: 'whatsapp' | 'imessage', work: (o: Rea
     state.storage.kv.put(`${surface}_subject`, SUBJECT);
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
-    const owner = new OwnerDO(state, { ...env, ...whatsappEnv, ...(name.includes('directory') ? directory : {}), CALENDAR_GROUNDED_PREP: '1', TELEGRAM_BOT_TOKEN: undefined, WALDO_OWNER_TELEGRAM_ID: undefined, WALDO_OWNER_TIMEZONE: 'Asia/Kolkata',
+    const owner = new OwnerDO(state, { ...env, ...whatsappEnv, ...(name.includes('directory') ? directory : {}), TELEGRAM_BOT_TOKEN: undefined, WALDO_OWNER_TELEGRAM_ID: undefined, WALDO_OWNER_TIMEZONE: 'Asia/Kolkata',
       OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' }) as unknown as Internals;
     const runtime = owner.setup(surface);
     try {

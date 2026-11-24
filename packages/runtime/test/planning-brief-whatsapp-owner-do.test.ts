@@ -63,8 +63,8 @@ beforeEach(() => {
     if (fn === 'health_context_read') return Response.json(null);
     if (fn === 'health_log_recent') return Response.json([]);
     if (url === 'https://graph.facebook.com/v26.0/fictional-phone-id/messages') {
-      const body = JSON.parse(String(init?.body)) as { to: string; type: string; text?: { body: string } };
-      if (body.type === 'text') wire.texts.push(body.text!.body); else wire.other.push(body.type);
+      const body = JSON.parse(String(init?.body)) as { to: string; type: string; text?: { body: string }; interactive?: unknown };
+      if (body.type === 'text') wire.texts.push(body.text!.body); else if (body.type === 'interactive') wire.texts.push(JSON.stringify(body.interactive)); else wire.other.push(body.type);
       return Response.json({ messaging_product: 'whatsapp', contacts: [{ input: body.to, wa_id: body.to }], messages: [{ id: `wamid.out.${wire.texts.length + wire.other.length}` }] });
     }
     return new Response('unexpected', { status: 500 });
@@ -97,9 +97,11 @@ describe('the planning Brief on WhatsApp', { timeout: 30_000 }, () => {
         expect(model.briefTools[0]).not.toContain('offer_replies');
         const [approval] = state.storage.sql.exec<{ id: string; kind: string; status: string }>('SELECT id, kind, status FROM ledger ORDER BY created_at').toArray();
         expect(approval).toMatchObject({ kind: 'calendar_change', status: 'open' });
-        // Both reached WhatsApp as text: the card first, as a card raised during a turn always is, then the Brief that asks.
+        // Both reached WhatsApp: the card first, as a card raised during a turn always is, with its choices to tap, then the
+        // Brief that asks in words.
         const card = wire.texts.findIndex(text => text.includes(`a:${approval!.id}`)), brief = wire.texts.indexOf(BRIEF);
         expect(card).toBeGreaterThanOrEqual(0);
+        expect(JSON.parse(wire.texts[card]!)).toMatchObject({ type: expect.stringMatching(/^(button|list)$/) });
         expect(brief).toBeGreaterThan(card);
         expect(wire.other).toEqual([]);
         expect(calendar.moved).toEqual([]);

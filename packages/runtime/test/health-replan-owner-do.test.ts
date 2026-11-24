@@ -239,11 +239,11 @@ describe('Weight follows the day', () => {
       // The sweep saved what changed before it read the health row, so a slow or failed read cannot lose the change.
       expect(world.recordedAtRead).toEqual([1]);
       expect(entry(o.state, HEALTH_RECOMPUTE_ID)).toEqual({ due_at: Date.now() + HEALTH_RECOMPUTE_WINDOW_MS });
-      // A second change inside the window is the same recompute.
+      // A second change inside the window waits behind the sweep's judge gap, so it is the same recompute.
       vi.setSystemTime(Date.now() + 20_000);
       world.changed = [{ ...OFFSITE, end: '2026-10-21T19:30:00+05:30', status: 'confirmed', created: new Date(NOW - 86_400_000).toISOString() }];
       await o.sweep();
-      expect(calendarLogs()).toEqual([{ ok: true, code: 'asked' }, { ok: true, code: 'asked' }]);
+      expect(calendarLogs()).toEqual([{ ok: true, code: 'asked' }]);
       expect(entry(o.state, HEALTH_RECOMPUTE_ID)).toEqual({ due_at: NOW + 10 * 60_000 + HEALTH_RECOMPUTE_WINDOW_MS });
       vi.setSystemTime(entry(o.state, HEALTH_RECOMPUTE_ID)!.due_at);
       await o.pass();

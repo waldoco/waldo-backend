@@ -37,7 +37,7 @@ it.each(['flag-unset', 'owner-opt-out'])('S5 default-on mail followup through th
     let now = Date.parse('2026-10-03T06:59:00Z');
     Date.now = () => now;
     fixture.event = false; fixture.mail = false; fixture.loopId = ''; fixture.sent = []; fixture.prompts = [];
-    const config = { ...env, MAIL_SOURCE_FOLLOWUPS: undefined, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };
+    const config = { ...env, WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };
     let owner = new OwnerDO(state, config);
     state.storage.kv.put('do_name', 'synthetic-mail-owner'); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');
@@ -70,7 +70,7 @@ it.each(['flag-unset', 'owner-opt-out'])('S5 default-on mail followup through th
       // the source loop.
       expect(reportMachineJobs(state.storage.sql)).toHaveLength(1);
       await (owner as unknown as { drainJobs(channel: string): Promise<void> }).drainJobs('telegram');
-      expect(loops.list(), 'default-on: a deadline mail must open a follow-up loop with MAIL_SOURCE_FOLLOWUPS unset').toHaveLength(1);
+      expect(loops.list(), 'default-on: a deadline mail must open a follow-up loop').toHaveLength(1);
       const open = loops.list()[0]!; fixture.loopId = open.id;
       expect(open.source_ref).toBe('mail:mail-thread-1');
       expect(fixture.prompts.some(text => text.includes('[source_ref mail:mail-thread-1]'))).toBe(true);

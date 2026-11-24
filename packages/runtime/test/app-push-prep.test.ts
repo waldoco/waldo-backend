@@ -78,22 +78,18 @@ describe('the prep push', () => {
 describe('the prep push body', () => {
   const start = '2026-10-03T05:00:00Z';
 
-  it('is the fixed line, with no title, while names are off', () => {
-    expect(prepPushBody({ title: 'Design review with Asha', start, timezone: 'Asia/Kolkata', named: false })).toBe(PUSHES.prep.body);
-  });
-
-  it('names the meeting and its local start when names are on', () => {
-    expect(prepPushBody({ title: 'Design review', start, timezone: 'Asia/Kolkata', named: true })).toBe('Prep: Design review at 10:30am');
+  it('names the meeting and its local start', () => {
+    expect(prepPushBody({ title: 'Design review', start, timezone: 'Asia/Kolkata' })).toBe('Prep: Design review at 10:30am');
   });
 
   it('never carries an email address, a link, a health value, or an empty or overlong title', () => {
-    expect(prepPushBody({ title: 'Sync with asha@example.test and ben@example.test', start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
-    expect(prepPushBody({ title: 'Verify your account at evil.co/x', start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
-    expect(prepPushBody({ title: 'Call zoom.us/j/8812345678?pwd=Xy12ab', start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
-    expect(prepPushBody({ title: 'Verify at evil\uff0eco/login', start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
-    expect(prepPushBody({ title: 'Recovery chat: HRV 42 ms', start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
-    expect(prepPushBody({ title: 'asha@example.test', start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
-    expect(prepPushBody({ title: undefined, start, timezone: 'UTC', named: true })).toBe(PUSHES.prep.body);
-    expect(prepPushBody({ title: 'x'.repeat(200), start, timezone: 'UTC', named: true }).length).toBeLessThanOrEqual('Prep:  at 5am'.length + 60);
+    expect(prepPushBody({ title: 'Sync with asha@example.test and ben@example.test', start, timezone: 'UTC' })).toBe(PUSHES.prep.body);
+    expect(prepPushBody({ title: 'Verify your account at evil.co/x', start, timezone: 'UTC' })).toBe(PUSHES.prep.body);
+    expect(prepPushBody({ title: 'Call zoom.us/j/8812345678?pwd=Xy12ab', start, timezone: 'UTC' })).toBe(PUSHES.prep.body);
+    expect(prepPushBody({ title: 'Verify at evil\uff0eco/login', start, timezone: 'UTC' })).toBe(PUSHES.prep.body);
+    expect(prepPushBody({ title: 'Recovery chat: HRV 42 ms', start, timezone: 'UTC' })).toBe(PUSHES.prep.body);
+    expect(prepPushBody({ title: 'asha@example.test', start, timezone: 'UTC' })).toBe(PUSHES.prep.body);
+    expect(prepPushBody({ title: undefined, start, timezone: 'UTC' })).toBe(PUSHES.prep.body);
+    expect(prepPushBody({ title: 'x'.repeat(200), start, timezone: 'UTC' }).length).toBeLessThanOrEqual('Prep:  at 5am'.length + 60);
   });
 });

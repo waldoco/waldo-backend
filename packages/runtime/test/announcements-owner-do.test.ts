@@ -60,7 +60,7 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 type Owner = Readonly<{ fetch(request: Request): Promise<Response>; alarm(): Promise<void>; setup(channel: string): { ready: Promise<unknown>; announcementPass(): Promise<void>; ledger(): Promise<string> } }>;
-type Config = Readonly<{ switches?: Record<string, string>; release?: string; gate?: boolean; off?: boolean; whatsNewChars?: string }>;
+type Config = Readonly<{ switches?: Record<string, string>; release?: string; off?: boolean; whatsNewChars?: string }>;
 
 const withOwner = async <T>(name: string, run: (owner: (config?: Config) => Owner, state: DurableObjectState) => Promise<T>): Promise<T> => {
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
@@ -74,7 +74,7 @@ const withOwner = async <T>(name: string, run: (owner: (config?: Config) => Owne
     await state.storage.put('google:accounts', MAIL_ONLY_GOOGLE);
     const owner = (config: Config = {}) => new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TELEGRAM_ID: undefined,
       WALDO_ENVIRONMENT: 'staging', WALDO_RELEASE: config.release ?? 'r1', WHATS_NEW: config.off ? '0' : '1', WALDO_SWITCHES: JSON.stringify(config.switches ?? { TRUSTED_COORDINATION: '1' }),
-      ...(config.gate ? { PROACTIVE_GATE: '1' } : {}), ...(config.whatsNewChars ? { WALDO_WHATS_NEW_CHARS: config.whatsNewChars } : {}) } as never) as unknown as Owner;
+      ...(config.whatsNewChars ? { WALDO_WHATS_NEW_CHARS: config.whatsNewChars } : {}) } as never) as unknown as Owner;
     try { return await run(owner, state); } finally { await state.storage.deleteAlarm(); poolAlarm.mockRestore(); }
   });
 };
@@ -214,7 +214,7 @@ describe('what\'s new in the owner object', () => {
   it('with the owner\'s limits in force, the model may tell them now: one message in the app chat, one interruption, reported once delivered', async () => {
     model.decision = '{"items":[{"id":"family","decision":"say"}],"say":"Now I can plan with your family\'s Waldo. Want me to set that up?"}';
     await withOwner('announce-say', async (owner, state) => {
-      const runtime = owner({ gate: true });
+      const runtime = owner();
       await runtime.setup('app').ready;
       // Inside the owner's day, so an unasked message may go.
       dayPlanBook(state.storage.sql).save(localIso(Date.now(), 'UTC').slice(0, 10), { card: 'card:brief', time: '00:00', reason: 'planned' });
@@ -237,7 +237,7 @@ describe('what\'s new in the owner object', () => {
   ] as const) it(`${why} hold a message the model chose: nothing goes, no interruption is spent, the card carries it`, async () => {
     model.decision = '{"items":[{"id":"family","decision":"say"}],"say":"Now!"}';
     await withOwner(`announce-hold-${why.replace(/ /g, '-')}`, async (owner, state) => {
-      const runtime = owner({ gate: true });
+      const runtime = owner();
       await runtime.setup('app').ready;
       dayPlanBook(state.storage.sql).save(localIso(Date.now(), 'UTC').slice(0, 10), { card: 'card:brief', time: '00:00', reason: 'planned' });
       state.storage.sql.exec('INSERT INTO proactivity (id, settings) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET settings = excluded.settings', JSON.stringify(settings()));
@@ -253,7 +253,7 @@ describe('what\'s new in the owner object', () => {
   it('follow-ups turned off after a message was queued: it does not go and waits for the card again', async () => {
     model.decision = '{"items":[{"id":"family","decision":"say"}],"say":"Now I can plan with your family\'s Waldo."}';
     await withOwner('announce-send-time-consent', async (owner, state) => {
-      const runtime = owner({ gate: true });
+      const runtime = owner();
       await runtime.setup('app').ready;
       dayPlanBook(state.storage.sql).save(localIso(Date.now(), 'UTC').slice(0, 10), { card: 'card:brief', time: '00:00', reason: 'planned' });
       await runtime.setup('app').announcementPass();
@@ -270,7 +270,7 @@ describe('what\'s new in the owner object', () => {
   it('quiet hours starting after a message was queued: it waits for them to end rather than going or being dropped', async () => {
     model.decision = '{"items":[{"id":"family","decision":"say"}],"say":"Now I can plan with your family\'s Waldo."}';
     await withOwner('announce-send-time-quiet', async (owner, state) => {
-      const runtime = owner({ gate: true });
+      const runtime = owner();
       await runtime.setup('app').ready;
       dayPlanBook(state.storage.sql).save(localIso(Date.now(), 'UTC').slice(0, 10), { card: 'card:brief', time: '00:00', reason: 'planned' });
       await runtime.setup('app').announcementPass();
@@ -310,12 +310,12 @@ describe('what\'s new in the owner object', () => {
   it('a capability switched off after the decision is not said: the card leaves it out and a queued message does not go', async () => {
     model.decision = '{"items":[{"id":"family","decision":"say"}],"say":"Now I can plan with your family\'s Waldo."}';
     await withOwner('announce-switched-off', async (owner, state) => {
-      const on = owner({ gate: true });
+      const on = owner();
       await on.setup('app').ready;
       dayPlanBook(state.storage.sql).save(localIso(Date.now(), 'UTC').slice(0, 10), { card: 'card:brief', time: '00:00', reason: 'planned' });
       await on.setup('app').announcementPass();
       expect(stateOf(state)).toEqual({ family: 'messaged' });
-      const off = owner({ gate: true, switches: { TRUSTED_COORDINATION: '0' } });
+      const off = owner({ switches: { TRUSTED_COORDINATION: '0' } });
       await new Promise(resolve => setTimeout(resolve, 400));
       await off.alarm();
       expect(await appChat(off, 'announce-switched-off')).not.toContain('Now I can plan with your family\'s Waldo.');
@@ -325,16 +325,6 @@ describe('what\'s new in the owner object', () => {
       await dueBrief(state);
       await off.alarm();
       expect([stateOf(state), wire.reports]).toEqual([{ family: 'card' }, []]);
-    });
-  });
-
-  it('without interruption limits in force, a chosen message waits for the card instead', async () => {
-    model.decision = '{"items":[{"id":"family","decision":"say"}],"say":"Now!"}';
-    await withOwner('announce-no-gate', async (owner, state) => {
-      const runtime = owner();
-      await runtime.setup('app').announcementPass();
-      expect(stateOf(state)).toEqual({ family: 'card' });
-      expect(await appChat(runtime, 'announce-no-gate')).not.toContain('Now!');
     });
   });
 

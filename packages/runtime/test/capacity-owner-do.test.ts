@@ -213,7 +213,7 @@ describe('the planning Brief with CAPACITY_BUDGET', { timeout: 30_000 }, () => {
   const EXPENSES = { id: 'ev-expenses', title: 'Expense report', start: `${DAY}T17:00:00Z`, end: `${DAY}T18:00:00Z`, status: 'confirmed' };
   const LIGHT = { id: 'ev-dentist', title: 'Dentist', start: '2030-03-08T09:00:00Z', end: '2030-03-08T10:00:00Z', status: 'confirmed' };
   const MOVE = { action: 'move', event_id: EXPENSES.id, title: EXPENSES.title, start: '2030-03-08T13:30:00Z', end: '2030-03-08T14:30:00Z', reason: 'Today runs past what holds for you; Friday afternoon is light' };
-  const BUDGET = { CAPACITY_PLAN: '1', CAPACITY_BUDGET: '1', PLANNING_BRIEF: '1', PROACTIVE_GATE: '1' };
+  const BUDGET = { CAPACITY_PLAN: '1', CAPACITY_BUDGET: '1', PLANNING_BRIEF: '1' };
   const brief = () => model.cards.find(asked => asked.request.includes('Scheduled card \\"The Daily Brief'))!;
   const weekReads = () => calendar.reads.filter(read => read.startsWith(TOMORROW));
 
@@ -301,7 +301,7 @@ describe('the Brief and the Close with CAPACITY_PLAN', { timeout: 30_000 }, () =
     const RESET = { action: 'create', title: 'Reset: long walk, no screens', start: `${DAY}T17:00:00Z`, end: `${DAY}T19:00:00Z`, block: 'rest', reason: 'Your week ran heavy; Saturday afternoon is the stretch you keep free' };
     model.card = [{ calls: [{ name: 'propose_calendar_change', arguments: RESET }] }, { text: 'The Daily Brief\nA heavy week behind you. I put a reset on a card for your yes.' },
       { text: 'The Close\nThe reset waits on your yes.' }];
-    await owned('capacity-brief-reset', { CAPACITY_PLAN: '1', PLANNING_BRIEF: '1', PROACTIVE_GATE: '1' }, async ({ state, card, approvals }) => {
+    await owned('capacity-brief-reset', { CAPACITY_PLAN: '1', PLANNING_BRIEF: '1' }, async ({ state, card, approvals }) => {
       const book = interruptBook(state.storage.kv, { now: () => Date.now(), timezone: () => 'UTC', ownerSpokeSince: at => ownerSpokeSince(state.storage.sql, at) });
       await card('card:brief');
       expect(model.cards[0]!.tools).toContain('propose_calendar_change');
@@ -347,7 +347,7 @@ describe('the Close with TOMORROW_TODAY', { timeout: 30_000 }, () => {
   const HOLD = { action: 'create', title: 'Deck', start: '2030-03-06T08:00:00Z', end: '2030-03-06T09:45:00Z', block: 'deep_work', reason: 'Your best hours are early and one block holds after a heavy day' };
   it('raises a deep-work card in the chat role, under the owner\'s limits, and the calendar waits for yes; off, it offers no card', async () => {
     model.card = [{ calls: [{ name: 'propose_calendar_change', arguments: HOLD }] }, { text: 'The Close\nTomorrow your best stretch is before Standup; a block for it waits on your yes. Done for today.' }];
-    await owned('tomorrow-close-on', { TOMORROW_TODAY: '1', PROACTIVE_GATE: '1' }, async ({ state, card, approvals }) => {
+    await owned('tomorrow-close-on', { TOMORROW_TODAY: '1' }, async ({ state, card, approvals }) => {
       const book = interruptBook(state.storage.kv, { now: () => Date.now(), timezone: () => 'UTC', ownerSpokeSince: at => ownerSpokeSince(state.storage.sql, at) });
       await card('card:close');
       expect(model.cards[0]!.tools).toContain('propose_calendar_change');
@@ -395,7 +395,7 @@ describe('TOMORROW_TODAY under the owner\'s settings', { timeout: 30_000 }, () =
   const HOLD = { action: 'create', title: 'Deck', start: '2030-03-06T08:00:00Z', end: '2030-03-06T09:45:00Z', block: 'deep_work', reason: 'Your best hours are early' };
   it('in quiet hours the Close waits: no model call and no card', async () => {
     model.card = [{ calls: [{ name: 'propose_calendar_change', arguments: HOLD }] }, { text: 'The Close\nA block waits on your yes.' }];
-    await owned('tomorrow-close-quiet', { TOMORROW_TODAY: '1', PROACTIVE_GATE: '1' }, async ({ state, card, approvals }) => {
+    await owned('tomorrow-close-quiet', { TOMORROW_TODAY: '1' }, async ({ state, card, approvals }) => {
       loopBook(state.storage.sql, { newId: () => 'fixture', now: () => Date.now() }).setProactivity({ quiet_start: '07:00', quiet_end: '09:00', volume: 'normal' });
       await card('card:close');
       expect(model.cards).toEqual([]);
@@ -406,7 +406,7 @@ describe('TOMORROW_TODAY under the owner\'s settings', { timeout: 30_000 }, () =
 
   it('with the day\'s interruptions spent and the gap not passed, the Close still goes with its card and is not charged', async () => {
     model.card = [{ calls: [{ name: 'propose_calendar_change', arguments: HOLD }] }, { text: 'The Close\nA block waits on your yes.' }];
-    await owned('tomorrow-close-spent', { TOMORROW_TODAY: '1', PROACTIVE_GATE: '1' }, async ({ state, card, approvals }) => {
+    await owned('tomorrow-close-spent', { TOMORROW_TODAY: '1' }, async ({ state, card, approvals }) => {
       const book = interruptBook(state.storage.kv, { now: () => Date.now(), timezone: () => 'UTC', ownerSpokeSince: at => ownerSpokeSince(state.storage.sql, at) });
       const spent = { day: book.spent().day, count: 2, urgent: 1, last: Date.now() - 60_000 };
       state.storage.kv.put(INTERRUPTS_KEY, spent);

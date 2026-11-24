@@ -64,7 +64,7 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown> }; alarm(): Promise<void> }>;
-const withOwner = (name: string, dayState: '0' | '1', work: (h: Readonly<{ sweep(): Promise<void>; due(card: string): number | undefined; sql: SqlStorage }>) => Promise<void>) =>
+const withOwner = (name: string, work: (h: Readonly<{ sweep(): Promise<void>; due(card: string): number | undefined; sql: SqlStorage }>) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const originalNow = Date.now;
     clock = Date.parse('2026-10-20T06:00:00Z');
@@ -77,7 +77,7 @@ const withOwner = (name: string, dayState: '0' | '1', work: (h: Readonly<{ sweep
       state.storage.kv.put('timezone_confirmed', true);
       await state.storage.put('origin', 'https://fixture.invalid');
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
-      const owner = new OwnerDO(state, { ...env, ...directory, WALDO_DAY_STATE: dayState, CALENDAR_GROUNDED_PREP: '0', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture',
+      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture',
         OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined,
         GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' }) as unknown as Owner;
       await owner.setup('app').ready;
@@ -97,7 +97,7 @@ const withOwner = (name: string, dayState: '0' | '1', work: (h: Readonly<{ sweep
 const replanNotes = (sql: SqlStorage) => sql.exec<{ ok: number; note: string | null }>("SELECT ok, note FROM trace_log WHERE hop = 'day_plan' AND trace LIKE '%:replan'").toArray();
 
 it('golden: a call added before the Brief moves the Brief ahead of it; the cards the reply leaves out keep their times', async () => {
-  await withOwner('day-replan-golden', '1', async ({ sweep, due, sql }) => {
+  await withOwner('day-replan-golden', async ({ sweep, due, sql }) => {
     fixture.reply = JSON.stringify({ cards: [{ id: 'card:brief', time: '07:15', reason: 'before the 07:30 call' }] });
     fixture.listed = [LISTED];
     fixture.changed = [CALL];
@@ -114,7 +114,7 @@ it('golden: a call added before the Brief moves the Brief ahead of it; the cards
 });
 
 it('a burst of changes in one pass costs one re-plan', async () => {
-  await withOwner('day-replan-burst', '1', async ({ sweep }) => {
+  await withOwner('day-replan-burst', async ({ sweep }) => {
     fixture.reply = JSON.stringify({ cards: [] });
     fixture.listed = Array.from({ length: 5 }, (_, i) => ({ ...LISTED, id: `e-${i}`, start: `2026-10-20T1${i}:00:00Z`, end: `2026-10-20T1${i}:30:00Z` }));
     fixture.changed = fixture.listed.map(item => ({ ...item, status: 'confirmed', created: CALL.created }));
@@ -124,7 +124,7 @@ it('a burst of changes in one pass costs one re-plan', async () => {
 });
 
 it('a re-plan the model could not give keeps the plan', async () => {
-  await withOwner('day-replan-failed', '1', async ({ sweep, due, sql }) => {
+  await withOwner('day-replan-failed', async ({ sweep, due, sql }) => {
     fixture.reply = 'SKIP';
     fixture.listed = [LISTED];
     fixture.changed = [CALL];
@@ -134,25 +134,12 @@ it('a re-plan the model could not give keeps the plan', async () => {
   });
 });
 
-it('with the day state off, a change touching today re-plans nothing', async () => {
-  await withOwner('day-replan-off', '0', async ({ sweep, due, sql }) => {
-    fixture.reply = JSON.stringify({ cards: [{ id: 'card:brief', time: '07:15', reason: 'x' }] });
-    fixture.listed = [LISTED];
-    fixture.changed = [CALL];
-    await sweep();
-    await sweep();
-    expect(fixture.replans).toEqual([]);
-    expect(replanNotes(sql)).toEqual([]);
-    expect(due('card:brief')).toBe(Date.parse('2026-10-20T08:00:00Z'));
-  });
-});
-
 it('a re-plan that throws before it reads the calendar is logged, never left unhandled', async () => {
   const unhandled: unknown[] = [];
   const onUnhandled = (event: PromiseRejectionEvent) => { unhandled.push(event.reason); event.preventDefault(); };
   globalThis.addEventListener('unhandledrejection', onUnhandled);
   try {
-    await withOwner('day-replan-throws', '1', async ({ sweep, due, sql }) => {
+    await withOwner('day-replan-throws', async ({ sweep, due, sql }) => {
       fixture.movableThrows = true;
       fixture.listed = [LISTED];
       fixture.changed = [CALL];

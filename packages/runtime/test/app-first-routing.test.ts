@@ -51,7 +51,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
       : format === 'claim_ops' ? JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null })
       : content.includes('[Meeting prep decision') ? JSON.stringify({ kind: 'notify', text: PREP_TEXT })
       : content.includes('[Mail follow-up check') ? FOLLOWUP_TEXT
-      : content.includes('[Update check') ? UPDATE_TEXT
+      : content.includes('[Update check') ? JSON.stringify({ say: UPDATE_TEXT })
       : content.includes('[Scheduled card') ? CARD_TEXT
       : content.includes('[Standing order due now') ? ORDER_TEXT
       : content.includes('[Check-back due now') ? CHECK_BACK_TEXT : 'SKIP';
@@ -104,7 +104,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 
 type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown> }; fetch(request: Request): Promise<Response>; alarm(): Promise<void> }>;
 type Ctx = { now: number; name: string; appSubject: number };
-// over: PROACTIVE_OVER_TELEGRAM with OWNER_SURFACE_DEFAULT, the owner's choice ahead of their Telegram link.
+// over: PROACTIVE_OVER_TELEGRAM, the owner's choice ahead of their Telegram link.
 type Binding = Readonly<{ app?: boolean; over?: boolean }>;
 
 // An owner bound to Telegram (subject 7) who has also used the app, with Google connected, the clock pinned, and no time
@@ -125,8 +125,8 @@ const withOwner = async (name: string, run: (owner: Owner, state: DurableObjectS
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only',
         scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/gmail.readonly'] }]);
       const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC',
-        WALDO_OWNER_TELEGRAM_ID: undefined, GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', WALDO_OAUTH_STATE_SECRET: 'synthetic-state-secret', MAIL_SOURCE_FOLLOWUPS: '1', CALENDAR_GROUNDED_PREP: '1',
-        ...(binding.over ? { OWNER_SURFACE_DEFAULT: '1', PROACTIVE_OVER_TELEGRAM: '1' } : {}) }) as unknown as Owner;
+        WALDO_OWNER_TELEGRAM_ID: undefined, GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', WALDO_OAUTH_STATE_SECRET: 'synthetic-state-secret',
+        ...(binding.over ? { PROACTIVE_OVER_TELEGRAM: '1' } : {}) }) as unknown as Owner;
       await owner.setup('telegram').ready;
       await owner.setup('app').ready;
       state.storage.sql.exec('DELETE FROM schedule');

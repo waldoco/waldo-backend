@@ -138,7 +138,7 @@ const world = async (name: string, setup: Setup, run: (world: World) => Promise<
     if (setup.accounts) await state.storage.put('google:accounts', setup.accounts);
     state.storage.sql.exec('CREATE TABLE IF NOT EXISTS schedule_preferences (kind TEXT PRIMARY KEY, enabled INTEGER NOT NULL)');
     for (const kind of setup.off ?? []) state.storage.sql.exec('INSERT INTO schedule_preferences (kind, enabled) VALUES (?, 0)', kind);
-    const owner = new OwnerDO(state, { ...env, ...CONFIG, WALDO_OWNER_TELEGRAM_ID: setup.surface === 'app' ? undefined : '7', ...(setup.pushProject === undefined ? {} : { GMAIL_PUSH_PROJECT: setup.pushProject }), ...(setup.realtime ? { WALDO_DAY_STATE: '1', GOOGLE_REALTIME_TRIAGE: '1' } : {}) }) as unknown as Owner;
+    const owner = new OwnerDO(state, { ...env, ...CONFIG, WALDO_OWNER_TELEGRAM_ID: setup.surface === 'app' ? undefined : '7', ...(setup.pushProject === undefined ? {} : { GMAIL_PUSH_PROJECT: setup.pushProject }), ...(setup.realtime ? { GOOGLE_REALTIME_TRIAGE: '1' } : {}) }) as unknown as Owner;
     const logs: MockInstance = vi.spyOn(console, 'log');
     const connect = async (id: string, scopes: readonly string[], email = EMAIL) => {
       edge.exchange = { id, scopes: [...scopes], email };

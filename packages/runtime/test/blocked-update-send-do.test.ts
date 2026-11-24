@@ -34,7 +34,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     const name = request.request.response_format?.name;
     const text = name === 'task_source_scope' ? '{"decision":"retain","sources":[]}'
       : name === 'claim_ops' ? JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [] })
-      : 'Synthetic update text.';
+      : JSON.stringify({ say: 'Synthetic update text.' });
     return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };

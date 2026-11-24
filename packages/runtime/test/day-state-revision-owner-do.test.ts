@@ -112,7 +112,7 @@ it.each([
       state.storage.kv.put('timezone_confirmed', true);
       await state.storage.put('origin', 'https://fixture.invalid');
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
-      const owner = new OwnerDO(state, { ...env, ...directory, WALDO_DAY_STATE: '1', UPDATE_PUSH_NAMES: '1', CALENDAR_GROUNDED_PREP: '0', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture',
+      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture',
         OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, EXPO_ACCESS_TOKEN: 'synthetic-expo-access',
         GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' }) as unknown as Owner;
       await owner.setup('app').ready;
@@ -189,16 +189,14 @@ it.each([
   });
 });
 
-// The gate in the owner object. Without the day state a sent Close still holds every update until tomorrow, as before. With
-// it the Close holds nothing, so the model judges a change after it; quiet hours on the app still write the job (a revision
-// may land) while on a surface that would have to send, they hold it.
+// The gate in the owner object. The Close holds nothing, so the model judges a change after it; quiet hours on the app still
+// write the job (a revision may land) while on a surface that would have to send, they hold it.
 it.each([
-  { state: undefined, case: 'after the Close', surface: 'app', job: false },
-  { state: '1', case: 'after the Close', surface: 'app', job: true },
-  { state: '1', case: 'in quiet hours', surface: 'app', job: true },
-  { state: '1', case: 'in quiet hours', surface: 'telegram', job: false },
-] as const)('day state $state, $case on $surface: a reader job written is $job', async ({ state: dayState, case: when, surface, job }) => {
-  const name = `day-state-gate-${dayState ?? 'off'}-${when.replace(/\W+/g, '-')}-${surface}`;
+  { case: 'after the Close', surface: 'app', job: true },
+  { case: 'in quiet hours', surface: 'app', job: true },
+  { case: 'in quiet hours', surface: 'telegram', job: false },
+] as const)('$case on $surface: a reader job written is $job', async ({ case: when, surface, job }) => {
+  const name = `day-state-gate-${when.replace(/\W+/g, '-')}-${surface}`;
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const originalNow = Date.now;
     clock = Date.parse('2026-10-20T22:00:00Z');
@@ -213,7 +211,7 @@ it.each([
       await state.storage.put('origin', 'https://fixture.invalid');
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
       // A Telegram owner here is the single owner a deploy without the directory names.
-      const owner = new OwnerDO(state, { ...env, ...(surface === 'app' ? directory : {}), WALDO_DAY_STATE: dayState, CALENDAR_GROUNDED_PREP: '0', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture',
+      const owner = new OwnerDO(state, { ...env, ...(surface === 'app' ? directory : {}), TELEGRAM_BOT_TOKEN: '7:synthetic-fixture',
         OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: surface === 'app' ? undefined : '7001',
         GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' }) as unknown as Owner;
       await owner.setup(surface).ready;
@@ -228,7 +226,7 @@ it.each([
       };
       const tomorrow = { ...SYNC, start: '2026-10-21T08:00:00Z', end: '2026-10-21T08:30:00Z' };
       // The app's quiet-hours owner has a full calendar: the day's read stops at its cap and says so.
-      const full = dayState === '1' && surface === 'app' && when === 'in quiet hours';
+      const full = surface === 'app' && when === 'in quiet hours';
       fixture.listed = [tomorrow, ...(full ? Array.from({ length: 249 }, (_, i) => ({ ...SYNC, id: `e-fill-${i}` })) : [])];
       await sweep();
       clock += 10 * 60_000;
@@ -262,7 +260,7 @@ it.each([
       state.storage.kv.put('timezone_confirmed', true);
       await state.storage.put('origin', 'https://fixture.invalid');
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
-      const owner = new OwnerDO(state, { ...env, ...directory, WALDO_DAY_STATE: '1', CALENDAR_GROUNDED_PREP: '0', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture',
+      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture',
         OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret',
         ...(separate ? { SEPARATE_TOGGLES: separate } : {}) }) as unknown as Owner;
       await owner.setup('app').ready;
@@ -305,7 +303,7 @@ it('a settled job wakes the sweep; a tick inside the judge gap pulls it to the g
       state.storage.kv.put('timezone_confirmed', true);
       await state.storage.put('origin', 'https://fixture.invalid');
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
-      const owner = new OwnerDO(state, { ...env, ...directory, WALDO_DAY_STATE: '1', CALENDAR_GROUNDED_PREP: '0', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture',
+      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture',
         OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined,
         GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' }) as unknown as Owner;
       await owner.setup('app').ready;
@@ -362,7 +360,7 @@ const moveAfterBrief = async (name: string, zone: string, briefAt: string, moveA
       state.storage.kv.put('timezone_confirmed', true);
       await state.storage.put('origin', 'https://fixture.invalid');
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
-      const owner = new OwnerDO(state, { ...env, ...directory, WALDO_DAY_STATE: '1', UPDATE_PUSH_NAMES: '1', CALENDAR_GROUNDED_PREP: '0', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture',
+      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture',
         OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: zone, WALDO_OWNER_TELEGRAM_ID: undefined, EXPO_ACCESS_TOKEN: 'synthetic-expo-access',
         GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' }) as unknown as Owner;
       await owner.setup('app').ready;

@@ -12,8 +12,8 @@ import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 
-// An app owner's prep note, run by the alarm: it reaches Main chat, then raises its own push. The push names the meeting only
-// while PREP_PUSH_NAMES is on; it never carries an attendee's address or the note's own text.
+// An app owner's prep note, run by the alarm: it reaches Main chat, then raises its own push. The push names the meeting; it
+// never carries an attendee's address or the note's own text.
 const NOTE = 'Design review at 10:30 IST with pat@example.test. Bring the onboarding mocks.';
 const EXPO_TOKEN = 'ExponentPushToken[synthetic-fixture-token]';
 const INSTALLATION = '0f1e2d3c-4b5a-4968-8776-655443322110';
@@ -60,11 +60,8 @@ afterEach(() => { vi.unstubAllGlobals(); });
 
 type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown> }; alarm(): Promise<void> }>;
 
-it.each([
-  { names: undefined, body: 'Waldo has a note before your next meeting' },
-  { names: '1', body: 'Prep: Design review at 10:30am' },
-])('an app owner\'s delivered prep note raises the prep push (PREP_PUSH_NAMES=$names)', async ({ names, body }) => {
-  const name = `push-prep-app-${names ?? 'off'}`;
+it('an app owner\'s delivered prep note raises the prep push', async () => {
+  const name = 'push-prep-app';
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const originalNow = Date.now;
     let now = Date.parse('2026-10-03T04:30:00Z');
@@ -79,7 +76,7 @@ it.each([
       state.storage.kv.put('timezone_confirmed', true);
       await state.storage.put('origin', 'https://fixture.invalid');
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
-      const owner = new OwnerDO(state, { ...env, ...directory, CALENDAR_GROUNDED_PREP: '1', PREP_PUSH_NAMES: names, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture',
+      const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture',
         WALDO_OWNER_TIMEZONE: 'Asia/Kolkata', WALDO_OWNER_TELEGRAM_ID: undefined, EXPO_ACCESS_TOKEN: 'synthetic-expo-access', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' }) as unknown as Owner;
       await owner.setup('app').ready;
       state.storage.sql.exec('DELETE FROM schedule');
@@ -97,7 +94,7 @@ it.each([
       expect(prep()[0]?.settled).toBe(true);
       // The push runs beside the drain, so it may land after the alarm returns.
       await vi.waitFor(() => expect(wire.pushes).toHaveLength(1));
-      expect(wire.pushes).toEqual([{ body, data: { trigger: 'pre_activity_spot' } }]);
+      expect(wire.pushes).toEqual([{ body: 'Prep: Design review at 10:30am', data: { trigger: 'pre_activity_spot' } }]);
       expect(JSON.stringify(wire.pushes)).not.toContain('pat@example.test');
       expect(JSON.stringify(wire.pushes)).not.toContain('onboarding mocks');
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }

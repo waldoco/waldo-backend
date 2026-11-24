@@ -62,7 +62,7 @@ const consoleOf = (name: string, switches: Record<string, string>, run: (send: C
     state.storage.kv.put('timezone', 'UTC');
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, WALDO_OWNER_TELEGRAM_ID: undefined, OPENAI_API_KEY: 'synthetic-fixture',
-      WALDO_OWNER_TIMEZONE: 'UTC', OWNER_SURFACE_DEFAULT: '1', ...switches } as never);
+      WALDO_OWNER_TIMEZONE: 'UTC', ...switches } as never);
     const cookie = `waldo_console=${await consoleAccess(state.storage).grant()}`;
     const { csrf } = await (await owner.fetch(new Request('https://owner/console/dashboard/api/v1/controls?view=connections', { headers: { cookie } }))).json() as { csrf: string };
     const send: Console = (command, token = csrf, method = 'POST') => owner.fetch(new Request(`https://owner${DASHBOARD_HARNESS_PATH}`, method === 'POST'

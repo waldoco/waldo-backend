@@ -137,7 +137,7 @@ export type HeartbeatDeps = Readonly<{
   // Writes the check-back job for these loops, synchronously, inside the scan's transaction.
   enqueue(loops: readonly Loop[], tick: Readonly<{ entryId: string; occurrence: number; runId: string; now: number }>): MachineEnqueued['code'];
   checked(code: HeartbeatCheck, detail: string): void;
-  // PROACTIVE_GATE: the owner's daily budget for unasked messages, which replaces CHECK_BACKS_PER_DAY (no count at high).
+  // The owner's daily budget for unasked messages, which replaces CHECK_BACKS_PER_DAY (no count at high).
   checkBacksPerDay?(): number;
 }>;
 
