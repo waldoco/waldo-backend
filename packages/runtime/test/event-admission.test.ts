@@ -18,7 +18,9 @@ it('durable event admission survives reconstruction, binds raw digest and never 
 it('actual owner event entry acknowledges durable admission, prevents duplicate notification and preserves unknown after loss, and records a refused send as not sent',async()=>{
  const stub=env.OWNER_DO!.get(env.OWNER_DO!.idFromName('event-admission-entry'));
  await runInDurableObject(stub,async(instance,state)=>{
-  const entry=instance as unknown as {recordEvent(r:Request,b:string):Promise<Response>;setup():unknown};
+  const entry=instance as unknown as {recordEvent(r:Request,b:string):Promise<Response>;setup():unknown;ownerSurface():string};
+  // An owner reached on a chat surface, whose send the stubbed runtime counts.
+  entry.ownerSurface=()=>'telegram';
   const setup=entry.setup;let sends=0;let lose=false;let skipped=false;const finished:{status:string;summary:string}[]=[];
   entry.setup=()=>({runs:{start:()=>({id:'synthetic-event'}),finish:(_id:string,status:string,summary:string)=>{finished.push({status,summary});return true;}},api:{sendMessage:async()=>{sends++;if(lose)throw new Error('synthetic response loss');return skipped?undefined:{message_id:1};}},owner:42,log:()=>{}});
   try{

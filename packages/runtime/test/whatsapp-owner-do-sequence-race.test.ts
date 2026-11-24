@@ -37,7 +37,7 @@ it('allocates distinct update_ids for overlapping different wamids (known wa_seq
     const turns = vi.spyOn(turnHost, 'turn');
     const post = (id: string) => instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
       method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550001111' },
-      body: JSON.stringify({ messages: [{ from: '15550001111', id, type: 'text', text: { body: '/stop' } }] }),
+      body: JSON.stringify({ messages: [{ from: '15550001111', id, type: 'text', text: { body: '/trace' } }] }),
     }));
     let drained: Promise<void> | undefined;
     try {

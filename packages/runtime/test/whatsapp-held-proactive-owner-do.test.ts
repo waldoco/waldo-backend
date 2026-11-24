@@ -34,7 +34,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     const asked = request.request.messages.at(-1)?.content ?? '';
     const text = asked.includes('[Scheduled card "The Daily Brief"') ? (model.cards += 1, CARD)
       : asked.includes('[Standing order due now') ? (model.reports += 1, model.slowReportMs && ((shift: number) => { const before = Date.now; Date.now = () => before() + shift; })(model.slowReportMs), model.reportOnce && model.reports > 1 ? '' : REPORT)
-        : asked.includes('[Update check,') ? (model.updates += 1, UPDATE) : 'Noted.';
+        : asked.includes('[Update check,') ? (model.updates += 1, JSON.stringify({ say: UPDATE })) : 'Noted.';
     return { ok: true as const, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
   return { ...original, createTelegramResponder: (...args: Parameters<typeof original.createTelegramResponder>) => { args[11] = gateway; return original.createTelegramResponder(...args); } };

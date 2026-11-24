@@ -82,7 +82,7 @@ const receipt = (body: Record<string, unknown>) => appControlResultV1Schema.pars
 it('an owner with WhatsApp linked moves Waldo there from settings, writing the setting the first run writes; a replay is the same receipt', async () => {
   await fixture(async ({ app, storage }) => {
     const before = await dayView(app);
-    expect(before.data.proactive_surface).toEqual({ value: 'app', choices: ['app', 'whatsapp', 'both'] });
+    expect(before.data.proactive_surface).toEqual({ value: 'both', choices: ['app', 'whatsapp', 'both'] });
     const saved = await choose(app, 'whatsapp', before.revision, 'surface-replayed-0001');
     expect([saved.status, receipt(saved.body), saved.body.duplicate]).toEqual([200, APP_PROACTIVE_SURFACE_RECEIPTS_V1.saved, false]);
     expect([storage.kv.get(PROACTIVE_SURFACE_KEY), proactiveSurface(storage.kv)]).toEqual(['whatsapp', 'whatsapp']);
@@ -110,7 +110,7 @@ it('refuses WhatsApp while the directory has no WhatsApp linked for this owner, 
   await fixture(async ({ app, storage, directory }) => {
     directory.whatsapp = 'not_linked';
     const day = await dayView(app);
-    expect(day.data.proactive_surface).toEqual({ value: 'app', choices: ['app'] });
+    expect(day.data.proactive_surface).toEqual({ value: 'both', choices: ['app'] });
     for (const value of ['whatsapp', 'both']) {
       const refused = await choose(app, value, day.revision);
       // A refusal is 409 with its receipt, as every rejected control receipt is.
