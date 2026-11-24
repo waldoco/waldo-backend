@@ -1,4 +1,7 @@
+import { env, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
+import { claimStore } from '../src/memory/claims';
+import { holdTopic } from './helpers/pending-topic';
 import type { FinalRecord } from '../src/channels/telegram-final-outbox';
 import { z } from 'zod';
 import { TOOL_PERMISSIONS, triggerTypeSchema, type ConversationEntry, type LLMRequest, type ToolName } from '@waldo/contracts';
@@ -7,7 +10,7 @@ import type { ConversationStore } from '../src/channels/conversation-store';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { LOOP_CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS } from '../src/channels/check-back';
 import { triageTools, updateSweepTools } from '../src/channels/update-sweep';
-import { deliveredLately, fitsScheduledMenu, OLDER_SENT_MAX_CHARS, recentExchange, recentExchangeText, RECENT_OWNER_MESSAGES, RECENT_ROW_MAX_CHARS, RECENT_SENT_MESSAGES, SCHEDULED_DIRECT, SCHEDULED_MENU, UNCONFIRMED_MARK, WHOLE_SENT_MESSAGES } from '../src/channels/scheduled-run';
+import { deliveredLately, fitsScheduledMenu, OLDER_SENT_MAX_CHARS, recentExchange, recentExchangeText, RECENT_OWNER_MESSAGES, RECENT_ROW_MAX_CHARS, RECENT_SENT_MESSAGES, SCHEDULED_DIRECT, SCHEDULED_MENU, WHOLE_SENT_MESSAGES } from '../src/channels/scheduled-run';
 import { toContextHealthMaterial, type HealthContextRow } from '../src/channels/health-context';
 import { ownerJobAdmission } from '../src/identity/surface-owner-admission';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
@@ -49,7 +52,9 @@ const fake = (name: string) => ({ name: name as ToolName, description: `The ${na
 const TOOLS = [...new Set([...SCHEDULED_MENU, 'web_search', 'browse_page', 'send_message'])].filter((name) => name !== 'get_context').map(fake);
 
 type Script = (request: LLMRequest, index: number) => Readonly<{ text: string; tool?: string; args?: string }>;
-const harness = async ({ lean, entries = chain(), script = () => ({ text: 'SKIP' }), health, loader = false, sent }: { lean: boolean; entries?: ConversationEntry[]; script?: Script; health?: boolean; loader?: boolean; sent?: readonly Readonly<{ at: number; text: string }>[] }) => {
+// memory: a claim store whose held topics the forget barrier ('items') takes out of everything the run is shown.
+const harness = async ({ lean, entries = chain(), script = () => ({ text: 'SKIP' }), health, loader = false, sent, memory }: { lean: boolean; entries?: ConversationEntry[]; script?: Script; health?: boolean; loader?: boolean;
+  sent?: readonly Readonly<{ at: number; text: string; confirmed?: boolean }>[]; memory?: ReturnType<typeof claimStore> }) => {
   const requests: LLMRequest[] = [];
   const logs: TurnLogEntry[] = [];
   const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {
@@ -63,8 +68,10 @@ const harness = async ({ lean, entries = chain(), script = () => ({ text: 'SKIP'
   // Staging runs the harness tool loader: core tools up front, the rest named in the system text's catalogue.
   const args: Parameters<typeof createOwnerResponder> = [loader ? { openaiApiKey: 'fixture', toolLoader: 'harness' } : 'fixture'];
   args[1] = store; args[3] = (entry) => logs.push(entry); args[5] = TOOLS as never; args[7] = false; args[10] = gateway;
+  if (memory) { args[2] = memory; args[11] = async () => ({ rewritten: 0, remaining: 1 }); }
   if (health !== undefined) args[17] = async () => health ? toContextHealthMaterial(HEALTH_ROW, { timezone: 'UTC', now: () => new Date() }) : null;
-  args[21] = { jobHost: { admit: async () => admission, chain: (_admission, surfaceChain) => surfaceChain }, dayCards: () => 'Today: Brief sent 07:30; Check-in due 13:00.', ...(lean ? { leanScheduled: true } : {}), ...(sent ? { waldoSent: () => sent } : {}) };
+  args[21] = { jobHost: { admit: async () => admission, chain: (_admission, surfaceChain) => surfaceChain }, dayCards: () => 'Today: Brief sent 07:30; Check-in due 13:00.', ...(lean ? { leanScheduled: true } : {}),
+    ...(sent ? { waldoSent: () => sent.map((message) => ({ confirmed: true, ...message })) } : {}), ...(memory ? { forgetBarrier: 'items' as const } : {}) };
   return { requests, logs, store, owner: createOwnerResponder(...args) };
 };
 
@@ -230,6 +237,26 @@ describe('what Waldo sent the owner, in a lean run', () => {
     expect(lastReply(none).messages.at(-1)!.content).not.toContain('messages Waldo sent the owner lately');
   });
 
+  it('drops a sent message that carries a topic the owner is forgetting, and keeps the rest', async () => {
+    await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('lean-sent-forget')), async (_instance, state) => {
+      const memory = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
+      holdTopic(state.storage.sql, 'coffee', '2026-10-21T08:00:00Z');
+      const { owner, requests } = await harness({ lean: true, memory, sent: [{ at, text: 'Brief: protect the morning.' }, { at: at + 60_000, text: 'Your coffee with Ravi moved to 15:00.' }] });
+      await run(owner, 'heartbeat:1', LOOP_CHECK_BACK_TOOLS, undefined);
+      const current = String(lastReply(requests).messages.at(-1)!.content);
+      expect(current).toContain('protect the morning');
+      expect(current).not.toMatch(/coffee/i);
+    });
+  });
+
+  it('says when a surface has not yet confirmed one arrived, and never calls them delivered', async () => {
+    const { owner, requests } = await harness({ lean: true, sent: [{ at, text: 'Brief: protect the morning.', confirmed: false }] });
+    await run(owner, 'heartbeat:1', LOOP_CHECK_BACK_TOOLS, undefined);
+    const current = String(lastReply(requests).messages.at(-1)!.content);
+    expect(current).toContain('(sent, not yet confirmed delivered) Brief: protect the morning.');
+    expect(current).not.toContain('as delivered');
+  });
+
   it('is not read by a run the lean view does not take', async () => {
     const { owner, requests } = await harness({ lean: false, sent: [{ at, text: 'Brief: protect the morning.' }] });
     await run(owner, 'heartbeat:1', LOOP_CHECK_BACK_TOOLS, undefined);
@@ -249,6 +276,14 @@ describe('what the outbox delivered lately', () => {
     ];
     expect(deliveredLately(records, now).map((message) => message.text)).toEqual(['text brief', 'text checkin', 'text whatsapp']);
   });
+  it('leaves out a reply to the owner\'s own message, which the exchange shows, and keeps a notice a turn queued', () => {
+    const records = [record('telegram-41', 'delivered', now - 60_000), record('whatsapp-42-reply', 'delivered', now - 50_000),
+      record('telegram-43', 'delivered', now - 40_000, { notice: true }), record('card:brief:1', 'delivered', now - 30_000)];
+    expect(deliveredLately(records, now).map((message) => message.text)).toEqual(['text telegram-43', 'text card:brief:1']);
+  });
+  it('marks one a surface accepted but has not yet confirmed', () => {
+    expect(deliveredLately([record('a', 'accepted', now - 60_000), record('d', 'delivered', now - 30_000)], now).map((message) => message.confirmed)).toEqual([false, true]);
+  });
   it(`keeps the newest ${WHOLE_SENT_MESSAGES} with the day view off`, () => {
     const records = Array.from({ length: 6 }, (_, i) => record(`m${i}`, 'delivered', now - (6 - i) * 60_000));
     expect(deliveredLately(records, now).map((message) => message.text)).toEqual(['text m3', 'text m4', 'text m5']);
@@ -264,7 +299,7 @@ describe('what the outbox delivered lately', () => {
     const day = deliveredLately(records, now, true);
     expect(day).toHaveLength(RECENT_SENT_MESSAGES);
     expect(day.slice(0, -1).map((message) => message.text.split(' ').slice(0, 2).join(' '))).toEqual(['text m3', 'text m4', 'text m5', 'text m6', 'text m7', 'text m8', 'text m9']);
-    expect(day.at(-1)!.text).toBe(`${UNCONFIRMED_MARK}text unsure`);
+    expect(day.at(-1)).toMatchObject({ text: 'text unsure', confirmed: false });
     for (const message of day.slice(0, -WHOLE_SENT_MESSAGES)) expect(message.text.length).toBeLessThanOrEqual(OLDER_SENT_MAX_CHARS + 1);
     for (const message of day.slice(-WHOLE_SENT_MESSAGES, -1)) expect(message.text.length).toBeGreaterThan(OLDER_SENT_MAX_CHARS);
   });
