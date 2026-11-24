@@ -16,6 +16,7 @@ import { browserDownloadToWorkspace } from '../src/channels/browser-download-wor
 import { generalDigest } from '../src/channels/general-browser-observation';
 import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, armAlarm } from '../src/scheduler/alarm-slot';
 import { toolOutput } from './fixtures/tool-output';
+import { AUTONOMY_OFF } from './helpers/autonomy-off';
 
 type InputItem = { type?: string; call_id?: string; name?: string; output?: string };
 type RequestBody = { tools?: { name: string }[]; input: string | InputItem[]; text?: { format?: { name?: string } }; instructions?: string };
@@ -382,7 +383,7 @@ it('workspace read taint survives the model boundary and a tainted send reaches 
     const texts = model.telegram.filter(item => item.method === 'sendMessage').map(item => String((item.body as { text?: unknown }).text));
     expect(texts.some(text => text === 'UNTRUSTED_WORKSPACE_SEND')).toBe(false);
     expect(texts.filter(text => text.startsWith('Send this message') && text.includes('UNTRUSTED_WORKSPACE_SEND'))).toHaveLength(1);
-  });
+  }, undefined, AUTONOMY_OFF);
 });
 
 it('scheduled reminder cannot write through the registered workspace closure without an authenticated live owner run', async () => {

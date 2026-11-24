@@ -12,12 +12,17 @@ import { isolatedCalendarEffectClient, isolatedGoogleClient } from '../scenarios
 import { captureFixtureAdapters } from '../evals/fixture-adapter-capture';
 import { auditIsolatedWorld } from '../evals/isolated-world-audit';
 import type { NativeManifest } from '../evals/native-manifest';
+import { AUTONOMY_OFF } from './helpers/autonomy-off';
 
+// The cards below prove the approval path, which runs only with the autonomy switches off. The Worker builds each owner object
+// from its own bindings, so the off set is laid over them here for every owner object in this file.
 vi.mock('../src/channels/owner-do', async load => {
   const original = await load<typeof import('../src/channels/owner-do')>();
   const { OpenAIResponsesAdapter } = await import('../src/llm/openai');
 
-  return original;
+  return { ...original, OwnerDO: class extends original.OwnerDO {
+    constructor(ctx: DurableObjectState, env: ConstructorParameters<typeof original.OwnerDO>[1]) { super(ctx, { ...env, ...AUTONOMY_OFF }); }
+  } };
 });
 
 const outbox: { method: string; body: Record<string, unknown> }[] = [];

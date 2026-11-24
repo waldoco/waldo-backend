@@ -75,8 +75,8 @@ describe('WHY_TRAIL in the Worker config', () => {
 });
 
 describe('HISTORY_ARCHIVE in the Worker config', () => {
-  it('is off in production and counts only (dry) in staging', () => {
-    expect(parsed.vars.HISTORY_ARCHIVE).toBe('0');
+  it('counts only (dry) in production and in staging', () => {
+    expect(parsed.vars.HISTORY_ARCHIVE).toBe('dry');
     expect(parsed.env.staging.vars.HISTORY_ARCHIVE).toBe('dry');
   });
 });

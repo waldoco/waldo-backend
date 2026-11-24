@@ -488,9 +488,9 @@ describe('through the owner turn', () => {
 
 type Vars = Readonly<Record<string, string>>;
 describe('APPROVE_IN_CHAT in the Worker config', () => {
-  it('is off in production and on in staging', () => {
+  it('is on in production and in staging', () => {
     const parsed = flatConfig(parseJsonc(config)) as { vars: Vars; env: { staging: { vars: Vars } } };
-    expect(parsed.vars.APPROVE_IN_CHAT).toBe('0');
+    expect(parsed.vars.APPROVE_IN_CHAT).toBe('1');
     expect(parsed.env.staging.vars.APPROVE_IN_CHAT).toBe('1');
   });
 });

@@ -10,6 +10,7 @@ import type { LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore } from '../src/memory/claims';
 import { jobBook, taskBrief } from '../src/tasks/jobs';
 import { ensureSchema } from '../src/tracer/schema';
+import { AUTONOMY_OFF } from './helpers/autonomy-off';
 import { presenceAuthority } from './helpers/directory-presence';
 import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
@@ -81,7 +82,7 @@ describe('asked on WhatsApp after reading outside text', { timeout: 30_000 }, ()
       state.storage.kv.put('wa_last_inbound_ms', Date.now());
       await state.storage.put('origin', 'https://fixture.invalid');
       await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'fictional-not-a-token', scopes: null }]);
-      const owner = new OwnerDO(state, { ...env, ...directory, ...whatsapp, ...google, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+      const owner = new OwnerDO(state, { ...env, ...directory, ...whatsapp, ...google, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, ...AUTONOMY_OFF });
       const ledger = () => state.storage.sql.exec<{ id: string; kind: string; status: string }>('SELECT id, kind, status FROM ledger ORDER BY created_at').toArray();
       const book = jobBook(state.storage.sql, { now: () => Date.now(), newId: () => crypto.randomUUID().replaceAll('-', '').slice(0, 12), newToken: () => crypto.randomUUID() });
       try {
