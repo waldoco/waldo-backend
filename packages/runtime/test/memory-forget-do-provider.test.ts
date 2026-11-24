@@ -240,7 +240,7 @@ it('HELDROWS continues projection and decoded-leaf listings from the given rowid
     // (c) real caller path: 128 pending topics, then the delivery slice.
     for (const t of many) sql.exec('INSERT OR IGNORE INTO topic_purge_pending (fingerprint, topic, created_at) VALUES (?,?,?)', `fp-${t.topic}`, t.topic, '2026-10-05T00:00:00Z');
     sql.exec('UPDATE update_cards SET changes = ?', JSON.stringify([{ n: 'M0001 M0002 M0003 M0004' }]));
-    const reply = (await (instance as unknown as { runHarness(c: unknown, id: number): Promise<string> }).runHarness(parseHarnessCommand('/heldrows update_cards'), 1)).slice(0, HARNESS_MESSAGE_LIMIT);
+    const reply = (await (instance as unknown as { runHarness(c: unknown, id: number, channel: string): Promise<string> }).runHarness(parseHarnessCommand('/heldrows update_cards'), 1, 'telegram')).slice(0, HARNESS_MESSAGE_LIMIT);
     expect(reply).toMatch(/more topics not shown/);
     expect(reply).toMatch(/projection/);
     expect(reply).toContain('row listing: escape/NUL rows');
