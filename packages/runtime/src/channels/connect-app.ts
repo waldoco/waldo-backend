@@ -111,14 +111,15 @@ export const appConnects = (deps: Readonly<{
       const url = record ? await deps.start(record.nonce) : null;
       return record && url ? { url, nonce: record.nonce } : null;
     },
-    // One due poll of a device code: armed again while the provider says wait, else the line for the conversation that asked.
-    async poll(nonce: string): Promise<Readonly<{ channel: ConnectAppChannel; thread?: string; text: string }> | null> {
+    // One due poll of a device code: armed again while the provider says wait, else the line for the conversation that
+    // asked and how the sign-in settled.
+    async poll(nonce: string): Promise<Readonly<{ channel: ConnectAppChannel; thread?: string; text: string; outcome: ConnectOutcome }> | null> {
       const record = kv.get<DeviceRecord>(`${DEVICE}${nonce}`), entry = MCP_CATALOGUE.find((candidate) => candidate.id === record?.connector);
       if (!record || !entry) return null;
       const out = await deps.pollDevice(nonce);
       if (out.kind === 'wait') { await arm(nonce, record, out.at); return null; }
       kv.delete(`${DEVICE}${nonce}`);
-      return { channel: record.channel, ...(record.thread ? { thread: record.thread } : {}), text: settledText(entry.label, out.outcome) };
+      return { channel: record.channel, ...(record.thread ? { thread: record.thread } : {}), text: settledText(entry.label, out.outcome), outcome: out.outcome };
     },
     // The line the conversation that asked gets once the sign-in settles, and where it goes; for a tile, only that the
     // callback returns to the app. Taken once.

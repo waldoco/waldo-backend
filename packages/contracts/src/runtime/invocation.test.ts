@@ -353,6 +353,7 @@ describe('trusted invocation acceptance', () => {
     ['patrol', 'patrol'],
     ['task_report', 'intervention'],
     ['retry_turn', 'user_message'],
+    ['connect_first_look', 'intervention'],
   ])('binds the owner job %s to the %s trigger, admitted only by the owner scheduler', (job, trigger) => {
     const invocation = accept({ ...trustedAdmission, admission_source: 'trusted_scheduler', intent: { kind: 'run_owner_job', job } });
 
