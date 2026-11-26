@@ -37,16 +37,17 @@ const days = (nights: number) => Array.from({ length: nights }, (_, i) => ({ day
 const samsungOnly = (nights: number) => days(nights).flatMap(({ day, i }) => samsungDay(day, i, i === 0 ? 11 : 23));
 const withWatch = (nights: number, origin: object = wear) => [...samsungOnly(nights), ...days(nights).map(({ day, i }) => watchNight(day, i, origin))];
 
-// What waldo.health_series_read returns: no origin, and each mark exactly as the migration sets it.
+// What waldo.health_series_read returns: no origin, an hour of heart rate's lowest and highest, and each mark exactly as the
+// migration sets it (every reading from Waldo's watch app, whatever its signal).
 const asRead = (s: Sample): Sample => {
-  const { origin: raw, sample_id: _id, revision: _rev, min: _min, max: _max, n_samples: _n, unit: _unit, ...rest } = s;
+  const { origin: raw, sample_id: _id, revision: _rev, min, max, n_samples: _n, unit: _unit, ...rest } = s;
   const o = raw as { read_api?: string; source_package_name?: string } | undefined;
-  const wearMark = s.signal === 'overnight_hrv' && s.method === 'rmssd' && o?.read_api === 'wear_sensor' && o.source_package_name === HEALTH_WEAR_PACKAGE_V1;
-  return { ...rest, timezone: TZ, ...(o?.source_package_name === SAMSUNG ? { samsung_writer: true } : {}), ...(wearMark ? { waldo_wear: true } : {}) };
+  const wearMark = o?.read_api === 'wear_sensor' && o.source_package_name === HEALTH_WEAR_PACKAGE_V1;
+  return { ...rest, timezone: TZ, ...(s.signal === 'heart_rate_window' ? { min, max } : {}), ...(o?.source_package_name === SAMSUNG ? { samsung_writer: true } : {}), ...(wearMark ? { waldo_wear: true } : {}) };
 };
 
 type Row = Record<string, any>;
-const produceRaw = async (samples: readonly Sample[], wearHrv?: boolean): Promise<string[]> => {
+const produceRaw = async (samples: readonly Sample[], wearHrv?: boolean, wearAllDay?: boolean): Promise<string[]> => {
   const written: string[] = [];
   const read = samples.map(asRead);
   await produceHealthScores({
@@ -55,10 +56,11 @@ const produceRaw = async (samples: readonly Sample[], wearHrv?: boolean): Promis
     compute: dailyScoresFor('1'),
     readDemand: async () => ({ state: 'available', days: Array.from({ length: 31 }, (_, i) => ({ day: addDays(TODAY, -i), busy_minutes: 240 + wobble(i, 40), partial: false })) }),
     ...(wearHrv === undefined ? {} : { wearHrv }),
+    ...(wearAllDay === undefined ? {} : { wearAllDay }),
   }, { now: local(TODAY, 12), timezone: TZ });
   return written;
 };
-const produce = async (samples: readonly Sample[], wearHrv?: boolean): Promise<Row[]> => (await produceRaw(samples, wearHrv)).map(payload => JSON.parse(payload));
+const produce = async (samples: readonly Sample[], wearHrv?: boolean, wearAllDay?: boolean): Promise<Row[]> => (await produceRaw(samples, wearHrv, wearAllDay)).map(payload => JSON.parse(payload));
 const today = (rows: readonly Row[]) => rows.find(r => r.day === TODAY)!;
 
 describe('the night\'s RMSSD from Waldo\'s watch app', () => {
@@ -101,5 +103,48 @@ describe('the night\'s RMSSD from Waldo\'s watch app', () => {
     const at = samples.findIndex(s => s.signal === 'heart_rate_window');
     const stray = samples.map((s, i) => (i === at ? { ...s, origin: hc('com.example.ringapp') } : s));
     expect(today(await produce(stray, true)).recovery).toMatchObject({ activation: 'accepted', hrv_method: 'rmssd' });
+  });
+});
+
+// The watch app's all-day readings in the same batch: an hour of heart rate and of steps beside the phone's own hour, under
+// their own ids, a blood-oxygen reading in the night and a resting rate. The read marks each waldo_wear. HEALTH_WEAR_ALL_DAY
+// decides whether they count; HEALTH_WEAR_HRV still decides the night's RMSSD alone.
+describe('the all-day readings from Waldo\'s watch app', () => {
+  const stepHour = (day: string, h: number, value: number, origin: object, writer: string): Sample =>
+    ({ ...common(`${writer}-steps-${day}-${h}`, day, local(day, h), local(day, h) + HOUR, origin), signal: 'steps_window', unit: 'count', value });
+  const phoneSteps = (nights: number) => days(nights).flatMap(({ day, i }) => Array.from({ length: i === 0 ? 4 : 12 }, (_, k) => stepHour(day, 8 + k, 300 + wobble(k + i, 200), hc(SAMSUNG), 'hc')));
+  const watchAllDay = (nights: number, copy: readonly Sample[]): Sample[] => [
+    ...copy.map(s => ({ ...s, sample_id: `${String(s.signal)}:wear:${String(s.start_at)}`.replace(/[^A-Za-z0-9._:-]/g, ''), origin: wear })),
+    ...days(nights).flatMap(({ day, i }) => {
+      const { from, to } = nightOf(day);
+      return [
+        { ...common(`resting_heart_rate:wear:${day}`, day, from, to, wear), signal: 'resting_heart_rate', unit: 'beats_per_minute', method: 'overnight_resting', value: 50 + wobble(i, 3) },
+        { ...common(`spo2:wear:${day}`, day, from + 3 * HOUR, from + 3 * HOUR, wear), signal: 'spo2', unit: 'percent', value: 95 + wobble(i, 2) },
+      ];
+    }),
+  ];
+  const phone = (nights: number): Sample[] => [...samsungOnly(nights), ...phoneSteps(nights)];
+  const watchCopy = (nights: number) => watchAllDay(nights, [...phone(nights)].filter(s => s.signal === 'heart_rate_window' || s.signal === 'steps_window').map(s => ({ ...s, value: Number(s.value) + 7, ...(s.signal === 'heart_rate_window' ? { min: Number(s.min) + 7, max: Number(s.max) + 7 } : {}) })));
+
+  it('uploads in the Health Connect batch beside the phone\'s own hours', () => {
+    const samples = [...phone(1), ...watchCopy(1)];
+    expect(healthIngestV1Schema.safeParse({ request_id: 'hc-upload-wear-2', source: 'health_connect', consent_epoch: 1, timezone: TZ, anchor_before: null, anchor_after: 'hc-anchor-2', samples, deletions: [] }).success).toBe(true);
+  });
+
+  it('off, writes every row byte for byte as it would with none of them sent, the vitals and the night included', async () => {
+    const without = await produceRaw(phone(25));
+    const all = [...phone(25), ...watchCopy(25), ...days(25).map(({ day, i }) => watchNight(day, i))];
+    expect(await produceRaw(all)).toStrictEqual(without);
+    expect(await produceRaw(all, false, false)).toStrictEqual(without);
+    // The wear-HRV switch on lets the night in and nothing else.
+    expect(await produceRaw(all, true)).toStrictEqual(await produceRaw([...phone(25), ...days(25).map(({ day, i }) => watchNight(day, i))], true));
+  });
+
+  it('on, counts them, and the night\'s RMSSD stays out until its own switch is on', async () => {
+    const without = await produceRaw(phone(25), false, true);
+    const watch = [...phone(25), ...watchCopy(25)];
+    expect(await produceRaw(watch, false, true)).not.toStrictEqual(without);
+    expect(await produceRaw([...watch, ...days(25).map(({ day, i }) => watchNight(day, i))], false, true)).toStrictEqual(await produceRaw(watch, false, true));
+    expect(today(await produce(watch, false, true)).recovery).toMatchObject({ activation: 'accepted' });
   });
 });

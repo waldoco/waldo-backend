@@ -46,7 +46,7 @@ export const healthStage = (book: HealthReadBook, timezone: () => string, now: (
   const lines: string[] = [], sources: AppNodeSourceV13[] = [], pointers: string[] = [], readDays = new Set<string>();
   // The same read get_health makes: time asleep only, a sleep stage from its own share of the night, one source and one
   // method per signal, so methods never blend.
-  // The watch app's night is left out here as with its switch off: the welcome build never reads a reading no score counts.
+  // The watch app's readings are left out here as with their switches off: the welcome build never reads a reading no score counts.
   const live = withoutWear(parsed.series).sources.filter((source) => HEALTH_SOURCES[source.source] !== undefined && consent.sources.has(source.source));
   for (const signal of signals) {
     const group = chooseGroup(signal, live);

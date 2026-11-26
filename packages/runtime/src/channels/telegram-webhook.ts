@@ -100,6 +100,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // anything else leaves those readings out of every score. Apply migration 20261123100000 before this Worker deploys: without
   // it the read marks nothing and the off switch leaves nothing out.
   HEALTH_WEAR_HRV?: string;
+  // "1" lets the watch app's all-day readings (hours of heart rate and steps, blood oxygen, resting rate) count in every score
+  // and show in get_health; anything else leaves them out. Apply migration 20261126100000 before this Worker deploys: without
+  // it the read marks only the night's RMSSD, so these would count as ordinary Health Connect readings with the switch off.
+  HEALTH_WEAR_ALL_DAY?: string;
   HEALTH_COACHING?: string;
   // "1" lets a health proposal, and a chat card, swap an event for another in its slot (a hard workout for an easy one) by
   // renaming it; the connector-proxy function must be deployed with the rename first.
