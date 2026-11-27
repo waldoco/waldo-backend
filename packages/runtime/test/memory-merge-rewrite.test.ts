@@ -17,16 +17,44 @@ const fromMail = (store: ClaimStore, text: string) => { store.add({ kind: 'fact'
 const live = (store: ClaimStore) => store.claims().map((claim) => claim.text).sort();
 
 describe('merge and rewrite', () => {
-  it('merges two of the owner\'s notes into one that is Waldo\'s read, linked to both, and no longer in the pinned profile', async () => {
+  it('merges two of the owner\'s notes into one that is Waldo\'s read, linked to both', async () => {
     await withStore('owner-pair', (store) => {
       const a = owned(store, 'I run on Tuesdays', 'app-1'), b = owned(store, 'Tuesday is my run day', 'app-2');
-      store.pin(a, 'profile', 0);
       const view = withOutsideNotes(store);
       expect(nightly(view, { merge: [{ ids: [a, b], kind: 'routine', text: 'Runs on Tuesdays' }] })).toContain('combined1');
       const [note] = store.claims();
       expect(live(store)).toEqual(['Runs on Tuesdays']);
       expect(note).toMatchObject({ kind: 'routine', origin: 'agent', source: 'inferred', source_ref: `notes:${a},${b}`, pinned: null });
       expect(store.allClaims().filter((claim) => claim.status === 'superseded').map((claim) => claim.id).sort()).toEqual([a, b]);
+    });
+  });
+  // A pin is the owner saying keep this as it is: the nightly tidy leaves a pinned note's words and its pin alone.
+  it('a merge that includes a pinned note changes nothing: the pinned note keeps its text, its pin and its place, and nothing is written', async () => {
+    await withStore('merge-pinned', (store) => {
+      const a = owned(store, 'I run on Tuesdays', 'app-1'), b = owned(store, 'Tuesday is my run day', 'app-2');
+      store.pin(a, 'profile', 0);
+      expect(nightly(withOutsideNotes(store), { merge: [{ ids: [a, b], kind: 'routine', text: 'Runs on Tuesdays' }] })).not.toContain('combined');
+      expect(live(store)).toEqual(['I run on Tuesdays', 'Tuesday is my run day']);
+      expect(store.claims().find((claim) => claim.id === a)).toMatchObject({ text: 'I run on Tuesdays', pinned: 'profile', pin_order: 0, status: 'active' });
+      expect(store.claims().find((claim) => claim.id === b)).toMatchObject({ pinned: null, status: 'active' });
+    });
+  });
+  it('a rewrite of a pinned note is refused', async () => {
+    await withStore('rewrite-pinned', (store) => {
+      const a = owned(store, 'I run on Tuesdays', 'app-1');
+      store.pin(a, 'facts', 3);
+      expect(nightly(withOutsideNotes(store), { rewrite: [{ id: a, kind: 'routine', text: 'Runs on Tuesdays' }] })).not.toContain('combined');
+      expect(store.claims()).toEqual([expect.objectContaining({ id: a, text: 'I run on Tuesdays', pinned: 'facts', pin_order: 3 })]);
+    });
+  });
+  it('a pinned note does not stop the unpinned ones around it from merging', async () => {
+    await withStore('merge-beside-pinned', (store) => {
+      const pinned = owned(store, 'Acme is my largest client', 'app-1');
+      store.pin(pinned, 'profile', 0);
+      const a = owned(store, 'I run on Tuesdays', 'app-2'), b = owned(store, 'Tuesday is my run day', 'app-3');
+      expect(nightly(withOutsideNotes(store), { merge: [{ ids: [a, b], kind: 'routine', text: 'Runs on Tuesdays' }] })).toContain('combined1');
+      expect(live(store)).toEqual(['Acme is my largest client', 'Runs on Tuesdays']);
+      expect(store.claims().find((claim) => claim.id === pinned)).toMatchObject({ pinned: 'profile' });
     });
   });
   it('a merge that takes in a note learned from mail is outside content, however many of the owner\'s notes it also replaced', async () => {
