@@ -381,6 +381,10 @@ describe('a partial view: words for a day whose body data made no Recovery score
     expect(parse(partial()).success).toBe(true);
     expect(parse(partial({ load_zone: 'moderate', baseline_state: { load: 'personal' }, sleep_debt: { amount: 'some', trend: 'building' } })).success).toBe(true);
     expect(parse(partial({ freshness: 'expired', as_of_day: 'earlier', present: [], missing_pillars: {} })).success).toBe(true);
+    expect(parse(partial({ form_without_recovery: { zone: 'flagging', basis: ['steps', 'stress'], confidence_band: 'low' } })).success).toBe(true);
+    for (const form of [{ zone: 'flagging', basis: [], confidence_band: 'low' }, { zone: 'flagging', basis: ['hrv'], confidence_band: 'low' }, { zone: 'flagging', basis: ['steps'], confidence_band: 'low', score: 40 }]) {
+      expect(parse(partial({ form_without_recovery: form })).success, JSON.stringify(form)).toBe(false);
+    }
     expect(partialHealthNarrativeSchema.safeParse({ day_summary: '', compiled_at: '2026-11-01T06:00:00.000Z' }).success).toBe(true);
   });
 

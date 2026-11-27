@@ -1,7 +1,7 @@
 import { labelOf } from './baseline';
 import { driverRanges, driversOf, SUBJECT_SIGNALS } from './drivers';
 import { formScore } from './form';
-import { ALGORITHM, PROVISIONAL_ALGORITHM, provisionalRecoveryBasis, recoveryBasis } from './recovery';
+import { ALGORITHM, DEGRADED_ALGORITHM, PROVISIONAL_ALGORITHM, provisionalRecoveryBasis, recoveryBasis } from './recovery';
 import { energyWindows } from './energy-windows';
 import { PART_ORDER, groupRows, partRows } from './parts';
 import { inUsualOrder, usualOfRange } from './usual';
@@ -60,7 +60,8 @@ export const computeDailyScores = (input: DailyScoresInput): DailyScores => {
     const { score, coverage } = combine(basis.components);
     const used = { signals: basis.signals, days: basis.days };
     recovery = provisional
-      ? { state: 'available', score, zone: recoveryZone(score), algorithm_version: PROVISIONAL_ALGORITHM.recovery, activation: 'accepted', coverage, hrv_method: basis.hrvMethod, used, baseline: labelOf(basis.own ?? [], basis.usedPrior === true) }
+      ? { state: 'available', score, zone: recoveryZone(score), coverage, hrv_method: basis.hrvMethod, used, baseline: labelOf(basis.own ?? [], basis.usedPrior === true),
+        ...(basis.sleepOnly ? { algorithm_version: DEGRADED_ALGORITHM.recovery, activation: 'candidate_unaccepted' as const } : { algorithm_version: PROVISIONAL_ALGORITHM.recovery, activation: 'accepted' as const }) }
       : { state: 'available', score, zone: recoveryZone(score), algorithm_version: ALGORITHM.recovery, activation: 'candidate_unaccepted', coverage, hrv_method: basis.hrvMethod, used };
   }
   const debt = sleepDebt(input.targetDay, byDay, prior, input.sleepNeedMinutes, provisional);

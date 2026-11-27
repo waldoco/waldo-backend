@@ -83,8 +83,8 @@ describe('a Galaxy Watch through Health Connect', () => {
     expect(mixed).toMatchObject({ activation: 'accepted', score: own.score, zone: own.zone, confidence: own.confidence });
   });
 
-  it('takes no resting rate from a night it did not read whole', async () => {
-    expect(today(await produce(history(1).flatMap(d => d.samples))).recovery).toEqual({ reason: 'missing_resting_signal' });
+  it('takes no resting rate from a night it did not read whole, so Recovery stands on the night\'s sleep alone', async () => {
+    expect(today(await produce(history(1).flatMap(d => d.samples))).recovery).toMatchObject({ algorithm_version: 'recovery.v6', activation: 'candidate_unaccepted', used: { signals: ['sleep'] } });
   });
 
   it('writes Weight without active energy, from what it has', async () => {

@@ -93,7 +93,8 @@ const LARGEST = {
   form: formHealthViewSchema.parse({ ...common, algorithm_version: 'form.v9', form_zone: 'steady', missing_components: crsPillarSchema.options }),
   recovery: recoveryHealthViewSchema.parse({ ...common, algorithm_version: 'recovery.v5', recovery_zone: 'solid', missing_components: recoveryComponentSchema.options }),
   partial: partialHealthViewSchema.parse({ ...shared, availability: 'partial', freshness: 'stale', as_of_day: 'yesterday', sources: [...SOURCES],
-    present: ['last_night_sleep', 'recent_sleep', 'calendar', 'activity', 'workouts'], load_zone: 'moderate', no_score_row: true }),
+    present: ['last_night_sleep', 'recent_sleep', 'calendar', 'activity', 'workouts'], load_zone: 'moderate', no_score_row: true,
+    form_without_recovery: { zone: 'steady', basis: ['sleep_timing', 'daylight', 'movement', 'steps', 'stress'], confidence_band: 'low' } }),
 };
 
 describe('the system prompt takes the largest health view the schemas admit', () => {

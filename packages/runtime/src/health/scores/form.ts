@@ -1,5 +1,5 @@
 import { circularStanding, labelOf, standing } from './baseline';
-import { ALGORITHM, PROVISIONAL_ALGORITHM, provisionalRecoveryBasis, recoveryBasis } from './recovery';
+import { ALGORITHM, DEGRADED_ALGORITHM, PROVISIONAL_ALGORITHM, provisionalRecoveryBasis, recoveryBasis, type RecoveryBasis } from './recovery';
 import { BASELINE_DAYS, circularZScore, combine, higherIsBetter, lowerIsBetter, mean, nearUsual, zScore, logZScore, type Component } from './stats';
 import { localDayWindow, wallMinute } from './time';
 import { formZone } from './zones';
@@ -80,8 +80,11 @@ export const formReading = (record: DayRecord, asOf: string | null, provisional:
 
 export const formScore = (record: DayRecord, earlier: readonly DayRecord[], sleepNeedMinutes: number | null, asOf: string | null, provisional = false, detail = false): FormResult => {
   const target = formHours(record, provisional), prior = earlier.map(day => formHours(day, provisional));
-  const recovery = provisional ? provisionalRecoveryBasis(target, prior, sleepNeedMinutes) : recoveryBasis(target, prior, sleepNeedMinutes);
-  if ('reason' in recovery) return { state: 'unavailable', reason: recovery.reason };
+  const outcome = provisional ? provisionalRecoveryBasis(target, prior, sleepNeedMinutes) : recoveryBasis(target, prior, sleepNeedMinutes);
+  // Provisional Form reads the day's own parts when Recovery has none; Recovery's reason stands only if they add nothing either.
+  if ('reason' in outcome && !provisional) return { state: 'unavailable', reason: outcome.reason };
+  const recovery: RecoveryBasis = 'reason' in outcome ? { components: [], signals: [], days: [], hrvMethod: null } : outcome;
+  const degraded = 'reason' in outcome || outcome.sleepOnly === true;
   const reading = formReading(target, asOf, provisional);
   if (reading === null) return { state: 'unavailable', reason: 'intraday_inputs_unavailable' };
   if (reading.stale) return { state: 'unavailable', reason: 'stale_inputs' };
@@ -166,7 +169,7 @@ export const formScore = (record: DayRecord, earlier: readonly DayRecord[], slee
       add('stress', mean(parts), FORM_WEIGHTS.stress, stressHistory.map(entry => entry.day));
     }
   }
-  if (!signals.some(name => name === 'daylight' || name === 'movement' || name === 'steps' || name === 'stress')) return { state: 'unavailable', reason: 'baseline_immature' };
+  if (!signals.some(name => name === 'daylight' || name === 'movement' || name === 'steps' || name === 'stress')) return { state: 'unavailable', reason: 'reason' in outcome ? outcome.reason : 'baseline_immature' };
 
   const { score, coverage } = combine(components);
   const used = { signals, days: [...days].sort() };
@@ -176,10 +179,13 @@ export const formScore = (record: DayRecord, earlier: readonly DayRecord[], slee
       // Steps fill movement's part when they stand in for it, so the shares still make the whole score.
       const asPart = (name: string) => (name === 'steps' ? 'movement' : name);
       const ownParts = components.filter(component => !component.name.startsWith('recovery.')).map(component => ({ ...component, name: asPart(component.name) }));
-      const rows = partRows(PART_ORDER.form, [fromTheNight(scaled), ...ownParts], new Map([...absent].map(([name, reason]) => [asPart(name), reason])));
+      // A Form the degraded rule made without Recovery has no night part: it is shown missing, with Recovery's reason in the parts' words.
+      if (scaled.length === 0 && 'reason' in outcome) absent.set('from_the_night', outcome.reason === 'baseline_immature' ? 'baseline_immature' : 'no_reading');
+      const rows = partRows(PART_ORDER.form, [...(scaled.length ? [fromTheNight(scaled)] : []), ...ownParts], new Map([...absent].map(([name, reason]) => [asPart(name), reason])));
       return { parts: rows, usual: components.flatMap(component => (component.usual ? [component.usual] : [])) };
     })() : {};
-    return { state: 'available', score, zone: formZone(score), algorithm_version: PROVISIONAL_ALGORITHM.form, activation: 'accepted', coverage, hrv_method: recovery.hrvMethod, used, baseline: labelOf(own, usedPrior), ...asked };
+    return { state: 'available', score, zone: formZone(score), coverage, hrv_method: recovery.hrvMethod, used, baseline: labelOf(own, usedPrior), ...asked,
+      ...(degraded ? { algorithm_version: DEGRADED_ALGORITHM.form, activation: 'candidate_unaccepted' as const } : { algorithm_version: PROVISIONAL_ALGORITHM.form, activation: 'accepted' as const }) };
   }
   return { state: 'available', score, zone: formZone(score), algorithm_version: ALGORITHM.form, activation: 'candidate_unaccepted', coverage, hrv_method: recovery.hrvMethod, used };
 };

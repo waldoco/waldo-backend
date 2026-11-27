@@ -69,12 +69,16 @@ describe('provisional Recovery: the first morning', () => {
   });
   it('still names what is missing', () => {
     expect(on(firstMorning({ sleep: null })).recovery).toEqual({ state: 'unavailable', reason: 'missing_sleep' });
-    expect(on(firstMorning({ overnightHrv: [], restingHeartRate: [] })).recovery).toEqual({ state: 'unavailable', reason: 'missing_resting_signal' });
   });
-  it('is baseline_immature when its only resting signal has no prior and too few own days', () => {
-    const appleDay = firstMorning({ overnightHrv: [{ value: 40, method: 'sdnn' }], restingHeartRate: [] });
-    expect(on(appleDay).recovery).toEqual({ state: 'unavailable', reason: 'baseline_immature' });
-    expect(on(firstMorning({ overnightHrv: [], restingHeartRate: [{ value: 60, method: 'unknown' }] })).recovery).toEqual({ state: 'unavailable', reason: 'baseline_immature' });
+  // Scores degrade, they do not gate: a night with no overnight heart signal, or none with a baseline yet, is a Recovery on the
+  // night's sleep alone, a candidate at sleep's share of coverage.
+  it.each([
+    ['no overnight heart signal', { overnightHrv: [], restingHeartRate: [] }],
+    ['an SDNN night with no baseline', { overnightHrv: [{ value: 40, method: 'sdnn' as const }], restingHeartRate: [] }],
+    ['a resting signal of an unknown method', { overnightHrv: [], restingHeartRate: [{ value: 60, method: 'unknown' as const }] }],
+  ])('stands on the night\'s sleep alone with %s', (_case, night) => {
+    const r = available(on(firstMorning(night)).recovery);
+    expect(r).toMatchObject({ algorithm_version: 'recovery.v6', activation: 'candidate_unaccepted', coverage: 0.5, hrv_method: null, used: { signals: ['sleep'] } });
   });
 });
 

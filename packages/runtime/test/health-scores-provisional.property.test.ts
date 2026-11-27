@@ -56,7 +56,8 @@ describe('provisional scores: properties', () => {
         if (pillar.state !== 'available') { expect(pillar.reason.length).toBeGreaterThan(0); continue; }
         expect(Number.isInteger(pillar.score) && pillar.score >= 0 && pillar.score <= 100).toBe(true);
         expect(pillar.coverage > 0 && pillar.coverage <= 1).toBe(true);
-        expect(pillar.activation).toBe('accepted');
+        // A pillar that stands on less than its full parts (scores degrade, they do not gate) is a candidate under its own version.
+        expect(pillar.activation).toBe(['recovery.v6', 'form.v11'].includes(pillar.algorithm_version) ? 'candidate_unaccepted' : 'accepted');
         expect(pillar.baseline!.needed).toBe(14);
         expect(pillar.baseline!.state).toBe(pillar.baseline!.personal_days >= 14 ? 'personal' : 'provisional');
         expect(pillar.baseline!.personal_days).toBeGreaterThanOrEqual(0);
