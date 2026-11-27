@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { OWNER_TEXT_INBOUND_MAX_CHARS } from '../adapters/channel';
 import { briefVariantSchema, triggerTypeSchema, type TriggerType } from '../core/trigger';
 import { sourceTaintSchema } from '../memory/sanitise';
 import {
@@ -20,7 +21,7 @@ const contentDigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 export const surfaceInvocationRequestSchema = z.strictObject({
   input: z.strictObject({
     kind: z.literal('text'),
-    text: z.string().min(1).max(8_192),
+    text: z.string().min(1).max(OWNER_TEXT_INBOUND_MAX_CHARS),
   }),
   retry_token: opaqueRef('rty').optional(),
 });
