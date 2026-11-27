@@ -1,3 +1,4 @@
+import { lastRunFailure, pausedLine, type RunFailureCode } from './run-failure';
 import { deriveContextBudgetChars, SANITISE_DESTINATION_POLICIES, WALDO_AUXILIARY_MODEL, type ModelName, type ScheduleEntry } from '@waldo/contracts';
 import { appWhy, storedWhy } from '../tools/why-trail';
 import { whyCarries } from './approvals';
@@ -454,7 +455,8 @@ const triesUsed = (kv: Kv, day: string): number => {
 const OUTAGE_REASONS: ReadonlySet<string> = new Set(Object.values(MODEL_OUTAGE_SKIP));
 export type CardViewState = Exclude<CardState, 'waiting_on_model'> | 'generating' | 'failed' | 'paused';
 // `retriesLeft` is present only while the card is stuck, so that is where Try again is offered and accepted.
-export type CardStatus = Readonly<{ state?: CardViewState; reason?: string; retriesLeft?: number }>;
+// code: why a paused card's last run failed (run-failure.ts), when one was recorded.
+export type CardStatus = Readonly<{ state?: CardViewState; reason?: string; retriesLeft?: number; code?: RunFailureCode }>;
 export type CardDeps = Readonly<{
   scheduler: Scheduler; book: DayPlanBook; kv: Kv; timezone: string; now: number;
   // Whether the day's card has a delivery that may still go out, or may already have.
@@ -475,7 +477,10 @@ export const cardStatus = (deps: CardDeps, card: DayCard): CardStatus => {
   if (row?.state === 'held') return { state: 'held' };
   if (entry !== null && inFlight(deps.scheduler, entry, deps.now)) return { state: 'generating', reason: 'Waldo is making it now' };
   const tries = deps.queued(day, card.id) ? {} : { retriesLeft: Math.max(0, CARD_RETRIES_PER_DAY - triesUsed(deps.kv, day)) };
-  if (entry?.status === 'quarantined') return { state: 'paused', reason: `Paused after ${QUARANTINE_AFTER_ATTEMPTS} failed tries in a row`, ...tries };
+  if (entry?.status === 'quarantined') {
+    const failure = lastRunFailure(deps.kv, card.id);
+    return { state: 'paused', reason: failure ? pausedLine(failure.code, QUARANTINE_AFTER_ATTEMPTS) : `Paused after ${QUARANTINE_AFTER_ATTEMPTS} failed tries in a row`, ...(failure ? { code: failure.code } : {}), ...tries };
+  }
   if (row?.state === 'waiting_on_model') return { state: 'failed', reason: MODEL_OUTAGE_SKIP[card.id], ...tries };
   return row === undefined || row.state === 'pending' ? { state: 'pending' } : {};
 };

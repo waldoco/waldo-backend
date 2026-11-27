@@ -258,6 +258,10 @@ const ownerName = text.min(1).max(80);
 // what holds it), delivered, failed (code: a short reason, such as whatsapp_payment_required) or unknown (it may have arrived;
 // nothing proves it). Kinds, codes and times only, never the words or an internal id. Below 26 it is never sent.
 export const APP_CONTROLS_SENT_TODAY_REVISION = 26;
+// Controls revision 27 (`controls=27`): a paused day card also carries state_code, why its last run failed, as a closed code
+// (the same reason its state_reason line gives in words); absent when no reason was recorded. Below 27 it is never sent.
+export const APP_CONTROLS_CARD_PAUSE_REASON_REVISION = 27;
+export const APP_RUN_FAILURE_CODES_V1 = ['model_unavailable', 'model_failed', 'timed_out', 'not_delivered', 'owner_check', 'outbox_full', 'storage', 'unknown'] as const;
 export const APP_SENT_TODAY_MAX_V1 = 50;
 const sendCode = z.string().regex(/^[a-z][a-z0-9_:]{0,63}$/);
 const sentToday = z.strictObject({
@@ -306,7 +310,8 @@ export const appControlDayDataV1Schema = z.strictObject({
   cards: z.array(z.strictObject({ id: text, name: text, defaultTime: text, time: text.nullable(), reason: text, sent: z.boolean(), pin: text.nullable(), latest: latestDelivery.nullable().optional(),
     state: appDayCardStateV1Schema.optional(), state_reason: text.min(1).max(APP_CARD_STATE_REASON_MAX_V1).optional(),
     retries_left: z.int().min(0).max(APP_CARD_RETRIES_PER_DAY_V1).optional(), revision: z.int().min(1).optional(), revised_at: z.int().positive().optional(),
-    why: appWhyV1Schema.optional() })
+    why: appWhyV1Schema.optional(), state_code: z.enum(APP_RUN_FAILURE_CODES_V1).optional() })
+    .refine(card => card.state_code === undefined || card.state === 'paused', { error: 'state_code comes only with a paused card', path: ['state_code'] })
     .refine(card => card.state === undefined || card.sent === (card.state === 'sent' || card.state === 'skipped'), { error: 'state and sent disagree', path: ['state'] })
     .refine(card => (card.revision === undefined) === (card.revised_at === undefined), { error: 'revision and revised_at come together', path: ['revision'] })),
   proactivity: z.strictObject({ quiet_start: text.nullable(), quiet_end: text.nullable(), volume: z.enum(['low', 'normal', 'high']) }),

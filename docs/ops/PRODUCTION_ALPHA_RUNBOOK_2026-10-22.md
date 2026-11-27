@@ -493,6 +493,7 @@ These steps hold until ADR-0062 or an owner-approved runbook replaces them. Each
    - Run the S5 smoke.
    - Check `npx wrangler deployments list --name <production worker>`.
    - Tail the logs with `npx wrangler tail <production worker> --format json`. The logs are content-free: hops, codes and trace keys.
+   - Count paused jobs across owners: in Workers Logs, filter `hop = schedule_paused` and group by `code`. The code is `<job kind>:<reason>`, the reason one of `model_unavailable`, `model_failed`, `timed_out`, `not_delivered`, `owner_check`, `outbox_full`, `storage` or `unknown`. There is one line per pause of a job the owner is told about (the day cards, reminders, the check on open items, standing orders, the overnight memory pass, the calendar and mail check, a forget cleanup), when its notice is handled; other kinds pause without a line. The three day cards share the kind `brief`, so a paused Brief, Check-in or Close shows as `brief:<reason>`, and its card in the app shows the same reason.
    - Read the cost ledger for today.
    - Read the OpenAI and Anthropic status pages.
 3. **Contain.**

@@ -162,6 +162,21 @@ it('a successful Try again lifts a quarantine on the card', async () => {
   });
 });
 
+it('a paused Brief says why: the reason of its last failed run in its line, and as a code for a build at controls=27; a pause with none recorded keeps the plain line', async () => {
+  await withBriefDue('paused-why', async (day) => {
+    const brief = (view: AppDay) => view.cards.find(card => card.id === 'card:brief')!;
+    day.sql.exec("UPDATE schedule SET status = 'quarantined', quarantined_until = ?, attempts = 3 WHERE id = 'card:brief'", AT + 24 * 60 * 60_000);
+    expect(brief(await day.appDay('controls=27'))).toMatchObject({ state: 'paused', state_reason: 'Paused after 3 failed tries in a row' });
+    expect(brief(await day.appDay('controls=27'))).not.toHaveProperty('state_code');
+    day.kv.put('schedule_failure_v1:card:brief', { code: 'not_delivered', at: AT });
+    const now = brief(await day.appDay('controls=27'));
+    expect(now).toMatchObject({ state: 'paused', state_reason: 'Paused after 3 failed tries in a row: it was written but could not be delivered', state_code: 'not_delivered' });
+    const v26 = brief(await day.appDay('controls=26'));
+    expect(v26).toMatchObject({ state: 'paused', state_reason: 'Paused after 3 failed tries in a row: it was written but could not be delivered' });
+    expect(v26).not.toHaveProperty('state_code');
+  });
+});
+
 it('refuses a card it does not know', async () => {
   await withBriefDue('try-again-unknown', async (day) => {
     expect(await day.act({ action: 'card.retry', id: 'card:nope' })).toBe(false);
