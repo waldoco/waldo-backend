@@ -24,7 +24,7 @@ const harness = async (steps: Step[], { lean = true, loader = true }: { lean?: b
   const calls: string[] = [];
   const fake = (name: string) => ({ name: name as ToolName, description: `The ${name} tool.`, schema: z.object({}).passthrough(), trigger_allowlist: allowed(name),
     handle: async () => { calls.push(name); return { ok: true as const, data: { done: name }, source_taint: (EXTERNAL_ORIGIN_TOOLS as readonly string[]).includes(name) ? 'external' as const : null }; } });
-  const tools = [...new Set([...SCHEDULED_MENU, 'web_search', 'browse_page', 'search_communication', 'send_message', 'set_reminder'])].filter((name) => name !== 'get_context').map(fake);
+  const tools = [...new Set([...SCHEDULED_MENU, 'web_search', 'browse_page', 'search_communication', 'send_message', 'set_reminder', 'cancel_reminder'])].filter((name) => name !== 'get_context').map(fake);
   const requests: LLMRequest[] = [];
   const logs: TurnLogEntry[] = [];
   const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {
@@ -97,6 +97,18 @@ describe('a Waldo-started run reaches the owner\'s whole catalogue', () => {
     await wake(owner, 'sweep:2', DAY_CARD_TOOLS);
     expect(calls).not.toContain('set_reminder');
     expect(outputOf(requests, 'set_reminder')).toContain('propose_action');
+  });
+
+  it('a run started from mail that cancels one reminder on the mail\'s word runs it and must say so; cancelling all is carded', async () => {
+    const { owner, calls, requests } = await harness([
+      { tool: FIND_TOOLS, args: { names: ['cancel_reminder'] } },
+      { tool: USE_TOOL, args: { name: 'cancel_reminder', arguments: { id: 'r1' } } },
+      { tool: USE_TOOL, args: { name: 'cancel_reminder', arguments: { all: true } } },
+    ]);
+    await wake(owner, 'triage:3', DAY_CARD_TOOLS);
+    expect(calls).toEqual(['cancel_reminder']);
+    const all = requests.at(-1)!.tool_turns!.filter((turn) => turn.call.arguments.includes('"all":true'))[0]!.output;
+    expect(all).toContain('propose_action');
   });
 
   it('without the harness loader a run keeps its job kind\'s list, so its function list does not grow to every tool', async () => {
