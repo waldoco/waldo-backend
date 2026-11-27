@@ -119,6 +119,22 @@ it('the yes and the setup answers write one look-up job carrying only the name, 
   });
 });
 
+it('with no name from setup, the name Google gave at sign-in starts the look-up, and the trace names only where it came from', async () => {
+  await ownerWith({ ONBOARDING_LOOKUP: '1' }, async ({ state, app, jobs, skipped }) => {
+    await state.storage.put('google:accounts', [{ id: 'acct-1', email: 'asha@example.com', scopes: [] }]);
+    await state.storage.put('google:profiles', { 'acct-1': { name: 'Asha Rao', given_name: 'Asha', at: Date.now() } });
+    await consents(app, true);
+    await vi.waitFor(() => expect(jobs()).toHaveLength(1), { timeout: 10_000, interval: 25 });
+    const brief = JSON.parse(jobs()[0]!.brief_json) as { context: string; machine: { refs: string[] } };
+    expect(brief.context).toContain('Asha Rao');
+    expect(skipped().join(' ')).not.toMatch(/no_name|Asha/);
+    const enqueued = state.storage.sql.exec<{ note: string | null }>("SELECT note FROM trace_log WHERE hop = 'lookup_enqueued'").toArray().map(row => row.note ?? '');
+    expect(enqueued).toEqual(['name:google']);
+    // A name the owner gives at setup is not overwritten by Google's, and nothing calls it the owner's chosen name.
+    expect(state.storage.sql.exec("SELECT 1 FROM claims WHERE source_ref = 'owner, first run: name'").toArray()).toEqual([]);
+  });
+});
+
 it('withdrawing the yes cancels and fences the look-up job', async () => {
   await ownerWith({ ONBOARDING_LOOKUP: '1' }, async ({ app, jobs, hops }) => {
     await consents(app, true);

@@ -4858,6 +4858,17 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
         return null;
       },
+      // The full name Google gave for the first connected account that has one: the owner look-up's name when the owner gave
+      // none at setup. It is Google's word, never stored as the name the owner chose to be called.
+      async profileName(): Promise<string | null> {
+        const [all, profiles] = [await accounts(), await googleProfiles()];
+        for (const account of all) {
+          const profile = profiles[account.id] ?? {};
+          const name = (profile.name ?? [profile.given_name, profile.family_name].filter(Boolean).join(' ')).trim();
+          if (name && name.length <= 80) return name;
+        }
+        return null;
+      },
       configured: () => Boolean(clientId && clientSecret && stateSecret),
       // Every call starts a fresh single-use attempt (state nonce + PKCE verifier) whose lifetime is CONSENT_TTL_MS (google-consent.ts).
       async begin(): Promise<Readonly<{ url: string; nonce: string }> | null> {
@@ -4921,6 +4932,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           log({ trace, hop: 'google_linked', ms: 0, ok: true, detail: `${outcome.scopes.length} scopes` });
           // A welcome build that skipped calendar or mail at setup takes them up now that Google is connected.
           welcomeAfterConnect();
+          // The look-up waits for a name; Google's, from this connect, may be the first it has.
+          this.reconcileLookup(runtime);
           const session = (await consentDeps.store.read())[input.nonce]?.session;
           const callRpc = signedRpc(env);
           if (session && callRpc) {
@@ -6902,12 +6915,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
         if (!lookupOn) return skipped('switch_off');
         if (lookupStarted() === consent.state('owner_lookup').granted_at) return skipped('started');
-        const name = ownerName(memory), doName = identity.get<string>('do_name');
+        // The name the owner gave at setup, else the one Google gave at sign-in: the trace says which, never the name.
+        const given = ownerName(memory), name = given ?? await google.profileName().catch(() => null), doName = identity.get<string>('do_name');
         const email = name && doName ? await ownerAccountEmail(this.env, doName).catch(() => null) : null;
         const made = storage.transactionSync(() => startLookup({ book: this.jobs(), consent: lookupConsent(), now: Date.now, surface: 'app',
           started: lookupStarted, markStarted: (at) => identity.put(LOOKUP_STARTED_KEY, at), held: heldTopicsOf(memory) }, name ? { name, email } : null));
         if (made.code !== 'enqueued') return skipped(made.code === 'no_name' ? `no_name:${ownerNameGap(memory)}` : made.code);
-        log({ trace: `task:${made.job.id}`, hop: 'lookup_enqueued', ms: 0, ok: true, job_id: made.job.id, job_profile: 'reader' });
+        log({ trace: `task:${made.job.id}`, hop: 'lookup_enqueued', ms: 0, ok: true, job_id: made.job.id, job_profile: 'reader', code: given ? 'name:setup' : 'name:google' });
         await armTaskJobsWake(storage, made.job.due_at ?? Date.now());
       },
       afterReply: async () => {
