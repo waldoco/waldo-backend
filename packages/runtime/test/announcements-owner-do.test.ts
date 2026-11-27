@@ -62,9 +62,14 @@ afterEach(() => { vi.unstubAllGlobals(); });
 type Owner = Readonly<{ fetch(request: Request): Promise<Response>; alarm(): Promise<void>; setup(channel: string): { ready: Promise<unknown>; announcementPass(): Promise<void>; ledger(): Promise<string> } }>;
 type Config = Readonly<{ switches?: Record<string, string>; release?: string; gate?: boolean; off?: boolean; whatsNewChars?: string }>;
 
+const CLOCK_UTC = '12:00:00';
 const withOwner = async <T>(name: string, run: (owner: (config?: Config) => Owner, state: DurableObjectState) => Promise<T>): Promise<T> => {
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   return runInDurableObject(stub, async (instance, state) => {
+    // An unasked message may go only inside the owner's day, from the Brief to the Close (21:30 by default). The clock is held
+    // at CLOCK_UTC on the run's own date, still ticking, so a run at any hour sees the day each case sets up.
+    const realNow = Date.now, shift = Date.parse(`${new Date(realNow()).toISOString().slice(0, 10)}T${CLOCK_UTC}Z`) - realNow();
+    Date.now = () => realNow() + shift;
     const poolAlarm = vi.spyOn(instance as InstanceType<typeof OwnerDO>, 'alarm').mockResolvedValue(undefined);
     claimStore(state.storage.sql); ensureSchema(state.storage); traceBook(state.storage.sql);
     state.storage.kv.put('do_name', name);
@@ -75,7 +80,7 @@ const withOwner = async <T>(name: string, run: (owner: (config?: Config) => Owne
     const owner = (config: Config = {}) => new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TELEGRAM_ID: undefined,
       WALDO_ENVIRONMENT: 'staging', WALDO_RELEASE: config.release ?? 'r1', WHATS_NEW: config.off ? '0' : '1', WALDO_SWITCHES: JSON.stringify(config.switches ?? { TRUSTED_COORDINATION: '1' }),
       ...(config.gate ? { PROACTIVE_GATE: '1' } : {}), ...(config.whatsNewChars ? { WALDO_WHATS_NEW_CHARS: config.whatsNewChars } : {}) } as never) as unknown as Owner;
-    try { return await run(owner, state); } finally { await state.storage.deleteAlarm(); poolAlarm.mockRestore(); }
+    try { return await run(owner, state); } finally { await state.storage.deleteAlarm(); poolAlarm.mockRestore(); Date.now = realNow; }
   });
 };
 
