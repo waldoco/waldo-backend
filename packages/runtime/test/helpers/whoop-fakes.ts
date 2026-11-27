@@ -119,7 +119,8 @@ export const planeRpc = (plane: Plane, doName = 'owner-w') => async (fn: string,
     return { consents: rows.filter(([, status]) => status !== 'none').map(([purpose, status]) => ({ consent_class: 'health_processing', source: 'whoop', purpose, version: plane.copy, status, epoch: plane.epoch, granted_at: '2026-10-01T00:00:00.000Z', withdrawn_at: null, deletion_state: 'not_required' })) };
   }
   if (fn === 'health_ingest') {
-    const text = String(args.p_payload), body = JSON.parse(text);
+    const text = String(args.p_payload), { rejection, ...body } = JSON.parse(text);
+    if (rejection !== undefined && rejection !== 'per_sample') return { error: 'invalid_request' };
     const parsed = healthIngestV1Schema.safeParse(body);
     if (!parsed.success) return { error: 'invalid_request' };
     const prior = plane.requests.get(parsed.data.request_id);
@@ -128,16 +129,25 @@ export const planeRpc = (plane: Plane, doName = 'owner-w') => async (fn: string,
     if (prior) return { ...(prior.response as object), replayed: true };
     plane.ingests += 1;
     let accepted = 0, deleted = 0, ignored = 0;
-    for (const sample of parsed.data.samples) {
+    const rejected: { change: 'sample'; index: number; signal: string; reason: 'revision_conflict' }[] = [];
+    // As waldo.health_ingest: one sample id at one revision with other content is a conflict, which fails an all-or-nothing
+    // batch whole and costs only that reading in a per-sample one.
+    for (const [index, sample] of parsed.data.samples.entries()) {
       const key = `${sample.signal}|${sample.sample_id}`, stored = plane.samples.get(key);
       if (stored && stored.revision > sample.revision) { ignored += 1; continue; }
+      if (stored && stored.revision === sample.revision) {
+        if (JSON.stringify(stored.payload) === JSON.stringify(sample)) { ignored += 1; continue; }
+        if (rejection !== 'per_sample') return { error: 'sample_conflict' };
+        rejected.push({ change: 'sample', index, signal: sample.signal, reason: 'revision_conflict' });
+        continue;
+      }
       plane.samples.set(key, { revision: sample.revision, payload: sample as unknown as Record<string, unknown> }); accepted += 1;
     }
     for (const deletion of parsed.data.deletions) {
       const key = `${deletion.signal}|${deletion.sample_id}`, stored = plane.samples.get(key);
       if (stored && deletion.revision >= stored.revision) { plane.samples.delete(key); deleted += 1; } else ignored += 1;
     }
-    const response = { request_id: parsed.data.request_id, source: 'whoop', consent_epoch: plane.epoch, accepted, deleted, ignored, anchor_after: parsed.data.anchor_after, replayed: false };
+    const response = { request_id: parsed.data.request_id, source: 'whoop', consent_epoch: plane.epoch, accepted, deleted, ignored, anchor_after: parsed.data.anchor_after, replayed: false, ...(rejection === 'per_sample' ? { rejected } : {}) };
     plane.requests.set(parsed.data.request_id, { digest: text, response });
     return response;
   }

@@ -221,10 +221,13 @@ describe('WHOOP cycles: day strain', () => {
     const [sample] = whoopCycleSamples(open);
     expect(sample).toMatchObject({ open: true, end_at: '2026-10-20T09:30:00.000Z', day: '2026-10-20' });
     expect(whoopCycleSamples(open)).toEqual([sample]);
-    // Moments after the night began, the cycle's only day so far is the one it started on.
-    const [early] = whoopCycleSamples(whoopCycle(cycleRecord({ end: null, updated_at: '2026-10-19T22:40:00.000Z' }))!);
-    expect(early).toMatchObject({ day: '2026-10-19', open: true });
-    expect(healthSampleV1Schema.safeParse(early).success).toBe(true);
+    // Moments after a night that began before midnight, the open cycle has not reached its day: it waits, rather than sitting
+    // on the day it began beside the cycle that closed then.
+    expect(whoopCycleSamples(whoopCycle(cycleRecord({ end: null, updated_at: '2026-10-19T22:40:00.000Z' }))!)).toEqual([]);
+    // A night begun after midnight is on its day at once.
+    const [late] = whoopCycleSamples(whoopCycle(cycleRecord({ start: '2026-10-20T00:30:00.000Z', end: null, updated_at: '2026-10-20T01:00:00.000Z' }))!);
+    expect(late).toMatchObject({ day: '2026-10-20', open: true });
+    expect(healthSampleV1Schema.safeParse(late).success).toBe(true);
   });
   it('gives no strain for an unscored cycle, a strain off the scale, an unplaceable offset or a span that runs backwards; steps only when stated', () => {
     for (const over of [{ score_state: 'PENDING_SCORE', score: undefined }, { score: { strain: 22 } }, { timezone_offset: 'BST' }, { end: '2026-10-19T20:00:00.000Z' }]) {

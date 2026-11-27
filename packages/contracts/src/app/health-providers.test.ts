@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { HEALTH_PROVIDER_CONSENT_VERSION_V1, healthConsentListAtRevisionV1, healthConsentGrantV1Schema, healthPurposeV1Schema, isHealthProviderSourceV1 } from './health-ingest';
+import { HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_SCORES_REVISION_V1, healthConsentListV1Schema, healthConsentListAtRevisionV1, healthConsentGrantV1Schema, healthPurposeV1Schema, isHealthProviderSourceV1 } from './health-ingest';
 import {
   appHealthProviderRoutesV1, healthProviderConnectResultV1Schema, healthProviderConnectV1Schema, healthProviderDisconnectResultV1Schema,
   healthProviderDisconnectV1Schema, healthProviderErrorV1Schema, healthProviderListV1Schema, healthProviderStatusV1Schema,
@@ -10,6 +10,14 @@ const status = { provider: 'whoop', state: 'connected', last_sync_at: '2026-10-2
 const connect = { request_id: 'provider-connect-1', provider: 'whoop' };
 
 describe('health providers: status', () => {
+  it('hides a WHOOP grant on copy 6 from a build below revision 16, which pins copies 2 to 4, and shows it from 16', () => {
+    const row = (version: number, source = 'whoop') => ({ consent_class: 'health_processing', source, purpose: 'storage_compute', version, status: 'granted', epoch: 1, granted_at: '2026-10-10T00:00:00Z', withdrawn_at: null, deletion_state: 'not_required' });
+    const rows = [row(2, 'apple'), row(6)];
+    expect(healthConsentListAtRevisionV1(rows, HEALTH_PROVIDER_SCORES_REVISION_V1 - 1)).toEqual([row(2, 'apple')]);
+    expect(healthConsentListAtRevisionV1([row(4)], HEALTH_PROVIDER_SCORES_REVISION_V1 - 1)).toEqual([row(4)]);
+    expect(healthConsentListAtRevisionV1(rows, HEALTH_PROVIDER_SCORES_REVISION_V1)).toEqual(rows);
+    expect(healthConsentListV1Schema.safeParse({ consents: healthConsentListAtRevisionV1(rows, HEALTH_PROVIDER_SCORES_REVISION_V1) }).success).toBe(true);
+  });
   it('names, from revision 16, the kinds a connection made before they were asked for lacks', () => {
     expect(healthProviderStatusV1Schema.safeParse({ ...status, reconnect_for: ['day_strain', 'body_measurements'] }).success).toBe(true);
     expect(healthProviderStatusV1Schema.safeParse({ ...status, reconnect_for: ['body_measurements'] }).success).toBe(true);

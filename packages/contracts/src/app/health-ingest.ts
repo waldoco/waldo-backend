@@ -88,8 +88,11 @@ export const healthConsentStateV1Schema = z.strictObject({
 }).refine(copyItsSourceHad, { message: 'a stored grant carries a copy version its source has had', path: ['version'] });
 export const healthConsentListV1Schema = z.strictObject({ consents: z.array(healthConsentStateV1Schema).max(12) });
 // What a client at an older health revision may be shown: no provider rows, since it cannot parse them.
+// A build below health revision 16 pins WHOOP's copies as 2, 3 and 4, so it is not shown a WHOOP grant on copy 6 or later.
 export const healthConsentListAtRevisionV1 = <Row extends { source: string }>(consents: readonly Row[], revision: number): Row[] =>
-  revision >= HEALTH_PROVIDER_REVISION_V1 ? [...consents] : consents.filter(row => !isHealthProviderSourceV1(row.source));
+  revision < HEALTH_PROVIDER_REVISION_V1 ? consents.filter(row => !isHealthProviderSourceV1(row.source))
+    : revision < HEALTH_PROVIDER_SCORES_REVISION_V1 ? consents.filter(row => !(row.source === 'whoop' && typeof (row as { version?: unknown }).version === 'number' && (row as unknown as { version: number }).version > 4))
+    : [...consents];
 export const healthConsentChangeV1Schema = z.strictObject({ consent: healthConsentStateV1Schema, replayed: z.boolean(), deletion_routed: z.boolean() });
 
 // The permission API is not the physiological producer: keep the observed read origin and

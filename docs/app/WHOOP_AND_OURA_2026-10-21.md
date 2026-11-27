@@ -124,6 +124,10 @@ not change item 3.
   hours before the record to now), so day strain follows a workout or a night without waiting for the daily pass. A failed cycle read
   after a webhook never fails the webhook; the next pass catches up. A WHOOP pass stays far inside WHOOP's 100 a minute and 10,000
   a day: a backfill is about 25 requests, a daily pass about 5, a webhook 1 to 3.
+- Revisions: a reading's revision is its record's `updated_at` in seconds plus 1 (no WHOOP scores) or 2 (copy 6, with them),
+  so a record stored before revision 16 with fewer keys, or before the owner moved to copy 6, is replaced on the next read
+  instead of colliding with itself; a deletion is above both. Batches are sent per sample, so a reading the database still
+  refuses (a revision conflict left by a rollback) costs that reading and logs `revision_conflict`, never the pass.
 - What is stored (health revision 16): see "What Waldo reads from WHOOP" below. A webhook only makes the owner object fetch; the
   fetch uses the owner's own token.
 - Webhook: `POST /events/whoop`, signature `X-WHOOP-Signature` = base64(HMAC-SHA256(timestamp + raw body, client secret)), checked against the

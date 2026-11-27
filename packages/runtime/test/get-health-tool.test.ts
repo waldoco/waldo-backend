@@ -445,6 +445,11 @@ describe('get_health: WHOOP', () => {
     expect(data.signals.find(s => s.signal === 'naps')!.days?.at(-1)?.value).toBe(28);
     expect(data.sessions).toEqual([{ day: '2026-10-12', activity: 'running', minutes: 50, energy_kcal: 400.1, avg_hr_bpm: 141, max_hr_bpm: 172, strain: 9.4, percent_recorded: 96.5, zone_minutes: [5, 15, 20, 8, 2] }]);
   });
+  it('keeps Apple Health\'s copy of WHOOP\'s night when WHOOP itself is not readable by the model', async () => {
+    const { handler } = fake({ consent: both(consent('granted', 'granted'), consent('granted', 'withdrawn', 'whoop', 1)), series: whoop });
+    const out = await handler.handle({ signals: ['sleep'], from: '2026-10-10', to: '2026-10-12', aggregation: 'daily' }, ctx);
+    expect(out.ok && out.data.state === 'available' && out.data.signals[0]).toMatchObject({ source: 'apple', days: [{ day: '2026-10-10', value: 398 }, { day: '2026-10-11', value: 402 }, { day: '2026-10-12', value: 431 }] });
+  });
   it('keeps the tool description inside the model contract\'s limit', () => {
     expect(fake({}).handler.description.length).toBeLessThanOrEqual(1_024);
   });

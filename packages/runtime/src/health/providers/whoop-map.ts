@@ -234,13 +234,16 @@ export const whoopWorkoutSamples = (workout: WhoopWorkout): HealthSampleV1[] => 
 const HOUR_MS = 3_600_000;
 // A cycle's strain on the owner's day: the waking day of the sleep that opens it, read as the local day twelve hours after its
 // start, never outside the days the cycle spans. An open cycle ends, for now, when WHOOP last scored it, so the same revision
-// always carries the same reading.
+// always carries the same reading, and waits until it reaches that day.
 export const whoopCycleSamples = (cycle: WhoopCycle): HealthSampleV1[] => {
   const offset = offsetMinutes(cycle.timezone_offset);
   const end = cycle.end ?? cycle.updated_at;
   const startMs = Date.parse(cycle.start), endMs = Date.parse(end);
   if (!cycle.score || offset === null || !(startMs <= endMs) || endMs - startMs > 3 * DAY_MIN * MIN || !between(cycle.score.strain, 0, 21)) return [];
   const first = localDayOf(startMs, offset), last = localDayOf(endMs, offset), noon = localDayOf(startMs + 12 * HOUR_MS, offset);
+  // An open cycle that has not yet reached its day (a night begun before midnight, read before it) is not placed: on the day it
+  // began it would sit beside the cycle that closed then.
+  if (cycle.end === null && noon > last) return [];
   const kcal = kcalOf(cycle.score.kilojoule);
   return [{
     day: noon > last ? last : noon < first ? first : noon, utc_offset_minutes: offset, start_at: cycle.start, end_at: end, sample_id: `whoop:cycle:${cycle.id}:provider_day_strain`,

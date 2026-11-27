@@ -5,6 +5,9 @@
 -- - waldo.health_ingest and waldo.health_series_read return to their definitions as of 20261116110200, and
 --   waldo.health_consent_view and waldo.health_consent_grant to theirs as of 20261107090000. A WHOOP grant stored on copy 6 keeps
 --   its version; the earlier grant function never wrote one, and the view reads a stored version as it is.
+-- - Forward-only for copy-6 grants: a Worker from before health revision 16 pins WHOOP's copies as 2, 3 and 4 and refuses a
+--   consent list holding copy 6, so an owner with a copy-6 grant sees the consent screen fail until they withdraw and grant
+--   again on copy 4 or the Worker rolls forward. The stored version is not rewritten: it records which notice the owner saw.
 delete from waldo.health_samples where signal in ('provider_recovery','provider_day_strain','provider_sleep_need','provider_sleep_performance','provider_sleep_consistency','nap','skin_temperature','height','max_heart_rate');
 update waldo.health_samples set payload = payload - 'stage_totals' where signal = 'sleep_duration' and payload ? 'stage_totals';
 update waldo.health_samples set payload = payload - 'strain' - 'percent_recorded' - 'elevation_change_m' where signal = 'workout' and (payload ? 'strain' or payload ? 'percent_recorded' or payload ? 'elevation_change_m');

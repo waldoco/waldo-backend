@@ -210,13 +210,20 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
   // object, never the time, sport or detail.
   type Pass = { woke: boolean; workout: boolean };
   type Grant = Readonly<{ epoch: number; scores: boolean }>;
+  // A reading's revision is its record's updated_at, raised by what this mapping sends for it: 1 under a copy without WHOOP's
+  // scores, 2 under one with them. The database refuses one sample id at one revision carrying two contents, so a record
+  // stored before revision 16 (fewer keys), or stored before its owner moved to copy 6 (no workout strain), is replaced rather
+  // than refused. A deletion takes the higher of the two, so it is never below a reading of the same record.
+  const MAPPING_REVISION = { readings: 1, scores: 2 } as const;
   const ingest = async (staged: Staged, grant: Grant, pass: Pass): Promise<number> => {
     let { epoch } = grant;
     const valid = staged.samples.filter(sample => healthSampleV1Schema.safeParse(sample).success);
     if (valid.length !== staged.samples.length) deps.log({ hop: 'whoop', ok: false, code: 'sample_dropped' });
-    const samples = grant.scores ? valid : withoutProviderScores(valid);
+    const raise = grant.scores ? MAPPING_REVISION.scores : MAPPING_REVISION.readings;
+    const samples = (grant.scores ? valid : withoutProviderScores(valid)).map(sample => ({ ...sample, revision: sample.revision + raise }));
+    const deletions = staged.deletions.map(deletion => ({ ...deletion, revision: deletion.revision + MAPPING_REVISION.scores }));
     let committed = 0;
-    const changes = [...samples.map(sample => ({ sample })), ...staged.deletions.map(deletion => ({ deletion }))];
+    const changes = [...samples.map(sample => ({ sample })), ...deletions.map(deletion => ({ deletion }))];
     for (let at = 0; at < changes.length; at += BATCH_MAX) {
       const slice = changes.slice(at, at + BATCH_MAX);
       const batchSamples = slice.flatMap(change => 'sample' in change ? [change.sample] : []);
@@ -225,12 +232,16 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
       const id = `whoop-${md5Hex(slice.map(change => 'sample' in change ? `${change.sample.sample_id}@${change.sample.revision}` : `${change.deletion.sample_id}@${change.deletion.revision}x`).sort().join('|'))}`;
       const send = (consentEpoch: number) => invokeHealth(deps.rpc, doName(), 'ingest', JSON.stringify({
         request_id: id, source: SOURCE, consent_epoch: consentEpoch, timezone: deps.timezone(), anchor_before: null, anchor_after: `whoop:${id}`, samples: batchSamples, deletions: batchDeletions,
+        // Each change on its own: a reading the database cannot take (a revision conflict left by a rollback) costs that reading,
+        // never the pass.
+        rejection: 'per_sample',
       }));
       let answer = record(await send(epoch));
       if (answer?.error === 'epoch_conflict') {
         const fresh = await consents();
-        // A grant that changed under this pass may now rest on another copy; the pass stops and the next one reads it afresh.
-        if (!fresh?.storage || fresh.scores !== grant.scores) throw new ConsentGone();
+        if (!fresh?.storage) throw new ConsentGone();
+        // A grant that moved to another copy under this pass: the pass stops and is retried soon, reading the copy afresh.
+        if (fresh.scores !== grant.scores) throw new Failed('copy changed');
         epoch = fresh.epoch;
         answer = record(await send(epoch));
       }
@@ -238,6 +249,7 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
       const receipt = healthIngestReceiptV1Schema.safeParse(answer);
       if (!receipt.success) throw new Failed('ingest refused');
       if (!receipt.data.replayed) committed += receipt.data.accepted + receipt.data.deleted;
+      if (!receipt.data.replayed && receipt.data.rejected?.length) deps.log({ hop: 'whoop', ok: false, code: receipt.data.rejected.some(r => r.reason === 'revision_conflict') ? 'revision_conflict' : 'sample_rejected' });
     }
     if (committed > 0 && deps.wakeFreshMs !== undefined && sleepJustEnded(samples, deps.now(), deps.wakeFreshMs)) pass.woke = true;
     if (committed > 0 && deps.workoutWake && workoutJustEnded(samples, deps.now())) pass.workout = true;

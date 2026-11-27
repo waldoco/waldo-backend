@@ -246,7 +246,9 @@ export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolH
     const parsed = parseSeries(raw);
     if (parsed.kind === 'no_consent') return unavailable('consent_required');
     if (parsed.kind === 'failed') return unavailable('read_failed');
-    const sources = withoutWhoopEcho(untruncated(parsed.series, 'get_health_truncated')).sources.filter((source) => consent.sources.has(source.source));
+    // Consent first: a WHOOP source the model may not read must not take an allowed source's copy of WHOOP's data with it.
+    const readable = untruncated(parsed.series, 'get_health_truncated');
+    const sources = withoutWhoopEcho({ ...readable, sources: readable.sources.filter((source) => consent.sources.has(source.source)) }).sources;
     const days: string[] = [];
     for (let day = args.from; daysBetween(day, args.to) >= 0; day = shiftDay(day, 1)) days.push(day);
     let newest = Number.NEGATIVE_INFINITY;

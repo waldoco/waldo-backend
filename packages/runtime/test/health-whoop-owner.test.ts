@@ -475,7 +475,7 @@ describe('WHOOP depth: cycles, body measurements, naps and the scopes a connecti
     h.clock.now = NOW + DAY;
     expect(await h.owner.sync()).toBe('synced');
     const [stored] = storedOf(h, 'provider_day_strain');
-    expect(stored).toMatchObject({ revision: Date.parse('2026-10-21T15:00:00.000Z') / 1000, payload: { value: 9.8, open: true } });
+    expect(stored).toMatchObject({ revision: Date.parse('2026-10-21T15:00:00.000Z') / 1000 + 2, payload: { value: 9.8, open: true } });
     expect(storedOf(h, 'provider_day_strain')).toHaveLength(1);
   });
 
@@ -594,5 +594,52 @@ describe('WHOOP depth: cycles, body measurements, naps and the scopes a connecti
     expect(await h.owner.sync()).toBe('synced');
     expect(h.logs.filter(line => line.code.startsWith('rate_remaining_'))).toEqual([{ hop: 'whoop', ok, code }]);
     expect(JSON.stringify(h.logs)).not.toContain(String(remaining));
+  });
+
+  // Rows stored before health revision 16 carry fewer keys at the record's own updated_at. Re-reading them must replace them,
+  // never fail the pass: the database refuses one sample id at one revision with two contents.
+  const seedEarlier = (h: { plane: { samples: Map<string, { revision: number; payload: Record<string, unknown> }> } }, signal: string, sampleId: string, revision: number, payload: Record<string, unknown>) =>
+    h.plane.samples.set(`${signal}|${sampleId}`, { revision, payload: { ...payload, signal, sample_id: sampleId, revision } });
+  it('replaces a night and a workout stored before this release instead of failing on the same revision, on the daily pass and on a reconnect\'s backfill', async () => {
+    const h = await connected();
+    const n = addNight(h.world, 1);
+    const workout = workoutRecord({ start: '2026-10-20T11:00:00.000Z', end: '2026-10-20T11:50:00.000Z' });
+    h.world.workouts.push(workout);
+    const sleepRevision = Date.parse(String(n.sleep.updated_at)) / 1000, workoutRevision = Date.parse(String(workout.updated_at)) / 1000;
+    seedEarlier(h, 'sleep_duration', `whoop:${n.sleep.id}:sleep_duration`, sleepRevision, { value: 430, unit: 'minutes' });
+    seedEarlier(h, 'workout', `whoop:${workout.id}:workout`, workoutRevision, { value: 50, activity: 'running' });
+    expect(await h.owner.sync()).toBe('synced');
+    expect(h.plane.samples.get(`sleep_duration|whoop:${n.sleep.id}:sleep_duration`)).toMatchObject({ revision: sleepRevision + 2, payload: { stage_totals: { method: 'provider_totals' } } });
+    expect(h.plane.samples.get(`workout|whoop:${workout.id}:workout`)).toMatchObject({ revision: workoutRevision + 2, payload: { strain: { method: 'whoop' } } });
+    expect(h.logs.map(line => line.code)).not.toContain('revision_conflict');
+  });
+  it('replaces a workout stored under copy 4 with its strain once the owner is on copy 6', async () => {
+    const plane = newPlane();
+    plane.copy = 4;
+    const h = await connected({ plane });
+    const workout = workoutRecord({ start: '2026-10-20T11:00:00.000Z', end: '2026-10-20T11:50:00.000Z' });
+    h.world.workouts.push(workout);
+    expect(await h.owner.sync()).toBe('synced');
+    plane.copy = 6;
+    h.clock.now = NOW + DAY;
+    expect(await h.owner.sync()).toBe('synced');
+    expect(h.plane.samples.get(`workout|whoop:${workout.id}:workout`)!.payload).toMatchObject({ strain: { value: 9.4, method: 'whoop' } });
+  });
+  it('costs one reading, never the pass, when a reading at the same revision holds other content (left by a rollback), and says so', async () => {
+    const h = await connected();
+    const n = addNight(h.world, 1);
+    const revision = Date.parse(String(n.sleep.updated_at)) / 1000 + 2;
+    seedEarlier(h, 'sleep_duration', `whoop:${n.sleep.id}:sleep_duration`, revision, { value: 430, unit: 'minutes' });
+    expect(await h.owner.sync()).toBe('synced');
+    expect(h.logs.map(line => line.code)).toContain('revision_conflict');
+    expect(signals(h.plane)).toContain('provider_recovery');
+  });
+  it('deletes a record at a revision above every reading it made', async () => {
+    const h = await connected();
+    const n = addNight(h.world, 0);
+    h.clock.now = Date.parse(String(n.recovery!.updated_at)) / 1;
+    expect(await h.owner.hint({ type: 'sleep.updated', id: String(n.sleep.id), trace: 'trace-rev-0001' })).toBe('handled');
+    expect(await h.owner.hint({ type: 'sleep.deleted', id: String(n.sleep.id), trace: 'trace-rev-0002' })).toBe('handled');
+    expect(signals(h.plane)).toEqual([]);
   });
 });
