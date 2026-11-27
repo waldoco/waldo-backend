@@ -193,6 +193,8 @@ describe('the numeric health floor', () => {
     time_in_bed: ['time in bed 460 min', '7h 40m in bed', '460 minutes in bed', 'in bed for 7.7 hours'],
     sleep_cycles: ['4 sleep cycles', 'sleep cycles: 4', '4 cycles of sleep'],
     sleep_disturbances: ['9 disturbances', 'disturbances: 9', 'woke 9 times', '9 sleep disturbances'],
+    height: ['height 1.76 m', '176 cm tall', 'height 176 cm', '1.76 m tall'],
+    max_hr: ['max heart rate 189', 'max HR 189', 'maximum heart rate 189 bpm'],
     sleep: ['time asleep 412 min', '412 minutes asleep', 'sleep duration 412 minutes', 'slept 6.9 hours'],
     sleep_midpoint: ['sleep midpoint 03:12', 'sleep midpoint was 192'],
     hrv: ['HRV 48ms', 'HRV was 48ms', 'HRV (rmssd) 48 ms', 'HRV sdnn 52', 'rmssd 48'],

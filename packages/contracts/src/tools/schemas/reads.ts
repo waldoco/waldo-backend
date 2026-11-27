@@ -40,10 +40,10 @@ export const healthReadSignalSchema = z.enum([
   // WHOOP's own measures, as WHOOP stated them, never Waldo's: its recovery (0-100), its day strain (0-21), the sleep it said a
   // night needed and the part of that from sleep debt, and its sleep performance and consistency (0-100). Naps (never the
   // night), skin temperature in sleep (absolute, apart from wrist temperature), and a provider night's time in bed, sleep cycles
-  // and disturbances. A cycle's steps, height and the provider's maximum heart rate are stored and named in the inventory, but
-  // not offered here: the tool definitions per round are at their budget.
+  // and disturbances; height, and the provider's estimate of the owner's maximum heart rate. A cycle's steps are stored and
+  // named in the inventory, but not offered here: the tool definitions per round are at their budget.
   'whoop_recovery', 'whoop_strain', 'whoop_sleep_need', 'whoop_sleep_debt', 'whoop_sleep_performance', 'whoop_sleep_consistency',
-  'naps', 'skin_temperature', 'time_in_bed', 'sleep_cycles', 'sleep_disturbances',
+  'naps', 'skin_temperature', 'time_in_bed', 'sleep_cycles', 'sleep_disturbances', 'height', 'max_hr',
 ]);
 export type HealthReadSignal = z.infer<typeof healthReadSignalSchema>;
 const healthReadDaySchema = z.iso.date();
@@ -66,7 +66,7 @@ export const HEALTH_READ_MAX_HOURLY_DAYS = 2;
 // A wall-clock time in the owner's zone, to the minute, as the result's timezone reads it.
 const healthReadLocalTimeSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d$/);
 
-export const healthReadUnitSchema = z.enum(['minutes', 'ms', 'bpm', 'minute_of_day', 'ratio', 'percent', 'breaths_per_minute', 'celsius', 'ml_per_kg_min', 'count', 'kcal', 'kg', 'g', 'strain']);
+export const healthReadUnitSchema = z.enum(['minutes', 'ms', 'bpm', 'minute_of_day', 'ratio', 'percent', 'breaths_per_minute', 'celsius', 'ml_per_kg_min', 'count', 'kcal', 'kg', 'g', 'strain', 'm']);
 // One workout as the watch measured it, from the same source as the workouts signal. A part the store holds in a shape this
 // does not admit is left out, never the session. zone_minutes are minutes in heart-rate zones 1 to 5.
 const sport = <Shape extends z.ZodRawShape>(shape: Shape) => z.strictObject(shape).partial();

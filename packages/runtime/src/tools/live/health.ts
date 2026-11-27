@@ -127,6 +127,8 @@ export const SIGNALS: Record<HealthReadSignal, Spec> = {
   time_in_bed: totals('in_bed', 'minutes'),
   sleep_cycles: totals('sleep_cycles', 'count'),
   sleep_disturbances: totals('disturbances', 'count'),
+  height: { stored: 'height', unit: 'm', fold: 'newest' },
+  max_hr: { stored: 'max_heart_rate', unit: 'bpm', fold: 'newest' },
 };
 type Session = z.infer<typeof healthWorkoutSessionSchema>;
 // One session as the tool shows it: each stored part kept only when it is the shape the result admits, and an average heart
@@ -214,7 +216,7 @@ const allowlist = triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS
 export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolHandler<GetHealthArgs, GetHealthResult, ToolDispatcherContext> => ({
   name: 'get_health',
   description:
-    "The owner's readings, up to 31 days ending today, one source per signal: by local day, a summary, hourly (at most two days) or nightly with each night's start and end. Sleep is time asleep, never time in bed; naps are never the night. HRV, daytime_hrv and wrist temperature carry their method, never blended. heart_rate, daytime_hrv, respiratory_rate, spo2 and hr_recovery are day means. whoop_* are WHOOP's scores, not Waldo's. Food signals are the owner's food app's log; a macro is missing on a day an entry lacked it. Context for a plan, never a judgement. Numbers stay in this turn; never stored or logged.",
+    "The owner's readings, up to 31 days ending today, one source per signal: by local day, a summary, hourly (at most two days) or nightly with each night's start and end. Sleep is time asleep, never time in bed; naps are never the night. HRV, daytime_hrv and wrist temperature carry their method, never blended. heart_rate, daytime_hrv, respiratory_rate, spo2 and hr_recovery are day means. whoop_* are WHOOP's scores, not Waldo's. Food is the owner's food app's log; a macro may be missing. Context for a plan, never a judgement. Numbers stay in this turn; never stored or logged.",
   schema: getHealthArgsSchema,
   trigger_allowlist: allowlist,
   autonomy_gated: false,

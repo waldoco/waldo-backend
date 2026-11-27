@@ -193,8 +193,8 @@ WHOOP has not scored, or does not state, makes no reading, never a zero.
 | Workout `strain` | `strain` on `workout` (method `whoop`) | block, sessions `strain` |
 | Workout `percent_recorded` | `percent_recorded` on `workout` | sessions |
 | Body `weight_kilogram` | `body_mass` | get_health `body_mass` |
-| Body `height_meter` | `height` | inventory only (as above) |
-| Body `max_heart_rate` | `max_heart_rate` (method `provider_estimate`) | inventory only (as above) |
+| Body `height_meter` | `height` | get_health `height` |
+| Body `max_heart_rate` | `max_heart_rate` (method `provider_estimate`) | get_health `max_hr` |
 
 Not stored: the profile's name and email (only the numeric `user_id` routes webhooks), record ids beyond each reading's
 `sample_id`, and `created_at`. A cycle that WHOOP deletes is not signalled by any webhook; it stays until it ages out.
