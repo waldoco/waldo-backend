@@ -398,7 +398,7 @@ describe('the day plan and the wake decision with the lean view on', () => {
 
 // MODEL_SET_WAKES: a run Waldo starts may leave itself a follow-up with no mail source; the loop book holds its bounds.
 describe('a Waldo-first run leaving itself a follow-up', () => {
-  const followUp = JSON.stringify({ title: 'Check the evening gym block', due: '2026-11-16T19:20', note: 'Did the 18:00 block happen?', watch_for: 'no workout, flat steps' });
+  const followUp = JSON.stringify({ title: 'Check the evening gym block', due: '2026-11-16T19:20', note: 'Did the 18:00 block happen? Worth acting on if no workout and flat steps.' });
   const script: Script = (_request, index) => index === 0 ? { text: '', tool: 'open_loop', args: followUp } : { text: 'SKIP' };
   it.each(KINDS.filter(([kind]) => kind !== 'an update sweep' && kind !== 'an update triage'))('%s is offered open_loop and its call runs', async (_kind, tools, direct) => {
     calls.length = 0;

@@ -5,7 +5,7 @@ import { FOLLOWUP_WAKE_PREFIX, loopBook, loopHandlers, loopsSection, openLoopsPr
 import { armFollowupWake } from '../src/channels/heartbeat';
 import { loopCheckBackText } from '../src/channels/check-back';
 
-// A follow-up Waldo leaves itself in a run it started: a time, a note to its future self and what to watch for. It wakes a
+// A follow-up Waldo leaves itself in a run it started: a time and a note to its future self (what to check, why, and what would make it worth acting on). It wakes a
 // later check-back and grants nothing. Every id and text is synthetic.
 const AT = Date.parse('2030-03-04T09:00:00Z');
 const withBook = (name: string, run: (sql: SqlStorage) => Promise<void>) =>
@@ -14,14 +14,14 @@ const book = (sql: SqlStorage, now = AT) => { let n = 0; return loopBook(sql, { 
 const ctx = (over: Record<string, unknown> = {}) => ({ runOrigin: 'waldo', turnId: 'run-1', ...over }) as never;
 // The open_loop handler, called as the dispatcher would after schema validation.
 const opener = (handlers: ReturnType<typeof loopHandlers>) => handlers[0] as unknown as { handle(args: Record<string, unknown>, context: never): Promise<unknown> };
-const gym = { title: 'Check the evening gym block', due: '2030-03-04T19:20', note: 'Did the 18:00 block happen? The training quest wants three a week.', watch_for: 'no workout logged, steps flat' };
+const gym = { title: 'Check the evening gym block', due: '2030-03-04T19:20', note: 'Did the 18:00 block happen? The training quest wants three a week. Worth acting on if no workout is logged and steps are flat.' };
 
 describe('Waldo\'s own follow-ups', () => {
   it('golden: a Waldo-started run leaves itself a follow-up with its note, kept apart from what the owner gave it', async () => withBook('self-golden', async sql => {
     const loops = book(sql);
     const open = opener(loopHandlers(loops, () => null, false, true));
     const result = await open.handle({ ...gym, due: gym.due }, ctx());
-    expect(result).toMatchObject({ ok: true, data: { origin: 'waldo', note: gym.note, watch_for: gym.watch_for, chain_depth: 1, taint: null } });
+    expect(result).toMatchObject({ ok: true, data: { origin: 'waldo', note: gym.note, chain_depth: 1, taint: null } });
     expect(loopsSection(loops, 'UTC', Date.now())).toContain('(Waldo\'s own check) Check the evening gym block');
     expect(openLoopsPrompt(loops, 'UTC', 2_000)).toContain('(Waldo\'s own check)');
   }));
@@ -34,7 +34,6 @@ describe('Waldo\'s own follow-ups', () => {
     expect(loop).toMatchObject({ taint: 'external' });
     const text = loopCheckBackText([loop], Date.now(), 'UTC');
     expect(text).toContain(gym.note);
-    expect(text).toContain(gym.watch_for);
     expect(text).toMatch(/may hold that content's words/);
   }));
 

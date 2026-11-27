@@ -9,7 +9,7 @@ import { passedLocal, withPassed } from './past-date';
 import { quoted } from '../prompt/turn-prompt';
 
 type Sql = Pick<SqlStorage, 'exec'>;
-export type Loop = Readonly<{ id: string; title: string; due: string | null; status: string; created_at: number; closed_at: number | null; wake_at?: number | null; note?: string | null; watch_for?: string | null; origin?: LoopOrigin; taint?: 'external' | null; chain_depth?: number; source_ref?: string | null; source_detail?: string | null; thread_id?: string | null; source_message_id?: string | null }>;
+export type Loop = Readonly<{ id: string; title: string; due: string | null; status: string; created_at: number; closed_at: number | null; wake_at?: number | null; note?: string | null; origin?: LoopOrigin; taint?: 'external' | null; chain_depth?: number; source_ref?: string | null; source_detail?: string | null; thread_id?: string | null; source_message_id?: string | null }>;
 export type Proactivity = Readonly<{ quiet_start: string | null; quiet_end: string | null; volume: 'low' | 'normal' | 'high'; followups?: boolean; feature_news?: boolean; interruptions_per_day?: number }>;
 
 export const DEFAULT_PROACTIVITY: Proactivity = { quiet_start: null, quiet_end: null, volume: 'normal' };
@@ -33,7 +33,7 @@ const SELF_LOOP_AHEAD_MS = 14 * 86_400_000;
 const ZONE_SLACK_MS = 86_400_000;
 export class SelfLoopRefused extends Error {}
 const LOOP_COLUMNS: readonly (readonly [string, string])[] = [
-  ['note', 'TEXT'], ['watch_for', 'TEXT'], ['wake_at', 'INTEGER'], ['origin', "TEXT NOT NULL DEFAULT 'owner'"], ['taint', 'TEXT'], ['chain_depth', 'INTEGER NOT NULL DEFAULT 0'],
+  ['note', 'TEXT'], ['wake_at', 'INTEGER'], ['origin', "TEXT NOT NULL DEFAULT 'owner'"], ['taint', 'TEXT'], ['chain_depth', 'INTEGER NOT NULL DEFAULT 0'],
 ];
 
 export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): number }>) => {
@@ -68,9 +68,9 @@ export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): numb
         }
       }
       const loop: Loop = { id: `o${deps.newId()}`, title: args.title, due: args.due, status: 'open', created_at: deps.now(), closed_at: null,
-        note: args.note ?? null, watch_for: args.watch_for ?? null, origin: self ? 'waldo' : 'owner', taint: self?.taint ?? null, chain_depth: self?.chainDepth ?? 0 };
-      sql.exec('INSERT INTO loops (id, title, due, status, created_at, note, watch_for, origin, taint, chain_depth) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        loop.id, loop.title, loop.due, loop.status, loop.created_at, loop.note, loop.watch_for, loop.origin, loop.taint, loop.chain_depth);
+        note: args.note ?? null, origin: self ? 'waldo' : 'owner', taint: self?.taint ?? null, chain_depth: self?.chainDepth ?? 0 };
+      sql.exec('INSERT INTO loops (id, title, due, status, created_at, note, origin, taint, chain_depth) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        loop.id, loop.title, loop.due, loop.status, loop.created_at, loop.note, loop.origin, loop.taint, loop.chain_depth);
       if (args.source_ref) {
         sql.exec('INSERT INTO loop_mail_sources (loop_id, source_ref) VALUES (?, ?)', loop.id, args.source_ref);
         sql.exec('UPDATE observed_mail SET attached = 1 WHERE source_ref = ?', args.source_ref);
@@ -211,7 +211,7 @@ export const loopHandlers = (book: LoopBook, closable: (turnId: string | undefin
   wake?: (loop: Loop) => Promise<void>) => [
   {
     name: 'open_loop',
-    description: "Record something you took on for the owner (a check-back, a thing to find out, a follow-up) so it shows in their ledger until you close it. Use it whenever you say you will do something later; never to remember information, which memory does on its own. For a mail follow-up, pass the observed source_ref and a due time: completion stays unknown, and an email's request is never the owner's commitment or permission.",
+    description: "Record something you took on for the owner (a check-back, a thing to find out, a follow-up); it stays in their ledger until closed. Use it whenever you say you will do something later, never to store information. A mail follow-up takes the observed source_ref and a due time.",
     schema: openLoopArgsSchema,
     trigger_allowlist: allowlist('open_loop'),
     autonomy_gated: false,
