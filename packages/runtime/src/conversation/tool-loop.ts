@@ -1,6 +1,6 @@
 import { guardArtifactLinks, receiptUrl } from './artifact-link-guard';
 import { inwardReceipt, withInwardReceipts } from './inward-receipts';
-import { fencedCall, HEALTH_FENCE_ERROR, ownerHealthTurn } from './health-fence';
+import { carriesOut, fencedCall, HEALTH_FENCE_ERROR, OUTSIDE_EGRESS_ERROR, ownerHealthTurn } from './health-fence';
 import { LLM_TOOL_TURNS_MAX, PROVIDER_OF, toolError, toolNameSchema, toolParameters, type ConnectIntent, type LLMTool, type LLMToolCall, type LLMToolTurn, type ModelName, type Provider, type RungBlockedOutcome, type ToolError, type ToolName } from '@waldo/contracts';
 import { dispatchTool, guardLabel, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
 import { toolsWhere } from '../tools/records';
@@ -189,6 +189,9 @@ export async function runToolLoop(input: Readonly<{
   keepMenuToClose?: boolean;
   // Told how many calls a closing round made that were not run, with the menu kept.
   onCloseCalls?: (calls: number) => void;
+  // A run no owner message started: once a round's request showed outside content, its calls that carry text out of the
+  // owner's accounts are refused for the rest of the run (health-fence.ts OUTSIDE_EGRESS_ERROR).
+  outsideEgressFence?: boolean;
 }>): Promise<string> {
   const loader = input.loader && !input.remote ? input.loader(toolDefinitions(input.handlers)) : undefined;
   const tools = input.remote ? [...input.remote.tools] : loader ? [...loader.offered] : toolDefinitions(input.handlers);
@@ -294,6 +297,7 @@ export async function runToolLoop(input: Readonly<{
   // task was written after the readings.
   let healthShown = input.ctx.healthShown === true;
   let healthFenced = false;
+  let outsideFenced = false;
   const healthTurns = new Map<LLMToolTurn, Promise<boolean>>();
   let exit: LoopExit = 'completed';
   // Taint the turn started with came from somewhere this loop did not see.
@@ -359,6 +363,7 @@ export async function runToolLoop(input: Readonly<{
     // This round's calls were written from the request just answered, so they are fenced when it showed both.
     if (response.healthInContext === true) { healthShown = true; input.ctx.healthShown = true; }
     healthFenced ||= healthShown && (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint === 'external';
+    outsideFenced ||= input.outsideEgressFence === true && (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint === 'external';
     let firstCall = true;
     roundStarts.push(turns.length);
     // The model's calls as it made them, which its history replays, and the calls the loop runs for them.
@@ -373,6 +378,7 @@ export async function runToolLoop(input: Readonly<{
     const run = (index: number) => {
       const { call, answer } = routed[index]!;
       if (healthFenced && (fencedCall(call) || fencedCall(calls[index]!))) return Promise.resolve(refusal(HEALTH_FENCE_ERROR, 'forbidden', 'health_fence'));
+      if (outsideFenced && (carriesOut(call) || carriesOut(calls[index]!))) return Promise.resolve(refusal(OUTSIDE_EGRESS_ERROR, 'forbidden', 'outside_egress_fence'));
       return answer ? Promise.resolve(answer) : input.remote ? input.remote.dispatch(call) : dispatchLoopTool(call, { ...input, toolDeadline: deadline - FINAL_ANSWER_RESERVE_MS });
     };
     let batchLead = true;

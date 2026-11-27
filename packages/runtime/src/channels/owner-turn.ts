@@ -774,6 +774,8 @@ export const createOwnerResponder = (
         handlers: turnHandlers,
         // The menu leads the provider's cache prefix, so the owner's turn offers the same one every round, with or without tool search.
         stableMenu: true,
+        // A run no owner message started sends nothing out once it has read outside content (health-fence.ts).
+        ...(activeOwnerTurn === undefined ? { outsideEgressFence: true } : {}),
         ...(access.thinkingReplay ? { keepMenuToClose: true, onCloseCalls: (calls: number) => log({ trace, hop: 'close_calls_not_run', ms: 0, ok: false, detail: `calls=${calls}` }) } : {}),
         ...(harnessLoader ? { loader: (tools: readonly LLMTool[]) => harnessToolLoader(tools, turnDirect) } : {}),
         ...(access.contextCaps ? { clearToLatest: { atChars: access.contextCaps.clearAtChars, keep: access.contextCaps.keepLatest } } : {}),
