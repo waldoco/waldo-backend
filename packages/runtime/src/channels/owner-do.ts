@@ -6886,15 +6886,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // The welcome build's model calls run on the queue as an owner job, like the nightly pass; its reads run beside it.
     // Each welcome call closes its own trace with a machine_turn root, so the trace exporter flushes it. The trace is per run:
     // a build taken up again after a cut must not add to a trace an earlier run already closed.
-    const askWelcome = (stage: WelcomeStage, text: string, version?: 2, detail = 'welcome') => this.serial(async () => {
+    const askWelcome = async (stage: WelcomeStage, text: string, version?: 2, detail = 'welcome') => {
       const started = Date.now(), trace = `welcome:${stage}:${started}`;
       let answered = false;
       try { const said = await this.asOwnerJob('dreaming', `welcome:${stage}`, () => responder.welcome!(trace, stage, text, version)); answered = true; return said; }
       finally { log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: answered, detail }); }
-    });
+    };
     const welcome = ownerWelcome({ sql: storage.sql, transaction: (work) => storage.transactionSync(work), claims: memory, now: Date.now, timezone: () => clock.timezone, healthMemory: () => healthMemoryOn(identity), healthRead, google,
       findings: () => findingStore(storage.sql, memory, consentLedger(storage.sql, consentSwitches(this.env)), Date.now),
-      ask: (stage, text, version) => askWelcome(stage, text, version),
+      // The build runs beside the serial lane, so each call queues on it.
+      ask: (stage, text, version) => this.serial(() => askWelcome(stage, text, version)),
       // The second build (WELCOME_V2) waits for a look-up still running, inside the tour's watch.
       ...(this.env.WELCOME_V2 === '1' ? { v2: { lookupOpen: () => lookupOn
         ? lookupPending({ book: this.jobs(), consent: lookupConsent(), started: lookupStarted }, ownerName(memory) !== null) : openLookup(this.jobs()) !== null } } : {}) });
@@ -6952,7 +6953,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
       ended: grant => { welcome.lateWeb(grant); this.continueWelcome(runtime); } });
     // The first-week read (WELCOME_V2): its worker reads the owner's own mail threads, calendar, files and contacts; its findings
-    // come back through the welcome build's own call and admission, filed under mail.
+    // come back through the welcome build's own call and admission, filed under mail. Its apply already runs in the jobs lane,
+    // inside the serial lane, so its call does not queue on it again.
     const getToKnowOn = this.env.WELCOME_V2 === '1';
     const getToKnowApply = getToKnowOn ? getToKnowApplier({ claims: memory, build: welcomeBuild(storage.sql, Date.now), now: Date.now, transaction: work => storage.transactionSync(work),
       healthMemory: () => healthMemoryOn(identity), ask: text => askWelcome('mail', text, 2, 'get_to_know') }) : null;

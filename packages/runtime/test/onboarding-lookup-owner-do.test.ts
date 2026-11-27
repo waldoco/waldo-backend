@@ -152,6 +152,29 @@ it('setup done with Google connected writes the first-week read once: a reader o
   });
 });
 
+it('the first-week read\'s report is applied in the jobs lane: one welcome call over its findings, and the job settles', async () => {
+  await ownerWith({ WELCOME_V2: '1' }, async ({ state, owner, app, book }) => {
+    await state.storage.put('google:accounts', [{ id: 'acct-1', email: 'asha@example.com', scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
+    await consents(app, false);
+    await app('/app/v1/onboarding/answers', { request_id: 'gtk-apply-1', name: 'Asha' });
+    const read = () => state.storage.sql.exec<{ id: string; status: string }>("SELECT id, status FROM task_jobs WHERE origin = 'machine:get_to_know_you'").toArray();
+    await vi.waitFor(() => expect(read()).toHaveLength(1), { timeout: 10_000, interval: 25 });
+    // The welcome build's own calls finish first, so the one counted below is the read's.
+    await vi.waitFor(() => expect(JSON.parse(state.storage.sql.exec<{ stages_json: string }>('SELECT stages_json FROM welcome_builds').one().stages_json).setup.state).not.toMatch(/pending|reading/), { timeout: 10_000, interval: 25 });
+    const jobs = book(), ticket = jobs.startAttempt(read()[0]!.id)!;
+    expect(jobs.report(ticket, { status: 'done', summary: 'Read the first week.', proposals: [], left: [], findings: [{ text: 'Maya Iyer <maya@run.example> sends the weekly plan for the February half marathon.', source_ref: 'gmail:thr_coach' }] }, { rounds: 4, costUsd: 0 })).toBe('accepted');
+    const before = model.welcome.length;
+    await state.storage.put(TASK_JOBS_DUE_KEY, Date.now() - 1_000);
+    await state.storage.deleteAlarm();
+    await owner.alarm();
+    await vi.waitFor(() => expect(read()[0]!.status).toBe('applied'), { timeout: 10_000, interval: 25 });
+    const asked = model.welcome.slice(before);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toContain('in the owner\'s first week');
+    expect(asked[0]).toContain('[thr_coach]');
+  });
+});
+
 it('writes no first-week read with the second build off, or before Google is connected', async () => {
   await ownerWith({}, async ({ state, app }) => {
     await state.storage.put('google:accounts', [{ id: 'acct-1', email: 'asha@example.com', scopes: ['https://www.googleapis.com/auth/gmail.readonly'] }]);
