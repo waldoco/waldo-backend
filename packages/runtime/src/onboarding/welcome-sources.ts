@@ -86,10 +86,16 @@ const guarded = async (work: () => Promise<readonly string[]>): Promise<readonly
   try { return await work(); } catch (error) { if (revokedAccess(error)) return 'revoked'; throw error; }
 };
 
-const eventLine = (event: CalendarItem) => `[${event.id}] ${event.title} · ${event.all_day ? `${event.start.slice(0, 10)} all day` : event.start}${event.attendees ? ` · ${event.attendees} people` : ''}${event.recurring_event_id ? ' · repeats' : ''}`;
+// Who else is in a meeting, as the calendar lists them, so the people map starts with the people the owner meets.
+const EVENT_PEOPLE_MAX = 8;
+const withLine = (event: CalendarItem) => {
+  const people = [(event.attendee_names ?? []).slice(0, EVENT_PEOPLE_MAX).join(', '), (event.attendee_emails ?? []).slice(0, EVENT_PEOPLE_MAX).join(', ')].filter(Boolean);
+  return people.length ? ` · with ${people.join(' · ')}` : '';
+};
+const eventLine = (event: CalendarItem) => `[${event.id}] ${event.title} · ${event.all_day ? `${event.start.slice(0, 10)} all day` : event.start}${event.attendees ? ` · ${event.attendees} people` : ''}${event.recurring_event_id ? ' · repeats' : ''}${withLine(event)}`;
 const taskLine = (task: TaskItem) => `[${task.id}] task: ${task.title} · ${task.status === 'done' ? 'done' : 'open'}${task.due ? ` · due ${task.due.slice(0, 10)}` : ''}`;
 
-// Titles, times, repeats and how many people: no descriptions, no attendee names or addresses.
+// Titles, times, repeats and who else is in each event: no descriptions.
 export const calendarStage = (google: GoogleAccess, now: () => number) => async (): Promise<StageInput> => {
   const from = new Date(now() - CALENDAR_PAST_DAYS * DAY_MS).toISOString(), to = new Date(now() + CALENDAR_AHEAD_DAYS * DAY_MS).toISOString();
   const sources = new Set<AppNodeSourceV13>(), pointers = new Set<string>();
@@ -127,12 +133,12 @@ export const calendarStage = (google: GoogleAccess, now: () => number) => async 
   return input(lines, sources, pointers);
 };
 
-// Who the owner writes with, and the subject lines: never a body or a snippet. A sender is a display name and a domain.
+// Who the owner writes with, and the subject lines: never a body or a snippet. A sender is a display name and an address, so the
+// people map can tell two people with one name apart.
 const sender = (from: string) => {
-  const address = /<([^>]+)>/.exec(from)?.[1] ?? from;
+  const address = (/<([^>]+)>/.exec(from)?.[1] ?? from).trim();
   const name = from.replace(/<[^>]*>/, '').replace(/"/g, '').trim();
-  const domain = address.includes('@') ? address.split('@').pop()!.trim() : '';
-  return [name || null, domain ? `(${domain})` : null].filter(Boolean).join(' ');
+  return [name && name !== address ? name : null, address.includes('@') ? `<${address}>` : null].filter(Boolean).join(' ');
 };
 const mailLine = (item: MailItem) => `[${item.thread_id}] ${sender(item.from)} · ${item.subject} · ${item.at.slice(0, 10)}`;
 
