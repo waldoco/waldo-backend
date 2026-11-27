@@ -11,6 +11,7 @@ import type { LLMGatewayAdapter } from '../src/llm/provider';
 import { taintedCallNeedsOwnerApproval, taintedCallRefused } from '../src/hooks/registry';
 import { TOOL_RECORDS } from '../src/tools/records';
 import { FIND_TOOLS, USE_TOOL } from '../src/tools/loader';
+import { standingOrderFireTools } from '../src/channels/standing-orders';
 
 // Every run Waldo starts reaches the owner's whole admitted catalogue through find_tools and use_tool, as the owner's own
 // turn does; what keeps it safe is the check each call meets at dispatch, not which tools its job kind was handed.
@@ -151,6 +152,21 @@ describe('a Waldo-started run that has read outside content sends nothing out', 
     expect(calls).toEqual(['web_search', 'search_communication', 'list_reminders']);
     const refused = requests.at(-1)!.tool_turns!.find((turn) => turn.call.name === 'browse_page')!;
     expect(refused.output).toContain('outside content');
+  });
+});
+
+describe('a confirm_first standing order changes nothing until the owner confirms, under full tool reach', () => {
+  it('its fire reads and puts the change on the owner\'s card; a write, even one exempt under taint, is refused before it runs', async () => {
+    const { owner, calls, requests } = await harness([
+      { tool: 'list_reminders', args: {} },
+      { tool: FIND_TOOLS, args: { names: ['cancel_reminder', 'set_reminder'] } },
+      { tool: USE_TOOL, args: { name: 'cancel_reminder', arguments: { id: 'r1' } } },
+      { tool: USE_TOOL, args: { name: 'set_reminder', arguments: { note: 'stretch', at: '2026-11-28T07:00' } } },
+      { tool: 'remember', args: { text: 'the owner stretches daily' } },
+    ], { lean: false });
+    await owner.prompt('order:1', CHAIN, 'Standing order due: tidy my reminders.', time, 'telegram', standingOrderFireTools({ gate: 'confirm_first' }), undefined, undefined, undefined, undefined, 'decides', undefined, undefined, undefined, undefined, true);
+    expect(calls).toEqual(['list_reminders']);
+    for (const tool of ['cancel_reminder', 'set_reminder', 'remember']) expect(outputOf(requests, tool)).toContain('confirm');
   });
 });
 

@@ -2,6 +2,7 @@ import {
   cancelStandingOrderArgsSchema, listStandingOrdersArgsSchema, setStandingOrderArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type CancelStandingOrderArgs, type ListStandingOrdersArgs, type SetStandingOrderArgs, type StandingEscalation, type StandingGate, type ToolHandler, type ToolName,
 } from '@waldo/contracts';
+import { OUTSIDE_TEXT_JOB_TOOLS } from './check-back';
 import type { ScheduleKind } from '@waldo/contracts';
 import { nextOccurrence, UnreadableScheduleRowError, type Scheduler } from '../scheduler/multiplexer';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
@@ -122,6 +123,12 @@ export const standingOrderFireText = (order: StandingOrder): string =>
       ? 'Prepare what you would do and report it; make no changes until the owner confirms in chat.'
       : 'Do it now, then report what you did.'
   }`;
+
+// A confirm_first order changes nothing until the owner confirms. Its fire is shown the reads and the owner's card, and the
+// owner turn holds every tool that changes something at dispatch (holdChanges), so the gate the owner set holds in code under
+// full tool reach too, not only in the fire text. Undefined: the run's whole tool set.
+export const standingOrderFireTools = (order: Pick<StandingOrder, 'gate'>): readonly ToolName[] | undefined =>
+  order.gate === 'confirm_first' ? OUTSIDE_TEXT_JOB_TOOLS : undefined;
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 
