@@ -190,7 +190,7 @@ import { applyDayPlan, applyReplan, applyWake, ownerCardTime, setCardTime, parse
 import { DAY_CARDS, dayPlanInput, planningCard, waitingSection, type CardId } from '../prompt/day-cards';
 import { channelStyle, type ReadsAs } from '../prompt/update-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview, waitingApprovals } from './dashboard-overview';
-import { nowFrameSections } from './now-frame';
+import { nowFrameSections, todaysCalendar } from './now-frame';
 import { consoleHealth, DASHBOARD_ADMIN_HEALTH_PATH, DASHBOARD_HEALTH_PATH } from './dashboard-health';
 import { DASHBOARD_ACCESS_LOG_PATH, readAccessLog, readAccessLogQuery } from './dashboard-access-log';
 import { DASHBOARD_HELD_CHANGES_PATH, readHeldChanges } from './dashboard-held-changes';
@@ -5588,7 +5588,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // The owner's own turns read where today's cards stand and what Waldo already sent first today (send-outcomes.ts).
     const dayFacts = () => [dayCards(), sendsTodaySection(sendsDeps())].filter(Boolean).join('\n\n');
     // What the owner's day holds now, for each of their own messages (channels/now-frame.ts).
-    const nowFrame = async () => nowFrameSections({ reminders: book.list(), waiting: waitingApprovals(desk.pending(Date.now())) });
+    // WALDO_DAY_STATE keeps what the sweep last saw of each event; without it there is no calendar to show.
+    const nowFrame = async () => nowFrameSections({ reminders: book.list(), waiting: waitingApprovals(desk.pending(Date.now())),
+      calendar: this.env.WALDO_DAY_STATE === '1' ? todaysCalendar(updates.seenTimes(), localIso(Date.now(), clock.timezone).slice(0, 10), clock.timezone, updates.seenDay()) : null });
     const memoryHooks = { ...(this.env.MEMORY_USED_SHOWN === '1' ? { memoryUsed: (turnId: string, ids: readonly number[]) => { const live = new Map([...memory.claims(), ...memory.claims('promoted')].map(claim => [claim.id, claim])); memoryUsedBook(storage.sql).record(turnId, ids.filter(id => { const claim = live.get(id); return claim !== undefined && outsideSafe(claim) && !claim.bring_up_less_at; }), Date.now()); } } : {}), ...memoryFlushHooks({ kv: identity, episodes, claims: () => memory.claims(), timezone: () => clock.timezone }), ...(semantic ? { semanticRecall: semantic } : {}), ...(this.env.MEMORY_VALIDITY === '1' ? { memoryValidity: true } : {}), ...(this.env.MEMORY_SELECTION === '1' ? { memorySelection: { reviewed: () => reviewedThrough(storage.kv.get<number>(NIGHTLY_THROUGH_KEY)) } } : {}) };
     // A call that would schedule a message Waldo cannot deliver is refused with the reason (see proactive-surface). Only an
     // owner who writes on iMessage alone meets it: every other surface a turn arrives on takes proactive work itself.

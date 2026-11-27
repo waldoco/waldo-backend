@@ -1,7 +1,10 @@
+import { env } from 'cloudflare:workers';
+import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
+import { updateBook } from '../src/channels/update-cards';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { createOwnerResponder } from '../src/channels/owner-turn';
-import { nowFrameSections } from '../src/channels/now-frame';
+import { nowFrameSections, todaysCalendar } from '../src/channels/now-frame';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { ownerTyped } from './helpers/owner-typed';
 
@@ -28,6 +31,51 @@ describe('nowFrameSections', () => {
 
   it('leaves out what is empty', () => {
     expect(nowFrameSections({ reminders: [], waiting: [] })).toEqual([]);
+  });
+});
+
+// Today's calendar comes from what the update sweep last saw (calendar_last_seen): times and how many attend, never a title,
+// so it carries no one else's words and reading it never marks the turn; query_calendar has the rest.
+describe('today\'s calendar in the frame', () => {
+  const seen = [
+    { start: '2026-11-27T14:00:00+05:30', end: '2026-11-27T16:00:00+05:30', all_day: false, attendees: 3 },
+    { start: '2026-11-27T09:00:00+05:30', end: '2026-11-27T09:30:00+05:30', all_day: false },
+    { start: '2026-11-27', end: '2026-11-28', all_day: true },
+    { start: '2026-11-26T23:30:00+05:30', end: '2026-11-27T00:30:00+05:30', all_day: false },
+    { start: '2026-11-28T09:00:00+05:30', end: '2026-11-28T10:00:00+05:30', all_day: false, attendees: 2 },
+    { start: '2026-11-26', end: '2026-11-27', all_day: true },
+  ];
+  it('lists today\'s events by time, soonest first, with how many attend and no title', () => {
+    const calendar = todaysCalendar(seen, '2026-11-27', 'Asia/Kolkata', '2026-11-27');
+    const sections = nowFrameSections({ reminders: [], waiting: [], calendar });
+    expect(sections).toEqual([[
+      'Today\'s calendar as Waldo last saw it, times only (query_calendar shows titles and who is coming):',
+      '- all day',
+      '- 00:00-00:30 (began the day before)',
+      '- 09:00-09:30',
+      '- 14:00-16:00, 3 attending',
+    ].join('\n')]);
+  });
+
+  it('says when it was last read in full, and that a day with nothing on it is clear', () => {
+    expect(nowFrameSections({ reminders: [], waiting: [], calendar: todaysCalendar([], '2026-11-27', 'UTC', '2026-11-27') })[0]).toContain('- nothing on it');
+    expect(nowFrameSections({ reminders: [], waiting: [], calendar: todaysCalendar(seen, '2026-11-27', 'Asia/Kolkata', '2026-11-26') })[0])
+      .toContain('last read in full on 2026-11-26; changes since are included');
+  });
+
+  it('reads the sweep\'s last-seen events, times and attendance only, and the day it last read them in full', async () => {
+    const read = await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('now-frame-seen')), async (_, state) => {
+      const book = updateBook(state.storage.sql);
+      const never = book.seenDay();
+      book.see({ event_id: 'e1', start: '2026-11-27T14:00:00+05:30', end: '2026-11-27T16:00:00+05:30', all_day: false, title_digest: 'digest-only', attendees: 3 }, Date.parse('2026-11-27T03:00:00Z'));
+      book.seeded('2026-11-27', Date.parse('2026-11-27T03:00:00Z'));
+      return { never, times: book.seenTimes(), day: book.seenDay() };
+    });
+    expect(read).toEqual({ never: null, times: [{ start: '2026-11-27T14:00:00+05:30', end: '2026-11-27T16:00:00+05:30', all_day: false, attendees: 3 }], day: '2026-11-27' });
+  });
+
+  it('shows nothing when the calendar was never read', () => {
+    expect(nowFrameSections({ reminders: [], waiting: [], calendar: todaysCalendar([], '2026-11-27', 'UTC', null) })).toEqual([]);
   });
 });
 
