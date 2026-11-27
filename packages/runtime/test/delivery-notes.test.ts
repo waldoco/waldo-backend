@@ -27,10 +27,13 @@ describe('a send that did not reach the owner is a fact for the next turn', () =
   });
 
   it('names the surface the record itself went to, not the one whose pass settled it, and none when that cannot be told', () => {
-    expect(recordSurface(ended({ id: 'whatsapp-copy:row-1' }), undefined, 'app')).toBe('whatsapp');
-    expect(recordSurface(ended({ ownerSubject: '15550001111' }), '15550001111', 'app')).toBe('whatsapp');
-    expect(recordSurface(ended({}), '15550001111', 'app')).toBe('app');
-    expect(recordSurface(ended({}), '15550001111', 'whatsapp')).toBeNull();
+    const app = { surface: 'app', owner: '1' } as const, whatsapp = { surface: 'whatsapp', owner: '15550001111' } as const;
+    expect(recordSurface(ended({ id: 'whatsapp-copy:row-1' }), undefined, app)).toBe('whatsapp');
+    expect(recordSurface(ended({ ownerSubject: '15550001111' }), '15550001111', app)).toBe('whatsapp');
+    expect(recordSurface(ended({}), '15550001111', app)).toBe('app');
+    // An app record settled by WhatsApp's pass, and a Telegram record settled by the app's: neither is the settler's.
+    expect(recordSurface(ended({}), '15550001111', whatsapp)).toBeNull();
+    expect(recordSurface(ended({ ownerSubject: '777' }), '15550001111', app)).toBeNull();
     const kv = store();
     noteUndelivered(kv, ended({ reason: 'provider_failed' }), null, 'UTC', AT);
     const [line] = takeDeliveryNotes(kv, AT);

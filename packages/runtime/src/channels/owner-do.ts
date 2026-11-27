@@ -275,7 +275,7 @@ import { healthMemoryOn, memoryFlushHooks, setHealthMemory } from './health-memo
 import { capacityBudgetContext, cardCapacityNote, recentBlocks, recentMoves, runCapacityPass } from './capacity';
 import { capacityContext } from '../prompt/capacity';
 import { renderHealth } from '../context-composer/prompt';
-import { chooseProactiveSurface, linkingAppRows, proactiveBothDefault, proactiveOnOwnerChain, proactiveReads, proactiveSurface, unaskedRecord, proactiveSurfaceReceipt, expiredCode, recordSurface, supersededBy, copyOf, copySupersedes, type ChatLinks, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, answersOwnerIn, ANSWERS_WHERE_ASKED, waldoFirstWaitingFor, wantedTargets, whatsappSubjects, withCopy, IMESSAGE_COPY_PREFIX, WHATSAPP_COPY_PREFIX, type ProactiveTarget } from './proactive-surface';
+import { chooseProactiveSurface, linkingAppRows, proactiveBothDefault, proactiveOnOwnerChain, proactiveReads, proactiveSurface, unaskedRecord, proactiveSurfaceReceipt, expiredCode, boundForWhatsApp, recordSurface, supersededBy, copyOf, copySupersedes, type ChatLinks, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, answersOwnerIn, ANSWERS_WHERE_ASKED, waldoFirstWaitingFor, wantedTargets, whatsappSubjects, withCopy, IMESSAGE_COPY_PREFIX, WHATSAPP_COPY_PREFIX, type ProactiveTarget } from './proactive-surface';
 import { appApprovalsRequest } from './app-approvals';
 import { WHATSAPP_LINK_CONFIRM_ACTION, whatsappLinkConfirmAction, whatsappLinkConfirmPage } from './whatsapp-link-console';
 import { WHATSAPP_LINK_PATH, whatsappLinkDirectory } from '../identity/whatsapp-link';
@@ -6830,10 +6830,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       log({ trace: record.trace, hop: 'outbox_delivery', ms: 0, ok: delivered,
         detail: record.status, ...(record.reason ? { code: record.reason } : {}) });
       if (record.status === 'pending') return;
-      noteUndelivered(this.ctx.storage.kv, record, recordSurface(record, this.ctx.storage.kv.get<string>('whatsapp_subject'), channel), clock.timezone, Date.now());
+      noteUndelivered(this.ctx.storage.kv, record, recordSurface(record, this.ctx.storage.kv.get<string>('whatsapp_subject'), { surface: channel, owner: String(owner) }), clock.timezone, Date.now());
       if (record.reason === 'expired' || record.reason === 'superseded') {
         const now = Date.now(), kv = this.ctx.storage.kv, settings = loops.proactivity(), whatsapp = kv.get<string>('whatsapp_subject');
-        const toWhatsApp = record.id.startsWith(WHATSAPP_COPY_PREFIX) || (whatsapp !== undefined && record.ownerSubject === whatsapp);
+        const toWhatsApp = boundForWhatsApp(record, whatsapp);
         log({ trace: record.trace, hop: 'outbox_expired', ms: now - record.createdAt, ok: false, code: expiredCode(record, {
           windowClosed: toWhatsApp && !whatsappWindowOpen(kv, now), quiet: isQuiet(settings, now, clock.timezone),
           volumeLow: settings.volume === 'low', followupsOff: settings.followups === false }) });
