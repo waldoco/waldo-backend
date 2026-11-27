@@ -34,7 +34,7 @@ export const noteUndelivered = (kv: Kv, record: FinalRecord, surface: Surface | 
   const kind = recordKind(record).replace(/_/g, ' '), what = record.dayCard ? `${kind} (${record.dayCard.card.replace('card:', '')})` : kind;
   const outcome = record.status === 'quarantined' ? 'may not have reached the owner' : 'did not reach the owner';
   const text = `[Delivery: your ${what}${surface ? ` for ${SURFACES[surface]}` : ''}, written ${localIso(record.createdAt, timezone).slice(0, 16).replace('T', ' ')}, ${outcome}`
-    + ` (${WHY[record.reason ?? ''] ?? record.reason ?? record.status}). It began: ${JSON.stringify(excerpt)}]`;
+    + ` (${WHY[record.failure ?? ''] ?? WHY[record.reason ?? ''] ?? record.reason ?? record.status}). It began: ${JSON.stringify(excerpt)}]`;
   keep(kv, record.id, text, now);
 };
 const keep = (kv: Kv, id: string, text: string, now: number): void => {
@@ -47,7 +47,7 @@ const keep = (kv: Kv, id: string, text: string, now: number): void => {
 // turn reads why, once, and can say so truthfully instead of implying the owner saw it.
 export const noteKnockFailed = (kv: Kv, failure: KnockFailure, timezone: string): void => keep(kv, `knock:${failure.at}`,
   `[Delivery: Waldo's WhatsApp knock at ${localIso(failure.at, timezone).slice(0, 16).replace('T', ' ')}, asking the owner to open WhatsApp so what waits there can go out,`
-  + ` did not reach them (${WHY[failure.reason] ?? 'the provider refused it'}). What waits for WhatsApp goes out only once the owner writes there.]`, failure.at);
+  + ` did not reach them (${WHY[failure.reason] ?? 'the provider refused it'}). What waits for WhatsApp goes out when the owner next writes there.]`, failure.at);
 
 // The waiting lines, oldest first, taken by the turn that reads them.
 export const takeDeliveryNotes = (kv: Kv, now: number): string[] => {

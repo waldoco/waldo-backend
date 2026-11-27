@@ -339,7 +339,7 @@ export const clearWhatsAppNumber = (kv: Kv, appFallback = false): readonly strin
   const retired = old ? retireSurfaceRecords(kv, record => record.ownerSubject === old && String(record.payload.chat_id) === old && !kept(record)) : [];
   if (old && appFallback) rememberWhatsAppSubject(kv, old);
   for (const prefix of [WA_HELD_PREFIX, REHELD_PREFIX]) for (const [key] of [...kv.list<unknown>({ prefix })]) kv.delete(key);
-  for (const key of [WA_LAST_INBOUND_KEY, LAST_INBOUND_IDS_KEY, KNOCKED_KEY, KNOCK_AT_KEY, KNOCK_ID_KEY, REFUSED_KEY, REFUSED_IDS_KEY, PUSHED_KEY]) kv.delete(key);
+  for (const key of [WA_LAST_INBOUND_KEY, LAST_INBOUND_IDS_KEY, KNOCKED_KEY, KNOCK_AT_KEY, KNOCK_ID_KEY, KNOCK_FAILURE_KEY, REFUSED_KEY, REFUSED_IDS_KEY, PUSHED_KEY]) kv.delete(key);
   clearWhatsAppContext(kv);
   return retired;
 };

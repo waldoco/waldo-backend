@@ -45,6 +45,9 @@ export type FinalRecord = {
   // accepted: every part was accepted by a surface that confirms arrival later (WhatsApp); not yet delivered, not settled.
   receiptUrls?: string[]; ownerSubject: string; doName: string; status: 'pending' | 'attempting' | 'accepted' | 'delivered' | 'quarantined' | 'blocked';
   dueAt: number; createdAt: number; attempts: number; settled?: boolean; messageId?: number; deliveredAt?: number; reason?: string;
+  // On a record the surface failed (reason provider_failed): the provider's own closed reason, when it gave one
+  // (whatsapp_payment_required). Every reader of reason keeps reading provider_failed.
+  failure?: string;
   // A surface whose receipt names its message by a string id (WhatsApp's wamid) records each part's id here, by part
   // index (null for a part that was held instead of sent), instead of messageId.
   providerMessageIds?: (string | null)[];
@@ -107,7 +110,7 @@ export type DeliveryReceipt = Readonly<{ messageId?: number; providerMessageId?:
 export type DeliveryAck = DeliveryReceipt | 'held' | 'refused' | null;
 // A surface's later report on one message id: it reached the recipient, it was refused for now (the record goes back to
 // pending and that part is sent again), or it failed for good.
-// A failure may name its closed reason (whatsappFailureReason); without one it ends as provider_failed.
+// A failure may name the provider's closed reason (whatsappFailureReason); it ends provider_failed either way, the reason beside it.
 export type SurfaceStatus = Readonly<{ id: string; kind: 'arrived' | 'refused' | 'failed'; at: number; reason?: string }>;
 // Telegram's acknowledgement names the message and the chat it landed in, which must be the record's own.
 export const telegramReceipt = (result: unknown, chatId: number): DeliveryAck => {
@@ -447,7 +450,8 @@ const applyStatus = (row: FinalRecord, index: number, kind: SurfaceStatus['kind'
   }
   if (arrived[index]) return false;
   if (kind === 'failed' || row.forgotten) {
-    row.status = 'blocked'; row.reason = kind === 'failed' ? reason ?? 'provider_failed' : 'owner_forget'; row.settled = false; row.dueAt = now;
+    row.status = 'blocked'; row.reason = kind === 'failed' ? 'provider_failed' : 'owner_forget'; row.settled = false; row.dueAt = now;
+    if (kind === 'failed' && reason && reason !== 'provider_failed') row.failure = reason;
     return true;
   }
   // Refused for now: this part goes again, in part order, with whatever else is still unsent.

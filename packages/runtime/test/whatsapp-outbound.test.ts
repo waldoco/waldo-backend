@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { WHATSAPP_GRAPH_VERSION, WhatsAppApiError, createWhatsAppCaller, createWhatsAppMediaDownloader, createWhatsAppMediaUploader, deliverWhatsAppFile, whatsappTelegramShim } from '../src/channels/whatsapp-api';
 import { egressGuardedCaller } from '../src/channels/egress-guard';
-import { WA_LAST_INBOUND_KEY, WHATSAPP_HELD, WHATSAPP_HELD_RETENTION_MS, WHATSAPP_KNOCK_EVERY_MS, deliverHeldWhatsApp, knockRevisitAt, SEND_UNASKED, recordWhatsAppInbound, templateFor, whatsappHeld, whatsappKnockFailed, whatsappKnockFailure, whatsappKnockArrived, whatsappProactiveTemplateConfig, whatsappTemplateConfig, whatsappWindowCaller } from '../src/channels/whatsapp-window';
+import { bindWhatsAppNumber, WA_LAST_INBOUND_KEY, WHATSAPP_HELD, WHATSAPP_HELD_RETENTION_MS, WHATSAPP_KNOCK_EVERY_MS, deliverHeldWhatsApp, knockRevisitAt, SEND_UNASKED, recordWhatsAppInbound, templateFor, whatsappHeld, whatsappKnockFailed, whatsappKnockFailure, whatsappKnockArrived, whatsappProactiveTemplateConfig, whatsappTemplateConfig, whatsappWindowCaller } from '../src/channels/whatsapp-window';
 import { egressGate, gatedCaller } from '../src/channels/telegram-api';
 import { DOCX_MIME as DOCX } from '../src/channels/document-render';
 
@@ -369,6 +369,18 @@ describe('whatsapp 24-hour window', () => {
     expect(whatsappKnockFailure(kv)).toEqual({ reason: 'whatsapp_payment_required', at: T0 + 60_000 });
     // The owner writing opens the window: what waited goes out, so the failed knock no longer stands between them.
     recordWhatsAppInbound(kv, [{ timestamp: String((T0 + 2 * HOUR) / 1000) }], T0 + 2 * HOUR);
+    expect(whatsappKnockFailure(kv)).toBeNull();
+  });
+
+  it('a knock failure goes with the number: a new or no WhatsApp number starts without it', async () => {
+    const clock = { now: T0 };
+    const graph = vi.fn(async () => Response.json({ messages: [{ id: 'wamid.knock' }] }));
+    const { kv, call, log } = setup(clock, graph as unknown as ReturnType<typeof graphOk>);
+    kv.put('whatsapp_subject', '15550001111');
+    await call('sendMessage', { chat_id: 1, text: 'a' });
+    whatsappKnockFailed(kv, [{ id: 'wamid.knock', code: 131042 }], log, T0);
+    expect(whatsappKnockFailure(kv)).not.toBeNull();
+    bindWhatsAppNumber(kv, '15550002222');
     expect(whatsappKnockFailure(kv)).toBeNull();
   });
 

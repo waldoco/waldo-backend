@@ -69,7 +69,7 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 let startedAt = '';
-type Record = { id: string; status: string; reason?: string; providerMessageIds?: (string | null)[] };
+type Record = { id: string; status: string; reason?: string; failure?: string; providerMessageIds?: (string | null)[] };
 type Run = { status: string; summary: string | null };
 
 // Unless a test says otherwise the owner last wrote an hour ago, so by our clock the window is open. Today's cards are already
@@ -178,7 +178,7 @@ const owned = async (name: string, script: (steps: Readonly<{
         },
         planned: () => dayPlanBook(state.storage.sql).read(today()).find(row => row.card === 'card:brief'),
         runs: () => state.storage.sql.exec<Run>("SELECT status, summary FROM background_runs WHERE kind = 'standing_order' ORDER BY started_at").toArray(),
-        outbox: () => records().map(({ id, status, reason, providerMessageIds }) => ({ id, status, ...(reason ? { reason } : {}), ...(providerMessageIds ? { providerMessageIds } : {}) })),
+        outbox: () => records().map(({ id, status, reason, failure, providerMessageIds }) => ({ id, status, ...(reason ? { reason } : {}), ...(failure ? { failure } : {}), ...(providerMessageIds ? { providerMessageIds } : {}) })),
       });
     } finally { await state.storage.deleteAlarm(); turn.mockRestore(); }
   });
@@ -372,7 +372,7 @@ describe.each([['just after midnight', '2026-10-22T00:30:00Z'], ['just before mi
       await card();
       await alarms(3);
       await status('failed', ids(), Date.now(), 131042);
-      expect(outbox()).toMatchObject([{ id: CARD_ID(), status: 'blocked', reason: 'whatsapp_payment_required' }]);
+      expect(outbox()).toMatchObject([{ id: CARD_ID(), status: 'blocked', reason: 'provider_failed', failure: 'whatsapp_payment_required' }]);
       await reply();
       expect(texts()).toEqual([CARD]);
       expect(notes()).toEqual([expect.stringContaining('[Delivery: your day card (brief) for WhatsApp')]);
@@ -453,6 +453,16 @@ describe.each([['just after midnight', '2026-10-22T00:30:00Z'], ['just before mi
       await alarms(3);
       await status('failed', ids());
       expect(outbox()[0]).toMatchObject({ status: 'blocked', reason: 'provider_failed' });
+      expect(runs()).toEqual([{ status: 'stopped', summary: 'order ran; its report could not be delivered' }]);
+    });
+  });
+
+  it('a report Meta failed for want of a payment method is a provider failure like any other, naming its reason beside it', async () => {
+    await owned('wa-order-failed-payment', async ({ alarms, order, status, ids, runs, outbox }) => {
+      await order();
+      await alarms(3);
+      await status('failed', ids(), Date.now(), 131042);
+      expect(outbox()[0]).toMatchObject({ status: 'blocked', reason: 'provider_failed', failure: 'whatsapp_payment_required' });
       expect(runs()).toEqual([{ status: 'stopped', summary: 'order ran; its report could not be delivered' }]);
     });
   });
