@@ -13,6 +13,7 @@ import { consentLedger, CURRENT_CONSENT_VERSION } from '../src/onboarding/consen
 import { findingStore } from '../src/onboarding/findings';
 import { recordSignupName } from '../src/onboarding/first-run';
 import { episodeIndex } from '../src/channels/episodes';
+import { ONBOARDING_SUMMARY_BUDGET_MS } from '../src/onboarding/summary';
 
 let sequence = 0;
 type Calls = { acts: unknown[]; admitted: string[]; rpc: number; hidden: (readonly string[])[] };
@@ -941,7 +942,7 @@ describe('onboarding summary routes', () => {
       const answered = await send('/app/v1/onboarding/summary/questions', { request_id: 'question-0001', question_id: train!.id, action: 'answer', text: 'Yes, at six.' });
       expect(await answered.json()).toEqual({ request_id: 'question-0001', question_id: train!.id, outcome: 'answered', replayed: false });
       expect(builds).toBe(before + 1);
-      expect(claimStore(storage.sql).claims().map(claim => claim.text)).toContain('Asked at setup "Do you train before work on weekdays too?", they said: "Yes, at six."');
+      expect(claimStore(storage.sql).claims().map(claim => claim.text)).toContain('Answered a question at setup: "Yes, at six."');
       expect(await (await send('/app/v1/onboarding/summary/questions', { request_id: 'question-0002', question_id: plan!.id, action: 'defer' })).json()).toMatchObject({ outcome: 'deferred' });
       expect(opened).toEqual([{ title: 'Ask the owner when it fits: Who do you plan your week with?', due: null }]);
       expect((await send('/app/v1/onboarding/summary/questions', { request_id: 'question-0003', question_id: plan!.id, action: 'answer', text: 'My partner.' })).status).toBe(409);
@@ -960,5 +961,21 @@ describe('onboarding summary routes', () => {
       answer = written;
       expect((await send('/app/v1/onboarding/summary', { request_id: 'summary-0009' })).status).toBe(200);
     }, { summarise: async () => { if (answer instanceof Error) throw answer; return answer; }, loops: { open: () => { throw new Error('unused'); } } });
+  });
+  it('a call that does not answer within its budget is aborted, writes nothing and answers unavailable', async () => {
+    let aborted = false;
+    await owner(async ({ send, act }) => {
+      await act({ action: 'start' });
+      await act(agree);
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const pending = send('/app/v1/onboarding/summary', { request_id: 'summary-0010' });
+        await vi.advanceTimersByTimeAsync(ONBOARDING_SUMMARY_BUDGET_MS);
+        const late = await pending;
+        expect([late.status, await late.json()]).toEqual([503, { error: 'unavailable' }]);
+      } finally { vi.useRealTimers(); }
+      expect(aborted).toBe(true);
+      expect(await (await send('/app/v1/onboarding/summary')).json()).toMatchObject({ state: 'none' });
+    }, { summarise: (_input, signal) => new Promise(() => { signal.addEventListener('abort', () => { aborted = true; }); }), loops: { open: () => { throw new Error('unused'); } } });
   });
 });

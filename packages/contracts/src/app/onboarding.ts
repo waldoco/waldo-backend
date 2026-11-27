@@ -337,9 +337,9 @@ export const appOnboardingQuestionResultV1Schema = z.strictObject({ request_id: 
 
 // channel.linked marks the channel step done once the owner directory shows that provider linked, as health.connected does for health.
 // A client acts on `error` only. stale_version: the grant named a copy that is no longer current. agreements_required: a step
-// that needs the accepted agreements came first. not_started: the run must be started first. not_connected: health.connected
+// that needs the accepted agreements came first (the summary routes too). not_started: the run must be started first. not_connected: health.connected
 // found no live health consent, or channel.linked found the provider not linked. not_offered: this server cannot link that chat
-// channel, or does not offer the look-up, or holds the agreements back. agreements_required also answers a look-up grant made before the privacy notice. completed: the run is finished and changes go through the controls. request_reused: a
+// channel, or does not offer the look-up, or holds the agreements back. agreements_required also answers a look-up grant made before the privacy notice. completed: the run is finished and changes go through the controls, or an open question from the summary was already answered or left for later. not_found: also the summary routes where this server cannot write one (hide the step). unavailable: also a summary the model could not write now, or the day's few are spent (retry later, or skip the step). request_reused: a
 // request_id came back with a different body. not_found: no such finding. step_up_required (403): a link code needs a sign-in
 // from the last two hours.
 export const appOnboardingErrorV1Schema = z.strictObject({

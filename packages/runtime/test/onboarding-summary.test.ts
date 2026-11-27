@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { claimStore } from '../src/memory/claims';
 import { loopBook } from '../src/channels/loops';
 import { isSetupRef } from '../src/onboarding/first-run';
-import { ONBOARDING_SUMMARIES_PER_DAY, onboardingSummary, summaryInput, SUMMARY_SCHEMA } from '../src/onboarding/summary';
+import { ONBOARDING_SUMMARIES_PER_DAY, onboardingSummary, summaryInput, summaryQuestion, SUMMARY_SCHEMA } from '../src/onboarding/summary';
+import { setupInput } from '../src/onboarding/welcome-sources';
 import { openAIStrictParameters } from '../src/llm/strict-schema';
 
 let sequence = 0;
@@ -75,8 +76,13 @@ describe('onboarding summary', () => {
       expect(transaction(() => book.answer(first!.id, 'Yes, at six, three days a week.'))).toBe('answered');
       const answer = claims.claims().find((claim) => claim.text.includes('at six'))!;
       expect(answer).toMatchObject({ origin: 'owner', source: 'stated', verification_status: 'owner-grounded' });
-      expect(answer.text).toBe('Asked at setup "Do you train before work on weekdays too?", they said: "Yes, at six, three days a week."');
+      // Only the owner's own words are theirs: Waldo's question, written over outside content, never enters their claim.
+      expect(answer.text).toBe('Answered a question at setup: "Yes, at six, three days a week."');
+      expect(answer.text).not.toContain('weekdays');
       expect(isSetupRef(answer.source_ref)).toBe(true);
+      // The setup stage shows the question beside it, as Waldo's.
+      const read = setupInput(claims, () => true, () => null, (id) => summaryQuestion(sql, id));
+      expect(read.kind === 'input' ? read.text : '').toContain(`[c${answer.id}] Answered a question at setup: "Yes, at six, three days a week." (in reply to Waldo's question, not their words: "Do you train before work on weekdays too?")`);
       expect(transaction(() => book.defer(second!.id))).toBe('deferred');
       expect(loops.list().map((loop) => loop.title)).toEqual(['Ask the owner when it fits: Who do you plan your week with?']);
       expect(book.view().questions.map((question) => question.state)).toEqual(['answered', 'deferred']);

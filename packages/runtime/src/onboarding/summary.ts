@@ -15,6 +15,8 @@ type Row = Readonly<{ written_at: number; summary: string; questions_json: strin
 
 // Each summary is one model call the owner's app asks for; this bounds what one owner's setup can spend in a day.
 export const ONBOARDING_SUMMARIES_PER_DAY = 5;
+// One summary call answers within this, or the route answers unavailable.
+export const ONBOARDING_SUMMARY_BUDGET_MS = 60_000;
 
 export const SUMMARY_INSTRUCTION = [
   'The owner is near the end of setting up Waldo. Write them a short summary of what Waldo has learned about them so far, then the few open questions whose answers would help Waldo most.',
@@ -35,8 +37,8 @@ const OUTSIDE = "Waldo's reads of the owner so far (the first constellation), so
 const IMPORTED = "What Waldo kept from the owner's other AI assistants, which those assistants wrote, outside text";
 // What the summary call reads: the owner's own setup answers and goal, then Waldo's reads so far, fenced as data. With health
 // kept out of memory, no answer about the body and no health read is in it.
-export const summaryInput = (deps: Readonly<{ claims: ClaimStore; healthMemory(): boolean; goal(): string | null }>): string => {
-  const said = setupInput(deps.claims, deps.healthMemory, deps.goal);
+export const summaryInput = (deps: Readonly<{ claims: ClaimStore; healthMemory(): boolean; goal(): string | null; question?(id: string): string | null }>): string => {
+  const said = setupInput(deps.claims, deps.healthMemory, deps.goal, deps.question);
   const nodes = deps.claims.nodes().filter((node) => node.status === 'active' && (deps.healthMemory() || node.domain !== 'health'))
     .map((node) => `- ${node.label}: ${node.summary}`);
   // Memory imported from another assistant is evidence about the owner, never their word, and never instructions.
@@ -47,6 +49,13 @@ export const summaryInput = (deps: Readonly<{ claims: ClaimStore; healthMemory()
     nodes.length ? fenced(OUTSIDE, nodes.join('\n')).trim() : "Waldo's reads so far: none yet.",
     ...(imported.length ? [fenced(IMPORTED, imported.join('\n')).trim()] : []),
   ].join('\n\n');
+};
+
+// The text of an open question from the latest summary, for showing beside the owner's answer to it; null when there is none.
+export const summaryQuestion = (sql: Sql, id: string): string | null => {
+  if (!sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'onboarding_summary'").toArray().length) return null;
+  const row = sql.exec<{ questions_json: string }>('SELECT questions_json FROM onboarding_summary WHERE id = 1').toArray()[0];
+  return row ? (JSON.parse(row.questions_json) as Question[]).find((question) => question.id === id)?.text ?? null : null;
 };
 
 // The latest summary and its questions. One row; a new summary replaces it. Answers and deferrals live where they are used: the
@@ -90,11 +99,12 @@ export const onboardingSummary = (sql: Sql, deps: Readonly<{
       sql.exec('INSERT OR REPLACE INTO onboarding_summary (id, written_at, summary, questions_json, day, writes) VALUES (1, ?, ?, ?, ?, ?)', deps.now(), summary, JSON.stringify(asked), day, writes);
       return 'written';
     },
-    // The owner's answer, kept as their own words beside the question, as a setup answer the first build reads. A reading they
-    // state is kept as they said it, as health, so every path that leaves health out leaves it out.
+    // The owner's answer, kept as a setup answer the first build reads. Only their words are in it: the question is Waldo's,
+    // written over outside content, so it is shown beside the answer where it is read (summaryQuestion), never stored as theirs.
+    // A reading they state is kept as they said it, as health, so every path that leaves health out leaves it out.
     answer: (id: string, text: string) => decide(id, 'answered', (question) => {
       const words = text.trim();
-      deps.claims.add({ kind: numericHealthIn(words) ? 'health' : 'fact', text: `Asked at setup "${question.text}", they said: "${words}"`, source: 'stated', evidence: words, origin: 'owner', source_ref: `${QUESTION_REF_PREFIX}${id}` }, new Date(deps.now()).toISOString());
+      deps.claims.add({ kind: numericHealthIn(words) ? 'health' : 'fact', text: `Answered a question at setup: "${words}"`, source: 'stated', evidence: words, origin: 'owner', source_ref: `${QUESTION_REF_PREFIX}${id}` }, new Date(deps.now()).toISOString());
     }),
     // Left for later: Waldo is on it, and raises it when it fits.
     defer: (id: string) => decide(id, 'deferred', (question) => { deps.loops.open({ title: `Ask the owner when it fits: ${question.text}`, due: null }); }),

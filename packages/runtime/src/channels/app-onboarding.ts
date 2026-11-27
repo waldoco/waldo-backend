@@ -14,7 +14,7 @@ import { claimStore } from '../memory/claims';
 import { consentLedger, type ConsentLedger } from '../onboarding/consent-ledger';
 import { findingStore, type FindingStore } from '../onboarding/findings';
 import { firstRun, type FirstRun, type FirstRunHost } from '../onboarding/first-run';
-import { onboardingSummary, summaryInput, type OnboardingSummary } from '../onboarding/summary';
+import { ONBOARDING_SUMMARY_BUDGET_MS, onboardingSummary, summaryInput, summaryQuestion, type OnboardingSummary } from '../onboarding/summary';
 import { bodyDigest, requestBook, type RequestBook } from '../onboarding/request-book';
 import { loopBook } from './loops';
 import { md5Hex } from './md5';
@@ -224,8 +224,9 @@ export type OwnerOnboardingDeps = Readonly<{
   stopLookup(): void;
   // The setup goal, kept as the owner's quest.
   goal?: FirstRunHost['goal'] & Readonly<{ line(): string | null }>;
-  // The onboarding summary's model call over its input, and Waldo's open loops for the questions left for later.
-  summarise?(input: string): Promise<string>;
+  // The onboarding summary's model call over its input, and Waldo's open loops for the questions left for later. The route runs
+  // in the owner's serial lane, so the call must not queue on that lane again (call through the owner job, never serial).
+  summarise?(input: string, signal: AbortSignal): Promise<string>;
   loops?: Pick<ReturnType<typeof loopBook>, 'open'>;
   healthMemory?(): boolean;
 }>;
@@ -275,9 +276,17 @@ export const ownerOnboardingHost = (deps: OwnerOnboardingDeps): AppOnboardingHos
     if (!list.success) logFailure('health_consent_shape');
     return list.success ? healthStepConnected(list.data.consents) : 'unavailable';
   };
-  const summaryHost = (summarise: (input: string) => Promise<string>, loops: Pick<ReturnType<typeof loopBook>, 'open'>) => ({
+  // The call is bounded here, whoever wires it: past the budget the route answers unavailable and the owner's lane moves on.
+  const summaryHost = (summarise: (input: string, signal: AbortSignal) => Promise<string>, loops: Pick<ReturnType<typeof loopBook>, 'open'>) => ({
     book: onboardingSummary(sql, { now, newId: () => crypto.randomUUID().replaceAll('-', ''), transaction, claims, loops }),
-    write: () => summarise(summaryInput({ claims, healthMemory: deps.healthMemory ?? (() => false), goal: () => deps.goal?.line() ?? null })),
+    write: async () => {
+      const abort = new AbortController();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = new Promise<never>((_, reject) => { timer = setTimeout(() => { abort.abort(); reject(new Error('summary budget')); }, ONBOARDING_SUMMARY_BUDGET_MS); });
+      try {
+        return await Promise.race([summarise(summaryInput({ claims, healthMemory: deps.healthMemory ?? (() => false), goal: () => deps.goal?.line() ?? null, question: id => summaryQuestion(sql, id) }), abort.signal), late]);
+      } finally { clearTimeout(timer); }
+    },
   });
   const firstRunHost: FirstRunHost = {
     googleConnected: async () => (storage.kv.get<unknown[]>('google:accounts') ?? []).length > 0,

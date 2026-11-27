@@ -11,6 +11,7 @@ import { requestBook } from '../onboarding/request-book';
 import { confirmWelcomeNode, correctWelcomeNode, welcomeBuild, welcomeSupportIds, type WelcomeStage } from '../onboarding/welcome';
 import { getToKnowApplier, startGetToKnow } from '../onboarding/get-to-know';
 import { onboardingGoal } from '../onboarding/goal';
+import { summaryQuestion } from '../onboarding/summary';
 import { ownerWelcome, type OwnerWelcome } from '../onboarding/welcome-sources';
 import { chatChannelLinks } from './chat-channel-links';
 import type { IMessageProof, WhatsAppProof } from './dashboard-phone';
@@ -6925,7 +6926,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       finally { log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: answered, detail }); }
     };
     const welcome = ownerWelcome({ sql: storage.sql, transaction: (work) => storage.transactionSync(work), claims: memory, now: Date.now, timezone: () => clock.timezone, healthMemory: () => healthMemoryOn(identity), healthRead, google,
-      goal: () => onboardingGoal(storage.kv, quests, ownerRef).line(),
+      goal: () => onboardingGoal(storage.kv, quests, ownerRef).line(), question: id => summaryQuestion(storage.sql, id),
       findings: () => findingStore(storage.sql, memory, consentLedger(storage.sql, consentSwitches(this.env)), Date.now),
       // The build runs beside the serial lane, so each call queues on it.
       ask: (stage, text, version) => this.serial(() => askWelcome(stage, text, version)),
