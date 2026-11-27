@@ -30,7 +30,7 @@ const sha256 = async (text: string) => hex(await crypto.subtle.digest('SHA-256',
 const notFound = () => new Response('not found', { status: 404, headers: { 'cache-control': 'no-store' } });
 
 const PAGES = {
-  linked: { status: 200, title: 'WHOOP is connected', body: 'Waldo can now read your WHOOP sleep, recovery and workouts. Your first days arrive in a few minutes. You can close this tab.' },
+  linked: { status: 200, title: 'WHOOP is connected', body: 'Waldo can now read your WHOOP sleep, recovery, strain, workouts and body measurements. Your first days arrive in a few minutes. You can close this tab.' },
   denied: { status: 400, title: 'WHOOP was not connected', body: 'Access was not granted. You can connect WHOOP from Waldo whenever you want to try again.' },
   expired: { status: 410, title: 'This link has expired', body: 'This connect link has run out. Start the connection again from Waldo.' },
   used: { status: 410, title: 'This link was already used', body: 'Each connect link starts one sign-in. Start the connection again from the Waldo app.' },

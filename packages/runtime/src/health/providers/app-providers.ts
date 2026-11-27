@@ -3,7 +3,7 @@ import {
   healthProviderConnectResultV1Schema, healthProviderConnectV1Schema, healthProviderDisconnectResultV1Schema, healthProviderDisconnectV1Schema,
   healthProviderErrorV1Schema, healthProviderListV1Schema,
 } from '../../../../contracts/src/app/health-providers';
-import { HEALTH_PROVIDER_REVISION_V1 } from '../../../../contracts/src/app/health-ingest';
+import { HEALTH_PROVIDER_REVISION_V1, HEALTH_PROVIDER_SCORES_REVISION_V1 } from '../../../../contracts/src/app/health-ingest';
 import { callOwnerProvider } from './provider-route';
 
 // The app's provider routes. The Worker checks the request against the app contract and the owner object does the work:
@@ -34,7 +34,8 @@ export const handleAppHealthProviders = async (input: Readonly<{ request: Reques
   const { request, url, doName, owners, secret } = input;
   const route = url.pathname.slice(APP_PROVIDERS_PATH.length);
   // A build that does not name health revision 2 has no providers to show or start.
-  if (appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'health') < HEALTH_PROVIDER_REVISION_V1) return refuse('invalid_request', 404);
+  const revision = appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'health');
+  if (revision < HEALTH_PROVIDER_REVISION_V1) return refuse('invalid_request', 404);
   if (!secret) return refuse('not_configured', 503);
   const settle = async (op: 'status' | 'connect' | 'disconnect', body: Record<string, unknown>, schema: ZodType): Promise<Response> => {
     const answer = await callOwnerProvider(owners, secret, doName, op, body);
@@ -48,6 +49,11 @@ export const handleAppHealthProviders = async (input: Readonly<{ request: Reques
       return code === 'not_configured' ? refuse('not_configured', 503) : refuse('unavailable', 503);
     }
     const parsed = schema.safeParse(answer.json);
+    // A build below revision 16 parses a provider's status strictly and has no reconnect_for.
+    if (parsed.success && op === 'status' && revision < HEALTH_PROVIDER_SCORES_REVISION_V1) {
+      const list = parsed.data as { providers: Record<string, unknown>[] };
+      return reply({ providers: list.providers.map(({ reconnect_for: _kinds, ...provider }) => provider) });
+    }
     if (parsed.success) return reply(parsed.data as object);
     console.error('app health provider response shape');
     return refuse('unavailable', 503);

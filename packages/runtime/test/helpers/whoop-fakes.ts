@@ -3,7 +3,7 @@ import { healthIngestV1Schema } from '../../../contracts/src/app/health-ingest';
 import { oauthProxy } from '../../src/connectors/oauth-proxy-client';
 import type { WhoopConfig } from '../../src/health/providers/whoop-client';
 import { whoopOwner, type WhoopLog } from '../../src/health/providers/whoop-owner';
-import { recoveryRecord, sleepRecord, workoutRecord } from '../fixtures/whoop-synthetic';
+import { bodyRecord, cycleRecord, recoveryRecord, sleepRecord, workoutRecord } from '../fixtures/whoop-synthetic';
 import { loadEdge, routeEdgeFetch, vaultFake, workerToEdge, WORKER_ENV, type VaultFake } from '../support/oauth-edge-harness';
 
 // Recorded fakes for WHOOP's API and for the health plane's database calls, written from the provider's documented
@@ -17,13 +17,17 @@ export const CONFIG: WhoopConfig = { clientId: 'client-id-fixture', redirectUri:
 // The edge's own copy of the client secret, entered at deploy; the owner object never gets it.
 export const CLIENT_SECRET = 'client-secret-fixture';
 export const WHOOP_ISSUER = 'https://api.prod.whoop.com';
+export const WHOOP_ALL_SCOPES = 'offline read:profile read:body_measurement read:cycles read:recovery read:sleep read:workout';
 
 export type World = {
-  sleeps: Record<string, unknown>[]; recoveries: Record<string, unknown>[]; workouts: Record<string, unknown>[];
+  sleeps: Record<string, unknown>[]; recoveries: Record<string, unknown>[]; workouts: Record<string, unknown>[]; cycles: Record<string, unknown>[]; body: Record<string, unknown> | null;
+  // What WHOOP grants at the next authorization, said in its token answer when `scopeInAnswer`; a request for a kind whose scope
+  // the access lacks answers `scopeStatus`.
+  grant: string | null; scopeInAnswer: boolean; granted: Map<string, readonly string[]>; scopeStatus: 401 | 403;
   validAccess: Set<string>; validRefresh: Set<string>; spent: string[]; calls: string[]; issued: number;
   pageSize: number; limited: { until: number } | null; breakAfter: { path: string; count: number; status: number } | null; revokeStatus: number; account: number;
 };
-export const newWorld = (): World => ({ sleeps: [], recoveries: [], workouts: [], validAccess: new Set(), validRefresh: new Set(), spent: [], calls: [], issued: 0, pageSize: 25, limited: null, breakAfter: null, revokeStatus: 204, account: 70001 });
+export const newWorld = (): World => ({ sleeps: [], recoveries: [], workouts: [], cycles: [], body: null, grant: null, scopeInAnswer: true, granted: new Map(), scopeStatus: 403, validAccess: new Set(), validRefresh: new Set(), spent: [], calls: [], issued: 0, pageSize: 25, limited: null, breakAfter: null, revokeStatus: 204, account: 70001 });
 
 // One night, i days before today, with the recovery WHOOP scored for it.
 export const night = (i: number, over: { sleep?: Record<string, unknown>; recovery?: Record<string, unknown> | null } = {}) => {
@@ -45,14 +49,20 @@ export const whoopFetch = (world: World, clock: { now: number }): typeof fetch =
   if (url.pathname === '/oauth/oauth2/token') {
     const form = new URLSearchParams(String(init?.body));
     if (form.get('client_id') !== CONFIG.clientId || form.get('client_secret') !== CLIENT_SECRET) return json({ error: 'invalid_client' }, 401);
-    const issue = () => { world.issued += 1; const tokens = { access_token: `access-${world.issued}`, refresh_token: `refresh-${world.issued}`, expires_in: 3600 }; world.validAccess.add(tokens.access_token); world.validRefresh.add(tokens.refresh_token); return tokens; };
-    if (form.get('grant_type') === 'authorization_code') return form.get('code') === 'good-code' ? json(issue()) : json({ error: 'invalid_grant' }, 400);
+    const issue = (scopes: readonly string[]) => {
+      world.issued += 1;
+      const tokens = { access_token: `access-${world.issued}`, refresh_token: `refresh-${world.issued}`, expires_in: 3600, ...(world.scopeInAnswer ? { scope: scopes.join(' ') } : {}) };
+      world.validAccess.add(tokens.access_token); world.validRefresh.add(tokens.refresh_token);
+      world.granted.set(tokens.access_token, scopes); world.granted.set(tokens.refresh_token, scopes);
+      return tokens;
+    };
+    if (form.get('grant_type') === 'authorization_code') return form.get('code') === 'good-code' ? json(issue((world.grant ?? WHOOP_ALL_SCOPES).split(' '))) : json({ error: 'invalid_grant' }, 400);
     if (form.get('grant_type') === 'refresh_token') {
       const old = form.get('refresh_token') ?? '';
       if (!world.validRefresh.has(old)) return json({ error: 'invalid_grant' }, 400);
       world.validRefresh.delete(old);
       world.spent.push(old);
-      return json(issue());
+      return json(issue(world.granted.get(old) ?? WHOOP_ALL_SCOPES.split(' ')));
     }
     return json({ error: 'unsupported_grant_type' }, 400);
   }
@@ -71,6 +81,10 @@ export const whoopFetch = (world: World, clock: { now: number }): typeof fetch =
     const slice = inside.slice(from, from + world.pageSize);
     return json({ records: slice, next_token: from + world.pageSize < inside.length ? String(from + world.pageSize) : null });
   };
+  const needs = (scope: string) => !(world.granted.get(bearer) ?? WHOOP_ALL_SCOPES.split(' ')).includes(scope);
+  if ((path === '/cycle' && needs('read:cycles')) || (path === '/user/measurement/body' && needs('read:body_measurement'))) return new Response('insufficient scope', { status: world.scopeStatus });
+  if (path === '/cycle') return listing(world.cycles, 'start');
+  if (path === '/user/measurement/body') return world.body ? json(world.body) : json({}, 404);
   if (path === '/activity/sleep') return listing(world.sleeps, 'end');
   if (path === '/recovery') return listing(world.recoveries, 'created_at');
   if (path === '/activity/workout') return listing(world.workouts, 'start');
@@ -85,6 +99,8 @@ export type Stored = { revision: number; payload: Record<string, unknown> };
 export type Plane = {
   samples: Map<string, Stored>; requests: Map<string, { digest: string; response: unknown }>; ingests: number; consent: 'granted' | 'withdrawn' | 'none'; model: 'granted' | 'withdrawn' | 'none'; epoch: number;
   sessions: string[]; handoffs: string[]; vault: VaultFake;
+  // The copy the owner's WHOOP grants were written on.
+  copy: number;
 };
 // Any owner name may link: the owner gate is the real function's job and is covered by the edge's own tests.
 const anyOwner = { includes: () => true } as unknown as readonly string[];
@@ -93,14 +109,14 @@ export const newVault = (): VaultFake => {
   vault.clients.set(`${WHOOP_ISSUER} ${CONFIG.redirectUri}`, { client_id: CONFIG.clientId, client_auth: 'client_secret_post', client_secret: CLIENT_SECRET });
   return vault;
 };
-export const newPlane = (): Plane => ({ samples: new Map(), requests: new Map(), ingests: 0, consent: 'granted', model: 'granted', epoch: 1, sessions: [], handoffs: [], vault: newVault() });
+export const newPlane = (): Plane => ({ samples: new Map(), requests: new Map(), ingests: 0, consent: 'granted', model: 'granted', epoch: 1, copy: 6, sessions: [], handoffs: [], vault: newVault() });
 
 // The database's own rules, in the parts a sync depends on.
 export const planeRpc = (plane: Plane, doName = 'owner-w') => async (fn: string, _message: string, args: Record<string, string | number>): Promise<unknown> => {
   // `consent` is the storage grant and `model` the model-use grant; the database refuses readings on storage alone.
   if (fn === 'health_consent_list') {
     const rows = [['storage_compute', plane.consent], ['model_processing', plane.model]] as const;
-    return { consents: rows.filter(([, status]) => status !== 'none').map(([purpose, status]) => ({ consent_class: 'health_processing', source: 'whoop', purpose, version: 3, status, epoch: plane.epoch, granted_at: '2026-10-01T00:00:00.000Z', withdrawn_at: null, deletion_state: 'not_required' })) };
+    return { consents: rows.filter(([, status]) => status !== 'none').map(([purpose, status]) => ({ consent_class: 'health_processing', source: 'whoop', purpose, version: plane.copy, status, epoch: plane.epoch, granted_at: '2026-10-01T00:00:00.000Z', withdrawn_at: null, deletion_state: 'not_required' })) };
   }
   if (fn === 'health_ingest') {
     const text = String(args.p_payload), body = JSON.parse(text);
@@ -169,4 +185,4 @@ export const connected = async (over: Parameters<typeof harness>[0] = {}, nights
   expect(await h.owner.exchange({ code: 'good-code', denied: false })).toBe('linked');
   return h;
 };
-export { sleepRecord, recoveryRecord, workoutRecord };
+export { bodyRecord, cycleRecord, sleepRecord, recoveryRecord, workoutRecord };

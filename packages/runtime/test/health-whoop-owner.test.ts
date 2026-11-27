@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import handoffMigration from '../../../supabase/migrations/20261023060000_waldo_connect_session_handoff.sql?raw';
 import { whoopDeletions } from '../src/health/providers/whoop-map';
 import { handoffHash, HANDOFF_CODE_TTL_MS } from '../src/channels/connect-confirm';
-import { addNight, connected, DAY, harness, NOW, night, newPlane, newWorld, recoveryRecord, sleepRecord, workoutRecord } from './helpers/whoop-fakes';
+import { addNight, bodyRecord, connected, cycleRecord, DAY, harness, NOW, night, newPlane, newWorld, recoveryRecord, sleepRecord, workoutRecord } from './helpers/whoop-fakes';
 
 // Distinctive synthetic readings: if one shows up in a log line, the owner object kept a value.
 const LEAKS = ['47.318', '430', '93.5'];
@@ -61,7 +61,7 @@ describe('WHOOP connect and callback', () => {
   it('has the edge trade the code and keep the tokens, pins what the edge may trust, and keeps only an id, an account, a token version and when it connected in the object', async () => {
     const h = await connected();
     const [exchange] = h.edgeCalls;
-    expect(exchange).toMatchObject({ op: 'exchange', provider: 'whoop', code: 'good-code', scope: 'offline read:profile read:sleep read:recovery read:workout' });
+    expect(exchange).toMatchObject({ op: 'exchange', provider: 'whoop', code: 'good-code', scope: 'offline read:profile read:body_measurement read:cycles read:recovery read:sleep read:workout' });
     expect(exchange!.pins).toEqual({
       issuer: 'https://api.prod.whoop.com', token_endpoint: 'https://api.prod.whoop.com/oauth/oauth2/token', client_id: 'client-id-fixture', client_auth: 'client_secret_post',
       redirect_uri: 'https://worker.example.invalid/oauth/whoop/callback', api_base: 'https://api.prod.whoop.com/developer/v2/', account_url: 'https://api.prod.whoop.com/developer/v2/user/profile/basic',
@@ -70,7 +70,7 @@ describe('WHOOP connect and callback', () => {
     expect(h.plane.vault.rows).toHaveLength(1);
     expect(h.plane.vault.rows[0]).toMatchObject({ provider: 'whoop', account: '70001', status: 'active' });
     expect(JSON.parse(h.plane.vault.rows[0]!.secret)).toMatchObject({ access_token: expect.stringMatching(/^access-/), refresh_token: expect.stringMatching(/^refresh-/) });
-    expect(Object.keys(h.kv.get('whoop:conn') as object).sort()).toEqual(['account', 'expires_at', 'id', 'linked_at', 'version']);
+    expect(Object.keys(h.kv.get('whoop:conn') as object).sort()).toEqual(['account', 'expires_at', 'id', 'linked_at', 'scopes', 'version']);
     expect(h.kv.get('whoop:conn')).toMatchObject({ id: h.plane.vault.rows[0]!.id, account: '70001', version: expect.stringMatching(/^[0-9a-f]{16}$/), linked_at: NOW });
     expect(h.owner.connectedAt()).toBe(NOW);
     expect(JSON.stringify([...h.kv, h.edgeCalls])).not.toMatch(/access-|refresh-|client-secret-fixture/);
@@ -283,7 +283,10 @@ describe('WHOOP webhooks as hints', () => {
     const n = addNight(h.world, 0);
     const hint = { type: 'sleep.updated', id: n.sleep.id as string, trace: 'trace-aaaa-0001' };
     expect(await h.owner.hint(hint)).toBe('handled');
-    expect(signals(h.plane).sort()).toEqual(['overnight_hrv', 'resting_heart_rate', 'sleep_duration', 'sleep_efficiency', 'sleep_midpoint', 'spo2']);
+    expect(signals(h.plane).sort()).toEqual([
+      'overnight_hrv', 'provider_recovery', 'provider_sleep_consistency', 'provider_sleep_need', 'provider_sleep_performance',
+      'respiratory_rate', 'resting_heart_rate', 'skin_temperature', 'sleep_duration', 'sleep_efficiency', 'sleep_midpoint', 'spo2',
+    ]);
     const calls = h.world.calls.length;
     expect(await h.owner.hint(hint)).toBe('duplicate');
     expect(h.world.calls.length).toBe(calls);
@@ -439,5 +442,149 @@ describe('WHOOP privacy', () => {
     const text = JSON.stringify([h.logs, [...h.kv], h.edgeCalls]);
     for (const leak of [...LEAKS, 'access-', 'refresh-', 'client-secret-fixture']) expect(text, leak).not.toContain(leak);
     for (const line of h.logs) expect(Object.keys(line).sort()).toEqual(['code', 'hop', 'ok']);
+  });
+});
+
+// Health revision 16: every kind WHOOP's API gives, cycles polled, and connections made before the new scopes kept whole.
+describe('WHOOP depth: cycles, body measurements, naps and the scopes a connection holds', () => {
+  const storedOf = (h: { plane: { samples: Map<string, { revision: number; payload: Record<string, unknown> }> } }, signal: string) => [...h.plane.samples.values()].filter(s => s.payload.signal === signal);
+  const today = (over: Record<string, unknown> = {}) => cycleRecord({ id: 900100, start: '2026-10-20T22:00:00.000Z', end: null, updated_at: '2026-10-21T07:30:00.000Z', timezone_offset: '+02:00', score: { strain: 4.2, kilojoule: 2_100, average_heart_rate: 61, max_heart_rate: 120 }, step_count: 1_204, ...over });
+  const yesterday = cycleRecord({ id: 900099, start: '2026-10-19T22:05:00.000Z', end: '2026-10-20T22:00:00.000Z', updated_at: '2026-10-20T22:10:00.000Z', timezone_offset: '+02:00' });
+
+  it('polls cycles page by page at WHOOP\'s page size of 25, stores day strain with the open cycle, and reads the body measurements once a pass', async () => {
+    const h = await connected({}, 2);
+    h.world.cycles.push(yesterday, today());
+    h.world.body = bodyRecord();
+    expect(await h.owner.sync()).toBe('synced');
+    const strain = storedOf(h, 'provider_day_strain').map(s => s.payload);
+    expect(strain.map(s => [s.day, s.value, s.open]).sort()).toEqual([['2026-10-20', 11.37, false], ['2026-10-21', 4.2, true]]);
+    expect(storedOf(h, 'body_mass').map(s => s.payload.value)).toEqual([71.4]);
+    expect(storedOf(h, 'height')).toHaveLength(1);
+    expect(storedOf(h, 'max_heart_rate')).toHaveLength(1);
+    expect(h.world.calls.filter(call => call === 'GET /cycle').length).toBe(5);
+    expect(h.world.calls.filter(call => call === 'GET /user/measurement/body')).toHaveLength(1);
+    expect(h.edgeCalls.filter(call => call.op === 'fetch' && call.path === 'cycle').every(call => (call.query as Record<string, string>).limit === '25')).toBe(true);
+    expect(await h.owner.status()).toEqual({ provider: 'whoop', state: 'connected', last_sync_at: new Date(NOW).toISOString() });
+  });
+
+  it('refreshes the open cycle on the next pass: the newer score replaces it, and the closed cycle is never written twice', async () => {
+    const h = await connected({}, 1);
+    h.world.cycles.push(today());
+    expect(await h.owner.sync()).toBe('synced');
+    h.world.cycles[0] = today({ updated_at: '2026-10-21T15:00:00.000Z', score: { strain: 9.8, kilojoule: 6_000, average_heart_rate: 72, max_heart_rate: 166 } });
+    h.clock.now = NOW + DAY;
+    expect(await h.owner.sync()).toBe('synced');
+    const [stored] = storedOf(h, 'provider_day_strain');
+    expect(stored).toMatchObject({ revision: Date.parse('2026-10-21T15:00:00.000Z') / 1000, payload: { value: 9.8, open: true } });
+    expect(storedOf(h, 'provider_day_strain')).toHaveLength(1);
+  });
+
+  it('keeps syncing sleep, recovery and workouts on a connection made with the earlier scopes, never asks for cycles or the body, and says what a reconnect adds', async () => {
+    const world = newWorld();
+    world.grant = 'offline read:profile read:sleep read:recovery read:workout';
+    const h = await connected({ world }, 2);
+    h.world.cycles.push(today());
+    h.world.body = bodyRecord();
+    expect(await h.owner.sync()).toBe('synced');
+    expect(h.world.calls.filter(call => call === 'GET /cycle' || call === 'GET /user/measurement/body')).toEqual([]);
+    expect(storedOf(h, 'sleep_duration')).toHaveLength(2);
+    expect(storedOf(h, 'provider_day_strain')).toEqual([]);
+    expect(await h.owner.status()).toMatchObject({ state: 'connected', reconnect_for: ['day_strain', 'body_measurements'] });
+  });
+
+  it('reads a connection saved before Waldo recorded scopes as holding the earlier scopes only, and learns its scopes at the next token refresh', async () => {
+    const h = await connected({}, 1);
+    const { scopes: _scopes, ...legacy } = h.kv.get('whoop:conn') as Record<string, unknown>;
+    h.kv.set('whoop:conn', legacy);
+    h.world.cycles.push(today());
+    expect(await h.owner.sync()).toBe('synced');
+    expect(h.world.calls).not.toContain('GET /cycle');
+    expect(await h.owner.status()).toMatchObject({ reconnect_for: ['day_strain', 'body_measurements'] });
+    // An hour later the token lapses; the refresh answer names what the grant holds.
+    h.clock.now = NOW + DAY;
+    expect(await h.owner.sync()).toBe('synced');
+    expect((h.kv.get('whoop:conn') as { scopes?: string[] }).scopes).toContain('read:cycles');
+    expect(storedOf(h, 'provider_day_strain')).toHaveLength(1);
+    expect(await h.owner.status()).not.toHaveProperty('reconnect_for');
+  });
+
+  it.each([403, 401] as const)('takes a %s on cycles or the body, after the core kinds answered, as a missing scope: the rest syncs and the connection is not marked for reconnecting', async (status) => {
+    const world = newWorld();
+    world.scopeInAnswer = false;
+    world.grant = 'offline read:profile read:sleep read:recovery read:workout';
+    world.scopeStatus = status;
+    const h = await connected({ world }, 3);
+    h.world.cycles.push(today());
+    h.world.body = bodyRecord();
+    expect(await h.owner.sync()).toBe('synced');
+    expect(storedOf(h, 'sleep_duration')).toHaveLength(3);
+    expect(h.kv.get('whoop:reconnect')).toBeUndefined();
+    expect(h.kv.get('whoop:lacks')).toEqual(['day_strain', 'body_measurements']);
+    expect(h.logs.map(line => line.code)).toEqual(expect.arrayContaining(['lacks_day_strain', 'lacks_body_measurements']));
+    expect(await h.owner.status()).toMatchObject({ state: 'connected', reconnect_for: ['day_strain', 'body_measurements'] });
+    // Once known to be missing, the kind is not asked for again until the owner connects again.
+    const asked = h.world.calls.filter(call => call === 'GET /cycle').length;
+    h.clock.now = NOW + DAY;
+    expect(await h.owner.sync()).toBe('synced');
+    expect(h.world.calls.filter(call => call === 'GET /cycle').length).toBe(asked);
+    // Connecting again with the full request clears it.
+    h.world.grant = null;
+    expect(await h.owner.exchange({ code: 'good-code', denied: false })).toBe('linked');
+    expect(h.kv.get('whoop:lacks')).toBeUndefined();
+    expect(await h.owner.status()).not.toHaveProperty('reconnect_for');
+  });
+
+  it('stores WHOOP\'s own scores only under a grant on copy 6: on copy 4 the readings sync and the scores and a workout\'s strain stay at WHOOP', async () => {
+    const plane = newPlane();
+    plane.copy = 4;
+    const h = await connected({ plane }, 1);
+    h.world.cycles.push(today());
+    h.world.workouts.push(workoutRecord({ start: '2026-10-20T11:00:00.000Z', end: '2026-10-20T11:50:00.000Z' }));
+    expect(await h.owner.sync()).toBe('synced');
+    expect(signals(h.plane).filter(signal => signal.startsWith('provider_'))).toEqual([]);
+    expect(storedOf(h, 'workout')[0]!.payload).not.toHaveProperty('strain');
+    expect(signals(h.plane)).toEqual(expect.arrayContaining(['sleep_duration', 'respiratory_rate', 'skin_temperature', 'overnight_hrv', 'workout']));
+    plane.copy = 6;
+    h.clock.now = NOW + DAY;
+    h.world.cycles[0] = today({ updated_at: '2026-10-21T09:00:00.000Z' });
+    expect(await h.owner.sync()).toBe('synced');
+    expect(signals(h.plane)).toContain('provider_day_strain');
+  });
+
+  it('stores a nap as a nap from a webhook and a sync, never as the night', async () => {
+    const h = await connected();
+    const nap = sleepRecord({ id: '11111111-0000-4000-8000-000000000001', nap: true, start: '2026-10-21T12:00:00.000Z', end: '2026-10-21T12:30:00.000Z', updated_at: '2026-10-21T12:40:00.000Z' });
+    h.world.sleeps.push(nap);
+    h.clock.now = Date.parse('2026-10-21T13:00:00.000Z');
+    expect(await h.owner.hint({ type: 'sleep.updated', id: String(nap.id), trace: 'trace-nap-0001' })).toBe('handled');
+    expect(signals(h.plane)).toEqual(['nap']);
+    expect(h.world.calls.some(call => call.startsWith('GET /cycle/'))).toBe(false);
+    expect(await h.owner.hint({ type: 'sleep.deleted', id: String(nap.id), trace: 'trace-nap-0002' })).toBe('handled');
+    expect(signals(h.plane)).toEqual([]);
+  });
+
+  it('refreshes day strain after a workout webhook, and a cycle read that fails leaves the workout stored and the hint handled', async () => {
+    const h = await connected();
+    const workout = workoutRecord({ start: '2026-10-21T06:00:00.000Z', end: '2026-10-21T06:45:00.000Z', updated_at: '2026-10-21T07:00:00.000Z' });
+    h.world.workouts.push(workout);
+    h.world.cycles.push(today());
+    expect(await h.owner.hint({ type: 'workout.updated', id: String(workout.id), trace: 'trace-cyc-0001' })).toBe('handled');
+    expect(signals(h.plane).sort()).toEqual(['provider_day_strain', 'workout']);
+    const second = await connected();
+    second.world.workouts.push(workout);
+    second.world.breakAfter = { path: '/cycle', count: 0, status: 500 };
+    expect(await second.owner.hint({ type: 'workout.updated', id: String(workout.id), trace: 'trace-cyc-0002' })).toBe('handled');
+    expect(signals(second.plane)).toEqual(['workout']);
+    expect(second.logs.map(line => line.code)).toContain('cycles_deferred');
+  });
+
+  it('removes every reading a deleted sleep made, WHOOP\'s scores included, and keeps no value in the object or its logs', async () => {
+    const h = await connected();
+    const n = addNight(h.world, 0);
+    expect(await h.owner.hint({ type: 'sleep.updated', id: String(n.sleep.id), trace: 'trace-del-0001' })).toBe('handled');
+    expect(signals(h.plane).length).toBe(12);
+    expect(await h.owner.hint({ type: 'sleep.deleted', id: String(n.sleep.id), trace: 'trace-del-0002' })).toBe('handled');
+    expect(signals(h.plane)).toEqual([]);
+    expect(JSON.stringify([...h.kv, h.logs])).not.toMatch(/11\.37|71\.4|33\.2|"61"/);
   });
 });

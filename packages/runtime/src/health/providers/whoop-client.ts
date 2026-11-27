@@ -1,14 +1,17 @@
 import { HANDOFF_PARAM } from '../../channels/connect-confirm';
 import type { ClientPins } from '../../connectors/mcp-oauth';
-import { whoopRecovery, whoopSleep, whoopWorkout, type WhoopRecovery, type WhoopSleep, type WhoopWorkout } from './whoop-map';
+import { whoopBody, whoopCycle, whoopRecovery, whoopSleep, whoopWorkout, type WhoopBody, type WhoopCycle, type WhoopRecovery, type WhoopSleep, type WhoopWorkout } from './whoop-map';
 
 // WHOOP API v2 as the owner object sees it: the oauth-proxy Edge Function holds every token and the client secret, makes
 // each request under the pinned API base, and hands back only a status, the parsed body and the rate-limit headers. This
 // module builds the pins the edge is told to trust, names each request as a path under that base, and parses each answer
 // through whoop-map. It never sees a token.
 export type WhoopConfig = Readonly<{ clientId: string; redirectUri: string }>;
-// offline is what makes a refresh token exist. The scopes are the three record kinds and the account id, no more.
-export const WHOOP_SCOPES = 'offline read:profile read:sleep read:recovery read:workout';
+// offline is what makes a refresh token exist. The rest is every kind of data WHOOP's API gives a member's app, and the
+// account id. A connection made before cycles and body measurements were asked for lacks those two scopes; it keeps syncing
+// the rest, and the owner connects again to add them.
+export const WHOOP_SCOPES = 'offline read:profile read:body_measurement read:cycles read:recovery read:sleep read:workout';
+export const WHOOP_LEGACY_SCOPES: readonly string[] = ['offline', 'read:profile', 'read:sleep', 'read:recovery', 'read:workout'];
 export const WHOOP_CALLBACK_PATH = '/oauth/whoop/callback';
 export const WHOOP_START_PATH = '/oauth/whoop/start/';
 // How long the browser binding of a WHOOP connect lasts, from the moment the browser takes the hop.
@@ -73,6 +76,9 @@ export const whoopClient = (call: WhoopCall) => {
     sleeps: (window: Parameters<typeof page>[1]) => page<WhoopSleep>('activity/sleep', window, whoopSleep),
     recoveries: (window: Parameters<typeof page>[1]) => page<WhoopRecovery>('recovery', window, whoopRecovery),
     workouts: (window: Parameters<typeof page>[1]) => page<WhoopWorkout>('activity/workout', window, whoopWorkout),
+    // Cycles have no webhook, so they are polled: the open one is in any window that reaches now.
+    cycles: (window: Parameters<typeof page>[1]) => page<WhoopCycle>('cycle', window, whoopCycle),
+    body: () => one<WhoopBody>('user/measurement/body', whoopBody),
     sleep: (id: string) => one(`activity/sleep/${encodeURIComponent(id)}`, whoopSleep),
     workout: (id: string) => one(`activity/workout/${encodeURIComponent(id)}`, whoopWorkout),
     cycleRecovery: (cycle: number) => one(`cycle/${cycle}/recovery`, whoopRecovery),
