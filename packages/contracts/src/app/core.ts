@@ -202,12 +202,54 @@ export const appIMessageLinkCodeV1Schema = z.strictObject({
 // Before sign-in: whether this server admits a new account with no invite. Open, sign-up asks for no invite code; closed, it
 // does. A Worker without the route answers 404, which reads as closed.
 export const appAuthOptionsV1Schema = z.strictObject({ open_signup: z.boolean() });
+// Auth revision 2 (`auth=2` in APP_CONTRACT_HEADER). A build that names it gets specific answers where revision 1 has only
+// needs_invite, and is asked before a sign-in creates an account:
+// - code_invalid: the email code did not verify (wrong, expired or used). Nothing else was checked.
+// - join_refused: the person proved the mailbox or the token, but no account could be made. reason signup_closed: this server
+//   takes no new accounts; join_limited: too many new accounts from this network or for this email today, try tomorrow;
+//   account_conflict: another Waldo account holds this email (a suspended or unbound one), which only support can sort.
+// - new_account: the person proved the mailbox or the token and no Waldo account has this email. Nothing was created. The app
+//   asks "Create a new Waldo account for <email>?" and sends `ticket` to /auth/join on a yes, or goes back to sign in with the
+//   address they used before. The ticket is good for APP_JOIN_TICKET_SECONDS and is bound to the proven identity: it
+//   creates that one account or signs into it, never another.
+// A revision 1 build keeps needs_invite for every refusal and is joined at once, as before.
+export const APP_AUTH_CONTRACT_REVISION = 2 as const;
+export const APP_JOIN_TICKET_SECONDS = 15 * 60;
+export const appJoinRefusalV2Schema = z.enum(['signup_closed', 'join_limited', 'account_conflict']);
+const joinTicket = z.string().min(20).max(2048);
+const appSignedInV1Schema = appSessionV1Schema.extend({ credential: z.string().min(20).max(512) });
+const joinRefused = z.strictObject({ state: z.literal('join_refused'), reason: appJoinRefusalV2Schema });
+const newAccount = z.strictObject({ state: z.literal('new_account'), email: z.email().max(254), ticket: joinTicket });
+export const appVerifyResultV2Schema = z.union([appSignedInV1Schema, z.strictObject({ state: z.literal('code_invalid') }), joinRefused, newAccount]);
+export const appIdTokenResultV2Schema = z.union([appSignedInV1Schema, joinRefused, newAccount,
+  z.strictObject({ state: z.literal('confirm_with_email_code'), email: z.email().max(254), link: signinLink })]);
+// The yes to new_account. phone is the number the new account starts with, unverified, as on /auth/verify. A ticket that is
+// forged, expired or bound to another server is refused 403 ticket_invalid: sign in again. A Worker without the route answers
+// 404; a revision 2 build is only ever sent new_account by a Worker that has it.
+export const appJoinRequestV1Schema = z.strictObject({ ticket: joinTicket, phone: joinPhone.optional() });
+export const appJoinResultV1Schema = z.union([appSignedInV1Schema, joinRefused]);
+// The `error` an unauthenticated auth route answers a refusal with, at every revision. 403 invalid_request: the body does not
+// parse. 403 signup_closed (/auth/code): no code was sent, because this address has no account and the server takes no new
+// ones. 429 rate_limited, with retry-after in seconds. 403 token_refused / no_email (/auth/id_token): the provider's token was
+// refused, or it carries no confirmed email. 403 ticket_invalid (/auth/join). 503 unavailable. /auth/code answers 200 only when a
+// code was sent.
+export const appAuthErrorV1Schema = z.strictObject({ error: z.enum(['invalid_request', 'signup_closed', 'rate_limited', 'token_refused', 'no_email', 'ticket_invalid', 'unavailable']) });
+// The phone's own IANA time zone, sent when the app opens and when the zone changes. A zone that is not yet confirmed takes it
+// and is confirmed by it, and later reports move it while the phone is still its source. A zone the owner chose themselves
+// (timezone.set, the console, or asking Waldo) wins: it is answered back with source owner and changed false. Not location: it
+// needs no place consent. An owner held for their agreements is refused 409 agreements_required, so the app reports again
+// after them. A Worker without the route answers 404.
+export const APP_DEVICE_TIMEZONE_PATH = '/app/v1/device/timezone' as const;
+export const appDeviceTimezoneRequestV1Schema = z.strictObject({ timezone: z.string().min(1).max(64).regex(/^[A-Za-z0-9_+\-/]+$/) });
+export const appDeviceTimezoneResultV1Schema = z.strictObject({ timezone: z.string().min(1).max(64), source: z.enum(['device', 'owner']), changed: z.boolean() });
 export const appCoreRoutesV1 = [
   { method: 'GET', path: '/app/v1/auth/options', response: appAuthOptionsV1Schema, authenticated: false, success_status: 200 },
   { method: 'POST', path: '/app/v1/auth/code', request: appCodeRequestSchema, response: appCodeResultSchema, authenticated: false, success_status: 200 },
   { method: 'POST', path: '/app/v1/auth/verify', request: appVerifyRequestV1Schema, response: appVerifyResultV1Schema, authenticated: false, success_status: 200 },
   // A Worker without this route answers 404; the app then offers the email code only.
   { method: 'POST', path: '/app/v1/auth/id_token', request: appIdTokenRequestV1Schema, response: appIdTokenResultV1Schema, authenticated: false, success_status: 200 },
+  { method: 'POST', path: '/app/v1/auth/join', request: appJoinRequestV1Schema, response: appJoinResultV1Schema, authenticated: false, success_status: 200 },
+  { method: 'POST', path: APP_DEVICE_TIMEZONE_PATH, request: appDeviceTimezoneRequestV1Schema, response: appDeviceTimezoneResultV1Schema, authenticated: true, success_status: 200 },
   { method: 'GET', path: '/app/v1/session', response: appSessionV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/auth/signout', response: appSignoutResultV1Schema, authenticated: true, success_status: 200 },
   // A Worker without this route answers 404; the app then keeps its credential.

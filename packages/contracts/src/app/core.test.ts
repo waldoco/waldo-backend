@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CHAT_MEMORY_USED_MAX_V1, APP_CHAT_MEMORY_USED_REVISION, APP_CHAT_ACTIVITY_KINDS, APP_CHAT_ACTIVITY_REVISION, APP_CHAT_DRAFT_REVISION, APP_CHAT_RATING_REVISION, APP_CONTRACT_HEADER, appAuthOptionsV1Schema, appCodeRequestSchema, appContractHeaderV1Schema, appContractRevision, appCoreRoutesV1, appErrorCodeV1Schema, appHistoryResultV1Schema, appIdTokenRequestV1Schema, appIdTokenResultV1Schema, appMessageReceiptV1Schema, appMessageV1Schema, appProblemV1Schema, appRatingRequestV1Schema, appRatingResultV1Schema, appVerifyRequestV1Schema, appVerifyResultV1Schema } from './core';
+import { APP_CHAT_MEMORY_USED_MAX_V1, APP_CHAT_MEMORY_USED_REVISION, APP_CHAT_ACTIVITY_KINDS, APP_CHAT_ACTIVITY_REVISION, APP_CHAT_DRAFT_REVISION, APP_CHAT_RATING_REVISION, APP_CONTRACT_HEADER, appAuthOptionsV1Schema, appCodeRequestSchema, appContractHeaderV1Schema, appContractRevision, appCoreRoutesV1, appErrorCodeV1Schema, appHistoryResultV1Schema, appIdTokenRequestV1Schema, appIdTokenResultV1Schema, appMessageReceiptV1Schema, appMessageV1Schema, appProblemV1Schema, appRatingRequestV1Schema, appRatingResultV1Schema, appVerifyRequestV1Schema, appVerifyResultV1Schema, APP_AUTH_CONTRACT_REVISION, APP_DEVICE_TIMEZONE_PATH, appAuthErrorV1Schema, appDeviceTimezoneRequestV1Schema, appDeviceTimezoneResultV1Schema, appIdTokenResultV2Schema, appJoinRequestV1Schema, appJoinResultV1Schema, appVerifyResultV2Schema } from './core';
 import { REPLY_TEXT_MAX_CHARS } from './parts';
 
 const fallback_text = 'Open Waldo to see this.';
@@ -273,5 +273,68 @@ describe('memory_used, chat revision 7', () => {
     expect(appMessageV1Schema.safeParse({ ...base, memory_used: many }).success).toBe(true);
     for (const memory_used of [[], [...many, { id: 'memory:claim:99', text: 'x' }], [{ id: 'memory:node:4', text: 'x' }], [{ id: 'memory:claim:4', text: '' }], [{ id: 'memory:claim:4', text: 'x'.repeat(301) }], [{ id: 'memory:claim:4', text: 'x', extra: 1 }]])
       expect(appMessageV1Schema.safeParse({ ...base, memory_used }).success, JSON.stringify(memory_used).slice(0, 60)).toBe(false);
+  });
+});
+
+describe('auth revision 2: specific refusals and a yes before a new account', () => {
+  const session = { state: 'active', session_ref: `sess_${'a'.repeat(64)}`, account_ref: `acct_${'b'.repeat(64)}`, surface: 'app', absolute_expires_at: 1793000000000, credential: 'owner-fixture.0123456789abcdef.fixture-signature' };
+  const ticket = 'sealed-join-ticket.0123456789abcdef';
+
+  it('is named auth=2 in the contract header', () => {
+    expect(APP_AUTH_CONTRACT_REVISION).toBe(2);
+    expect(appContractRevision('chat=7,auth=2', 'auth')).toBe(2);
+    expect(appContractRevision('chat=7', 'auth')).toBe(1);
+  });
+
+  it('verify answers a session, a bad code, a refused join with its reason, or a new account to confirm', () => {
+    for (const answer of [session, { state: 'code_invalid' }, { state: 'join_refused', reason: 'signup_closed' }, { state: 'join_refused', reason: 'join_limited' },
+      { state: 'join_refused', reason: 'account_conflict' }, { state: 'new_account', email: 'new@example.test', ticket }])
+      expect(appVerifyResultV2Schema.safeParse(answer).success).toBe(true);
+    for (const invalid of [{ state: 'needs_invite' }, { state: 'join_refused' }, { state: 'join_refused', reason: 'cap' }, { state: 'new_account', email: 'new@example.test' },
+      { state: 'new_account', email: 'not-an-email', ticket }, { state: 'code_invalid', reason: 'x' }])
+      expect(appVerifyResultV2Schema.safeParse(invalid).success).toBe(false);
+  });
+
+  it('a revision 1 parser refuses every new state, so they go only to builds that name auth=2', () => {
+    for (const answer of [{ state: 'code_invalid' }, { state: 'join_refused', reason: 'signup_closed' }, { state: 'new_account', email: 'new@example.test', ticket }]) {
+      expect(appVerifyResultV1Schema.safeParse(answer).success).toBe(false);
+      expect(appIdTokenResultV1Schema.safeParse(answer).success).toBe(false);
+    }
+  });
+
+  it('id_token answers the same, plus the email-code confirm, but never code_invalid', () => {
+    expect(appIdTokenResultV2Schema.safeParse({ state: 'confirm_with_email_code', email: 'member@example.test', link: 'sealed-fixture-payload.0123456789abcdef' }).success).toBe(true);
+    expect(appIdTokenResultV2Schema.safeParse({ state: 'new_account', email: 'relay@privaterelay.appleid.com', ticket }).success).toBe(true);
+    expect(appIdTokenResultV2Schema.safeParse({ state: 'code_invalid' }).success).toBe(false);
+  });
+
+  it('join takes the ticket and an optional phone, and answers a session or a refused join', () => {
+    expect(appJoinRequestV1Schema.safeParse({ ticket }).success).toBe(true);
+    expect(appJoinRequestV1Schema.safeParse({ ticket, phone: '+919876543210' }).success).toBe(true);
+    for (const invalid of [{}, { ticket: 'short' }, { ticket, phone: '98765' }, { ticket, email: 'x@example.test' }]) expect(appJoinRequestV1Schema.safeParse(invalid).success).toBe(false);
+    expect(appJoinResultV1Schema.safeParse(session).success).toBe(true);
+    expect(appJoinResultV1Schema.safeParse({ state: 'join_refused', reason: 'join_limited' }).success).toBe(true);
+    expect(appJoinResultV1Schema.safeParse({ state: 'new_account', email: 'new@example.test', ticket }).success).toBe(false);
+    expect(appCoreRoutesV1.find(entry => entry.path === '/app/v1/auth/join')).toMatchObject({ method: 'POST', request: appJoinRequestV1Schema, response: appJoinResultV1Schema, authenticated: false });
+  });
+
+  it('names each refusal by its own error, which the generic problem schema still reads', () => {
+    for (const error of ['invalid_request', 'signup_closed', 'rate_limited', 'token_refused', 'no_email', 'ticket_invalid', 'unavailable']) {
+      expect(appAuthErrorV1Schema.safeParse({ error }).success).toBe(true);
+      expect(appProblemV1Schema.safeParse({ error }).success).toBe(true);
+    }
+    expect(appAuthErrorV1Schema.safeParse({ error: 'needs_invite' }).success).toBe(false);
+  });
+});
+
+describe('the phone reports its time zone', () => {
+  it('takes an IANA name and answers the zone in force, its source and whether it moved', () => {
+    for (const timezone of ['Asia/Kolkata', 'America/Argentina/Buenos_Aires', 'Etc/GMT+5', 'UTC']) expect(appDeviceTimezoneRequestV1Schema.safeParse({ timezone }).success).toBe(true);
+    for (const invalid of [{}, { timezone: '' }, { timezone: 'Asia/Kolkata; DROP' }, { timezone: 'x'.repeat(65) }, { timezone: 'UTC', place: 'tdr1w' }])
+      expect(appDeviceTimezoneRequestV1Schema.safeParse(invalid).success).toBe(false);
+    expect(appDeviceTimezoneResultV1Schema.safeParse({ timezone: 'Asia/Kolkata', source: 'device', changed: true }).success).toBe(true);
+    expect(appDeviceTimezoneResultV1Schema.safeParse({ timezone: 'Europe/London', source: 'owner', changed: false }).success).toBe(true);
+    expect(appDeviceTimezoneResultV1Schema.safeParse({ timezone: 'Asia/Kolkata', source: 'fallback', changed: false }).success).toBe(false);
+    expect(appCoreRoutesV1.find(entry => entry.path === APP_DEVICE_TIMEZONE_PATH)).toMatchObject({ method: 'POST', authenticated: true, success_status: 200 });
   });
 });
