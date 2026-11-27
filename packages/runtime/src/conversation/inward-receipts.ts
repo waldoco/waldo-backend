@@ -1,5 +1,5 @@
 import type { ToolName } from '@waldo/contracts';
-import { SKIP_UPDATE } from '../prompt/skip-update';
+import { sendsNothing } from './run-end';
 
 // A write the taint gate lets run without a card after outside text (tools/records owner_inward and narrows, and a figure the
 // owner stated) is listed under the reply in these fixed words, whatever the model wrote, so the owner sees what outside
@@ -59,5 +59,5 @@ export const inwardReceipt = (tool: string, argumentsJson: string, data?: unknow
 export const withInwardReceipts = (reply: string, receipts: readonly string[]): string => {
   if (receipts.length === 0) return reply;
   const listed = `${INWARD_RECEIPTS_HEADER}\n${receipts.map((line) => `- ${line}`).join('\n')}`;
-  return reply.trim() === SKIP_UPDATE ? listed : `${reply}\n\n${listed}`;
+  return sendsNothing(reply) ? listed : `${reply}\n\n${listed}`;
 };

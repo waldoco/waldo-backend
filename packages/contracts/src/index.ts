@@ -45,6 +45,7 @@ export * from './tools/schemas/owner-message-heard';
 export * from './tools/schemas/reactions';
 export * from './tools/schemas/attach-file';
 export * from './tools/schemas/offer-replies';
+export * from './tools/schemas/end-run';
 export * from './tools/schemas/show-chart';
 export * from './tools/schemas/writes';
 export * from './tools/schemas/delegate';

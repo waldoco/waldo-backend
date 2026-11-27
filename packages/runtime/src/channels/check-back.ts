@@ -1,7 +1,7 @@
 import type { ToolName } from '@waldo/contracts';
 import { CHILD_READ_TOOLS } from '../conversation/subagent';
 import { EGRESS_READ_TOOLS } from '../tasks/profiles';
-import { SKIP_UPDATE } from '../prompt/update-cards';
+import { RUN_END_INSTRUCTION, sendsNothing } from '../conversation/run-end';
 import type { Loop } from './loops';
 import { withPassed } from './past-date';
 import type { ReminderTiming } from './owner-turn-envelope';
@@ -23,7 +23,7 @@ export const OUTSIDE_TEXT_JOB_TOOLS: readonly ToolName[] = [...OUTSIDE_TEXT_READ
 export const DAY_CARD_TOOLS: readonly ToolName[] = [...OUTSIDE_TEXT_JOB_TOOLS, 'close_loop', 'remember'];
 
 const LOOK = 'Look at the current state with your read tools before you write anything (mail, drafts, calendar, memory, earlier conversation, whatever this is about). Then say what matters now, from what you found, and ask at most one question; the owner wants the result, not the list of what you looked at.';
-const SILENT = `If what you found means the owner gains nothing from hearing from you now, reply with exactly ${SKIP_UPDATE}.`;
+const SILENT = RUN_END_INSTRUCTION;
 
 // The note is the owner's own words from when they set it; it says what to look at, it is not the message. The timing is
 // facts for the model to judge: a reminder that fires hours after its time (an outage, a restart) should say so.
@@ -62,7 +62,7 @@ export const loopCheckBackText = (loops: readonly Loop[], now: number, timezone:
 // reminder, and the next heartbeat tick asks again about a loop.
 export const checkBackReply = (raw: string): string | null => {
   const text = raw.trim();
-  if (text === SKIP_UPDATE) return null;
+  if (sendsNothing(text)) return null;
   if (!text) throw new Error('check-back turn returned no reply');
   return text;
 };

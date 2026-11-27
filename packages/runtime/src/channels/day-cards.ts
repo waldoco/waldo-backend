@@ -3,7 +3,8 @@ import { appWhy, storedWhy } from '../tools/why-trail';
 import { whyCarries } from './approvals';
 import type { AppWhyV1 } from '../../../contracts/src/app/why';
 import { turnMemoryPrompt, type ClaimStore } from '../memory/claims';
-import { DAY_CARDS, dayCardPrompt, SKIP_CARD, type CardId, type DayCard } from '../prompt/day-cards';
+import { DAY_CARDS, dayCardPrompt, type CardId, type DayCard } from '../prompt/day-cards';
+import { sendsNothing } from '../conversation/run-end';
 import { calendarPromptProjection, type CalendarItem, type GoogleClient } from '../connectors/google';
 import { QUARANTINE_AFTER_ATTEMPTS, type Scheduler } from '../scheduler/multiplexer';
 import { ModelUnavailableError } from '../llm/provider';
@@ -605,7 +606,7 @@ const fitDayCard = async (
   return build({ ledger: '', today: '', updates: '' });
 };
 
-export const isSkip = (text: string): boolean => text.trim() === SKIP_CARD;
+export const isSkip = sendsNothing;
 
 // The day so far is the owner's own text only where every row is: their own words, or Waldo's from a run that read nothing
 // outside. A quote, a whole message stored before messages were split, and a system note may hold someone else's text.

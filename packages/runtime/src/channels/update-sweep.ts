@@ -2,7 +2,8 @@ import type { ToolName } from '@waldo/contracts';
 import { z } from 'zod';
 import type { GoogleClient } from '../connectors/google';
 import { machineResultText, UPDATE_SWEEP_ACT_AHEAD_TEXT, UPDATE_SWEEP_JOB_TEXT } from '../prompt/machine-jobs';
-import { SKIP_UPDATE, triagePrompt, updateCardPrompt, updateEffectsPrompt, type TriageHold } from '../prompt/update-cards';
+import { triagePrompt, updateCardPrompt, updateEffectsPrompt, type TriageHold } from '../prompt/update-cards';
+import { sendsNothing } from '../conversation/run-end';
 import { taskBrief, type JobBook, type JobRow } from '../tasks/jobs';
 import { enqueueMachine, type MachineEnqueued, type MachineHandler, type MachineSpec } from '../tasks/machine';
 import { PUSHES, pushTitle } from './expo-push';
@@ -216,7 +217,8 @@ export const heldSection = (held: readonly HeldRow[], changes: readonly Change[]
 ].join('\n\n');
 
 // What the apply turn may choose with the day state: revise a day card that reached the owner today, or say an update, and
-// with either a push; or nothing ({} or SKIP). The schema is the contract between the turn and the code that delivers it.
+// with either a push; or nothing ({}, or an end_run that sends nothing). The schema is the contract between the turn and the
+// code that delivers it.
 const UPDATE_TEXT_CHARS = 4_000;
 const effectText = z.string().trim().min(1).max(UPDATE_TEXT_CHARS);
 const dayCardIds = DAY_CARDS.map(card => card.id) as [string, ...string[]];
@@ -229,7 +231,7 @@ export const updateEffectsSchema = z.strictObject({
 export type UpdateEffects = z.infer<typeof updateEffectsSchema>;
 export const parseUpdateEffects = (reply: string): UpdateEffects | 'invalid' => {
   const text = reply.trim();
-  if (!text || text === SKIP_UPDATE) return {};
+  if (!text || sendsNothing(text)) return {};
   const body = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(text)?.[1] ?? text;
   try {
     const parsed = updateEffectsSchema.safeParse(JSON.parse(body));
@@ -347,7 +349,7 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
       if (!day) {
         const text = updateSweepApplyText(localIso(deps.now(), deps.timezone), changes, { ...await deps.context(), sourceFollowups }, result, withheld);
         const reply = (await deps.turn(io.trace, text, io.current)).trim();
-        if (!reply || reply === SKIP_UPDATE) { judged(row, io.settle); return 'skipped'; }
+        if (!reply || sendsNothing(reply)) { judged(row, io.settle); return 'skipped'; }
         await deps.deliver(`update:${row.id}`, io.trace, reply, recordId!, commit);
         return 'delivered';
       }

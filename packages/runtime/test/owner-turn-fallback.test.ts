@@ -362,6 +362,30 @@ it('with Claude chosen, a turn Sonnet refuses goes to Terra next, never to a sec
   expect(models()).toEqual([ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, OPENAI_GPT_6_1_TERRA_MODEL]);
 });
 
+it('a request shape OpenAI refuses (400) is answered by Sonnet, once, and never by a second Terra call', async () => {
+  const requests: LLMGatewayRequest[] = [];
+  const gateway: LLMGatewayAdapter = { complete: async (input) => {
+    requests.push(input);
+    if (input.step.provider === OPENAI_PROVIDER) return { ok: false, code: 'invalid_args', error: 'OpenAI request failed (400 invalid_value)', wireRejected: true };
+    return { ok: true, data: { model: input.request.model, text: 'Sonnet took it.', input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, latency_ms: 1 } };
+  } };
+  await expect(responder(gateway).respond(ownerTyped({ traceId: 'terra-first-400', conversationRef: 'telegram-1', surface: 'telegram', text: 'plan it', memoryWrites: false }), time)).resolves.toBe('Sonnet took it.');
+  expect(requests.map((request) => request.request.model)).toEqual([OPENAI_GPT_6_1_TERRA_MODEL, ANTHROPIC_CLAUDE_SONNET_5_5_MODEL]);
+});
+
+it('a request shape every provider on the route refuses ends at the floor reply after one failover, not a bare failure', async () => {
+  const requests: LLMGatewayRequest[] = [];
+  const gateway: LLMGatewayAdapter = { complete: async (input) => {
+    requests.push(input);
+    return { ok: false, code: 'invalid_args', error: `${input.step.provider} request failed (400)`, wireRejected: true };
+  } };
+  const hops: TurnLogEntry[] = [];
+  const reply = await responder(gateway, (entry) => { if (entry.hop === 'llm_reply') hops.push(entry); }).respond(ownerTyped({ traceId: 'all-400', conversationRef: 'telegram-1', surface: 'telegram', text: 'plan it', memoryWrites: false }), time);
+  expect(reply).toBe(MODEL_UNREACHABLE_REPLY);
+  expect(requests.map((request) => request.request.model)).toEqual([OPENAI_GPT_6_1_TERRA_MODEL, ANTHROPIC_CLAUDE_SONNET_5_5_MODEL]);
+  expect(hops[0]).toMatchObject({ ok: true, fallback_fired: true, error_code: 'invalid_args', code: 'template_floor' });
+});
+
 it('with Claude chosen, a request shape Claude refuses (400) is answered by Terra, and ends the turn when no other provider is ahead', async () => {
   const run = async (access: Readonly<{ anthropicApiKey: string; openaiApiKey: string }>) => {
     const requests: LLMGatewayRequest[] = [];

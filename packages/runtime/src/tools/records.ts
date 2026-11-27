@@ -111,6 +111,9 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   show_health_chart: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, long: false, claim: null, replay: unknown('keeps the chart\'s query in memory for the reply this turn saves; a re-run of the turn draws whatever it draws then') },
   show_chart: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, long: false, claim: null, replay: unknown('keeps the chart in memory for the reply this turn saves; a re-run of the turn draws whatever it draws then') },
   offer_replies: { brain: 'reminders', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: unknown('keeps the answers in memory for the card this turn writes; a re-run of the turn writes the card again with whatever it offers then') },
+  // claim null: an end says how the run closed, never that anything was done. A replay changes nothing: the run's end lives
+  // only in the loop that chose it.
+  end_run: { brain: 'reminders', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read('ends the run in the loop that holds it; writes nothing') },
   react_to_message: { brain: 'core', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, long: false, claim: null, replay: { replay: 'provider_idempotent', basis: 'the commandId is fixed by the turn and the reaction, and the bridge mailbox and the host journal keep one command per commandId', evidence: { file: 'channels/imessage/final-outbox.ts', needle: 'wrx_' } } },
   attach_file: { brain: 'actions', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: true, long: false, claim: null, replay: unknown('queues the file; the send after the reply is keyed only in the local effect ledger, WhatsApp cannot be asked whether an upload landed, so an unknown send is never retried') },
   // claim null: its not-sent outcomes are ok results too, so a done label would claim a send that never happened.
@@ -146,7 +149,7 @@ export const TOOL_RECORDS: Readonly<Record<ToolName, ToolRecord>> = {
   search_mcp_tools: { brain: 'web', scope: 'deny', concurrent: false, probe: 'strip', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read('searches stored tool definitions, refreshing a stale list with tools/list; runs no server tool') },
   read_drive: { brain: 'web', scope: 'deny', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, long: true, claim: null, replay: read() },
   search_connector: { brain: 'web', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: unknown(NO_HANDLER + ' (schema only)') },
-  propose_schedule: { brain: 'calendar', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: unknown('proposal handler not inspected') },
+  propose_schedule: { brain: 'calendar', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: unknown(NO_HANDLER + ' (schema only)') },
   search_tools: { brain: 'skills', scope: 'allow', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
   list_reminders: { brain: 'core', scope: 'allow', concurrent: true, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
   read_tool_output: { brain: 'memory', scope: 'deny', concurrent: false, probe: 'keep', paid: false, ownerTurnOnly: false, long: false, claim: null, replay: read() },
@@ -264,8 +267,9 @@ export const byToolName = (a: Readonly<{ name: string }>, b: Readonly<{ name: st
 // core. Off, every tool goes up front. Either way the list is in name order and namespaces in BRAIN_NAMESPACES order.
 // Where a turn offers a tool: its record's place, except finding and reading the owner's own connected tools, which are
 // why they connected them. Those are admitted only with a connection (tools/live/mcp.ts eligible), so when admitted they are
-// offered in full, outside the core's budget, rather than one tool-search hop away.
-const OFFERED_IN_FULL: ReadonlySet<string> = new Set(['search_mcp_tools', 'read_mcp_tool']);
+// offered in full, outside the core's budget, rather than one tool-search hop away. So is end_run, admitted only to a run
+// Waldo started, which must see how to end without a search.
+const OFFERED_IN_FULL: ReadonlySet<string> = new Set(['search_mcp_tools', 'read_mcp_tool', 'end_run']);
 export const offeredPlacement = (name: string): 'core' | BrainNamespace =>
   OFFERED_IN_FULL.has(name) ? 'core' : (TOOL_RECORDS as Partial<Record<string, ToolRecord>>)[name]?.brain ?? 'core';
 
@@ -298,7 +302,7 @@ const TOOL_ACTIVITY: Readonly<Record<ToolName, AppChatActivityKind>> = {
   create_artifact: 'artifacts', revise_artifact: 'artifacts', restore_artifact: 'artifacts', export_artifact: 'artifacts', list_artifacts: 'artifacts', read_artifact: 'artifacts', draft_document: 'artifacts', write_sheet_cell: 'artifacts',
   set_proactivity: 'settings', set_schedule_preference: 'settings', set_quest: 'health', set_experiment: 'health', review_experiment: 'health', set_standing_order: 'settings', cancel_standing_order: 'settings', list_standing_orders: 'settings', propose_standing_grant: 'calendar', revoke_standing_grant: 'settings', pause_autonomy: 'settings', send_console_link: 'settings', connect_app: 'settings',
   search_tools: 'skills', skills_list: 'skills', skills_load: 'skills', skills_install: 'skills', skills_disable: 'skills',
-  send_message: 'actions', propose_action: 'actions', raise_approval: 'actions', approve_shown: 'actions', send_progress_note: 'actions', owner_message_heard: 'working', attach_file: 'actions', react_to_message: 'actions', offer_replies: 'actions', show_chart: 'actions', show_health_chart: 'actions', use_mac: 'actions', update_todo: 'actions', execute_action: 'actions', execute_code: 'actions',
+  send_message: 'actions', propose_action: 'actions', raise_approval: 'actions', approve_shown: 'actions', send_progress_note: 'actions', owner_message_heard: 'working', attach_file: 'actions', react_to_message: 'actions', offer_replies: 'actions', end_run: 'working', show_chart: 'actions', show_health_chart: 'actions', use_mac: 'actions', update_todo: 'actions', execute_action: 'actions', execute_code: 'actions',
   get_context: 'working', connect_service: 'working', delegate_task: 'working', start_task: 'working', cancel_task: 'working', check_task: 'working', steer_task: 'working',
 };
 // From the name alone, never the call's arguments. A name outside the record (a connected server's tool, a test double) is generic work.
