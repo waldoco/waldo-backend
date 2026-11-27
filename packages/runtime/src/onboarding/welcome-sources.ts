@@ -168,7 +168,7 @@ export const mailStage = (google: GoogleAccess) => async (): Promise<StageInput>
 // goal: the goal the owner gave at setup, kept as their quest, as one line; it is their own words too.
 export const setupStage = (claims: ClaimStore, healthMemory: () => boolean, goal: () => string | null = () => null) => async (): Promise<StageInput> => setupInput(claims, healthMemory, goal);
 const GOAL_POINTER = 'goal';
-const setupInput = (claims: ClaimStore, healthMemory: () => boolean, goal: () => string | null = () => null): StageInput => {
+export const setupInput = (claims: ClaimStore, healthMemory: () => boolean, goal: () => string | null = () => null): StageInput => {
   const health = healthMemory(), held = holdsIn(heldTopicsOf(claims));
   const said = [...claims.claims(), ...claims.claims('promoted')].filter((claim) => isSetupRef(claim.source_ref) && claim.origin === 'owner'
     && claim.verification_status === 'owner-grounded' && !held(claim.text) && (health || (claim.kind !== 'health' && !numericHealthIn(claim.text))));

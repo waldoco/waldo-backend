@@ -6,7 +6,9 @@ import {
   appFindingV1Schema, appOnboardingActionV1Schema, appOnboardingErrorV1Schema, appOnboardingResultV1Schema, appOnboardingRoutesV1,
   appOnboardingV1Schema, appConsentPurposeV1Schema, appChannelLinkCodeV1Schema, appChannelLinkRequestV1Schema, appOnboardingChannelsV1Schema,
   appSetupAnswersRequestV1Schema, appSetupAnswersResultV1Schema, appSetupAnswersFitRevision, appSetupAnswersResultAtRevision, appSetupSpotV1Schema,
-  APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1, APP_ONBOARDING_SETUP_TRAINING_REVISION_V1, APP_ONBOARDING_SETUP_GOAL_REVISION_V1, APP_SETUP_TRAINING_SPOTS_V1, APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1, APP_ONBOARDING_CONSENT_VERSION_REVISION_V1, appConsentListAtRevision,
+  APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1, APP_ONBOARDING_SETUP_TRAINING_REVISION_V1, APP_ONBOARDING_SETUP_GOAL_REVISION_V1, APP_SETUP_TRAINING_SPOTS_V1,
+  appOnboardingSummaryV1Schema, appOnboardingSummaryRequestV1Schema, appOnboardingSummaryResultV1Schema, appOnboardingQuestionActionV1Schema, appOnboardingQuestionResultV1Schema,
+  APP_ONBOARDING_SUMMARY_MAX_CHARS_V1, APP_ONBOARDING_QUESTIONS_MAX_V1, APP_ONBOARDING_QUESTION_MAX_CHARS_V1, APP_ONBOARDING_QUESTION_ANSWER_MAX_CHARS_V1, APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1, APP_ONBOARDING_CONSENT_VERSION_REVISION_V1, appConsentListAtRevision,
 } from './onboarding';
 import { appJsonWireBytes } from './core';
 import { healthPurposeV1Schema, healthSourceV1Schema } from './health-ingest';
@@ -436,5 +438,46 @@ describe('setup answers, onboarding revision 5: the goal', () => {
     };
     accepted(appSetupAnswersRequestV1Schema, [longest]);
     expect(appJsonWireBytes(longest)).toBeLessThanOrEqual(APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1);
+  });
+});
+
+describe('the summary before the last onboarding step, with open questions', () => {
+  const question = (n: number, state = 'open') => ({ id: `oq_${'a'.repeat(n)}`, text: 'Do you train before work on weekdays too?', state });
+  const ready = { state: 'ready', summary: 'You are training for your first HYROX in March and keep mornings for it.', written_at: 1_000, questions: [question(8), question(9, 'answered'), question(10, 'deferred')] };
+  it('reads none before the first summary, then the summary and its questions with their state', () => {
+    accepted(appOnboardingSummaryV1Schema, [{ state: 'none', summary: null, written_at: null, questions: [] }, ready, { ...ready, questions: [] }]);
+    rejected(appOnboardingSummaryV1Schema, [
+      { ...ready, summary: '' }, { ...ready, summary: 'x'.repeat(APP_ONBOARDING_SUMMARY_MAX_CHARS_V1 + 1) }, { state: 'none', summary: 'x', written_at: null, questions: [] },
+      { ...ready, questions: Array.from({ length: APP_ONBOARDING_QUESTIONS_MAX_V1 + 1 }, (_, n) => question(n + 1)) },
+      { ...ready, questions: [{ ...question(8), text: 'x'.repeat(APP_ONBOARDING_QUESTION_MAX_CHARS_V1 + 1) }] }, { ...ready, questions: [question(8, 'skipped')] },
+      { ...ready, questions: [{ ...question(8), id: 'q1' }] }, { ...ready, extra: true },
+    ]);
+  });
+  it('asks for a summary by request id, and answers it with the summary as written', () => {
+    accepted(appOnboardingSummaryRequestV1Schema, [{ request_id: 'onboarding-summary-1' }]);
+    rejected(appOnboardingSummaryRequestV1Schema, [{}, { request_id: 'onboarding-summary-1', text: 'x' }]);
+    accepted(appOnboardingSummaryResultV1Schema, [{ request_id: 'onboarding-summary-1', summary: ready, replayed: false }]);
+    rejected(appOnboardingSummaryResultV1Schema, [{ request_id: 'onboarding-summary-1', summary: { state: 'none', summary: null, written_at: null, questions: [] }, replayed: false }]);
+  });
+  it('answers a question in the owner\'s words, or leaves it for Waldo to ask later', () => {
+    accepted(appOnboardingQuestionActionV1Schema, [
+      { request_id: 'onboarding-question-1', question_id: 'oq_aaaaaaaa', action: 'answer', text: 'Yes, at six.' },
+      { request_id: 'onboarding-question-1', question_id: 'oq_aaaaaaaa', action: 'answer', text: 'x'.repeat(APP_ONBOARDING_QUESTION_ANSWER_MAX_CHARS_V1) },
+      { request_id: 'onboarding-question-1', question_id: 'oq_aaaaaaaa', action: 'defer' },
+    ]);
+    rejected(appOnboardingQuestionActionV1Schema, [
+      { request_id: 'onboarding-question-1', question_id: 'oq_aaaaaaaa', action: 'answer' }, { request_id: 'onboarding-question-1', question_id: 'oq_aaaaaaaa', action: 'answer', text: '  ' },
+      { request_id: 'onboarding-question-1', question_id: 'oq_aaaaaaaa', action: 'answer', text: 'x'.repeat(APP_ONBOARDING_QUESTION_ANSWER_MAX_CHARS_V1 + 1) },
+      { request_id: 'onboarding-question-1', question_id: 'oq_aaaaaaaa', action: 'defer', text: 'later' }, { request_id: 'onboarding-question-1', question_id: 'oq_aaaaaaaa', action: 'skip' },
+      { request_id: 'onboarding-question-1', question_id: 'nope', action: 'defer' },
+    ]);
+    accepted(appOnboardingQuestionResultV1Schema, [{ request_id: 'onboarding-question-1', question_id: 'oq_aaaaaaaa', outcome: 'answered', replayed: false }, { request_id: 'onboarding-question-1', question_id: 'oq_aaaaaaaa', outcome: 'deferred', replayed: true }]);
+    rejected(appOnboardingQuestionResultV1Schema, [{ request_id: 'onboarding-question-1', question_id: 'oq_aaaaaaaa', outcome: 'open', replayed: false }]);
+  });
+  it('lists the three routes, each authenticated, the writes idempotent by request id', () => {
+    const routes = appOnboardingRoutesV1.filter(route => route.path.startsWith('/app/v1/onboarding/summary'));
+    expect(routes.map(route => `${route.method} ${route.path}`)).toEqual(['GET /app/v1/onboarding/summary', 'POST /app/v1/onboarding/summary', 'POST /app/v1/onboarding/summary/questions']);
+    expect(routes.every(route => route.authenticated)).toBe(true);
+    expect(routes.filter(route => route.method === 'POST').every(route => 'idempotency_field' in route && route.idempotency_field === 'request_id')).toBe(true);
   });
 });

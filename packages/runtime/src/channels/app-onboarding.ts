@@ -3,7 +3,8 @@ import {
   appOnboardingChannelsV1Schema, type AppOnboardingChannelsV1, type AppProactiveSurfaceV1, appConsentChangeV1Schema, appConsentGrantV1Schema, appConsentListAtRevision, appConsentListV1Schema,
   appConsentWithdrawV1Schema, appFindingActionV1Schema, appFindingListQueryV1Schema, appFindingListV1Schema, appFindingResultV1Schema,
   appOnboardingActionV1Schema, appOnboardingResultV1Schema, appOnboardingV1Schema, appSetupAnswersFitRevision, appSetupAnswersRequestV1Schema, appSetupAnswersResultAtRevision, appSetupAnswersResultV1Schema,
-  type AppSetupAnswersResultV1,
+  type AppSetupAnswersResultV1, appOnboardingQuestionActionV1Schema, appOnboardingQuestionResultV1Schema, appOnboardingSummaryRequestV1Schema,
+  appOnboardingSummaryResultV1Schema, appOnboardingSummaryV1Schema,
 } from '../../../contracts/src/app/onboarding';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import type { AppConsentStateV1 } from '../../../contracts/src/app/onboarding';
@@ -13,13 +14,15 @@ import { claimStore } from '../memory/claims';
 import { consentLedger, type ConsentLedger } from '../onboarding/consent-ledger';
 import { findingStore, type FindingStore } from '../onboarding/findings';
 import { firstRun, type FirstRun, type FirstRunHost } from '../onboarding/first-run';
+import { onboardingSummary, summaryInput, type OnboardingSummary } from '../onboarding/summary';
 import { bodyDigest, requestBook, type RequestBook } from '../onboarding/request-book';
 import { loopBook } from './loops';
 import { md5Hex } from './md5';
 import { proactiveSurface, setProactiveSurface } from './proactive-surface';
 
 const CHANNELS_PATH = '/app/v1/onboarding/channels', CHANNEL_LINK_PATH = '/app/v1/onboarding/channel-link', ANSWERS_PATH = '/app/v1/onboarding/answers';
-export const APP_ONBOARDING_PATHS: readonly string[] = ['/app/v1/onboarding', '/app/v1/onboarding/actions', ANSWERS_PATH, CHANNELS_PATH, CHANNEL_LINK_PATH, '/app/v1/consents', '/app/v1/consents/withdraw', '/app/v1/findings', '/app/v1/findings/actions'];
+const SUMMARY_PATH = '/app/v1/onboarding/summary', QUESTIONS_PATH = '/app/v1/onboarding/summary/questions';
+export const APP_ONBOARDING_PATHS: readonly string[] = ['/app/v1/onboarding', '/app/v1/onboarding/actions', ANSWERS_PATH, CHANNELS_PATH, CHANNEL_LINK_PATH, SUMMARY_PATH, QUESTIONS_PATH, '/app/v1/consents', '/app/v1/consents/withdraw', '/app/v1/findings', '/app/v1/findings/actions'];
 
 export type AppOnboardingHost = Readonly<{
   firstRun: FirstRun; consent: ConsentLedger; findings: FindingStore; requests: RequestBook;
@@ -41,6 +44,9 @@ export type AppOnboardingHost = Readonly<{
   withdrawLookup(): Promise<Readonly<{ state: AppConsentStateV1; erased: number }>>;
   // Rechecks the app session before an answer leaves.
   assertCurrent(): Promise<void>;
+  // The onboarding summary and its open questions, and the one model call that writes it (outside any transaction). Absent where
+  // this host has no model, and the summary routes are then not found.
+  summary?: Readonly<{ book: OnboardingSummary; write(): Promise<string> }>;
 }>;
 
 // The two grants the first run reads from the health plane, by source and purpose. Only the fields it decides on are read, so a
@@ -81,6 +87,7 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
         ({ provider, state: await host.chat.offered(provider).then(offered => offered ? host.chat.linked(provider) : 'not_offered' as const, () => 'unknown' as const) })));
       return answer(appOnboardingChannelsV1Schema.parse({ surface: host.proactiveSurface(), channels } satisfies AppOnboardingChannelsV1));
     }
+    if (path === SUMMARY_PATH && !url.search) return host.summary ? answer(appOnboardingSummaryV1Schema.parse(host.summary.book.view())) : problem('not_found');
     if (path === '/app/v1/consents' && !url.search) return answer(appConsentListV1Schema.parse(appConsentListAtRevision(host.consent.list(), appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'onboarding'))));
     if (path === '/app/v1/findings') {
       if ([...url.searchParams.keys()].some(key => url.searchParams.getAll(key).length !== 1)) return problem('invalid_request');
@@ -91,7 +98,8 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
     }
     return path.startsWith('/app/v1/') && APP_ONBOARDING_PATHS.includes(path) ? reply({ error: 'method_not_allowed' }, 405) : problem('not_found');
   }
-  if (request.method !== 'POST' || !['/app/v1/onboarding/actions', ANSWERS_PATH, CHANNEL_LINK_PATH, '/app/v1/consents', '/app/v1/consents/withdraw', '/app/v1/findings/actions'].includes(path)) return reply({ error: 'method_not_allowed' }, 405);
+  if (request.method !== 'POST' || !['/app/v1/onboarding/actions', ANSWERS_PATH, CHANNEL_LINK_PATH, SUMMARY_PATH, QUESTIONS_PATH, '/app/v1/consents', '/app/v1/consents/withdraw', '/app/v1/findings/actions'].includes(path)) return reply({ error: 'method_not_allowed' }, 405);
+  if ((path === SUMMARY_PATH || path === QUESTIONS_PATH) && !host.summary) return problem('not_found');
   // A result is recorded whole and answered at the revision the asking build reads, so a replay suits whichever build asks. A
   // build below the setup answers' revision keeps the cap and the fields it always had.
   const revision = appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'onboarding');
@@ -112,6 +120,8 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
   }
   const parsed = path === '/app/v1/onboarding/actions' ? appOnboardingActionV1Schema.safeParse(raw)
     : path === ANSWERS_PATH ? appSetupAnswersRequestV1Schema.safeParse(raw)
+    : path === SUMMARY_PATH ? appOnboardingSummaryRequestV1Schema.safeParse(raw)
+    : path === QUESTIONS_PATH ? appOnboardingQuestionActionV1Schema.safeParse(raw)
     : path === '/app/v1/consents' ? appConsentGrantV1Schema.safeParse(raw)
     : path === '/app/v1/consents/withdraw' ? appConsentWithdrawV1Schema.safeParse(raw)
     : appFindingActionV1Schema.safeParse(raw);
@@ -139,6 +149,25 @@ export async function appOnboardingRequest(request: Request, host: AppOnboarding
     const held = host.transaction(() => host.firstRun.saveAnswers(answers));
     host.setupDone?.();
     return record(appSetupAnswersResultV1Schema.parse({ request_id: answers.request_id, held, replayed: false }));
+  }
+  if (path === SUMMARY_PATH || path === QUESTIONS_PATH) {
+    // What the owner said and what Waldo read of them: nothing is written before the agreements, as with the answers.
+    if (!host.consent.stepsOpen()) return problem('agreements_required');
+    const summary = host.summary!;
+    if (path === SUMMARY_PATH) {
+      if (!summary.book.room()) return problem('unavailable');
+      // The model call runs outside any transaction; only what passes the hard lines is written.
+      const raw = await summary.write().catch(() => null);
+      if (raw === null || host.transaction(() => summary.book.write(raw)) !== 'written') return problem('unavailable');
+      return record(appOnboardingSummaryResultV1Schema.parse({ request_id: body.request_id, summary: summary.book.view(), replayed: false }));
+    }
+    const action = appOnboardingQuestionActionV1Schema.parse(body);
+    const outcome = host.transaction(() => action.action === 'answer' ? summary.book.answer(action.question_id, action.text) : summary.book.defer(action.question_id));
+    if (outcome === 'not_found') return problem('not_found');
+    if (outcome === 'decided') return problem('completed');
+    // An answer is a setup answer: the first build reads it with the others.
+    if (outcome === 'answered') host.setupDone?.();
+    return record(appOnboardingQuestionResultV1Schema.parse({ request_id: action.request_id, question_id: action.question_id, outcome, replayed: false }));
   }
   if (path === '/app/v1/consents') {
     const grant = appConsentGrantV1Schema.parse(body);
@@ -194,7 +223,11 @@ export type OwnerOnboardingDeps = Readonly<{
   hideText(texts: readonly string[]): Promise<void>;
   stopLookup(): void;
   // The setup goal, kept as the owner's quest.
-  goal?: FirstRunHost['goal'];
+  goal?: FirstRunHost['goal'] & Readonly<{ line(): string | null }>;
+  // The onboarding summary's model call over its input, and Waldo's open loops for the questions left for later.
+  summarise?(input: string): Promise<string>;
+  loops?: Pick<ReturnType<typeof loopBook>, 'open'>;
+  healthMemory?(): boolean;
 }>;
 // Quiet hours run from this time until the Brief, so nothing but the Brief opens the owner's morning.
 export const FIRST_RUN_QUIET_FROM = '22:00';
@@ -242,6 +275,10 @@ export const ownerOnboardingHost = (deps: OwnerOnboardingDeps): AppOnboardingHos
     if (!list.success) logFailure('health_consent_shape');
     return list.success ? healthStepConnected(list.data.consents) : 'unavailable';
   };
+  const summaryHost = (summarise: (input: string) => Promise<string>, loops: Pick<ReturnType<typeof loopBook>, 'open'>) => ({
+    book: onboardingSummary(sql, { now, newId: () => crypto.randomUUID().replaceAll('-', ''), transaction, claims, loops }),
+    write: () => summarise(summaryInput({ claims, healthMemory: deps.healthMemory ?? (() => false), goal: () => deps.goal?.line() ?? null })),
+  });
   const firstRunHost: FirstRunHost = {
     googleConnected: async () => (storage.kv.get<unknown[]>('google:accounts') ?? []).length > 0,
     healthConnected,
@@ -265,5 +302,6 @@ export const ownerOnboardingHost = (deps: OwnerOnboardingDeps): AppOnboardingHos
   return {
     firstRun: firstRun(sql, consent, claims, firstRunHost, now), consent, findings, requests: requestBook(sql, now), chat: deps.chat, signedInRecently: deps.signedInRecently, ...(deps.setupDone ? { setupDone: deps.setupDone } : {}), ...(deps.lookupChanged ? { lookupChanged: deps.lookupChanged } : {}), proactiveSurface: firstRunHost.proactiveSurface, now, transaction,
     assertCurrent: deps.assertCurrent, forgetFinding, withdrawLookup,
+    ...(deps.summarise && deps.loops ? { summary: summaryHost(deps.summarise, deps.loops) } : {}),
   };
 };

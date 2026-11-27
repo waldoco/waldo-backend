@@ -2133,6 +2133,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           return await appOnboardingRequest(request,ownerOnboardingHost({storage:this.ctx.storage,doName:name,now:Date.now,rpc:signedRpc(this.env),assertCurrent:current,
             ...consentSwitches(this.env),hideText:texts=>this.hideRetainedText(texts),stopLookup:()=>{for(const id of this.jobs().cancelMachine('owner_lookup')){this.tasks.cancelled(id);this.setup('app').log({trace:`task:${id}`,hop:'lookup_cancelled',ms:0,ok:true,job_id:id});}},
             goal:onboardingGoal(this.ctx.storage.kv,{set:(args,user)=>this.setup('app').quests.set(args,user),open:()=>this.setup('app').quests.open()},()=>this.ctx.storage.kv.get<string>('owner_principal_ref')??name),
+            loops:loopBook(this.ctx.storage.sql,{newId:()=>crypto.randomUUID().slice(0,8),now:Date.now}),healthMemory:()=>healthMemoryOn(this.ctx.storage.kv),
             chat:chatChannelLinks({env:this.env,kv:this.ctx.storage.kv,doName:name,auth:consoleAuth(this.env)}),bothDefault:proactiveBothDefault(this.env),
             signedInRecently:async()=>signedInRecently((await consoleAuth(this.env)!.listSessions(name)).find(row=>row.session===hash)?.signed_in_at,Date.now()),
             act:action=>this.setup('app').act(action,current),

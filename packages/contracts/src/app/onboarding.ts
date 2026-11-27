@@ -308,6 +308,33 @@ export const appSetupAnswersResultAtRevision = (result: AppSetupAnswersResultV1,
   return { ...result, held: Object.fromEntries(Object.entries(result.held).filter(([key]) => !leftOut.includes(key))) as AppSetupAnswersResultV1['held'] };
 };
 
+// The summary before the last onboarding step: what Waldo learned from the owner's answers and whatever the first build holds so
+// far, in a few sentences written to the owner, with a few open questions. A question the owner answers is kept as their own
+// answer, and the first build reads it as one; one they leave is kept for Waldo to ask later, in normal use. A POST writes a new
+// summary (a model call; refused unavailable when it fails, and refused once the day's few are spent); GET reads the latest.
+// The summary is Waldo's read, never a measurement: it carries no number about the owner's body. These routes are new paths,
+// so a build that does not call them is unchanged.
+export const APP_ONBOARDING_SUMMARY_MAX_CHARS_V1 = 1200;
+export const APP_ONBOARDING_QUESTIONS_MAX_V1 = 5;
+export const APP_ONBOARDING_QUESTION_MAX_CHARS_V1 = 160;
+export const APP_ONBOARDING_QUESTION_ANSWER_MAX_CHARS_V1 = 500;
+export const appOnboardingQuestionIdV1Schema = z.string().regex(/^oq_[a-z0-9]{8,32}$/);
+const onboardingQuestion = z.strictObject({ id: appOnboardingQuestionIdV1Schema, text: z.string().min(1).max(APP_ONBOARDING_QUESTION_MAX_CHARS_V1), state: z.enum(['open', 'answered', 'deferred']) });
+const summaryReady = z.strictObject({
+  state: z.literal('ready'), summary: z.string().min(1).max(APP_ONBOARDING_SUMMARY_MAX_CHARS_V1), written_at: z.int().nonnegative(),
+  questions: z.array(onboardingQuestion).max(APP_ONBOARDING_QUESTIONS_MAX_V1),
+});
+export const appOnboardingSummaryV1Schema = z.discriminatedUnion('state', [
+  z.strictObject({ state: z.literal('none'), summary: z.null(), written_at: z.null(), questions: z.array(onboardingQuestion).max(0) }), summaryReady,
+]);
+export const appOnboardingSummaryRequestV1Schema = z.strictObject({ request_id: requestId });
+export const appOnboardingSummaryResultV1Schema = z.strictObject({ request_id: requestId, summary: summaryReady, replayed: z.boolean() });
+export const appOnboardingQuestionActionV1Schema = z.discriminatedUnion('action', [
+  z.strictObject({ request_id: requestId, question_id: appOnboardingQuestionIdV1Schema, action: z.literal('answer'), text: z.string().trim().min(1).max(APP_ONBOARDING_QUESTION_ANSWER_MAX_CHARS_V1) }),
+  z.strictObject({ request_id: requestId, question_id: appOnboardingQuestionIdV1Schema, action: z.literal('defer') }),
+]);
+export const appOnboardingQuestionResultV1Schema = z.strictObject({ request_id: requestId, question_id: appOnboardingQuestionIdV1Schema, outcome: z.enum(['answered', 'deferred']), replayed: z.boolean() });
+
 // channel.linked marks the channel step done once the owner directory shows that provider linked, as health.connected does for health.
 // A client acts on `error` only. stale_version: the grant named a copy that is no longer current. agreements_required: a step
 // that needs the accepted agreements came first. not_started: the run must be started first. not_connected: health.connected
@@ -325,6 +352,9 @@ export const appOnboardingRoutesV1 = [
   { method: 'POST', path: '/app/v1/onboarding/actions', request: appOnboardingActionV1Schema, response: appOnboardingResultV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: APP_ONBOARDING_MAX_REQUEST_BYTES_V1 },
   { method: 'POST', path: '/app/v1/onboarding/answers', request: appSetupAnswersRequestV1Schema, response: appSetupAnswersResultV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1 },
   { method: 'GET', path: '/app/v1/onboarding/channels', response: appOnboardingChannelsV1Schema, authenticated: true, success_status: 200 },
+  { method: 'GET', path: '/app/v1/onboarding/summary', response: appOnboardingSummaryV1Schema, authenticated: true, success_status: 200 },
+  { method: 'POST', path: '/app/v1/onboarding/summary', request: appOnboardingSummaryRequestV1Schema, response: appOnboardingSummaryResultV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: APP_ONBOARDING_MAX_REQUEST_BYTES_V1 },
+  { method: 'POST', path: '/app/v1/onboarding/summary/questions', request: appOnboardingQuestionActionV1Schema, response: appOnboardingQuestionResultV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: APP_ONBOARDING_MAX_REQUEST_BYTES_V1 },
   { method: 'POST', path: '/app/v1/onboarding/channel-link', request: appChannelLinkRequestV1Schema, response: appChannelLinkCodeV1Schema, authenticated: true, success_status: 200, max_request_bytes: APP_ONBOARDING_MAX_REQUEST_BYTES_V1 },
   { method: 'GET', path: '/app/v1/consents', response: appConsentListV1Schema, authenticated: true, success_status: 200 },
   { method: 'POST', path: '/app/v1/consents', request: appConsentGrantV1Schema, response: appConsentChangeV1Schema, authenticated: true, success_status: 200, idempotency_field: 'request_id', max_request_bytes: APP_ONBOARDING_MAX_REQUEST_BYTES_V1 },
@@ -350,3 +380,5 @@ export type AppFindingActionV1 = z.infer<typeof appFindingActionV1Schema>;
 export type AppSetupAnswersRequestV1 = z.infer<typeof appSetupAnswersRequestV1Schema>;
 export type AppSetupAnswersResultV1 = z.infer<typeof appSetupAnswersResultV1Schema>;
 export type AppSetupGoalV1 = z.infer<typeof appSetupGoalV1Schema>;
+export type AppOnboardingSummaryV1 = z.infer<typeof appOnboardingSummaryV1Schema>;
+export type AppOnboardingQuestionActionV1 = z.infer<typeof appOnboardingQuestionActionV1Schema>;
