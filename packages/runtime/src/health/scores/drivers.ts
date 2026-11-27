@@ -10,7 +10,7 @@ type Subject = (typeof DRIVER_SUBJECTS)[number];
 // Candidate band constants, ratified with the zone bands: outside from one spread of the owner's own days, far from two. The
 // usual band and a part's direction take the same cut, so a band's edge is where the phrase begins.
 export const OUTSIDE = 1;
-const FAR = 2;
+export const FAR = 2;
 const MAX_DRIVERS = 8;
 const TEMPERATURE_ORDER: readonly TemperatureMethod[] = ['absolute', 'baseline_delta'];
 

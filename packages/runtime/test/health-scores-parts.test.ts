@@ -19,7 +19,7 @@ describe('parts and usual change no score', () => {
   it.each(inputs)('%s: every pillar, driver, window and the sleep debt are the same with and without them', (_name, input) => {
     const plain = provisional(input);
     for (const over of [{ parts: true }, { usual: true }, { parts: true, usual: true }]) {
-      const { components: _components, usual: _usual, ...rest } = provisional(input, over);
+      const { components: _components, usual: _usual, readings: _readings, ...rest } = provisional(input, over);
       expect(JSON.stringify(rest), JSON.stringify(over)).toBe(JSON.stringify(plain));
     }
   });

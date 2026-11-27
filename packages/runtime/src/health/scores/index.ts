@@ -6,12 +6,12 @@ import { energyWindows } from './energy-windows';
 import { PART_ORDER, groupRows, partRows } from './parts';
 import { inUsualOrder, usualOfRange } from './usual';
 import { priorDays, sleepDebt } from './sleep-debt';
-import { combine } from './stats';
+import { combine, readingsOf } from './stats';
 import { isTimeZone, localDayWindow } from './time';
 import { recoveryZone } from './zones';
 import { activeEnergy, weightScore } from './weight';
 import { ownRange } from './drivers';
-import type { DailyScores, DailyScoresInput, DayRecord, PartsByPillar, RecoveryResult, Unavailable, UnavailableReason, UsualRow } from './types';
+import type { DailyScores, DailyScoresInput, DayRecord, PartsByPillar, RecoveryResult, TodayReading, Unavailable, UnavailableReason, UsualRow } from './types';
 
 export type { DailyScores, DailyScoresInput, DayRecord, DayVitals, HourlyBucket, PartRow, UnavailableReason, UsualRow } from './types';
 
@@ -94,17 +94,24 @@ export const computeDailyScores = (input: DailyScoresInput): DailyScores => {
     ...driverRanges(target, prior).map(({ subject, method, range }) => usualOfRange(SUBJECT_SIGNALS[subject], method, range)),
     ...(energy ? [usualOfRange('active_energy', null, energy)] : []),
   ]);
+  const readings: TodayReading[] = [
+    ...readingsOf(recoveryRead?.components ?? []),
+    ...(form.state === 'available' ? form.readings ?? [] : []),
+    ...driverRanges(target, prior).map(({ subject, method, range }) => ({ signal: SUBJECT_SIGNALS[subject], method, value: range.today, sense: 'none' as const })),
+    ...(energy ? [{ signal: 'active_energy', method: null, value: energy.today, sense: 'none' as const }] : []),
+  ].filter((reading, at, all) => all.findIndex(other => other.signal === reading.signal) === at);
   return {
     ...scores,
     form: withoutDetail(form), weight: withoutDetail(weight),
     ...(input.parts === true && Object.keys(components).length ? { components: componentsWithGroups } : {}),
     ...(input.usual === true && usual.length ? { usual } : {}),
+    ...(readings.length ? { readings } : {}),
   };
 };
 
 const withoutDetail = <P extends DailyScores['form'] | DailyScores['weight']>(pillar: P): P => {
   if (pillar.state !== 'available') return pillar;
-  const { parts: _parts, usual: _usual, ...rest } = pillar;
+  const { parts: _parts, usual: _usual, readings: _readings, ...rest } = pillar;
   return rest as P;
 };
 

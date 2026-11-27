@@ -75,10 +75,12 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1", with HEALTH_PARTIAL_CONTEXT, adds to the health block which kinds of body data exist, in words, and gives an owner with
   // readings but no score row a block of that alone; anything else leaves the block as the stored row makes it.
   HEALTH_INVENTORY?: string;
+  HEALTH_BODY_CONTEXT?: string;
   HEALTH_TRAINING_LOAD?: string;
   // '1' has the health producer write today's Form curve, measured and then projected, on today's derived row, for the app's
   // calendar day; anything else writes none.
   HEALTH_FORM_CURVE?: string;
+  HEALTH_CHANGES?: string;
   // '1' has the health decision reason from the reviewed health protocols (skills/health-protocols), read through the
   // owner's next day, in the chat role. Anything else keeps the decision as it was.
   HEALTH_ACTIONS?: string;

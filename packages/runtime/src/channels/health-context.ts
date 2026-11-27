@@ -5,6 +5,7 @@ import {
   derivedMissingPillarReasonSchema,
   HEALTH_SIGNAL_NAMES,
   HEALTH_SIGNALS,
+  HEALTH_USUAL_WORDS,
   healthInventorySchema,
   derivedSleepDebtTrendSchema,
   formHealthViewSchema,
@@ -14,6 +15,7 @@ import {
   partialHealthSourceSchema,
   recoveryHealthViewSchema,
   type DerivedBaselineState,
+  type DerivedBody,
   type DerivedHealthDestinationView,
   type DerivedMissingPillars,
   type DerivedSleepDebt,
@@ -24,8 +26,11 @@ import {
   type RecoveryHealthView,
 } from '@waldo/contracts';
 import { isPartialHealth } from '../context-composer/prompt';
+import { bodyViewOf } from './health-body';
+import { healthChangesV1Schema } from '../../../contracts/src/app/health-ingest';
 import type { ContextHealthMaterial, ZoneHealthMaterial } from '../context-composer/types';
 import { TRAINING_LOAD_PHRASES } from '../health/scores/training-load';
+import { circularDelta } from '../health/scores/stats';
 import { shiftDay } from '../health/scores/time';
 import { STEADY_SCORE_MOVE } from '../health/scores/zones';
 import type { OwnerClock } from '../tools/live/get-context';
@@ -71,6 +76,8 @@ export type HealthContextRow = Readonly<{
     windows?: unknown;
     // The candidate training load: a closed phrase and method, or a closed reason, never a figure.
     training_load?: unknown;
+    // What changed today (healthChangesV1Schema), read by the model as words only: which subject, which way, and better or worse.
+    changes?: unknown;
     // The row's updated_at: when the app last compiled this derived context. It becomes the
     // narrative's compiled_at - the truthful as-of the prepareHealth provenance bound checks
     // against the turn's snapshot time, which a read-time stamp would always violate.
@@ -233,6 +240,34 @@ const presentOf = (context: RowContext): PartialHealthPresent[] => {
   ];
 };
 
+// What changed today, in words: the significant changes only, the furthest first, each its subject, which way it moved against
+// yesterday or the owner's usual, and whether that is better or worse. The figures stay on the row; no number reaches the prompt.
+const CHANGE_SUBJECT_WORDS: Readonly<Record<string, string>> = {
+  'tier1.recovery': 'Recovery', 'tier1.form': 'Form', 'tier1.weight': 'load',
+  'tier2.sleep': 'sleep', 'tier2.hrv': 'heart rate variability', 'tier2.resting_heart_rate': 'resting heart rate', 'tier2.from_the_night': 'the night',
+  'tier2.sleep_midpoint': 'sleep timing', 'tier2.daylight': 'daylight', 'tier2.movement': 'movement', 'tier2.stress': 'daytime stress',
+  'tier2.calendar': 'calendar load', 'tier2.tasks': 'task load', 'tier2.messages': 'message load', 'tier2.physical_load': 'physical load',
+  'tier2.resting_state': 'resting state', 'tier2.circadian': 'circadian rhythm',
+  // A reading is named in the registry's words, as the body read names it.
+  ...Object.fromEntries(Object.entries(HEALTH_USUAL_WORDS).map(([signal, words]) => [`tier3.${signal}`, words])),
+};
+const VERDICT_WORDS: Readonly<Record<string, string>> = { improved: ' (better)', declined: ' (worse)', neutral: '' };
+const MAX_CHANGE_PHRASES = 6;
+const changeWords = (value: unknown): string | null => {
+  const parsed = healthChangesV1Schema.safeParse(value);
+  if (!parsed.success) return null;
+  const phrases = parsed.data.filter(change => change.significant).slice(0, MAX_CHANGE_PHRASES).flatMap(change => {
+    const subject = CHANGE_SUBJECT_WORDS[`tier${change.subject.tier}.${change.subject.key}`];
+    // Sleep timing is a minute of the day, so it is read round the clock: half past midnight against a usual ten to midnight is later.
+    const way = change.against !== 'usual' ? (change.to > change.from ? 'up since yesterday' : 'down since yesterday')
+      : change.unit === 'local_minute' ? (circularDelta(change.to, change.from) > 0 ? 'later than your usual' : 'earlier than your usual')
+      : change.to > change.from ? 'above your usual' : 'below your usual';
+    const phrase = subject ? `${subject} ${way}${VERDICT_WORDS[change.verdict]}` : null;
+    return phrase && wordOnly(phrase) ? [phrase] : [];
+  });
+  return phrases.length ? `Changed today: ${phrases.join('; ')}.` : null;
+};
+
 const daySummaryParts = (context: RowContext): string[] => {
   const parts: string[] = [];
   const drivers = [...new Set([...pillarDrivers(context.form), ...wordList(context.drivers, 4)])].slice(0, 4);
@@ -241,6 +276,8 @@ const daySummaryParts = (context: RowContext): string[] => {
   if (tags.length > 0) parts.push(`Tags: ${tags.join(', ')}.`);
   const trainingLoad = trainingLoadWords(context.training_load);
   if (trainingLoad !== null) parts.push(trainingLoad);
+  const changed = changeWords(context.changes);
+  if (changed !== null) parts.push(changed);
   return parts;
 };
 
@@ -409,7 +446,16 @@ export const withInventory = (material: ContextHealthMaterial | null, inventory:
 // lists from the row. Off, the reader is as it was.
 // inventory: with partial, also read which body data exists and put it in the block, and give an owner who has readings but no
 // score row a block made of that alone.
-export type HealthContextOptions = Readonly<{ partial?: boolean; inventory?: boolean }>;
+// body: also read today's readings, the parts of each score, the day's load and the hours of strain at rest against the owner's
+// usual (health-body.ts), and put them in the block as words.
+export type HealthContextOptions = Readonly<{ partial?: boolean; inventory?: boolean; body?: boolean }>;
+
+// The body words beside a view the row gave, re-checked whole; a view that cannot carry them is given without them.
+const withBody = (material: ContextHealthMaterial | null, body: DerivedBody | null): ContextHealthMaterial | null => {
+  if (material === null || body === null) return material;
+  const parsed = derivedHealthDestinationViewSchema.safeParse({ ...material.view, body });
+  return parsed.success ? ({ ...material, view: parsed.data } as ContextHealthMaterial) : material;
+};
 
 // Without the partial switch the material is always a zone one.
 export function toContextHealthMaterial(row: HealthContextRow, clock: OwnerClock, onError?: (error: unknown) => void, options?: Readonly<{ partial?: false }>): ZoneHealthMaterial | null;
@@ -568,9 +614,22 @@ export const healthContextBook = (
       return null;
     }
   };
+  // A failed body read leaves the block without its body words, and says so in the log; it never fails the turn.
+  const readBody = async (trace?: string): Promise<DerivedBody | null> => {
+    if (!call || !doName || options.body !== true) return null;
+    const today = localIso(clock.now().getTime(), clock.timezone).slice(0, 10);
+    try {
+      const answer = await call('health_body_read', `health.body_read.${doName}.${md5Hex('{}')}`, { p_do_name: doName, p_payload: '{}' });
+      return bodyViewOf(answer, today, clock.timezone, (error) => onReadError?.(error, trace));
+    } catch (error) {
+      onReadError?.(new Error(`health body read failed: ${String(error)}`), trace);
+      return null;
+    }
+  };
   const read: HealthContextBook['read'] = async (trace) => {
     if (!call || !doName) return null;
     const inventoryRead = readInventory(trace);
+    const bodyRead = readBody(trace);
     let row: unknown;
     try {
       row = await call('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName });
@@ -582,7 +641,7 @@ export const healthContextBook = (
     const fromRow = row === null || typeof row !== 'object' ? null
       : toContextHealthMaterial(row as HealthContextRow, clock, (error) => { invalid = true; onReadError?.(error, trace); }, options);
     if (invalid) return 'unknown';
-    const material = withInventory(fromRow, await inventoryRead, clock);
+    const material = withBody(withInventory(fromRow, await inventoryRead, clock), await bodyRead);
     onReadSuccess?.(material !== null, trace, material !== null && isPartialHealth(material));
     return material;
   };

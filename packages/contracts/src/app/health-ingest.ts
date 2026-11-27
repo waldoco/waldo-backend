@@ -644,6 +644,65 @@ export const healthStressCurveV1Schema = z.strictObject({
 }).refine(curve => curve.hours.every((hour, i) => i === 0 || Date.parse(curve.hours[i - 1]!.at) < Date.parse(hour.at)), { error: 'hours run forward in time', path: ['hours'] })
   .refine(curve => curve.hours.some(hour => hour.value !== null), { error: 'a curve with no hour that has a value is no curve', path: ['hours'] });
 
+// Health revision 18: what changed today, one list the app's Body card and Waldo's words
+// both read, so the two never disagree. Each change is decided on the server, never on the phone:
+// - tier 1 is a pillar's score and tier 2 a part or group of one, each against yesterday's, only when both days were scored by
+//   the same source and the same algorithm version. A Weight (load) score or Weight part that rose is declined, one that fell is
+//   improved; every other score or part that rose is improved.
+// - tier 3 is a reading against the owner's usual band for it (from is the band's centre), only when that band is personal.
+//   Its verdict follows the way the score engine scores that reading (higher, lower, or nearer usual is better); a reading that
+//   feeds no score (the night vitals, active energy) is neutral either way.
+// - significant is the owner's own band, never a fixed step: a reading outside its usual band, or a score or part that moved
+//   further than one root-mean-square of its own day-to-day moves over the owner's last thirty days, from fourteen moves. With
+//   fewer moves no change of that subject is significant.
+// - neutral when nothing moved. Figures are rounded to what is shown: whole points for a score, the unit's own step otherwise.
+// - ordered significant first, then by how far each moved against its own band. Today's row only; absent when the row has none.
+export const HEALTH_CHANGES_REVISION_V1 = 18;
+export const HEALTH_CHANGES_MAX_V1 = 32;
+export const healthChangeUnitV1Schema = z.enum([
+  'score', 'milliseconds', 'beats_per_minute', 'local_minute', 'minutes', 'breaths_per_minute', 'percent', 'celsius', 'count', 'kilocalories', 'ml_per_kg_min',
+]);
+type UsualSignal = z.infer<typeof healthUsualSignalV1Schema>;
+type ChangePillar = 'recovery' | 'form' | 'weight';
+export const HEALTH_CHANGE_UNIT_OF_SIGNAL_V1: Readonly<Record<UsualSignal, z.infer<typeof healthChangeUnitV1Schema>>> = {
+  overnight_hrv: 'milliseconds', resting_heart_rate: 'beats_per_minute', sleep_midpoint: 'local_minute', daylight: 'minutes', movement: 'minutes',
+  stress_heart_rate: 'beats_per_minute', breathing_rate: 'breaths_per_minute', spo2: 'percent', wrist_temperature: 'celsius', awake_time: 'minutes',
+  walking_heart_rate: 'beats_per_minute', steps: 'count', active_energy: 'kilocalories', vo2_max: 'ml_per_kg_min',
+};
+// The pillar a reading's detail sits under in the app, so a tap opens the right one.
+export const HEALTH_CHANGE_PILLAR_OF_SIGNAL_V1: Readonly<Record<UsualSignal, ChangePillar>> = {
+  overnight_hrv: 'recovery', resting_heart_rate: 'recovery', breathing_rate: 'recovery', spo2: 'recovery', wrist_temperature: 'recovery', awake_time: 'recovery',
+  sleep_midpoint: 'form', daylight: 'form', movement: 'form', stress_heart_rate: 'form', walking_heart_rate: 'form', steps: 'form', vo2_max: 'form',
+  active_energy: 'weight',
+};
+const changePillar = z.enum(['recovery', 'form', 'weight']);
+const changePartKeys = [...healthPartKeysV1.recovery, ...healthPartKeysV1.form, ...healthPartKeysV1.weight, ...healthGroupKeyV1Schema.options] as const;
+const pillarOfPart = (key: string): ChangePillar | undefined => (key in healthGroupKeysV1
+  ? healthGroupKeysV1[key as keyof typeof healthGroupKeysV1].pillar
+  : (['recovery', 'form', 'weight'] as const).find(pillar => (healthPartKeysV1[pillar] as readonly string[]).includes(key)));
+export const healthChangeSubjectV1Schema = z.discriminatedUnion('tier', [
+  z.strictObject({ tier: z.literal(1), key: changePillar }),
+  z.strictObject({ tier: z.literal(2), key: z.enum(changePartKeys) }),
+  z.strictObject({ tier: z.literal(3), key: healthUsualSignalV1Schema, method: healthUsualMethodV1Schema.nullable() })
+    .refine(subject => usualMethodFits(subject.key, subject.method), { error: 'the method belongs to the signal', path: ['method'] }),
+]);
+export const healthChangeV1Schema = z.strictObject({
+  subject: healthChangeSubjectV1Schema,
+  pillar: changePillar,
+  from: z.number().finite(),
+  to: z.number().finite(),
+  unit: healthChangeUnitV1Schema,
+  against: z.enum(['yesterday', 'usual']),
+  verdict: z.enum(['improved', 'declined', 'neutral']),
+  significant: z.boolean(),
+}).refine(change => change.pillar === (change.subject.tier === 1 ? change.subject.key : change.subject.tier === 2 ? pillarOfPart(change.subject.key) : HEALTH_CHANGE_PILLAR_OF_SIGNAL_V1[change.subject.key]), { error: 'the pillar is the subject\'s own', path: ['pillar'] })
+  .refine(change => change.unit === (change.subject.tier === 3 ? HEALTH_CHANGE_UNIT_OF_SIGNAL_V1[change.subject.key] : 'score'), { error: 'the unit is the subject\'s own', path: ['unit'] })
+  .refine(change => change.against === (change.subject.tier === 3 ? 'usual' : 'yesterday'), { error: 'a score is against yesterday, a reading against usual', path: ['against'] })
+  .refine(change => change.unit !== 'score' || [change.from, change.to].every(value => Number.isInteger(value) && value >= 0 && value <= 100), { error: 'a score is a whole number of points', path: ['to'] })
+  .refine(change => change.from !== change.to || (change.verdict === 'neutral' && !change.significant), { error: 'nothing moved, so nothing improved or declined', path: ['verdict'] });
+export const healthChangesV1Schema = z.array(healthChangeV1Schema).max(HEALTH_CHANGES_MAX_V1)
+  .refine(changes => new Set(changes.map(change => `${change.subject.tier}.${change.subject.key}`)).size === changes.length, { error: 'one change per subject' });
+
 export const healthScoresQueryV1Schema = z.strictObject({ day: healthDayV1Schema.optional() });
 // compiled_at is the row's own compile time on the backend, never the read time and never a device clock.
 export const healthScoresV1Schema = z.strictObject({
@@ -665,6 +724,8 @@ export const healthScoresV1Schema = z.strictObject({
   // Revision 14 and later; absent when the row has none. Today's row only.
   day_load: healthDayLoadV1Schema.optional(),
   stress_curve: healthStressCurveV1Schema.optional(),
+  // Revision 18 and later; absent when the row has none. Today's row only.
+  changes: healthChangesV1Schema.optional(),
 });
 // Builds pinned before the app took sleep_debt parse the scores strictly without it, so it is shown only to a build that
 // names health revision 2 or later, whose pin always has it. A need that leans on the prior (blended_average) is a third
@@ -683,9 +744,14 @@ export const healthScoresResponseV1Schema = z.union([healthScoresV1Schema, healt
 // label, and nothing else of the day: no reading, driver, window or sleep debt. A day with no row is left out, so the chart
 // shows a gap and never a zero. backfilled is present only on a day recomputed from history that arrived late.
 export const HEALTH_SCORES_HISTORY_REVISION_V1 = HEALTH_BASELINE_REVISION_V1;
-export const HEALTH_SCORES_HISTORY_WINDOWS_V1 = [7, 30, 90] as const;
-export const healthScoresHistoryQueryV1Schema = z.strictObject({ days: z.enum(['7', '30', '90']) });
-const historyWindowDays = z.union([z.literal(7), z.literal(30), z.literal(90)]);
+// The Body screen's six months and year (180 and 365 days) are served from the revision the screen's other additions name, so a
+// build that cannot draw them never asks; they are daily rows like the shorter windows, and the app draws its weekly and monthly
+// bars from them. A day's parts ride the 90-day windows and shorter only, so a year's answer stays the size of its scores.
+export const HEALTH_LONG_HISTORY_REVISION_V1 = HEALTH_CHANGES_REVISION_V1;
+export const HEALTH_SCORES_HISTORY_WINDOWS_V1 = [7, 30, 90, 180, 365] as const;
+export const HEALTH_SCORES_HISTORY_PARTS_MAX_DAYS_V1 = 90;
+export const healthScoresHistoryQueryV1Schema = z.strictObject({ days: z.enum(['7', '30', '90', '180', '365']) });
+const historyWindowDays = z.union([z.literal(7), z.literal(30), z.literal(90), z.literal(180), z.literal(365)]);
 const dayNumber = (day: string): number => Date.parse(`${day}T00:00:00Z`) / 86_400_000;
 export const healthScoresHistoryDayV1Schema = z.strictObject({
   day: healthDayV1Schema,
@@ -701,7 +767,7 @@ export const healthScoresHistoryV1Schema = z.strictObject({
   window_days: historyWindowDays,
   from: healthDayV1Schema,
   to: healthDayV1Schema,
-  days: z.array(healthScoresHistoryDayV1Schema).max(90),
+  days: z.array(healthScoresHistoryDayV1Schema).max(365),
 }).refine(history => dayNumber(history.to) - dayNumber(history.from) + 1 === history.window_days, { error: 'from to to spans the window', path: ['to'] })
   .refine(history => history.days.every((row, i) => row.day >= history.from && row.day <= history.to && (i === 0 || history.days[i - 1]!.day < row.day)),
     { error: 'days fall inside the window, oldest first, once each', path: ['days'] });

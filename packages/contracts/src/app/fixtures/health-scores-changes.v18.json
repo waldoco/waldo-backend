@@ -1,0 +1,119 @@
+{
+  "note": "Synthetic values. GET /app/v1/health/scores at health revision 18 with HEALTH_CHANGES on: what changed today, most notable first.",
+  "scores": {
+    "day": "2026-11-19",
+    "timezone": "Asia/Kolkata",
+    "compiled_at": "2026-11-19T03:10:00.000Z",
+    "freshness": "fresh",
+    "recovery": {
+      "state": "available",
+      "score": 72,
+      "zone": "solid",
+      "algorithm_version": "recovery.v5",
+      "activation": "accepted",
+      "confidence": 0.8,
+      "hrv_method": "rmssd"
+    },
+    "form": {
+      "state": "available",
+      "score": 64,
+      "zone": "steady",
+      "algorithm_version": "form.v9",
+      "activation": "accepted",
+      "confidence": 0.8,
+      "hrv_method": null
+    },
+    "weight": {
+      "state": "available",
+      "score": 58,
+      "zone": "moderate",
+      "algorithm_version": "weight.v5",
+      "activation": "accepted",
+      "confidence": 0.8,
+      "hrv_method": null
+    },
+    "changes": [
+      {
+        "subject": {
+          "tier": 1,
+          "key": "weight"
+        },
+        "pillar": "weight",
+        "from": 71,
+        "to": 58,
+        "unit": "score",
+        "against": "yesterday",
+        "verdict": "improved",
+        "significant": true
+      },
+      {
+        "subject": {
+          "tier": 3,
+          "key": "resting_heart_rate",
+          "method": "provider_resting_daily"
+        },
+        "pillar": "recovery",
+        "from": 56.5,
+        "to": 53.1,
+        "unit": "beats_per_minute",
+        "against": "usual",
+        "verdict": "improved",
+        "significant": true
+      },
+      {
+        "subject": {
+          "tier": 3,
+          "key": "breathing_rate",
+          "method": null
+        },
+        "pillar": "recovery",
+        "from": 14.2,
+        "to": 15.6,
+        "unit": "breaths_per_minute",
+        "against": "usual",
+        "verdict": "neutral",
+        "significant": true
+      },
+      {
+        "subject": {
+          "tier": 2,
+          "key": "resting_state"
+        },
+        "pillar": "recovery",
+        "from": 61,
+        "to": 68,
+        "unit": "score",
+        "against": "yesterday",
+        "verdict": "improved",
+        "significant": false
+      },
+      {
+        "subject": {
+          "tier": 1,
+          "key": "form"
+        },
+        "pillar": "form",
+        "from": 66,
+        "to": 64,
+        "unit": "score",
+        "against": "yesterday",
+        "verdict": "declined",
+        "significant": false
+      },
+      {
+        "subject": {
+          "tier": 3,
+          "key": "daylight",
+          "method": null
+        },
+        "pillar": "form",
+        "from": 42,
+        "to": 35,
+        "unit": "minutes",
+        "against": "usual",
+        "verdict": "declined",
+        "significant": false
+      }
+    ]
+  }
+}

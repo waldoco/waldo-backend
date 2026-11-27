@@ -3,7 +3,7 @@ import {
   crsPillarSchema, derivedHealthDestinationEligibilitySchema, derivedHealthDestinationViewSchema, DERIVED_HEALTH_VIEW_BOUNDS, formHealthViewSchema,
   HEALTH_SIGNALS, HEALTH_SIGNAL_GRAINS, partialHealthViewSchema, recoveryComponentSchema, recoveryHealthViewSchema, SANITISE_DESTINATION_POLICIES,
 } from '@waldo/contracts';
-import { healthSignalV1Schema } from '../../contracts/src/app/health-ingest';
+import { healthPartKeysV1, healthSignalV1Schema, healthUsualSignalV1Schema } from '../../contracts/src/app/health-ingest';
 import { healthContextBook, type HealthContextRow } from '../src/channels/health-context';
 import type { RunEffectScope } from '../src/channels/run-effect-scope';
 import { createOwnerTurnContext } from '../src/context-composer/owner-turn';
@@ -87,6 +87,13 @@ const shared = {
   energy_windows: [['07:00', '09:00', 'peak'], ['13:00', '14:00', 'dip'], ['16:00', '18:00', 'peak'], ['21:00', '22:00', 'dip']].map(([start, end, kind]) => ({ start, end, kind })),
   missing_pillars: { recovery: 'stale_inputs', form: 'stale_inputs', load: 'calendar_demand_unavailable', sleep_debt: 'missing_sleep' },
   inventory: EVERY_KIND.map(signal => ({ signal, grain: HEALTH_SIGNAL_GRAINS[0], newest: 'today', regularity: 'nearly_every_day', sources: [...SOURCES] })),
+  body: {
+    readings: healthUsualSignalV1Schema.options.map(signal => ({ signal, standing: { state: 'compared', direction: 'above', far: true } })),
+    parts: ([['recovery', healthPartKeysV1.recovery], ['form', healthPartKeysV1.form], ['load', healthPartKeysV1.weight]] as const)
+      .flatMap(([pillar, keys]) => keys.map(key => ({ pillar, key, standing: { state: 'compared', direction: 'below', far: true } }))).slice(0, 12),
+    day_load: { state: 'compared', direction: 'above', far: true, approximate: true },
+    strain_hours: Array.from({ length: 12 }, (_, hour) => ({ start: `${String(hour * 2).padStart(2, '0')}:00`, end: `${String(hour * 2).padStart(2, '0')}:30` })),
+  },
 };
 const common = { ...shared, trend: 'steady', freshness: 'fresh', confidence_band: 'high' };
 const LARGEST = {

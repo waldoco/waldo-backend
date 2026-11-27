@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { iso8601Schema } from '../core/error';
 import { HEALTH_SIGNAL_GRAINS } from './signals';
-import { healthSignalV1Schema } from '../app/health-ingest';
+import { healthPartKeysV1, healthPartUnavailableReasonV1Schema, healthSignalV1Schema, healthUsualSignalV1Schema } from '../app/health-ingest';
 
 // The canonical Form/CRS zone vocabulary — this file is its single owner; memory/sanitise
 // and every egress shape consume it from here. The top band is 'energized', never 'peak'
@@ -103,6 +103,48 @@ export const healthInventoryEntrySchema = z.strictObject({
 export type HealthInventoryEntry = z.infer<typeof healthInventoryEntrySchema>;
 export const healthInventorySchema = z.array(healthInventoryEntrySchema).max(healthSignalV1Schema.options.length);
 
+// What the body read says of today against the owner's own usual, in closed words only: never a value or a score. A reading or a
+// part stood above, below, later or earlier than its usual band, or within it, and is far when it lies two of the band's spreads
+// or more from the centre (the band itself is one spread either side). A band still short of the owner's fourteen days is forming,
+// and says nothing about direction. The sleep part stands against the owner's need, in tenths of it.
+const bodyStandingSchema = z.union([
+  z.strictObject({ state: z.literal('compared'), direction: z.enum(['above', 'below', 'later', 'earlier', 'within']), far: z.literal(true).optional() })
+    .refine((standing) => standing.far === undefined || standing.direction !== 'within', { error: 'a reading within its band is not far', path: ['far'] }),
+  z.strictObject({ state: z.literal('forming') }),
+]);
+export const derivedBodyReadingSchema = z.strictObject({ signal: healthUsualSignalV1Schema, standing: bodyStandingSchema });
+// The model calls the Weight pillar Load.
+const bodyPillarSchema = z.enum(['recovery', 'form', 'load']);
+const BODY_PART_KEYS = { recovery: healthPartKeysV1.recovery, form: healthPartKeysV1.form, load: healthPartKeysV1.weight } as const;
+const bodyPartKeySchema = z.enum([...new Set(Object.values(BODY_PART_KEYS).flat())] as [string, ...string[]]);
+const partFits = (part: { pillar: z.infer<typeof bodyPillarSchema>; key: string }) => (BODY_PART_KEYS[part.pillar] as readonly string[]).includes(part.key);
+// via steps: Form's movement part read on the owner's steps, for a phone that sends no movement minutes.
+export const derivedBodyPartSchema = z.union([
+  z.strictObject({ pillar: bodyPillarSchema, key: bodyPartKeySchema, standing: bodyStandingSchema, via: z.literal('steps').optional() })
+    .refine((part) => part.via === undefined || part.key === 'movement', { error: 'only movement is read on steps', path: ['via'] }),
+  z.strictObject({ pillar: z.literal('recovery'), key: z.literal('sleep'), need_tenths: z.int().min(0).max(10) }),
+  z.strictObject({ pillar: bodyPillarSchema, key: bodyPartKeySchema, unavailable: healthPartUnavailableReasonV1Schema }),
+]).refine(partFits, { error: 'the part belongs to its pillar', path: ['key'] });
+// Today's load so far against the owner's usual whole day, or the band still forming. approximate: the zones were set from the
+// highest heart rate seen, not a measured maximum.
+export const derivedBodyDayLoadSchema = z.union([
+  z.strictObject({ state: z.literal('compared'), direction: z.enum(['above', 'below', 'within']), far: z.literal(true).optional(), approximate: z.boolean() })
+    .refine((load) => load.far === undefined || load.direction !== 'within', { error: 'a load within its band is not far', path: ['far'] }),
+  z.strictObject({ state: z.literal('forming'), approximate: z.boolean() }),
+]);
+// A stretch of today's settled hours whose strain at rest stood high against the same hours of the owner's earlier days.
+export const derivedStrainHoursSchema = z.array(z.strictObject({ start: clockTimeSchema, end: clockTimeSchema })).max(12);
+export const derivedBodySchema = z.strictObject({
+  readings: z.array(derivedBodyReadingSchema).max(healthUsualSignalV1Schema.options.length)
+    .refine((readings) => new Set(readings.map((reading) => reading.signal)).size === readings.length, { error: 'one entry per reading' }),
+  parts: z.array(derivedBodyPartSchema).max(12)
+    .refine((parts) => new Set(parts.map((part) => `${part.pillar}.${part.key}`)).size === parts.length, { error: 'one entry per part' }),
+  day_load: derivedBodyDayLoadSchema.optional(),
+  // Present only when today's row holds a stress curve: empty when no settled hour stood high.
+  strain_hours: derivedStrainHoursSchema.optional(),
+});
+export type DerivedBody = z.infer<typeof derivedBodySchema>;
+
 const derivedViewShared = {
   authority: z.literal('backend'),
   provenance_refs: z.array(opaqueHealthProvenanceRefSchema).min(1).max(4),
@@ -121,6 +163,9 @@ const derivedViewShared = {
   missing_pillars: derivedMissingPillarsSchema.optional(),
   // What body data exists for the owner, whatever any score could make of it. Absent when it was not read.
   inventory: healthInventorySchema.optional(),
+  // Today's readings, the parts of each score, the day's load and the hours of high strain at rest, against the owner's usual. Absent
+  // when it was not read, or the body read answered for another day than the view's.
+  body: derivedBodySchema.optional(),
 } as const;
 
 const derivedViewCommon = {
@@ -201,7 +246,8 @@ export type DerivedHealthDestinationView = z.infer<typeof derivedHealthDestinati
 export const DERIVED_HEALTH_VIEW_BOUNDS = {
   fields: Math.max(...[formHealthViewSchema, recoveryHealthViewSchema, partialHealthViewSchema].map((schema) => Object.keys(schema.shape).length)),
   items: healthSignalV1Schema.options.length,
-  depth: 4,
+  // A body reading's standing: the view, its body, the readings, a reading, its standing.
+  depth: 5,
 } as const;
 
 // The sensor-named pillar key must never sit directly against a numeric literal in non-test
