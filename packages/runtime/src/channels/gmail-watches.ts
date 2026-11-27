@@ -1,5 +1,6 @@
 import { gmailWatchDue, type GmailPushConfig, type GmailWatch, type GmailWatchState } from '../connectors/google-push';
 import type { GmailWatchMiss } from './gmail-push';
+import { watchStartFailure, type WatchStartFailure } from './watch-start-failure';
 
 // GOOGLE_REALTIME_TRIAGE: one Gmail watch per connected mail account. Pushes are routed by mailbox through the connections
 // table, which hands this object the account's connection: a push marks just that mailbox to be read. An account held the
@@ -38,7 +39,8 @@ export const gmailWatchesBook = (kv: Kv) => {
 };
 export type GmailWatchesBook = ReturnType<typeof gmailWatchesBook>;
 
-export type GmailWatchesOutcome = Readonly<{ started: number; failed: number; skipped: number; fresh: number }> | 'skipped';
+// misses: the closed reason of each failed start, never the mailbox.
+export type GmailWatchesOutcome = Readonly<{ started: number; failed: number; skipped: number; fresh: number; misses: readonly WatchStartFailure[] }> | 'skipped';
 
 export const ensureGmailWatches = async (deps: Readonly<{
   book: GmailWatchesBook; now: number; config: GmailPushConfig | null; doName: string | undefined;
@@ -48,19 +50,20 @@ export const ensureGmailWatches = async (deps: Readonly<{
 }>): Promise<GmailWatchesOutcome> => {
   const { book, now } = deps;
   if (!deps.config || !deps.doName || !deps.proxy) return 'skipped';
-  let started = 0, failed = 0, skipped = 0, fresh = 0;
+  let started = 0, skipped = 0, fresh = 0;
+  const misses: WatchStartFailure[] = [];
   for (const account of deps.accounts) {
     if (!gmailWatchDue(book.state(account.id), now)) { fresh += 1; continue; }
     if (account.local) { book.fail(account.id, now, 'local_rail'); skipped += 1; continue; }
     try {
       book.record(account.id, await deps.proxy.gmailWatch(deps.doName, account.id, deps.config.topic), now);
       started += 1;
-    } catch {
+    } catch (error) {
       book.fail(account.id, now);
-      failed += 1;
+      misses.push(watchStartFailure(error));
     }
   }
   // A mailbox no longer read is forgotten, so its pushes wake nothing; Gmail lets its watch lapse within seven days.
   for (const account of book.accounts().filter(id => !deps.accounts.some(known => known.id === id))) book.forget(account);
-  return { started, failed, skipped, fresh };
+  return { started, failed: misses.length, skipped, fresh, misses };
 };

@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { calendarPushBook } from '../src/channels/calendar-push';
 import { calendarSet, capCalendars, MAX_READ_CALENDARS, readableCalendars } from '../src/channels/calendar-set';
 import { calendarChannelsBook, ensureCalendarWatches } from '../src/channels/calendar-watches';
-import { verifyCalendarChannel, type CalendarWatch } from '../src/connectors/google-push';
+import { GooglePushError, verifyCalendarChannel, type CalendarWatch } from '../src/connectors/google-push';
+import { GoogleError } from '../src/connectors/google';
 import type { CalendarListItem } from '../src/connectors/google';
 
 // GOOGLE_REALTIME_TRIAGE: one push channel per calendar the owner reads, each renewed on its own. Every id is synthetic.
@@ -18,12 +19,13 @@ const LIST_B = [listed('other@example.test', { primary: true, access_role: 'owne
 type Fixture = { list: readonly CalendarListItem[] | Error; route?: Error | null; local?: boolean };
 const world = (accounts: Record<string, Fixture> = { a1: { list: LIST } }) => {
   const store = kv();
-  const started: { account: string; calendarId: string; channelId: string; token: string }[] = [], stopped: string[] = [], dropped: string[] = [], refuse = new Set<string>();
+  const started: { account: string; calendarId: string; channelId: string; token: string }[] = [], stopped: string[] = [], dropped: string[] = [], refuse = new Set<string>(), unsupported = new Set<string>();
   let n = 0, now = 1_000 * HOUR;
   const proxy = {
     calendarWatch: async (_doName: string, connection: string, input: { channelId: string; token: string; address: string; calendarId?: string }): Promise<CalendarWatch> => {
       const calendarId = input.calendarId ?? 'primary';
-      if (refuse.has(`${connection}/${calendarId}`) || refuse.has(calendarId)) throw new Error('google_push_refused');
+      if (refuse.has(`${connection}/${calendarId}`) || refuse.has(calendarId)) throw new GoogleError(400, 'google_push_refused');
+      if (unsupported.has(calendarId)) throw new GoogleError(400, 'google_push_unsupported');
       started.push({ account: connection, calendarId, channelId: input.channelId, token: input.token });
       return { channelId: input.channelId, resourceId: `res-${input.channelId}`, expiration: now + 7 * DAY };
     },
@@ -37,7 +39,7 @@ const world = (accounts: Record<string, Fixture> = { a1: { list: LIST } }) => {
       listCalendars: async () => { if (fixture.list instanceof Error) throw fixture.list; return fixture.list; } })),
     dropSource: (account, calendarId) => { dropped.push(`${account}/${calendarId}`); },
   });
-  return { store, book, legacy, set, started, stopped, dropped, refuse, run, accounts, at: (ms: number) => { now = ms; }, now: () => now };
+  return { store, book, legacy, set, started, stopped, dropped, refuse, unsupported, run, accounts, at: (ms: number) => { now = ms; }, now: () => now };
 };
 
 describe('every calendar the owner reads', () => {
@@ -75,6 +77,42 @@ describe('every calendar the owner reads', () => {
     w.at(w.now() + 6 * HOUR);
     expect(await w.run()).toMatchObject({ started: 1 });
     expect(w.book.failures()).toEqual([]);
+  });
+
+  it('names a closed reason for each failed start, and which calendar kind it was, never the calendar or account', async () => {
+    const w = world({ a1: { list: LIST }, b2: { list: LIST_B, route: new Error('PRIVATE_CANARY mint failed') } });
+    w.refuse.add('team@group.example.test');
+    const outcome = await w.run();
+    expect(outcome).toMatchObject({ started: 2, failed: 3, fresh: 0 });
+    expect(outcome !== 'skipped' && outcome.misses).toEqual([
+      { reason: 'google_refused', calendar: 'other' }, { reason: 'route_failed', calendar: 'primary' }, { reason: 'route_failed', calendar: 'other' }]);
+    expect(JSON.stringify(outcome)).not.toMatch(/@|a1|b2|PRIVATE_CANARY/);
+  });
+
+  it('a calendar Google cannot push is read on the poll, waits a week, and is not an account failure', async () => {
+    const w = world();
+    w.unsupported.add('holidays@group.v.calendar.example.test');
+    const first = await w.run();
+    expect(first).toMatchObject({ started: 2, failed: 1 });
+    expect(first !== 'skipped' && first.misses).toEqual([{ reason: 'unsupported', calendar: 'other' }]);
+    expect(w.book.failures()).toEqual([]);
+    expect(w.set.calendars('a1')).toContain('holidays@group.v.calendar.example.test');
+    w.at(w.now() + 6 * HOUR);
+    expect(await w.run()).toMatchObject({ started: 0, failed: 0, fresh: 3 });
+    w.unsupported.clear();
+    w.at(w.now() + 7 * DAY);
+    expect(await w.run()).toMatchObject({ started: 3 });
+  });
+
+  it('a start through a token minted here reads the same reasons', async () => {
+    const w = world();
+    const outcome = await ensureCalendarWatches({
+      book: w.book, legacy: w.legacy, set: w.set, now: w.now(), origin: 'https://waldo.example.test', secret: SECRET, doName: 'owner-do', proxy: null,
+      fetcher: (async () => Response.json({ error: { errors: [{ reason: 'pushNotSupportedForRequestedResource' }] } }, { status: 400 })) as unknown as typeof fetch,
+      newId: () => 'chan-x', accounts: [{ id: 'local:a', local: true, route: async () => ({ mode: 'bearer' as const, token: 't' }), listCalendars: async () => null }], dropSource: () => undefined,
+    });
+    expect(outcome !== 'skipped' && outcome.misses).toEqual([{ reason: 'unsupported', calendar: 'primary' }]);
+    expect(new GooglePushError(400, 'unsupported').message).toBe('google_push_unsupported');
   });
 
   it('renews each channel a day before it lapses and stops the one it replaces', async () => {

@@ -60,6 +60,21 @@ describe('watch and stop calls', () => {
     await result.catch((error: unknown) => { expect(error).toBeInstanceOf(GooglePushError); expect(String(error)).not.toContain('PRIVATE_CANARY'); });
   });
 
+  it('a calendar Google says it cannot push is an unsupported failure, not a refusal to retry', async () => {
+    const body = { error: { code: 400, message: 'Push notifications are not supported by this resource.', errors: [{ domain: 'global', reason: 'pushNotSupportedForRequestedResource', message: 'PRIVATE_CANARY' }] } };
+    const fetcher = vi.fn(async () => Response.json(body, { status: 400 }));
+    const result = startCalendarWatch(fetcher as unknown as typeof fetch, 't', { channelId: 'c', token: 't', address: 'https://w.test/events/gcal' }, 'holidays@group.v.calendar.example.test');
+    await expect(result).rejects.toMatchObject({ status: 400, code: 'unsupported' });
+    await result.catch((error: unknown) => { expect(String(error)).not.toContain('PRIVATE_CANARY'); });
+  });
+
+  it('an unreadable or oversized error body is a plain refusal', async () => {
+    for (const text of ['not json', JSON.stringify({ error: { errors: [{ reason: 'pushNotSupportedForRequestedResource' }] }, pad: 'x'.repeat(5_000) })]) {
+      const fetcher = vi.fn(async () => new Response(text, { status: 400 }));
+      await expect(startCalendarWatch(fetcher as unknown as typeof fetch, 't', { channelId: 'c', token: 't', address: 'https://w.test/events/gcal' })).rejects.toMatchObject({ code: 'refused' });
+    }
+  });
+
   it('a reply naming another channel is malformed', async () => {
     const fetcher = vi.fn(async () => Response.json({ id: 'other', resourceId: 'r', expiration: '1' }));
     await expect(startCalendarWatch(fetcher as unknown as typeof fetch, 't', { channelId: 'c', token: 't', address: 'https://w.test/events/gcal' })).rejects.toMatchObject({ code: 'malformed' });
@@ -84,5 +99,9 @@ describe('when a watch is due', () => {
   it('waits six hours after a failed attempt', () => {
     expect(watchDue({ failedAt: 0 }, 5 * HOUR)).toBe(false);
     expect(watchDue({ failedAt: 0 }, 6 * HOUR)).toBe(true);
+  });
+  it('waits a week after Google said the calendar cannot be pushed', () => {
+    expect(watchDue({ failedAt: 0, unsupported: true }, 6 * 24 * HOUR)).toBe(false);
+    expect(watchDue({ failedAt: 0, unsupported: true }, 7 * 24 * HOUR)).toBe(true);
   });
 });

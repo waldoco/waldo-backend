@@ -53,11 +53,11 @@ const LOGGED_CODES = new Set([...READ_FAILURE_CODES, GOOGLE_MCP_READ_ONLY, 'unkn
   'intent_required', 'intent_conflict', 'intent_pending', 'unreadable response', 'google token failed: invalid_grant', 'google token transient failure', 'google token configuration failure',
   'google token protocol failure', 'drive_invalid_request', 'drive_invalid_response', 'drive_auth_failed', 'drive_access_denied', 'drive_scope_missing', 'drive_service_disabled',
   'drive_not_found', 'drive_rate_limited', 'drive_read_failed', 'drive_source_changed', 'drive_content_unsupported',
-  'google_push_invalid_request', 'google_push_auth', 'google_push_refused', 'google_push_transient', 'google_push_malformed']);
+  'google_push_invalid_request', 'google_push_auth', 'google_push_refused', 'google_push_unsupported', 'google_push_transient', 'google_push_malformed']);
 
 // One structured line per call: operation, method, outcome and duration. Never the code, verifier,
 // token, account or arguments. The operation and method come from the request body, so only known ones are logged.
-const LOGGED_OPS = new Set(['exchange', 'adopt', 'call', 'mcp_call', 'calendar_watch', 'channel_stop', 'gmail_watch', 'revoke', 'unconfigured', 'unsigned']);
+const LOGGED_OPS = new Set(['exchange', 'adopt', 'call', 'mcp_call', 'calendar_watch', 'events_watch', 'channel_stop', 'gmail_watch', 'revoke', 'unconfigured', 'unsigned']);
 const REVOKE_OUTCOMES: ReadonlySet<unknown> = new Set(GOOGLE_REVOKE_OUTCOMES);
 const logged = async (started: number, op: unknown, method: unknown, response: Response, read = false) => {
   const outcome = await response.clone().json().then(value => (value as {error?:{status:number;message:string;provider_diagnostic?:unknown}}).error ?? null).catch(() => ({ status: response.status, message: 'unreadable response' }));

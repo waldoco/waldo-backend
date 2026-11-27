@@ -3,13 +3,15 @@ import type { CalendarListItem } from '../connectors/google';
 import type { McpGoogleResolution } from '../tools/live/mcp';
 import type { CalendarPushBook } from './calendar-push';
 import { capCalendars, readableCalendars, type CalendarSet } from './calendar-set';
+import { watchStartFailure, type WatchStartFailure } from './watch-start-failure';
 
 // GOOGLE_REALTIME_TRIAGE: one push channel per calendar the owner reads on each connected account, each started, renewed and
 // backed off on its own. The channel's stored row names its account, so a push marks just that calendar to be read; a
 // calendar Google will not watch waits out the backoff and is read on the poll meanwhile.
 type Kv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void; delete(key: string): unknown }>;
 type Live = CalendarWatch & Readonly<{ connection: string | null; highest: number }>;
-type Entry = Live | Readonly<{ failedAt: number }>;
+type Failed = Readonly<{ failedAt: number; unsupported?: boolean }>;
+type Entry = Live | Failed;
 type Entries = Record<string, Record<string, Entry>>;
 const KEY = 'calendar_channels_v1';
 
@@ -27,11 +29,12 @@ export const calendarChannelsBook = (kv: Kv) => {
     calendars: (account: string): readonly string[] => Object.keys(read()[account] ?? {}),
     state: (account: string, calendarId: string): CalendarWatchState | null => {
       const entry = read()[account]?.[calendarId];
-      return !entry ? null : live(entry) ? { channelId: entry.channelId, resourceId: entry.resourceId, expiration: entry.expiration } : { failedAt: entry.failedAt };
+      return !entry ? null : live(entry) ? { channelId: entry.channelId, resourceId: entry.resourceId, expiration: entry.expiration } : { failedAt: entry.failedAt, ...(entry.unsupported ? { unsupported: true } : {}) };
     },
     live: (account: string, calendarId: string): Live | null => { const entry = read()[account]?.[calendarId]; return live(entry) ? entry : null; },
     record: (account: string, calendarId: string, watch: CalendarWatch, connection: string | null) => put(account, calendarId, { ...watch, connection, highest: 0 }),
-    fail: (account: string, calendarId: string, now: number) => put(account, calendarId, { failedAt: now }),
+    // Google's answer that a calendar has no push is kept as such: it waits longer and is no failure of the account's push.
+    fail: (account: string, calendarId: string, now: number, unsupported = false) => put(account, calendarId, { failedAt: now, ...(unsupported ? { unsupported: true } : {}) }),
     forget: (account: string, calendarId: string) => put(account, calendarId, null),
     // Forgets an account's channels and hands back the live ones, for the caller to stop while it still can.
     forgetAccount: (account: string): readonly Live[] => {
@@ -44,9 +47,10 @@ export const calendarChannelsBook = (kv: Kv) => {
       const entries = read();
       if (entries[account]) write({ ...entries, [account]: Object.fromEntries(Object.entries(entries[account]).filter(([, entry]) => live(entry))) });
     },
-    // Each account with a calendar whose start failed, and the earliest such failure.
+    // Each account with a calendar whose start failed, and the earliest such failure. A calendar Google cannot push is read on
+    // the poll and nothing the owner does would change that, so it is not one.
     failures: (): readonly Readonly<{ account: string; at: number }>[] => Object.entries(read()).flatMap(([account, entries]) => {
-      const failed = Object.values(entries).filter((entry): entry is Readonly<{ failedAt: number }> => !live(entry)).map(entry => entry.failedAt);
+      const failed = Object.values(entries).filter((entry): entry is Failed => !live(entry) && !entry.unsupported).map(entry => entry.failedAt);
       return failed.length ? [{ account, at: Math.min(...failed) }] : [];
     }),
     // The calendar a push is for. Message numbers only grow per channel: a repeat or an older number is a redelivery.
@@ -71,7 +75,9 @@ type WatchProxy = Readonly<{
 // A calendar-scoped account to watch: how to reach Google as it (a throw is a failed start for each calendar due), whether it
 // is held the older way (a raw token in this object), and its calendar list (null or a throw keeps its set as it was).
 export type WatchAccount = Readonly<{ id: string; local: boolean; route(): Promise<McpGoogleResolution | null>; listCalendars(): Promise<readonly CalendarListItem[] | null> }>;
-export type WatchesOutcome = Readonly<{ started: number; failed: number; fresh: number; stopped: number }> | 'skipped';
+// One failed start: its closed reason and whether it was an account's primary calendar. Never the calendar or the account.
+export type WatchStartMiss = Readonly<{ reason: WatchStartFailure; calendar: 'primary' | 'other' }>;
+export type WatchesOutcome = Readonly<{ started: number; failed: number; fresh: number; stopped: number; misses: readonly WatchStartMiss[] }> | 'skipped';
 
 export const ensureCalendarWatches = async (deps: Readonly<{
   book: CalendarChannelsBook; legacy: CalendarPushBook; set: CalendarSet; now: number;
@@ -93,7 +99,12 @@ export const ensureCalendarWatches = async (deps: Readonly<{
   const heirs = legacy ? accounts.filter(account => legacy.connection === null ? account.local : account.id === legacy.connection) : [];
   const heir = heirs.length === 1 ? heirs[0] : undefined;
   if (legacy && heir && !book.live(heir.id, 'primary')) book.record(heir.id, 'primary', legacy, legacy.connection);
-  let started = 0, failed = 0, fresh = 0, stopped = 0;
+  let started = 0, fresh = 0, stopped = 0;
+  const misses: WatchStartMiss[] = [];
+  const miss = (account: string, calendarId: string, reason: WatchStartFailure) => {
+    book.fail(account, calendarId, now, reason === 'unsupported');
+    misses.push({ reason, calendar: calendarId === 'primary' ? 'primary' : 'other' });
+  };
   for (const account of accounts) {
     const calendars = deps.set.calendars(account.id);
     const due = calendars.filter(id => watchDue(book.state(account.id, id), now));
@@ -102,8 +113,7 @@ export const ensureCalendarWatches = async (deps: Readonly<{
     if (!due.length && !stale.length) continue;
     let route: McpGoogleResolution | null;
     try { route = await account.route(); } catch {
-      for (const calendarId of due) book.fail(account.id, calendarId, now);
-      failed += due.length;
+      for (const calendarId of due) miss(account.id, calendarId, 'route_failed');
       route = null;
     }
     const usable = route !== null && (route.mode === 'bearer' || deps.proxy !== null) ? route : null;
@@ -122,9 +132,8 @@ export const ensureCalendarWatches = async (deps: Readonly<{
         book.record(account.id, calendarId, watch, connection);
         started += 1;
         if (previous) await stop(previous);
-      } catch {
-        book.fail(account.id, calendarId, now);
-        failed += 1;
+      } catch (error) {
+        miss(account.id, calendarId, watchStartFailure(error));
       }
     }
     for (const calendarId of stale) {
@@ -140,5 +149,5 @@ export const ensureCalendarWatches = async (deps: Readonly<{
     for (const calendarId of book.calendars(account)) deps.dropSource(account, calendarId);
     book.forgetAccount(account);
   }
-  return { started, failed, fresh, stopped };
+  return { started, failed: misses.length, fresh, stopped, misses };
 };

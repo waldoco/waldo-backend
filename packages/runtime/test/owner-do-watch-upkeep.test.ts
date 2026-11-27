@@ -35,7 +35,8 @@ const CONFIG = { TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'syn
   SUPABASE_PROJECT_URL: 'https://edge.test', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', GMAIL_PUSH_PROJECT: 'waldo-dev' };
 
 const edge = vi.hoisted(() => ({ ops: [] as Record<string, unknown>[], exchange: { id: '', scopes: [] as string[], email: '' }, failing: new Set<string>(),
-  sends: [] as string[], models: 0, throwing: null as 'calendar' | 'gmail' | null, googleWatches: [] as Record<string, string>[], calendars: [] as unknown[] }));
+  sends: [] as string[], models: 0, throwing: null as 'calendar' | 'gmail' | null, googleWatches: [] as Record<string, string>[], calendars: [] as unknown[],
+  refusing: new Map<string, string>() }));
 // A locally held refresh token resolves to a bearer route without reaching Google.
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
@@ -79,6 +80,8 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 const answer = (body: Record<string, unknown>): unknown => {
   edge.ops.push(body);
   if (edge.failing.has(String(body.op))) return { error: { status: 503, message: 'backend unavailable' } };
+  const refusal = edge.refusing.get(String(body.op === 'events_watch' ? body.calendar_id : body.op === 'gmail_watch' ? 'gmail' : 'primary'));
+  if (refusal && ['calendar_watch', 'events_watch', 'gmail_watch'].includes(String(body.op))) return { error: { status: refusal === 'unknown operation' ? 404 : 400, message: refusal } };
   if (body.op === 'exchange') return { id: edge.exchange.id, email: edge.exchange.email, scopes: edge.exchange.scopes };
   if (body.op === 'gmail_watch') return { data: { historyId: '555', expiration: Date.now() + 7 * DAY } };
   if (body.op === 'calendar_watch' || body.op === 'events_watch') return { data: { channelId: body.channel_id, resourceId: 'res-1', expiration: Date.now() + 7 * DAY } };
@@ -88,7 +91,7 @@ const answer = (body: Record<string, unknown>): unknown => {
 };
 
 beforeEach(() => {
-  edge.ops = []; edge.failing = new Set(); edge.sends = []; edge.models = 0; edge.throwing = null; edge.googleWatches = []; edge.calendars = [];
+  edge.ops = []; edge.failing = new Set(); edge.sends = []; edge.models = 0; edge.throwing = null; edge.googleWatches = []; edge.calendars = []; edge.refusing = new Map();
   vi.useFakeTimers({ toFake: ['Date'], now: START });
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
@@ -458,7 +461,7 @@ describe('GOOGLE_REALTIME_TRIAGE: every calendar the owner reads', () => {
       expect(w.watches('calendar_watch'), 'the primary calendar').toEqual(['conn-1']);
       const team = edge.ops.filter(body => body.op === 'events_watch');
       expect(team.map(body => body.calendar_id)).toEqual(['team@group.example.test']);
-      expect(codes(w, 'calendar_watch')).toEqual(['calendar_watches:accounts=1:started=2:failed=0:stopped=0']);
+      expect(codes(w, 'calendar_watch')).toEqual(['calendar_watches:accounts=1:started=2:failed=0:fresh=0:stopped=0']);
       for (const { raw } of w.lines('calendar_watch')) expect(raw).not.toMatch(/@|conn-|example/);
       const push = (channel: string, number: number) => w.owner.fetch(new Request('https://owner.invalid/google-push', { method: 'POST',
         headers: { 'x-waldo-gcal-channel': channel, 'x-waldo-gcal-state': 'exists', 'x-waldo-gcal-number': String(number) } }));
@@ -466,6 +469,23 @@ describe('GOOGLE_REALTIME_TRIAGE: every calendar the owner reads', () => {
       expect(w.lines('calendar_push')).toHaveLength(1);
       expect((await push(String(team[0]!.channel_id), 1)).status).toBe(200);
       expect(w.lines('calendar_push'), 'a redelivery wakes nothing').toHaveLength(1);
+    });
+  });
+
+  it('each failed start logs its closed reason; a calendar Google cannot push is no account failure and waits a week', async () => {
+    edge.calendars = [listed(EMAIL, true), listed('holidays@group.v.calendar.example.test'), listed('team@group.example.test')];
+    edge.refusing = new Map([['holidays@group.v.calendar.example.test', 'google_push_unsupported'], ['team@group.example.test', 'unknown operation'], ['gmail', 'google_refresh_failed']]);
+    await world('upkeep-realtime-reasons', { off: ['event_briefs'], realtime: true }, async w => {
+      await w.connect('conn-1', [...MAIL, CALENDAR]);
+      for (let n = 0; n < 2 && codes(w, 'gmail_watch').length === 0; n++) await w.pass();
+      expect(codes(w, 'calendar_watch')).toEqual([
+        'calendar_watch_start_failed:unsupported:other', 'calendar_watch_start_failed:edge_unsupported:other',
+        'calendar_watches:accounts=1:started=1:failed=2:fresh=0:stopped=0']);
+      expect(codes(w, 'gmail_watch')).toEqual(['gmail_watch_start_failed:token_refresh', 'gmail_watches:accounts=1:started=0:failed=1:skipped=0']);
+      for (const { raw } of [...w.lines('gmail_watch'), ...w.lines('calendar_watch')]) expect(raw).not.toMatch(/@|conn-|example|holidays|team/);
+      const kv = w.state.storage.kv;
+      expect(calendarChannelsBook(kv).failures().map(miss => miss.account), 'the unpushable calendar is not a failure the owner can fix').toEqual(['conn-1']);
+      expect(calendarChannelsBook(kv).state('conn-1', 'holidays@group.v.calendar.example.test')).toMatchObject({ unsupported: true });
     });
   });
 
