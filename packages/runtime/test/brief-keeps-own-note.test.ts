@@ -69,7 +69,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown> }; alarm(): Promise<void> }>;
 
 // An owner on the app or on Telegram, Google connected when the calendar has events, with a Brief due now and nothing else.
-const briefFires = async (name: string, surface: 'app' | 'telegram', google: boolean, seed?: (sql: SqlStorage) => void) => {
+const briefFires = async (name: string, surface: 'app' | 'telegram', google: boolean, seed?: (sql: SqlStorage) => void, extra: Readonly<Record<string, string>> = {}) => {
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   return runInDurableObject(stub, async (_instance, state) => {
     const originalNow = Date.now;
@@ -85,7 +85,7 @@ const briefFires = async (name: string, surface: 'app' | 'telegram', google: boo
       if (google) await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only',
         scopes: ['https://www.googleapis.com/auth/calendar.events'] }]);
       const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC',
-        WALDO_OWNER_TELEGRAM_ID: surface === 'telegram' ? '7' : undefined, GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', MEMORY_OUTSIDE_NOTES: '0' }) as unknown as Owner;
+        WALDO_OWNER_TELEGRAM_ID: surface === 'telegram' ? '7' : undefined, GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret', MEMORY_OUTSIDE_NOTES: '0', ...extra }) as unknown as Owner;
       await owner.setup(surface).ready;
       state.storage.sql.exec('DELETE FROM schedule');
       seed?.(state.storage.sql);
@@ -95,7 +95,8 @@ const briefFires = async (name: string, surface: 'app' | 'telegram', google: boo
       state.storage.kv.put('owner_alarm_last_v1', 1);
       await owner.alarm();
       const loops = state.storage.sql.exec<{ status: string }>('SELECT status FROM loops').toArray().map((row) => row.status);
-      return { claims: claimStore(state.storage.sql).allClaims().map((claim) => ({ origin: claim.origin, ref: claim.source_ref })), loops };
+      const own = loopBook(state.storage.sql, { newId: () => 'x', now: () => AT }).list().filter((loop) => loop.origin === 'waldo').map((loop) => ({ title: loop.title, taint: loop.taint }));
+      return { claims: claimStore(state.storage.sql).allClaims().map((claim) => ({ origin: claim.origin, ref: claim.source_ref })), loops, own };
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
   });
 };
@@ -117,6 +118,9 @@ describe('a Brief keeps what it learned when it read only the owner\'s own data'
     ['its ledger lists a loop opened from a mail', (sql: SqlStorage) => {
       const loop = loopBook(sql, { newId: () => '2', now: () => AT }).open({ title: 'Reply to Priya about the pitch', due: '2026-11-24' });
       sql.exec('INSERT INTO loop_mail_sources (loop_id, source_ref) VALUES (?, ?)', loop.id, 'gmail:owner@example.test:m1');
+    }],
+    ['its ledger lists a follow-up Waldo set after reading outside content', (sql: SqlStorage) => {
+      loopBook(sql, { newId: () => '3', now: () => AT }).open({ title: 'From the mail: wire the deposit', due: '2026-11-24T09:00' }, { origin: 'waldo', taint: 'external', chainDepth: 1 });
     }],
     ['its ledger lists an approval', (sql: SqlStorage) => sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, created_at) VALUES ('l1', 'email_send', 'skipped', 'Send Priya the deck', '{}', ?)", AT - 86_400_000)],
   ])('but not when %s: it then keeps nothing while outside notes are off', async (_name, seed) => {
@@ -141,5 +145,25 @@ describe('a Brief of the owner\'s own data still asks before it acts', () => {
     });
     expect(kept.loops).toEqual(['open']);
     expect(fixture.results.join('\n')).toContain('taint_needs_approval');
+  });
+});
+
+// What the Brief records follows the data too: a follow-up it leaves itself is clean when it read only the owner's own data,
+// and carries the mark once its calendar holds an invite someone else wrote.
+describe('a Brief\'s own follow-up carries what the Brief read', () => {
+  const FOLLOW_UP = { title: 'Check the deep work block happened', due: `${DAY}T16:30`, note: 'Did the 14:00 block hold? Worth a word if a meeting landed on it.' };
+  const wakes = { MODEL_SET_WAKES: '1', WALDO_TOOL_LOADER: 'harness' };
+  it('clean from the owner\'s own data', async () => {
+    fixture.call = { name: 'open_loop', args: FOLLOW_UP };
+    fixture.events = [event({ owner_status: 'organizer' })];
+    const kept = await briefFires('brief-follow-up-own', 'app', true, undefined, wakes);
+    expect(kept.own).toEqual([{ title: FOLLOW_UP.title, taint: null }]);
+  });
+
+  it('marked when its calendar holds an invite someone else wrote', async () => {
+    fixture.call = { name: 'open_loop', args: FOLLOW_UP };
+    fixture.events = [event({ owner_status: 'organizer' }), event({ id: 'e2', title: 'Pitch sync', owner_status: 'accepted', attendee_names: ['Priya'] })];
+    const kept = await briefFires('brief-follow-up-invite', 'app', true, undefined, wakes);
+    expect(kept.own).toEqual([{ title: FOLLOW_UP.title, taint: 'external' }]);
   });
 });

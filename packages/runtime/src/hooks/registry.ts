@@ -147,6 +147,7 @@ import {
 import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, OPEN_PUBLIC_TOOLS, evaluateDeclaredEgress } from './egress-policy';
 import { TOOL_RECORDS, type ToolRecord } from '../tools/records';
 import { holdsPrivateAndEgress, TASK_PROFILE_SPECS } from '../tasks/profile-tools';
+import { actsOnOutside } from '../tools/run-authority';
 import { ownerStatedMinutes, type MemoryOwnerTurn } from '../tools/owner-words';
 
 export type HookRegistry<Ctx> = readonly HookHandler<Ctx>[];
@@ -646,13 +647,15 @@ export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
       return halt('tool argument taint invalid', 'invalid_args');
     }
 
-    if (taintedCallRefused(tool.data, sourceTaint.data, payload.args, ctx)) return halt(TAINT_REFUSED_REASON, 'forbidden');
+    // A run held as if it had read outside content meets the gate as one that has, whatever its mark says so far.
+    const gateTaint = actsOnOutside(ctx) ? 'external' as const : sourceTaint.data;
+    if (taintedCallRefused(tool.data, gateTaint, payload.args, ctx)) return halt(TAINT_REFUSED_REASON, 'forbidden');
 
     // Two calls pass with tainted arguments: the owner-approved replay of a frozen call, and a call whose handler only
     // raises the owner's card. Neither executes anything the owner has not seen.
     if (ctx.approvedTaintedAction?.tool !== tool.data && ctx.proposalOnlyCall !== tool.data) {
       let needsOwner: boolean;
-      try { needsOwner = await taintedCallNeedsOwnerApproval(tool.data, sourceTaint.data, payload.args, ctx); }
+      try { needsOwner = await taintedCallNeedsOwnerApproval(tool.data, gateTaint, payload.args, ctx); }
       catch { return halt('loop lookup failed', 'transient'); }
       // Only the owner's own turn can start the narrower task at once, so only there is the model pointed at it.
       if (needsOwner) return halt(ctx.ownerInitiated === true && combinedTask(tool.data, payload.args) ? TAINT_COMBINED_TASK_REASON : TAINT_NEEDS_APPROVAL_REASON, 'forbidden');

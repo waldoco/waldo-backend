@@ -21,7 +21,8 @@ export type MemoryToolContext = ToolDispatcherContext & {
   memoryTurn?: Readonly<{ ownerId: string; conversationRef: string; current: MemoryOwnerTurn; recent: readonly MemoryOwnerTurn[] }>;
   // Set by the host for a run Waldo started (a Brief, a check-back, a reminder): no owner message to ground a note in, so a
   // note it saves is Waldo's own read, with this run as its source.
-  // ownText: the run's prompt held only the owner's own text, though the run started tainted for its actions' sake.
+  // ownText: the run's prompt held only the owner's own text, though the run started marked for its actions' sake. A run whose
+  // mark follows its reads has no ownText: its mark already says whether it read outside content.
   memoryRun?: Readonly<{ ownerId: string; conversationRef: string; runId: string; ownText?: true }>;
   // Set by the host for a model call built from outside content: memory reads go through the same fence as its memory block.
   memoryOutside?: boolean;
