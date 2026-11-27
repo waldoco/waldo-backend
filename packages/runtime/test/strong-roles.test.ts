@@ -32,17 +32,19 @@ const roles = (strongRoles: boolean) => runInDurableObject(env.OWNER_DO!.get(env
     return seen.slice(before).map((call) => ({ ...call, kind }));
   };
   await responder.consolidate('nightly-1', 'owner: I moved to Lisbon.');
+  await responder.outcomeClaims!('outcomes-1', '[2030-03-03T07:00] Waldo suggested: Add a 07:00 run\n[2030-03-03T09:00] Then the owner declined it.', { health: true, body: false, outside: false });
   await responder.planDay('day-1', 'Calendar: standup at 10.').catch(() => '');
   const prep = await job('meeting_prep', 'decides', { name: 'calendar_prep', schema: { type: 'object' } });
   const plan = await job('day_card', 'plans');
   const unmarked = await job('unmarked', undefined);
   const late = await job('late_answer', true);
-  return [...seen.filter((call) => call.kind === 'claim_ops' || call.kind === 'day_plan'), ...prep, ...plan, ...unmarked, ...late];
+  return [...seen.filter((call) => call.kind === 'claim_ops' || call.kind === 'source_claims' || call.kind === 'day_plan'), ...prep, ...plan, ...unmarked, ...late];
 });
 
 it('with the switch off, memory, the day plan and deciding jobs stay on the auxiliary model at its own effort', async () => {
   expect(await roles(false)).toEqual([
     { kind: 'claim_ops', model: ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, effort: 'low' },
+    { kind: 'source_claims', model: ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, effort: 'low' },
     { kind: 'day_plan', model: ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, effort: 'low' },
     { kind: 'meeting_prep', model: ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, effort: 'low' },
     { kind: 'day_card', model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, effort: 'medium' },
@@ -54,6 +56,7 @@ it('with the switch off, memory, the day plan and deciding jobs stay on the auxi
 it('with the switch on, memory and deciding jobs move to the chat model, and planning runs ask it for high effort', async () => {
   expect(await roles(true)).toEqual([
     { kind: 'claim_ops', model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, effort: 'medium' },
+    { kind: 'source_claims', model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, effort: 'medium' },
     { kind: 'day_plan', model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, effort: 'high' },
     { kind: 'meeting_prep', model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, effort: 'medium' },
     { kind: 'day_card', model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, effort: 'high' },

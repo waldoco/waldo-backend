@@ -150,6 +150,8 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   MEMORY_OUTSIDE_NOTES: gap('recall of notes learned from mail and calendar is not turned on in a trial'),
   MEMORY_USED_SHOWN: inert('the app shows which notes a reply looked at; the trial reads no app history'),
   MEMORY_DAYTIME_CONSOLIDATOR: gap('the daytime memory pass is not run in a trial'),
+  MEMORY_OUTCOME_LEARNING: gap('the nightly outcomes pass is not run in a trial, so no turn reads what it learned'),
+  MEMORY_BODY_PATTERNS: gap('the nightly outcomes pass is not run in a trial'),
   WALDO_IMESSAGE_PROGRESS: gap('iMessage progress notes; the trial runs the app surface; staging has them off'),
   IMESSAGE_MEDIA: gap('iMessage media; the trial runs the app surface'),
   IMESSAGE_STOP: inert('a typed /stop on iMessage ends the running turn; the trial runs the app surface and sends no stop'),
