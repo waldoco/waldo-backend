@@ -34,6 +34,21 @@ describe('the WhatsApp shim splits text over 4,096 characters', () => {
     expect(bodies.every(body => body.length <= WHATSAPP_TEXT_MAX_CHARS)).toBe(true);
   });
 
+  it('keeps every word whole across parts, and a card too long for buttons keeps them as reply instructions', async () => {
+    let n = 0;
+    const graph = vi.fn(async () => Response.json(ack(`wamid.${++n}`)));
+    const shim = whatsappTelegramShim('tok', 'pn1', SUBJECT, graph as unknown as typeof fetch, { replyButtons: true, listCards: true });
+    const words = Array.from({ length: 1_200 }, (_, index) => `item${index}`);
+    const text = words.join(' ');
+    await shim('sendMessage', { chat_id: 1, text, reply_markup: { inline_keyboard: [[{ text: 'Do it', callback_data: 'a:p1' }, { text: 'Not now', callback_data: 'd:p1' }]] } });
+    const bodies = bodiesOf(graph);
+    expect(bodies.every(body => body.type === 'text' && body.text.body.length <= WHATSAPP_TEXT_MAX_CHARS)).toBe(true);
+    const sent = bodies.map(body => body.text.body as string);
+    expect(sent.length).toBeGreaterThan(1);
+    expect(sent.flatMap(body => body.split(/\s+/)).filter(word => word.startsWith('item'))).toEqual(words);
+    expect(sent.at(-1)).toContain('- Do it: reply "a:p1"\n- Not now: reply "d:p1"');
+  });
+
   it('a failure after a part went out reports what was sent and what was not; a first-part failure is the plain error', async () => {
     const graph = vi.fn(async (_url: string, init?: RequestInit) => JSON.parse(String(init?.body)).text.body.startsWith('a')
       ? Response.json(ack('wamid.1')) : Response.json({ error: { code: 131000 } }, { status: 500 }));

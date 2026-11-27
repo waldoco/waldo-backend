@@ -1,3 +1,4 @@
+import { OWNER_TEXT_INBOUND_MAX_CHARS } from '@waldo/contracts';
 import { z } from 'zod';
 import { onlyArtifacts, quarantineArtifacts } from '../security/artifact-hygiene';
 import { OUTBOX_CUSTODY } from './delivery-routes';
@@ -430,9 +431,23 @@ const quarantined = (text: string): string => {
   const q = quarantineArtifacts(text);
   return q.kinds.length === 0 ? text : onlyArtifacts(q) ? `[quarantined: ${q.kinds.join('/')} artifact - see your WhatsApp thread]` : q.text;
 };
+// The longest caption one update carries (the shared update schema's caption bound).
+export const WHATSAPP_CAPTION_MAX_CHARS = 1024;
+// Owner text past what one update carries is cut at a word, never silently: the turn reads a note saying how much was cut, so
+// the model knows it did not see all of it and can tell the owner to send the rest.
+export const boundedOwnerText = (text: string, max: number): string => {
+  if (text.length <= max) return text;
+  const note = (cut: number) => `\n\n[Waldo: the owner's message ran past ${max} characters, so its last ${cut} characters were cut and not read. Tell the owner, so they can send the rest.]`;
+  let kept = text.slice(0, Math.max(0, max - note(text.length).length));
+  const space = kept.search(/\s\S*$/);
+  if (space > kept.length / 2) kept = kept.slice(0, space);
+  else if (/[\uD800-\uDBFF]$/.test(kept)) kept = kept.slice(0, -1);
+  kept = kept.trimEnd();
+  return kept + note(text.length - kept.length);
+};
 const captionOf = (caption: string | undefined) => {
   const text = (caption ?? '').trim();
-  return text ? { caption: quarantined(text).slice(0, 1024) } : {};
+  return text ? { caption: boundedOwnerText(quarantined(text), WHATSAPP_CAPTION_MAX_CHARS) } : {};
 };
 const fieldText = (value: unknown): string | null => typeof value === 'string' && value.trim() ? value.trim() : null;
 const locationText = (location: WaLocation | undefined): string | null => {
@@ -492,12 +507,12 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
     // without a caption there is nothing to read, and it gets the shared unsupported reply.
     if (message.type === 'video') {
       const caption = fieldText(message.video?.caption);
-      push(caption ? { text: quarantined(`Sent a video Waldo can't watch yet. Its caption: ${caption}`).slice(0, 4096) } : { whatsapp_type: 'video' });
+      push(caption ? { text: boundedOwnerText(quarantined(`Sent a video Waldo can't watch yet. Its caption: ${caption}`), OWNER_TEXT_INBOUND_MAX_CHARS) } : { whatsapp_type: 'video' });
       continue;
     }
     if (message.type === 'location' || message.type === 'contacts') {
       const text = message.type === 'location' ? locationText(message.location) : contactsText(message.contacts);
-      push(text ? { text: quarantined(text).slice(0, 4096) } : { whatsapp_type: message.type });
+      push(text ? { text: boundedOwnerText(quarantined(text), OWNER_TEXT_INBOUND_MAX_CHARS) } : { whatsapp_type: message.type });
       continue;
     }
     if (message.type === 'interactive') {
@@ -526,7 +541,7 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
       add({ update_id: WA_UPDATE_BASE + seq, callback_query: { id: `wa-${message.id ?? seq}`, from: { id: ownerNum, is_bot: false }, data: text, message: { message_id: 0, chat: { id: ownerNum } } } });
       continue;
     }
-    add({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: ownerNum, is_bot: false }, chat: { id: ownerNum, type: 'private' }, ...origin, ...reply, text: quarantined(text) } });
+    add({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: ownerNum, is_bot: false }, chat: { id: ownerNum, type: 'private' }, ...origin, ...reply, text: boundedOwnerText(quarantined(text), OWNER_TEXT_INBOUND_MAX_CHARS) } });
   }
   return { updates, seq, sources };
 };
