@@ -4,7 +4,6 @@ import { APPROVAL_PUSH_CATEGORY, pushNotificationSchema, type PushNotification }
 
 // Expo's push service, which delivers through APNs and FCM. The directory releases only tokens registered under expo.
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
-const EXPO_RECEIPTS_URL = 'https://exp.host/--/api/v2/push/getReceipts';
 // Each push has a fixed line per trigger and the ids the app opens, never health or email content. An approval push names
 // the approval it opens, which the caller adds; the text never says what it suggests or why. A prep or update push may carry
 // a body code writes in place of its fixed line, naming a meeting by pushTitle and its time (channels/event-briefs.ts
@@ -61,6 +60,7 @@ const REPLY_BUDGET_KEY = 'app_push_reply_budget_v1';
 // Expo's ticket for each push it accepted, until its receipt is read: Expo has the receipt about 15 minutes after the send
 // and keeps it for a day. A ticket names its device so a receipt that says the token is dead retires that registration.
 const TICKETS_KEY = 'app_push_tickets_v1';
+const EXPO_RECEIPTS_URL = 'https://exp.host/--/api/v2/push/getReceipts';
 export const RECEIPT_AFTER_MS = 15 * 60_000;
 const RECEIPT_KEPT_MS = 24 * 60 * 60_000;
 const MAX_TICKETS = 100;
