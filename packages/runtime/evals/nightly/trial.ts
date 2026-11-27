@@ -22,7 +22,7 @@ import { trialSkillBook } from './skills';
 import { ownerTurnTrace } from '../../src/channels/owner-turn-envelope';
 import { CHAT_REF, evalWorld, TIMEZONE, type Effect, type MemoryMode, type SeedMail, type SeedUpload, type WorldSeed } from './world';
 import { changeLines, type Change } from '../../src/channels/update-cards';
-import { parseTriage, triageTools, TRIAGE_INTERRUPTS_PER_DAY } from '../../src/channels/update-sweep';
+import { parseTriage, triageTools } from '../../src/channels/update-sweep';
 import { triagePrompt } from '../../src/prompt/update-cards';
 // The cards a triage turn can raise: a send, a calendar change, or any other tool through propose_action.
 export const TRIAGE_CARDS: readonly string[] = ['mail.send.proposed', 'calendar.change.proposed', 'action.proposed'];
@@ -198,7 +198,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         skills.turn(`${scenario.id}-triage-${turn}`);
         const offered = new Set(world.handlers.map((handler) => handler.name));
         const prompt = triagePrompt(world.localNow(), { changes, ledger: '', feedback: '', volume: 'normal', sourceFollowups: false, cards: '', revisesCards: true,
-          goals: world.goals(), hold: null, left: TRIAGE_INTERRUPTS_PER_DAY });
+          goals: world.goals(), hold: null });
         const carded = () => world.effects().filter((effect) => TRIAGE_CARDS.includes(effect.kind)).length;
         const before = carded();
         const reply = await responder.prompt(`${scenario.id}-triage-${turn}`, 1, prompt, time, triageTools(false, true).filter((name) => offered.has(name)) as never, undefined, undefined, undefined, 'external');

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { APPROVAL_PUSH_CATEGORY, pushNotificationSchema } from '../../contracts/src/ui/notification';
-import { EVENT_PUSH_DAILY_LIMIT, ownerPush, PUSH_DAILY_LIMIT, PUSHES, pushReceipts, RECEIPT_AFTER_MS, REPLY_PUSH_DAILY_LIMIT, type OwnerPushDeps, type PushTarget } from '../src/channels/expo-push';
+import { ownerPush, PUSHES, pushReceipts, RECEIPT_AFTER_MS, REPLY_PUSH_DAILY_LIMIT, type OwnerPushDeps, type PushTarget } from '../src/channels/expo-push';
 
 const EXPO = 'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]', OTHER = 'ExpoPushToken[bbbbbbbbbbbbbbbbbbbb]';
 const ACCESS = 'synthetic-expo-access';
@@ -59,40 +59,15 @@ describe('pushing the owner\'s app', () => {
     expect(logged).toEqual([{ code: 'invalid_payload', count: 0 }, { code: 'invalid_payload', count: 0 }]);
   });
 
-  it('an approval push is held in quiet hours, and shares the day\'s limit with the Brief', async () => {
+  it('an approval push is held in quiet hours, and otherwise keeps no count of its own: a busy day\'s approvals each push, Brief or not', async () => {
     const held = fixture({ quiet: () => true });
     await held.push('approval', 'p0001');
     expect([held.send.mock.calls.length, held.logged]).toEqual([0, [{ code: 'quiet', count: 0 }]]);
     const { push, send, logged } = fixture();
-    for (let i = 0; i < PUSH_DAILY_LIMIT; i++) await (i % 2 ? push('brief') : push('approval', `p000${i}`));
-    await push('approval', 'p0009');
-    expect(send).toHaveBeenCalledTimes(PUSH_DAILY_LIMIT);
-    expect(logged.at(-1)).toEqual({ code: 'daily_limit', count: 0 });
-  });
-
-  it('keeps the Brief\'s slot: approval pushes stop one short of the day\'s limit until the Brief has been pushed, and use the last slot after it', async () => {
-    const early = fixture();
-    for (let i = 0; i < PUSH_DAILY_LIMIT; i++) await early.push('approval', `p000${i}`);
-    expect(early.send).toHaveBeenCalledTimes(PUSH_DAILY_LIMIT - 1);
-    expect(early.logged.at(-1)).toEqual({ code: 'daily_limit', count: 0 });
-    await early.push('brief');
-    expect(early.send).toHaveBeenCalledTimes(PUSH_DAILY_LIMIT);
-    expect(early.posted.at(-1)!.body).toEqual([expect.objectContaining({ body: 'Your Daily Brief is ready' })]);
-
-    const briefFirst = fixture();
-    await briefFirst.push('brief');
-    for (let i = 0; i < PUSH_DAILY_LIMIT; i++) await briefFirst.push('approval', `p000${i}`);
-    expect(briefFirst.send).toHaveBeenCalledTimes(PUSH_DAILY_LIMIT);
-    expect(briefFirst.logged.at(-1)).toEqual({ code: 'daily_limit', count: 0 });
-  });
-
-  it('the reserved slot is per owner-day: the next day starts with the Brief\'s slot held again', async () => {
-    let day = '2026-10-13';
-    const { push, send } = fixture({ today: () => day });
+    for (let i = 0; i < 8; i++) await push('approval', `p000${i}`);
     await push('brief');
-    day = '2026-10-14';
-    for (let i = 0; i < PUSH_DAILY_LIMIT; i++) await push('approval', `p000${i}`);
-    expect(send).toHaveBeenCalledTimes(1 + PUSH_DAILY_LIMIT - 1);
+    expect(send).toHaveBeenCalledTimes(9);
+    expect(logged.map(entry => entry.code)).not.toContain('daily_limit');
   });
 
   it('gives up on a send that never answers, and on a receipt that never arrives, instead of holding the caller', async () => {
@@ -119,15 +94,14 @@ describe('pushing the owner\'s app', () => {
     expect(logged).toEqual([{ code: 'not_configured', count: 0 }]);
   });
 
-  it(`sends at most ${PUSH_DAILY_LIMIT} a day, and again the next day`, async () => {
+  it('a Brief pushes every time it is sent, with no daily count across the owner\'s day change', async () => {
     let day = '2026-10-13';
     const { push, logged, send } = fixture({ today: () => day });
-    for (let i = 0; i < PUSH_DAILY_LIMIT + 1; i++) await push('brief');
-    expect(send).toHaveBeenCalledTimes(PUSH_DAILY_LIMIT);
-    expect(logged.at(-1)).toEqual({ code: 'daily_limit', count: 0 });
+    for (let i = 0; i < 5; i++) await push('brief');
     day = '2026-10-14';
     await push('brief');
-    expect(send).toHaveBeenCalledTimes(PUSH_DAILY_LIMIT + 1);
+    expect(send).toHaveBeenCalledTimes(6);
+    expect(logged.map(entry => entry.code)).not.toContain('daily_limit');
   });
 
   it('sends nothing in quiet hours, without devices, or when the targets cannot be read', async () => {
@@ -146,11 +120,12 @@ describe('pushing the owner\'s app', () => {
     }
   });
 
-  it('a failed or refused send is logged and never thrown, and still counts against the day', async () => {
+  it('a failed or refused send is logged and never thrown, and a reply\'s still counts against its backstop', async () => {
     const down = fixture({ send: (async () => { throw new Error('network'); }) as unknown as typeof fetch });
     await expect(down.push('brief')).resolves.toBeUndefined();
     expect(down.logged).toEqual([{ code: 'send_failed', count: 0 }]);
-    expect(down.store.get('app_push_budget_v1')).toEqual({ day: '2026-10-13', sent: 1 });
+    await down.push('reply');
+    expect(down.store.get('app_push_reply_budget_v1')).toEqual({ day: '2026-10-13', sent: 1 });
     const refused = fixture({ send: (async () => new Response('', { status: 429 })) as unknown as typeof fetch });
     await refused.push('brief');
     expect(refused.logged).toEqual([{ code: 'send_refused', count: 0 }]);
@@ -176,12 +151,11 @@ describe('pushing the owner\'s app', () => {
 });
 
 describe('an update push', () => {
-  it('carries the line it was given and the card it opens, on the proactive ceiling', async () => {
+  it('carries the line it was given and the card it opens, and keeps no count of it', async () => {
     const { push, posted, store } = fixture();
     await push('update', undefined, 'Your 15:00 with Krati moved to 17:00', 'card:brief');
     expect(posted[0]!.body).toEqual([{ to: EXPO, body: 'Your 15:00 with Krati moved to 17:00', data: { trigger: 'update', card_ref: 'card:brief' }, sound: 'default' }]);
-    expect(store.get('app_push_proactive_budget_v1')).toEqual({ day: '2026-10-13', sent: 1 });
-    expect(store.get('app_push_budget_v1')).toBeUndefined();
+    expect([...store.keys()].filter(key => key.includes('budget'))).toEqual([]);
   });
 
   it('without a line or a card, is the fixed line that opens Main chat', async () => {
@@ -198,20 +172,20 @@ describe('an update push', () => {
 });
 
 describe('an event push', () => {
-  it('is its fixed line whatever body it is handed, and counts on its own ceiling, never the one prep and update pushes share', async () => {
-    const { push, posted, store, logged } = fixture();
-    for (let n = 0; n <= EVENT_PUSH_DAILY_LIMIT; n += 1) await push('event', undefined, 'Deploy finished: see https://ci.example');
-    expect(posted).toHaveLength(EVENT_PUSH_DAILY_LIMIT);
+  it('is its fixed line whatever body it is handed, with no daily count of its own; the owner\'s limits still hold it', async () => {
+    const { push, posted, logged } = fixture();
+    for (let n = 0; n < 6; n += 1) await push('event', undefined, 'Deploy finished: see https://ci.example');
+    expect(posted).toHaveLength(6);
     expect(posted[0]!.body).toEqual([{ to: EXPO, body: PUSHES.event.body, data: { trigger: 'event' }, sound: 'default' }]);
-    expect(logged.at(-1)).toEqual({ code: 'daily_limit', count: 0 });
-    expect(store.get('app_push_proactive_budget_v1')).toBeUndefined();
-    await push('update', undefined, 'Your 15:00 moved to 17:00');
-    expect(posted).toHaveLength(EVENT_PUSH_DAILY_LIMIT + 1);
+    expect(logged.map(entry => entry.code)).not.toContain('daily_limit');
+    const held = fixture({ held: kind => kind === 'event' ? 'budget' : null });
+    await held.push('event');
+    expect([held.posted.length, held.logged]).toEqual([0, [{ code: 'held_budget', count: 0 }]]);
   });
 });
 
 describe('a message or a reply in the app chat', () => {
-  it('a message pushes the fixed line that opens Main chat, on the proactive ceiling, and holds in quiet hours', async () => {
+  it('a message pushes the fixed line that opens Main chat, and holds in quiet hours', async () => {
     const { push, posted, logged } = fixture();
     await push('message');
     expect(posted[0]!.body).toEqual([{ to: EXPO, body: 'Waldo has a new message for you', data: { trigger: 'event' }, sound: 'default' }]);
@@ -221,7 +195,7 @@ describe('a message or a reply in the app chat', () => {
     expect(logged).toEqual([{ code: 'sent', count: 1 }]);
   });
 
-  it('a reply goes in quiet hours, since the owner just wrote, on its own backstop that the proactive pushes never use up', async () => {
+  it('a reply goes in quiet hours, since the owner just wrote, on its own backstop against a sender loop, which unasked pushes never touch', async () => {
     const { push, posted, logged } = fixture({ quiet: () => true });
     await push('reply');
     expect(posted[0]!.body).toEqual([{ to: EXPO, body: 'Waldo replied', data: { trigger: 'event' }, sound: 'default' }]);

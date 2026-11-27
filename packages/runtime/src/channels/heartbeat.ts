@@ -32,10 +32,9 @@ const WAKE_SCAN_LIMIT = 200;
 // still past due. The notified-occurrence key is (loop_id, due), so editing the due time starts a
 // fresh occurrence that notifies again immediately. A check that found nothing to say holds it too.
 const RENOTIFY_COOLDOWN_MS = 4 * 60 * 60_000;
-// A lenient ceiling on Waldo starting conversations about open loops: at most this many check-back messages in any 24 hours,
-// counted from the outbox, whatever the number of loops. A due loop over it is not dropped; it waits for a later tick. Under the
-// owner's limits their daily budget replaces it.
-const CHECK_BACKS_PER_DAY = 6;
+// Check-backs keep no count of their own (the owner's ruling of 27 November): the model judges what is worth raising. Only a
+// number the owner set for themselves (checkBacksPerDay) caps them, counted from the outbox over 24 hours; a due loop over it
+// is not dropped, it waits for a later tick.
 const DAY_MS = 24 * 60 * 60_000;
 const checkBacksSince = (records: readonly FinalRecord[], since: number) =>
   records.filter(record => record.heartbeat && record.status !== 'blocked' && record.createdAt >= since).length;
@@ -137,7 +136,7 @@ export type HeartbeatDeps = Readonly<{
   // Writes the check-back job for these loops, synchronously, inside the scan's transaction.
   enqueue(loops: readonly Loop[], tick: Readonly<{ entryId: string; occurrence: number; runId: string; now: number }>): MachineEnqueued['code'];
   checked(code: HeartbeatCheck, detail: string): void;
-  // PROACTIVE_GATE: the owner's daily budget for unasked messages, which replaces CHECK_BACKS_PER_DAY (no count at high).
+  // PROACTIVE_GATE: the owner's own daily number for unasked messages, when they set one (infinite otherwise).
   checkBacksPerDay?(): number;
 }>;
 
@@ -187,7 +186,7 @@ export const heartbeatTick = (deps: HeartbeatDeps): ScheduleExecutor => {
       const records = deps.outbox();
       const notify = dueLoops(deps.sql, firedAt, deps.timezone, undefined, heldByOutbox(records, firedAt));
       if (notify.length === 0) return { code: 'unchanged' as const, count: 0 };
-      if (checkBacksSince(records, firedAt - DAY_MS) >= (deps.checkBacksPerDay?.() ?? CHECK_BACKS_PER_DAY)) return { code: 'held_daily_cap' as const, count: notify.length };
+      if (checkBacksSince(records, firedAt - DAY_MS) >= (deps.checkBacksPerDay?.() ?? Number.POSITIVE_INFINITY)) return { code: 'held_daily_cap' as const, count: notify.length };
       if (deps.providerDown()) return { code: 'held_breaker' as const, count: notify.length };
       const made = deps.enqueue(notify, { entryId: entry.id, occurrence: entry.occurrence_at, runId, now: firedAt });
       // The decision commits with the job, so a crash in between leaves neither.

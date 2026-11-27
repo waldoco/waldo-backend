@@ -52,7 +52,8 @@ const waitingRows = (records: readonly FinalRecord[], whatsappSubject: string | 
 
 const OUTCOMES: ReadonlySet<string> = new Set(['waiting', 'delivered', 'failed', 'unknown']);
 const wellFormed = (row: SendRow): boolean => typeof row?.id === 'string' && typeof row.kind === 'string' && OUTCOMES.has(row.outcome);
-export type SendsDeps = Readonly<{ kv: Kv; records: readonly FinalRecord[]; whatsappSubject?: string; windowOpen: boolean; knock: KnockFailure | null; timezone: string; now: number }>;
+// spokeSince: whether the owner has written to Waldo, on any surface, since a time; with it a delivered send says so.
+export type SendsDeps = Readonly<{ kv: Kv; records: readonly FinalRecord[]; whatsappSubject?: string; windowOpen: boolean; knock: KnockFailure | null; timezone: string; now: number; spokeSince?(at: number): boolean }>;
 // Today's Waldo-first sends in the owner's day, oldest first: those that ended, then those still waiting.
 export const sendsToday = (deps: SendsDeps): SendRow[] => {
   const day = localIso(deps.now, deps.timezone).slice(0, 10), today = (at: number) => localIso(at, deps.timezone).startsWith(day);
@@ -70,15 +71,17 @@ export const sentTodayPage = (rows: readonly SendRow[], max: number) => ({
 });
 
 const SURFACE_NAME: Readonly<Record<SendSurface, string>> = { app: 'the app', whatsapp: 'WhatsApp', telegram: 'Telegram', imessage: 'iMessage' };
-const said = (row: SendRow): string => row.outcome === 'delivered' ? 'delivered'
+const said = (row: SendRow, spokeSince?: (at: number) => boolean): string => row.outcome === 'delivered'
+  ? `delivered${spokeSince ? spokeSince(row.endedAt ?? row.at) ? '; the owner has written since' : '; no word from the owner since' : ''}`
   : row.outcome === 'waiting' ? `waiting${row.code ? ` (${row.code})` : ''}`
     : `${row.outcome === 'failed' ? 'failed' : 'unknown, it may not have arrived'}${row.code ? ` (${row.code})` : ''}`;
-// One host fact for the next run: what Waldo already sent today on its own, and what became of each. Kinds, times, surfaces and
-// codes only, never the words, which stay in the chat they went to.
+// One host fact for the next run: what Waldo already sent today on its own, and what became of each: how it ended and, once
+// delivered, whether the owner has written since. With no daily count (the owner's ruling of 27 November) this is what the
+// model judges the next unasked message by. Kinds, times, surfaces and codes only, never the words, which stay in their chat.
 export const sendsTodaySection = (deps: SendsDeps): string => {
   const rows = sendsToday(deps);
   if (!rows.length) return '';
   const clock = (at: number) => localIso(at, deps.timezone).slice(11, 16);
   return ['Messages Waldo sent first today (not replies), oldest first, and what became of each. An answer to what the owner asked is marked; the rest Waldo sent unasked:',
-    ...rows.map(row => `- ${clock(row.at)} ${row.kind === 'answer' ? 'answer to what the owner asked,' : row.kind.replace(/_/g, ' ')}${row.surface ? ` to ${SURFACE_NAME[row.surface]}` : ''}: ${said(row)}`)].join('\n');
+    ...rows.map(row => `- ${clock(row.at)} ${row.kind === 'answer' ? 'answer to what the owner asked,' : row.kind.replace(/_/g, ' ')}${row.surface ? ` to ${SURFACE_NAME[row.surface]}` : ''}: ${said(row, deps.spokeSince)}`)].join('\n');
 };

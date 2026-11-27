@@ -651,23 +651,17 @@ describe('the triage turn', () => {
     });
   });
 
-  it('over the day\'s budget the turn cannot raise a card and a tell waits for the next main card', async () => {
+  it('triage keeps no budget or gap of its own: after two interrupts today, the last half an hour ago, the turn may still raise a card and a tell goes', async () => {
     await withSweep(async (h) => {
-      h.storage.transactionSync(() => { h.updates.interrupted(DAY, h.clock.at - 3 * 3_600_000); h.updates.interrupted(DAY, h.clock.at - 2 * 3_600_000); });
-      const a = await triaged(h, { decision: 'tell', say: 'Your sync with Krati moved to 17:00.', push: { event: 'e-sync' } });
-      expect(a.tools[0]).not.toContain('propose_action');
-      expect([a.effects, a.chose]).toEqual([[], ['held_budget']]);
-      expect(unfolded(h)).toContain('Sync with Krati');
-      expect(h.updates.interrupts(DAY).count).toBe(2);
+      h.storage.transactionSync(() => { h.updates.interrupted(DAY, h.clock.at - 3 * 3_600_000); h.updates.interrupted(DAY, h.clock.at - 30 * 60_000); });
+      const a = await triaged(h, { decision: 'tell', say: 'Your sync with Krati moved to 17:00.' });
+      expect(a.tools[0]).toContain('propose_action');
+      expect([a.effects.length, a.chose]).toEqual([1, ['tell']]);
+      expect(h.updates.interrupts(DAY).count).toBe(3);
     });
   });
 
-  it('inside the cooldown after an interrupt, and in quiet hours, a tell waits; a revision still lands, silently', async () => {
-    await withSweep(async (h) => {
-      h.storage.transactionSync(() => h.updates.interrupted(DAY, h.clock.at - 30 * 60_000));
-      const a = await triaged(h, { decision: 'tell', say: 'Your sync with Krati moved to 17:00.' });
-      expect([a.effects, a.chose, a.tools[0]?.includes('propose_action')]).toEqual([[], ['held_cooldown'], false]);
-    });
+  it('in quiet hours a tell waits; a revision still lands, silently', async () => {
     await withSweep(async (h) => {
       const a = await triaged(h, { decision: 'tell', revise: { card: 'card:brief', text: 'The afternoon starts at 17:00 now.' }, push: { event: 'e-sync' } }, a => { a.quiet.on = true; });
       expect(a.effects).toEqual([expect.objectContaining({ text: 'The afternoon starts at 17:00 now.', revision: 'card:brief' })]);
@@ -722,7 +716,7 @@ describe('the triage turn', () => {
 // PROACTIVE_GATE: the owner's own limits replace triage's budget. The model may call a batch urgent to go past the budget from a
 // small allowance, never past quiet hours or a question still waiting; a message that asks sets the one question in flight.
 describe('the triage turn under the owner\'s interruption limits', () => {
-  const limits: InterruptLimits = { perDay: 1, urgentPerDay: 1, gapMs: 60 * 60_000 };
+  const limits: InterruptLimits = { perDay: 1, urgentPerDay: 1 };
   const owned = (h: Harness, spoke = { at: null as number | null }, day = { closed: false }) => ({
     spoke, day, book: interruptBook(h.storage.kv, { now: () => h.clock.at, timezone: () => 'UTC', ownerSpokeSince: at => spoke.at !== null && spoke.at > at }), limits: () => limits,
     closed: () => day.closed,
@@ -786,9 +780,10 @@ describe('the triage turn under the owner\'s interruption limits', () => {
     });
   });
 
-  it('cards raised unmarked on every batch stop at the budget and the allowance: card tools go once both are spent', async () => {
-    // Six triage batches ten minutes apart, each raising a card whenever card tools are offered, none marked urgent.
-    const two: InterruptLimits = { perDay: 2, urgentPerDay: 1, gapMs: 60 * 60_000 };
+  it('cards raised unmarked on every batch stop at the owner\'s own number and the allowance: card tools go once both are spent', async () => {
+    // Six triage batches ten minutes apart, each raising a card whenever card tools are offered, none marked urgent; the owner
+    // set two a day for themselves. There is no gap: ten minutes apart is no reason to wait.
+    const two: InterruptLimits = { perDay: 2, urgentPerDay: 1 };
     let ledger: unknown, start: number | undefined;
     const offered: boolean[] = [];
     for (let batch = 0; batch < 6; batch += 1) {
@@ -802,9 +797,9 @@ describe('the triage turn under the owner\'s interruption limits', () => {
         ledger = h.storage.kv.get(INTERRUPTS_KEY);
       });
     }
-    // One within the budget, one inside the gap from the allowance, then no card tools for the rest of the hour.
-    expect(offered).toEqual([true, true, false, false, false, false]);
-    expect(ledger).toMatchObject({ count: 1, urgent: 1 });
+    // Two within the owner's number, one from the urgent allowance, then no card tools for the rest of the day.
+    expect(offered).toEqual([true, true, true, false, false, false]);
+    expect(ledger).toMatchObject({ count: 2, urgent: 1 });
   });
 
   it('urgent never passes quiet hours', async () => {
@@ -818,7 +813,7 @@ describe('the triage turn under the owner\'s interruption limits', () => {
   });
 
   it('one question in flight: a second question waits, even urgent, until the owner speaks; a tell that asks nothing still goes', async () => {
-    const roomy: InterruptLimits = { ...limits, perDay: 5, gapMs: 0 };
+    const roomy: InterruptLimits = { ...limits, perDay: 5 };
     const asked = async (reply: unknown, spokeAfter: boolean) => withSweep(async (h) => {
       const own = { ...owned(h), limits: () => roomy };
       h.storage.transactionSync(() => own.book.spend(roomy, true, 'update:earlier'));

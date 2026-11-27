@@ -3,13 +3,14 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { setProactivityArgsSchema } from '@waldo/contracts';
 import { drawingOn, interruptBook, interruptHold, interruptLimits, reopensAt, spendOf, withinBudget, type HoldInput, type InterruptLimits } from '../src/channels/interruptions';
-import { loopBook, loopHandlers, proactivityLine } from '../src/channels/loops';
+import { isQuiet, loopBook, loopHandlers, proactivityLine } from '../src/channels/loops';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { episodeIndex, ownerSpokeSince, OWNER_SAID } from '../src/channels/episodes';
 
-// The owner's limits on unasked messages. Code holds consent, quiet hours, one question waiting, the day's budget and the gap;
-// the model's urgent goes past the budget and the gap from a small allowance, and never past the rest.
-const LIMITS: InterruptLimits = { perDay: 2, urgentPerDay: 1, gapMs: 60 * 60_000 };
+// The owner's limits on unasked messages (ruling of 27 Nov: no notification cap; the model judges). Code holds consent, quiet
+// hours, the owner's day and one question waiting, and a daily number only when the owner set one for themselves; there is no
+// gap between two messages. Past the owner's own number the model's urgent goes from a small allowance, never past the rest.
+const LIMITS: InterruptLimits = { perDay: 2, urgentPerDay: 1 };
 const NOW = Date.parse('2026-11-05T10:00:00Z');
 const base: HoldInput = { consent: true, quiet: false, asks: false, urgent: false, open: null, spent: { day: '2026-11-05', count: 0, urgent: 0, last: null }, limits: LIMITS, now: NOW };
 let seq = 0;
@@ -21,7 +22,7 @@ describe('interruptHold', () => {
     expect(interruptHold(base)).toBeNull();
   });
 
-  it('holds in order: consent, quiet hours, the end of the owner\'s day, a waiting question, the budget, the gap', () => {
+  it('holds in order: consent, quiet hours, the end of the owner\'s day, a waiting question, the owner\'s own number', () => {
     const open = { ref: 'update:1', at: NOW - 1, day: '2026-11-05' };
     const spent = { day: '2026-11-05', count: 2, urgent: 0, last: NOW - 1 };
     expect(interruptHold({ ...base, consent: false, quiet: true })).toBe('consent');
@@ -29,10 +30,13 @@ describe('interruptHold', () => {
     expect(interruptHold({ ...base, closed: true, asks: true, open, spent })).toBe('closed');
     expect(interruptHold({ ...base, asks: true, open, spent })).toBe('question');
     expect(interruptHold({ ...base, open, spent })).toBe('budget');
-    expect(interruptHold({ ...base, spent: { ...spent, count: 1 } })).toBe('cooldown');
   });
 
-  it('urgent goes past the budget and the gap while the allowance lasts, never past consent, quiet hours or a waiting question', () => {
+  it('no gap: a message a minute after the last one goes', () => {
+    expect(interruptHold({ ...base, spent: { day: '2026-11-05', count: 1, urgent: 0, last: NOW - 60_000 } })).toBeNull();
+  });
+
+  it('urgent goes past the owner\'s number while the allowance lasts, never past consent, quiet hours or a waiting question', () => {
     const spent = { day: '2026-11-05', count: 2, urgent: 0, last: NOW - 1 };
     const open = { ref: 'update:1', at: NOW - 1, day: '2026-11-05' };
     expect(interruptHold({ ...base, urgent: true, spent })).toBeNull();
@@ -43,59 +47,87 @@ describe('interruptHold', () => {
     expect(interruptHold({ ...base, urgent: true, asks: true, open })).toBe('question');
   });
 
-  it('past the budget or the gap a charge draws on the urgent allowance while it lasts, then is counted over the budget', () => {
+  it('past the owner\'s number a charge draws on the urgent allowance while it lasts, then is counted over it', () => {
     const over = { day: '2026-11-05', count: 2, urgent: 0, last: NOW - 1 };
-    expect(spendOf(base.spent, LIMITS, NOW)).toBe('counted');
-    expect(spendOf(over, LIMITS, NOW)).toBe('urgent');
-    expect(spendOf({ ...over, count: 1 }, LIMITS, NOW)).toBe('urgent');
-    expect(spendOf({ ...over, urgent: 1 }, LIMITS, NOW)).toBe('counted');
+    expect(spendOf(base.spent, LIMITS)).toBe('counted');
+    expect(spendOf({ ...over, count: 1 }, LIMITS)).toBe('counted');
+    expect(spendOf(over, LIMITS)).toBe('urgent');
+    expect(spendOf({ ...over, urgent: 1 }, LIMITS)).toBe('counted');
   });
 });
 
-describe('interruptLimits: the owner\'s volume sets the daily count, and their own number wins', () => {
+describe('interruptLimits: no count of Waldo\'s own; the owner\'s own number holds', () => {
   const at = (volume: 'low' | 'normal' | 'high', interruptions_per_day?: number) => ({ quiet_start: null, quiet_end: null, volume, ...(interruptions_per_day === undefined ? {} : { interruptions_per_day }) });
-  // The deployed PROACTIVE_INTERRUPTS_PER_DAY ("2") no longer decides: volume does.
+  // What staging still sets; none of it is a count Waldo holds any more.
   const deployed = { PROACTIVE_INTERRUPTS_PER_DAY: '2', PROACTIVE_URGENT_PER_DAY: '1', PROACTIVE_GAP_MIN: '60' };
 
-  it('normal is six a day', () => {
-    expect(interruptLimits(deployed, at('normal'))).toEqual({ perDay: 6, urgentPerDay: 1, gapMs: 60 * 60_000 });
+  it('at every volume, without a number of the owner\'s, there is no daily count and no gap', () => {
+    for (const volume of ['low', 'normal', 'high'] as const) {
+      const limits = interruptLimits(deployed, at(volume));
+      expect(limits).toEqual({ perDay: Number.POSITIVE_INFINITY, urgentPerDay: 0 });
+      const spent = { day: '2026-11-05', count: 40, urgent: 0, last: NOW - 60_000 };
+      expect(interruptHold({ ...base, spent, limits })).toBeNull();
+      expect(withinBudget(spent, limits)).toBe(true);
+      expect(interruptHold({ ...base, quiet: true, spent, limits })).toBe('quiet');
+    }
   });
 
-  it('low is two a day', () => {
-    expect(interruptLimits(deployed, at('low'))).toEqual({ perDay: 2, urgentPerDay: 1, gapMs: 60 * 60_000 });
+  it('the owner\'s own number holds at every volume, with the deployment\'s urgent allowance past it', () => {
+    for (const volume of ['low', 'normal', 'high'] as const) expect(interruptLimits(deployed, at(volume, 3))).toEqual({ perDay: 3, urgentPerDay: 1 });
   });
 
-  it('high has no daily count; the gap and quiet hours still hold', () => {
-    const high = interruptLimits(deployed, at('high'));
-    expect(high).toEqual({ perDay: Number.POSITIVE_INFINITY, urgentPerDay: 1, gapMs: 60 * 60_000 });
-    const spent = { day: '2026-10-20', count: 40, urgent: 0, last: NOW - 2 * 3_600_000 };
-    expect(interruptHold({ ...base, spent, limits: high })).toBeNull();
-    expect(interruptHold({ ...base, spent: { ...spent, last: NOW - 10 * 60_000 }, limits: high })).toBe('cooldown');
-    expect(interruptHold({ ...base, quiet: true, spent, limits: high })).toBe('quiet');
-    expect(withinBudget(spent, high, NOW)).toBe(true);
-  });
-
-  it('the owner\'s own number wins at every volume', () => {
-    for (const volume of ['low', 'normal', 'high'] as const) expect(interruptLimits(deployed, at(volume, 3)).perDay).toBe(3);
-  });
-
-  it('the owner\'s zero means none at all, even at high: no budget and no urgent allowance', () => {
+  it('the owner\'s zero means none at all: no urgent allowance either', () => {
     const none = interruptLimits({ PROACTIVE_URGENT_PER_DAY: '3' }, at('high', 0));
-    expect(none).toMatchObject({ perDay: 0, urgentPerDay: 0 });
+    expect(none).toEqual({ perDay: 0, urgentPerDay: 0 });
     expect(interruptHold({ ...base, urgent: true, limits: none })).toBe('budget');
   });
 
-  it('an unreadable urgent allowance or gap falls back rather than opening the gate', () => {
-    expect(interruptLimits({ PROACTIVE_URGENT_PER_DAY: 'lots', PROACTIVE_GAP_MIN: '1.5' }, at('normal'))).toEqual({ perDay: 6, urgentPerDay: 1, gapMs: 60 * 60_000 });
+  it('an unreadable urgent allowance falls back rather than opening the gate', () => {
+    expect(interruptLimits({ PROACTIVE_URGENT_PER_DAY: 'lots' }, at('normal', 4))).toEqual({ perDay: 4, urgentPerDay: 1 });
   });
 
-  it('the turn reads what is left: a count at normal, none at high', () => {
+  it('the turn is told there is no count to spend, and to judge from what already went today; the owner\'s own number is read back', () => {
     const kv = new Map<string, unknown>();
     const book = interruptBook({ get: <T,>(key: string) => kv.get(key) as T | undefined, put: (key, value) => { kv.set(key, value); }, delete: key => kv.delete(key) },
       { now: () => NOW, timezone: () => 'UTC', ownerSpokeSince: () => false });
-    expect(book.line(interruptLimits(deployed, at('normal')))).toContain('6 more times today');
-    expect(book.line(interruptLimits(deployed, at('high')))).toContain('no daily count');
-    expect(book.line(interruptLimits(deployed, at('high')))).not.toMatch(/Infinity|budget for unasked messages is spent/);
+    const free = book.line(interruptLimits(deployed, at('normal')));
+    expect(free).toContain('There is no daily count of unasked messages and no gap between them');
+    expect(free).toContain('what Waldo already sent today and what became of each');
+    expect(free).not.toMatch(/Infinity|urgent|budget|more times/);
+    expect(book.line(interruptLimits(deployed, at('normal', 3)))).toContain('The owner set 3 unasked messages a day for themselves: 3 more today.');
+  });
+});
+
+// The sleep window and the owner's day change on a mocked clock, in Kolkata (UTC+05:30), with quiet hours 22:00-07:00.
+describe('with no count, the sleep window and the owner\'s own number still hold across the night and the day change', () => {
+  const settings = (interruptions_per_day?: number) => ({ quiet_start: '22:00', quiet_end: '07:00', volume: 'normal' as const, ...(interruptions_per_day === undefined ? {} : { interruptions_per_day }) });
+  const ZONE = 'Asia/Kolkata';
+  it('a message at 22:15 waits for the morning, urgent or not; at 07:01 it goes, however many went the day before', async () => {
+    await withKv((state) => {
+      const clock = { at: Date.parse('2026-11-05T16:30:00Z') }; // 22:00 IST
+      const book = interruptBook(state.storage.kv, { now: () => clock.at, timezone: () => ZONE, ownerSpokeSince: () => false });
+      const limits = interruptLimits({ PROACTIVE_URGENT_PER_DAY: '1' }, settings());
+      clock.at = Date.parse('2026-11-05T16:00:00Z'); // 21:30 IST
+      for (let n = 0; n < 12; n += 1) { expect(book.hold({ consent: true, quiet: isQuiet(settings(), clock.at, ZONE), asks: false, urgent: false, limits })).toBeNull(); book.spend(limits, false, `m${n}`); clock.at += 60_000; }
+      clock.at = Date.parse('2026-11-05T16:45:00Z'); // 22:15 IST
+      for (const urgent of [false, true]) expect(book.hold({ consent: true, quiet: isQuiet(settings(), clock.at, ZONE), asks: false, urgent, limits })).toBe('quiet');
+      clock.at = Date.parse('2026-11-06T01:31:00Z'); // 07:01 IST on the 6th
+      expect(book.spent()).toMatchObject({ day: '2026-11-06', count: 0 });
+      expect(book.hold({ consent: true, quiet: isQuiet(settings(), clock.at, ZONE), asks: false, urgent: false, limits })).toBeNull();
+    });
+  });
+
+  it('the owner\'s own number is spent by their midnight, not UTC\'s, and starts again after it', async () => {
+    await withKv((state) => {
+      const clock = { at: Date.parse('2026-11-05T12:00:00Z') }; // 17:30 IST
+      const book = interruptBook(state.storage.kv, { now: () => clock.at, timezone: () => ZONE, ownerSpokeSince: () => false });
+      const limits = interruptLimits({ PROACTIVE_URGENT_PER_DAY: '1' }, { ...settings(3), quiet_start: null, quiet_end: null });
+      for (const ref of ['a', 'b', 'c']) book.spend(limits, false, ref);
+      clock.at = Date.parse('2026-11-05T18:29:00Z'); // 23:59 IST
+      expect(book.hold({ consent: true, quiet: false, asks: false, urgent: false, limits })).toBe('budget');
+      clock.at = Date.parse('2026-11-05T18:31:00Z'); // 00:01 IST on the 6th, still the 5th in UTC
+      expect(book.hold({ consent: true, quiet: false, asks: false, urgent: false, limits })).toBeNull();
+    });
   });
 });
 
@@ -159,7 +191,7 @@ describe('interruptBook', () => {
       const clock = { at: NOW };
       const book = interruptBook(state.storage.kv, { now: () => clock.at, timezone: () => 'UTC', ownerSpokeSince: () => false });
       expect(book.spend(LIMITS, false, 'a')).toBe('counted');
-      clock.at += LIMITS.gapMs;
+      clock.at += 60_000;
       expect(book.spend(LIMITS, false, 'b')).toBe('counted');
       clock.at += 1;
       expect(book.spend(LIMITS, false, 'c')).toBe('urgent');
@@ -192,7 +224,7 @@ describe('interruptBook', () => {
       const spoke = { at: null as number | null };
       const book = interruptBook(state.storage.kv, { now: () => NOW, timezone: () => 'UTC', ownerSpokeSince: at => spoke.at !== null && spoke.at > at });
       book.spend(LIMITS, true, 'q');
-      book.spend({ ...LIMITS, gapMs: 0 }, false, 'note');
+      book.spend(LIMITS, false, 'note');
       expect(book.question()).toMatchObject({ ref: 'q' });
       expect(book.hold({ consent: true, quiet: false, asks: true, urgent: true, limits: LIMITS })).toBe('question');
       spoke.at = NOW + 1;
@@ -202,7 +234,7 @@ describe('interruptBook', () => {
 });
 
 describe('drawingOn: a health card under the owner\'s limits', () => {
-  it('stops at the day\'s budget, waits out the gap, and charges both budgets once it goes', async () => {
+  it('stops at the owner\'s own number with no gap before it, and charges both budgets once it goes', async () => {
     await withKv((state) => {
       const clock = { at: NOW }, charged: string[] = [];
       const book = interruptBook(state.storage.kv, { now: () => clock.at, timezone: () => 'UTC', ownerSpokeSince: () => false });
@@ -210,10 +242,9 @@ describe('drawingOn: a health card under the owner\'s limits', () => {
       expect(budget.admit('health:2026-11-05')).toEqual({ verdict: 'send' });
       budget.charge('health:2026-11-05');
       expect([charged, book.spent().count]).toEqual([['health:2026-11-05'], 1]);
-      expect(budget.admit('health:2026-11-05')).toEqual({ verdict: 'wait', until: NOW + LIMITS.gapMs });
-      clock.at += LIMITS.gapMs;
+      clock.at += 60_000;
+      expect(budget.admit('health:2026-11-05')).toEqual({ verdict: 'send' });
       budget.charge('health:2026-11-05');
-      clock.at += LIMITS.gapMs;
       expect(budget.admit('health:2026-11-05')).toEqual({ verdict: 'spent' });
     });
   });

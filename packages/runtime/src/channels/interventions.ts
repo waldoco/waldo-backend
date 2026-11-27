@@ -140,7 +140,7 @@ export const interventionApplier = (deps: InterventionApplyDeps): MachineHandler
     const chosen = parseIntervention(reply);
     const asks = chosen !== 'invalid' && chosen.asks === true, urgent = chosen !== 'invalid' && chosen.urgent === true;
     const spend = () => { deps.book.spend(limits, asks, `intervention:${row.id}`); };
-    const within = () => withinBudget(deps.book.spent(), limits, deps.now());
+    const within = () => withinBudget(deps.book.spent(), limits);
     if (deps.cardsSince(started) > 0) { settle(within() ? 'act' : urgent ? 'act+urgent' : 'act+over_budget', spend); return 'skipped'; }
     if (chosen === 'invalid') { settle('invalid'); return 'skipped'; }
     if (chosen.decision === 'none') { settle('none'); return 'skipped'; }

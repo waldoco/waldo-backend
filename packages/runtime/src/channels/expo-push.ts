@@ -41,21 +41,10 @@ export const pushTitle = (title: unknown): string | null => {
   if (!plain || HOST.test(probe) || numericHealthIn(probe)) return null;
   return plain.length <= PUSH_TITLE_CHARS ? plain : `${plain.slice(0, PUSH_TITLE_CHARS - 1).trim()}…`;
 };
-export const PUSH_DAILY_LIMIT = 3;
-// Pushes for anything but a day card or an approval have their own ceiling: a backstop against a runaway sender. Whether one
-// is sent at all is the model's judgment.
-export const PROACTIVE_PUSH_DAILY_LIMIT = 6;
-// Under the owner's limits the ceiling rises with their daily budget (OwnerPushDeps.proactivePerDay), never below the fixed
-// one: these pushes ride on messages the limits already admitted and charged, or copy one, so the budget never lowers it.
-// High volume has no daily count; this caps it all the same, as a guard against a sender loop, not as a volume rule.
-export const PROACTIVE_PUSH_BACKSTOP = 24;
-// Event pushes, which an outside source's notices raise, count apart: a noisy source never uses up the day's prep and update
-// pushes. This is a backstop under the owner's own limits (OwnerPushDeps.held), which the deploy can set (EVENT_PUSH_PER_DAY).
-export const EVENT_PUSH_DAILY_LIMIT = 3;
-// Reply pushes have their own backstop against a sender loop; a busy conversation stays far under it.
+// A push for an unasked message keeps no daily count (the owner's ruling of 27 November): each message Waldo sends pushes once,
+// and whether to send it at all is the model's judgment, under the owner's own limits (OwnerPushDeps.held) and quiet hours.
+// Reply pushes keep a backstop against a sender loop; they answer the owner, and a busy conversation stays far under it.
 export const REPLY_PUSH_DAILY_LIMIT = 60;
-const CARD_PUSHES: ReadonlySet<PushKind> = new Set(['brief', 'approval']);
-const BUDGET_KEY = 'app_push_budget_v1';
 const REPLY_BUDGET_KEY = 'app_push_reply_budget_v1';
 // Expo's ticket for each push it accepted, until its receipt is read: Expo has the receipt about 15 minutes after the send
 // and keeps it for a day. A ticket names its device so a receipt that says the token is dead retires that registration.
@@ -65,10 +54,6 @@ export const RECEIPT_AFTER_MS = 15 * 60_000;
 const RECEIPT_KEPT_MS = 24 * 60 * 60_000;
 const MAX_TICKETS = 100;
 type Ticket = Readonly<{ id: string; installation_id: string; device_epoch: number; at: number }>;
-const PROACTIVE_BUDGET_KEY = 'app_push_proactive_budget_v1';
-const EVENT_BUDGET_KEY = 'app_push_event_budget_v1';
-// The owner-day the Brief was last pushed, which opens the day's last slot to approval pushes.
-const BRIEF_DAY_KEY = 'app_push_brief_day_v1';
 const MAX_TARGETS = 10;
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 
@@ -89,9 +74,6 @@ export type OwnerPushDeps = Readonly<{
   // charged to them by spent, when it is counted.
   held?(kind: PushKind): string | null;
   spent?(kind: PushKind): void;
-  eventPerDay?: number;
-  // PROACTIVE_GATE: the owner's daily budget for unasked messages, which raises the proactive ceiling up to the backstop.
-  proactivePerDay?(): number;
   now?(): number;
 }>;
 
@@ -109,10 +91,9 @@ const unregistered = (ticket: unknown) => {
   return answer?.status === 'error' && answer.details?.error === 'DeviceNotRegistered';
 };
 
-// Sends one push to the owner's Expo devices, within its day's budget and never in quiet hours. A push is
-// counted before it is sent, so an unknown outcome never lets a retry pass the limit. Failures are logged as a code and
-// never thrown, so the work that triggered the push is not affected. The last slot of the day is the Brief's: approval pushes
-// stop one short of the limit until the Brief has been pushed that day. The send and the read of its receipt are bounded.
+// Sends one push to the owner's Expo devices, never in quiet hours (a reply excepted) and never past the owner's own limits. A
+// reply push is counted before it is sent, so an unknown outcome never lets a retry pass its backstop. Failures are logged as a
+// code and never thrown, so the work that triggered the push is not affected. The send and the read of its receipt are bounded.
 export const ownerPush = (deps: OwnerPushDeps) => async (kind: PushKind, approvalId?: string, checkedBody?: string, cardRef?: string): Promise<void> => {
   if (!deps.accessToken) return deps.log('not_configured', 0);
   const { data: fixed } = PUSHES[kind];
@@ -123,18 +104,14 @@ export const ownerPush = (deps: OwnerPushDeps) => async (kind: PushKind, approva
   if (kind !== 'reply' && deps.quiet()) return deps.log('quiet', 0);
   const held = deps.held?.(kind);
   if (held) return deps.log(`held_${held}`, 0);
-  const card = CARD_PUSHES.has(kind), key = card ? BUDGET_KEY : kind === 'event' ? EVENT_BUDGET_KEY : kind === 'reply' ? REPLY_BUDGET_KEY : PROACTIVE_BUDGET_KEY;
-  const day = deps.today(), budget = deps.kv.get<{ day: string; sent: number }>(key);
+  const day = deps.today(), budget = kind === 'reply' ? deps.kv.get<{ day: string; sent: number }>(REPLY_BUDGET_KEY) : undefined;
   const sent = budget?.day === day ? budget.sent : 0;
-  const proactive = deps.proactivePerDay ? Math.min(Math.max(deps.proactivePerDay(), PROACTIVE_PUSH_DAILY_LIMIT), PROACTIVE_PUSH_BACKSTOP) : PROACTIVE_PUSH_DAILY_LIMIT;
-  const limit = kind === 'event' ? deps.eventPerDay ?? EVENT_PUSH_DAILY_LIMIT : kind === 'reply' ? REPLY_PUSH_DAILY_LIMIT : !card ? proactive : kind === 'approval' && deps.kv.get<string>(BRIEF_DAY_KEY) !== day ? PUSH_DAILY_LIMIT - 1 : PUSH_DAILY_LIMIT;
-  if (sent >= limit) return deps.log('daily_limit', 0);
+  if (kind === 'reply' && sent >= REPLY_PUSH_DAILY_LIMIT) return deps.log('daily_limit', 0);
   let devices: readonly PushTarget[];
   try { devices = readTargets(await deps.targets()); } catch { return deps.log('targets_unavailable', 0); }
   if (!devices.length) return deps.log('no_devices', 0);
-  deps.kv.put(key, { day, sent: sent + 1 });
+  if (kind === 'reply') deps.kv.put(REPLY_BUDGET_KEY, { day, sent: sent + 1 });
   deps.spent?.(kind);
-  if (kind === 'brief') deps.kv.put(BRIEF_DAY_KEY, day);
   let response: Response;
   try {
     response = await withRequestTimeout(signal => deps.send(EXPO_PUSH_URL, { method: 'POST', signal,

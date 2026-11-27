@@ -57,13 +57,11 @@ export const mailFollowupPrompt = (localNow: string, loop: import('../channels/l
 ].join('\n\n');
 
 // The triage turn (GOOGLE_REALTIME_TRIAGE): the same update check, choosing one of four outcomes for the batch. Code holds the
-// owner's quiet hours and daily interrupt budget; `hold` says why nothing can interrupt them now, and then the turn has no
-// tool that raises a card.
-export type TriageHold = 'quiet' | 'budget' | 'cooldown';
+// owner's quiet hours, and their own limits when they are on; `hold` says why nothing can interrupt them now, and then the turn
+// has no tool that raises a card.
+export type TriageHold = 'quiet';
 const HOLDS: Readonly<Record<TriageHold, string>> = {
   quiet: 'It is the owner\'s quiet hours: nothing can interrupt them now. A revision still lands silently.',
-  budget: 'Waldo has used today\'s interrupts: nothing can interrupt the owner again today. A revision still lands silently.',
-  cooldown: 'Waldo interrupted the owner a short while ago: nothing can interrupt them again yet. A revision still lands silently.',
 };
 // Acting ahead: Waldo brings the owner the prepared outcome, once, with why; or says nothing.
 const ACT_AHEAD = [
@@ -81,7 +79,7 @@ const STYLES: Readonly<Record<ReadsAs, string>> = {
 export const channelStyle = (reads: ReadsAs): string => STYLES[reads];
 
 export const triagePrompt = (localNow: string, context: Readonly<{ changes: string; ledger: string; feedback: string; volume: 'normal' | 'high'; sourceFollowups?: boolean;
-  cards: string; revisesCards: boolean; goals: string; hold: TriageHold | null; left: number;
+  cards: string; revisesCards: boolean; goals: string; hold: TriageHold | null;
   // The owner's own interruption limits, when they replace triage's budget: what is left today and whether a question waits.
   limits?: string;
   // PROACTIVE_ACT_AHEAD: the worker prepared the move; style says how a message reads on the owner's surface.
@@ -103,7 +101,7 @@ export const triagePrompt = (localNow: string, context: Readonly<{ changes: stri
   '- tell: they should know now. Say a short update in their chat, or revise a day card that already reached them today when the change makes it wrong (write the whole card as it should now read), and push a phone notification only when it is worth interrupting them for.',
   '- brief: worth knowing, not now. The next day card carries it.',
   '- silent: noise, newsletters, changes Waldo made itself (check the ledger), and what the owner already handled. Nothing carries it.',
-  context.hold ? HOLDS[context.hold] : context.limits ? `${context.limits} Act and a tell that messages or pushes each spend one.` : `Waldo can interrupt the owner ${context.left === 1 ? 'once more' : `${context.left} more times`} today; act and a tell that messages or pushes each spend one.`,
+  context.hold ? HOLDS[context.hold] : context.limits ? `${context.limits} Act and a tell that messages or pushes each spend one.` : 'There is no daily count of interruptions and no gap between them: judge whether this change is worth the owner\'s attention now from what Waldo already sent today and what became of each.',
   ...(context.revisesCards ? [] : ['The owner reads Waldo where a card cannot be edited: a revision goes out as a new message, so write it as a short note of what changed in the card.']),
   `A short update leads with the change itself ("${LEAD_EXAMPLE}"), with no header line. The day cards are card:brief (the Daily Brief), card:midday (the Check-in) and card:close (the Close).`,
   'Waldo writes the push itself from one calendar change: give that event\'s id ("id" in its change) and the push names the meeting and its new time. Without an id, or for a mail, the push only says there is an update to their day.',

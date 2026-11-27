@@ -114,6 +114,17 @@ describe('every Waldo-first send ends with one recorded outcome', () => {
     expect(sendsToday(deps(kv)).map(row => row.id)).toEqual(['good']);
   });
 
+  it('says, for each delivered send, whether the owner has written since, so the model can judge what landed and what met silence', () => {
+    const { kv } = kvOf();
+    recordAppSend(kv, 'brief', 'day_card', NINE);
+    recordAppSend(kv, 'nudge', 'message', NINE + 30 * 60_000);
+    recordSendEnded(kv, record({ id: 'copy:1', status: 'blocked', reason: 'provider_failed' }), 'whatsapp', NINE);
+    const section = sendsTodaySection(deps(kv, { spokeSince: at => at < NINE + 15 * 60_000 }));
+    expect(section).toContain('- 09:00 day card to the app: delivered; the owner has written since');
+    expect(section).toContain('- 09:30 message to the app: delivered; no word from the owner since');
+    expect(section).toContain('- 09:00 message to WhatsApp: failed (provider_failed)\n');
+  });
+
   it('gives the next run one section of kinds, times, surfaces and outcomes, and none on a day with no sends', () => {
     const { kv } = kvOf();
     expect(sendsTodaySection(deps(kv))).toBe('');

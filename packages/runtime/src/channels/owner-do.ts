@@ -193,7 +193,7 @@ import { meetingPrepApplier, meetingPrepSpec } from './meeting-prep';
 import { prepGranola } from './meeting-prep-granola';
 import { prepFireflies } from './meeting-prep-fireflies';
 import { briefBodyAfter, briefBodyBefore, BRIEF_BODY_KEY, BRIEF_BODY_TOOLS, briefBodyPrompt, briefBodyRevision, recoveryScored, type BriefBodyCode } from './brief-revision';
-import { emitObserved, observedEvents, triageHold, UPDATE_JUDGE_WAKE_KEY, updateSweepApplier, updateSweepCheck, updateSweepTools, type ObservedSubscriber, type SweepGate } from './update-sweep';
+import { emitObserved, observedEvents, UPDATE_JUDGE_WAKE_KEY, updateSweepApplier, updateSweepCheck, updateSweepTools, type ObservedSubscriber, type SweepGate } from './update-sweep';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { recallChain, recallChainOn } from '../history/recall-chain';
 import { searchHistoryHandler } from '../tools/live/search-history';
@@ -489,11 +489,6 @@ type ScheduledOwner = Readonly<{ kind: 'admitted'; binding: SurfaceOwnerBinding;
 // The notice for a run that stopped before it finished, so its outcome is unknown.
 const RUN_DID_NOT_FINISH = INTERRUPTED_NOTICES.unfinished;
 
-// EVENT_PUSH_PER_DAY: the deploy's backstop on event pushes, a whole number; anything else keeps expo-push's default.
-const eventPushesPerDay = (raw: string | undefined): number | null => {
-  const parsed = Number(raw);
-  return raw !== undefined && raw.trim() !== '' && Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
-};
 const validZone = (zone: string): boolean => {
   try {
     return zone.length > 0 && Boolean(new Intl.DateTimeFormat('en', { timeZone: zone }));
@@ -5169,7 +5164,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const mcpWaiting = () => { const servers = this.mcp().waitingServers(); return servers.length ? `MCP questions\n- ${servers.join(', ')} asked the owner a question before running a tool; search_mcp_tools shows it.` : ''; };
     // What Waldo already sent first today and what became of each (send-outcomes.ts), for every run built on the ledger.
     const sendsDeps = () => ({ kv: storage.kv, records: finalOutbox.records(), whatsappSubject: storage.kv.get<string>('whatsapp_subject'),
-      windowOpen: whatsappWindowOpen(storage.kv, Date.now()), knock: whatsappKnockFailure(storage.kv), timezone: clock.timezone, now: Date.now() });
+      windowOpen: whatsappWindowOpen(storage.kv, Date.now()), knock: whatsappKnockFailure(storage.kv), timezone: clock.timezone, now: Date.now(),
+      spokeSince: (at: number) => ownerSpokeSince(storage.sql, at) });
     const promptLedger = async () =>
       [loopsSection(loops, clock.timezone, Date.now()), sendsTodaySection(sendsDeps()), desk.ledger(book.list()), mcpWaiting(), unreadableRemindersLine(book.unreadable()), proactivityLine(loops.proactivity(), this.env.PROACTIVE_GATE === '1'), schedulePreferencesLine(schedPrefs.all(), schedPrefs.healthMode())]
         .filter((section) => section !== '')
@@ -5201,7 +5197,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const lookFollows = async (on: boolean) => { if (interventions && on && armable('heartbeat')) await armLook(Date.now()); else await dropLook(); };
     const dropLook = async () => { if (scheduler.lookup(INTERVENTION_REVIEW_ID).state !== 'absent') { await scheduler.cancelReadable(INTERVENTION_REVIEW_ID); cancelMachine('intervention'); } };
     // The app's push: fixed text to the owner's own devices, read from the directory for each send.
-    const eventPerDay = eventPushesPerDay(this.env.EVENT_PUSH_PER_DAY);
     const pushDeps: Parameters<typeof ownerPush>[0] = { accessToken: this.env.EXPO_ACCESS_TOKEN, kv: identity, send: fetch, quiet, today: () => localIso(Date.now(), clock.timezone).slice(0, 10),
       targets: async () => { const { call, doName } = this.pushDirectory(); return call('app_push_targets', `app.push.targets.${doName}`, { p_do_name: doName }); },
       retire: target => this.retirePushTarget(target),
@@ -5215,7 +5210,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         ? interrupts.book.hold({ consent: reachesOut(), quiet: false, closed: interrupts.closed(), asks: false, urgent: false, limits: interrupts.limits() })
         : reachesOut() ? null : 'consent',
       spent: kind => { if (kind === 'event' && interrupts) interrupts.book.spend(interrupts.limits(), false, 'push:event'); },
-      ...(eventPerDay === null ? {} : { eventPerDay }), ...(interrupts ? { proactivePerDay: () => interrupts.limits().perDay } : {}) };
+    };
     const push = ownerPush(pushDeps);
     // Media reads are per-surface and feed the one transcriber/attachment pipeline: Telegram file ids go through getFile,
     // WhatsApp media ids through the Graph two-step, and an app attachment's id opens the upload staged in this object.
@@ -6489,12 +6484,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // HELD_RAISE (with triage): a batch held while Waldo could not reach the owner is judged again at the first sweep that may.
     const heldRaise = realtime && this.env.HELD_RAISE === '1';
     // Whether an unasked message could reach the owner now, by the same holds a tell meets: quiet hours, and the owner's limits
-    // or triage's own budget. A raise written while one holds would only wait again.
+    // when they are on. A raise written while one holds would only wait again.
     const mayRaise = () => {
       if (quiet()) return false;
       const now = Date.now();
-      if (interrupts) return interrupts.book.hold({ consent: true, quiet: false, closed: interrupts.closed(), asks: false, urgent: false, limits: interrupts.limits() }) === null;
-      return triageHold(updates.interrupts(localIso(now, clock.timezone).slice(0, 10)), now, false) === null;
+      return !interrupts || interrupts.book.hold({ consent: true, quiet: false, closed: interrupts.closed(), asks: false, urgent: false, limits: interrupts.limits() }) === null;
     };
     const sweepGate = (day: string): SweepGate | null => {
       const { followups, volume } = loops.proactivity();
