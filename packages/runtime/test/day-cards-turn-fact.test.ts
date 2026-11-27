@@ -5,6 +5,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { dayCardsLine, dayPlanBook } from '../src/channels/day-cards';
 import { OwnerDO } from '../src/channels/owner-do';
 import { localIso } from '../src/channels/reminders';
+import { recordSendEnded } from '../src/channels/send-outcomes';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
@@ -106,6 +107,9 @@ it('a hello on WhatsApp carries where the Brief went today, in the turn context 
       const deliveredAt = Date.now() - 60_000;
       plans.delivered(today, 'card:brief', 'row-1', deliveredAt);
       plans.sent(today, 'card:brief');
+      // Its WhatsApp copy failed for want of a payment method: the hello's turn reads that too.
+      recordSendEnded(state.storage.kv, { id: 'whatsapp-copy:row-1', trace: 't', payload: { chat_id: 1, text: 'synthetic' }, digest: 'd', ownerSubject: subject, doName: name,
+        status: 'blocked', reason: 'whatsapp_payment_required', dueAt: 0, createdAt: deliveredAt, attempts: 0 }, 'whatsapp', deliveredAt);
       const instance = new OwnerDO(state, fixtureEnv);
       const response = await instance.fetch(new Request('https://telegram-owner/whatsapp-admit', {
         method: 'POST', headers: { 'x-waldo-whatsapp-subject': subject, 'x-waldo-do-name': name, 'x-waldo-origin': 'https://waldo.example' },
@@ -117,6 +121,8 @@ it('a hello on WhatsApp carries where the Brief went today, in the turn context 
       const input = turn.input;
       const message = JSON.stringify(Array.isArray(input) ? input.at(-1) : input);
       expect(message).toContain(`Today's cards: The Daily Brief reached them in the app at ${localIso(deliveredAt, ZONE).slice(11, 16)}.`);
+      expect(message).toContain('Messages Waldo sent first today (not replies)');
+      expect(message).toContain(`${localIso(deliveredAt, ZONE).slice(11, 16)} whatsapp copy to WhatsApp: failed (whatsapp_payment_required)`);
     } finally { network.mockRestore(); await state.storage.deleteAlarm(); }
   });
 });

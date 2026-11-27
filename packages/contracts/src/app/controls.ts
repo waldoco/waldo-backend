@@ -252,6 +252,21 @@ export const APP_CONTROLS_DAY_CARD_REVISION = 9;
 // proposals ("Why this changed", ./why), the same steps their approval cards carry. Below 14 it is never sent.
 export const APP_CONTROLS_WHY_REVISION = 14;
 const ownerName = text.min(1).max(80);
+// Controls revision 26 (`controls=26`): the day view carries sent_today, the messages Waldo sent first today (anything but a
+// reply in the owner's own conversation), newest first, and total counts every one of them. Each names its kind, the surface
+// (null while the delivery outbox has not bound it to one), when it was written (epoch ms) and its outcome: waiting (code says
+// what holds it), delivered, failed (code: a short reason, such as whatsapp_payment_required) or unknown (it may have arrived;
+// nothing proves it). Kinds, codes and times only, never the words or an internal id. Below 26 it is never sent.
+export const APP_CONTROLS_SENT_TODAY_REVISION = 26;
+export const APP_SENT_TODAY_MAX_V1 = 50;
+const sendCode = z.string().regex(/^[a-z][a-z0-9_:]{0,63}$/);
+const sentToday = z.strictObject({
+  items: z.array(z.strictObject({
+    kind: z.string().regex(/^[a-z][a-z_]{0,31}$/), surface: z.enum(['app', 'telegram', 'whatsapp', 'imessage']).nullable(), at: z.int().positive(),
+    outcome: z.enum(['waiting', 'delivered', 'failed', 'unknown']), code: sendCode.optional(),
+  }).refine(item => item.outcome !== 'delivered' || item.code === undefined, { error: 'a delivered send carries no code', path: ['code'] })).max(APP_SENT_TODAY_MAX_V1),
+  total: count,
+}).refine(page => page.total >= page.items.length, { error: 'total counts every send today', path: ['total'] });
 export const APP_CARD_STATE_REASON_MAX_V1 = 120;
 export const APP_CARD_RETRIES_PER_DAY_V1 = 3;
 export const appDayCardStateV1Schema = z.enum(['pending', 'held', 'sent', 'skipped', 'generating', 'failed', 'paused']);
@@ -297,6 +312,7 @@ export const appControlDayDataV1Schema = z.strictObject({
   proactivity: z.strictObject({ quiet_start: text.nullable(), quiet_end: text.nullable(), volume: z.enum(['low', 'normal', 'high']) }),
   schedules: z.strictObject({ daily_brief: z.boolean(), followups: z.boolean(), event_briefs: z.boolean(), nightly: z.boolean(), heartbeat: z.boolean() }),
   carrying: firstPage(carried).optional(),
+  sent_today: sentToday.optional(),
   open_loops: firstPage(openLoop).optional(),
   updates: updates.optional(),
   // Controls revision 11: where Waldo writes first (value) and what the owner can choose now (choices). A choice is offered

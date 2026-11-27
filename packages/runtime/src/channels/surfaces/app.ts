@@ -1,6 +1,6 @@
 import { REPLY_TEXT_MAX_CHARS, replyApprovalPartV1Schema, replyQuickRepliesPartV1Schema } from '@waldo/contracts';
 import type { z } from 'zod';
-import { APP_COPY_OF, APP_NO_PUSH, APP_REPLIES, APP_THREAD, SEND_NOW_ONLY } from '../delivery-routes';
+import { APP_COPY_OF, APP_NO_PUSH, APP_OUTBOX_RECORD, APP_REPLIES, APP_THREAD, SEND_NOW_ONLY } from '../delivery-routes';
 import type { CopyOf } from '../telegram-final-outbox';
 
 export type AppApprovalPart = z.infer<typeof replyApprovalPartV1Schema>;
@@ -35,7 +35,8 @@ export const WHATSAPP_CONNECT_GUIDANCE = 'No connect button was sent: WhatsApp c
 // is never kept for later on another surface.
 // thread: the app thread the message belongs in, while that thread is open; main otherwise. replies: answers the owner can
 // tap under the message. push: false when the sender raises the push itself; otherwise the delivery pushes the owner's phone.
-export type AppSend = Readonly<{ nowOnly?: boolean; thread?: string; replies?: readonly string[]; copyOf?: CopyOf; push?: false }>;
+// outbox: the delivery outbox sent it and records how it ended.
+export type AppSend = Readonly<{ nowOnly?: boolean; thread?: string; replies?: readonly string[]; copyOf?: CopyOf; push?: false; outbox?: true }>;
 export type ScheduledAppDelivery = (text: string, send?: AppSend) => Promise<string>;
 // A surface whose turn replies leave through an outbox of their own (iMessage) acknowledges a plain send only during its
 // turn: outside one, a send with no delivery bound has nowhere to go, so it returns no message, which producers read as
@@ -46,10 +47,11 @@ export const appCaller = (scheduledDelivery: () => ScheduledAppDelivery | null =
   if ((markup?.inline_keyboard ?? []).some(row => row.length > 0)) return undefined;
   const deliver = scheduledDelivery();
   if (!deliver && !inTurn()) return undefined;
-  const marks = body as { [SEND_NOW_ONLY]?: unknown; [APP_THREAD]?: unknown; [APP_REPLIES]?: unknown; [APP_COPY_OF]?: unknown; [APP_NO_PUSH]?: unknown };
+  const marks = body as { [SEND_NOW_ONLY]?: unknown; [APP_THREAD]?: unknown; [APP_REPLIES]?: unknown; [APP_COPY_OF]?: unknown; [APP_NO_PUSH]?: unknown; [APP_OUTBOX_RECORD]?: unknown };
   const thread = typeof marks[APP_THREAD] === 'string' ? marks[APP_THREAD] : undefined;
   const replies = Array.isArray(marks[APP_REPLIES]) && marks[APP_REPLIES].length ? marks[APP_REPLIES] as readonly string[] : undefined;
   const row = deliver ? await deliver(text ?? '', { nowOnly: marks[SEND_NOW_ONLY] === true, ...(thread ? { thread } : {}), ...(replies ? { replies } : {}),
-    ...(marks[APP_COPY_OF] === 'day_card' || marks[APP_COPY_OF] === 'day_update' ? { copyOf: marks[APP_COPY_OF] } : {}), ...(marks[APP_NO_PUSH] === true ? { push: false as const } : {}) }) : undefined;
+    ...(marks[APP_COPY_OF] === 'day_card' || marks[APP_COPY_OF] === 'day_update' ? { copyOf: marks[APP_COPY_OF] } : {}), ...(marks[APP_NO_PUSH] === true ? { push: false as const } : {}),
+    ...(marks[APP_OUTBOX_RECORD] === true ? { outbox: true as const } : {}) }) : undefined;
   return { message_id: 1, chat: { id: chatId ?? 0 }, ...(row === undefined ? {} : { app_row_id: row }) };
 };

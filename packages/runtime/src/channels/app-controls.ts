@@ -1,5 +1,6 @@
 import { APP_CONTROLS_PEOPLE_REVISION, APP_PEOPLE_MAX_V1, APP_MEMORY_PAGE_MAX_V1, APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_CONNECTIONS_CATALOGUE_REVISION, type AppWearableV1, APP_CONTROLS_QUESTS_REVISION, type AppQuestV1, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_WHY_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_SCHEDULE_REVISION } from '../../../contracts/src/app/controls';
-import { declaresActWithoutAsking } from '../../../contracts/src/app/controls';
+import { APP_CONTROLS_SENT_TODAY_REVISION, APP_SENT_TODAY_MAX_V1, declaresActWithoutAsking } from '../../../contracts/src/app/controls';
+import { sentTodayPage, type SendRow } from './send-outcomes';
 import type { AppWhyV1 } from '../../../contracts/src/app/why';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
 import { appControlStepUpAction, appStepUpRefusal, stepUpGated } from './console-step-up';
@@ -45,6 +46,8 @@ export type AppControlsHost = Readonly<{
   ownerName?():string|null;
   // The owner's quests as the day view lists them (controls revision 17).
   quests?():readonly AppQuestV1[];
+  // What Waldo sent first today and what became of each (controls revision 26).
+  sentToday?():readonly SendRow[];
   account:Pick<OwnerControlsDeps,'owner'|'auth'|'requestUrl'|'purgeOwnerFiles'|'eraseOwnerStorage'>;
   phone:PhoneSmsEnv;
   // Clears the WhatsApp chat this owner DO holds, after the directory unlinked it.
@@ -118,6 +121,8 @@ const withoutActWithoutAsking=<T extends {view:string;data:unknown}>(request:Req
   const {act_without_asking:_choice,...data}=projection.data as Record<string,unknown>;
   return {...projection,data};
 };
+// Controls revision 26 lists what Waldo sent first today; builds below it never receive it.
+const listsSentToday=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_SENT_TODAY_REVISION;
 const dayForRevision=(request:Request,day:Record<string,unknown>)=>{
   const {schedule_controls:_schedules,...older}=day.data as Record<string,unknown>,shown=withoutActWithoutAsking(request,{...day,view:String(day.view),data:setsSchedules(request)?day.data:older});
   if(appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_CARD_STATE_REVISION)return shown;
@@ -282,13 +287,15 @@ export async function appControlsRequest(request:Request,host:AppControlsHost):P
     // Where Waldo writes first is offered from the same links the action checks, outside the day's revision.
     // The quests change in chat, never through a day action, so they too sit outside the day's revision.
     const quests=query.data.view==='day'&&host.quests&&appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_QUESTS_REVISION?{quests:host.quests()}:{};
+    // What Waldo sent first today changes with every send and no action checks it, so it too sits outside the day's revision.
+    const sent=query.data.view==='day'&&host.sentToday&&listsSentToday(request)?{sent_today:sentTodayPage(host.sentToday(),APP_SENT_TODAY_MAX_V1)}:{};
     const surface=query.data.view==='day'&&choosesSurface(request,host)?{proactive_surface:{value:proactiveSurface(host.storage.kv,host.bothDefault),choices:proactiveSurfaceChoices(await host.chatLinks!())}}:{};
     // Like the surface, the sign-in account is offered outside the view's revision: it changes nothing an action checks.
     // Every build gets it: the app reads this view tolerantly, so one that does not know the field drops it.
     const google=query.data.view==='connections'?(day.data as {google:{connectAvailable:boolean;accounts:{id:string;email:string}[]}}).google:null;
     const catalogue=google!==null&&listsCatalogue(request);
     const connections=google?{google:{...google,...(catalogue?{accounts:await withRevision17(host,google.accounts,built?.google.accounts??[])}:{}),...await googleSignin(host.phone,host.account.owner,google)},...(catalogue?await wearablesOf(host):{})}:{};
-    const parsed=appControlProjectionV1Schema.safeParse({...day,data:{...(day.data as object),...(named?{name:named}:{}),...memory,...surface,...quests,...connections},revision});
+    const parsed=appControlProjectionV1Schema.safeParse({...day,data:{...(day.data as object),...(named?{name:named}:{}),...memory,...surface,...quests,...sent,...connections},revision});
     await host.assertCurrent();return parsed.success?reply(parsed.data):reply({error:'projection_unavailable'},503);
   }
   if(path!=='/app/v1/actions')return reply({error:'not_found'},404);

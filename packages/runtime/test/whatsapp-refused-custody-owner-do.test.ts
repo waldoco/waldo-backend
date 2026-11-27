@@ -102,6 +102,9 @@ const owned = async (name: string, script: (steps: Readonly<{
   outbox(): Record[];
   // The lines waiting for the owner's next turn about what did not reach them.
   notes(): string[];
+  // The recorded endings of Waldo-first sends, and the ledger the next run reads.
+  sends(): { [key: string]: unknown }[];
+  ledger(): Promise<string>;
 }>) => Promise<void>, wrote = HOUR, switches: Readonly<{ [name: string]: string }> = {}) => {
   // Each start gets its own owner, since every scenario runs once per start.
   const doName = `${name}-${startedAt}`;
@@ -167,6 +170,8 @@ const owned = async (name: string, script: (steps: Readonly<{
         ids: () => { expect(records()).toHaveLength(1); return records()[0]!.providerMessageIds ?? []; },
         texts: () => wire.events.filter(event => event.startsWith('text:')).map(event => event.slice('text:'.length)),
         notes: () => [...state.storage.kv.list<{ text: string }>({ prefix: 'delivery_note:' })].map(([, note]) => note.text),
+        sends: () => [...state.storage.kv.list<{ [key: string]: unknown }>({ prefix: 'send_outcome:' })].map(([, row]) => row),
+        ledger: () => (owner as unknown as { setup(channel: string): { ledger(): Promise<string> } }).setup('whatsapp').ledger(),
         held: () => [...state.storage.kv.list<{ body: { text: string } }>({ prefix: 'wa_held:' })].map(([, record]) => record.body.text),
         update: () => { updateBook(state.storage.sql).record(today(), Date.now() - 60_000, [{ source: 'calendar', kind: 'added', detail: '{"title":"Lunch"}' }], null); },
         folded: () => state.storage.sql.exec<{ folded: number }>('SELECT folded FROM update_cards ORDER BY id').toArray().map(row => row.folded),
@@ -368,7 +373,7 @@ describe.each([['just after midnight', '2026-10-22T00:30:00Z'], ['just before mi
   });
 
   it('a card Meta failed for want of a payment method (131042) ends naming that reason, is never resent, and the owner\'s next turn reads why', async () => {
-    await owned('wa-failed-payment', async ({ alarms, reply, card, status, ids, texts, outbox, notes }) => {
+    await owned('wa-failed-payment', async ({ alarms, reply, card, status, ids, texts, outbox, notes, sends, ledger }) => {
       await card();
       await alarms(3);
       await status('failed', ids(), Date.now(), 131042);
@@ -377,13 +382,16 @@ describe.each([['just after midnight', '2026-10-22T00:30:00Z'], ['just before mi
       expect(texts()).toEqual([CARD]);
       expect(notes()).toEqual([expect.stringContaining('[Delivery: your day card (brief) for WhatsApp')]);
       expect(notes()[0]).toContain("did not reach the owner (WhatsApp refused it: Waldo's WhatsApp account has no payment method)");
+      // The ending is recorded by its code, and the next run reads it.
+      expect(sends()).toEqual([expect.objectContaining({ id: CARD_ID(), kind: 'day_card', surface: 'whatsapp', outcome: 'failed', code: 'whatsapp_payment_required' })]);
+      expect(await ledger()).toContain('day card to WhatsApp: failed (whatsapp_payment_required)');
     });
   });
 
   it('a knock Meta failed for want of a payment method is recorded and logged by that reason, the owner\'s next turn reads it once, and nothing is sent again for it', async () => {
     const lines = vi.spyOn(console, 'log');
     try {
-      await owned('wa-knock-payment', async ({ alarms, order, endOrder, status, outbox, notes }) => {
+      await owned('wa-knock-payment', async ({ alarms, order, endOrder, status, outbox, notes, ledger }) => {
         await order();
         await alarms(3);
         endOrder();
@@ -399,6 +407,8 @@ describe.each([['just after midnight', '2026-10-22T00:30:00Z'], ['just before mi
         // A replayed report changes nothing and leaves no second line.
         await status('failed', [`wamid.out.${wire.wamid}`], Date.now(), 131042);
         expect(notes()).toHaveLength(1);
+        // The report still waits, and the next run reads what holds it.
+        expect(await ledger()).toMatch(/standing order to WhatsApp: waiting \(window_closed:knock_failed:whatsapp_payment_required\)/);
       }, 30 * HOUR);
     } finally { lines.mockRestore(); }
   });
