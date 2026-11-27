@@ -6,27 +6,19 @@ import type { TurnLogEntry } from '../src/channels/owner-turn-types';
 import { ownerTyped } from './helpers/owner-typed';
 
 const timer = async <T,>(_hop: string, work: () => Promise<T>) => work();
-const NOW = Date.parse('2026-11-27T09:30:00Z');
 
 describe('nowFrameSections', () => {
-  it('reads the rest of today\'s calendar, the reminders and the waiting cards, each its own section', async () => {
-    const asked: string[] = [];
-    const calendar = { events: async (from: string, to: string) => { asked.push(from, to); return [
-      { id: 'e1', title: 'Board call', start: '2026-11-27T11:00:00Z', end: '2026-11-27T12:00:00Z', all_day: false, owner_status: 'accepted', attendee_names: ['Sam'] },
-    ]; } };
-    const sections = await nowFrameSections({ now: NOW, timezone: 'UTC', calendar: calendar as never,
-      reminders: [{ note: 'call the physio', at: '2026-11-27T17:00', repeat: 'none' }],
+  it('reads the reminders and the waiting cards, each its own section', () => {
+    const sections = nowFrameSections({ reminders: [{ note: 'call the physio', at: '2026-11-27T17:00', repeat: 'none' }, { note: 'stretch', at: '2026-11-28T07:00', repeat: 'daily' }],
       waiting: [{ id: 'a1', kind: 'send_email', summary: 'Reply to Sam about the deck', state: 'open', undoable: false } as never] });
-    expect(sections).toHaveLength(3);
-    expect(asked[0]).toBe(new Date(NOW).toISOString());
-    expect(asked[1]!.startsWith('2026-11-27T23:59') || asked[1]!.startsWith('2026-11-28T00:00')).toBe(true);
-    expect(sections[0]).toContain('Board call');
-    expect(sections[1]).toContain('2026-11-27 17:00: call the physio');
-    expect(sections[2]).toContain('Reply to Sam about the deck');
+    expect(sections).toHaveLength(2);
+    expect(sections[0]).toContain('2026-11-27 17:00: call the physio');
+    expect(sections[0]).toContain('2026-11-28 07:00 (daily): stretch');
+    expect(sections[1]).toContain('Reply to Sam about the deck');
   });
 
-  it('leaves out what is empty, and the calendar when Google is not connected', async () => {
-    expect(await nowFrameSections({ now: NOW, timezone: 'UTC', calendar: null, reminders: [], waiting: [] })).toEqual([]);
+  it('leaves out what is empty', () => {
+    expect(nowFrameSections({ reminders: [], waiting: [] })).toEqual([]);
   });
 });
 
@@ -61,7 +53,7 @@ describe('the owner\'s chat turn reads the day as it stands now', () => {
     const slow = responder(() => { asked += 1; return new Promise(() => undefined); });
     await slow.owner.respond(ownerTyped({ traceId: 'now-2', conversationRef: 'owner', surface: 'app', text: 'hi' }), timer);
     expect(asked).toBe(1);
-    expect(said(slow.requests)).not.toContain('calendar');
+    expect(said(slow.requests)).not.toContain("the owner's day as it stands now");
     expect(slow.logs.some((entry) => entry.hop === 'now_frame' && !entry.ok)).toBe(true);
     await slow.owner.prompt('job-1', 'owner', 'Check the loops.', timer, 'app', ['read_memory']);
     expect(asked).toBe(1);
