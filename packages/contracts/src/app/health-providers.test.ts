@@ -10,6 +10,11 @@ const status = { provider: 'whoop', state: 'connected', last_sync_at: '2026-10-2
 const connect = { request_id: 'provider-connect-1', provider: 'whoop' };
 
 describe('health providers: status', () => {
+  it('names, from revision 16, the kinds a connection made before they were asked for lacks', () => {
+    expect(healthProviderStatusV1Schema.safeParse({ ...status, reconnect_for: ['day_strain', 'body_measurements'] }).success).toBe(true);
+    expect(healthProviderStatusV1Schema.safeParse({ ...status, reconnect_for: ['body_measurements'] }).success).toBe(true);
+    rejected(healthProviderStatusV1Schema, [{ ...status, reconnect_for: [] }, { ...status, reconnect_for: ['sleep'] }, { ...status, reconnect_for: ['day_strain', 'body_measurements', 'day_strain'] }, { ...status, reconnect_for: 'day_strain' }]);
+  });
   it('reports each provider with its state and last sync, and never a reading', () => {
     expect(healthProviderListV1Schema.safeParse({ providers: [status] }).success).toBe(true);
     expect(healthProviderStatusV1Schema.safeParse({ ...status, state: 'not_connected', last_sync_at: null }).success).toBe(true);

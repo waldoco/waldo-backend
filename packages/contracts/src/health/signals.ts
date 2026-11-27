@@ -38,6 +38,15 @@ export const HEALTH_SIGNALS = {
   stand_hour: { grain: 'hour', words: 'stand hours' },
   nutrition: { grain: 'reading', words: 'food logged' },
   heart_rate_bins_window: { grain: 'hour', words: 'time in heart rate ranges through the day' },
+  provider_recovery: { grain: 'night', words: "WHOOP's own recovery score" },
+  provider_day_strain: { grain: 'day', words: "WHOOP's own day strain" },
+  provider_sleep_need: { grain: 'night', words: "the sleep WHOOP said a night needed" },
+  provider_sleep_performance: { grain: 'night', words: "WHOOP's own sleep performance" },
+  provider_sleep_consistency: { grain: 'night', words: "WHOOP's own sleep consistency" },
+  nap: { grain: 'session', words: 'naps' },
+  skin_temperature: { grain: 'night', words: 'skin temperature in sleep' },
+  height: { grain: 'reading', words: 'height' },
+  max_heart_rate: { grain: 'reading', words: 'maximum heart rate estimate' },
 } as const satisfies Readonly<Record<HealthSignal, Entry>>;
 
 export const HEALTH_SIGNAL_NAMES = healthSignalV1Schema.options;

@@ -26,16 +26,22 @@ export const isHealthProviderSourceV1 = (source: string): boolean => (HEALTH_PRO
 // A new grant carries the current version of its source's copy, never another's, so a stored grant shows which notice it
 // rested on. A stored grant keeps the version it was written on, so reading one back accepts every version its source has
 // had (WHOOP's grants were written on copies 2 and 3 before). The app owns the wording; a changed notice takes the next number.
-export const HEALTH_PROVIDER_CONSENT_VERSION_V1 = 4;
+// Copy 6 (health revision 16) also says that Waldo stores WHOOP's own scores (recovery, strain, sleep performance, consistency
+// and need) beside the raw readings, and that the raw readings themselves reach the AI models. A build still showing copy 4
+// keeps granting on copy 4, and the grant is stored on the copy it named; WHOOP's own scores are stored only under a storage
+// grant on copy 6 or later (HEALTH_PROVIDER_SCORES_CONSENT_VERSION_V1), so a copy-4 owner gets the raw readings alone.
+export const HEALTH_PROVIDER_CONSENT_VERSION_V1 = 6;
+export const HEALTH_PROVIDER_SCORES_CONSENT_VERSION_V1 = 6;
 type HealthSourceV1 = z.infer<typeof healthSourceV1Schema>;
-const CONSENT_COPY_V1: Readonly<Record<HealthSourceV1, Readonly<{ current: number; had: readonly number[] }>>> = {
-  apple: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
-  samsung: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
-  health_connect: { current: HEALTH_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1] },
-  whoop: { current: HEALTH_PROVIDER_CONSENT_VERSION_V1, had: [HEALTH_CONSENT_VERSION_V1, 3, HEALTH_PROVIDER_CONSENT_VERSION_V1] },
+// current: the copy a build should show now. granting: the copies a new grant may name. had: every copy a stored grant may carry.
+const CONSENT_COPY_V1: Readonly<Record<HealthSourceV1, Readonly<{ current: number; granting: readonly number[]; had: readonly number[] }>>> = {
+  apple: { current: HEALTH_CONSENT_VERSION_V1, granting: [HEALTH_CONSENT_VERSION_V1], had: [HEALTH_CONSENT_VERSION_V1] },
+  samsung: { current: HEALTH_CONSENT_VERSION_V1, granting: [HEALTH_CONSENT_VERSION_V1], had: [HEALTH_CONSENT_VERSION_V1] },
+  health_connect: { current: HEALTH_CONSENT_VERSION_V1, granting: [HEALTH_CONSENT_VERSION_V1], had: [HEALTH_CONSENT_VERSION_V1] },
+  whoop: { current: HEALTH_PROVIDER_CONSENT_VERSION_V1, granting: [4, HEALTH_PROVIDER_CONSENT_VERSION_V1], had: [HEALTH_CONSENT_VERSION_V1, 3, 4, HEALTH_PROVIDER_CONSENT_VERSION_V1] },
 };
 export const healthConsentVersionV1 = (source: HealthSourceV1): number => CONSENT_COPY_V1[source].current;
-const currentCopyOfItsSource = (row: { source: HealthSourceV1; version: number }) => row.version === CONSENT_COPY_V1[row.source].current;
+const currentCopyOfItsSource = (row: { source: HealthSourceV1; version: number }) => CONSENT_COPY_V1[row.source].granting.includes(row.version);
 const copyItsSourceHad = (row: { source: HealthSourceV1; version: number }) => CONSENT_COPY_V1[row.source].had.includes(row.version);
 // Purposes are separate grants, requested together on one consent screen: storage_compute (store and compute the
 // owner's health data and show the owner their scores) and model_processing (let Waldo use it when it talks to the
@@ -62,7 +68,7 @@ export const healthConsentGrantV1Schema = z.strictObject({
   version: z.int().positive(),
   expected_epoch: epochV1,
   age_attested_18_plus: z.literal(true),
-}).refine(currentCopyOfItsSource, { message: 'a new grant names the current copy version of its source', path: ['version'] });
+}).refine(currentCopyOfItsSource, { message: 'a new grant names a copy version its source is granting on', path: ['version'] });
 export const healthConsentWithdrawV1Schema = z.strictObject({
   request_id: healthRequestIdV1Schema,
   source: healthSourceV1Schema,
@@ -248,6 +254,10 @@ const workoutDetail = {
   cycling: z.strictObject({ power_w: watts.optional(), cadence_rpm: z.number().finite().min(0).max(250).optional() }).optional(),
   // A swim's distance is distance_m.
   swimming: z.strictObject({ strokes: z.int().min(0).max(100_000) }).optional(),
+  // Revision 16, a provider's workout only.
+  strain: z.strictObject({ value: z.number().finite().min(0).max(21), method: z.literal('whoop') }).optional(),
+  percent_recorded: z.number().finite().min(0).max(100).optional(),
+  elevation_change_m: z.number().finite().min(-20_000).max(20_000).optional(),
 };
 // Health revision 15: an hour's heart rate as the seconds spent in each 5 bpm, split by whether a workout the platform holds covered
 // them. The phone holds each device's sample until that device's next one, at most ten minutes, and counts a second once across
@@ -257,6 +267,39 @@ export const HEALTH_PASSIVE_LOAD_REVISION_V1 = 15;
 export const HEALTH_HR_BIN_BPM_V1 = 5;
 export const HEALTH_HR_BINS_TOP_BPM_V1 = 225;
 const binSeconds = z.array(z.int().min(0).max(3_600)).min(1).max(40);
+// Health revision 16: a cloud provider's own measures, kept as the provider stated them and labelled as its own. Every
+// provider_* kind carries method 'whoop' (the provider whose model made it) and is never an input to Waldo's own Recovery,
+// Form or Load: those read a closed list of kinds that does not include them. Only a provider source sends them, and the
+// database stores a provider score only under a storage grant on copy HEALTH_PROVIDER_SCORES_CONSENT_VERSION_V1 or later.
+// - provider_recovery: the provider's 0-100 recovery for the night it scores, with whether its model is still calibrating.
+// - provider_day_strain: the provider's 0-21 strain for one physiological cycle, with that cycle's energy, heart rate and
+//   steps; open while the cycle is running, when its end is the time the provider last scored it.
+// - provider_sleep_need: the minutes of sleep the provider said a night needed, as its parts: the owner's baseline, the need
+//   from sleep debt and from recent strain, and the reduction from recent naps (zero or less). value is their sum.
+// - provider_sleep_performance and provider_sleep_consistency: the provider's 0-100 percentages for one night.
+// A nap is its own session, never the night: its value is the minutes asleep the provider scored, or the record's span
+// while it is unscored. skin_temperature is the provider's absolute skin temperature for the night, a kind of its own beside
+// a watch's wrist temperature, never blended with it. height and max_heart_rate are the body measurements the provider holds
+// for the owner; max_heart_rate is the provider's own estimate.
+// A night's stage totals without the intervals they come from are stage_totals on its time-asleep reading (method
+// provider_totals): light, deep, REM, awake, no-data and in-bed minutes, sleep cycles and disturbances. They never stand in for
+// `stages`, which a phone reduces from intervals. A provider's workout may carry its strain (method whoop), the share of the
+// session its heart rate was recorded, and the net change in altitude from start to end.
+export const HEALTH_PROVIDER_SCORES_REVISION_V1 = 16;
+export const healthProviderMethodV1Schema = z.literal('whoop');
+const percent100 = z.number().finite().min(0).max(100);
+const strain21 = z.number().finite().min(0).max(21);
+const nightMinutes = z.number().finite().min(0).max(1440);
+export const healthSleepStageTotalsV1Schema = z.strictObject({
+  method: z.literal('provider_totals'),
+  light: nightMinutes, deep: nightMinutes, rem: nightMinutes, awake: nightMinutes, no_data: nightMinutes, in_bed: nightMinutes,
+  sleep_cycles: z.int().min(0).max(100), disturbances: z.int().min(0).max(1_000),
+}).refine(totals => totals.light + totals.deep + totals.rem + totals.awake <= totals.in_bed + totals.no_data + 1, 'stage totals exceed the time in bed');
+const totalsMatchAsleep = (sample: { method?: string | undefined; value: number; stages?: unknown; stage_totals?: z.infer<typeof healthSleepStageTotalsV1Schema> | undefined }): boolean =>
+  !sample.stage_totals || ((sample.method === undefined || sample.method === 'asleep_duration') && sample.stages === undefined
+    && Math.abs(sample.stage_totals.light + sample.stage_totals.deep + sample.stage_totals.rem - sample.value) <= 1);
+const sleepNeedAddsUp = (need: { value: number; baseline_minutes: number; debt_minutes: number; strain_minutes: number; nap_minutes: number }): boolean =>
+  Math.abs(need.baseline_minutes + need.debt_minutes + need.strain_minutes + need.nap_minutes - need.value) <= 1;
 type BinsShape = { value: number; from_bpm: number; outside_workouts: readonly number[]; in_workouts: readonly number[] };
 const binsAddUp = (bins: BinsShape): boolean =>
   bins.outside_workouts.length === bins.in_workouts.length
@@ -268,7 +311,7 @@ const isOneSession = (workout: WorkoutShape): boolean =>
   && (!workout.hr_zones || workout.hr_zones.seconds.reduce((a, b) => a + b, 0) <= (Date.parse(workout.end_at) - Date.parse(workout.start_at)) / 1000 + 60);
 // Bounds are plausibility limits that catch unit mistakes. They are not medical thresholds.
 export const healthSampleV1Schema = z.discriminatedUnion('signal', [
-  z.strictObject({ ...sampleCommon, signal: z.literal('sleep_duration'), unit: z.literal('minutes'), method: z.enum(['asleep_duration', 'time_in_bed', 'unknown']).optional(), value: z.number().finite().min(0).max(1440), stages: healthSleepStagesV1Schema.optional() }),
+  z.strictObject({ ...sampleCommon, signal: z.literal('sleep_duration'), unit: z.literal('minutes'), method: z.enum(['asleep_duration', 'time_in_bed', 'unknown']).optional(), value: z.number().finite().min(0).max(1440), stages: healthSleepStagesV1Schema.optional(), stage_totals: healthSleepStageTotalsV1Schema.optional() }),
   z.strictObject({ ...sampleCommon, signal: z.literal('sleep_efficiency'), unit: z.literal('ratio'), value: z.number().finite().min(0).max(1) }),
   z.strictObject({ ...sampleCommon, signal: z.literal('sleep_midpoint'), unit: z.literal('local_minute'), method: z.literal('sleep_midpoint'), value: z.number().finite().min(0).max(1439.999) }),
   z.strictObject({ ...sampleCommon, signal: z.literal('overnight_hrv'), unit: z.literal('milliseconds'), method: hrvMethodV1, value: z.number().finite().positive().max(1000) }),
@@ -312,16 +355,37 @@ export const healthSampleV1Schema = z.discriminatedUnion('signal', [
     from_bpm: z.int().min(30).max(HEALTH_HR_BINS_TOP_BPM_V1).refine(bpm => bpm % HEALTH_HR_BIN_BPM_V1 === 0, 'bins start on a multiple of 5 bpm'),
     bin_bpm: z.literal(HEALTH_HR_BIN_BPM_V1), outside_workouts: binSeconds, in_workouts: binSeconds,
   }).refine(binsAddUp, 'heart-rate bins are two equal arrays below the top bin whose seconds add up to value'),
+  // Revision 16. A provider's own measures, and the kinds only a provider sends.
+  z.strictObject({ ...sampleCommon, signal: z.literal('provider_recovery'), unit: z.literal('percent'), method: healthProviderMethodV1Schema, value: percent100, calibrating: z.boolean() }),
+  z.strictObject({
+    ...sampleCommon, signal: z.literal('provider_day_strain'), unit: z.literal('strain'), method: healthProviderMethodV1Schema, value: strain21, open: z.boolean(),
+    energy_kcal: z.number().finite().min(0).max(30_000).optional(), avg_hr_bpm: bpm.optional(), max_hr_bpm: bpm.optional(), step_count: z.int().min(0).max(300_000).optional(),
+  }).refine(cycle => cycle.avg_hr_bpm === undefined || cycle.max_hr_bpm === undefined || cycle.avg_hr_bpm <= cycle.max_hr_bpm, 'average heart rate above the maximum'),
+  z.strictObject({
+    ...sampleCommon, signal: z.literal('provider_sleep_need'), unit: z.literal('minutes'), method: healthProviderMethodV1Schema, value: nightMinutes,
+    baseline_minutes: nightMinutes, debt_minutes: z.number().finite().min(-1440).max(1440), strain_minutes: nightMinutes, nap_minutes: z.number().finite().min(-1440).max(0),
+  }).refine(sleepNeedAddsUp, 'sleep need is the sum of its parts'),
+  z.strictObject({ ...sampleCommon, signal: z.literal('provider_sleep_performance'), unit: z.literal('percent'), method: healthProviderMethodV1Schema, value: percent100 }),
+  z.strictObject({ ...sampleCommon, signal: z.literal('provider_sleep_consistency'), unit: z.literal('percent'), method: healthProviderMethodV1Schema, value: percent100 }),
+  z.strictObject({ ...sampleCommon, signal: z.literal('nap'), unit: z.literal('minutes'), method: z.enum(['asleep_duration', 'span']), value: nightMinutes }),
+  z.strictObject({ ...sampleCommon, signal: z.literal('skin_temperature'), unit: z.literal('celsius'), method: z.literal('absolute'), value: z.number().finite().min(25).max(42) }),
+  z.strictObject({ ...sampleCommon, signal: z.literal('height'), unit: z.literal('meters'), value: z.number().finite().min(0.5).max(2.75) }),
+  z.strictObject({ ...sampleCommon, signal: z.literal('max_heart_rate'), unit: z.literal('beats_per_minute'), method: z.literal('provider_estimate'), value: z.number().finite().min(100).max(250) }),
 ]).refine(sample => Date.parse(sample.start_at) <= Date.parse(sample.end_at), 'sample end precedes start')
   .refine(sample => !WINDOW_SIGNALS.includes(sample.signal) || isLocalHourBucket(sample), 'window signals are fixed local-hour buckets')
   .refine(sample => sample.signal !== 'heart_rate_window' || (sample.min <= sample.value && sample.value <= sample.max), 'heart-rate window mean outside its range')
-  .refine(sample => sample.signal !== 'sleep_duration' || stagesMatchContext(sample), 'sleep stages disagree with their intervals');
+  .refine(sample => sample.signal !== 'sleep_duration' || stagesMatchContext(sample), 'sleep stages disagree with their intervals')
+  .refine(sample => sample.signal !== 'sleep_duration' || totalsMatchAsleep(sample), 'stage totals belong on time asleep alone and add up to it');
 export const healthSignalV1Schema = z.enum([
   'sleep_duration', 'sleep_efficiency', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'daylight_duration', 'movement_duration',
   'heart_rate_window', 'hrv_window', 'spo2', 'respiratory_rate', 'steps_window', 'active_energy_window', 'workout',
   'wrist_temperature', 'walking_heart_rate_average', 'vo2_max', 'heart_rate_recovery', 'mindful_duration',
   'body_mass', 'body_fat_percentage', 'lean_body_mass', 'stand_hour', 'nutrition', 'heart_rate_bins_window',
+  'provider_recovery', 'provider_day_strain', 'provider_sleep_need', 'provider_sleep_performance', 'provider_sleep_consistency',
+  'nap', 'skin_temperature', 'height', 'max_heart_rate',
 ]);
+// The kinds that are a provider's own scores: stored only from a provider source, under a storage grant on its scores copy.
+export const HEALTH_PROVIDER_SCORE_SIGNALS_V1 = ['provider_recovery', 'provider_day_strain', 'provider_sleep_need', 'provider_sleep_performance', 'provider_sleep_consistency'] as const;
 export const healthSampleDeletionV1Schema = z.strictObject({ sample_id: sampleIdV1, signal: healthSignalV1Schema, revision: epochV1 });
 // anchor_before and anchor_after form an opaque compare-and-set cursor of at most 2048 characters; the app keeps its
 // real per-type anchors on the phone. The server stores the last acknowledged anchor_after per owner and source.
