@@ -1,4 +1,4 @@
-import { acceptTrustedInvocation, type TrustedInvocationEnvelope } from '@waldo/contracts';
+import { acceptTrustedInvocation, OWNER_TEXT_INBOUND_MAX_CHARS, type TrustedInvocationEnvelope } from '@waldo/contracts';
 import type { RunEffectScope } from '../channels/run-effect-scope';
 import type { ResolvedInvocationInput } from '../context-composer/types';
 
@@ -67,7 +67,7 @@ export async function ownerMessageAdmission(options: Options): Promise<OwnerMess
   const acceptedAt = now();
   if (locator.environment !== 'staging' || !locator.namespace || !locator.doName || !locator.doId
     || actualDoId !== locator.doId || expectedDoId(locator.doName) !== actualDoId || !allowed.includes(locator.doName)
-    || provider !== 'telegram' || !/^\d{1,32}$/.test(subject) || !text || text.length > 8_192 || !occurrenceKey || occurrenceKey.length > 512
+    || provider !== 'telegram' || !/^\d{1,32}$/.test(subject) || !text || text.length > OWNER_TEXT_INBOUND_MAX_CHARS || !occurrenceKey || occurrenceKey.length > 512
     || !Number.isSafeInteger(acceptedAt) || !Number.isSafeInteger(occurredAt) || occurredAt < 0 || occurredAt > acceptedAt) throw new OwnerAdmissionError('rejected');
   const resolve = async (): Promise<PresenceBinding> => {
     scope.admit();

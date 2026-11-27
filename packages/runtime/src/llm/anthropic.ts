@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { validModelCredential } from './credential-shape';
 import { ANTHROPIC_PROVIDER, PROVIDER_OF, type LLMAttachment, type LLMRequest, type LLMToolCall, type LLMToolTurn, type ModelName } from '@waldo/contracts';
-import { OUTPUT_ITEM_PROVIDER, outputItemProvider, type LLMGatewayAdapter, type LLMGatewayRequest, type LLMGatewayResult, type ProviderRetryAdvice } from './provider';
+import { OUTPUT_ITEM_PROVIDER, outputItemProvider, type LLMGatewayAdapter, type LLMGatewayRequest, type LLMGatewayResult, type ProviderRetryAdvice, providerErrorLabel } from './provider';
 import type { ReplyDeltaSink } from '../conversation/reply-stream';
 import { OWNER_SKILL_PROCEDURES_LEAD, OWNER_SKILL_SAFEGUARDS } from '../prompt/messaging-behavior';
 import { callTimeLeftMs, FIRST_TOKEN_TIMEOUT_MS, MODEL_CALL_TIMEOUT_MS } from './time-budget';
@@ -167,12 +167,13 @@ export class AnthropicMessagesAdapter implements LLMGatewayAdapter {
     } catch (error) {
       if (error instanceof FirstTokenTimeout) return { ok: false, code: 'transient', error: 'Anthropic first token timed out', retry: { allowed: false }, firstTokenLate: true, ...(searched.length > 0 ? { spent: searchSpent } : {}) };
       // Only identifiers cross into the trace (status, the API's error type); the provider's message can quote the request.
-      const detail = error instanceof Anthropic.APIError
-        ? ` (${[error.status, error.type].filter((part) => part !== undefined && part !== null).join(' ')})`
-        : '';
+      // A failure with no HTTP answer (a refused connection, a client fault) names its error class, so the reason is never blank.
+      const status = error instanceof Anthropic.APIError && typeof error.status === 'number' ? error.status : undefined;
+      const errorType = error instanceof Anthropic.APIError && typeof error.type === 'string' ? providerErrorLabel(error.type) : undefined;
+      const detail = ` (${[status, errorType].filter((part) => part !== undefined).join(' ') || (error instanceof Error ? error.constructor.name : typeof error)})`;
       const retry = error instanceof Anthropic.APIError ? retryAdvice(error.headers) : undefined;
       const wireRejected = error instanceof Anthropic.APIError && error.status === 400;
-      return { ok: false, code: anthropicErrorCode(error), error: `Anthropic request failed${detail}`, ...(retry ? { retry } : {}), ...(wireRejected ? { wireRejected: true } : {}), ...(searched.length > 0 ? { spent: searchSpent } : {}) };
+      return { ok: false, code: anthropicErrorCode(error), error: `Anthropic request failed${detail}`, ...(status !== undefined ? { status } : {}), ...(errorType !== undefined ? { errorType } : {}), ...(retry ? { retry } : {}), ...(wireRejected ? { wireRejected: true } : {}), ...(searched.length > 0 ? { spent: searchSpent } : {}) };
     } finally {
       clearTimeout(timeout);
       input.runScope?.signal.removeEventListener('abort', abortRun);

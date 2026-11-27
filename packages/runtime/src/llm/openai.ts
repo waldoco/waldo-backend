@@ -8,7 +8,7 @@ import {
   type ModelName,
 } from '@waldo/contracts';
 import { fromOpenAIStrictArguments, openAIStrictParameters } from './strict-schema';
-import { outputItemProvider, type LLMGatewayAdapter, type LLMGatewayRequest, type LLMGatewayResult, type ProviderRetryAdvice } from './provider';
+import { outputItemProvider, providerErrorLabel, type LLMGatewayAdapter, type LLMGatewayRequest, type LLMGatewayResult, type ProviderRetryAdvice } from './provider';
 import type { ReplyDeltaSink } from '../conversation/reply-stream';
 import { callTimeLeftMs, FIRST_TOKEN_TIMEOUT_MS, MODEL_CALL_TIMEOUT_MS } from './time-budget';
 
@@ -160,12 +160,14 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
     } catch (error) {
       if (error instanceof FirstTokenTimeout) return { ok: false, code: 'transient', error: 'OpenAI first token timed out', retry: { allowed: false }, firstTokenLate: true, ...(billedRounds > 0 ? { spent: searchSpent } : {}) };
       // Only identifiers cross into the trace (status, provider error code, offending parameter name); the provider's message can quote the request.
-      const detail = error instanceof OpenAI.APIError
-        ? ` (${[error.status, error.code, error.param].filter((part) => part !== undefined && part !== null && part !== '').join(' ')})`
-        : '';
+      // A failure with no HTTP answer (a refused connection, a client fault) names its error class, so the reason is never blank.
+      const status = error instanceof OpenAI.APIError && typeof error.status === 'number' ? error.status : undefined;
+      const errorType = error instanceof OpenAI.APIError ? providerErrorLabel(error.code ?? error.type) : undefined;
+      const parts = error instanceof OpenAI.APIError ? [error.status, error.code, error.param].filter((part) => part !== undefined && part !== null && part !== '') : [];
+      const detail = ` (${parts.join(' ') || (error instanceof Error ? error.constructor.name : typeof error)})`;
       const retry = error instanceof OpenAI.APIError ? retryAdvice(error.headers) : undefined;
       const wireRejected = error instanceof OpenAI.APIError && error.status === 400;
-      return { ok: false, code: openAIErrorCode(error), error: `OpenAI request failed${detail}`, ...(retry ? { retry } : {}), ...(wireRejected ? { wireRejected: true } : {}), ...(billedRounds > 0 ? { spent: searchSpent } : {}) };
+      return { ok: false, code: openAIErrorCode(error), error: `OpenAI request failed${detail}`, ...(status !== undefined ? { status } : {}), ...(errorType !== undefined ? { errorType } : {}), ...(retry ? { retry } : {}), ...(wireRejected ? { wireRejected: true } : {}), ...(billedRounds > 0 ? { spent: searchSpent } : {}) };
     } finally {
       clearTimeout(timeout);
       input.runScope?.signal.removeEventListener('abort', abortRun);

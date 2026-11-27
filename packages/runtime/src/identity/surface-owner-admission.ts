@@ -1,4 +1,4 @@
-import { acceptTrustedInvocation, ownerJobSchema, type InvocationIntent, type OwnerJob, type TrustedInvocationAdmissionSource } from '@waldo/contracts';
+import { acceptTrustedInvocation, OWNER_TEXT_INBOUND_MAX_CHARS, ownerJobSchema, type InvocationIntent, type OwnerJob, type TrustedInvocationAdmissionSource } from '@waldo/contracts';
 import type { RunEffectScope } from '../channels/run-effect-scope';
 import type { OwnerMessageAdmission } from './owner-message-admission';
 import { OwnerAdmissionError } from './owner-message-admission';
@@ -118,7 +118,7 @@ export async function surfaceOwnerAdmission(options: SurfaceOwnerAdmissionOption
   const now = options.now ?? Date.now;
   const acceptedAt = now();
   const { scope, text, occurredAt, surface, subject, occurrenceKey, expectedPhysicalDoId } = options;
-  if (!text || text.length > 16_384 || !surface || surface.length > 64 || !subject || subject.length > 512
+  if (!text || text.length > OWNER_TEXT_INBOUND_MAX_CHARS || !surface || surface.length > 64 || !subject || subject.length > 512
     || !occurrenceKey || occurrenceKey.length > 512 || !expectedPhysicalDoId || !validTimes(acceptedAt, occurredAt)) throw new OwnerAdmissionError('rejected');
   return boundAdmission({ lookup: options.lookup, admit: () => scope.admit(), expectedPhysicalDoId, occurrenceParts: [surface, subject, occurrenceKey],
     admissionSource: 'authenticated_ingress', intent: { kind: 'respond_to_user' }, text, occurredAt, acceptedAt, now });

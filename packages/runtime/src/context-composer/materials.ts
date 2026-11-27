@@ -1,6 +1,8 @@
 import {
   derivedHealthDestinationViewSchema,
+  MODEL_CONTEXT_MAX_CHARS,
   narrativeContextSchema,
+  OWNER_TEXT_INBOUND_MAX_CHARS,
   partialHealthNarrativeSchema,
   type CanaryTokens,
   type DerivedHealthDestinationView,
@@ -38,9 +40,11 @@ import type {
   StagedInputResolver,
 } from './types';
 
-const MAX_INPUT_CHARS = 4_000;
-const MAX_INPUT_TOTAL_CHARS = 12_000;
-const MAX_CONTEXT_FRAGMENT_CHARS = 4_000;
+// The owner's text is the same size at ingress, admission and here; the prompt-level bound (MODEL_CONTEXT_MAX_CHARS) is the one
+// that limits the sum of every input and fragment.
+const MAX_INPUT_CHARS = OWNER_TEXT_INBOUND_MAX_CHARS;
+// One source (a document, a mail thread, a tool result) may take a quarter of the model context. A longer one is clipped with a note.
+const MAX_CONTEXT_FRAGMENT_CHARS = MODEL_CONTEXT_MAX_CHARS / 4;
 const MAX_WORKSPACE_FRAGMENTS = 4;
 const MAX_TOOL_OUTPUT_FRAGMENTS = 6;
 
@@ -76,7 +80,6 @@ export async function loadStagedInputs(
   }
 
   const texts: string[] = [];
-  let total = 0;
   for (let index = 0; index < invocation.input_refs.length; index += 1) {
     const expected = invocation.input_refs[index];
     const actual = snapshotResolvedInput(resolvedSnapshot[index]);
@@ -96,8 +99,6 @@ export async function loadStagedInputs(
     if ((await sha256Prefixed(actual.text)) !== expected.content_digest) {
       throw new FailClosed('input_integrity');
     }
-    total += actual.text.length;
-    if (total > MAX_INPUT_TOTAL_CHARS) throw new FailClosed('input_integrity');
     provenance.add(
       actual.source,
       { source_kind: 'invocation_input', scope: 'invocation', source_taint: null },
@@ -201,6 +202,7 @@ export async function loadRuntimeContextMaterials(
       snapshot.revision_ref,
       { source_taint: 'external' },
       true,
+      true,
     );
     if (
       prepared.source.source_kind !== 'connector_snapshot' &&
@@ -235,6 +237,7 @@ export async function loadRuntimeContextMaterials(
       provenance,
       snapshot.revision_ref,
       { source_kind: 'tool_result' },
+      true,
       true,
     );
     if (prepared.source.scope !== 'invocation' && prepared.source.scope !== 'principal') {
@@ -389,15 +392,16 @@ function prepareMandatoryFragment(
   revisionRef: string,
   expected: Partial<Pick<ContextSource, 'source_kind' | 'scope' | 'source_taint'>> = {},
   allowScribeRewrite = false,
+  clipOversize = false,
 ): ContextFragment {
   const record = recordWithKeys(fragment, ['text', 'source'], 'mandatory_context_missing');
-  if (typeof record.text !== 'string' || record.text.trim().length === 0 || record.text.length > MAX_CONTEXT_FRAGMENT_CHARS) {
+  if (typeof record.text !== 'string' || record.text.trim().length === 0 || (!clipOversize && record.text.length > MAX_CONTEXT_FRAGMENT_CHARS)) {
     throw new FailClosed('mandatory_context_missing');
   }
   const source = snapshotContextSource(record.source, 'provenance_invalid');
   let prepared: string;
   try {
-    prepared = preparePromptSourceText(record.text, source.source_taint, inputs.canary_tokens, 'material');
+    prepared = preparePromptSourceText(clipOversize ? clipFragmentText(record.text) : record.text, source.source_taint, inputs.canary_tokens, 'material');
   } catch (error) {
     if (error instanceof FailClosed && /^sanitisation_failed:[a-z_]+:material$/.test(error.message)) {
       throw new FailClosed(
@@ -411,6 +415,15 @@ function prepareMandatoryFragment(
   }
   provenance.add(source, expected, stableJson({ text: prepared }), revisionRef);
   return Object.freeze({ text: prepared, source });
+}
+
+// A source longer than one fragment may take is cut at the bound with a note, so the model knows it read part of it and can ask for
+// the rest. The run's own fixed instructions are never clipped: an oversize one is a defect and fails closed.
+function clipFragmentText(text: string): string {
+  if (text.length <= MAX_CONTEXT_FRAGMENT_CHARS) return text;
+  const last = text.charCodeAt(MAX_CONTEXT_FRAGMENT_CHARS - 1);
+  const kept = last >= 0xd800 && last <= 0xdbff ? MAX_CONTEXT_FRAGMENT_CHARS - 1 : MAX_CONTEXT_FRAGMENT_CHARS;
+  return `${text.slice(0, kept)}\n[Waldo clipped this source: the first ${kept} of ${text.length} characters are shown.]`;
 }
 
 function compareFragments(left: ContextFragment, right: ContextFragment): number {

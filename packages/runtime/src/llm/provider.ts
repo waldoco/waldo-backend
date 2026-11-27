@@ -158,8 +158,15 @@ export type ProviderRetryAdvice = Readonly<{ afterMs?: number; allowed?: boolean
 // call showed nothing within the first-token window and was cut to fail over; the provider was slow, not failing, so it
 // does not count against the provider's circuit. `unsendable`: the provider has no wire for this request (an attachment type
 // it cannot carry), which says nothing about the request, so the route moves on to a provider that may. `wireRejected`: the
-// provider refused this request's shape (its 400); another provider may take it, so the route moves on when one is ahead.
-export type GatewayFailure = Readonly<{ ok: false; code: ErrorCode; error: string; spent?: SpentTokens; retry?: ProviderRetryAdvice; firstTokenLate?: true; unsendable?: true; wireRejected?: true }>;
+// provider refused this request's shape (its 400); another provider may take it, so the route moves on when one is ahead. `status` and
+// `errorType` are the provider's HTTP status and its own error type or code, for the log line of the failed attempt; the message is never kept.
+export type GatewayFailure = Readonly<{ ok: false; code: ErrorCode; error: string; spent?: SpentTokens; retry?: ProviderRetryAdvice; firstTokenLate?: true; unsendable?: true; wireRejected?: true; status?: number; errorType?: string }>;
+
+// A provider's own error type or code as a log label: identifier characters only and bounded, since the field comes off the wire.
+export const providerErrorLabel = (value: unknown): string | undefined => {
+  const label = typeof value === 'string' ? value.replace(/[^A-Za-z0-9_.:-]/g, '').slice(0, 64) : '';
+  return label === '' ? undefined : label;
+};
 
 export type LLMGatewayResult = Extract<AdapterResult<LLMResponse>, { ok: true }> | GatewayFailure;
 
@@ -458,6 +465,22 @@ export function selectModelRoute(input: SelectModelRouteInput): ModelRoute {
   return modelRouteSchema.parse(candidates[0]);
 }
 
+// One line per failed provider attempt, so a provider that fails every call shows why. Identifiers only: provider, model, the HTTP
+// status and the provider's error type, the time the attempt took and whether the route goes on. The request, its text, keys and
+// headers never reach it.
+const failedWire = (failed: GatewayFailure) => ({
+  ...(failed.status !== undefined ? { status: failed.status } : {}),
+  ...(failed.errorType !== undefined ? { errorType: failed.errorType } : {}),
+});
+
+function logFailedAttempt(plan: ReturnType<typeof attemptPlan>[number], failed: Readonly<{ code: ErrorCode; detail: string; status?: number; errorType?: string }>, latencyMs: number, fallbackFollows: boolean): void {
+  console.warn(JSON.stringify({
+    hop: 'provider_attempt_failed', ok: false, provider: plan.step.provider, model: plan.step.model, code: failed.code,
+    ...(failed.status !== undefined ? { status: failed.status } : {}), ...(failed.errorType !== undefined ? { error_type: failed.errorType } : {}),
+    detail: failed.detail, latency_ms: latencyMs, fallback_follows: fallbackFollows,
+  }));
+}
+
 export class RuntimeLLMProvider {
   private readonly gateway: LLMGatewayAdapter;
   private readonly circuitBreaker: CircuitBreaker;
@@ -559,6 +582,9 @@ export class RuntimeLLMProvider {
       }
 
       let gatewayResult: LLMGatewayResult;
+      let sentAt = Date.now();
+      const fallbackAhead = () => plans.slice(index + 1).some((later) => modelKey(later.step) !== modelKey(plan.step)
+        && !settledModels.has(modelKey(later.step)) && !this.circuitBreaker.isOpen(later.step.provider));
       let searchDegraded = false;
       let searchRejection: string | undefined;
       try {
@@ -566,6 +592,7 @@ export class RuntimeLLMProvider {
           && !settledModels.has(modelKey(later.step)) && !this.circuitBreaker.isOpen(later.step.provider));
         const send = (request: LLMRequest) => {
           input.runScope?.admit();
+          sentAt = Date.now();
           return this.gateway.complete({
             ...(failoverAhead ? { failoverAhead: true as const } : {}),
             ...(input.runScope ? { runScope: input.runScope } : {}),
@@ -582,6 +609,7 @@ export class RuntimeLLMProvider {
         // The step degrades to every tool up front, as the switch-off request sends them, rather than failing the turn.
         if (!gatewayResult.ok && gatewayResult.code === 'invalid_args' && sanitisedRequest.request.tool_search !== undefined) {
           attempts.push(failure(plan, 'invalid_args', gatewayResult.spent));
+          logFailedAttempt(plan, { code: 'invalid_args', detail: gatewayResult.error, ...failedWire(gatewayResult) }, Date.now() - sentAt, false);
           const { tool_search: _rejected, ...withoutSearch } = sanitisedRequest.request;
           searchDegraded = true;
           searchRejection = gatewayResult.error.slice(0, 160);
@@ -599,6 +627,7 @@ export class RuntimeLLMProvider {
           fallback_step: plan.fallback_step,
           code: 'transient',
         });
+        logFailedAttempt(plan, { code: 'transient', detail: lastDetail }, Date.now() - sentAt, fallbackAhead());
         continue;
       }
 
@@ -606,6 +635,8 @@ export class RuntimeLLMProvider {
         lastDetail = gatewayResult.error;
         if (PROVIDER_HEALTH_CODES.has(gatewayResult.code) && !gatewayResult.firstTokenLate) this.circuitBreaker.recordFailure(plan.step.provider);
         attempts.push(failure(plan, gatewayResult.code, gatewayResult.spent));
+        const failedFor = { code: gatewayResult.code, detail: gatewayResult.error, ...failedWire(gatewayResult) };
+        if (gatewayResult.code !== 'invalid_args') logFailedAttempt(plan, failedFor, Date.now() - sentAt, fallbackAhead());
         if (gatewayResult.code === 'invalid_args') {
           // A provider with no wire for this request (an attachment type it cannot carry), or one reached only because an
           // earlier one was unhealthy, says nothing about the request being bad, so the walk goes on to the next provider
@@ -620,9 +651,9 @@ export class RuntimeLLMProvider {
           // the route at its floor, the same as an outage, rather than as a bad request the owner never hears about.
           const reachedByRejection = attempts.slice(0, -1).some((attempt) => attempt.outcome === 'failure'
             && attempt.code === 'invalid_args' && attempt.provider !== plan.step.provider);
-          if (!reachedByOutage && !reachedByRejection && !gatewayResult.unsendable && !walkPastRejection) return invalidResponseFailure(plan.fallback_step, attempts, routingLogs, undefined, gatewayResult.error);
-          // The adapter's error names only the status and the provider's error type, never its message.
-          if (walkPastRejection) console.warn(JSON.stringify({ hop: 'provider_rejected_request', ok: false, provider: plan.step.provider, model: plan.step.model, detail: gatewayResult.error }));
+          const walksOn = reachedByOutage || reachedByRejection || gatewayResult.unsendable === true || walkPastRejection;
+          logFailedAttempt(plan, failedFor, Date.now() - sentAt, walksOn && fallbackAhead());
+          if (!walksOn) return invalidResponseFailure(plan.fallback_step, attempts, routingLogs, undefined, gatewayResult.error);
           settledModels.add(modelKey(plan.step));
           continue;
         }
