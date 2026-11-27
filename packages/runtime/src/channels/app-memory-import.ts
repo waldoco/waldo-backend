@@ -8,12 +8,14 @@ import { bodyDigest, type RequestBook } from '../onboarding/request-book';
 export type AppMemoryImportHost = Readonly<{
   // MEMORY_IMPORT_DOC: off, GET says unavailable and POST keeps nothing.
   on: boolean;
+  // Whether the owner has accepted the agreements, while the server offers them: nothing about the owner is kept before.
+  agreed(): boolean;
   requests: RequestBook;
   importDoc(source: AppMemoryImportSourceV1, text: string): Promise<DocImportCounts>;
 }>;
 
 const NO_STORE = { 'cache-control': 'no-store' };
-const refuse = (error: 'invalid_request' | 'request_reused' | 'unavailable', status: number) => Response.json({ error }, { status, headers: NO_STORE });
+const refuse = (error: 'invalid_request' | 'request_reused' | 'agreements_required' | 'unavailable', status: number) => Response.json({ error }, { status, headers: NO_STORE });
 const things = (count: number) => count === 1 ? '1 thing' : `${count} things`;
 
 export const memoryImportResult = (counts: DocImportCounts): AppMemoryImportResultV1 => appMemoryImportResultV1Schema.parse({
@@ -29,6 +31,7 @@ export const appMemoryImportRequest = async (request: Request, host: AppMemoryIm
   if (request.method === 'GET') return Response.json({ version: 1, available: host.on }, { headers: NO_STORE });
   if (request.method !== 'POST') return refuse('invalid_request', 405);
   if (!host.on) return refuse('unavailable', 503);
+  if (!host.agreed()) return refuse('agreements_required', 409);
   let parsed: unknown;
   try { parsed = await request.json(); } catch { return refuse('invalid_request', 400); }
   const body = appMemoryImportRequestV1Schema.safeParse(parsed);

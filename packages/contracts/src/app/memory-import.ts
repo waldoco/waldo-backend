@@ -19,11 +19,12 @@ export type AppMemoryImportSourceV1 = z.infer<typeof appMemoryImportSourceV1Sche
 export const APP_MEMORY_IMPORT_SOURCE_NAMES_V1: Readonly<Record<AppMemoryImportSourceV1, string>> = {
   chatgpt: 'ChatGPT', claude: 'Claude', gemini: 'Gemini', grok: 'Grok', other: 'Another AI',
 };
-// A document shorter than this says nothing worth reading; longer than the maximum is refused rather than cut.
+// A document shorter than this says nothing worth reading. A long one is read in parts, never cut; the maximum bounds what one
+// request can cost, well above what an assistant writes for the prompt below.
 export const APP_MEMORY_IMPORT_TEXT_MIN_V1 = 40;
-export const APP_MEMORY_IMPORT_TEXT_MAX_V1 = 40_000;
+export const APP_MEMORY_IMPORT_TEXT_MAX_V1 = 120_000;
 // The maximum text at four bytes a character, with room for JSON escapes and the other fields.
-export const APP_MEMORY_IMPORT_MAX_REQUEST_BYTES_V1 = 200_000;
+export const APP_MEMORY_IMPORT_MAX_REQUEST_BYTES_V1 = 600_000;
 // At most this many claims are kept from one document.
 export const APP_MEMORY_IMPORT_CLAIMS_MAX_V1 = 60;
 
@@ -39,8 +40,11 @@ export const APP_MEMORY_IMPORT_PROMPT_V1 = [
   '## People in my life',
   'The people I mention most: name, how they relate to me, and anything I\'ve said matters about them.',
   '',
+  '## What I\'m working toward',
+  'The goal I\'m working toward and by when (a race, an event, a launch), and why it matters to me.',
+  '',
   '## Work and projects',
-  'What I\'m working on now, my goals, deadlines I\'ve mentioned, tools I use.',
+  'What I\'m working on now, deadlines I\'ve mentioned, tools I use.',
   '',
   '## Routines and schedule',
   'When I usually wake, sleep, work, exercise and eat. How I like meetings and my calendar arranged.',

@@ -5,7 +5,7 @@ import { buildSessionState, type ToolHandler } from '@waldo/contracts';
 import { APP_MEMORY_IMPORT_PATH_V1, APP_MEMORY_IMPORT_PROMPT_V1, APP_MEMORY_IMPORT_TEXT_MAX_V1, appMemoryImportRequestV1Schema, appMemoryImportResultV1Schema } from '../../contracts/src/app/memory-import';
 import { appMemoryImportRequest, type AppMemoryImportHost } from '../src/channels/app-memory-import';
 import { claimStore, memoryPrompt } from '../src/memory/claims';
-import { importDoc, type DocImportDeps } from '../src/memory/doc-import';
+import { DOC_IMPORT_PART_CHARS, importDoc, type DocImportDeps } from '../src/memory/doc-import';
 import { importedQuote, importSourceOf } from '../src/memory/import-ref';
 import { requestBook } from '../src/onboarding/request-book';
 import { dispatchTool } from '../src/tools/dispatcher';
@@ -57,7 +57,8 @@ describe('importing a pasted summary', () => {
     const kept = t.store.claims();
     expect(kept.map(claim => claim.text).sort()).toEqual(GOOD.map(claim => claim.text).sort());
     for (const claim of kept) {
-      expect(claim).toMatchObject({ source: 'inferred', origin: 'agent', verification_status: 'provisional' });
+      // Another assistant wrote the summary: what is kept from it is outside content, recalled as an outside note, never the owner's word.
+      expect(claim).toMatchObject({ source: 'inferred', origin: 'untrusted' });
       expect(claim.source_ref).toMatch(/^import:gemini:[0-9a-f]{16}:doc$/);
       expect(importSourceOf(claim.source_ref)).toBe('gemini');
       expect(claim.evidence).toMatch(/^the summary of the owner they pasted from Gemini: "/);
@@ -131,13 +132,22 @@ describe('the memory import route', () => {
   const hostFor = (storage: DurableObjectStorage, on = true) => {
     const calls: string[] = [];
     let fail = false;
-    const host: AppMemoryImportHost = { on, requests: requestBook(storage.sql, Date.now), importDoc: async (source, text) => {
+    let agreed = true;
+    const host: AppMemoryImportHost = { on, agreed: () => agreed, requests: requestBook(storage.sql, Date.now), importDoc: async (source, text) => {
       calls.push(`${source}:${text.length}`);
       if (fail) throw new Error(`model down while reading ${text}`);
       return { added: 2, already_known: 1, left_out: 0 };
     } };
-    return { host, calls, failNext: () => { fail = true; } };
+    return { host, calls, failNext: () => { fail = true; }, disagree: () => { agreed = false; } };
   };
+
+  it('keeps nothing before the agreements are accepted, as with the onboarding answers', () => withStorage(async storage => {
+    const t = hostFor(storage);
+    t.disagree();
+    const refused = await appMemoryImportRequest(post(body), t.host);
+    expect([refused.status, await refused.json()]).toEqual([409, { error: 'agreements_required' }]);
+    expect(t.calls).toEqual([]);
+  }));
 
   it('says whether imports are on', () => withStorage(async storage => {
     for (const on of [true, false]) {
@@ -172,7 +182,25 @@ describe('the memory import route', () => {
   }));
 });
 
+describe('a long summary', () => {
+  it('is read in parts rather than refused or cut: each part quoted against itself, and nothing kept twice', () => withStorage(async storage => {
+    const part = (n: number) => Array.from({ length: 200 }, (_, line) => `Paragraph ${n}.${line}: Meera likes long walks by the river on quiet Sunday mornings in Pune.`).join('\n');
+    const long = [part(1), part(2), part(3)].join('\n\n');
+    expect(long.length).toBeGreaterThan(DOC_IMPORT_PART_CHARS);
+    expect(long.length).toBeLessThanOrEqual(APP_MEMORY_IMPORT_TEXT_MAX_V1);
+    const t = setup(storage, reply([{ kind: 'routine', text: 'Walks by the river on Sunday mornings', evidence_quote: 'long walks by the river on quiet Sunday mornings' }]));
+    expect(await importDoc(t.deps, 'claude', long)).toEqual({ added: 1, already_known: t.asked.length - 1, left_out: 0 });
+    expect(t.asked.length).toBeGreaterThan(1);
+    for (const input of t.asked) expect(input.length).toBeLessThan(DOC_IMPORT_PART_CHARS + 1_000);
+    expect(t.store.claims()).toHaveLength(1);
+  }));
+});
+
 describe('the memory import contract', () => {
+  it('asks the other assistant for what the owner is working toward and by when', () => {
+    expect(APP_MEMORY_IMPORT_PROMPT_V1).toContain('working toward');
+  });
+
   it('takes a summary from a known assistant within its bounds', () => {
     expect(appMemoryImportRequestV1Schema.safeParse({ request_id: 'import-0001', source: 'other', text: SUMMARY }).success).toBe(true);
     expect(appMemoryImportRequestV1Schema.safeParse({ request_id: 'short', source: 'other', text: SUMMARY }).success).toBe(false);
