@@ -10,6 +10,7 @@ import { outsideSafe } from '../memory/outside-view';
 import { requestBook } from '../onboarding/request-book';
 import { confirmWelcomeNode, correctWelcomeNode, welcomeBuild, welcomeSupportIds, type WelcomeStage } from '../onboarding/welcome';
 import { getToKnowApplier, startGetToKnow } from '../onboarding/get-to-know';
+import { onboardingGoal } from '../onboarding/goal';
 import { ownerWelcome, type OwnerWelcome } from '../onboarding/welcome-sources';
 import { chatChannelLinks } from './chat-channel-links';
 import type { IMessageProof, WhatsAppProof } from './dashboard-phone';
@@ -2131,6 +2132,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         try{
           return await appOnboardingRequest(request,ownerOnboardingHost({storage:this.ctx.storage,doName:name,now:Date.now,rpc:signedRpc(this.env),assertCurrent:current,
             ...consentSwitches(this.env),hideText:texts=>this.hideRetainedText(texts),stopLookup:()=>{for(const id of this.jobs().cancelMachine('owner_lookup')){this.tasks.cancelled(id);this.setup('app').log({trace:`task:${id}`,hop:'lookup_cancelled',ms:0,ok:true,job_id:id});}},
+            goal:onboardingGoal(this.ctx.storage.kv,{set:(args,user)=>this.setup('app').quests.set(args,user),open:()=>this.setup('app').quests.open()},()=>this.ctx.storage.kv.get<string>('owner_principal_ref')??name),
             chat:chatChannelLinks({env:this.env,kv:this.ctx.storage.kv,doName:name,auth:consoleAuth(this.env)}),bothDefault:proactiveBothDefault(this.env),
             signedInRecently:async()=>signedInRecently((await consoleAuth(this.env)!.listSessions(name)).find(row=>row.session===hash)?.signed_in_at,Date.now()),
             act:action=>this.setup('app').act(action,current),
@@ -6922,6 +6924,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       finally { log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: answered, detail }); }
     };
     const welcome = ownerWelcome({ sql: storage.sql, transaction: (work) => storage.transactionSync(work), claims: memory, now: Date.now, timezone: () => clock.timezone, healthMemory: () => healthMemoryOn(identity), healthRead, google,
+      goal: () => onboardingGoal(storage.kv, quests, ownerRef).line(),
       findings: () => findingStore(storage.sql, memory, consentLedger(storage.sql, consentSwitches(this.env)), Date.now),
       // The build runs beside the serial lane, so each call queues on it.
       ask: (stage, text, version) => this.serial(() => askWelcome(stage, text, version)),

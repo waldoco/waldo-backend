@@ -320,3 +320,24 @@ it('health connected after the first answer started the build is read once its f
     } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
   });
 });
+
+it('the goal given at setup reaches the first build with the other answers', async () => {
+  const name = `welcome-owner-goal-${crypto.randomUUID()}`;
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    claimStore(state.storage.sql);
+    ensureSchema(state.storage);
+    state.storage.kv.put('do_name', name);
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    try {
+      const saved = await owner.fetch(new Request('https://telegram-owner/app/v1/onboarding/answers', { method: 'POST',
+        headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'c'.repeat(64), 'content-type': 'application/json', 'x-waldo-app-contract': 'onboarding=5' },
+        body: JSON.stringify({ request_id: 'welcome-goal-1', name: 'Asha', goal: { own_words: 'Finish my first HYROX', by: '2027-03-14' } }) }));
+      expect(saved.status).toBe(200);
+      await vi.waitFor(() => expect(state.storage.sql.exec<{ finished_at: number | null }>('SELECT finished_at FROM welcome_builds').toArray()[0]?.finished_at).not.toBeNull(), { timeout: 15_000, interval: 25 });
+      const setup = model.welcome.find((body) => body.includes('Source: what the owner told'))!;
+      expect(setup).toContain('[goal] Working toward, in their own words: \\"Finish my first HYROX\\", by 2027-03-14.');
+      expect(setup).toContain('Wants to be called Asha');
+    } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
+  });
+});
