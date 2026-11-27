@@ -155,9 +155,9 @@ not change item 3.
   newest recovery and day strain against the owner's own WHOOP days (above, within or below their usual, or too few days for one),
   says whether WHOOP is still calibrating, whether last night met the need WHOOP set and whether that need counts sleep debt, and
   whether the newest workout carries WHOOP's strain and zone minutes. Never a number: `get_health` reads the numbers
-  (`whoop_recovery` with `calibrating`, `whoop_strain`, `whoop_cycle_steps`, `whoop_sleep_need`, `whoop_sleep_debt`,
+  (`whoop_recovery` with `calibrating`, `whoop_strain`, `whoop_sleep_need`, `whoop_sleep_debt`,
   `whoop_sleep_performance`, `whoop_sleep_consistency`, `naps`, `skin_temperature`, `time_in_bed`, `sleep_cycles`,
-  `sleep_disturbances`, `height`, `max_hr`, and each workout session's `strain`, `percent_recorded` and `zone_minutes`).
+  `sleep_disturbances`, and each workout session's `strain`, `percent_recorded` and `zone_minutes`).
 
 ## What Waldo reads from WHOOP (health revision 16)
 
@@ -184,7 +184,7 @@ WHOOP has not scored, or does not state, makes no reading, never a zero.
 | Recovery `skin_temp_celsius` (4.0+) | `skin_temperature` (absolute °C, apart from a watch's wrist temperature) | get_health `skin_temperature` |
 | Cycle `score.strain` | `provider_day_strain` (method `whoop`; `open` while the cycle runs) | block (against the owner's usual), get_health `whoop_strain` |
 | Cycle `kilojoule`, `average_heart_rate`, `max_heart_rate` | on `provider_day_strain` (kcal, bpm) | not offered |
-| Cycle `step_count` | on `provider_day_strain` | get_health `whoop_cycle_steps` |
+| Cycle `step_count` | on `provider_day_strain` | inventory only (not offered as a read: the per-round tool budget is full) |
 | Workout span and `sport_name` | `workout` (minutes, activity) | get_health `workouts` and sessions |
 | Workout `kilojoule` | `energy_kcal` on `workout` | sessions |
 | Workout `average_heart_rate`, `max_heart_rate` | `avg_hr_bpm`, `max_hr_bpm` | sessions |
@@ -193,8 +193,8 @@ WHOOP has not scored, or does not state, makes no reading, never a zero.
 | Workout `strain` | `strain` on `workout` (method `whoop`) | block, sessions `strain` |
 | Workout `percent_recorded` | `percent_recorded` on `workout` | sessions |
 | Body `weight_kilogram` | `body_mass` | get_health `body_mass` |
-| Body `height_meter` | `height` | get_health `height` |
-| Body `max_heart_rate` | `max_heart_rate` (method `provider_estimate`) | get_health `max_hr` |
+| Body `height_meter` | `height` | inventory only (as above) |
+| Body `max_heart_rate` | `max_heart_rate` (method `provider_estimate`) | inventory only (as above) |
 
 Not stored: the profile's name and email (only the numeric `user_id` routes webhooks), record ids beyond each reading's
 `sample_id`, and `created_at`. A cycle that WHOOP deletes is not signalled by any webhook; it stays until it ages out.
