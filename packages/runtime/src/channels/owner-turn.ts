@@ -50,7 +50,7 @@ import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
 import { fitPromptToBudget } from '../prompt/fit-prompt';
 import { ownerProfilePrompt } from '../memory/owner-profile';
-import { FORGOTTEN, QUIET_NOTE, QUIET_TAG, withoutBringUpLess, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, knownPeopleBlock, SOURCE_PEOPLE_CLAIMS_SCHEMA, SOURCE_PEOPLE_RULE, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, promotionInstruction, PROMOTION_SCHEMA, promotionInput, SOURCE_CLAIMS_SCHEMA, SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput, withoutHealthClaims, type ClaimStore, barrierPrompt, memoryPrompt, RETIRE_RULES } from '../memory/claims';
+import { FORGOTTEN, QUIET_NOTE, QUIET_TAG, withoutBringUpLess, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, knownPeopleBlock, SOURCE_PEOPLE_CLAIMS_SCHEMA, SOURCE_PEOPLE_RULE, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, promotionInstruction, PROMOTION_SCHEMA, promotionInput, SOURCE_CLAIMS_SCHEMA, SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput, OUTCOME_MEMORY_INSTRUCTION, outcomesInput, withoutHealthClaims, type ClaimStore, barrierPrompt, memoryPrompt, RETIRE_RULES } from '../memory/claims';
 import { OWNER_WORDS_CHECK_FORMAT, OWNER_WORDS_CHECK_INSTRUCTION, ownerWordsCheckInput, ownerWordsStated, type OwnerWordsCheck } from '../memory/owner-words-check';
 import { CAPACITY_INSTRUCTION, CAPACITY_SCHEMA } from '../prompt/capacity';
 import { sha256Hex } from '../context-composer/canonical';
@@ -446,7 +446,7 @@ export const createOwnerResponder = (
     const response = result.ok ? result.response : undefined;
     const metadataOnly = transientDecision || purpose.startsWith('memory') || purpose.startsWith('task_source') || purpose === 'compaction';
     // The source pass runs apart from any owner turn, for the nightly run and the daytime pass alike, so its spend is background.
-    const costKind = purpose === 'memory_nightly_sources' ? { cost_kind: 'background' as const } : {};
+    const costKind = purpose === 'memory_nightly_sources' || purpose === 'memory_nightly_outcomes' ? { cost_kind: 'background' as const } : {};
     // The floor line is answered by no provider: every attempt failed, and the last failure is why the floor ran.
     const floor = result.ok && result.fallback_step === 'template';
     const served = floor ? undefined : result.attempts.at(-1);
@@ -1381,6 +1381,16 @@ export const createOwnerResponder = (
       const input = sourceUpdatesInput(outsideView(promptMemory()!), updates, policy?.health !== false);
       const raw = await ask(trace, 'memory_nightly_sources', people ? `${SOURCE_MEMORY_INSTRUCTION}\n${SOURCE_PEOPLE_RULE}` : SOURCE_MEMORY_INSTRUCTION,
         people ? `${input}\n\n${knownPeopleBlock(memory)}` : input, { name: 'source_claims', schema: people ? SOURCE_PEOPLE_CLAIMS_SCHEMA : SOURCE_CLAIMS_SCHEMA }, undefined, undefined, undefined, roleModel);
+      await assertFresh();
+      return raw;
+    },
+    // Rows drawn from outside content read memory as a job built from outside content does.
+    async outcomeClaims(trace, outcomes, policy) {
+      const asOwner = await asOwnerJob(trace, job => job.outcomeClaims!(trace, outcomes, policy));
+      if (asOwner !== undefined) return asOwner;
+      if (!memory) return '{"add":[]}';
+      const raw = await ask(trace, 'memory_nightly_outcomes', OUTCOME_MEMORY_INSTRUCTION, outcomesInput(policy.outside ? outsideView(promptMemory()!) : promptMemory()!, outcomes, policy),
+        { name: 'source_claims', schema: SOURCE_CLAIMS_SCHEMA }, undefined, undefined, undefined, roleModel);
       await assertFresh();
       return raw;
     },

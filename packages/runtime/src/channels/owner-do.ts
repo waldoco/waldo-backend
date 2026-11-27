@@ -172,6 +172,7 @@ import { toolOutputLedger , redactToolOutputLedger } from '../conversation/tool-
 import { heldTopicsOf, holdsIn } from '../memory/forget-guard';
 import { armNightly, backfillEpisodes, consolidationSides, CONSTELLATION_DIGEST_KEY, episodeIndex, indexedConversationStore, type EpisodeIndex, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_THROUGH_KEY, ownerSpokeSince, recentExchange, scrubEpisodeTexts, transcript } from './episodes';
 import { consolidateSources, type SourcesDeps } from './nightly-sources';
+import { consolidateOutcomes, OUTCOME_CLAIMS_KEY, outcomeBook, outcomeReadsSection } from '../memory/outcomes';
 import { consolidateBacklog as consolidateNightly } from './nightly-backlog';
 import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
@@ -5534,7 +5535,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         conversationRef: ctx => { const record = this.activeApp; return record && ctx.runScope?.runId === record.id && ctx.runScope.attempt === record.attempt && threadOfChain(record.conversationRef) ? record.conversationRef : null; } })]), undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; }, approvableHere: () => desk.approvableHere() }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now()); const trails = forgetTrails(this.ctx.storage.sql, texts) + dayPlanBook(this.ctx.storage.sql).forgetWhy(texts); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + trails + titles.remaining }; }), undefined,
       (opt) => opt ? [openLoopsPrompt(loops, clock.timezone, opt.loopsRoom, false, Date.now()), runningTasksLine(this.jobs(), Date.now()),
         // "What's new?" in the owner's own turns: what is recent and still live by its switch, while feature news is on.
-        whatsNewSection(newsOn() ? announced.recent(Date.now() - WHATS_NEW_WINDOW_MS).filter(row => switchOn(declaredSwitch(this.env, row.capability))) : [], budget.whatsNewChars)].filter(Boolean).join('\n\n') : [standingOrdersPrompt(orders, ...(contextCaps ? [budget.standingOrdersChars] : [])), questsPrompt(quests, ...(contextCaps ? [budget.questsChars] : []))].filter(Boolean).join('\n\n'), runs, undefined,
+        whatsNewSection(newsOn() ? announced.recent(Date.now() - WHATS_NEW_WINDOW_MS).filter(row => switchOn(declaredSwitch(this.env, row.capability))) : [], budget.whatsNewChars),
+        // MEMORY_OUTCOME_LEARNING: what the nightly pass learned from how the owner answered Waldo, in every turn and every run.
+        this.env.MEMORY_OUTCOME_LEARNING === '1' ? outcomeReadsSection(memory, storage.kv.get<number[]>(OUTCOME_CLAIMS_KEY)) : ''].filter(Boolean).join('\n\n') : [standingOrdersPrompt(orders, ...(contextCaps ? [budget.standingOrdersChars] : [])), questsPrompt(quests, ...(contextCaps ? [budget.questsChars] : []))].filter(Boolean).join('\n\n'), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
       undefined, channel, ({ telegram: telegramSkillHost, app: appSkillHost, imessage: imessageSkillHost, whatsapp: whatsappSkillHost } satisfies Record<ChannelKind, OwnerSkillHost>)[channel],
@@ -5964,6 +5967,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const people = this.env.PEOPLE_MAP === '1';
       return { kv: storage.kv, updates, claims: memory, transaction: work => storage.transactionSync(work), timezone: clock.timezone, now: Date.now, health, people, log, ask: text => read(trace, text, { health, people }) };
     };
+    // MEMORY_OUTCOME_LEARNING: what Waldo did on its own initiative and what became of it, read before the day is planned so
+    // tomorrow's plan can use what the owner's answers showed. A failure is logged and the night goes on.
+    const learnOutcomes = async (trace: string) => {
+      if (this.env.MEMORY_OUTCOME_LEARNING !== '1' || !responder.outcomeClaims) return;
+      const started = Date.now(), health = healthMemoryOn(identity);
+      try {
+        await consolidateOutcomes({ kv: storage.kv, outcomes: outcomeBook(storage.sql), claims: memory, transaction: work => storage.transactionSync(work), timezone: clock.timezone, now: Date.now, health, log,
+          ...(this.env.MEMORY_BODY_PATTERNS === '1' ? { readZones } : {}), ask: (text, policy) => responder.outcomeClaims!(trace, text, policy) }, trace);
+      } catch (error) {
+        log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: false, code: 'outcomes_failed', error: error instanceof Error ? error.name : 'error' });
+      }
+    };
     const nightlyPass = recordedRun(runs, 'nightly', NIGHTLY_RUN, async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
       const started = Date.now();
@@ -5981,6 +5996,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const outcome = await consolidateBacklog(trace, entry.occurrence_at);
         if (outcome === 'more' || outcome === 'failed') await armCatchUp();
         if (this.env.MEMORY_NIGHTLY_SOURCE_UPDATES === '1' && responder.sourceClaims) await consolidateSources(sourcesFor(trace), trace);
+        await learnOutcomes(trace);
         const promoting = Date.now();
         await responder.promote(trace, { last: storage.kv.get<string>(CONSTELLATION_DIGEST_KEY), promoted: digest => storage.kv.put(CONSTELLATION_DIGEST_KEY, digest) })
           .then((detail) => log({ trace, hop: 'constellation', ms: Date.now() - promoting, ok: true, detail, ...(detail === 'unchanged' ? { code: 'unchanged' } : {}) }))

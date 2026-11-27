@@ -319,6 +319,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   MEMORY_NIGHTLY_SOURCE_UPDATES?: string;
   // "1" with MEMORY_NIGHTLY_SOURCE_UPDATES also "1": mail and calendar changes reach memory the same day (memory/consolidator.ts).
   MEMORY_DAYTIME_CONSOLIDATOR?: string;
+  // "1": the nightly pass reads what Waldo did on its own initiative and what became of it, and every turn reads what it learned (memory/outcomes.ts).
+  MEMORY_OUTCOME_LEARNING?: string;
+  // "1" with MEMORY_OUTCOME_LEARNING: that pass also reads the owner's Recovery and Form zone words around each of Waldo's own outcomes.
+  MEMORY_BODY_PATTERNS?: string;
   MEMORY_VALIDITY?: string;
   // "1": an owner turn also recalls notes learned from mail and calendar, shown as not the owner's words; a turn that recalls one is marked as carrying outside content (memory/claims.ts withOutsideNotes).
   MEMORY_OUTSIDE_NOTES?: string;

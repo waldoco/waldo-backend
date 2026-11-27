@@ -6,14 +6,14 @@ Status: draft. Owner's ruling 7 of 16 Nov 2026 (waldoco/waldo-app#257, comment 6
 
 | Destination | Before | After (with `MEMORY_BODY_PATTERNS`) |
 |---|---|---|
-| Memory claims | Only what the owner said about their health. Never a wearable reading, never an inferred condition. | Also a **body-response pattern**: Waldo's inferred, untrusted claim about how the owner's Recovery or Form tended to be after a kind of outcome. It is written in zone words, across at least three outcomes, never with a number, a condition, a diagnosis or a cause stated as fact. |
+| Memory claims | Only what the owner said about their health. Never a wearable reading, never an inferred condition. | Also a **body-response pattern**: Waldo's inferred claim about how the owner's Recovery or Form tended to be after a kind of outcome. It is written in zone words, never with a number, a condition, a diagnosis or a cause stated as fact. The model judges whether the outcomes show a pattern; no count is fixed in code. |
 
 Every other destination is unchanged. Raw values stay in the health store. Tool numbers stay in the turn. No score, driver or reading is ever passed to the review.
 
 ## What the review reads, and when
 
-- It reads the outcomes it already reads: decided cards and closed loops since its mark.
-- Beside each outcome, it reads the owner's Recovery and Form **zone words** for the day the outcome ended and the next day. These come from `waldo.health_zones_read` (20261106120000), the read personal experiments already use:
+- It reads the outcomes it already reads since its mark: decided cards, closed loops, and the day cards and update cards Waldo sent unasked with when the owner next wrote.
+- Beside each of **Waldo's own** outcomes (never a row drawn from outside content: a card raised by a run that read mail, a follow-up opened from mail, an update card, or a day card written after reading mail), it reads the owner's Recovery and Form **zone words** for the day the outcome ended and the next day. These come from `waldo.health_zones_read` (20261106120000), the read personal experiments already use:
   - zone words only;
   - only rows whose consent basis is live for model use;
   - never a backfilled row.
@@ -25,7 +25,8 @@ Every other destination is unchanged. Raw values stay in the health store. Tool 
 
 ## What is stored
 
-- A claim of kind `health`, with source `inferred` and origin `untrusted` (outside grounding). It quotes the outcome lines it rests on. Example: "Recovery tended to be mixed or compromised the day after evening workouts Waldo moved; held for 3 of 4."
+- A claim of kind `health`, with source `inferred` and origin `agent` (Waldo's own read, since body lines sit only beside Waldo's own rows). It quotes the outcome lines it rests on. Example: "Recovery tended to be mixed or compromised the day after evening workouts Waldo moved."
+- It reaches the owner's own turns through recall, under the memory health setting. It is not in the outcome-reads section every turn and every Waldo-started run gets, because that section also reaches jobs built from outside content.
 - The numeric health floor refuses any claim that carries a number tied to a health word, as it does for every memory write.
 - **Correctable and forgettable:** it is an ordinary claim. The owner can confirm, correct or dismiss it, and "forget" removes it and holds its topic against being re-added.
 - **Consent:** withdrawing model processing stops the read the next night. Turning off health in memory removes health claims from the review's adds (`withoutHealthClaims`), and the existing health-memory setting governs whether stored health claims are kept.
@@ -44,7 +45,7 @@ Privacy notice row:
 
 ## Rollout
 
-1. Staging: `MEMORY_BODY_PATTERNS` on for the owner's and the team's accounts, after the outcomes caller is wired (Ark's lane: the nightly line and the `outcomeClaims` responder, behind `MEMORY_OUTCOME_LEARNING`).
+1. Staging: `MEMORY_BODY_PATTERNS` on, with `MEMORY_OUTCOME_LEARNING` (the caller is wired in the same PR). Both ship `"0"`. Since 26 Nov staging serves real users as production, so turning this one on needs the owner's ruling on whether step 2's conditions now apply to staging.
 2. Production: only after this amendment is accepted and the consent line is in the app.
 
 ## Evidence Trail

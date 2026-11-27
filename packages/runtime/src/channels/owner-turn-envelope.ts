@@ -5,6 +5,7 @@ import type { TurnTimer } from './owner-turn-types';
 import type { turnControl } from './turn-control';
 import type { ReplyStream } from '../conversation/reply-stream';
 import type { OwnerContextCapability } from '../context-composer/owner-turn';
+import type { OutcomesPolicy } from '../memory/claims';
 
 // Auth and provider parsing happen in adapters. This is the admitted content
 // boundary consumed by the conversation, memory and tool loop.
@@ -73,6 +74,9 @@ export type OwnerResponder = Readonly<{
   consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>, policy?: Readonly<{ health: boolean }>): Promise<Readonly<{ done: boolean; detail: string }>>;
   // The model's reply over the day's calendar and mail changes (outside content), applied by the caller. Absent on fakes.
   sourceClaims?(trace: string, updates: string, policy?: Readonly<{ health: boolean; people?: boolean }>): Promise<string>;
+  // MEMORY_OUTCOME_LEARNING: the model's reply over what Waldo did on its own initiative and what became of it (memory/outcomes.ts),
+  // applied by the caller. Absent on fakes.
+  outcomeClaims?(trace: string, outcomes: string, policy: OutcomesPolicy): Promise<string>;
   // CAPACITY_PLAN: the model's raw answer keeping the owner's capacity note, applied by the caller. Absent on fakes.
   capacity?(trace: string, input: string): Promise<string>;
   migrate(trace: string, input: string, policy?: Readonly<{ health: boolean }>): Promise<string>;
