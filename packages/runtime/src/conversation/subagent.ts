@@ -21,7 +21,7 @@ export const SUBAGENT_MAX_SPAWNS_PER_TURN = 5;
 // What a child may use: every read tool whose handler only reads, page reads included (browse_page is external-origin, so a
 // child's page read taints its report). Delegation keeps depth flat, read_tool_output pages the parent's own store, and the
 // rest of the table is effects, so the autonomy gate never fires inside a child and a child never acts for the owner.
-const NOT_FOR_CHILDREN: readonly ToolName[] = ['delegate_task', 'read_tool_output'];
+const NOT_FOR_CHILDREN: readonly ToolName[] = ['delegate_task', 'read_tool_output', 'end_run'];
 export const CHILD_READ_TOOLS: readonly ToolName[] = (Object.keys(TOOL_REPLAY_CLASS) as ToolName[])
   .filter((name) => TOOL_REPLAY_CLASS[name].replay === 'safe_read' && !NOT_FOR_CHILDREN.includes(name));
 // A child's default tools: every read but the owner's health and medicine reads. A child's report reaches the parent as

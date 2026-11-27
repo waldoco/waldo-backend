@@ -44,6 +44,9 @@ const restingOn = (sql: Pick<SqlStorage, 'exec'>, from: readonly number[]): numb
 };
 // The source ref of a note written in place of others: notes:<their ids>.
 export const COMBINED_REF = 'notes:';
+// A note a run Waldo started saved from what it found (a Brief, a check-back, a reminder): Waldo's own read, never the owner's
+// words, with the run that wrote it.
+export const WALDO_RUN_REF = 'waldo run, ';
 export const awaitsOwnerConfirm = (claim: Pick<Claim, 'source'>): boolean => claim.source === 'inferred' || claim.source === 'waldo_confirmed';
 export const EDGE_RELATIONS = ['tends to precede', 'worsens', 'improves', 'co-occurs with'] as const;
 
@@ -1384,6 +1387,7 @@ export const memoryPrompt = (store: ClaimStore): string => {
 const evidenceLabel = (claim: Claim): string => claim.origin !== 'agent' ? ''
   : importSourceOf(claim.source_ref) ? ' (quoted from the owner\'s side of a chat export they imported, which may hold text they pasted and may be out of date, so Waldo\'s read until the owner confirms it)'
   : claim.source_ref?.startsWith(COMBINED_REF) ? ' (Waldo\'s wording, written in place of the notes named, so Waldo\'s read until the owner confirms it)'
+  : claim.source_ref?.startsWith(WALDO_RUN_REF) ? ' (Waldo\'s own note from a run it started, not the owner\'s words, so Waldo\'s read until the owner confirms it)'
   : claim.source_ref ? ' (the owner\'s words, but saved in a turn that read outside content or said in answer to a reply that carried it, so Waldo\'s read until the owner confirms it)'
   : ' (writer-stated quote; at admission it matched neither the owner\'s nor the shared content checked then)';
 

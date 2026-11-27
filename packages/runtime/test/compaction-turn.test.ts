@@ -11,6 +11,8 @@ import { episodeIndex, OWNER_SAID } from '../src/channels/episodes';
 import { memoryFlushHooks } from '../src/channels/health-memory';
 import { ClosedRunError, type RunEffectScope } from '../src/channels/run-effect-scope';
 
+// The 160 tokens these cases were written for at 4 bytes per token, counted at 2.8 with each message's fixed framing.
+const BUDGET = 210;
 const fake = vi.hoisted(() => ({ summary: 'The owner prefers tea and wants quiet mornings.', flushOps: '', onFlush: undefined as (() => void) | undefined, bodies: [] as Array<{ instructions?: string; input?: unknown }> }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: { instructions?: string; input?: unknown }) => {
   fake.bodies.push(body);
@@ -47,7 +49,7 @@ const question = (n: number) => `Question ${n}: ${'q'.repeat(90)}`;
 const settle = () => new Promise(resolve => setTimeout(resolve, 2));
 
 it('after a turn that dropped rows, compactIfDue writes one summary row the next turn sees first, supersedes it later, and never compacts twice for one span', async () => {
-  Object.assign(COMPACTION, { enabled: true, budgetTokens: 160, minOwnerRows: 2, minIntervalMs: 0 });
+  Object.assign(COMPACTION, { enabled: true, budgetTokens: BUDGET, minOwnerRows: 2, minIntervalMs: 0 });
   const storage = memoryStorage();
   const logs: TurnLogEntry[] = [];
   await inOwner('compaction-turn', async () => {
@@ -94,7 +96,7 @@ it('after a turn that dropped rows, compactIfDue writes one summary row the next
 });
 
 it('a summary that carries a health number is never written, and counts as an attempt', async () => {
-  Object.assign(COMPACTION, { enabled: true, budgetTokens: 160, minOwnerRows: 2, minIntervalMs: 3_600_000 });
+  Object.assign(COMPACTION, { enabled: true, budgetTokens: BUDGET, minOwnerRows: 2, minIntervalMs: 3_600_000 });
   fake.summary = 'The owner slept 5 hours and prefers tea.';
   const storage = memoryStorage();
   const logs: TurnLogEntry[] = [];
@@ -118,13 +120,13 @@ it('with the switch off nothing is called and an existing summary row shapes no 
   await inOwner('compaction-off', async () => {
     const store = canonicalOwnerConversationStore(storage, { invocation: localTrustedBriefScheduleInput().admission as never, assertCurrent: async () => undefined });
     const responder = createOwnerResponder('fixture', store);
-    Object.assign(COMPACTION, { enabled: true, budgetTokens: 160, minOwnerRows: 2, minIntervalMs: 0 });
+    Object.assign(COMPACTION, { enabled: true, budgetTokens: BUDGET, minOwnerRows: 2, minIntervalMs: 0 });
     for (let n = 1; n <= 6; n += 1) await responder.respond(ownerTyped({ traceId: `app-${n}`, conversationRef: 'owner', surface: 'app', text: question(n) }), (_name, work) => work());
     await responder.compactIfDue!('owner');
     await settle();
     expect([...storage.data.values()].some(value => (value as { role?: string })?.role === 'compaction')).toBe(true);
     // the switch alone stops the next one: the same budget, two new owner rows and no interval would let it through
-    Object.assign(COMPACTION, { ...defaults, budgetTokens: 160, minOwnerRows: 2, minIntervalMs: 0 });
+    Object.assign(COMPACTION, { ...defaults, budgetTokens: BUDGET, minOwnerRows: 2, minIntervalMs: 0 });
     const compactions = () => fake.bodies.filter(body => body.instructions === COMPACTION_INSTRUCTION).length;
     expect(compactions()).toBe(1);
     for (const n of [7, 8]) await responder.respond(ownerTyped({ traceId: `app-${n}`, conversationRef: 'owner', surface: 'app', text: question(n) }), (_name, work) => work());
@@ -135,7 +137,7 @@ it('with the switch off nothing is called and an existing summary row shapes no 
 });
 
 it('after a restart the stored summary row is never the leaf: the next turn continues from the last reply, with the switch on or off', async () => {
-  Object.assign(COMPACTION, { enabled: true, budgetTokens: 160, minOwnerRows: 2, minIntervalMs: 0 });
+  Object.assign(COMPACTION, { enabled: true, budgetTokens: BUDGET, minOwnerRows: 2, minIntervalMs: 0 });
   const storage = memoryStorage();
   const parentOf = (id: string) => ([...storage.data.values()].find(row => (row as { id?: string })?.id === id) as { parentId: string | null } | undefined)?.parentId;
   await inOwner('compaction-restart', async () => {
@@ -170,7 +172,7 @@ describe('the memory flush seam', () => {
   };
 
   it('sees the span, before its summary row exists, with the rows the summary covers', async () => {
-    Object.assign(COMPACTION, { enabled: true, budgetTokens: 160, minOwnerRows: 2, minIntervalMs: 0 });
+    Object.assign(COMPACTION, { enabled: true, budgetTokens: BUDGET, minOwnerRows: 2, minIntervalMs: 0 });
     const storage = memoryStorage();
     const logs: TurnLogEntry[] = [];
     const seen: CompactionSpan[] = [];
@@ -195,7 +197,7 @@ describe('the memory flush seam', () => {
   });
 
   it('a flush that fails writes no summary and keeps the span in the window; the next attempt runs it again', async () => {
-    Object.assign(COMPACTION, { enabled: true, budgetTokens: 160, minOwnerRows: 2, minIntervalMs: 0 });
+    Object.assign(COMPACTION, { enabled: true, budgetTokens: BUDGET, minOwnerRows: 2, minIntervalMs: 0 });
     const storage = memoryStorage();
     const logs: TurnLogEntry[] = [];
     let fail = true, flushes = 0;
@@ -228,7 +230,7 @@ describe('what the flush keeps', () => {
   type Kept = Readonly<{ saved: (readonly Readonly<{ id: number; kind: string }>[])[]; memory: ReturnType<typeof claimStore>; logs: TurnLogEntry[] }>;
   type Span = Readonly<{ transcript: string; sides: ClaimGrounding; ops: string }>;
   const keepWith = async (name: string, health: boolean, inspect: (kept: Kept) => void, prepare: (sql: SqlStorage) => void = () => undefined, span: Span = { transcript: `owner: ${OWNER}`, sides: { owner: OWNER }, ops: flushOps }) => {
-    Object.assign(COMPACTION, { enabled: true, budgetTokens: 160, minOwnerRows: 2, minIntervalMs: 0 });
+    Object.assign(COMPACTION, { enabled: true, budgetTokens: BUDGET, minOwnerRows: 2, minIntervalMs: 0 });
     fake.flushOps = span.ops;
     const storage = memoryStorage();
     const logs: TurnLogEntry[] = [];
@@ -432,7 +434,7 @@ describe('the memory notice', () => {
 // Probe C3 on the summary: the owner typed a 6 and a 16 in the span about other things, and Waldo relayed a reading with
 // those numbers. Only numbers inside the owner's own readings count, so a summary carrying the relayed reading is refused.
 it('C3: a summary is refused when a reading\'s numbers are in the owner\'s words only outside any reading', async () => {
-  Object.assign(COMPACTION, { enabled: true, budgetTokens: 160, minOwnerRows: 2, minIntervalMs: 0 });
+  Object.assign(COMPACTION, { enabled: true, budgetTokens: BUDGET, minOwnerRows: 2, minIntervalMs: 0 });
   fake.flushOps = JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null });
   const storage = memoryStorage();
   const logs: TurnLogEntry[] = [];
@@ -461,7 +463,7 @@ it('C3: a summary is refused when a reading\'s numbers are in the owner\'s words
 // what the owner said there once: the second offer writes no second copy.
 describe('a span offered twice', () => {
   it('is flushed once, and a summary keeps a reading only when the owner wrote its number in the span', async () => {
-    Object.assign(COMPACTION, { enabled: true, budgetTokens: 160, minOwnerRows: 2, minIntervalMs: 0 });
+    Object.assign(COMPACTION, { enabled: true, budgetTokens: BUDGET, minOwnerRows: 2, minIntervalMs: 0 });
     fake.flushOps = JSON.stringify({ add: [{ kind: 'preference', text: 'Wants quiet mornings', source: 'stated', evidence: 'quiet mornings', touches_forgotten: false, aliases: [], aliases_touch_forgotten: false }],
       corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null });
     const storage = memoryStorage();

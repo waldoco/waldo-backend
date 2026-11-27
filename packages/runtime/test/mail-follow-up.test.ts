@@ -23,7 +23,7 @@ it('grounds a pending mail follow-up, revisits without new mail once, and respec
     updates.record('2026-10-03', now, changes, null);
     const loop = loops.open({ title: 'Check deck review', due: '2026-10-03T10:00', source_ref: 'mail:thread1' });
     expect(loops.open({ title: 'Duplicate deck', due: '2026-10-03T10:00', source_ref: 'mail:thread1' }).id).toBe(loop.id);
-    expect(loopsSection(loops, 'UTC')).toContain('completion unknown');
+    expect(loopsSection(loops, 'UTC', Date.now())).toContain('completion unknown');
     expect(() => loops.open({ title: 'Invented', due: null, source_ref: 'mail:invented' })).toThrow('unobserved source');
     expect(loops.reviewDue('2026-10-03T09:00')).toHaveLength(0);
     expect(loops.reviewDue('2026-10-03T10:00')).toHaveLength(1);
@@ -72,7 +72,7 @@ it('runs the periodic mail-review lane without new mail, defers through quiet, A
     const loop = loops.open({ title: 'Check review', due: '2026-10-03T09:30', source_ref: 'mail:t1' });
     const outbox = new TelegramFinalOutbox(state.storage.kv, () => now);
     const sent: string[] = [];
-    const deps = { loops, now, timezone: 'UTC', allowed: false, ledger: async () => loopsSection(loops, 'UTC'), prompt: async () => 'Have you handled the review? Pat requested it by 09:30.', enqueue: async (text: string, receipt: import('../src/channels/telegram-final-outbox').MailFollowupReceipt) => {
+    const deps = { loops, now, timezone: 'UTC', allowed: false, ledger: async () => loopsSection(loops, 'UTC', now), prompt: async () => 'Have you handled the review? Pat requested it by 09:30.', enqueue: async (text: string, receipt: import('../src/channels/telegram-final-outbox').MailFollowupReceipt) => {
       await outbox.enqueueFenced({ id: `mail:${receipt.loopId}:${receipt.due}`, trace: 'fixture', payload: { chat_id: 7, text }, ownerSubject: '7', doName: 'owner-7', mailFollowup: receipt }, work => state.storage.transactionSync(() => { work(); loops.claimReview(receipt); }));
     } };
     expect(await reviewMailFollowup(deps)).toBe(false);

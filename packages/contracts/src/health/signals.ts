@@ -37,9 +37,13 @@ export const HEALTH_SIGNALS = {
   lean_body_mass: { grain: 'reading', words: 'lean body mass' },
   stand_hour: { grain: 'hour', words: 'stand hours' },
   nutrition: { grain: 'reading', words: 'food logged' },
+  heart_rate_bins_window: { grain: 'hour', words: 'time in heart rate ranges through the day' },
 } as const satisfies Readonly<Record<HealthSignal, Entry>>;
 
 export const HEALTH_SIGNAL_NAMES = healthSignalV1Schema.options;
+// Kinds only the score engine reads. An hour's heart-rate bins are the day load's raw input: the model reads the load they make
+// and the hour's heart rate, so neither the read tool nor the inventory offers them.
+export const HEALTH_ENGINE_ONLY_SIGNALS = ['heart_rate_bins_window'] as const satisfies readonly HealthSignal[];
 
 // What a score names in a pillar's used signals, and the stored kinds each name stands on. The database's derived-row writer
 // admits exactly these names, so a name joins here and in the writer's migration together; calendar, tasks and messages are

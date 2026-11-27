@@ -24,7 +24,9 @@ const row = (id: string, parentId: string | null, role: 'user' | 'assistant', te
   modelProjection: { mode: 'include' }, role, ...(role === 'user' ? { inputOrigin: 'owner' as const } : {}), createdAt,
 });
 const PREFIX = `canonical-owner-v1:${PRINCIPAL}:${TENANT}:`;
-const settings = { ...COMPACTION, budgetTokens: 120 };
+// The 120-token window and 160-token summary input these cases were written for at 4 bytes per token, counted at 2.8 with
+// each message's fixed framing.
+const settings = { ...COMPACTION, budgetTokens: 160 };
 
 const seeded = async (rounds: number) => {
   const storage = memoryStorage();
@@ -95,7 +97,7 @@ describe('canonical store compaction rows', () => {
   it('a summary whose span was trimmed owner-first still walks back to its first row: a forget in a reply it skipped supersedes it', async () => {
     const { storage, store, tree, leaf } = await seeded(6);
     // an input budget that holds the owner messages but not every reply
-    const plan = compactionPlan(tree, leaf, null, settings, 160)!;
+    const plan = compactionPlan(tree, leaf, null, settings, 210)!;
     expect(plan.gap).toBeGreaterThan(0);
     expect(plan.input.some((message) => message.content.startsWith('answer 2 '))).toBe(false);
     const summary = compactionRow(plan, 'The owner asked five questions.', PRINCIPAL, 99);

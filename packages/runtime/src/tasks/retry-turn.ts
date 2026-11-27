@@ -1,5 +1,4 @@
 import { floorReplyText, ownerTime } from '../prompt/fixed-lines';
-import { SKIP_UPDATE } from '../prompt/update-cards';
 import type { FloorTurn } from '../llm/owner-routes';
 import { numericHealthIn } from '../scribe/sanitiser';
 import type { JobBook, RetryBrief } from './jobs';
@@ -33,7 +32,7 @@ export const retryTurnText = (brief: RetryBrief, timezone: string, where?: Reado
     elsewhere === null
       ? 'Answer it now, saying briefly that this is the late answer. Look at what has happened since first (the conversation after it, and anything already done for it) so nothing is done twice.'
       : `Answer it now, saying briefly that this is the late answer to their message on ${elsewhere}. Look at anything already done for it first so nothing is done twice.`,
-    `If it no longer needs an answer, reply with exactly ${SKIP_UPDATE}.`,
+    'If it no longer needs an answer, end the run with end_run as nothing_to_send.',
   ].join('\n\n');
 };
 

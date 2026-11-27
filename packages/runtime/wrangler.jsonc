@@ -42,7 +42,7 @@
   // clears a turn's tool results down to the latest few past a size (the context budget below); "0" is the rollback.
   // WALDO_COMPACTION_WAKE: "1" runs a compaction in its own alarm pass after the one that ran the owner's turns; "0" runs
   // it at the end of that pass, and is the rollback.
-  // WALDO_CALL_CEILINGS: "1" holds every chat's history to the history budget (22k tokens by default), the conversation
+  // WALDO_CALL_CEILINGS: "1" holds every chat's history to the history budget (31,429 tokens by default), the conversation
   // layer of a chat call, clears a turn's earlier tool results once its tool turns would carry the call past the hard
   // ceiling, and logs each call against its class's ceiling; "0" is the rollback.
   // The context budget's sizes (src/conversation/context-budget.ts), read while those switches are on: the history budget,
@@ -50,8 +50,8 @@
   // results kept, and standing-order and quest characters. Each is fixed per deploy so the cached prefix holds; a value that
   // is not a valid size reads as its default.
   // WALDO_LEAN_SCHEDULED: "1" sends a Waldo-first scheduled run (a day card, a loop check-back, an update sweep, an
-  // intervention) its own event, the composed context and the last six rows of the owner's exchange instead of the chat
-  // replay, offers every such run one tool menu (each still calls only its own) so the cached head is shared, keeps that
+  // intervention) its own event, the composed context, the owner's exchange and the day's sends within the chat's history
+  // budget instead of the chat replay, offers every such run one tool menu (each still calls only its own) so the cached head is shared, keeps that
   // head an hour, and gives the day plan and wake decision the shared health block; "0" is the rollback.
   // WALDO_TIMEZONE_ASK: "1" tells a turn whose time zone the owner has not confirmed to ask for it when it fits; "0" is the
   // rollback.
@@ -130,10 +130,10 @@
       "WALDO_CONTEXT_CAPS": "0",
       "WALDO_COMPACTION_WAKE": "0",
       "WALDO_CALL_CEILINGS": "0",
-      "WALDO_HISTORY_BUDGET_TOKENS": "22000",
-      "WALDO_CHAT_CEILING_TOKENS": "40000",
-      "WALDO_JOB_CEILING_TOKENS": "25000",
-      "WALDO_HARD_CEILING_TOKENS": "80000",
+      "WALDO_HISTORY_BUDGET_TOKENS": "31429",
+      "WALDO_CHAT_CEILING_TOKENS": "57143",
+      "WALDO_JOB_CEILING_TOKENS": "35714",
+      "WALDO_HARD_CEILING_TOKENS": "114286",
       "WALDO_STEPPED_WINDOW_TARGET": "0.5",
       "WALDO_TOOL_RESULTS_CLEAR_AT_CHARS": "120000",
       "WALDO_TOOL_RESULTS_KEEP_LATEST": "3",
@@ -145,7 +145,14 @@
       "HEALTH_PROVISIONAL_SCORES": "0",
       "HEALTH_SOLO_NOTICE": "0",
       "HEALTH_PARTIAL_CONTEXT": "0",
+      "HEALTH_INVENTORY": "0",
       "HEALTH_TRAINING_LOAD": "0",
+      "HEALTH_SCORE_PARTS": "0",
+      "HEALTH_USUAL": "0",
+      "HEALTH_DAY_LOAD": "0",
+      "HEALTH_PASSIVE_LOAD": "0",
+      "HEALTH_STRESS_CURVE": "0",
+      "HEALTH_FORM_CURVE": "0",
       "HEALTH_COACHING": "0",
       "HEALTH_ACTIONS": "0",
       "MEDICATIONS": "0",
@@ -195,6 +202,8 @@
       "WALDO_LEAN_SCHEDULED": "0",
       "WALDO_ONE_TIMELINE": "0",
       "WALDO_LIGHT_CHAT": "0",
+      "WALDO_THINKING_REPLAY": "0",
+      "WALDO_STRONG_ROLES": "0",
       "GOOGLE_REALTIME_TRIAGE": "0",
       "HELD_RAISE": "0",
       "WALDO_WATCHDOG": "0",
@@ -206,7 +215,9 @@
       "PROACTIVE_ACT_AHEAD": "0",
       "PROACTIVE_BOTH_DEFAULT": "0",
       "EVENT_PUSH": "0",
+      "BRIEF_BODY_REVISION": "0",
       "EVENT_PUSH_PER_DAY": "3",
+      "WHATSAPP_DAILY_KNOCK": "0",
       "PROACTIVE_OVER_TELEGRAM": "0",
       "REENGAGE_PROACTIVE": "0",
       "PROACTIVE_INTERVENTIONS": "0",
@@ -378,10 +389,10 @@
           "WALDO_CONTEXT_CAPS": "1",
           "WALDO_COMPACTION_WAKE": "1",
           "WALDO_CALL_CEILINGS": "1",
-          "WALDO_HISTORY_BUDGET_TOKENS": "22000",
-          "WALDO_CHAT_CEILING_TOKENS": "40000",
-          "WALDO_JOB_CEILING_TOKENS": "25000",
-          "WALDO_HARD_CEILING_TOKENS": "80000",
+          "WALDO_HISTORY_BUDGET_TOKENS": "31429",
+          "WALDO_CHAT_CEILING_TOKENS": "57143",
+          "WALDO_JOB_CEILING_TOKENS": "35714",
+          "WALDO_HARD_CEILING_TOKENS": "114286",
           "WALDO_STEPPED_WINDOW_TARGET": "0.5",
           "WALDO_TOOL_RESULTS_CLEAR_AT_CHARS": "120000",
           "WALDO_TOOL_RESULTS_KEEP_LATEST": "3",
@@ -393,7 +404,14 @@
           "HEALTH_PROVISIONAL_SCORES": "1",
           "HEALTH_SOLO_NOTICE": "1",
           "HEALTH_PARTIAL_CONTEXT": "1",
+          "HEALTH_INVENTORY": "1",
           "HEALTH_TRAINING_LOAD": "1",
+          "HEALTH_SCORE_PARTS": "1",
+          "HEALTH_USUAL": "1",
+          "HEALTH_DAY_LOAD": "1",
+          "HEALTH_PASSIVE_LOAD": "apple,health_connect",
+          "HEALTH_STRESS_CURVE": "1",
+          "HEALTH_FORM_CURVE": "0",
           "HEALTH_COACHING": "1",
           "HEALTH_ACTIONS": "1",
           "MEDICATIONS": "1",
@@ -443,6 +461,8 @@
           "WALDO_LEAN_SCHEDULED": "1",
           "WALDO_ONE_TIMELINE": "1",
           "WALDO_LIGHT_CHAT": "0",
+          "WALDO_THINKING_REPLAY": "1",
+          "WALDO_STRONG_ROLES": "1",
           "GOOGLE_REALTIME_TRIAGE": "1",
           "HELD_RAISE": "1",
           "WALDO_WATCHDOG": "1",
@@ -454,7 +474,9 @@
           "PROACTIVE_ACT_AHEAD": "1",
           "PROACTIVE_BOTH_DEFAULT": "1",
           "EVENT_PUSH": "1",
+          "BRIEF_BODY_REVISION": "1",
           "EVENT_PUSH_PER_DAY": "3",
+          "WHATSAPP_DAILY_KNOCK": "1",
           "PROACTIVE_OVER_TELEGRAM": "1",
           "REENGAGE_PROACTIVE": "1",
           "PROACTIVE_INTERVENTIONS": "1",

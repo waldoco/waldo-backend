@@ -1,4 +1,5 @@
 import { env, runInDurableObject } from 'cloudflare:test';
+import { OWNER_TEXT_INBOUND_MAX_CHARS } from '@waldo/contracts';
 import { expect, it } from 'vitest';
 import { ClosedRunError } from '../src/channels/run-effect-scope';
 import { WA_UPDATE_BASE } from '../src/channels/whatsapp-api';
@@ -168,8 +169,18 @@ it('claims plain texts in a row as one turn under the newest message; the joined
   expect(inbox.records().map(row => [row.wamid, row.state])).toEqual([['wamid.card', 'running'], ['wamid.card', 'completed']]);
 }));
 
-it('plain texts whose joined length would pass one message\'s limit are not joined: the newest runs, the others ride with it whole', () => withInbox((inbox, storage, clock) => {
+it('plain texts join into one text past one WhatsApp message\'s 4,096 characters, up to the inbound bound', () => withInbox((inbox, storage, clock) => {
   const long = (mark: string) => `${mark} ${'x'.repeat(3_000)}`;
+  admit(inbox, storage, [{ wamid: 'w1', body: long('one') }, { wamid: 'w2', body: long('two') }, { wamid: 'w3', body: 'short close' }]);
+  const record = inbox.claimNext(clock.now + WHATSAPP_TURN_DEADLINE_MS)!;
+  expect(record.wamid).toBe('w3');
+  expect(textOf(record)).toBe(`${long('one')}\n${long('two')}\nshort close`);
+  expect(record.earlier).toBeUndefined();
+  expect(inbox.next()).toBeNull();
+}));
+
+it('plain texts whose joined length would pass the inbound bound are not joined: the newest runs, the others ride with it whole', () => withInbox((inbox, storage, clock) => {
+  const long = (mark: string) => `${mark} ${'x'.repeat(OWNER_TEXT_INBOUND_MAX_CHARS / 2)}`;
   admit(inbox, storage, [{ wamid: 'w1', body: long('one') }, { wamid: 'w2', body: long('two') }, { wamid: 'w3', body: 'short close' }]);
   const record = inbox.claimNext(clock.now + WHATSAPP_TURN_DEADLINE_MS)!;
   expect(record.wamid).toBe('w3');

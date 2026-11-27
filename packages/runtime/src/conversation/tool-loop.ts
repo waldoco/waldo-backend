@@ -11,6 +11,7 @@ import { FINAL_ANSWER_RESERVE_MS, MODEL_CALL_TIMEOUT_MS, PROMPT_CACHE_TTL_MS, tu
 import type { RunEffectScope } from '../channels/run-effect-scope';
 import type { StoredPut, ToolOutputStore } from './tool-output-store';
 import { numericHealthInJsonText } from '../scribe/sanitiser';
+import { chosenEnd, replyOfEnd, unchosenEnd, type RunEnd } from './run-end';
 import { META_TOOLS, toolOfCall, type RoutedCall, type ToolLoader } from '../tools/loader';
 
 
@@ -82,6 +83,9 @@ export const BROWSING_UNAVAILABLE = 'Browsing is unavailable on this Waldo for t
 // provider unavailable, a rejected key), so after one both are withheld until the turn ends. Keyed on the typed code.
 const BROWSE_TOOLS: ReadonlySet<string> = new Set(['browse_page', 'browse_act']);
 const TIME_UP_NOTE = `\n[budget: turn time is up - no more tool calls; ${CLOSING}]`;
+const BUDGET_UP_NOTE = `\n[budget: tool budget exhausted this turn - no more tool calls; ${CLOSING}]`;
+// A closing round that keeps the tool list hears that it closes from the newest result, which no request has sent yet.
+const CLOSE_NOTE = `\n[budget: no more tool calls this turn; ${CLOSING}]`;
 
 // Every round resends the turn's tool results. Past this many characters of result text the oldest results are cleared
 // (the call stays, its result becomes a short note), down to half of it at once, so a long turn stays inside the model's
@@ -142,6 +146,8 @@ export async function runToolLoop(input: Readonly<{
   onToolStart?: (tool: string) => void;
   // Fired once, just before the loop returns, with the truthful exit classification.
   onSettle?: (exit: LoopExit) => void;
+  // Fired once, beside onSettle, with how the run closed: the end the model chose with end_run, or what the loop saw.
+  onRunEnd?: (end: RunEnd) => void;
   // Shared tool-round budget across a parent turn and its children (subagent orchestration
   // spec): when present, every offered round in EVERY loop holding the same object decrements
   // it, so a turn's stated round cap is absolute - children can never dispatch past it. The
@@ -177,6 +183,12 @@ export async function runToolLoop(input: Readonly<{
   // A machine turn's check, before each round after the first: true when the owner's own message is waiting, so the turn
   // closes as if its time were up (no more tools, one last answer) and the owner's turn takes the chain.
   yieldNow?: () => boolean;
+  // WALDO_THINKING_REPLAY: the closing round offers the same tool list as every round before it, so the request's prefix, and
+  // the thinking bound to it, stay as sent; the newest result says no more tools, and a call made anyway is not run.
+  // Not for a task worker's remote loop, whose report is itself a tool call.
+  keepMenuToClose?: boolean;
+  // Told how many calls a closing round made that were not run, with the menu kept.
+  onCloseCalls?: (calls: number) => void;
 }>): Promise<string> {
   const loader = input.loader && !input.remote ? input.loader(toolDefinitions(input.handlers)) : undefined;
   const tools = input.remote ? [...input.remote.tools] : loader ? [...loader.offered] : toolDefinitions(input.handlers);
@@ -288,6 +300,12 @@ export async function runToolLoop(input: Readonly<{
   const ctxOrigins = input.ctx as { taintOrigins?: readonly string[]; toolArgSourceTaint?: unknown };
   ctxOrigins.taintOrigins ??= ctxOrigins.toolArgSourceTaint === 'external' ? ['*'] : [];
   const taintedBy = (origin: string) => { ctxOrigins.taintOrigins = [...(ctxOrigins.taintOrigins ?? ['*']), origin]; };
+  // Every return goes through here, so no run ends without its exit and its closed reason.
+  const close = (settled: LoopExit, end: RunEnd, reply: string): string => {
+    input.onSettle?.(settled);
+    input.onRunEnd?.(end);
+    return withInwardReceipts(reply, inward);
+  };
   for (let round = 0; ; round += 1) {
     const timeLeft = deadline - Date.now();
     const roundsAvailable = round < input.maxSteps && (input.budget === undefined || input.budget.remaining > 0);
@@ -304,12 +322,13 @@ export async function runToolLoop(input: Readonly<{
     if (exit === 'completed' && !roundsAvailable) exit = 'budget_exhausted';
     else if (exit === 'completed' && !timeAvailable) exit = 'time_exhausted';
     // With no time left even for the answer, say so instead of starting a model call that cannot finish.
-    if (!offer && !repairEmptyCeiling && timeLeft <= 0) {
-      input.onSettle?.('time_exhausted');
-      return withInwardReceipts(unfinishedReply('time_exhausted', done), inward);
-    }
+    if (!offer && !repairEmptyCeiling && timeLeft <= 0) return close('time_exhausted', { reason: 'time_exhausted' }, unfinishedReply('time_exhausted', done));
     if ((offer || repairEmptyCeiling) && input.budget !== undefined) input.budget.remaining -= 1;
     input.ctx.runScope?.admit();
+    // Rounds before this one offered the list, and this round's newest result has not been sent.
+    const closeOnMenu = input.keepMenuToClose === true && !input.remote && !offer && !repairEmptyCeiling && round > 0 && roundTools.length > 0;
+    const newest = closeOnMenu ? turns.at(-1) : undefined;
+    if (newest && !newest.output.endsWith(TIME_UP_NOTE) && !newest.output.endsWith(BUDGET_UP_NOTE)) turns[turns.length - 1] = { ...newest, output: newest.output + CLOSE_NOTE };
     let response: Awaited<ReturnType<ToolLoopStep>>;
     const shown = shownTurns();
     for (const turn of healthShown ? [] : shown) {
@@ -317,12 +336,11 @@ export async function runToolLoop(input: Readonly<{
       if (await healthTurns.get(turn)) { healthShown = true; input.ctx.healthShown = true; break; }
     }
     try {
-      response = await withCallDeadline(runScope, deadline, () => input.step(offer ? roundTools : undefined, shown, { healthShown, tainted }));
+      response = await withCallDeadline(runScope, deadline, () => input.step(offer || closeOnMenu ? roundTools : undefined, shown, { healthShown, tainted }));
     } catch (error) {
       // A model step that fails once the turn's time is gone ends the turn plainly; a closed or stopped run never does.
       if (error instanceof ClosedRunError || runScope?.signal?.aborted || Date.now() < deadline) throw error;
-      input.onSettle?.('time_exhausted');
-      return withInwardReceipts(unfinishedReply('time_exhausted', done), inward);
+      return close('time_exhausted', { reason: 'time_exhausted' }, unfinishedReply('time_exhausted', done));
     }
     input.ctx.runScope?.admit();
     if (response.model !== undefined) answeredAt.set(PROVIDER_OF[response.model], Date.now());
@@ -333,10 +351,10 @@ export async function runToolLoop(input: Readonly<{
       taintedBy('*');
     }
     if (response.tool_calls === undefined || (!offer && !repairEmptyCeiling)) {
-      input.onSettle?.(exit);
-      return withInwardReceipts(guardArtifactLinks(response.text || (exit === 'budget_exhausted' || exit === 'time_exhausted'
-        ? unfinishedReply(exit, done)
-        : tools.length === 0 ? "I couldn't act on that here, so nothing was done." : ''), receiptUrls), inward);
+      if (closeOnMenu && response.tool_calls?.length) input.onCloseCalls?.(response.tool_calls.length);
+      const exhausted = exit === 'budget_exhausted' || exit === 'time_exhausted' ? exit : undefined;
+      const words = response.text || (exhausted ? unfinishedReply(exhausted, done) : tools.length === 0 ? "I couldn't act on that here, so nothing was done." : '');
+      return close(exit, unchosenEnd(words, exhausted), guardArtifactLinks(words, receiptUrls));
     }
     // This round's calls were written from the request just answered, so they are fenced when it showed both.
     if (response.healthInContext === true) { healthShown = true; input.ctx.healthShown = true; }
@@ -355,7 +373,7 @@ export async function runToolLoop(input: Readonly<{
     const run = (index: number) => {
       const { call, answer } = routed[index]!;
       if (healthFenced && (fencedCall(call) || fencedCall(calls[index]!))) return Promise.resolve(refusal(HEALTH_FENCE_ERROR, 'forbidden', 'health_fence'));
-      return answer ? Promise.resolve(answer) : input.remote ? input.remote.dispatch(call) : dispatchLoopTool(call, input);
+      return answer ? Promise.resolve(answer) : input.remote ? input.remote.dispatch(call) : dispatchLoopTool(call, { ...input, toolDeadline: deadline - FINAL_ANSWER_RESERVE_MS });
     };
     let batchLead = true;
     for (const [index, made] of calls.entries()) {
@@ -477,14 +495,14 @@ export async function runToolLoop(input: Readonly<{
       const budgetNote = toolTimeLeft < 0
         ? TIME_UP_NOTE
         : input.maxSteps > WARN_WINDOW_ROUNDS && roundsLeft === 0
-          ? `\n[budget: tool budget exhausted this turn - no more tool calls; ${CLOSING}]`
+          ? BUDGET_UP_NOTE
           : input.maxSteps > WARN_WINDOW_ROUNDS && roundsLeft > 0 && roundsLeft < WARN_WINDOW_ROUNDS
             ? `\n[budget: ${roundsLeft} tool round${roundsLeft === 1 ? '' : 's'} left this turn - finish the step you are on, then answer with what is done and what is left]`
             : toolTimeLeft < TOOL_TIME_WARN_MS
               ? '\n[budget: under 15 s of tool time left this turn - finish the step you are on, then answer with what is done and what is left]'
               : '';
       const replayNote = previous && !previous.ok
-        ? '\n[repeat: cached failure from this turn; no new tool execution]'
+        ? '\n[repeat: cached failure from this turn; no new tool execution. Change the call or take another route instead of repeating it.]'
         : '';
       const json = JSON.stringify(result);
       let unchangedNote = '';
@@ -516,15 +534,20 @@ export async function runToolLoop(input: Readonly<{
       });
       batchLead = false;
       if(call.name==='use_mac' && result.ok && result.data && typeof result.data==='object' && 'request_id' in result.data && typeof result.data.request_id==='string') {
-       input.onSettle?.('completed');
        // The handler's status says whether the Mac took the request (and whether it asks for approval) or it is still queued.
        const status='status' in result.data && typeof result.data.status==='string' ? result.data.status : 'Sent to your Mac.';
+       input.onSettle?.('completed');
+       input.onRunEnd?.({ reason: 'handed_off' });
        return `${status} Request: ${result.data.request_id}`;
       }
       if (input.remote?.final === call.name && result.ok) {
         input.onSettle?.('completed');
+        input.onRunEnd?.({ reason: 'handed_off' });
         return '';
       }
+      // The model's own end: the calls before it in this response ran, nothing after it does.
+      const chosen = result.ok && !input.remote ? chosenEnd(call.name, call.arguments) : null;
+      if (chosen) return close('completed', { reason: chosen.outcome, why: chosen.reason }, guardArtifactLinks(replyOfEnd(chosen), receiptUrls));
     }
     await input.afterRound?.(turns);
   }
@@ -564,7 +587,7 @@ const refusal = (error: ToolError, code: string, reason?: string): LoopToolResul
 
 export async function dispatchLoopTool(
   call: LLMToolCall,
-  input: Readonly<{ handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']; ctx: ToolDispatcherContext; offload?: ToolOutputStore }>,
+  input: Readonly<{ handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']; ctx: ToolDispatcherContext; offload?: ToolOutputStore; toolDeadline?: number }>,
 ): Promise<LoopToolResult> {
   const name = toolNameSchema.safeParse(call.name);
   if (!name.success) return refusal(toolError('unknown_tool', `Unknown tool ${call.name}.`), 'invalid_args', 'unknown_tool');
@@ -574,7 +597,7 @@ export async function dispatchLoopTool(
   } catch {
     return refusal(toolError('invalid_json_args'), 'invalid_args', 'invalid_args');
   }
-  const result = await dispatchTool({ id: call.call_id, name: name.data, args }, input.ctx, { handlers: input.handlers, ...(input.offload === undefined ? {} : { offload: input.offload }) });
+  const result = await dispatchTool({ id: call.call_id, name: name.data, args }, input.ctx, { handlers: input.handlers, ...(input.offload === undefined ? {} : { offload: input.offload }), ...(input.toolDeadline === undefined ? {} : { toolDeadline: input.toolDeadline }) });
   // The untrusted marker crosses the model boundary on BOTH arms: a successful external result
   // keeps source_taint 'external' in the JSON the model reads, so provider text never presents
   // as internal truth (security review 2026-09-26); the failure arm keeps it for the same reason.

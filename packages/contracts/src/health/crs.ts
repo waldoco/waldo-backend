@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { iso8601Schema } from '../core/error';
+import { HEALTH_SIGNAL_GRAINS } from './signals';
+import { healthSignalV1Schema } from '../app/health-ingest';
 
 // The canonical Form/CRS zone vocabulary — this file is its single owner; memory/sanitise
 // and every egress shape consume it from here. The top band is 'energized', never 'peak'
@@ -89,6 +91,29 @@ export const derivedMissingPillarsSchema = z.strictObject({
 });
 export type DerivedMissingPillars = z.infer<typeof derivedMissingPillarsSchema>;
 
+// How fresh a reading is by its age: fresh within a day and a half, stale within three days, expired after. get_health and the
+// model's health block label readings on this one scale, so the same word means the same age in both.
+const READING_HOUR_MS = 3_600_000;
+export const readingFreshnessSchema = z.enum(['fresh', 'stale', 'expired']);
+export type ReadingFreshness = z.infer<typeof readingFreshnessSchema>;
+export const readingFreshness = (ageMs: number): ReadingFreshness => (ageMs <= 36 * READING_HOUR_MS ? 'fresh' : ageMs <= 72 * READING_HOUR_MS ? 'stale' : 'expired');
+// A row's or reading's local day against the owner's local today.
+export const healthAsOfDaySchema = z.enum(['today', 'yesterday', 'earlier']);
+
+// One kind of body data the owner's sources sent in the last thirty days, in words: how often it carries a value, how recent
+// its newest reading is, on how many of the thirty days it arrived, and from which sources. Never a value.
+export const healthInventoryEntrySchema = z.strictObject({
+  signal: healthSignalV1Schema,
+  grain: z.enum(HEALTH_SIGNAL_GRAINS),
+  newest: z.enum(['within_hours', 'today', 'yesterday', 'this_week', 'this_month']),
+  regularity: z.enum(['nearly_every_day', 'most_days', 'some_days', 'a_few_days']),
+  // The newest reading's age on the reading scale. Absent on an inventory read before it existed.
+  freshness: readingFreshnessSchema.optional(),
+  sources: z.array(z.enum(['apple', 'oura', 'whoop', 'samsung', 'health_connect'])).min(1).max(5),
+});
+export type HealthInventoryEntry = z.infer<typeof healthInventoryEntrySchema>;
+export const healthInventorySchema = z.array(healthInventoryEntrySchema).max(healthSignalV1Schema.options.length);
+
 const derivedViewShared = {
   authority: z.literal('backend'),
   provenance_refs: z.array(opaqueHealthProvenanceRefSchema).min(1).max(4),
@@ -105,6 +130,8 @@ const derivedViewShared = {
   energy_windows: derivedEnergyWindowsSchema.optional(),
   // The pillars the row could not compute and the reason it stored for each. Absent on a view written before it existed.
   missing_pillars: derivedMissingPillarsSchema.optional(),
+  // What body data exists for the owner, whatever any score could make of it. Absent when it was not read.
+  inventory: healthInventorySchema.optional(),
 } as const;
 
 const derivedViewCommon = {
@@ -112,6 +139,8 @@ const derivedViewCommon = {
   trend: z.enum(['improving', 'steady', 'declining', 'insufficient']),
   freshness: z.enum(['fresh', 'stale']),
   confidence_band: z.enum(['high', 'medium', 'low']),
+  // The day the scores are for. Absent on a view built before it existed.
+  as_of_day: healthAsOfDaySchema.optional(),
 } as const;
 
 // A version name as a stored row carries it, e.g. form.v9 or recovery.candidate.v4: the pillar's own name, optional middle
@@ -142,7 +171,7 @@ export type RecoveryHealthView = z.infer<typeof recoveryHealthViewSchema>;
 // carries no Recovery or Form zone and no readiness word, only what the row records in words: which sources it was computed
 // from, which inputs it shows arrived, which pillars it could not compute and why, and any pillar honest on its own (Load,
 // sleep debt, energy windows). An expired view carries nothing from that old day but its age and sources.
-export const partialHealthSourceSchema = z.enum(['apple', 'oura', 'whoop', 'samsung', 'health_connect']);
+export const partialHealthSourceSchema = healthInventoryEntrySchema.shape.sources.element;
 export type PartialHealthSource = z.infer<typeof partialHealthSourceSchema>;
 // Inputs a stored row shows arrived. A signal the row does not record (steps, heart rate through the day) is never named.
 // last_night_sleep is the row's own night, the one that ended on the row's day: last night only for today's row.
@@ -153,11 +182,14 @@ export const partialHealthViewSchema = z.strictObject({
   availability: z.literal('partial'),
   freshness: z.enum(['fresh', 'stale', 'expired']),
   // The row's day against the owner's local today.
-  as_of_day: z.enum(['today', 'yesterday', 'earlier']),
+  as_of_day: healthAsOfDaySchema,
   sources: z.array(partialHealthSourceSchema).max(5),
   present: z.array(partialHealthPresentSchema).max(5),
   missing_pillars: derivedMissingPillarsSchema,
   load_zone: loadZoneSchema.optional(),
+  // No score row is stored for the owner at all: the view stands on the inventory alone, and its day and freshness are those of
+  // the newest reading.
+  no_score_row: z.literal(true).optional(),
 });
 export type PartialHealthView = z.infer<typeof partialHealthViewSchema>;
 
@@ -174,6 +206,16 @@ export type PartialHealthNarrative = z.infer<typeof partialHealthNarrativeSchema
 // neither zone and says so by its availability.
 export const derivedHealthDestinationViewSchema = z.union([formHealthViewSchema, recoveryHealthViewSchema, partialHealthViewSchema]);
 export type DerivedHealthDestinationView = z.infer<typeof derivedHealthDestinationViewSchema>;
+
+// How large a derived health view can be, read from its own closed schemas: the most fields any view carries, its longest list
+// (the inventory, one entry per kind Waldo stores) and how deep it nests. A health view is the only structured payload the
+// system prompt accepts, so the Scribe's caps for that destination are these: the schema is the bound, and a view the schema
+// admits is never refused for its size. A test builds the largest view the schemas admit and checks it fits.
+export const DERIVED_HEALTH_VIEW_BOUNDS = {
+  fields: Math.max(...[formHealthViewSchema, recoveryHealthViewSchema, partialHealthViewSchema].map((schema) => Object.keys(schema.shape).length)),
+  items: healthSignalV1Schema.options.length,
+  depth: 4,
+} as const;
 
 // The sensor-named pillar key must never sit directly against a numeric literal in non-test
 // code (health-data firewall), so its coefficient lives behind a module const.

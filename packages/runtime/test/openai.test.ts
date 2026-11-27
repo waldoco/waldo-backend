@@ -269,7 +269,13 @@ describe('OpenAIResponsesAdapter', () => {
       apiKey: 'test-key',
       client: client(async () => { throw new OpenAI.APIError(400, { message: 'secret request text', code: 'invalid_value', param: 'input[3]' }, 'secret request text', new Headers()); }),
     });
-    await expect(adapter.complete(gatewayRequest())).resolves.toEqual({ ok: false, code: 'invalid_args', error: 'OpenAI request failed (400 invalid_value input[3])' });
+    await expect(adapter.complete(gatewayRequest())).resolves.toEqual({ ok: false, code: 'invalid_args', error: 'OpenAI request failed (400 invalid_value input[3])', wireRejected: true });
+  });
+
+  it('marks only a 400 as the provider refusing the request shape, so the route can take it to the next provider', async () => {
+    const failing = (status: number) => new OpenAIResponsesAdapter({ apiKey: 'test-key', client: client(async () => { throw OpenAI.APIError.generate(status, { message: 'quoted request text' }, undefined, new Headers()); }) });
+    expect(await failing(400).complete(gatewayRequest())).toMatchObject({ ok: false, code: 'invalid_args', wireRejected: true });
+    for (const status of [401, 404, 413, 429, 500]) expect(await failing(status).complete(gatewayRequest())).not.toHaveProperty('wireRejected');
   });
 
   it('aborts a hung request at the adapter timeout', async () => {

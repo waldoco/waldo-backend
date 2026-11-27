@@ -3,11 +3,13 @@ import { appWhy, storedWhy } from '../tools/why-trail';
 import { whyCarries } from './approvals';
 import type { AppWhyV1 } from '../../../contracts/src/app/why';
 import { turnMemoryPrompt, type ClaimStore } from '../memory/claims';
-import { DAY_CARDS, dayCardPrompt, SKIP_CARD, type CardId, type DayCard } from '../prompt/day-cards';
+import { DAY_CARDS, dayCardPrompt, type CardId, type DayCard } from '../prompt/day-cards';
+import { sendsNothing } from '../conversation/run-end';
 import { calendarPromptProjection, type CalendarItem, type GoogleClient } from '../connectors/google';
 import { QUARANTINE_AFTER_ATTEMPTS, type Scheduler } from '../scheduler/multiplexer';
 import { ModelUnavailableError } from '../llm/provider';
 import { localIso, localToEpoch } from './reminders';
+import type { Episode } from './episodes';
 import { localDayWindow, shiftDay } from '../health/scores/time';
 import { APP_CARD_EXCERPT_MAX_V1, APP_SCHEDULE_RECEIPTS_V1, appScheduleTimeReceiptV1, type AppScheduleTimeTodayV1, type APP_SCHEDULE_TIME_IDS_V1 } from '../../../contracts/src/app/controls';
 
@@ -522,17 +524,24 @@ export const cardWindow = (card: DayCard, now: number, timezone: string): Readon
 const eventLine = (event: CalendarItem, timezone: string) =>
   JSON.stringify({ ...calendarPromptProjection(event), start: event.all_day ? event.start : localIso(Date.parse(event.start), timezone), end: event.all_day ? event.end : localIso(Date.parse(event.end), timezone) });
 
-export const readCalendar = async (
+// An event is the owner's own text only when they organized it and it names no one else: an invite's title and description,
+// and a guest's display name, are written by other people. An event whose organizer is unknown counts as someone else's.
+const ownersOwn = (event: CalendarItem): boolean => event.owner_status === 'organizer' && !event.attendee_names?.length;
+
+// The card's calendar, and whether any of it was written by someone other than the owner.
+const calendarRead = async (
   window: Readonly<{ from: number; to: number }>, timezone: string, google: GoogleClient | null, connectable: boolean, max = 25,
-): Promise<string> => {
-  if (!google) return connectable ? 'Google is not connected, so there are no events to show. The owner can ask you to connect it; do not write a link.' : 'Google Calendar is not set up.';
+): Promise<Readonly<{ text: string; outside: boolean }>> => {
+  if (!google) return { text: connectable ? 'Google is not connected, so there are no events to show. The owner can ask you to connect it; do not write a link.' : 'Google Calendar is not set up.', outside: false };
   try {
     const events = await google.events(new Date(window.from).toISOString(), new Date(window.to).toISOString(), max, false);
-    return events.length ? events.map((event) => eventLine(event, timezone)).join('\n') : 'No events.';
+    return { text: events.length ? events.map((event) => eventLine(event, timezone)).join('\n') : 'No events.', outside: !events.every(ownersOwn) };
   } catch (error) {
-    return `Calendar could not be read right now (${error instanceof Error ? error.message : String(error)}). Say so briefly; do not guess the schedule.`;
+    return { text: `Calendar could not be read right now (${error instanceof Error ? error.message : String(error)}). Say so briefly; do not guess the schedule.`, outside: false };
   }
 };
+
+export const readCalendar = async (...args: Parameters<typeof calendarRead>): Promise<string> => (await calendarRead(...args)).text;
 
 const wireSize = (content: string) => JSON.stringify([{ role: 'user', content }]).length;
 
@@ -555,13 +564,21 @@ const fitLines = (text: string, room: number, keep: 'head' | 'tail'): string => 
 
 // A card reads in seconds, so it gets half the provider budget; an unbounded ledger or an update backlog
 // that a failed card never folds must not push the one message past the Scribe size cap and cost the owner the card.
+// outside: the calendar or the updates carry text someone other than the owner wrote: an event they did not make alone, or an
+// update (each is a change in mail or calendar). The caller labels the rest of what it passes (owner-do's day card).
 export const composeDayCard = async (
   card: DayCard, now: number, timezone: string,
   sources: Readonly<{ google: GoogleClient | null; connectable: boolean; ledger: string; today: string; updates: string; waiting?: string; planning?: boolean; dayShape?: boolean; capacity?: boolean; tomorrow?: boolean; layout?: boolean; planCard?: boolean }>,
   model: ModelName = WALDO_AUXILIARY_MODEL,
+): Promise<Readonly<{ text: string; outside: boolean }>> => {
+  const read = await calendarRead(cardWindow(card, now, timezone), timezone, sources.google, sources.connectable);
+  return { text: await fitDayCard(card, now, timezone, sources, read.text, model), outside: read.outside || sources.updates.trim() !== '' };
+};
+
+const fitDayCard = async (
+  card: DayCard, now: number, timezone: string, sources: Parameters<typeof composeDayCard>[3], calendar: string, model: ModelName,
 ): Promise<string> => {
   const cap = Math.floor(deriveContextBudgetChars(model, SANITISE_DESTINATION_POLICIES.internal_context.max_chars) / 2);
-  const calendar = await readCalendar(cardWindow(card, now, timezone), timezone, sources.google, sources.connectable);
   const localNow = localIso(now, timezone);
   const build = (sections: Readonly<{ ledger: string; today: string; updates: string }>) => dayCardPrompt(card, localNow, { calendar, ...sections, ...(sources.waiting ? { waiting: sources.waiting } : {}) }, sources.planning === true, sources.dayShape === true, sources.capacity === true, sources.tomorrow === true, sources.layout === true, sources.planCard === true);
   const whole = { ledger: sources.ledger, today: sources.today, updates: sources.updates };
@@ -589,7 +606,12 @@ export const composeDayCard = async (
   return build({ ledger: '', today: '', updates: '' });
 };
 
-export const isSkip = (text: string): boolean => text.trim() === SKIP_CARD;
+export const isSkip = sendsNothing;
+
+// The day so far is the owner's own text only where every row is: their own words, or Waldo's from a run that read nothing
+// outside. A quote, a whole message stored before messages were split, and a system note may hold someone else's text.
+export const dayIsOwnText = (day: readonly Episode[]): boolean =>
+  day.every((episode) => (episode.speaker === 'owner' && episode.own === true) || (episode.speaker === 'waldo' && episode.readOutside !== true));
 
 // The Main chat row each card was delivered to is kept on its day_plan row. A build before that kept today's in one KV
 // entry, which is still read for its own day, so the day it deploys keeps the cards delivered before it.
