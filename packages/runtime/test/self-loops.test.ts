@@ -72,6 +72,21 @@ describe('Waldo\'s own follow-ups', () => {
     expect(await open.handle(gym, ctx())).toMatchObject({ ok: false, code: 'rejected', error: expect.stringMatching(/today/) });
   }));
 
+  it('the ledger every job reads lists the soonest of Waldo\'s own checks and counts the rest, so months of a runaway never grow it', async () => withBook('self-ledger-cap', async sql => {
+    const loops = book(sql);
+    sql.exec("INSERT INTO loops (id, title, due, status, created_at, origin) VALUES ('owner-1', 'Send the deck to Sam', '2030-03-05', 'open', ?, 'owner')", AT);
+    for (let i = 0; i < 200; i += 1) {
+      const day = new Date(AT + (i + 1) * 86_400_000).toISOString().slice(0, 10);
+      sql.exec("INSERT INTO loops (id, title, due, status, created_at, origin, chain_depth) VALUES (?, ?, ?, 'open', ?, 'waldo', 1)", `w${i}`, `look again ${i}`, `${day}T08:00`, AT);
+    }
+    const ledger = loopsSection(loops, 'UTC', AT);
+    expect(ledger).toContain('Send the deck to Sam');
+    expect(ledger).toContain('look again 0');
+    expect(ledger).not.toContain('look again 199');
+    expect(ledger).toContain('and 180 more of Waldo\'s own checks, due later');
+    expect(ledger.length).toBeLessThan(3_000);
+  }));
+
   it('a check-back that sets the next follow-up extends its chain with no depth limit: "look again tomorrow" runs all week', async () => withBook('self-chain', async sql => {
     const loops = book(sql);
     let given = new Set<string>();

@@ -158,11 +158,18 @@ export const proactivityLine = (settings: Proactivity, limits = false): string =
 
 const ownCheck = (loop: Loop) => loop.origin === 'waldo' ? "(Waldo's own check) " : '';
 
+// The ledger lists the soonest of Waldo's own checks and counts the rest: a year of follow-ups set by a runaway never grows the
+// prompt of every job that reads the ledger. The owner's loops and mail follow-ups are listed whole, as before.
+const OWN_CHECKS_LISTED = 20;
 export const loopsSection = (book: LoopBook, timezone: string, now: number): string => {
-  const open = book.list();
+  const all = book.list();
+  const own = all.filter((loop) => loop.origin === 'waldo');
+  const later = new Set(own.slice(OWN_CHECKS_LISTED));
+  const open = all.filter((loop) => !later.has(loop));
   return [
     'Waldo is on',
     ...(open.length ? open.map((loop) => `- ${ownCheck(loop)}${loop.title}${loop.due ? ` (${withPassed('due', loop.due, now, timezone)})` : ''}${loop.source_ref ? ` [source ${loop.source_ref}; completion unknown]` : ''} [${loop.id}]`) : ['- nothing open']),
+    ...(later.size ? [`- and ${later.size} more of Waldo's own checks, due later`] : []),
     ...book.closed().map((loop) => `- ${loop.status}: ${loop.title} (${localIso(loop.closed_at ?? loop.created_at, timezone).slice(0, 10)})`),
   ].join('\n');
 };
