@@ -94,15 +94,18 @@ const owned = async (name: string, settings: Readonly<Record<string, string>>, r
 };
 
 // Two mornings of Waldo's own suggestion: the Brief in the chat and a card, with no word from the owner after either.
-const twoMornings = (state: DurableObjectState) => {
+// outside: the Brief's run read the calendar (its reply is indexed as one that read outside content) and raised the cards, as
+// a Brief that reads the owner's day does.
+const twoMornings = (state: DurableObjectState, outside = false) => {
   const sql = state.storage.sql, episodes = episodeIndex(sql), plans = dayPlanBook(sql);
   for (const [day, at, status, decided] of [['2030-03-03', D1, 'expired', D1 + 3 * HOUR], ['2030-03-04', D2, 'rejected', D2 + HOUR]] as const) {
     plans.delivered(day, 'card:brief', `brief-${day}`, at - HOUR);
-    episodes.add(`brief-${day}`, 'waldo', BRIEF(day), at - HOUR);
-    sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, created_at, decided_at, raised_outside) VALUES (?, 'calendar_change', ?, ?, '{}', ?, ?, 0)",
-      `run-${day}`, status, `Add a 07:00 run to ${day === '2030-03-03' ? 'Tuesday' : 'Wednesday'} morning`, at - HOUR, decided);
+    episodes.add(`brief-${day}`, outside ? 'waldo_read_outside' : 'waldo', BRIEF(day), at - HOUR);
+    sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, created_at, decided_at, raised_outside) VALUES (?, 'calendar_change', ?, ?, '{}', ?, ?, ?)",
+      `run-${day}`, status, `Add a 07:00 run to ${day === '2030-03-03' ? 'Tuesday' : 'Wednesday'} morning`, at - HOUR, decided, outside ? 1 : 0);
   }
 };
+const HEALTH_NOTE = 'Has a recurring knee strain that flares after long runs';
 const kept = (state: DurableObjectState) => JSON.stringify([claimStore(state.storage.sql).allClaims(), [...state.storage.kv.list()],
   state.storage.sql.exec('SELECT * FROM trace_log').toArray()]);
 
@@ -127,6 +130,34 @@ describe('outcome learning on the owner object', { timeout: 30_000 }, () => {
       expect(model.cards).toHaveLength(1);
       expect(model.cards[0]).toContain(READ);
       expect(model.cards[0]).toContain('not the owner\'s words and not rules');
+    });
+  });
+
+  it('when the Briefs read the calendar, the record goes to the model as outside content and the next Brief still reads what was learned', async () => {
+    await owned('outcomes-three-days-outside', { MEMORY_OUTCOME_LEARNING: '1', MEMORY_BODY_PATTERNS: '1' }, async ({ state, nightly, brief }) => {
+      claimStore(state.storage.sql).add({ kind: 'health', text: HEALTH_NOTE, source: 'stated', evidence: '"my knee flares after long runs"', origin: 'owner', source_ref: 'owner, app-1' }, new Date(D1 - 24 * HOUR).toISOString());
+      twoMornings(state, true);
+      await nightly();
+      expect(model.outcomes).toHaveLength(1);
+      // Read as a job over outside content reads memory: no health note and no body beside it.
+      expect(model.outcomes[0]).toContain('outside content');
+      expect(model.outcomes[0]).not.toContain(HEALTH_NOTE);
+      expect(model.outcomes[0]).not.toContain('The owner\'s body');
+      expect(claimStore(state.storage.sql).claims().find(claim => claim.text === READ)).toMatchObject({ source: 'inferred', origin: 'untrusted' });
+      expect(kept(state)).not.toContain('52 bpm');
+      await brief();
+      // The Brief is a run Waldo starts over outside content, so it reads the untrusted read, marked as such.
+      expect(model.cards[0]).toContain(READ);
+      expect(model.cards[0]).toContain('Waldo\'s reads over outside content');
+    });
+  });
+
+  it('with Waldo\'s own record, the pass reads memory whole', async () => {
+    await owned('outcomes-own-memory', { MEMORY_OUTCOME_LEARNING: '1' }, async ({ state, nightly }) => {
+      claimStore(state.storage.sql).add({ kind: 'health', text: HEALTH_NOTE, source: 'stated', evidence: '"my knee flares after long runs"', origin: 'owner', source_ref: 'owner, app-1' }, new Date(D1 - 24 * HOUR).toISOString());
+      twoMornings(state);
+      await nightly();
+      expect(model.outcomes[0]).toContain(HEALTH_NOTE);
     });
   });
 

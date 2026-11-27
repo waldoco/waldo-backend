@@ -172,7 +172,7 @@ import { toolOutputLedger , redactToolOutputLedger } from '../conversation/tool-
 import { heldTopicsOf, holdsIn } from '../memory/forget-guard';
 import { armNightly, backfillEpisodes, consolidationSides, CONSTELLATION_DIGEST_KEY, episodeIndex, indexedConversationStore, type EpisodeIndex, NIGHTLY_CATCH_UP_DELAY_MS, NIGHTLY_CATCH_UP_ID, NIGHTLY_THROUGH_KEY, ownerSpokeSince, recentExchange, scrubEpisodeTexts, transcript } from './episodes';
 import { consolidateSources, type SourcesDeps } from './nightly-sources';
-import { consolidateOutcomes, OUTCOME_CLAIMS_KEY, outcomeBook, outcomeReadsSection } from '../memory/outcomes';
+import { consolidateOutcomes, OUTCOME_CLAIMS_KEY, OUTCOME_OUTSIDE_CLAIMS_KEY, outcomeBook, outcomeReadsSection } from '../memory/outcomes';
 import { consolidateBacklog as consolidateNightly } from './nightly-backlog';
 import { nightlyDiagnostic } from './nightly-diagnostic';
 import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
@@ -5566,7 +5566,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // Every job here runs tainted: an action or a standing change it wants goes to the owner's card, as in an owner turn that
     // read outside text. What it may keep in memory follows the data instead (ownTextRuns).
     const ledgerJob = async (trace: string, said: string, toolNames?: Parameters<typeof responder.prompt>[4], directTools?: Parameters<typeof responder.prompt>[11], strong?: Parameters<typeof responder.prompt>[9], context?: string, waldoFirst?: boolean) =>
-      responder.prompt(trace, owner, said, async (_hop, work) => work(), toolNames, undefined, undefined, [await healthLogLines(), context ?? ''].filter(Boolean).join('\n\n'), 'external', strong, undefined, directTools, waldoFirst);
+      responder.prompt(trace, owner, said, async (_hop, work) => work(), toolNames, undefined, undefined, [await healthLogLines(),
+        // MEMORY_OUTCOME_LEARNING: what the nightly pass learned from rows drawn from outside content; this job already runs over outside content.
+        this.env.MEMORY_OUTCOME_LEARNING === '1' ? outcomeReadsSection(memory, storage.kv.get<number[]>(OUTCOME_OUTSIDE_CLAIMS_KEY), true) : '', context ?? ''].filter(Boolean).join('\n\n'), 'external', strong, undefined, directTools, waldoFirst);
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);
       if (input === null) return;

@@ -20,6 +20,9 @@ export const OUTCOMES_THROUGH_KEY = 'nightly_outcomes_through_v1';
 // The ids of the claims this pass wrote from Waldo's own rows: ids only, so a claim the owner corrects, dismisses or forgets
 // leaves the reads by its own status.
 export const OUTCOME_CLAIMS_KEY = 'nightly_outcome_claims_v1';
+// The same for the untrusted notes it wrote from rows drawn from outside content: only runs Waldo starts read those, since
+// they already run as jobs over outside content; the owner's own turns recall them only with outside notes on.
+export const OUTCOME_OUTSIDE_CLAIMS_KEY = 'nightly_outcome_outside_claims_v1';
 const ROWS_PER_READ = 200;
 const DAY_MS = 24 * 60 * 60_000;
 // What the reads section may take of a turn's prompt.
@@ -192,15 +195,17 @@ export const consolidateOutcomes = async (deps: OutcomesDeps, trace: string): Pr
     const at = new Date(deps.now()).toISOString();
     const detail = deps.transaction(() => {
       if (!settle()) return null;
-      const before = new Set(deps.claims.claims().map(claim => claim.id));
+      // Keeps the ids of what one application added under key, beside those of earlier nights still live.
+      const keeping = (key: string, apply: () => string) => {
+        const before = new Set(deps.claims.claims().map(claim => claim.id));
+        const detail = apply();
+        const live = deps.claims.claims().map(claim => claim.id), added = live.filter(id => !before.has(id));
+        if (added.length) deps.kv.put(key, [...(deps.kv.get<number[]>(key) ?? []).filter(id => live.includes(id)), ...added]);
+        return detail;
+      };
       // Waldo's own rows ground in no one's words: what the pass adds from them is Waldo's own read (origin agent).
-      const ownDetail = ownOps ? applyClaimOps(deps.claims, ownOps, at, `Waldo's own outcomes, ${trace}`, undefined, { outside: false }, false) : null;
-      const added = deps.claims.claims().filter(claim => !before.has(claim.id)).map(claim => claim.id);
-      if (added.length) {
-        const live = new Set(deps.claims.claims().map(claim => claim.id));
-        deps.kv.put(OUTCOME_CLAIMS_KEY, [...(deps.kv.get<number[]>(OUTCOME_CLAIMS_KEY) ?? []).filter(id => live.has(id)), ...added]);
-      }
-      const outsideDetail = outsideOps ? applyClaimOps(deps.claims, outsideOps, at, `Waldo's outcomes from outside content, ${trace}`, undefined, { shared: outsideLines, outside: true }, false) : null;
+      const ownDetail = ownOps ? keeping(OUTCOME_CLAIMS_KEY, () => applyClaimOps(deps.claims, ownOps, at, `Waldo's own outcomes, ${trace}`, undefined, { outside: false }, false)) : null;
+      const outsideDetail = outsideOps ? keeping(OUTCOME_OUTSIDE_CLAIMS_KEY, () => applyClaimOps(deps.claims, outsideOps, at, `Waldo's outcomes from outside content, ${trace}`, undefined, { shared: outsideLines, outside: true }, false)) : null;
       return [ownDetail ? `own ${ownDetail}` : null, outsideDetail ? `outside ${outsideDetail}` : null].filter(Boolean).join('; ');
     });
     if (detail === null) return raced();
@@ -212,13 +217,17 @@ export const consolidateOutcomes = async (deps: OutcomesDeps, trace: string): Pr
   }
 };
 
-// What every later turn reads of the pass: the claims it wrote from Waldo's own rows that are still live, newest first, by id
-// so the model can correct one with remember. Health notes stay out, since this section also reaches jobs built from outside
-// content (the owner's own turns still recall them), and so does a claim the owner asked Waldo to bring up less.
-export const outcomeReadsSection = (store: ClaimStore, ids: readonly number[] | undefined, maxChars = OUTCOME_READS_CHARS): string => {
+// What later turns read of the pass: the claims it wrote that are still live, newest first, by id so the model can correct one
+// with remember. Every turn reads those from Waldo's own rows; only runs Waldo starts over outside content read those from
+// outside rows (outside). Health notes stay out, since both reach jobs built from outside content (the owner's own turns still
+// recall them), and so does a claim the owner asked Waldo to bring up less.
+export const outcomeReadsSection = (store: ClaimStore, ids: readonly number[] | undefined, outside = false, maxChars = OUTCOME_READS_CHARS): string => {
   const wanted = new Set(ids ?? []);
   if (!wanted.size) return '';
   const reads = store.claims().filter(claim => wanted.has(claim.id) && claim.kind !== 'health' && !statedReading(claim) && !claim.bring_up_less_at).sort((a, b) => b.id - a.id);
   const lines = fittingLines(reads.map(profileLine), maxChars);
-  return lines.length ? ['What Waldo has learned from how the owner answered its own suggestions and messages. These are Waldo\'s reads, not the owner\'s words and not rules: today may differ, and the owner can correct or remove any of them.', ...lines].join('\n') : '';
+  if (!lines.length) return '';
+  return [outside
+    ? 'What Waldo has learned from how the owner answered suggestions and messages it drew from mail, calendar or other outside content. These are Waldo\'s reads over outside content, not the owner\'s words and not rules: today may differ, and the owner can correct or remove any of them.'
+    : 'What Waldo has learned from how the owner answered its own suggestions and messages. These are Waldo\'s reads, not the owner\'s words and not rules: today may differ, and the owner can correct or remove any of them.', ...lines].join('\n');
 };

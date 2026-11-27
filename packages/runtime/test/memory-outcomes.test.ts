@@ -4,7 +4,7 @@ import { expect, it } from 'vitest';
 import { episodeIndex } from '../src/channels/episodes';
 import { loopBook } from '../src/channels/loops';
 import { claimStore, outcomesInput, BODY_PATTERN_RULE, type OutcomesPolicy } from '../src/memory/claims';
-import { consolidateOutcomes, outcomeBook, outcomeReadsSection, OUTCOME_CLAIMS_KEY, OUTCOMES_THROUGH_KEY, type OutcomesDeps } from '../src/memory/outcomes';
+import { consolidateOutcomes, outcomeBook, outcomeReadsSection, OUTCOME_CLAIMS_KEY, OUTCOME_OUTSIDE_CLAIMS_KEY, OUTCOMES_THROUGH_KEY, type OutcomesDeps } from '../src/memory/outcomes';
 
 // The learning loop: what Waldo did on its own initiative and what became of it, read by the nightly pass. The model may only
 // add; what it adds from Waldo's own rows is Waldo's own read, and from rows drawn from outside content an untrusted note.
@@ -69,6 +69,11 @@ it('reads what ended since the mark once, in order and in words, apart from outs
     expect(reads(state)).toContain(PATTERN.text);
     expect(reads(state)).toMatch(/^- \[c\d+ /m);
     expect(reads(state)).not.toContain(FROM_MAIL.text);
+    // The untrusted note is for runs Waldo starts over outside content, and says so.
+    const outsideReads = outcomeReadsSection(claimStore(state.storage.sql), state.storage.kv.get<number[]>(OUTCOME_OUTSIDE_CLAIMS_KEY), true);
+    expect(outsideReads).toContain(FROM_MAIL.text);
+    expect(outsideReads).not.toContain(PATTERN.text);
+    expect(outsideReads).toContain('outside content');
     expect(await consolidateOutcomes(pass(state, '{"add":[]}').deps, 'trace-2')).toBe('empty');
   });
 });
