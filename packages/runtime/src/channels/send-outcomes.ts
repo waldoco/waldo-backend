@@ -1,4 +1,4 @@
-import { recordKind, recordSurface } from './proactive-surface';
+import { boundForWhatsApp, recordKind } from './proactive-surface';
 import { localIso } from './reminders';
 import type { FinalRecord } from './telegram-final-outbox';
 import type { KnockFailure } from './whatsapp-window';
@@ -45,7 +45,7 @@ export const recordAppSend = (kv: Kv, id: string, kind: string, now: number): vo
 // simply its turn.
 const waitingRows = (records: readonly FinalRecord[], whatsappSubject: string | undefined, windowOpen: boolean, knock: KnockFailure | null): SendRow[] =>
   records.filter(record => waldoFirst(record) && (record.status === 'pending' || record.status === 'attempting' || record.status === 'accepted')).map(record => {
-    const whatsapp = recordSurface(record, whatsappSubject, 'app') === 'whatsapp';
+    const whatsapp = boundForWhatsApp(record, whatsappSubject);
     const held = record.status === 'accepted' ? 'awaiting_arrival' : whatsapp && !windowOpen ? (knock ? `window_closed:knock_failed:${knock.reason}` : 'window_closed') : undefined;
     return { id: record.id, kind: recordKind(record), surface: whatsapp ? 'whatsapp' : null, at: record.createdAt, outcome: 'waiting', ...(held ? { code: held } : {}) };
   });
