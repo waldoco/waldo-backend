@@ -477,7 +477,7 @@ function logFailedAttempt(plan: ReturnType<typeof attemptPlan>[number], failed: 
   console.warn(JSON.stringify({
     hop: 'provider_attempt_failed', ok: false, provider: plan.step.provider, model: plan.step.model, code: failed.code,
     ...(failed.status !== undefined ? { status: failed.status } : {}), ...(failed.errorType !== undefined ? { error_type: failed.errorType } : {}),
-    detail: failed.detail, latency_ms: latencyMs, fallback_follows: fallbackFollows,
+    detail: failed.detail.slice(0, 200), latency_ms: latencyMs, fallback_follows: fallbackFollows,
   }));
 }
 

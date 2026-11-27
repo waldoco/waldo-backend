@@ -417,8 +417,8 @@ function prepareMandatoryFragment(
   return Object.freeze({ text: prepared, source });
 }
 
-// A source longer than one fragment may take is cut at the bound with a note, so the model knows it read part of it and can ask for
-// the rest. The run's own fixed instructions are never clipped: an oversize one is a defect and fails closed.
+// A source longer than one fragment may take is cut at the bound with a note, so the model knows it read only part of it.
+// The run's own fixed instructions are never clipped: an oversize one is a defect and fails closed.
 function clipFragmentText(text: string): string {
   if (text.length <= MAX_CONTEXT_FRAGMENT_CHARS) return text;
   const last = text.charCodeAt(MAX_CONTEXT_FRAGMENT_CHARS - 1);
