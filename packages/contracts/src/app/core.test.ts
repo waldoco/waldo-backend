@@ -110,7 +110,8 @@ describe('app sign-in with an Apple or Google identity token', () => {
     const fixture = (await import('./fixtures/app-auth-id-token.v1.json')).default;
     for (const request of fixture.requests) expect(appIdTokenRequestV1Schema.safeParse(request).success).toBe(true);
     for (const response of fixture.responses) expect(appIdTokenResultV1Schema.safeParse(response).success).toBe(true);
-    for (const refusal of fixture.refusals) expect(appProblemV1Schema.safeParse(refusal.body).success && refusal.body.error === 'unavailable').toBe(true);
+    for (const refusal of fixture.refusals) expect(appProblemV1Schema.safeParse(refusal.body).success && appAuthErrorV1Schema.safeParse(refusal.body).success).toBe(true);
+    expect(fixture.refusals.map(refusal => refusal.body.error)).toEqual(['invalid_request', 'token_refused', 'no_email', 'rate_limited', 'unavailable', 'unavailable']);
     for (const response of fixture.responses) expect(appVerifyResultV1Schema.safeParse(response).success).toBe(response.state !== 'confirm_with_email_code');
     const route = appCoreRoutesV1.find(entry => entry.path === '/app/v1/auth/id_token');
     expect(route).toMatchObject({ method: 'POST', request: appIdTokenRequestV1Schema, response: appIdTokenResultV1Schema, authenticated: false, success_status: 200 });

@@ -355,7 +355,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   const rating = url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) && url.pathname.endsWith(APP_RATING_SUFFIX);
   const linkCode = url.pathname === APP_IMESSAGE_LINK_CODE_PATH;
   const onboarding = APP_ONBOARDING_PATHS.includes(url.pathname);
-  const bucket = url.pathname === APP_TODAY_PATH ? 'app-today' : request.method !== 'POST' || stop || linkCode ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : url.pathname === APP_AUTONOMY_CHANGES_PATH ? 'app-autonomy-change' : url.pathname === APP_CALENDAR_PROPOSALS_PATH ? 'app-calendar-proposal' : onboarding ? 'app-onboarding' : url.pathname === `${APP_PATH}/auth/renew` ? 'app-renew' : url.pathname.startsWith(APP_DEVICES_PATH) ? 'app-devices' : 'app-chat-send';
+  const bucket = url.pathname === APP_TODAY_PATH ? 'app-today' : request.method !== 'POST' || stop || linkCode ? 'app-read' : url.pathname === APP_APPROVAL_DECISIONS_PATH ? 'app-approval-decision' : url.pathname === APP_AUTONOMY_CHANGES_PATH ? 'app-autonomy-change' : url.pathname === APP_CALENDAR_PROPOSALS_PATH ? 'app-calendar-proposal' : onboarding ? 'app-onboarding' : url.pathname === `${APP_PATH}/auth/renew` ? 'app-renew' : url.pathname.startsWith(APP_DEVICES_PATH) ? 'app-devices' : url.pathname === APP_DEVICE_TIMEZONE_PATH ? 'app-device-timezone' : 'app-chat-send';
   try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `${bucket}:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
 
   if (url.pathname === `${APP_PATH}/session`) {

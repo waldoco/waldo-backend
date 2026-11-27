@@ -49,7 +49,7 @@ export const appVerifyRequestV1Schema = z.strictObject({ email: z.email().max(25
 // SHA-256, lower-case hex, the app handed the SDK; Supabase hashes it the same way and compares it with the token's nonce
 // claim. Supabase also checks the signature, the issuer and that the audience is a client id the provider lists. The owner
 // is resolved from the email Supabase confirms, never one the app sends, then as /auth/verify resolves it, with the same
-// invite and phone. A token Supabase refuses, or one with no confirmed email, gets the generic 403. request_id names the
+// invite and phone. A token Supabase refuses gets 403 token_refused, and one with no confirmed email 403 no_email (appAuthErrorV1Schema). request_id names the
 // attempt for the client's own retries; the backend keeps no record of it, so a repeat may open another session, though it
 // never creates a second owner or spends an invite twice. authorization_code is Apple's one-time code from the same sign-in: accepted and
 // unused until the backend holds Apple's Sign in with Apple key, after which it is exchanged for the refresh token that
