@@ -819,7 +819,7 @@ describe('ContextComposer', () => {
     for (const material of [withInventory(row, inventory, clock), withInventory(null, inventory, clock)]) {
       const composed = await createContextComposer(withHealth(material)).compose(trustedEnvelope(), RUNTIME_INPUTS);
       expect(composed.ok, composed.ok ? undefined : composed.failure.code).toBe(true);
-      if (composed.ok) expect(composed.prompt).toContain('Body data on hand this month: time asleep (nightly; newest today; most days); heart rate through the day (hourly; newest within hours; nearly every day); steps (hourly; newest within hours; nearly every day).');
+      if (composed.ok) expect(composed.prompt).toContain('Body data on hand this month: time asleep (nightly; newest today, fresh; most days); heart rate through the day (hourly; newest within hours, fresh; nearly every day); steps (hourly; newest within hours, fresh; nearly every day).');
     }
   });
 
