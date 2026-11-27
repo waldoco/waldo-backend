@@ -199,8 +199,7 @@ export const WELCOME_SCHEMA = {
 export const WELCOME_SCHEMA_V2 = {
   type: 'object', additionalProperties: false, required: ['nodes'],
   properties: {
-    nodes: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['domain', 'label', 'summary', 'observation', 'source', 'pointers', 'extends'],
-      required: [...WELCOME_SCHEMA.properties.nodes.items.required, 'extends', 'people', 'links_to'],
+    nodes: { type: 'array', items: { type: 'object', additionalProperties: false, required: [...WELCOME_SCHEMA.properties.nodes.items.required, 'extends', 'people', 'links_to'],
       properties: { ...WELCOME_SCHEMA.properties.nodes.items.properties, extends: { type: ['integer', 'null'] },
         people: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['name', 'address', 'relation'],
           properties: { name: { type: 'string' }, address: { type: ['string', 'null'] }, relation: { type: ['string', 'null'] } } } },

@@ -8,7 +8,8 @@ import { APP_RATING_SUFFIX, appRatingRequest, replyRatings } from './app-rating'
 import { memoryUsedBook, memoryUsedFor } from './app-memory-used';
 import { outsideSafe } from '../memory/outside-view';
 import { requestBook } from '../onboarding/request-book';
-import { confirmWelcomeNode, correctWelcomeNode, welcomeSupportIds } from '../onboarding/welcome';
+import { confirmWelcomeNode, correctWelcomeNode, welcomeBuild, welcomeSupportIds, type WelcomeStage } from '../onboarding/welcome';
+import { getToKnowApplier, startGetToKnow } from '../onboarding/get-to-know';
 import { ownerWelcome, type OwnerWelcome } from '../onboarding/welcome-sources';
 import { chatChannelLinks } from './chat-channel-links';
 import type { IMessageProof, WhatsAppProof } from './dashboard-phone';
@@ -361,6 +362,9 @@ type OwnerRuntime = Readonly<{
   welcome: OwnerWelcome;
   // The owner look-up the owner's yes starts: written or stopped as the yes stands, and let start once the first reply is out.
   lookup: Readonly<{ reconcile(): Promise<void>; afterReply(): Promise<void> }>;
+  // The first-week read of the owner's own Google data (WELCOME_V2): written once, when the welcome build has begun and Google
+  // can be read.
+  getToKnow: Readonly<{ reconcile(): Promise<void> }>;
   api: ReturnType<typeof createTelegramOwnerApi>;
   call: ReturnType<typeof createTelegramCaller>;
   probeCapture: ProbeCaptureSlot;
@@ -455,6 +459,7 @@ const HEALTH_CHART_READ_MS = 3_000;
 const healthChartKey = (chart: ConversationHealthChart): string => `${chart.health.signal}|${chart.health.from}|${chart.health.to}`;
 // The look-up consent grant time the owner look-up was last started for (onboarding/lookup.ts).
 const LOOKUP_STARTED_KEY = 'owner_lookup_started';
+const GET_TO_KNOW_STARTED_KEY = 'get_to_know_started';
 const LOOKUP_TRACE = 'owner-lookup';
 // The last message row of one chain. Every chain of an owner shares one history store, so the store's own leaf can sit in another chain.
 const chainLeaf = (entries: readonly ConversationEntry[], chatId: string): string | null =>
@@ -2127,7 +2132,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             chat:chatChannelLinks({env:this.env,kv:this.ctx.storage.kv,doName:name,auth:consoleAuth(this.env)}),bothDefault:proactiveBothDefault(this.env),
             signedInRecently:async()=>signedInRecently((await consoleAuth(this.env)!.listSessions(name)).find(row=>row.session===hash)?.signed_in_at,Date.now()),
             act:action=>this.setup('app').act(action,current),
-            setupDone:()=>{this.bindAppSubject(name);const runtime=this.setup('app');runtime.welcome.build().start();this.continueWelcome(runtime);this.reconcileLookup(runtime);},
+            setupDone:()=>{this.bindAppSubject(name);const runtime=this.setup('app');runtime.welcome.build().start();this.continueWelcome(runtime);this.reconcileLookup(runtime);this.reconcileGetToKnow(runtime);},
             lookupChanged:()=>{this.bindAppSubject(name);this.reconcileLookup(this.setup('app'));},
             admit:async(client,text)=>{
               this.bindAppSubject(name);
@@ -2448,6 +2453,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
   private reconcileLookup(runtime: OwnerRuntime): void {
     this.ctx.waitUntil(runtime.lookup.reconcile().catch(()=>{console.error(JSON.stringify({hop:'lookup_reconcile',ok:false}));}));
+  }
+  private reconcileGetToKnow(runtime: OwnerRuntime): void {
+    this.ctx.waitUntil(runtime.getToKnow.reconcile().catch(()=>{console.error(JSON.stringify({hop:'get_to_know_reconcile',ok:false}));}));
   }
   private bindAppSubject(name: string): void {
     const subject=appSubjectFor(name);if(this.ctx.storage.kv.get<string>('app_subject')!==String(subject)){this.ctx.storage.kv.put('app_subject',String(subject));this.runtimes={};}
@@ -4746,7 +4754,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       log({ trace: `google:${Date.now()}`, hop: 'google_token_migrated', ms: 0, ok: true, detail: vault ? 'moved to vault' : 'moved to account list' });
     };
     const googleEnvironment = this.env;
-    const welcomeAfterConnect = () => { runtime.welcome.googleConnected(); this.continueWelcome(runtime); };
+    // The look-up waits for a name, and Google's, from this connect, may be the first it has; the first-week read waits for Google.
+    const welcomeAfterConnect = () => { runtime.welcome.googleConnected(); this.continueWelcome(runtime); this.reconcileLookup(runtime); this.reconcileGetToKnow(runtime); };
     // GOOGLE_REALTIME_TRIAGE reads and watches every connected account that holds a feature, the first MAX_ACCOUNTS_PER_READ.
     const realtimeAccounts = async (feature: 'calendar' | 'mail') => (await accounts()).filter(account => googleHas(account.scopes, feature)).slice(0, MAX_ACCOUNTS_PER_READ);
     // How push upkeep reaches Google as one account: a raw token held here mints a bearer, a Vault-held grant goes through the proxy.
@@ -4863,7 +4872,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       async profileName(): Promise<string | null> {
         const [all, profiles] = [await accounts(), await googleProfiles()];
         for (const account of all) {
-          const profile = profiles[account.id] ?? {};
+          const profile: Partial<GoogleProfileFact> = profiles[account.id] ?? {};
           const name = (profile.name ?? [profile.given_name, profile.family_name].filter(Boolean).join(' ')).trim();
           if (name && name.length <= 80) return name;
         }
@@ -4932,8 +4941,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           log({ trace, hop: 'google_linked', ms: 0, ok: true, detail: `${outcome.scopes.length} scopes` });
           // A welcome build that skipped calendar or mail at setup takes them up now that Google is connected.
           welcomeAfterConnect();
-          // The look-up waits for a name; Google's, from this connect, may be the first it has.
-          this.reconcileLookup(runtime);
           const session = (await consentDeps.store.read())[input.nonce]?.session;
           const callRpc = signedRpc(env);
           if (session && callRpc) {
@@ -6877,16 +6884,17 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         message_id: record.reaction.message_id, reaction: [{ type: 'emoji', emoji: record.reaction.emoji }] }).catch(() => undefined);
     };
     // The welcome build's model calls run on the queue as an owner job, like the nightly pass; its reads run beside it.
+    // Each welcome call closes its own trace with a machine_turn root, so the trace exporter flushes it. The trace is per run:
+    // a build taken up again after a cut must not add to a trace an earlier run already closed.
+    const askWelcome = (stage: WelcomeStage, text: string, version?: 2, detail = 'welcome') => this.serial(async () => {
+      const started = Date.now(), trace = `welcome:${stage}:${started}`;
+      let answered = false;
+      try { const said = await this.asOwnerJob('dreaming', `welcome:${stage}`, () => responder.welcome!(trace, stage, text, version)); answered = true; return said; }
+      finally { log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: answered, detail }); }
+    });
     const welcome = ownerWelcome({ sql: storage.sql, transaction: (work) => storage.transactionSync(work), claims: memory, now: Date.now, timezone: () => clock.timezone, healthMemory: () => healthMemoryOn(identity), healthRead, google,
       findings: () => findingStore(storage.sql, memory, consentLedger(storage.sql, consentSwitches(this.env)), Date.now),
-      // Each stage's call closes its own trace with a machine_turn root, so the trace exporter flushes it. The trace is per run:
-      // a build taken up again after a cut must not add to a trace an earlier run already closed.
-      ask: (stage, text, version) => this.serial(async () => {
-        const started = Date.now(), trace = `welcome:${stage}:${started}`;
-        let answered = false;
-        try { const said = await this.asOwnerJob('dreaming', `welcome:${stage}`, () => responder.welcome!(trace, stage, text, version)); answered = true; return said; }
-        finally { log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: answered, detail: 'welcome' }); }
-      }),
+      ask: (stage, text, version) => askWelcome(stage, text, version),
       // The second build (WELCOME_V2) waits for a look-up still running, inside the tour's watch.
       ...(this.env.WELCOME_V2 === '1' ? { v2: { lookupOpen: () => lookupOn
         ? lookupPending({ book: this.jobs(), consent: lookupConsent(), started: lookupStarted }, ownerName(memory) !== null) : openLookup(this.jobs()) !== null } } : {}) });
@@ -6943,7 +6951,23 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           doName: identity.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] }, work => storage.transactionSync(() => { work(); commit(); }));
       },
       ended: grant => { welcome.lateWeb(grant); this.continueWelcome(runtime); } });
-    const runtime: OwnerRuntime = { welcome, lookup, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, push, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, reviseBriefForBody, healthChanged, healthTrigger, interventionReview, announcementPass, announcementsCurrent, placeMoved, placeArrived, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    // The first-week read (WELCOME_V2): its worker reads the owner's own mail threads, calendar, files and contacts; its findings
+    // come back through the welcome build's own call and admission, filed under mail.
+    const getToKnowOn = this.env.WELCOME_V2 === '1';
+    const getToKnowApply = getToKnowOn ? getToKnowApplier({ claims: memory, build: welcomeBuild(storage.sql, Date.now), now: Date.now, transaction: work => storage.transactionSync(work),
+      healthMemory: () => healthMemoryOn(identity), ask: text => askWelcome('mail', text, 2, 'get_to_know') }) : null;
+    const getToKnow: OwnerRuntime['getToKnow'] = {
+      reconcile: async () => {
+        if (!getToKnowOn) return;
+        const connected = ((await google.state?.().catch(() => [])) ?? []).some(account => account.error === null && (account.mail || account.calendar));
+        const made = storage.transactionSync(() => startGetToKnow({ book: this.jobs(), now: Date.now, surface: 'app', build: welcomeBuild(storage.sql, Date.now), held: heldTopicsOf(memory),
+          started: () => identity.get<number>(GET_TO_KNOW_STARTED_KEY) ?? null, markStarted: at => identity.put(GET_TO_KNOW_STARTED_KEY, at) }, connected));
+        if (made.code !== 'enqueued') { log({ trace: 'get_to_know', hop: 'get_to_know_skipped', ms: 0, ok: true, code: made.code }); return; }
+        log({ trace: `task:${made.job.id}`, hop: 'get_to_know_enqueued', ms: 0, ok: true, job_id: made.job.id, job_profile: 'reader' });
+        await armTaskJobsWake(storage, made.job.due_at ?? Date.now());
+      },
+    };
+    const runtime: OwnerRuntime = { welcome, lookup, getToKnow, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}), ...(getToKnowApply ? { get_to_know_you: getToKnowApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, push, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, reviseBriefForBody, healthChanged, healthTrigger, interventionReview, announcementPass, announcementsCurrent, placeMoved, placeArrived, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       lookupToolHandlers: () => {
         const unlocated = webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch), this.lookupPages) : null;

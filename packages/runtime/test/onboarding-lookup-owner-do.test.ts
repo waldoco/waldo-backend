@@ -135,6 +135,39 @@ it('with no name from setup, the name Google gave at sign-in starts the look-up,
   });
 });
 
+it('setup done with Google connected writes the first-week read once: a reader of the owner\'s own data, due after the tour', async () => {
+  await ownerWith({ WELCOME_V2: '1' }, async ({ state, app }) => {
+    await state.storage.put('google:accounts', [{ id: 'acct-1', email: 'asha@example.com', scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/gmail.readonly'] }]);
+    await consents(app, false);
+    const reads = () => state.storage.sql.exec<{ status: string; profile: string; due_at: number | null }>("SELECT status, profile, due_at FROM task_jobs WHERE origin = 'machine:get_to_know_you'").toArray();
+    expect((await app('/app/v1/onboarding/answers', { request_id: 'gtk-answers-1', name: 'Asha' })).status).toBe(200);
+    await vi.waitFor(() => expect(reads()).toHaveLength(1), { timeout: 10_000, interval: 25 });
+    expect(reads()[0]).toMatchObject({ status: 'queued', profile: 'reader' });
+    expect(reads()[0]!.due_at).toBeGreaterThan(Date.now());
+    await app('/app/v1/onboarding/answers', { request_id: 'gtk-answers-2', name: 'Asha K' });
+    await settle();
+    expect(reads()).toHaveLength(1);
+    const skipped = state.storage.sql.exec<{ note: string | null }>("SELECT note FROM trace_log WHERE hop = 'get_to_know_skipped'").toArray().map(row => row.note);
+    expect(skipped).toContain('started');
+  });
+});
+
+it('writes no first-week read with the second build off, or before Google is connected', async () => {
+  await ownerWith({}, async ({ state, app }) => {
+    await state.storage.put('google:accounts', [{ id: 'acct-1', email: 'asha@example.com', scopes: ['https://www.googleapis.com/auth/gmail.readonly'] }]);
+    await consents(app, false);
+    await app('/app/v1/onboarding/answers', { request_id: 'gtk-off-1', name: 'Asha' });
+    await settle();
+    expect(state.storage.sql.exec("SELECT 1 FROM task_jobs WHERE origin = 'machine:get_to_know_you'").toArray()).toEqual([]);
+  });
+  await ownerWith({ WELCOME_V2: '1' }, async ({ state, app }) => {
+    await consents(app, false);
+    await app('/app/v1/onboarding/answers', { request_id: 'gtk-nog-1', name: 'Asha' });
+    await vi.waitFor(() => expect(state.storage.sql.exec<{ note: string | null }>("SELECT note FROM trace_log WHERE hop = 'get_to_know_skipped'").toArray().map(row => row.note)).toContain('no_google'), { timeout: 10_000, interval: 25 });
+    expect(state.storage.sql.exec("SELECT 1 FROM task_jobs WHERE origin = 'machine:get_to_know_you'").toArray()).toEqual([]);
+  });
+});
+
 it('withdrawing the yes cancels and fences the look-up job', async () => {
   await ownerWith({ ONBOARDING_LOOKUP: '1' }, async ({ app, jobs, hops }) => {
     await consents(app, true);
