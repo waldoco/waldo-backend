@@ -6,6 +6,7 @@ import {
 import type { z } from 'zod';
 import type { RunEffectScope } from '../../channels/run-effect-scope';
 import { callWhy, proposalStatus, type ProposeOptions, type CardPlacement, type TaintedActionOutcome, type TaintedActionProposal } from '../../channels/approvals';
+import { actsOnOutside } from '../run-authority';
 import { TAINT_REFUSED_CAUSE, TOOL_ARG_SCHEMAS, taintedCallNeedsOwnerApproval, taintedCallRefused } from '../../hooks/registry';
 import { argumentDigest, dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../dispatcher';
 import { TOOL_RECORDS } from '../records';
@@ -51,7 +52,7 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
   mutates_state: true,
   handle: async (args: ProposeActionArgs, ctx: ToolDispatcherContext): Promise<ToolResult<unknown>> => {
     // The card is the route for arguments that came from outside; a turn that read nothing from outside calls the tool.
-    if ((ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint !== 'external') return { ok: false, error: 'Nothing in this turn came from an email, web page or other outside source, so no approval card is needed; call the tool directly.', code: 'rejected' };
+    if (!actsOnOutside(ctx as { toolArgSourceTaint?: unknown; runOrigin?: unknown })) return { ok: false, error: 'Nothing in this turn came from an email, web page or other outside source, so no approval card is needed; call the tool directly.', code: 'rejected' };
     const tool = toolNameSchema.safeParse(args.tool);
     if (!tool.success) return { ok: false, error: `No tool is named ${args.tool}; propose one of the tools you were offered.`, code: 'invalid_args' };
     if (taintedCallRefused(tool.data, 'external')) return { ok: false, error: `${tool.data} is never put on a card. ${TAINT_REFUSED_CAUSE}`, code: 'rejected' };

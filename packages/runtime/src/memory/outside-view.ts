@@ -12,9 +12,10 @@ export const outsideSafe = (claim: Claim): boolean =>
 export const outsideView = (store: ClaimStore): ClaimStore => keptView(store, outsideSafe);
 
 // What a run Waldo started is shown up front while its outside-content mark follows what it reads: the outside view, less every
-// note learned from outside content, so nothing shown before its first read was written by someone else. read_memory still
-// reaches those notes, and its result marks the run.
-export const ownNotesView = (store: ClaimStore): ClaimStore => keptView(store, (claim) => outsideSafe(claim) && claim.origin !== 'untrusted');
+// note the owner did not state themselves (read_memory's own rule for outside text: notes learned from outside content, imports,
+// merges, Waldo's own reads, legacy rows), so nothing shown before its first read was written by someone else. read_memory
+// still reaches those notes, and its result marks the run.
+export const ownNotesView = (store: ClaimStore): ClaimStore => keptView(store, (claim) => outsideSafe(claim) && claim.origin === 'owner');
 
 const keptView = (store: ClaimStore, kept: (claim: Claim) => boolean): ClaimStore => {
   const nodes = () => {

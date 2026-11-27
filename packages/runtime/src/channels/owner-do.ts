@@ -322,7 +322,7 @@ import { armWatchUpkeep, endWatchUpkeep, watchGrants, watchStatusLine, watchUpke
 import { gmailPush, stopChannel } from '../connectors/google-push';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 import type { LLMToolCall, LLMToolTurn, StandingGrantRecord, ToolName } from '@waldo/contracts';
-import { jobBook, jobsKept, REPLAY_DEADLINE_MS, replayKey, taskJobsForgetStore, type JobBook, type MachineJob, type ReplayBrief, type ReplayOutcome, type TaskTicket } from '../tasks/jobs';
+import { jobBook, jobsKept, REPLAY_DEADLINE_MS, replayKey, taskBrief, taskJobsForgetStore, type JobBook, type MachineJob, type ReplayBrief, type ReplayOutcome, type TaskTicket } from '../tasks/jobs';
 import { BROWSER_TOOLS, jobTools, LOOKUP_ORIGIN } from '../tasks/profiles';
 import { taskAsks } from '../tasks/asks';
 import { taskHost, type TaskHost } from '../tasks/brain';
@@ -5205,7 +5205,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // Day-card runs whose prompt is the owner's own text, while they run (memoryRun.ownText).
     const ownTextRuns = new Set<string>();
     const ledgerFromOthers = () => loops.list().some((loop) => loop.source_ref || loop.taint === 'external') || loops.closed().some((loop) => loops.sourceBound(loop.id))
-      || book.list().some((reminder) => reminder.outside) || storage.sql.exec('SELECT 1 FROM ledger LIMIT 1').toArray().length > 0;
+      || book.list().some((reminder) => reminder.outside) || storage.sql.exec('SELECT 1 FROM ledger LIMIT 1').toArray().length > 0
+      // The running tasks' titles ride beside the open loops; one written after reading someone else's words is theirs.
+      || this.jobs().open().some((row) => row.kind === 'task' && taskBrief(row).outside_text === true);
     const quiet = () => isQuiet(loops.proactivity(), Date.now(), clock.timezone);
     // PROACTIVE_GATE: one set of owner limits on every unasked message. The owner speaking anywhere answers a waiting question.
     const interrupts = this.env.PROACTIVE_GATE === '1' ? {

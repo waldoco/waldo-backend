@@ -127,7 +127,8 @@ export const taskToolHandlers = (deps: TaskToolDeps) => [
           age_minutes: Math.floor((deps.now() - row.created_at) / 60_000), steps: row.rounds, tools_called,
           ...(asked ? { approval_id: asked } : {}), ...(result ? { result } : {}),
         },
-        source_taint: result ? row.taint : null,
+        // A title written after reading someone else's words is theirs too, whether or not a result has come back.
+        source_taint: (result && row.taint === 'external') || (row.kind === 'task' && taskBrief(row).outside_text === true) ? 'external' as const : result ? row.taint : null,
       };
     },
   } satisfies ToolHandler<CheckTaskArgs, unknown, ToolDispatcherContext>,

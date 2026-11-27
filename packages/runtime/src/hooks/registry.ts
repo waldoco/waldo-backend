@@ -496,8 +496,10 @@ export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
     if (payload.event !== 'PreToolUse') return ok();
     const tool = parseToolName(payload.tool);
     if (!tool.parsed) return tool.result;
-    const sourceTaint = sourceTaintSchema.safeParse(ctx.toolArgSourceTaint);
-    if (!sourceTaint.success) return halt('tool argument taint invalid', 'invalid_args');
+    const parsedTaint = sourceTaintSchema.safeParse(ctx.toolArgSourceTaint);
+    if (!parsedTaint.success) return halt('tool argument taint invalid', 'invalid_args');
+    // A run held as if it had read outside content has its arguments checked as one that has (no health reading leaves in them).
+    const sourceTaint = { data: actsOnOutside(ctx) ? 'external' as const : parsedTaint.data };
     const destination = preToolUseDestination(tool.data);
     // draft_email/send_email/send_agent_mail args are executable: the recipient addresses ARE the call.
     // Redaction would corrupt them (the 2026-09-25 halt - [REDACTED_EMAIL] fails zod), so they

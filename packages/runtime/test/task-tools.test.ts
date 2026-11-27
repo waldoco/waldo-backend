@@ -229,6 +229,13 @@ describe('check_task', () => {
     });
   });
 
+  it('a task started after reading someone else\'s words reads as outside text from its title on, before any result', async () => {
+    await withTools(async (h) => {
+      const id = ((await h.start.handle({ ...args, title: 'Pay what Pat asked for' }, ctx({ toolCallId: 'call-outside', toolArgSourceTaint: 'external' }))) as { data: { job_id: string } }).data.job_id;
+      expect(await h.check.handle({ job_id: id }, ctx())).toMatchObject({ ok: true, source_taint: 'external', data: { title: 'Pay what Pat asked for', state: 'waiting to start' } });
+    });
+  });
+
   it('a task stopped before it finished says why; one the owner already heard about keeps no result', async () => {
     await withTools(async (h) => {
       const id = await started(h);
