@@ -105,9 +105,9 @@ describe('welcome calendar stage', () => {
     expect(await calendarStage(google([account('a@x.com')], { 'a@x.com': new GoogleError(401, 'expired') }), () => NOW)()).toEqual({ kind: 'settled', state: 'revoked' });
   });
 
-  it('reads every connected account by name, sends titles and times but no descriptions or addresses, and cites event ids', async () => {
+  it('reads every connected account by name, sends titles, times and who else is in each event but no descriptions, and cites event ids', async () => {
     const g = google([account('a@x.com'), account('b@y.com')], {
-      'a@x.com': { calendarPage: async () => ({ events: [event('evt_a', { recurring_event_id: 'r1' })], next_page_token: null, fetched_count: 1, account: { connection_id: null, email: 'a@x.com' }, observed_at: '' }) },
+      'a@x.com': { calendarPage: async () => ({ events: [event('evt_a', { recurring_event_id: 'r1', attendee_names: ['Priya Shah'], attendee_emails: ['priya@studio.example'] })], next_page_token: null, fetched_count: 1, account: { connection_id: null, email: 'a@x.com' }, observed_at: '' }) },
       'b@y.com': { calendarPage: async () => ({ events: [event('evt_b'), event('evt_gone', { status: 'cancelled' })], next_page_token: null, fetched_count: 2, account: { connection_id: null, email: 'b@y.com' }, observed_at: '' }) },
     });
     const result = await calendarStage(g, () => NOW)();
@@ -117,7 +117,10 @@ describe('welcome calendar stage', () => {
     expect([...result.pointers]).toEqual(['evt_a', 'evt_b']);
     expect(result.text).toContain('[evt_a] Planning evt_a');
     expect(result.text).toContain('repeats');
-    expect(result.text).not.toMatch(/SECRET|someone@example\.com|evt_gone/);
+    // The people in a meeting feed the people map: names and addresses as the calendar shows them.
+    expect(result.text).toContain('[evt_a] Planning evt_a · 2026-10-20T09:00:00Z · 3 people · repeats · with Priya Shah · priya@studio.example');
+    expect(result.text).toContain('[evt_b] Planning evt_b · 2026-10-20T09:00:00Z · 3 people · with someone@example.com');
+    expect(result.text).not.toMatch(/SECRET|evt_gone/);
   });
 
   it('is empty when the connected calendars and task lists hold nothing', async () => {
@@ -134,15 +137,15 @@ describe('welcome calendar stage', () => {
 });
 
 describe('welcome mail stage', () => {
-  it('sends who and what about, never a snippet or a full address, and cites each thread once', async () => {
+  it('sends who and what about, with the sender\'s address for the people map, never a snippet, and cites each thread once', async () => {
     const g = google([account('a@x.com', { calendar: false })], { 'a@x.com': { mailPage: async () => ({ messages: [mail('thr_1'), mail('thr_1'), mail('thr_2')], next_page_token: null, result_size_estimate: 3 }) } });
     const result = await mailStage(g)();
     expect(result.kind).toBe('input');
     if (result.kind !== 'input') return;
     expect(result.sources).toEqual(['gmail']);
     expect([...result.pointers]).toEqual(['thr_1', 'thr_2']);
-    expect(result.text).toContain('[thr_1] Ana Diaz (design.example) · Review thr_1');
-    expect(result.text).not.toMatch(/SECRET|ana@/);
+    expect(result.text).toContain('[thr_1] Ana Diaz <ana@design.example> · Review thr_1');
+    expect(result.text).not.toMatch(/SECRET/);
   });
 
   it('says revoked when the mail grant is dead or its scope was taken back, and reads nothing then', async () => {

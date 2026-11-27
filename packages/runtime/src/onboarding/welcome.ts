@@ -1,7 +1,9 @@
 import { APP_WELCOME_STAGES_V5, type AppNodeSourceV13, type AppWelcomeBuildV1 } from '../../../contracts/src/app/controls';
+import { PEOPLE_PER_CLAIM_MAX, personLinkSchema, type PersonWrite } from '../../../contracts/src/memory/people';
 import { FORGOTTEN, textFingerprint, type ClaimStore } from '../memory/claims';
 import { carriesTopic } from '../memory/forget-guard';
 import { isWelcomeRef, nodeSources, nodeSupports, sourceRef, supportIds, writtenOn, type WelcomeSource } from '../memory/node-sources';
+import { personAddresses } from '../memory/people';
 import { numericHealthIn } from '../scribe/sanitiser';
 
 type Sql = Pick<SqlStorage, 'exec'>;
@@ -20,9 +22,9 @@ export type StageInput =
 
 export const WELCOME_MAX_NODES = 15;
 export const WELCOME_STAGE_MAX_NODES = 5;
-// The second build reads five sources that each write nodes, one after another, so each gets room; a node a later source adds
-// evidence to is not a new node and takes none.
-export const WELCOME_V2_MAX_NODES = 20;
+// The second build writes what each source supports; how many is the model's call. This bounds only what one owner's build can
+// store, far above what a real first week shows. A node a later source adds evidence to is not a new node and takes none.
+export const WELCOME_V2_MAX_NODES = 60;
 export const WELCOME_HEALTH_DAYS = 30;
 // While the owner look-up is still running, the web stage waits this long after the build starts, inside the tour's watch,
 // then settles empty so the gift is not held back; it is read once when the look-up ends.
@@ -39,7 +41,7 @@ export const WELCOME_RECHECK_MS = 10 * 60_000;
 // A health stage that found nothing may have run before the owner's first readings landed. The next health upload or the night
 // reads it once more, within this long of it settling.
 export const WELCOME_LATE_HEALTH_MS = 24 * 60 * 60_000;
-const DOMAINS = ['health', 'work', 'people', 'routines', 'interests'] as const;
+const DOMAINS = ['health', 'work', 'people', 'routines', 'interests', 'goals'] as const;
 const LIMITS = { label: 40, summary: 140, observation: 200 } as const;
 const MAX_POINTERS = 10;
 // ADR-0081: nothing numeric about the owner's body is stored in DO memory. A node read from health readings, or filed under
@@ -181,7 +183,10 @@ export const WELCOME_INSTRUCTION_V2 = [
   'You see one source at a time; the health source comes first and sets the centre. Each source comes with the constellation already written, each node with its id. When this source shows a pattern already there, give that node\'s id in extends, with this source\'s observation and pointers: Waldo adds this evidence to it and keeps its words. Otherwise set extends to null and write a new node. Never write the same pattern again under another name. When the owner shares no health, say nothing of their body, sleep, energy, fitness or readiness: you have no data for it.',
   ...WELCOME_INSTRUCTION.split('\n').slice(2, -1),
   'What the owner look-up found on the public web is Waldo\'s unconfirmed read of pages that may be about someone else with the same name: build only on what fits the rest of what you know of the owner.',
-  `At most ${WELCOME_STAGE_MAX_NODES} new nodes. Reply with an empty list when the data shows nothing worth keeping.`,
+  'A goal the owner is working toward (a race, a launch, a habit they are building) is a node in the goals domain.',
+  'In people, name the people a node rests on, as the data names them: address only when the data shows that address with them, else null; relation in a few words when the data shows it, else null. No person for a newsletter, a service or a no-reply sender.',
+  'In links_to, give the ids of nodes already in the constellation that this one bears on (a training goal and the long run that serves it), or an empty list.',
+  'Write as many nodes as the data plainly supports and no more. Reply with an empty list when the data shows nothing worth keeping.',
 ].join('\n');
 
 export const WELCOME_SCHEMA = {
@@ -195,10 +200,38 @@ export const WELCOME_SCHEMA_V2 = {
   type: 'object', additionalProperties: false, required: ['nodes'],
   properties: {
     nodes: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['domain', 'label', 'summary', 'observation', 'source', 'pointers', 'extends'],
-      properties: { ...WELCOME_SCHEMA.properties.nodes.items.properties, extends: { type: ['integer', 'null'] } } } },
+      required: [...WELCOME_SCHEMA.properties.nodes.items.required, 'extends', 'people', 'links_to'],
+      properties: { ...WELCOME_SCHEMA.properties.nodes.items.properties, extends: { type: ['integer', 'null'] },
+        people: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['name', 'address', 'relation'],
+          properties: { name: { type: 'string' }, address: { type: ['string', 'null'] }, relation: { type: ['string', 'null'] } } } },
+        links_to: { type: 'array', items: { type: 'integer' } } } } },
   },
 };
-type ProposedNode = Readonly<{ domain: string; label: string; summary: string; observation: string; source: string; pointers: readonly string[]; extends?: number | null }>;
+type ProposedPerson = Readonly<{ name?: unknown; address?: unknown; relation?: unknown }>;
+type ProposedNode = Readonly<{ domain: string; label: string; summary: string; observation: string; source: string; pointers: readonly string[]; extends?: number | null; people?: readonly ProposedPerson[]; links_to?: readonly number[] }>;
+
+// The people a node names, as person links for its support claim. The name and relation are the model's read; an address is kept
+// only when this stage's data shows it, so the model cannot invent where to reach someone. One person per address, else per
+// name: a person memory already holds is linked by ref, and one the owner has spoken about takes no address from outside content.
+const personLinks = (claims: ClaimStore, text: string, proposed: unknown, forgotten: (text: string) => boolean): PersonWrite[] => {
+  if (!Array.isArray(proposed)) return [];
+  const shown = text.toLowerCase(), known = claims.people.all(), links: PersonWrite[] = [];
+  for (const raw of proposed as ProposedPerson[]) {
+    if (links.length >= PEOPLE_PER_CLAIM_MAX) break;
+    const name = typeof raw?.name === 'string' ? raw.name.trim() : '';
+    const relation = typeof raw?.relation === 'string' && raw.relation.trim() ? raw.relation.trim() : undefined;
+    const link = personLinkSchema.safeParse({ name, role: 'mention', ...(relation ? { relation } : {}) });
+    if (!link.success || forgotten(name) || (relation && forgotten(relation))) continue;
+    const address = typeof raw.address === 'string' ? raw.address.trim().toLowerCase() : '';
+    const seen = address.includes('@') && shown.includes(address) && !forgotten(address) ? address : null;
+    const person = (seen ? known.find((row) => personAddresses(row).includes(seen)) : undefined)
+      ?? known.find((row) => squash(row.name) === squash(name));
+    if (person && links.some((other) => other.ref === person.id)) continue;
+    const addresses = seen && !(person && claims.people.ownersOwn(person.id)) ? { addresses: [seen] } : {};
+    links.push(person ? { ref: person.id, role: 'mention', ...(relation ? { relation } : {}), ...addresses } : { ...link.data, ...addresses });
+  }
+  return links;
+};
 
 const squash = (text: string) => text.trim().toLowerCase().replace(/\s+/g, ' ');
 // A node the welcome build wrote: the note it was written on is a welcome read.
@@ -218,7 +251,7 @@ const barred = (claims: ClaimStore) => {
 export const admitWelcomeNodes = (claims: ClaimStore, build: WelcomeBuild, stage: WelcomeStage, input: Extract<StageInput, { kind: 'input' }>, raw: string, at: string, v2 = false): Readonly<{ added: number; extended: number }> => {
   const proposed = (JSON.parse(raw) as { nodes?: unknown }).nodes;
   if (!Array.isArray(proposed)) throw new Error('welcome answer has no nodes');
-  const room = Math.min(WELCOME_STAGE_MAX_NODES, (v2 ? WELCOME_V2_MAX_NODES : WELCOME_MAX_NODES) - build.written());
+  const room = v2 ? WELCOME_V2_MAX_NODES - build.written() : Math.min(WELCOME_STAGE_MAX_NODES, WELCOME_MAX_NODES - build.written());
   const forgotten = barred(claims);
   let added = 0, extended = 0;
   for (const node of proposed as ProposedNode[]) {
@@ -247,6 +280,16 @@ export const admitWelcomeNodes = (claims: ClaimStore, build: WelcomeBuild, stage
       return stored;
     })();
     const cited = pointers.map((pointer) => input.cites?.get(pointer)).filter((id): id is number => id !== undefined);
+    if (v2) {
+      const people = personLinks(claims, input.text, node.people, forgotten);
+      if (people.length && !claims.people.linksOf(support.id).length) claims.people.link(support.id, people, at);
+    }
+    // A link names a node the constellation holds now; the model's read of how two patterns bear on each other.
+    const linkTo = (from: number) => {
+      if (!v2 || !Array.isArray(node.links_to)) return;
+      const live = new Set(claims.nodes().filter((row) => row.status === 'active').map((row) => row.id));
+      for (const to of new Set(node.links_to)) if (Number.isSafeInteger(to) && to !== from && live.has(to)) claims.saveEdge({ from_id: from, to_id: to, relation: 'co-occurs with', strength: 0.5, evidence_count: 1 });
+    };
     if (target) {
       const held = supportIds(target);
       const more = [support.id, ...cited].filter((id) => !held.includes(id));
@@ -255,9 +298,10 @@ export const admitWelcomeNodes = (claims: ClaimStore, build: WelcomeBuild, stage
         claims.saveNode({ id: target.id, domain: target.domain, label: target.label, summary: target.summary, strength: target.strength, status: 'active', supporting_spots: [...held, ...more] }, at);
         extended += 1;
       }
+      linkTo(target.id);
       continue;
     }
-    claims.saveNode({ id: null, domain: node.domain, label: texts.label, summary: texts.summary, strength: 0.5, status: 'active', supporting_spots: [support.id, ...cited] }, at);
+    linkTo(claims.saveNode({ id: null, domain: node.domain, label: texts.label, summary: texts.summary, strength: 0.5, status: 'active', supporting_spots: [support.id, ...cited] }, at));
     added += 1;
   }
   return { added, extended };

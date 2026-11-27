@@ -8,7 +8,7 @@ import { readMemoryGraph } from '../src/channels/memory-graph';
 import { barrierMemory } from '../src/context-composer/forget-barrier';
 import { ownerProfilePrompt } from '../src/memory/owner-profile';
 import {
-  confirmWelcomeNode, correctWelcomeNode, runWelcome, WELCOME_HEALTH_NOT_SHARED, WELCOME_MAX_NODES, WELCOME_SCHEMA, WELCOME_STAGE_BUDGET_MS, welcomeBuild, welcomeSupportIds,
+  confirmWelcomeNode, correctWelcomeNode, runWelcome, WELCOME_HEALTH_NOT_SHARED, WELCOME_MAX_NODES, WELCOME_V2_MAX_NODES, WELCOME_SCHEMA, WELCOME_STAGE_BUDGET_MS, welcomeBuild, welcomeSupportIds,
   type StageInput, type WelcomeDeps, type WelcomeStage,
 } from '../src/onboarding/welcome';
 import { setupStage } from '../src/onboarding/welcome-sources';
@@ -879,7 +879,7 @@ describe('welcome build v2: one source after another, no copies, late sources on
     });
   });
 
-  it('writes at most twenty new nodes, five a source, and an addition to a node takes no room', async () => {
+  it('writes what each source supports, with no per-source cap; an addition to a node takes no room, and only the storage bound stops it', async () => {
     await withSql(async (sql, transaction) => {
       const clock = { at: T0 };
       const many = (make: (over: Partial<Node>) => Node, stage: string) => answer(...['one', 'two', 'three', 'four', 'five', 'six'].map((word) => make({ label: `${stage} pattern ${word}` })));
@@ -889,10 +889,53 @@ describe('welcome build v2: one source after another, no copies, late sources on
       } });
       build.start();
       await runWelcome(d);
-      expect(active(claims)).toHaveLength(20);
-      expect(build.view().nodes).toBe(20);
+      expect(active(claims)).toHaveLength(25);
+      expect(build.view().nodes).toBe(25);
       expect(build.view().stages.web).toBe('done');
       expect(nodeSources(claims.allClaims(), active(claims)[0]!)).toContain('web');
+      expect(WELCOME_V2_MAX_NODES).toBeGreaterThan(25);
+    });
+  });
+
+  it('a node names the people it rests on: each becomes one person, with an address only where the source showed it', async () => {
+    await withSql(async (sql, transaction) => {
+      const clock = { at: T0 };
+      const mailText = '[thr_1] Priya Shah <priya@studio.example> · Sprint review · 2026-10-20';
+      const people = (list: readonly { name: string; address: string | null; relation: string | null }[]) => list;
+      const { claims, build, deps: d } = v2(sql, transaction, clock, {
+        read: { health: async () => ({ kind: 'settled', state: 'skipped' }), setup: async () => ({ kind: 'settled', state: 'skipped' }), web: async () => ({ kind: 'settled', state: 'skipped' }),
+          calendar: async () => ({ kind: 'input', text: '[evt_a] Design sync · 2026-10-21T10:00:00Z · repeats · with Priya Shah · priya@studio.example', sources: ['calendar'], pointers: new Set(['evt_a']) }),
+          mail: async () => ({ kind: 'input', text: mailText, sources: ['gmail'], pointers: new Set(['thr_1']) }) },
+        answers: {
+          calendar: answer({ ...calendarNode({ domain: 'people', label: 'Weekly design sync with Priya', observation: 'A design sync with Priya repeats weekly.' }), people: people([{ name: 'Priya Shah', address: 'priya@studio.example', relation: 'design lead' }]) } as Node),
+          mail: answer({ ...mailNode({ observation: 'Priya writes about sprint reviews.' }), extends: 1, people: people([{ name: 'priya shah', address: 'PRIYA@studio.example', relation: null }, { name: 'Sam Doe', address: 'sam@elsewhere.example', relation: null }]) } as Node),
+        },
+      });
+      build.start();
+      await runWelcome(d);
+      const all = claims.people.all();
+      expect(all.map((person) => person.name).sort()).toEqual(['Priya Shah', 'Sam Doe']);
+      const priya = all.find((person) => person.name === 'Priya Shah')!;
+      expect(JSON.parse(priya.addresses!)).toEqual(['priya@studio.example']);
+      // An address the source never showed is not kept: the model may not invent where to reach someone.
+      expect(all.find((person) => person.name === 'Sam Doe')!.addresses).toBeNull();
+      expect(claims.people.claimsOf(priya.id).map((claim) => claim.source_ref).sort()).toEqual(['welcome:calendar:evt_a', 'welcome:gmail:thr_1']);
+      expect(claims.people.claimsOf(priya.id).every((claim) => claim.origin === 'untrusted')).toBe(true);
+    });
+  });
+
+  it('a goal is a node of its own, and a node may link to one already in the constellation', async () => {
+    await withSql(async (sql, transaction) => {
+      const clock = { at: T0 };
+      const { claims, build, deps: d } = v2(sql, transaction, clock, { answers: {
+        setup: answer(setupNode({ domain: 'goals', label: 'Training for a marathon', summary: 'You are training for a spring marathon.', observation: 'Said the marathon is the goal this season.' })),
+        calendar: answer({ ...calendarNode({ domain: 'routines', label: 'Long run on Sundays', summary: 'You keep Sunday mornings for the long run.', observation: 'A Sunday long run repeats.' }), links_to: [1, 99] } as Node),
+      } });
+      build.start();
+      await runWelcome(d);
+      expect(active(claims).map((node) => [node.id, node.domain])).toEqual([[1, 'goals'], [2, 'routines']]);
+      // Only a node that is there now can be linked; an id the constellation does not hold is dropped.
+      expect(claims.edges().map((edge) => [edge.from_id, edge.to_id])).toEqual([[2, 1]]);
     });
   });
 
