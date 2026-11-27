@@ -4,7 +4,7 @@ import {
 } from '@waldo/contracts';
 import { nextOccurrence, UnreadableScheduleRowError, type Scheduler } from '../scheduler/multiplexer';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
-import { ownerAsked } from './approvals';
+import { ownerAsked } from './owner-asked';
 import type { OwnerClock } from '../tools/live/get-context';
 
 // outside: set in a turn that had read outside text, so the note may carry that text's words, not the owner's.

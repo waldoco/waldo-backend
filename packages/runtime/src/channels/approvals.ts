@@ -1,4 +1,6 @@
 import { WHATSAPP_REPLY_BODY_MAX } from './whatsapp-api';
+import { ownerAsked, turnReadOutside } from './owner-asked';
+export { ownerAsked, turnReadOutside };
 import { EffectNotAppliedError, EffectQuotaError, EffectRefusedError, EffectUnknownError, type OwnerEffectLedger, type EffectReceipt, type EffectReadback } from './owner-effect-ledger';
 import { AVAILABLE_CLASSES, GrantLimitError, type GrantUse, type StandingGrants } from './standing-grants';
 import type { ProxyIntent } from '../connectors/proxy-intent';
@@ -282,20 +284,10 @@ export type ApproveShownOutcome = Readonly<{ outcome: 'decided'; decision: Appro
   | { outcome: 'off' | 'not_shown_here' | 'changed_since_shown' | 'shown_after_message' }
   | { outcome: 'app_only'; link?: string }
   | { outcome: 'not_waiting'; state: AppApprovalStateV1 | 'not_found' }>;
-// Whether a tool call runs in a turn that has read outside text.
-export const turnReadOutside = (ctx: Readonly<{ toolArgSourceTaint?: unknown }> | undefined): boolean => ctx?.toolArgSourceTaint === 'external';
 // What the model hears when a request the owner asked for ran with no card: the desk's own words for how it ended and, where it
 // can be undone, how the owner undoes it.
 export const ASKED_UNDO = 'The owner can undo it: if they ask, call raise_approval with operation undo and this approval id.';
 export const askedStatus = (outcome: Readonly<{ message: string; undo: boolean }>): string => `${outcome.message}${outcome.undo ? ` ${ASKED_UNDO}` : ''}`;
-// Whether the owner asked for a call in their own words: the turn was started by the owner's own message alone (the host sets
-// ownerMessage only then, never for quotes or forwards), every part of it is their own words (a transcript of a file they sent
-// may be someone else speaking, and a media note describes what someone else made), the turn has read nothing from outside, and
-// nothing it carries from before (the conversation the model reads, recalled notes and messages) may be someone else's words:
-// an email read last turn can't steer an "ok, handle it" now into a send with no card. Whether a call is what the owner
-// asked for is the model's judgment; what code holds to is that nothing an email, page or tool answer said can reach here.
-export const ownerAsked = (ctx: Readonly<{ ownerMessage?: Readonly<{ ownWordsOnly?: boolean }>; runOrigin?: unknown; toolArgSourceTaint?: unknown; carriedOutside?: boolean }> | undefined): boolean =>
-  ctx?.ownerMessage?.ownWordsOnly === true && ctx.runOrigin === 'owner' && !turnReadOutside(ctx) && ctx.carriedOutside !== true;
 // The provenance line of the owner's "Just do it" choice: a turn the owner started with their own message (the host sets
 // ownerMessage only then, never for a forward, a quote, inbound mail, a Brief, a proactive run or a job) may act even after it
 // read outside text. words are the owner's own typed or spoken words in that message, never a quote, a transcript of a file or
