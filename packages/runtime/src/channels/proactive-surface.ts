@@ -127,6 +127,12 @@ export const recordKind = (record: FinalRecord): string =>
 export const expiredCode = (record: FinalRecord, facts: ExpiryFacts): string => `${record.reason === 'superseded' ? 'superseded' : 'expired'}:${recordKind(record)}:${
   facts.windowClosed ? 'window_closed' : facts.quiet ? 'quiet' : facts.volumeLow ? 'volume_low' : facts.followupsOff ? 'followups_off' : 'waited'}`;
 
+// The surface a record went to, or waits for. One pass settles the records of every route it drained, so the surface is read
+// from the record: WhatsApp for a copy or a record bound to the owner's WhatsApp number; otherwise the surface of the runtime
+// whose pass settled it, unless that is WhatsApp, when the record went elsewhere and its surface cannot be told (null).
+export const recordSurface = <S extends string>(record: Pick<FinalRecord, 'id' | 'ownerSubject'>, whatsappSubject: string | undefined, settledBy: S): S | 'whatsapp' | null =>
+  record.id.startsWith(WHATSAPP_COPY_PREFIX) || (whatsappSubject !== undefined && record.ownerSubject === whatsappSubject) ? 'whatsapp' : settledBy === 'whatsapp' ? null : settledBy;
+
 // A waiting message ends unsent only when a newer one makes it moot, never by the clock: a day card covers the cards and the
 // day's updates still waiting before it, a newer day update the older ones (an in-place edit only a card replaces), a newer
 // copy the older copy, and a newer notice of the same kind the older one. Only a record for the same chat is reached.

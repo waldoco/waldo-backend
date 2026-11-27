@@ -24,13 +24,14 @@ const WHY: Readonly<Record<string, string>> = {
   restart_during_send: 'a restart cut the send short', invalid_ack: 'the provider gave no usable receipt',
 };
 
-export const noteUndelivered = (kv: Kv, record: FinalRecord, surface: Surface, timezone: string, now: number): void => {
+// surface: where the record went (recordSurface), or null when that cannot be told.
+export const noteUndelivered = (kv: Kv, record: FinalRecord, surface: Surface | null, timezone: string, now: number): void => {
   if ((record.status !== 'blocked' && record.status !== 'quarantined') || NOT_FAILURES.has(record.reason ?? '')) return;
   const said = redactNumericHealth(redactSecretUrls((record.payload.fallback_text ?? record.payload.text).trim()).text, HEALTH_SPAN_MARKER);
   const excerpt = said.length > EXCERPT_CHARS ? `${said.slice(0, EXCERPT_CHARS - 1)}…` : said;
   const kind = recordKind(record).replace(/_/g, ' '), what = record.dayCard ? `${kind} (${record.dayCard.card.replace('card:', '')})` : kind;
   const outcome = record.status === 'quarantined' ? 'may not have reached the owner' : 'did not reach the owner';
-  const text = `[Delivery: your ${what} for ${SURFACES[surface]}, written ${localIso(record.createdAt, timezone).slice(0, 16).replace('T', ' ')}, ${outcome}`
+  const text = `[Delivery: your ${what}${surface ? ` for ${SURFACES[surface]}` : ''}, written ${localIso(record.createdAt, timezone).slice(0, 16).replace('T', ' ')}, ${outcome}`
     + ` (${WHY[record.reason ?? ''] ?? record.reason ?? record.status}). It began: ${JSON.stringify(excerpt)}]`;
   kv.put(`${NOTE}${record.id}`, { at: now, text } satisfies Row);
   const rows = [...kv.list<Row>({ prefix: NOTE })].sort(([, a], [, b]) => b.at - a.at);

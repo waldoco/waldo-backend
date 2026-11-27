@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { forgetDeliveryNotes, noteUndelivered, takeDeliveryNotes } from '../src/channels/delivery-notes';
+import { recordSurface } from '../src/channels/proactive-surface';
 import type { FinalRecord } from '../src/channels/telegram-final-outbox';
 
 const store = () => {
@@ -23,6 +24,17 @@ describe('a send that did not reach the owner is a fact for the next turn', () =
     expect(line).toContain('Your 3pm moved to 4pm.');
     expect(line).toContain('2026-11-20 09:00');
     expect(takeDeliveryNotes(kv, AT + 180_000)).toEqual([]);
+  });
+
+  it('names the surface the record itself went to, not the one whose pass settled it, and none when that cannot be told', () => {
+    expect(recordSurface(ended({ id: 'whatsapp-copy:row-1' }), undefined, 'app')).toBe('whatsapp');
+    expect(recordSurface(ended({ ownerSubject: '15550001111' }), '15550001111', 'app')).toBe('whatsapp');
+    expect(recordSurface(ended({}), '15550001111', 'app')).toBe('app');
+    expect(recordSurface(ended({}), '15550001111', 'whatsapp')).toBeNull();
+    const kv = store();
+    noteUndelivered(kv, ended({ reason: 'provider_failed' }), null, 'UTC', AT);
+    const [line] = takeDeliveryNotes(kv, AT);
+    expect(line).toMatch(/^\[Delivery: your message, written 2026-11-20 09:00, did not reach the owner/);
   });
 
   it('says an unconfirmed send may not have arrived, never that it failed', () => {
