@@ -174,6 +174,36 @@ export type OwnerContextIntegration = Readonly<{ skills?: OwnerSkillCapability; 
 export type OwnerSpend = Readonly<{ spentUsd: number; ceilingUsd: number }>;
 type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; finishedTasks?: (since: number) => string; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; loopHasPassed?: (id: string) => boolean; memoryChat?: (chain: string, principal: string) => string; promptOwnText?: (traceId: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; turnCharts?: (turnId: string) => readonly ConversationChart[]; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; jobOutcomeRows?: boolean; timelineSeed?: TimelineSeed; machineTime?: OwnerContextIntegration['machineTime']; leanScheduled?: boolean; promotedTools?: OwnerContextIntegration['promotedTools']; noteLoaded?: OwnerContextIntegration['noteLoaded']; waldoSent?: OwnerContextIntegration['waldoSent'] }>;
 
+// Which scoped responder each owner field reaches. A scoped responder is built per run scope: the owner's own message
+// ('chat'), a Waldo-started run as the admitted owner ('job'), or a compaction pass over one chain ('compaction'). Every
+// field is listed, so a new one needs a decision here. Its own context and skills each scope prepares itself; the job host
+// reaches none, since asOwnerJob reads its absence as "this is already the owner's job".
+type ScopedKind = 'chat' | 'job' | 'compaction';
+const SCOPED_FIELDS = {
+  skillHost: ['chat'], skills: [], contextHost: ['chat'], context: [], history: ['chat', 'compaction'], jobHost: [],
+  ownerProfile: ['chat'], watchStatus: ['chat'], connectors: ['chat'], dayCards: ['chat', 'job'],
+  compactionFlush: ['chat', 'compaction'], timelineSeed: ['compaction'],
+  memoryNotice: ['chat'], newerOwnerInput: ['chat'], newerOwnerMessages: ['chat'], finishedTasks: ['chat'],
+  asyncTools: ['chat'], lightChat: ['chat'], lightRoles: ['chat'],
+  spend: ['chat', 'job'], forgetBarrier: ['chat', 'job', 'compaction'], forgetPass: ['chat', 'job', 'compaction'],
+  loopIsSourceBound: ['chat', 'job'], loopHasPassed: ['chat', 'job'],
+  profileView: ['chat', 'job'], semanticRecall: ['chat', 'job'], memorySelection: ['chat', 'job'], memoryValidity: ['chat', 'job'],
+  memoryUsed: ['chat', 'job'], turnCharts: ['chat', 'job'],
+  // The tools the model loaded stay offered on the owner's next message and on Waldo's next run alike.
+  promotedTools: ['chat', 'job'], noteLoaded: ['chat', 'job'],
+  // A Waldo-started run's own: the memory chat it writes, its prompt's authorship, the alarm's time, the lean view and its
+  // outcome rows. None reaches the owner's own turn.
+  memoryChat: ['job'], promptOwnText: ['job'], machineTime: ['job'], leanScheduled: ['job'], jobOutcomeRows: ['job'], waldoSent: ['job'],
+} as const satisfies Record<keyof PrivateOwner, readonly ScopedKind[]>;
+export const scopedOwner = (kind: ScopedKind, owner: PrivateOwner | undefined, own: PrivateOwner): PrivateOwner => {
+  const picked: Record<string, unknown> = {};
+  for (const [field, kinds] of Object.entries(SCOPED_FIELDS) as [keyof PrivateOwner, readonly ScopedKind[]][]) {
+    const value = owner?.[field];
+    if (value && kinds.includes(kind)) picked[field] = value;
+  }
+  return { ...picked, ...own } as PrivateOwner;
+};
+
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 // The typed failure on a tool hop: the ToolError code when the tool returned one, else the loop's coarse code.
 const toolErrorCode = (event: ToolLoopEvent): { error_code?: string } => {
@@ -1057,7 +1087,7 @@ export const createOwnerResponder = (
       onPhase: (phase, previousMs) => log({ trace, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }),
     });
     const jobSkills = jobHost.skills?.(jobContext.invocation.verified_authority.principal_ref, trace, () => jobContext.assertCurrent());
-    const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, privateRunScope, privateSystemSkills, { context: jobContext, ...(jobSkills ? { skills: jobSkills } : {}), ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}), ...(privateOwner?.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner?.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}), ...(privateOwner?.loopIsSourceBound ? { loopIsSourceBound: privateOwner.loopIsSourceBound } : {}), ...(privateOwner?.loopHasPassed ? { loopHasPassed: privateOwner.loopHasPassed } : {}), ...(privateOwner?.memoryChat ? { memoryChat: privateOwner.memoryChat } : {}), ...(privateOwner?.promptOwnText ? { promptOwnText: privateOwner.promptOwnText } : {}), ...(privateOwner?.profileView ? { profileView: true } : {}), ...(privateOwner?.semanticRecall ? { semanticRecall: privateOwner.semanticRecall } : {}), ...(privateOwner?.memorySelection ? { memorySelection: privateOwner.memorySelection } : {}), ...(privateOwner?.memoryUsed ? { memoryUsed: privateOwner.memoryUsed } : {}), ...(privateOwner?.turnCharts ? { turnCharts: privateOwner.turnCharts } : {}), ...(privateOwner?.memoryValidity ? { memoryValidity: true } : {}), ...(privateOwner?.machineTime ? { machineTime: privateOwner.machineTime } : {}), ...(privateOwner?.jobOutcomeRows ? { jobOutcomeRows: true } : {}), ...(privateOwner?.leanScheduled ? { leanScheduled: true } : {}), ...(privateOwner?.dayCards ? { dayCards: privateOwner.dayCards } : {}), ...(privateOwner?.promotedTools ? { promotedTools: privateOwner.promotedTools } : {}), ...(privateOwner?.noteLoaded ? { noteLoaded: privateOwner.noteLoaded } : {}), ...(privateOwner?.waldoSent ? { waldoSent: privateOwner.waldoSent } : {}) });
+    const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, privateRunScope, privateSystemSkills, scopedOwner('job', privateOwner, { context: jobContext, ...(jobSkills ? { skills: jobSkills } : {}) }));
     control.route(scoped.control);
     try { return await work(scoped); }
     finally { control.unroute(scoped.control); }
@@ -1245,7 +1275,7 @@ export const createOwnerResponder = (
     async compactChain(trace, jobContext, scope) {
       if (privateRunScope !== scope) {
         if (!privateOwner?.history) return;
-        const job = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, scope, privateSystemSkills, { context: jobContext, history: privateOwner.history, ...(privateOwner.compactionFlush ? { compactionFlush: privateOwner.compactionFlush } : {}), ...(privateOwner.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}), ...(privateOwner.timelineSeed ? { timelineSeed: privateOwner.timelineSeed } : {}) });
+        const job = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, scope, privateSystemSkills, scopedOwner('compaction', privateOwner, { context: jobContext }));
         return job.compactChain!(trace, jobContext, scope);
       }
       traceId = trace;
@@ -1257,7 +1287,7 @@ export const createOwnerResponder = (
         const capturedTurn = { ...turn, memoryWrites };
         const preparedContext = privateOwner?.contextHost ? await privateOwner.contextHost.prepare(capturedTurn, turn.runScope) : undefined;
         const preparedSkills = privateOwner?.skillHost ? await privateOwner.skillHost.prepare(capturedTurn, preparedContext?.invocation.verified_authority.principal_ref ?? ownerId, turn.runScope) : undefined;
-        const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}), ...(privateOwner?.skillHost ? { skillHost: privateOwner.skillHost } : {}), ...(privateOwner?.contextHost ? { contextHost: privateOwner.contextHost } : {}), ...(privateOwner?.history ? {history:privateOwner.history} : {}), ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}), ...(privateOwner?.watchStatus ? { watchStatus: privateOwner.watchStatus } : {}), ...(privateOwner?.connectors ? { connectors: privateOwner.connectors } : {}), ...(privateOwner?.dayCards ? { dayCards: privateOwner.dayCards } : {}), ...(privateOwner?.compactionFlush ? { compactionFlush: privateOwner.compactionFlush } : {}), ...(privateOwner?.memoryNotice ? { memoryNotice: privateOwner.memoryNotice } : {}), ...(privateOwner?.newerOwnerInput ? { newerOwnerInput: privateOwner.newerOwnerInput } : {}), ...(privateOwner?.newerOwnerMessages ? { newerOwnerMessages: privateOwner.newerOwnerMessages } : {}), ...(privateOwner?.finishedTasks ? { finishedTasks: privateOwner.finishedTasks } : {}), ...(privateOwner?.asyncTools ? { asyncTools: true } : {}), ...(privateOwner?.lightChat ? { lightChat: true } : {}), ...(privateOwner?.lightRoles ? { lightRoles: privateOwner.lightRoles } : {}), ...(privateOwner?.spend ? { spend: privateOwner.spend } : {}), ...(privateOwner?.forgetBarrier ? { forgetBarrier: privateOwner.forgetBarrier } : {}), ...(privateOwner?.forgetPass ? { forgetPass: privateOwner.forgetPass } : {}), ...(privateOwner?.loopIsSourceBound ? { loopIsSourceBound: privateOwner.loopIsSourceBound } : {}), ...(privateOwner?.loopHasPassed ? { loopHasPassed: privateOwner.loopHasPassed } : {}), ...(privateOwner?.profileView ? { profileView: true } : {}), ...(privateOwner?.semanticRecall ? { semanticRecall: privateOwner.semanticRecall } : {}), ...(privateOwner?.memorySelection ? { memorySelection: privateOwner.memorySelection } : {}), ...(privateOwner?.memoryUsed ? { memoryUsed: privateOwner.memoryUsed } : {}), ...(privateOwner?.turnCharts ? { turnCharts: privateOwner.turnCharts } : {}), ...(privateOwner?.memoryValidity ? { memoryValidity: true } : {}) });
+        const scoped = createOwnerResponder(modelAccess, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, auxiliaryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills, scopedOwner('chat', privateOwner, { ...(preparedSkills ? { skills: preparedSkills } : {}), ...(preparedContext ? { context: preparedContext } : {}) }));
         control.route(scoped.control);
         scopedCompaction = scoped.compactIfDue;
         try { return await scoped.respond(capturedTurn, time); }
