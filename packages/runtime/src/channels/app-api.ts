@@ -1,10 +1,10 @@
 import { isHealthChart, type ConversationEntry, type ConversationHealthChart } from '@waldo/contracts';
 import { iMessageSendUrl } from './imessage/send-url';
 import { appUploadHeaders } from './app-uploads';
-import { APP_CHAT_UPLOAD_KIND_HEADER, APP_CHAT_UPLOAD_MAX_BYTES, APP_CHAT_UPLOAD_NAME_HEADER, APP_CHAT_UPLOAD_PATH, APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appAuthOptionsV1Schema, appCodeRequestSchema, appContractHeaderV1Schema, appIdTokenRequestV1Schema, appIMessageLinkCodeV1Schema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
+import { APP_CHAT_UPLOAD_KIND_HEADER, APP_CHAT_UPLOAD_MAX_BYTES, APP_CHAT_UPLOAD_NAME_HEADER, APP_CHAT_UPLOAD_PATH, APP_CONTRACT_HEADER, APP_DEVICE_TIMEZONE_PATH, APP_SEND_MAX_WIRE_BYTES, appAuthOptionsV1Schema, appContractRevision, appJoinRequestV1Schema, appCodeRequestSchema, appContractHeaderV1Schema, appIdTokenRequestV1Schema, appIMessageLinkCodeV1Schema, appVerifyRequestV1Schema, appSendRequestV1Schema, appSessionV1Schema, type AppMessageV1 } from '../../../contracts/src/app/core';
 import type { AppApprovalCards } from './approvals';
 import { appQuickRepliesPart } from './surfaces/app';
-import { consoleAuth, sessionFamily, signedInRecently, type ConsoleAuth } from '../identity/console-auth';
+import { consoleAuth, sessionFamily, signedInRecently, type ConsoleAuth, type EmailSignIn } from '../identity/console-auth';
 import { readOwnerDemand } from '../health/calendar-demand-route';
 import { notifyOwnerHealthSamples, notifyOwnerPlaceArrived, notifyOwnerPlaceMoved, notifyOwnerZoneChange, type ArrivalPlace } from '../health/zone-change-route';
 import { wakeFreshMs } from '../health/wake-notice';
@@ -25,10 +25,10 @@ import { appDeviceMutationResultV1Schema, appDeviceRegisterV1Schema, appDeviceRe
 import { APP_ONBOARDING_PATHS } from './app-onboarding';
 import { APP_PROVIDERS_PATH, handleAppHealthProviders } from '../health/providers/app-providers';
 import { fenceSession } from './session-fence';
-import { CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS, CONSOLE_OTP_SEND_LIMIT, CONSOLE_OTP_VERIFY_LIMIT } from './console-signin';
+import { CONSOLE_AUTH_WINDOW_SECONDS, CONSOLE_OTP_SEND_LIMIT, CONSOLE_OTP_VERIFY_LIMIT } from './console-signin';
 import { publicOrigin, type PublicOriginEnv } from '../connectors/public-origin';
 import { APP_RATING_SUFFIX } from './app-rating';
-import { openSignupCaps, openSignupFor, type OpenSignupEnv } from '../identity/open-signup';
+import { openSignupFor, openSignupOn, type OpenSignupEnv } from '../identity/open-signup';
 import { markOpenOwner } from '../identity/open-owner-hold';
 import { APP_DEVICE_CALENDAR_PATH } from './device-calendar';
 import { DEVICE_CALENDAR_MAX_REQUEST_BYTES_V1 } from '../../../contracts/src/app/device-context';
@@ -44,6 +44,7 @@ export const APP_AUTONOMY_PATH = `${APP_PATH}/autonomy`;
 export const APP_AUTONOMY_CHANGES_PATH = `${APP_AUTONOMY_PATH}/changes`;
 export const APP_DEVICES_PATH = `${APP_PATH}/devices`;
 const MAX_BODY_BYTES = 8192;
+const authRevision = (request: Request) => appContractRevision(request.headers.get(APP_CONTRACT_HEADER), 'auth');
 
 // APP_ID_TOKEN_SIGNIN "1" serves Sign in with Apple and Google; otherwise the route answers 404 and the app offers the email code.
 type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_SCORE_PARTS?: string; HEALTH_USUAL?: string; HEALTH_DAY_LOAD?: string; HEALTH_PASSIVE_LOAD?: string; HEALTH_STRESS_CURVE?: string; HEALTH_FORM_CURVE?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string; DEVICE_PLACE?: string; DEVICE_CALENDAR?: string; WAKE_BRIEF?: string; WAKE_BRIEF_FRESH_MIN?: string; APP_CHAT_ATTACHMENTS?: string; WORKOUT_WAKE?: string; ARRIVAL_LOOK?: string }>;
@@ -52,6 +53,14 @@ const UPLOAD_READ_MS = 60_000;
 // Errors before authentication share one shape so the app cannot learn who is invited.
 const fail = (status: 401 | 403 | 404 | 405 | 413 | 429 | 503) => Response.json({ error: 'unavailable' }, { status, headers: { 'cache-control': 'no-store', ...(status === 429 ? { 'retry-after': '60' } : {}) } });
 const ok = (body: object, status = 200) => Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
+// An auth refusal named by its own error (appAuthErrorV1Schema), so the app can say what happened.
+const refuse = (status: 403 | 429, error: 'invalid_request' | 'signup_closed' | 'rate_limited' | 'token_refused' | 'no_email' | 'ticket_invalid') =>
+  Response.json({ error }, { status, headers: { 'cache-control': 'no-store', ...(status === 429 ? { 'retry-after': '60' } : {}) } });
+// App sign-in attempts from one network address in CONSOLE_AUTH_WINDOW_SECONDS, across code, verify, id_token and join. A cohort
+// signs up together from one network (a gym's members on its Wi-Fi): 60 people at about 4 calls each in one 15-minute window is
+// 240, so 400 leaves room for retries. Each email keeps its own tighter limits, which are what stop a code being guessed. Kept
+// under its own key, apart from the console's 30.
+export const APP_AUTH_IP_LIMIT = 400;
 
 const readJson = async (request: Request): Promise<Record<string, unknown> | null> => {
   if (!(request.headers.get('content-type') ?? '').toLowerCase().startsWith('application/json')) return null;
@@ -112,7 +121,7 @@ const authenticate = async (request: Request, auth: ConsoleAuth): Promise<{ doNa
 };
 
 // An identity token is keyed by its digest: the throttle table keeps its keys.
-const admit = async (env: AppEnv, auth: ConsoleAuth, request: Request, kind: 'send' | 'verify' | 'id_token', address: string): Promise<'ok' | 'limited' | 'unavailable'> => {
+const admit = async (env: AppEnv, auth: ConsoleAuth, request: Request, kind: 'send' | 'verify' | 'id_token' | 'join', address: string): Promise<'ok' | 'limited' | 'unavailable'> => {
   if (!env.RESPONSIBILITY_RATE_LIMITER) return 'unavailable';
   const ip = request.headers.get('cf-connecting-ip') ?? 'unknown';
   try {
@@ -120,7 +129,7 @@ const admit = async (env: AppEnv, auth: ConsoleAuth, request: Request, kind: 'se
     const edgeIp = (await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-${kind}-ip:${ip}` })).success;
     if (!edgeEmail || !edgeIp) return 'limited';
     const limit = kind === 'send' ? CONSOLE_OTP_SEND_LIMIT : CONSOLE_OTP_VERIFY_LIMIT;
-    const durable = (await auth.throttle(`${kind}:${address}`, limit, CONSOLE_AUTH_WINDOW_SECONDS)) && (await auth.throttle(`ip:${ip}`, CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS));
+    const durable = (await auth.throttle(`${kind}:${address}`, limit, CONSOLE_AUTH_WINDOW_SECONDS)) && (await auth.throttle(`app-ip:${ip}`, APP_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS));
     return durable ? 'ok' : 'limited';
   } catch { return 'unavailable'; }
 };
@@ -205,21 +214,22 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     if (request.method !== 'GET') return fail(405);
     if (!env.RESPONSIBILITY_RATE_LIMITER) return fail(503);
     try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-options-ip:${request.headers.get('cf-connecting-ip') ?? 'unknown'}` })).success) return fail(429); } catch { return fail(503); }
-    return ok(appAuthOptionsV1Schema.parse({ open_signup: openSignupCaps(env) !== null }));
+    return ok(appAuthOptionsV1Schema.parse({ open_signup: openSignupOn(env) }));
   }
 
   if (url.pathname === `${APP_PATH}/auth/code`) {
     if (request.method !== 'POST') return fail(405);
     const body = await readJson(request);
     const email = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : '';
-    if (!appCodeRequestSchema.safeParse(body).success) return fail(403);
+    if (!appCodeRequestSchema.safeParse(body).success) return refuse(403, 'invalid_request');
     const gate = await admit(env, auth, request, 'send', email);
-    if (gate === 'limited') return fail(429);
+    if (gate === 'limited') return refuse(429, 'rate_limited');
     if (gate === 'unavailable') return fail(503);
-    // Unknown addresses get the same answer; sendCode itself only emails members, holders of a matching invite and, with
-    // open sign-up, anyone while a join could still fit.
-    try { await auth.sendCode(email, typeof body?.invite === 'string' ? body.invite : '', openSignupFor(env, request)); } catch { return fail(503); }
-    return ok({ ok: true });
+    // ok only when a code went out. With open sign-up every address gets one; without it, only members and holders of a matching
+    // invite do, so the refusal tells an address it has no account, which only a closed server ever says.
+    let sent: boolean;
+    try { sent = await auth.sendCode(email, typeof body?.invite === 'string' ? body.invite : '', openSignupFor(env, request)); } catch { return fail(503); }
+    return sent ? ok({ ok: true }) : refuse(403, 'signup_closed');
   }
 
   if (url.pathname === `${APP_PATH}/auth/verify`) {
@@ -227,32 +237,38 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     const body = await readJson(request);
     const email = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : '';
     const code = typeof body?.code === 'string' ? body.code.trim() : '';
-    if (!appVerifyRequestV1Schema.safeParse(body).success) return fail(403);
+    if (!appVerifyRequestV1Schema.safeParse(body).success) return refuse(403, 'invalid_request');
     const gate = await admit(env, auth, request, 'verify', email);
-    if (gate === 'limited') return fail(429);
+    if (gate === 'limited') return refuse(429, 'rate_limited');
     if (gate === 'unavailable') return fail(503);
-    let doName: string | null;
-    try { doName = await auth.verifyOrJoin(email, code, typeof body?.invite === 'string' ? body.invite : '', typeof body?.phone === 'string' ? body.phone : '', typeof body?.link === 'string' ? body.link : '', openSignupFor(env, request)); } catch { return fail(503); }
-    if (!doName) return ok({ state: 'needs_invite' });
-    return appSignIn(env, auth, doName);
+    const invite = typeof body?.invite === 'string' ? body.invite : '', phone = typeof body?.phone === 'string' ? body.phone : '', link = typeof body?.link === 'string' ? body.link : '';
+    const open = openSignupFor(env, request), confirmNew = authRevision(request) >= 2;
+    let signedIn: EmailSignIn;
+    try {
+      signedIn = auth.signInWithEmailCode ? await auth.signInWithEmailCode(email, code, { invite, phone, link, open, confirmNew })
+        : await auth.verifyOrJoin(email, code, invite, phone, link, open).then(doName => doName ? { state: 'owner', doName } as const : { state: 'code_invalid' } as const);
+    } catch { return fail(503); }
+    if (signedIn.state === 'owner') return appSignIn(env, auth, signedIn.doName);
+    return ok(confirmNew ? signedIn : { state: 'needs_invite' });
   }
 
   if (url.pathname === `${APP_PATH}/auth/id_token`) {
     if (env.APP_ID_TOKEN_SIGNIN !== '1' || !auth.signInWithIdToken) return fail(404);
     if (request.method !== 'POST') return fail(405);
     const asked = appIdTokenRequestV1Schema.safeParse(await readJson(request));
-    if (!asked.success) return fail(403);
+    if (!asked.success) return refuse(403, 'invalid_request');
     const { provider, id_token: token, nonce, invite, phone } = asked.data;
     const gate = await admit(env, auth, request, 'id_token', await sha256Hex(token));
-    if (gate === 'limited') return fail(429);
+    if (gate === 'limited') return refuse(429, 'rate_limited');
     if (gate === 'unavailable') return fail(503);
+    const confirmNew = authRevision(request) >= 2;
     let signedIn: Awaited<ReturnType<NonNullable<ConsoleAuth['signInWithIdToken']>>>;
-    try { signedIn = await auth.signInWithIdToken(provider, token, nonce ?? '', invite ?? '', phone ?? '', openSignupFor(env, request)); } catch { return fail(503); }
+    try { signedIn = await auth.signInWithIdToken(provider, token, nonce ?? '', invite ?? '', phone ?? '', openSignupFor(env, request), confirmNew); } catch { return fail(503); }
     if (signedIn.state === 'refused') {
       console.error(JSON.stringify({ hop: 'app_id_token', ok: false, code: signedIn.reason === 'token' ? 'id_token_refused' : 'id_token_no_email', provider }));
-      return fail(403);
+      return refuse(403, signedIn.reason === 'token' ? 'token_refused' : 'no_email');
     }
-    if (signedIn.state === 'needs_invite') return ok({ state: 'needs_invite' });
+    if (signedIn.state === 'needs_invite' || signedIn.state === 'join_refused' || signedIn.state === 'new_account') return ok(confirmNew && signedIn.state !== 'needs_invite' ? signedIn : { state: 'needs_invite' });
     if (signedIn.state === 'confirm') {
       // Each confirm emails the owner, so it spends the same per-address send budget as /auth/code.
       const sending = await admit(env, auth, request, 'send', signedIn.email);
@@ -262,6 +278,22 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
       return ok({ state: 'confirm_with_email_code', email: signedIn.email, link: signedIn.link });
     }
     return appSignIn(env, auth, signedIn.doName);
+  }
+
+  // The yes to new_account. The ticket names the person, so its digest is the per-person key, as the token's is for id_token.
+  if (url.pathname === `${APP_PATH}/auth/join`) {
+    if (!auth.joinWithTicket) return fail(404);
+    if (request.method !== 'POST') return fail(405);
+    const asked = appJoinRequestV1Schema.safeParse(await readJson(request));
+    if (!asked.success) return refuse(403, 'invalid_request');
+    const gate = await admit(env, auth, request, 'join', await sha256Hex(asked.data.ticket));
+    if (gate === 'limited') return refuse(429, 'rate_limited');
+    if (gate === 'unavailable') return fail(503);
+    let joined: Awaited<ReturnType<NonNullable<ConsoleAuth['joinWithTicket']>>>;
+    try { joined = await auth.joinWithTicket(asked.data.ticket, asked.data.phone ?? '', openSignupFor(env, request)); } catch { return fail(503); }
+    if (joined.state === 'ticket_invalid') return refuse(403, 'ticket_invalid');
+    if (joined.state === 'join_refused') return ok(joined);
+    return appSignIn(env, auth, joined.doName);
   }
 
   const who = await authenticate(request, auth);
@@ -392,7 +424,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     return appToday((path, signal) => owner.fetch(new Request(`https://telegram-owner${path}`, { headers, signal })));
   }
 
-  if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === APP_THREADS_PATH || url.pathname.startsWith(`${APP_THREADS_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`) || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_APPROVAL_DECISIONS_PATH || url.pathname === APP_AUTONOMY_PATH || url.pathname === APP_AUTONOMY_CHANGES_PATH || url.pathname === APP_CALENDAR_DAY_PATH || url.pathname === APP_CALENDAR_PROPOSALS_PATH || url.pathname.startsWith(`${APP_GOOGLE_PICTURE_PATH_V1}/`) || onboarding) {
+  if (url.pathname === APP_CHAT_PATH || url.pathname === APP_CHAT_SEND_PATH || url.pathname.startsWith(`${APP_CHAT_SEND_PATH}/`) || url.pathname === APP_THREADS_PATH || url.pathname.startsWith(`${APP_THREADS_PATH}/`) || url.pathname === `${APP_PATH}/controls` || url.pathname === `${APP_PATH}/actions` || url.pathname.startsWith(`${APP_PATH}/actions/`) || (url.pathname === APP_DEVICE_TIMEZONE_PATH && request.method === 'POST') || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_APPROVAL_DECISIONS_PATH || url.pathname === APP_AUTONOMY_PATH || url.pathname === APP_AUTONOMY_CHANGES_PATH || url.pathname === APP_CALENDAR_DAY_PATH || url.pathname === APP_CALENDAR_PROPOSALS_PATH || url.pathname.startsWith(`${APP_GOOGLE_PICTURE_PATH_V1}/`) || onboarding) {
     const sending = url.pathname === APP_CHAT_SEND_PATH;
     if ((rating ? request.method !== 'PUT' : !['GET', 'POST'].includes(request.method)) || ((url.pathname === APP_CHAT_PATH || url.pathname === APP_APPROVALS_PATH || url.pathname === APP_AUTONOMY_PATH || url.pathname === APP_CALENDAR_DAY_PATH) && request.method !== 'GET') || ((sending || url.pathname === APP_APPROVAL_DECISIONS_PATH || url.pathname === APP_AUTONOMY_CHANGES_PATH || url.pathname === APP_CALENDAR_PROPOSALS_PATH) && request.method !== 'POST')) return fail(405);
     const mutating = request.method === 'POST' || request.method === 'PUT';

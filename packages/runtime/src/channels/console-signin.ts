@@ -213,8 +213,8 @@ const page = (body: string, status = 200) => new Response(
 );
 const DAY_MS = 24 * 60 * 60_000;
 const staysSignedIn = `<p class="help">You stay signed in on this browser for up to ${CONSOLE_SESSION_LIFETIME_MS / DAY_MS} days while you keep using it, and sign in again after ${CONSOLE_SESSION_IDLE_MS / DAY_MS} days away. On a shared computer, sign out when you finish.</p>`;
-// Sign-in is for members. A new member joins through the invite signup, which spends the invite.
-const joinLink = `<p class="help">New to Waldo? <a href="${CONSOLE_SIGNUP_PATH}">Join with your invite</a>.</p>`;
+// Sign-in is for members. A new account starts in the app.
+const joinLink = `<p class="help">New to Waldo? <a href="${CONSOLE_SIGNUP_PATH}">Get started in the app</a>.</p>`;
 // Confirm mode is the step-up before an action that creates lasting access: the same email code, in a browser that stays
 // signed in, back to the page the owner came from.
 const confirmIntro = `<h1>Confirm it's you</h1><p>Pairing a Mac, linking a chat, connecting an account or tool, letting a tool run without asking, inviting someone and deleting your account need an email code from the last ${CONSOLE_STEP_UP_MS / 3_600_000} hours. Enter your email and Waldo sends you one; this browser stays signed in.</p>`;
@@ -225,7 +225,7 @@ const signinEmailForm = (note = '', email = '', target: string | null = null, co
 const linkField = (link: string | null) => link ? `<input type="hidden" name="link" value="${esc(link)}">` : '';
 const signinCodeForm = (email: string, note = '', target: string | null = null, link: string | null = null) => page(`<form method="post" action="${CONSOLE_VERIFY_PATH}" data-pending="Checking your code…">${returnField(target)}${linkField(link)}<h1>Check your email</h1><p role="status">${note ? esc(note) : `If ${esc(email)} belongs to a Waldo member, a sign-in code was requested for it. It can take a minute to arrive; check spam too.`}</p><input type="hidden" name="email" value="${esc(email)}"><label for="signin-code">Email sign-in code</label><input id="signin-code" name="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="Code from the email"><button>Sign in</button></form><form method="post" action="${CONSOLE_SIGNIN_PATH}" data-pending="Requesting an email code…">${returnField(target)}${linkField(link)}<input type="hidden" name="email" value="${esc(email)}"><button id="signin-resend" class="secondary">Send a new code</button></form><form method="post" action="${CONSOLE_SIGNIN_PATH}" data-pending="Opening your details…">${returnField(target)}<input type="hidden" name="intent" value="edit"><input type="hidden" name="email" value="${esc(email)}"><button class="secondary">Use a different email</button></form>${joinLink}`);
 
-// With Supabase configured, the console signs in by email code (invite-required for new members) and a signed owner cookie picks the owner DO.
+// With Supabase configured, the console signs in by email code (new accounts start in the app) and a signed owner cookie picks the owner DO.
 // Returns null when Supabase is not configured; the caller keeps the Telegram one-time link sign-in.
 export const handleConsole = async (request: Request, env: ConsoleEnv, auth: ConsoleAuth | null = consoleAuth(env), requestTrace: string = consoleTrace()): Promise<Response | null> => {
   if (new URL(request.url).pathname === CONSOLE_SIGNUP_PATH || new URL(request.url).pathname.startsWith(`${CONSOLE_SIGNUP_PATH}/`)) return withConsoleTrace(await handleSignup(request, env, auth, undefined, requestTrace), requestTrace);
@@ -302,7 +302,7 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
     catch { return back('verification_unavailable', 'Sign-in is temporarily unavailable. Try again shortly.'); }
     if (signedIn.state === 'refused') return back(signedIn.reason === 'token' ? 'code_refused' : 'no_email', 'Google did not confirm that sign-in. Try again, or use an email code.');
     // The person proved they hold this Google address, so saying it has no account tells them only about themselves.
-    if (signedIn.state === 'needs_invite') return back('not_member', 'No Waldo account uses that Google address. Sign in with the email you were invited with, or join with your invite.');
+    if (signedIn.state === 'needs_invite' || signedIn.state === 'join_refused' || signedIn.state === 'new_account') return back('not_member', 'No Waldo account uses that Google address. Sign in with the email your Waldo account uses, or create an account in the Waldo app.');
     if (signedIn.state === 'confirm') {
       // A Google account this owner has never signed in with: the mailbox confirms it before anything is signed in.
       let sent = false;

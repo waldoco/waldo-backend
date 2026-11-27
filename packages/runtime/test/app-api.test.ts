@@ -34,12 +34,12 @@ describe('app sign-in and main chat routes', () => {
   it('ignores paths outside /app/v1', async () => {
     expect(await handleApp(new Request('https://w.test/console'), env(), fakeAuth().auth)).toBeNull();
   });
-  it('answers a code request the same for invited and unknown addresses', async () => {
+  it('answers ok only when a code was sent, and names the refusal when none was', async () => {
     const { auth } = fakeAuth();
     const known = await handleApp(post('/app/v1/auth/code', { email: 'member@example.test' }), env(), auth);
     const unknown = await handleApp(post('/app/v1/auth/code', { email: 'stranger@example.test' }), env(), auth);
     expect([known!.status, await known!.json()]).toEqual([200, { ok: true }]);
-    expect([unknown!.status, await unknown!.json()]).toEqual([200, { ok: true }]);
+    expect([unknown!.status, await unknown!.json()]).toEqual([403, { error: 'signup_closed' }]);
   });
   it('verifies a code into the console session artifact and labels the surface app', async () => {
     const response = await handleApp(post('/app/v1/auth/verify', { email: 'member@example.test', code: '123456' }), env(), fakeAuth().auth);

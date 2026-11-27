@@ -114,7 +114,7 @@ export const LINK_REPLIES = {
 export const enrolledReply = (url: string) =>
   `Hi, I'm Waldo. This number is set up for your Waldo account but not linked yet. Open ${url} and tap Open Messages to finish.`;
 export const onboardingReply = (url: string) =>
-  `Hi, I'm Waldo. This number only talks to people with their own Waldo. To get yours, join here: ${url} - already have one? Text waldo followed by the code from your Waldo console.`;
+  `Hi, I'm Waldo. This number only talks to people with their own Waldo. To get yours, get the Waldo app: ${url} - already have one? Text waldo followed by the code from your Waldo console.`;
 const onboardingUrl = (raw: string | undefined): string | null => {
   try { const u = new URL(raw ?? ''); return u.protocol === 'https:' && !u.username && !u.password ? u.toString() : null; } catch { return null; }
 };

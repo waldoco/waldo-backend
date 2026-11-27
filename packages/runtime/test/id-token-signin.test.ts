@@ -315,21 +315,21 @@ describe('app sign-in with an Apple or Google identity token', () => {
     const memberAuth = state.owners.get(MEMBER)!.auth;
     const attacker = token({ provider: 'google', sub: 'attacker-sub', email: MEMBER, verified: false });
     for (const body of [google(attacker), google(attacker, { invite: INVITE })])
-      expect(await app('/auth/id_token', body)).toEqual({ status: 403, body: { error: 'unavailable' } });
+      expect(await app('/auth/id_token', body)).toEqual({ status: 403, body: { error: 'no_email' } });
     expect(state.owners.get(MEMBER)).toEqual({ auth: memberAuth, doName });
     expect(state.identities.get('google:attacker-sub')?.user).not.toBe(memberAuth);
     expect(state.lookups).toEqual([]);
     expect(state.otp).toEqual([]);
   });
 
-  it('answers the generic 403 when Supabase refuses the token, and logs neither the token nor Supabase\'s answer', async () => {
+  it('answers 403 token_refused when Supabase refuses the token, and logs neither the token nor Supabase\'s answer', async () => {
     const { app, state, token } = await supabase();
     const wrongAudience = token({ provider: 'google', email: INVITED, audience: 'other' });
     const otherNonce = token({ provider: 'apple', email: INVITED, nonce: await hex('another-raw-nonce-000000') });
     const logs = captureLogs();
     try {
       for (const body of [google(wrongAudience, { invite: INVITE }), apple(otherNonce, { invite: INVITE }), google('unknown.issuer.token'), apple(token({ provider: 'google', email: INVITED }))]) {
-        expect({ body, answer: await app('/auth/id_token', body) }).toEqual({ body, answer: { status: 403, body: { error: 'unavailable' } } });
+        expect({ body, answer: await app('/auth/id_token', body) }).toEqual({ body, answer: { status: 403, body: { error: 'token_refused' } } });
       }
     } finally { logs.restore(); }
     expect(state.lookups).toEqual([]);
@@ -340,15 +340,15 @@ describe('app sign-in with an Apple or Google identity token', () => {
     }
   });
 
-  it('answers the generic 403 for a token with no email, an unconfirmed one, or no usable subject, before any owner lookup', async () => {
+  it('answers 403 no_email for a token with no email or an unconfirmed one, and token_refused for no usable subject, before any owner lookup', async () => {
     const { app, state, token } = await supabase();
     const noSubject = `fixture.${base64url(new TextEncoder().encode('{"n":0}'))}.signature`;
     state.tokens.set(noSubject, { provider: 'google', email: INVITED, sub: 'kept-by-supabase' });
     const logs = captureLogs();
     try {
-      expect(await app('/auth/id_token', apple(token({ provider: 'apple', email: '' }), { invite: INVITE }))).toEqual({ status: 403, body: { error: 'unavailable' } });
-      expect(await app('/auth/id_token', google(token({ provider: 'google', email: INVITED, verified: false }), { invite: INVITE }))).toEqual({ status: 403, body: { error: 'unavailable' } });
-      expect(await app('/auth/id_token', google(noSubject, { invite: INVITE }))).toEqual({ status: 403, body: { error: 'unavailable' } });
+      expect(await app('/auth/id_token', apple(token({ provider: 'apple', email: '' }), { invite: INVITE }))).toEqual({ status: 403, body: { error: 'no_email' } });
+      expect(await app('/auth/id_token', google(token({ provider: 'google', email: INVITED, verified: false }), { invite: INVITE }))).toEqual({ status: 403, body: { error: 'no_email' } });
+      expect(await app('/auth/id_token', google(noSubject, { invite: INVITE }))).toEqual({ status: 403, body: { error: 'token_refused' } });
     } finally { logs.restore(); }
     expect(logs.lines.map(line => JSON.parse(line).code)).toEqual(['id_token_no_email', 'id_token_no_email', 'id_token_refused']);
     expect(state.lookups).toEqual([]);
@@ -397,7 +397,7 @@ describe('app sign-in with an Apple or Google identity token', () => {
     limited.value = false;
     await app('/auth/id_token', google(jwt, { invite: INVITE }));
     const keys = () => fetcher.mock.calls.map(([, init]) => JSON.parse(String(init?.body)).p_key).filter(Boolean);
-    expect(keys()).toEqual([`id_token:${await hex(jwt)}`, 'ip:unknown']);
+    expect(keys()).toEqual([`id_token:${await hex(jwt)}`, 'app-ip:unknown']);
     await member();
     state.denySend = true;
     expect((await app('/auth/id_token', google(token({ provider: 'google', email: MEMBER })))).status).toBe(429);

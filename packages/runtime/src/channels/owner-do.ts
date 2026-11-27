@@ -4,6 +4,7 @@ import { deliveredLately } from './scheduled-run';
 import { appGooglePicture, googlePictures } from './app-google-picture';
 import { wearablesCatalogue } from '../health/wearables';
 import { APP_ONBOARDING_PATHS, appOnboardingRequest, ownerOnboardingHost } from './app-onboarding';
+import { DEVICE_ZONE_MADE, ZONE_SOURCE_KEY, deviceZoneAnswer, deviceZoneApplies, zoneState, type ZoneSource } from './zone-source';
 import { APP_RATING_SUFFIX, appRatingRequest, replyRatings } from './app-rating';
 import { memoryUsedBook, memoryUsedFor } from './app-memory-used';
 import { outsideSafe } from '../memory/outside-view';
@@ -262,7 +263,7 @@ import { approvalHandlers, approveShownHandler } from '../tools/live/raise-appro
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi, telegramReplyDraft } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
-import { APP_CHAT_CHART_REVISION, APP_CHAT_HEALTH_CHART_REVISION, APP_CHAT_MEMORY_USED_REVISION, APP_CHAT_RATING_REVISION, APP_CHAT_UPLOAD_MAX_BYTES, APP_CHAT_UPLOAD_PATH, APP_CONTRACT_HEADER, appChatUploadResultV1Schema, appContractRevision } from '../../../contracts/src/app/core';
+import { APP_CHAT_CHART_REVISION, APP_CHAT_HEALTH_CHART_REVISION, APP_CHAT_MEMORY_USED_REVISION, APP_CHAT_RATING_REVISION, APP_CHAT_UPLOAD_MAX_BYTES, APP_CHAT_UPLOAD_PATH, APP_CONTRACT_HEADER, APP_DEVICE_TIMEZONE_PATH, appChatUploadResultV1Schema, appContractRevision, appDeviceTimezoneRequestV1Schema, appDeviceTimezoneResultV1Schema } from '../../../contracts/src/app/core';
 import { APP_AUTONOMY_PATH, APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, APP_UPDATE_BASE, appSubjectFor, appTranscriptPage, appTranscriptPageRead, appTranscriptPageRows, ownerPrincipalRef, parseAppSend } from './app-api';
 import { appThreadsRequest, askThreadTitle, nameThread, recallReach, redactThreadTitles, threadChainRef, threadOfChain, threadRecord, threadRowsOfChain, threadRowsPrefix, touchThread, type AppThreadsHost } from './app-threads';
 import { stableJson } from '../context-composer/canonical';
@@ -2085,6 +2086,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const origin=request.headers.get('x-waldo-app-origin');if(origin)this.ctx.storage.kv.put('origin',origin);
     // An owner who joined openly writes nothing outside the first run and the consents until they accept the agreements.
     if(request.method!=='GET'&&!APP_ONBOARDING_PATHS.includes(path)&&await this.openHold().held())return Response.json({error:'agreements_required'},{status:409,headers:{'cache-control':'no-store'}});
+    if(path===APP_DEVICE_TIMEZONE_PATH)return request.method==='POST'?this.serial(()=>this.deviceZone(request,async()=>{await this.appAuthority(name,hash);})):fail(405);
     if(path===APP_CHAT_SEND_PATH&&request.method==='POST')return this.appSend(request,authority.ownerId);
     if(path===APP_DEVICE_CALENDAR_PATH||path.startsWith(APP_DEVICE_CALENDAR_PATH+'/'))return this.env.DEVICE_CALENDAR==='1'?deviceCalendarRequest(request,this.deviceCalendar(),work=>this.ctx.storage.transactionSync(work)):fail(404);
     if(path===APP_CHAT_UPLOAD_PATH&&request.method==='POST')return this.appUpload(request,name);
@@ -3074,6 +3076,19 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const { kv } = this.ctx.storage;
     kv.put('telegram_unlinked', true);
     kv.put('telegram_link_epoch', (kv.get<number>('telegram_link_epoch') ?? 0) + 1);
+  }
+
+  // The phone's own zone (zone-source.ts). It goes through the owner's own timezone.set, marked as the phone's, so the directory
+  // keeps it first and the owner's jobs re-arm on it; a zone the owner chose is answered back unchanged.
+  private async deviceZone(request: Request, current: () => Promise<void>): Promise<Response> {
+    const reply = (body: object, status = 200) => Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
+    const asked = appDeviceTimezoneRequestV1Schema.safeParse(await request.json().catch(() => null));
+    const zone = asked.success ? ianaZone(asked.data.timezone) : null;
+    if (!zone) return reply({ error: 'invalid_request' }, 400);
+    const before = zoneState(this.ctx.storage.kv);
+    if (deviceZoneApplies(before, zone) && (await this.setup('app').act({ action: 'timezone.set', id: '', value: zone, made: DEVICE_ZONE_MADE }, current)) !== true)
+      return reply({ error: 'unavailable' }, 503);
+    return reply(appDeviceTimezoneResultV1Schema.parse(deviceZoneAnswer(before, zoneState(this.ctx.storage.kv), zone)));
   }
 
   // The webhook names the Telegram subject and timezone it resolved for this owner; they outlive deploy variables.
@@ -5224,12 +5239,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // The owner's own time zone, from the console or from chat: the directory keeps it first, then this object applies it,
     // confirms it and re-arms the owner's jobs on it. Runtimes are rebuilt so values captured at build time follow the zone;
     // from inside a turn, the turn's own runtime is kept, since its stop and steer controls are reached through it.
-    const confirmZone = async (zone: string, now: number, assertCurrent?: () => Promise<void>, inTurn = false): Promise<string | null> => {
+    const confirmZone = async (zone: string, now: number, assertCurrent?: () => Promise<void>, inTurn = false, source: ZoneSource = 'owner'): Promise<string | null> => {
       const named = ianaZone(zone);
       if (!named || !(await saveSettings({ timezone: named, ...loops.proactivity() }))) return null;
       await assertCurrent?.();
       identity.put('timezone', named);
       identity.put('timezone_confirmed', true);
+      identity.put(ZONE_SOURCE_KEY, source);
       await armOwnJobs(named, now, true);
       const own = inTurn ? this.runtimes[channel] : undefined;
       this.runtimes = own ? { [channel]: own } : {};
@@ -7012,7 +7028,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           await assertCurrent?.();
           loops.setProactivity(parsed.data);
         } else if (action === 'timezone.set') {
-          if (!(await confirmZone(value ?? '', now, assertCurrent))) return false;
+          if (!(await confirmZone(value ?? '', now, assertCurrent, false, made === DEVICE_ZONE_MADE ? 'device' : 'owner'))) return false;
         } else if (action === 'spot.pin' || action === 'spot.unpin') {
           // The owner's pin goes at the end of its block; only the kinds the pinned blocks carry can be pinned.
           const claim = [...memory.claims(), ...memory.claims('promoted')].find((row) => row.id === spotId);

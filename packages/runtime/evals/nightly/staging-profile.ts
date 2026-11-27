@@ -169,8 +169,6 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   CONSOLE_GOOGLE_SIGNIN: inert('console sign-in'),
   APP_ID_TOKEN_SIGNIN: inert('app sign-in'),
   OPEN_SIGNUP: inert('app sign-up without an invite'),
-  OPEN_SIGNUP_DAILY_CAP: inert('app sign-up without an invite'),
-  OPEN_SIGNUP_TOTAL_CAP: inert('app sign-up without an invite'),
   OPEN_SIGNUP_SPEND_CEILING_USD: inert('applies only to an owner who joined without an invite; the trial owner is invited'),
   OWNER_SPEND_CEILING_USD: inert('the trial keeps no month of spend, so no ceiling is reached'),
   GMAIL_PUSH_PROJECT: inert('mail push subscription'),

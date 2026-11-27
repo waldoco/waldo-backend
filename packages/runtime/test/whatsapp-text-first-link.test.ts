@@ -20,18 +20,18 @@ const inbound = async (text: string, from = SENDER) => {
   const body = JSON.stringify({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'pn1' }, messages: [{ from, id: `wamid.${crypto.randomUUID()}`, timestamp: '1700000000', type: 'text', text: { body: text } }] } }] }] });
   return new Request('https://waldo.example/whatsapp/webhook', { method: 'POST', body, headers: { 'x-hub-signature-256': await sign(body) } });
 };
-const env = { OWNER_DO: {} as DurableObjectNamespace, WHATSAPP_APP_SECRET: SECRET, WHATSAPP_ACCESS_TOKEN: 'fictional-token', WHATSAPP_PHONE_NUMBER_ID: 'pn1', WHATSAPP_ONBOARDING_URL: 'https://www.heywaldo.in/waitlist' };
+const env = { OWNER_DO: {} as DurableObjectNamespace, WHATSAPP_APP_SECRET: SECRET, WHATSAPP_ACCESS_TOKEN: 'fictional-token', WHATSAPP_PHONE_NUMBER_ID: 'pn1', WHATSAPP_ONBOARDING_URL: 'https://get.waldo.example/app' };
 const unlinked: OwnerDirectory = { byPresence: async () => null, redeem: vi.fn(async () => null) };
 const links = (open: WhatsAppLinkDirectory['open']): WhatsAppLinkDirectory => ({ open: vi.fn(open), subject: vi.fn(async () => null), consume: vi.fn(async () => 'rejected' as const) });
 
-const run = async (request: Request, directory: OwnerDirectory, textFirst: WhatsAppTextFirst | null, graphReply = () => Response.json({ messages: [{ id: 'wamid.reply' }] })) => {
+const run = async (request: Request, directory: OwnerDirectory, textFirst: WhatsAppTextFirst | null, graphReply = () => Response.json({ messages: [{ id: 'wamid.reply' }] }), overrides: Partial<typeof env> = {}) => {
   const sent: { to: string; text: { body: string; preview_url?: boolean } }[] = [];
   const logs: string[] = [];
   const graph = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => { sent.push(JSON.parse(String(init?.body))); return graphReply(); });
   const log = vi.spyOn(console, 'log').mockImplementation((line: unknown) => { logs.push(String(line)); });
   const work: Promise<unknown>[] = [];
   try {
-    const response = await handleWhatsAppWebhook(request, env, (p) => work.push(p), directory, textFirst);
+    const response = await handleWhatsAppWebhook(request, { ...env, ...overrides }, (p) => work.push(p), directory, textFirst);
     await Promise.all(work);
     return { response, sent, logs };
   } finally { graph.mockRestore(); log.mockRestore(); }
@@ -55,14 +55,21 @@ describe('the reply to an unlinked sender', () => {
     expect(logs.join('\n')).not.toContain(token!);
   });
 
-  it('a sender no owner has on file gets the waitlist, never a sign-in link', async () => {
+  it('a sender no owner has on file is pointed at the app to make their own Waldo, never a sign-in link or an invite', async () => {
     const { sent } = await run(await inbound('hello?'), unlinked, { links: links(async () => 'waitlist'), throttle: async () => true });
     expect(sent).toHaveLength(1);
-    expect(sent[0]!.text.body).toContain('https://www.heywaldo.in/waitlist');
+    expect(sent[0]!.text.body).toContain('Get the Waldo app: https://get.waldo.example/app');
+    expect(sent[0]!.text.body).not.toMatch(/invite|waitlist/i);
     expect(sent[0]!.text.body).not.toContain('/console/whatsapp/link');
   });
 
-  it('a sender no single owner has on file is pointed at the console link flow as well as the waitlist', async () => {
+  it('with no app link configured, still says how to get Waldo, without a dead link', async () => {
+    const { sent } = await run(await inbound('hello?'), unlinked, { links: links(async () => 'waitlist'), throttle: async () => true }, undefined, { WHATSAPP_ONBOARDING_URL: '' });
+    expect(sent[0]!.text.body).toContain('Get the Waldo app on your phone');
+    expect(sent[0]!.text.body).not.toMatch(/invite|waitlist|https:\/\/[^\s]*app\b/i);
+  });
+
+  it('a sender no single owner has on file is pointed at the console link flow as well as the app', async () => {
     const { sent } = await run(await inbound('hi'), unlinked, { links: links(async () => 'waitlist'), throttle: async () => true });
     expect(sent[0]!.text.body).toContain('Already on Waldo?');
     expect(sent[0]!.text.body).toContain('https://waldo.example/console#/connections');

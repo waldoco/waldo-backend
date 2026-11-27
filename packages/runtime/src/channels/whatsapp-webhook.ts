@@ -13,7 +13,7 @@ export type WhatsAppWebhookEnv = PublicOriginEnv & Readonly<{
   WHATSAPP_APP_SECRET?: string;
   WHATSAPP_ACCESS_TOKEN?: string;
   WHATSAPP_PHONE_NUMBER_ID?: string;
-  // Where a sender with no Waldo account is sent (the waitlist). Unset, the reply carries no link.
+  // Where a sender with no Waldo account gets the app (its install page). Unset, the reply names the app without a link.
   WHATSAPP_ONBOARDING_URL?: string;
   // Waldo's own number, as E.164 digits: sent as a contact card after a link. Unset, no card is sent.
   WHATSAPP_WALDO_NUMBER?: string;
@@ -52,8 +52,8 @@ const textFirstReply = async (sender: string, origin: string, env: WhatsAppWebho
   if (opened === 'opened') return `Tap to link this WhatsApp number to your Waldo. You'll sign in and confirm the number; the link works once, for 10 minutes: ${whatsappLinkUrl(origin, token)}`;
   // pending: the link sent earlier still works, so the sender is not sent a second one.
   if (opened === 'linked' || opened === 'pending') return null;
-  const waitlist = /^https:\/\/[^\s]+$/.test(env.WHATSAPP_ONBOARDING_URL ?? '') ? ` Join the waitlist: ${env.WHATSAPP_ONBOARDING_URL}` : '';
-  return `Waldo is invite-only for now.${waitlist}\n\nAlready on Waldo? Link WhatsApp from your console: ${origin}${CONSOLE_PATH}#/connections. It gives you a code that opens this chat ready to send.`;
+  const app = /^https:\/\/[^\s]+$/.test(env.WHATSAPP_ONBOARDING_URL ?? '') ? `Get the Waldo app: ${env.WHATSAPP_ONBOARDING_URL}` : 'Get the Waldo app on your phone and sign up there.';
+  return `Hi, I'm Waldo. To have your own Waldo, start in the app. ${app}\n\nAlready on Waldo? Link WhatsApp from your console: ${origin}${CONSOLE_PATH}#/connections. It gives you a code that opens this chat ready to send.`;
 };
 
 // What a "waldo CODE" text is told. A refusal by the directory leaves the code unspent, so a link refused for its number can be
