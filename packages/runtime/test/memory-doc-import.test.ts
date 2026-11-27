@@ -8,6 +8,7 @@ import { claimStore, memoryPrompt } from '../src/memory/claims';
 import { DOC_IMPORT_PART_CHARS, importDoc, type DocImportDeps } from '../src/memory/doc-import';
 import { importedQuote, importSourceOf } from '../src/memory/import-ref';
 import { requestBook } from '../src/onboarding/request-book';
+import { appClaimActions, claimHeldAs } from '../src/channels/dashboard-memory-actions';
 import { dispatchTool } from '../src/tools/dispatcher';
 import { memoryHandlers, type MemoryToolContext } from '../src/tools/live/memory';
 import { sanitise } from '../src/scribe/sanitiser';
@@ -179,6 +180,20 @@ describe('the memory import route', () => {
     expect(failed.status).toBe(503);
     expect(await failed.text()).not.toContain('Pune');
     expect(t.calls).toHaveLength(1);
+  }));
+});
+
+describe('confirming what was imported', () => {
+  it('offers confirm on a claim kept from a pasted summary, and the owner\'s yes makes it their word', () => withStorage(async storage => {
+    const t = setup(storage, reply(GOOD));
+    await importDoc(t.deps, 'claude', SUMMARY);
+    const claim = t.store.claims().find(row => row.text === 'Runs a small design studio in Pune')!;
+    expect(claimHeldAs(claim)).toBe('waldo_thinks');
+    expect(appClaimActions(claim)).toContain('claim.confirm');
+    expect(t.store.ownerGround(claim.id, '2026-11-16T11:00:00Z', 'owner, app:claim.confirm')).toBe(true);
+    const confirmed = t.store.claims().find(row => row.id === claim.id)!;
+    expect(confirmed).toMatchObject({ origin: 'owner', verification_status: 'owner-grounded' });
+    expect(claimHeldAs(confirmed)).toBe('owner_said');
   }));
 });
 
