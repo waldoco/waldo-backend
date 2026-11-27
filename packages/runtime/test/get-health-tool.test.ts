@@ -427,9 +427,9 @@ describe('get_health: WHOOP', () => {
     const data = await read(['whoop_recovery']);
     expect(data.signals[0]).toMatchObject({ signal: 'whoop_recovery', source: 'whoop', unit: 'percent', calibrating: true, days: [{ day: '2026-10-10', value: null }, { day: '2026-10-11', value: 48 }, { day: '2026-10-12', value: 61 }] });
   });
-  it('reads the need, its debt part, day strain and that cycle\'s steps', async () => {
-    const data = await read(['whoop_sleep_need', 'whoop_sleep_debt', 'whoop_strain', 'whoop_cycle_steps']);
-    expect(data.signals.map(s => [s.signal, s.unit, s.days?.at(-1)?.value])).toEqual([['whoop_sleep_need', 'minutes', 490], ['whoop_sleep_debt', 'minutes', 35], ['whoop_strain', 'strain', 11.37], ['whoop_cycle_steps', 'count', 9_412]]);
+  it('reads the need, its debt part and day strain', async () => {
+    const data = await read(['whoop_sleep_need', 'whoop_sleep_debt', 'whoop_strain']);
+    expect(data.signals.map(s => [s.signal, s.unit, s.days?.at(-1)?.value])).toEqual([['whoop_sleep_need', 'minutes', 490], ['whoop_sleep_debt', 'minutes', 35], ['whoop_strain', 'strain', 11.37]]);
     expect(data.signals.find(s => s.signal === 'whoop_strain')).not.toHaveProperty('calibrating');
   });
   it('reads a WHOOP night\'s time in bed, cycles, disturbances and stage minutes from its totals, never its awake time as waking in the night', async () => {

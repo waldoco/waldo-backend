@@ -120,9 +120,17 @@ const localDayOf = (at: number, offset: number): string => new Date(at + offset 
 const epochSeconds = (iso: string): number => Math.floor(Date.parse(iso) / 1000);
 const PLACES = 2;
 const RMSSD_PLACES = 3;
+const HEIGHT_PLACES = 3;
 const round = (value: number, places = PLACES): number => Math.round(value * 10 ** places) / 10 ** places;
 const minutesOf = (milli: number): number => round(milli / MIN);
 const between = (value: number | null, low: number, high: number): value is number => value !== null && value >= low && value <= high;
+// Plausibility bounds that catch a unit mistake, the contract's own; not medical thresholds. Named here so no reading is
+// written beside a raw number.
+const BOUNDS = {
+  percent: [0, 100], spo2: [50, 100], breathing: [4, 80], skin: [25, 42], strain: [0, 21], minutes: [0, DAY_MIN], debt: [-DAY_MIN, DAY_MIN], nap: [-DAY_MIN, 0],
+  distance: [0, 1_000_000], gain: [0, 20_000], change: [-20_000, 20_000], steps: [0, 300_000], mass: [20, 400], height: [0.5, 2.75], maxHr: [100, 250],
+} as const satisfies Readonly<Record<string, readonly [number, number]>>;
+const within = (value: number | null, [low, high]: readonly [number, number]): value is number => between(value, low, high);
 const kcalOf = (kilojoule: number | null): number | null => (kilojoule !== null && kilojoule >= 0 && kilojoule / 4.184 <= 30_000 ? round(kilojoule / 4.184, 1) : null);
 const bpm = (value: number | null): number | undefined => (between(value, 1, 300) ? value : undefined);
 // Average and maximum heart rate only as a pair that can be one session, or each alone.
@@ -165,15 +173,15 @@ export const whoopNightSamples = (night: Readonly<{ sleep: WhoopSleep; recovery:
       const midpoint = (((start + end) / 2 + offset * MIN) % (DAY_MIN * MIN) + DAY_MIN * MIN) % (DAY_MIN * MIN) / MIN;
       out.push({ ...base, sample_id: at('sleep_duration'), revision, signal: 'sleep_duration', unit: 'minutes', method: 'asleep_duration', value: round(asleep), ...stageTotals(score.stage_summary) });
       out.push({ ...base, sample_id: at('sleep_midpoint'), revision, signal: 'sleep_midpoint', unit: 'local_minute', method: 'sleep_midpoint', value: Math.min(round(midpoint, 3), 1439.999) });
-      if (between(score.efficiency, 0, 100)) out.push({ ...base, sample_id: at('sleep_efficiency'), revision, signal: 'sleep_efficiency', unit: 'ratio', value: round(score.efficiency / 100, 4) });
+      if (within(score.efficiency, BOUNDS.percent)) out.push({ ...base, sample_id: at('sleep_efficiency'), revision, signal: 'sleep_efficiency', unit: 'ratio', value: round(score.efficiency / 100, 4) });
     }
-    if (between(score.respiratory_rate, 4, 80)) out.push({ ...base, sample_id: at('respiratory_rate'), revision, signal: 'respiratory_rate', unit: 'breaths_per_minute', value: round(score.respiratory_rate) });
-    if (between(score.performance, 0, 100)) out.push({ ...base, sample_id: at('provider_sleep_performance'), revision, signal: 'provider_sleep_performance', unit: 'percent', method: 'whoop', value: round(score.performance) });
-    if (between(score.consistency, 0, 100)) out.push({ ...base, sample_id: at('provider_sleep_consistency'), revision, signal: 'provider_sleep_consistency', unit: 'percent', method: 'whoop', value: round(score.consistency) });
+    if (within(score.respiratory_rate, BOUNDS.breathing)) out.push({ ...base, sample_id: at('respiratory_rate'), revision, signal: 'respiratory_rate', unit: 'breaths_per_minute', value: round(score.respiratory_rate) });
+    if (within(score.performance, BOUNDS.percent)) out.push({ ...base, sample_id: at('provider_sleep_performance'), revision, signal: 'provider_sleep_performance', unit: 'percent', method: 'whoop', value: round(score.performance) });
+    if (within(score.consistency, BOUNDS.percent)) out.push({ ...base, sample_id: at('provider_sleep_consistency'), revision, signal: 'provider_sleep_consistency', unit: 'percent', method: 'whoop', value: round(score.consistency) });
     if (score.need) {
       const parts = { baseline_minutes: minutesOf(score.need.baseline), debt_minutes: minutesOf(score.need.debt), strain_minutes: minutesOf(score.need.strain), nap_minutes: minutesOf(score.need.nap) };
       const total = round(parts.baseline_minutes + parts.debt_minutes + parts.strain_minutes + parts.nap_minutes);
-      if (between(total, 0, DAY_MIN) && between(parts.baseline_minutes, 0, DAY_MIN) && between(parts.debt_minutes, -DAY_MIN, DAY_MIN) && between(parts.strain_minutes, 0, DAY_MIN) && between(parts.nap_minutes, -DAY_MIN, 0)) {
+      if (within(total, BOUNDS.minutes) && within(parts.baseline_minutes, BOUNDS.minutes) && within(parts.debt_minutes, BOUNDS.debt) && within(parts.strain_minutes, BOUNDS.minutes) && within(parts.nap_minutes, BOUNDS.nap)) {
         out.push({ ...base, sample_id: at('provider_sleep_need'), revision, signal: 'provider_sleep_need', unit: 'minutes', method: 'whoop', value: total, ...parts });
       }
     }
@@ -183,9 +191,9 @@ export const whoopNightSamples = (night: Readonly<{ sleep: WhoopSleep; recovery:
     const { hrv_rmssd_milli: rmssd, resting_heart_rate: resting, spo2_percentage: oxygen, recovery_score: score, calibrating, skin_temp_celsius: skin } = recovery.score;
     if (rmssd !== null && rmssd > 0 && rmssd <= 1000) out.push({ ...base, sample_id: at('overnight_hrv'), revision, signal: 'overnight_hrv', unit: 'milliseconds', method: 'rmssd', value: round(rmssd, RMSSD_PLACES) });
     if (resting !== null && resting > 0 && resting <= 300) out.push({ ...base, sample_id: at('resting_heart_rate'), revision, signal: 'resting_heart_rate', unit: 'beats_per_minute', method: 'provider_resting_daily', value: round(resting) });
-    if (between(oxygen, 50, 100)) out.push({ ...base, sample_id: at('spo2'), revision, signal: 'spo2', unit: 'percent', value: round(oxygen) });
-    if (between(score, 0, 100) && calibrating !== null) out.push({ ...base, sample_id: at('provider_recovery'), revision, signal: 'provider_recovery', unit: 'percent', method: 'whoop', value: round(score), calibrating });
-    if (between(skin, 25, 42)) out.push({ ...base, sample_id: at('skin_temperature'), revision, signal: 'skin_temperature', unit: 'celsius', method: 'absolute', value: round(skin) });
+    if (within(oxygen, BOUNDS.spo2)) out.push({ ...base, sample_id: at('spo2'), revision, signal: 'spo2', unit: 'percent', value: round(oxygen) });
+    if (within(score, BOUNDS.percent) && calibrating !== null) out.push({ ...base, sample_id: at('provider_recovery'), revision, signal: 'provider_recovery', unit: 'percent', method: 'whoop', value: round(score), calibrating });
+    if (within(skin, BOUNDS.skin)) out.push({ ...base, sample_id: at('skin_temperature'), revision, signal: 'skin_temperature', unit: 'celsius', method: 'absolute', value: round(skin) });
   }
   return out;
 };
@@ -222,11 +230,11 @@ export const whoopWorkoutSamples = (workout: WhoopWorkout): HealthSampleV1[] => 
     signal: 'workout', unit: 'minutes', activity, value: round(minutes),
     ...(kcal === null ? {} : { energy_kcal: kcal }),
     ...(score ? heartRates(score.average_heart_rate, score.max_heart_rate) : {}),
-    ...(between(score?.distance_meter ?? null, 0, 1_000_000) ? { distance_m: round(score!.distance_meter!) } : {}),
-    ...(between(score?.altitude_gain_meter ?? null, 0, 20_000) ? { elevation_gain_m: round(score!.altitude_gain_meter!) } : {}),
-    ...(between(score?.altitude_change_meter ?? null, -20_000, 20_000) ? { elevation_change_m: round(score!.altitude_change_meter!) } : {}),
-    ...(between(score?.percent_recorded ?? null, 0, 100) ? { percent_recorded: round(score!.percent_recorded!) } : {}),
-    ...(between(score?.strain ?? null, 0, 21) ? { strain: { value: round(score!.strain!), method: 'whoop' as const } } : {}),
+    ...(within(score?.distance_meter ?? null, BOUNDS.distance) ? { distance_m: round(score!.distance_meter!) } : {}),
+    ...(within(score?.altitude_gain_meter ?? null, BOUNDS.gain) ? { elevation_gain_m: round(score!.altitude_gain_meter!) } : {}),
+    ...(within(score?.altitude_change_meter ?? null, BOUNDS.change) ? { elevation_change_m: round(score!.altitude_change_meter!) } : {}),
+    ...(within(score?.percent_recorded ?? null, BOUNDS.percent) ? { percent_recorded: round(score!.percent_recorded!) } : {}),
+    ...(within(score?.strain ?? null, BOUNDS.strain) ? { strain: { value: round(score!.strain!), method: 'whoop' as const } } : {}),
     ...(zonesFit ? { hr_zones: { basis: 'provider' as const, lower_bounds_bpm: null, seconds: zones as [number, number, number, number, number] } } : {}),
   }];
 };
@@ -239,7 +247,7 @@ export const whoopCycleSamples = (cycle: WhoopCycle): HealthSampleV1[] => {
   const offset = offsetMinutes(cycle.timezone_offset);
   const end = cycle.end ?? cycle.updated_at;
   const startMs = Date.parse(cycle.start), endMs = Date.parse(end);
-  if (!cycle.score || offset === null || !(startMs <= endMs) || endMs - startMs > 3 * DAY_MIN * MIN || !between(cycle.score.strain, 0, 21)) return [];
+  if (!cycle.score || offset === null || !(startMs <= endMs) || endMs - startMs > 3 * DAY_MIN * MIN || !within(cycle.score.strain, BOUNDS.strain)) return [];
   const first = localDayOf(startMs, offset), last = localDayOf(endMs, offset), noon = localDayOf(startMs + 12 * HOUR_MS, offset);
   // An open cycle that has not yet reached its day (a night begun before midnight, read before it) is not placed: on the day it
   // began it would sit beside the cycle that closed then.
@@ -250,7 +258,7 @@ export const whoopCycleSamples = (cycle: WhoopCycle): HealthSampleV1[] => {
     revision: epochSeconds(cycle.updated_at), signal: 'provider_day_strain', unit: 'strain', method: 'whoop', value: round(cycle.score.strain), open: cycle.end === null,
     ...(kcal === null ? {} : { energy_kcal: kcal }),
     ...heartRates(cycle.score.average_heart_rate, cycle.score.max_heart_rate),
-    ...(cycle.step_count !== null && Number.isInteger(cycle.step_count) && between(cycle.step_count, 0, 300_000) ? { step_count: cycle.step_count } : {}),
+    ...(cycle.step_count !== null && Number.isInteger(cycle.step_count) && within(cycle.step_count, BOUNDS.steps) ? { step_count: cycle.step_count } : {}),
   }];
 };
 
@@ -270,9 +278,9 @@ export const whoopBodySamples = (body: WhoopBody, at: number, timeZone: string):
   const when = new Date(Math.floor(at / 1000) * 1000).toISOString();
   const base = { day: localDayOf(at, offset), utc_offset_minutes: offset, start_at: when, end_at: when, revision: Math.floor(at / 1000) };
   const out: HealthSampleV1[] = [];
-  if (between(body.weight_kilogram, 20, 400)) out.push({ ...base, sample_id: 'whoop:body:body_mass', signal: 'body_mass', unit: 'kilograms', value: round(body.weight_kilogram) });
-  if (between(body.height_meter, 0.5, 2.75)) out.push({ ...base, sample_id: 'whoop:body:height', signal: 'height', unit: 'meters', value: round(body.height_meter, 3) });
-  if (between(body.max_heart_rate, 100, 250)) out.push({ ...base, sample_id: 'whoop:body:max_heart_rate', signal: 'max_heart_rate', unit: 'beats_per_minute', method: 'provider_estimate', value: round(body.max_heart_rate) });
+  if (within(body.weight_kilogram, BOUNDS.mass)) out.push({ ...base, sample_id: 'whoop:body:body_mass', signal: 'body_mass', unit: 'kilograms', value: round(body.weight_kilogram) });
+  if (within(body.height_meter, BOUNDS.height)) out.push({ ...base, sample_id: 'whoop:body:height', signal: 'height', unit: 'meters', value: round(body.height_meter, HEIGHT_PLACES) });
+  if (within(body.max_heart_rate, BOUNDS.maxHr)) out.push({ ...base, sample_id: 'whoop:body:max_heart_rate', signal: 'max_heart_rate', unit: 'beats_per_minute', method: 'provider_estimate', value: round(body.max_heart_rate) });
   return out;
 };
 

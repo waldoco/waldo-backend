@@ -118,7 +118,6 @@ export const SIGNALS: Record<HealthReadSignal, Spec> = {
   daytime_hrv: { stored: 'hrv_window', unit: 'ms', fold: 'mean', methods: ['rmssd', 'sdnn'] },
   whoop_recovery: { stored: 'provider_recovery', unit: 'percent', fold: 'newest' },
   whoop_strain: { stored: 'provider_day_strain', unit: 'strain', fold: 'newest' },
-  whoop_cycle_steps: { stored: 'provider_day_strain', unit: 'count', fold: 'newest', value: part('step_count') },
   whoop_sleep_need: { stored: 'provider_sleep_need', unit: 'minutes', fold: 'newest' },
   whoop_sleep_debt: { stored: 'provider_sleep_need', unit: 'minutes', fold: 'newest', value: part('debt_minutes') },
   whoop_sleep_performance: { stored: 'provider_sleep_performance', unit: 'percent', fold: 'newest' },
@@ -128,8 +127,6 @@ export const SIGNALS: Record<HealthReadSignal, Spec> = {
   time_in_bed: totals('in_bed', 'minutes'),
   sleep_cycles: totals('sleep_cycles', 'count'),
   sleep_disturbances: totals('disturbances', 'count'),
-  height: { stored: 'height', unit: 'm', fold: 'newest' },
-  max_hr: { stored: 'max_heart_rate', unit: 'bpm', fold: 'newest' },
 };
 type Session = z.infer<typeof healthWorkoutSessionSchema>;
 // One session as the tool shows it: each stored part kept only when it is the shape the result admits, and an average heart
@@ -217,7 +214,7 @@ const allowlist = triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS
 export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolHandler<GetHealthArgs, GetHealthResult, ToolDispatcherContext> => ({
   name: 'get_health',
   description:
-    "The owner's own health readings, up to 31 days ending today, one source per signal: by local day, a summary, hourly over at most two days (heart_rate, daytime_hrv, steps, movement, daylight, active_energy, stand_hours), or nightly with each night's start and end (sleep and its stages, sleep_midpoint, sleep_efficiency, hrv, wrist_temperature). Sleep is time asleep, never time in bed. HRV, daytime_hrv and wrist temperature carry their method, never blended. whoop_* are WHOOP's own measures, never Waldo's scores; naps are never the night. heart_rate, daytime_hrv, respiratory_rate, spo2 and hr_recovery are day means. food_energy, protein, carbs and fat are what the owner's food app logged; a macro is missing on a day an entry lacked it. Context for a plan, never a judgement of what the owner ate. The numbers stay in this turn and are never stored or logged.",
+    "The owner's readings, up to 31 days ending today, one source per signal: by local day, a summary, hourly (at most two days) or nightly with each night's start and end. Sleep is time asleep, never time in bed; naps are never the night. HRV, daytime_hrv and wrist temperature carry their method, never blended. heart_rate, daytime_hrv, respiratory_rate, spo2 and hr_recovery are day means. whoop_* are WHOOP's scores, not Waldo's. Food signals are the owner's food app's log; a macro is missing on a day an entry lacked it. Context for a plan, never a judgement. Numbers stay in this turn; never stored or logged.",
   schema: getHealthArgsSchema,
   trigger_allowlist: allowlist,
   autonomy_gated: false,

@@ -37,13 +37,13 @@ export const healthReadSignalSchema = z.enum([
   'food_energy', 'protein', 'carbs', 'fat',
   // Heart rate variability through the waking day: the day's mean of the hourly readings, apart from the overnight one.
   'daytime_hrv',
-  // WHOOP's own measures, as WHOOP stated them, never Waldo's: its recovery (0-100), its day strain (0-21) and the steps of that
-  // day's cycle, the sleep it said a night needed and the part of that from sleep debt, and its sleep performance and
-  // consistency (0-100).
-  'whoop_recovery', 'whoop_strain', 'whoop_cycle_steps', 'whoop_sleep_need', 'whoop_sleep_debt', 'whoop_sleep_performance', 'whoop_sleep_consistency',
-  // Naps (never the night), skin temperature in sleep (absolute, apart from wrist temperature), a provider night's time in bed,
-  // sleep cycles and disturbances, and the body measurements a provider holds.
-  'naps', 'skin_temperature', 'time_in_bed', 'sleep_cycles', 'sleep_disturbances', 'height', 'max_hr',
+  // WHOOP's own measures, as WHOOP stated them, never Waldo's: its recovery (0-100), its day strain (0-21), the sleep it said a
+  // night needed and the part of that from sleep debt, and its sleep performance and consistency (0-100). Naps (never the
+  // night), skin temperature in sleep (absolute, apart from wrist temperature), and a provider night's time in bed, sleep cycles
+  // and disturbances. A cycle's steps, height and the provider's maximum heart rate are stored and named in the inventory, but
+  // not offered here: the tool definitions per round are at their budget.
+  'whoop_recovery', 'whoop_strain', 'whoop_sleep_need', 'whoop_sleep_debt', 'whoop_sleep_performance', 'whoop_sleep_consistency',
+  'naps', 'skin_temperature', 'time_in_bed', 'sleep_cycles', 'sleep_disturbances',
 ]);
 export type HealthReadSignal = z.infer<typeof healthReadSignalSchema>;
 const healthReadDaySchema = z.iso.date();
@@ -51,9 +51,7 @@ export const HEALTH_READ_MAX_DAYS = 31;
 const dayOrdinal = (day: string): number => Math.round(Date.parse(`${day}T00:00:00Z`) / 86_400_000);
 export const getHealthArgsSchema = z
   .strictObject({
-    signals: z.array(healthReadSignalSchema).min(1).max(healthReadSignalSchema.options.length).describe(
-      "whoop_* are WHOOP's own measures as WHOOP stated them, never Waldo's scores: whoop_recovery 0-100 (with calibrating while WHOOP is still learning the owner), whoop_strain 0-21 per WHOOP day and whoop_cycle_steps for it, whoop_sleep_need (what WHOOP said the night needed) and whoop_sleep_debt (its part from debt), whoop_sleep_performance and whoop_sleep_consistency 0-100. Compare one with the owner's own summary of it, or with another (strain with recovery, need with sleep), never with Waldo's Recovery. naps are never the night; skin_temperature is absolute and apart from wrist_temperature; time_in_bed, sleep_cycles and sleep_disturbances come from a wearable's night; daily workout sessions carry WHOOP's strain and minutes in each heart-rate zone.",
-    ),
+    signals: z.array(healthReadSignalSchema).min(1).max(healthReadSignalSchema.options.length),
     from: healthReadDaySchema,
     to: healthReadDaySchema,
     // hourly: each hour's value of a signal read by the hour, over at most HEALTH_READ_MAX_HOURLY_DAYS days. nightly: each
@@ -68,7 +66,7 @@ export const HEALTH_READ_MAX_HOURLY_DAYS = 2;
 // A wall-clock time in the owner's zone, to the minute, as the result's timezone reads it.
 const healthReadLocalTimeSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d$/);
 
-export const healthReadUnitSchema = z.enum(['minutes', 'ms', 'bpm', 'minute_of_day', 'ratio', 'percent', 'breaths_per_minute', 'celsius', 'ml_per_kg_min', 'count', 'kcal', 'kg', 'g', 'strain', 'm']);
+export const healthReadUnitSchema = z.enum(['minutes', 'ms', 'bpm', 'minute_of_day', 'ratio', 'percent', 'breaths_per_minute', 'celsius', 'ml_per_kg_min', 'count', 'kcal', 'kg', 'g', 'strain']);
 // One workout as the watch measured it, from the same source as the workouts signal. A part the store holds in a shape this
 // does not admit is left out, never the session. zone_minutes are minutes in heart-rate zones 1 to 5.
 const sport = <Shape extends z.ZodRawShape>(shape: Shape) => z.strictObject(shape).partial();

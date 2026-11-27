@@ -184,7 +184,6 @@ describe('the numeric health floor', () => {
   const GET_HEALTH_READINGS: Record<HealthReadSignal, readonly string[]> = {
     whoop_recovery: ['WHOOP recovery 61%', 'recovery score 61', 'your recovery was 61%', 'recovery of 61 percent', 'WHOOP recovery: 61', '61% recovery'],
     whoop_strain: ['day strain 11.4', 'strain 11.4', 'WHOOP strain of 14', 'strain was 9.8 yesterday', 'a 14.2 strain day'],
-    whoop_cycle_steps: ['9,412 steps', 'steps 9412', '9.4k steps'],
     whoop_sleep_need: ['sleep need 8h 10m', 'WHOOP said you needed 490 minutes of sleep', 'you needed 8.2 hours of sleep', 'sleep needed 490 min'],
     whoop_sleep_debt: ['sleep debt 35 min', '35 minutes of sleep debt', 'sleep debt of 1h 5m', 'sleep debt was 35 minutes'],
     whoop_sleep_performance: ['sleep performance 88%', '88% sleep performance', 'sleep performance was 88'],
@@ -194,8 +193,6 @@ describe('the numeric health floor', () => {
     time_in_bed: ['time in bed 460 min', '7h 40m in bed', '460 minutes in bed', 'in bed for 7.7 hours'],
     sleep_cycles: ['4 sleep cycles', 'sleep cycles: 4', '4 cycles of sleep'],
     sleep_disturbances: ['9 disturbances', 'disturbances: 9', 'woke 9 times', '9 sleep disturbances'],
-    height: ['height 1.76 m', '176 cm tall', 'height 176 cm', '1.76 m tall'],
-    max_hr: ['max heart rate 189', 'max HR 189', 'maximum heart rate 189 bpm'],
     sleep: ['time asleep 412 min', '412 minutes asleep', 'sleep duration 412 minutes', 'slept 6.9 hours'],
     sleep_midpoint: ['sleep midpoint 03:12', 'sleep midpoint was 192'],
     hrv: ['HRV 48ms', 'HRV was 48ms', 'HRV (rmssd) 48 ms', 'HRV sdnn 52', 'rmssd 48'],
