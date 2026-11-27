@@ -87,13 +87,40 @@ describe('every Waldo-first send ends with one recorded outcome', () => {
     expect(sendsToday(deps(kv, { records })).map(row => row.id)).toEqual(['good']);
   });
 
+  it('marks an answer to what the owner asked, so the model never takes it for something Waldo sent unasked', () => {
+    const { kv } = kvOf();
+    recordSendEnded(kv, record({ id: 'report', status: 'delivered', answersOwner: true }), 'app', NINE);
+    recordAppSend(kv, 'connected', 'answer', NINE + 60_000);
+    recordAppSend(kv, 'nudge', 'message', NINE + 120_000);
+    const section = sendsTodaySection(deps(kv));
+    expect(section).toContain('- 09:00 answer to what the owner asked, to the app: delivered');
+    expect(section).toContain('- 09:01 answer to what the owner asked, to the app: delivered');
+    expect(section).toContain('- 09:02 message to the app: delivered');
+  });
+
+  it('records the provider\'s own reason for a failure when it gave one, and the record\'s reason otherwise', () => {
+    const { kv } = kvOf();
+    recordSendEnded(kv, record({ id: 'a', status: 'blocked', reason: 'provider_failed', failure: 'whatsapp_payment_required' }), 'whatsapp', NINE);
+    recordSendEnded(kv, record({ id: 'b', status: 'blocked', reason: 'provider_failed' }), 'whatsapp', NINE);
+    expect(sendsToday(deps(kv)).map(row => row.code)).toEqual(['whatsapp_payment_required', 'provider_failed']);
+  });
+
+  it('a stored row of the wrong shape is left out', () => {
+    const { kv } = kvOf();
+    kv.put('send_outcome:x', { id: 7, kind: null, at: NINE, outcome: 'delivered' });
+    kv.put('send_outcome:y', { id: 'y', kind: 'message', at: NINE, outcome: 'sent' });
+    recordAppSend(kv, 'good', 'message', NINE);
+    expect(() => sendsTodaySection(deps(kv))).not.toThrow();
+    expect(sendsToday(deps(kv)).map(row => row.id)).toEqual(['good']);
+  });
+
   it('gives the next run one section of kinds, times, surfaces and outcomes, and none on a day with no sends', () => {
     const { kv } = kvOf();
     expect(sendsTodaySection(deps(kv))).toBe('');
     recordSendEnded(kv, record({ id: 'card', status: 'delivered', dayCard: { day: '2026-11-27', card: 'card:brief', foldUpTo: 0 } }), 'app', NINE);
     recordSendEnded(kv, record({ id: 'copy:1', status: 'quarantined', reason: 'delivery_unconfirmed' }), 'whatsapp', NINE);
     expect(sendsTodaySection(deps(kv))).toBe([
-      'Messages Waldo sent first today (not replies), oldest first, and what became of each:',
+      'Messages Waldo sent first today (not replies), oldest first, and what became of each. An answer to what the owner asked is marked; the rest Waldo sent unasked:',
       '- 09:00 day card to the app: delivered',
       '- 09:00 message to WhatsApp: unknown, it may not have arrived (delivery_unconfirmed)',
     ].join('\n'));

@@ -35,8 +35,9 @@ export const WHATSAPP_CONNECT_GUIDANCE = 'No connect button was sent: WhatsApp c
 // is never kept for later on another surface.
 // thread: the app thread the message belongs in, while that thread is open; main otherwise. replies: answers the owner can
 // tap under the message. push: false when the sender raises the push itself; otherwise the delivery pushes the owner's phone.
-// outbox: the delivery outbox sent it and records how it ended.
-export type AppSend = Readonly<{ nowOnly?: boolean; thread?: string; replies?: readonly string[]; copyOf?: CopyOf; push?: false; outbox?: true }>;
+// outbox: the delivery outbox sent it and records how it ended. answers: it answers something the owner started (a connect they
+// finished), so it is recorded as an answer, not as something Waldo sent unasked.
+export type AppSend = Readonly<{ nowOnly?: boolean; thread?: string; replies?: readonly string[]; copyOf?: CopyOf; push?: false; outbox?: true; answers?: true }>;
 export type ScheduledAppDelivery = (text: string, send?: AppSend) => Promise<string>;
 // A surface whose turn replies leave through an outbox of their own (iMessage) acknowledges a plain send only during its
 // turn: outside one, a send with no delivery bound has nowhere to go, so it returns no message, which producers read as

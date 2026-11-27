@@ -111,7 +111,8 @@ it('a Brief written straight into the app chat is recorded once as delivered the
     const rows = [...state.storage.kv.list<Record<string, unknown>>({ prefix: 'send_outcome:' })].map(([, row]) => row);
     expect(rows).toEqual([{ id: expect.stringMatching(/^scheduled-/), kind: 'day_card', surface: 'app', at: AT, outcome: 'delivered', endedAt: AT }]);
     const ledger = await (owner as unknown as { setup(channel: string): { ledger(): Promise<string> } }).setup('app').ledger();
-    expect(ledger).toContain('Messages Waldo sent first today (not replies), oldest first, and what became of each:\n- 09:00 day card to the app: delivered');
+    expect(ledger).toContain('Messages Waldo sent first today (not replies)');
+    expect(ledger).toContain('\n- 09:00 day card to the app: delivered');
     expect(ledger).not.toContain(CARD_TEXT);
   });
 });

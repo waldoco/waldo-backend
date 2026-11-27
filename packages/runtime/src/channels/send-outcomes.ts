@@ -1,4 +1,4 @@
-import { recordKind, WHATSAPP_COPY_PREFIX } from './proactive-surface';
+import { recordKind, recordSurface } from './proactive-surface';
 import { localIso } from './reminders';
 import type { FinalRecord } from './telegram-final-outbox';
 import type { KnockFailure } from './whatsapp-window';
@@ -34,7 +34,7 @@ export const recordSendEnded = (kv: Kv, record: FinalRecord, surface: SendSurfac
   if (!waldoFirst(record)) return;
   const outcome = record.status === 'delivered' ? 'delivered' : record.status === 'blocked' ? 'failed' : record.status === 'quarantined' ? 'unknown' : null;
   if (!outcome) return;
-  put(kv, { id: record.id, kind: recordKind(record), surface, at: record.createdAt, outcome, ...(outcome === 'delivered' ? {} : code(record.reason)), endedAt: record.deliveredAt ?? now }, now);
+  put(kv, { id: record.id, kind: recordKind(record), surface, at: record.createdAt, outcome, ...(outcome === 'delivered' ? {} : code(record.failure ?? record.reason)), endedAt: record.deliveredAt ?? now }, now);
 };
 
 // A message Waldo wrote straight into the app chat outside a turn: the write is the delivery, recorded in the same transaction.
@@ -45,16 +45,18 @@ export const recordAppSend = (kv: Kv, id: string, kind: string, now: number): vo
 // simply its turn.
 const waitingRows = (records: readonly FinalRecord[], whatsappSubject: string | undefined, windowOpen: boolean, knock: KnockFailure | null): SendRow[] =>
   records.filter(record => waldoFirst(record) && (record.status === 'pending' || record.status === 'attempting' || record.status === 'accepted')).map(record => {
-    const whatsapp = record.id.startsWith(WHATSAPP_COPY_PREFIX) || (whatsappSubject !== undefined && record.ownerSubject === whatsappSubject);
+    const whatsapp = recordSurface(record, whatsappSubject, 'app') === 'whatsapp';
     const held = record.status === 'accepted' ? 'awaiting_arrival' : whatsapp && !windowOpen ? (knock ? `window_closed:knock_failed:${knock.reason}` : 'window_closed') : undefined;
     return { id: record.id, kind: recordKind(record), surface: whatsapp ? 'whatsapp' : null, at: record.createdAt, outcome: 'waiting', ...(held ? { code: held } : {}) };
   });
 
+const OUTCOMES: ReadonlySet<string> = new Set(['waiting', 'delivered', 'failed', 'unknown']);
+const wellFormed = (row: SendRow): boolean => typeof row?.id === 'string' && typeof row.kind === 'string' && OUTCOMES.has(row.outcome);
 export type SendsDeps = Readonly<{ kv: Kv; records: readonly FinalRecord[]; whatsappSubject?: string; windowOpen: boolean; knock: KnockFailure | null; timezone: string; now: number }>;
 // Today's Waldo-first sends in the owner's day, oldest first: those that ended, then those still waiting.
 export const sendsToday = (deps: SendsDeps): SendRow[] => {
   const day = localIso(deps.now, deps.timezone).slice(0, 10), today = (at: number) => localIso(at, deps.timezone).startsWith(day);
-  const ended = [...deps.kv.list<SendRow>({ prefix: PREFIX })].map(([, row]) => row);
+  const ended = [...deps.kv.list<SendRow>({ prefix: PREFIX })].map(([, row]) => row).filter(wellFormed);
   const endedIds = new Set(ended.map(row => row.id));
   // A row or record with no usable time (written by an older version, or malformed) is left out rather than thrown on.
   return [...ended, ...waitingRows(deps.records, deps.whatsappSubject, deps.windowOpen, deps.knock).filter(row => !endedIds.has(row.id))]
@@ -77,6 +79,6 @@ export const sendsTodaySection = (deps: SendsDeps): string => {
   const rows = sendsToday(deps);
   if (!rows.length) return '';
   const clock = (at: number) => localIso(at, deps.timezone).slice(11, 16);
-  return ['Messages Waldo sent first today (not replies), oldest first, and what became of each:',
-    ...rows.map(row => `- ${clock(row.at)} ${row.kind.replace(/_/g, ' ')}${row.surface ? ` to ${SURFACE_NAME[row.surface]}` : ''}: ${said(row)}`)].join('\n');
+  return ['Messages Waldo sent first today (not replies), oldest first, and what became of each. An answer to what the owner asked is marked; the rest Waldo sent unasked:',
+    ...rows.map(row => `- ${clock(row.at)} ${row.kind === 'answer' ? 'answer to what the owner asked,' : row.kind.replace(/_/g, ' ')}${row.surface ? ` to ${SURFACE_NAME[row.surface]}` : ''}: ${said(row)}`)].join('\n');
 };

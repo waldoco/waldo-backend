@@ -915,7 +915,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const found = await this.appOwnerLookup();
       if (found.kind !== 'admitted') return 'blocked';
       // An event raises its own push under its own switch and ceiling (the caller); any other notice is pushed as a message.
-      await this.appDeliveryFor(found.authority)(text, unasked ? { push: false } : undefined);
+      await this.appDeliveryFor(found.authority)(text, unasked ? { push: false } : { answers: true });
       return 'sent';
     }
     const ack = await runtime.api.sendMessage({ chat_id: runtime.owner, text, ...(unasked ? { [SEND_UNASKED]: true } : {}) } as Parameters<typeof runtime.api.sendMessage>[0]);
@@ -1700,7 +1700,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return async (text, send) => {
       const thread = send?.thread !== undefined && open(send.thread) ? send.thread : undefined;
       const notify = (row: string) => { if (send?.push !== false) this.ctx.waitUntil(this.setup('app').push('message').catch(() => undefined)); return row; };
-      const kind = send?.outbox ? undefined : send?.copyOf === 'day_card' ? 'day_card' : send?.copyOf === 'day_update' ? 'update_card' : 'message';
+      const kind = send?.outbox ? undefined : send?.answers ? 'answer' : send?.copyOf === 'day_card' ? 'day_card' : send?.copyOf === 'day_update' ? 'update_card' : 'message';
       try { return notify(await write(text, thread, send?.replies, kind)); } catch (error) { if (error === closed) return notify(await write(text, undefined, send?.replies, kind)); throw error; }
     };
   }
