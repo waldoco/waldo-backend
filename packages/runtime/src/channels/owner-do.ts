@@ -362,7 +362,8 @@ type OwnerRuntime = Readonly<{
   listener: TelegramOwnerListener | null;
   control: TurnControl;
   welcome: OwnerWelcome;
-  // The one join pass, queued on the owner's serial lane: run after the owner's setup answers change, and by the welcome build.
+  // The one join pass, queued on the owner's serial lane: run by the welcome build, and after the owner's setup answers change
+  // once it is done (while it runs, its own join reads them).
   joinConstellations(reason: string): Promise<string>;
   // The owner look-up the owner's yes starts: written or stopped as the yes stands, and let start once the first reply is out.
   lookup: Readonly<{ reconcile(): Promise<void>; afterReply(): Promise<void> }>;
@@ -2136,7 +2137,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             chat:chatChannelLinks({env:this.env,kv:this.ctx.storage.kv,doName:name,auth:consoleAuth(this.env)}),bothDefault:proactiveBothDefault(this.env),
             signedInRecently:async()=>signedInRecently((await consoleAuth(this.env)!.listSessions(name)).find(row=>row.session===hash)?.signed_in_at,Date.now()),
             act:action=>this.setup('app').act(action,current),
-            setupDone:()=>{this.bindAppSubject(name);const runtime=this.setup('app');if(!runtime.welcome.build().start())this.ctx.waitUntil(runtime.joinConstellations('setup').catch(()=>undefined));this.continueWelcome(runtime);this.reconcileLookup(runtime);this.reconcileGetToKnow(runtime);},
+            setupDone:()=>{this.bindAppSubject(name);const runtime=this.setup('app');if(!runtime.welcome.build().start()&&runtime.welcome.build().view().state==='done')this.ctx.waitUntil(runtime.joinConstellations('setup').catch(()=>undefined));this.continueWelcome(runtime);this.reconcileLookup(runtime);this.reconcileGetToKnow(runtime);},
             lookupChanged:()=>{this.bindAppSubject(name);this.reconcileLookup(this.setup('app'));},
             admit:async(client,text)=>{
               this.bindAppSubject(name);

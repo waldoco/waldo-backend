@@ -2083,7 +2083,14 @@ export const applyPromotion = (store: ClaimStore, raw: string, at: string, onEvi
   const plan = JSON.parse(raw) as JoinPlan;
   const all = store.allClaims(), shown = new Set(joinSpots(store).map((claim) => claim.id));
   const live = new Map(store.nodes().filter((node) => node.status === 'active').map((node) => [node.id, node]));
-  const dismissed = store.dismissedPatterns();
+  // Whether a text carries anything the owner asked to forget: a topic still being forgotten inside it, or the very words of one.
+  const barriers = store.barriers(), pending = holdsIn(store.pendingTopics());
+  const forgotten = (text: string) => store.barred(text) || pending(text) || barriers.some((barrier) => barrier.topic !== FORGOTTEN && carriesTopic(text, barrier.topic));
+  // A pattern the owner took away, by the spots of it still standing: it is not built again on those spots, alone or with more.
+  const dismissed = store.dismissedPatterns().map((pattern) => pattern.filter((id) => shown.has(id))).filter((pattern) => pattern.length > 0);
+  const rebuilds = (spots: readonly number[]) => dismissed.some((pattern) => spots.every((id) => pattern.includes(id)) || (pattern.length >= 2 && pattern.every((id) => spots.includes(id))));
+  // An id the reply names for one constellation is not taken by another that names none.
+  const namedInReply = new Set((plan.constellations ?? []).map((proposal) => proposal.id).filter((id): id is number => Number.isSafeInteger(id)));
   const held = (reason: PromotionEvidenceReason) => { onEvidence?.({ outcome: 'held', reason, source_kind: 'owner_observation_pattern', count: 1 }); return undefined; };
   const clamp01 = (n: unknown) => Math.min(1, Math.max(0, typeof n === 'number' && Number.isFinite(n) ? n : 0));
   const claimed = new Set<number>(), supported = new Set<number>();
@@ -2093,15 +2100,15 @@ export const applyPromotion = (store: ClaimStore, raw: string, at: string, onEvi
     const area = String(proposal.area ?? ''), label = String(proposal.label ?? '').trim(), summary = String(proposal.summary ?? '').trim();
     const named = proposal.id !== null && proposal.id !== undefined;
     const prior = named ? live.get(proposal.id as number)
-      : [...live.values()].find((node) => !claimed.has(node.id) && (sameLabel(node.label, label) || sameIds(spotsOf(all, node), spots)));
+      : [...live.values()].find((node) => !claimed.has(node.id) && !namedInReply.has(node.id) && (sameLabel(node.label, label) || sameIds(spotsOf(all, node), spots)));
     if ((named && !prior) || (prior && claimed.has(prior.id))) return held('untrusted_or_missing');
     const owned = prior !== undefined && ownersWording(all, prior);
     const words = owned ? { domain: prior.domain, label: prior.label, summary: prior.summary } : { domain: area, label, summary };
     if (!owned) {
       const body = bodyArea(area);
       if (!(CONSTELLATION_AREAS as readonly string[]).includes(area) || (body && store.keepsHealth?.() === false) || !label || label.length > CONSTELLATION_LIMITS.label || !summary || summary.length > CONSTELLATION_LIMITS.summary
-        || [label, summary].some((text) => numericHealthIn(text) || store.barred(text) || (body && BODY_DIGIT.test(text)))) return held('refused');
-      if (dismissed.some((pattern) => spots.every((id) => pattern.includes(id)))) return held('dismissed');
+        || [label, summary].some((text) => numericHealthIn(text) || forgotten(text) || (body && BODY_DIGIT.test(text)))) return held('refused');
+      if (rebuilds(spots)) return held('dismissed');
     }
     // The owner's yes to a wording stays cited while the wording does.
     const yes = prior && nodeWording(prior) === nodeWording(words) ? nodeStatementIds(all, prior.id).filter((id) => supportIds(prior).includes(id)) : [];

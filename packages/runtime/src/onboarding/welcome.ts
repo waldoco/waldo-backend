@@ -144,14 +144,18 @@ export const welcomeBuild = (sql: Sql, now: () => number) => {
       const run = row();
       if (run) write({ ...stages(run), [stage]: { ...stages(run)[stage], state: 'reading', at: now() } }, null);
     },
-    settle(stage: WelcomeStage, state: Settled, noted: Readonly<{ days?: number }> = {}): void {
+    // joins: a join runs once the run's stages settle, and the build reads done only after it (joined).
+    settle(stage: WelcomeStage, state: Settled, noted: Readonly<{ days?: number }> = {}, joins = false): void {
       const run = row();
       if (!run) return;
       const at = now(), next = { ...stages(run), [stage]: { ...stages(run)[stage], state, at, ...noted } };
-      write(next, STAGES.every((name) => settled(next[name].state)) ? at : null);
+      write(next, !joins && STAGES.every((name) => settled(next[name].state)) ? at : null);
     },
-    counted(nodes: number): void {
-      sql.exec('UPDATE welcome_builds SET nodes = ? WHERE id = 1', nodes);
+    // The join that follows the stages ran: the constellations standing now, and done when every stage has settled.
+    joined(nodes: number): void {
+      const run = row();
+      if (!run) return;
+      sql.exec('UPDATE welcome_builds SET nodes = ?, finished_at = ? WHERE id = 1', nodes, Object.values(stages(run)).every((stage) => settled(stage.state)) ? now() : null);
     },
   };
 };
@@ -317,11 +321,11 @@ export const runWelcome = async (deps: WelcomeDeps): Promise<void> => {
       }
     } catch { state = 'unavailable'; }
     const days = input?.kind === 'input' ? input.days : undefined;
-    deps.transaction(() => deps.build.settle(stage, state, days === undefined ? {} : { days }));
+    deps.transaction(() => deps.build.settle(stage, state, days === undefined ? {} : { days }, deps.join !== undefined));
   }
   if (!deps.join) return;
   await deps.join().catch(() => undefined);
-  deps.transaction(() => deps.build.counted(deps.claims.nodes().filter((node) => node.status === 'active').length));
+  deps.transaction(() => deps.build.joined(deps.claims.nodes().filter((node) => node.status === 'active').length));
 };
 
 // The welcome reads a constellation rests on that are still Waldo's read and that no other constellation rests on: they go when

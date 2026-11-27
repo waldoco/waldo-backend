@@ -6,6 +6,8 @@ import { NODE_STATEMENT, supportIds } from '../src/memory/node-sources';
 import { runWelcome, welcomeBuild, type WelcomeDeps, type WelcomeStage } from '../src/onboarding/welcome';
 import { healthStage, setupStage } from '../src/onboarding/welcome-sources';
 import { numericHealthIn } from '../src/scribe/sanitiser';
+import { outsideView } from '../src/memory/outside-view';
+import { holdTopic } from './helpers/pending-topic';
 
 // Six setup answers, a month of health zone words and a calendar, through the first build and the join pass. The model's
 // answers stand in for its judgment; what this checks is what code owns. Every value is synthetic.
@@ -71,10 +73,11 @@ it('six answers, a month of zone words and a calendar join into a handful of lin
     const answers = seedAnswers(claims);
     expect(claims.pin(answers.protect.id, 'facts', 0)).toBe(true);
     const pinned = JSON.stringify(claims.allClaims().find((claim) => claim.id === answers.protect.id));
-    const asked: string[] = [], joins: string[] = [];
+    const asked: string[] = [], joins: string[] = [], states: string[] = [];
     const join = async () => {
       const input = promotionInput(claims);
       joins.push(input);
+      states.push(build.view().state);
       return transaction(() => applyPromotion(claims, joinReply(input, answers), new Date(T0).toISOString()));
     };
     const deps: WelcomeDeps = {
@@ -94,6 +97,8 @@ it('six answers, a month of zone words and a calendar join into a handful of lin
     // The stages wrote spots only; one join read them all together, answers, zone words and calendar alike.
     expect(asked).toHaveLength(2);
     expect(joins).toHaveLength(1);
+    // The build reads building until its join has run, then done.
+    expect(states).toEqual(['building']);
     expect(joins[0]).toContain(ANSWERS.slips);
     expect(joins[0]).toContain('Recovery and Form read low on Tuesdays');
     expect(joins[0]).toContain('A late call with the US team every Monday evening');
@@ -122,10 +127,12 @@ it('six answers, a month of zone words and a calendar join into a handful of lin
     const receipts: string[] = [];
     const again = JSON.parse(joinReply(promotionInput(claims), answers)) as { constellations: { label: string; summary: string }[] };
     again.constellations.push({ ...again.constellations[1]!, label: 'Late nights cost sleep', summary: 'A late night costs you sleep.' });
+    again.constellations.push({ ...again.constellations[1]!, label: 'Flat after late nights', summary: 'A late night leaves you flat.', spots: [answers.slips.id, answers.low.id, answers.protect.id] } as never);
     transaction(() => applyPromotion(claims, JSON.stringify(again), new Date(T0).toISOString(), (receipt) => receipts.push(receipt.reason ?? receipt.outcome)));
     expect(claims.nodes().map((row) => row.label)).not.toContain('Short sleep after late calls');
     expect(claims.nodes().map((row) => row.label)).not.toContain('Late nights cost sleep');
-    expect(receipts.filter((reason) => reason === 'refused' || reason === 'dismissed').length).toBeGreaterThanOrEqual(2);
+    expect(claims.nodes().map((row) => row.label)).not.toContain('Flat after late nights');
+    expect(receipts.filter((reason) => reason === 'dismissed').length).toBeGreaterThanOrEqual(2);
 
     // No raw health value reached a prompt or any stored row.
     expect([...asked, ...joins].some((text) => text.includes(PLANTED))).toBe(false);
@@ -156,5 +163,35 @@ it('an owner with one constellation per answer gets them joined, and a constella
     expect(confirmed.summary).toBe(ANSWERS.protect);
     expect(observations(claims.allClaims(), confirmed).sort()).toEqual([answers.matters.id, answers.protect.id].sort());
     expect(claims.edges()).toHaveLength(1);
+  });
+});
+
+it('the join\'s hard lines: a forgotten topic inside a label, an id the reply names, and body patterns kept from outside content', async () => {
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName('constellation-join-lines')), async (_instance, state) => {
+    const transaction = <R>(work: () => R) => state.storage.transactionSync(work);
+    const claims = claimStore(state.storage.sql, transaction), at = new Date(T0).toISOString();
+    const answers = seedAnswers(claims);
+    claims.add({ kind: 'observation', text: 'A late call with the US team every Monday evening', source: 'inferred', evidence: 'welcome build', origin: 'untrusted', source_ref: 'welcome:calendar:evt_us', area: 'work' }, at);
+    const call = claims.claims().find((claim) => claim.source_ref === 'welcome:calendar:evt_us')!.id;
+    holdTopic(state.storage.sql, 'marathon', at);
+    const receipts: string[] = [];
+    const apply = (reply: object) => transaction(() => applyPromotion(claims, JSON.stringify({ links: [], promoted: [], ...reply }), at, (receipt) => receipts.push(receipt.reason ?? receipt.outcome)));
+    apply({ constellations: [{ id: null, replaces: [], area: 'goals', label: 'Half marathon season', summary: 'You are training for a race.', strength: 0.6, spots: [answers.season.id, answers.protect.id] }] });
+    expect(receipts).toEqual(['refused']);
+
+    apply({ constellations: [
+      { id: null, replaces: [], area: 'body', label: 'Short sleep after late calls', summary: 'Late calls push your sleep back.', strength: 0.7, spots: [answers.slips.id, answers.low.id] },
+      { id: null, replaces: [], area: 'work', label: 'Late US calls', summary: 'Your Mondays end late.', strength: 0.7, spots: [answers.day.id, call] },
+    ] });
+    const [body, work] = ['Short sleep after late calls', 'Late US calls'].map((label) => claims.nodes().find((row) => row.label === label)!);
+    // Outside text never sits beside a body pattern, however its spots are filed.
+    expect(outsideView(claims).nodes().map((row) => row.id)).toEqual([work!.id]);
+
+    // A proposal that names no id never takes a constellation another proposal in the same reply names.
+    apply({ constellations: [
+      { id: null, replaces: [], area: 'body', label: 'Short sleep after late calls', summary: 'An unnamed copy.', strength: 0.5, spots: [answers.slips.id, answers.low.id] },
+      { id: body!.id, replaces: [], area: 'body', label: 'Short sleep after late calls', summary: 'Late calls cost you sleep and leave you flat.', strength: 0.7, spots: [answers.slips.id, answers.low.id, answers.day.id] },
+    ] });
+    expect(claims.nodes().find((row) => row.id === body!.id)!.summary).toBe('Late calls cost you sleep and leave you flat.');
   });
 });
