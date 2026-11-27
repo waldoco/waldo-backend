@@ -72,23 +72,36 @@ describe('an owner reminder that fires and reads mail', () => {
 
 // What a late answer to the owner's message carries: an empty message is no one's words, so nothing it sets is the owner's ask.
 describe('a late answer to the owner\'s message', () => {
-  it('with no words of the owner\'s in it, is not their own words', async () => {
-    const seen: unknown[] = [];
+  const late = async (text: string, history: ConversationEntry[]) => {
+    const seen: Record<string, unknown>[] = [];
     const steps = [{ tool: 'set_reminder', args: { note: 'pay the canteen', at: '2030-03-05T09:00', repeat: 'none' } }];
     const fake = { name: 'set_reminder' as ToolName, description: 'The set_reminder tool.', schema: z.object({}).passthrough(), trigger_allowlist: allowed('set_reminder'),
-      handle: async (_args: unknown, ctx: { ownerMessage?: unknown }) => { seen.push(ctx.ownerMessage); return { ok: true as const, data: { id: 'reminder:1' }, source_taint: null }; } };
+      handle: async (_args: unknown, ctx: { ownerMessage?: unknown; carriedOutside?: unknown }) => { seen.push({ ownerMessage: ctx.ownerMessage, carriedOutside: ctx.carriedOutside === true }); return { ok: true as const, data: { id: 'reminder:1' }, source_taint: null }; } };
     const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {
       const next = request.response_format ? undefined : steps.shift();
       return { ok: true, data: { model: request.model, text: request.response_format ? '{}' : next ? '' : 'Done.', ...(next ? { tool_calls: [{ call_id: 'c1', name: next.tool, arguments: JSON.stringify(next.args) }] } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
     } };
-    const saved: ConversationEntry[] = [];
+    const saved: ConversationEntry[] = [...history];
     const store: ConversationStore = { load: async () => ({ entries: [...saved], leafId: saved.at(-1)?.id ?? null }), save: async (rows) => { saved.push(...rows); } };
     const args: Parameters<typeof createOwnerResponder> = [{ openaiApiKey: 'fixture', toolLoader: 'harness' }];
     args[1] = store; args[3] = () => undefined; args[5] = [fake] as never; args[7] = false; args[10] = gateway;
     await createOwnerResponder(...args).prompt('late:1', 'telegram-7', 'Answer the owner\'s message now.', time, 'telegram', undefined, undefined, undefined, undefined, undefined, true, undefined, undefined, undefined,
-      { text: '', messageRef: 'm1', conversationRef: 'telegram-7', surface: 'telegram', receivedAt: Date.now() - 60_000 });
+      { text, messageRef: 'm1', conversationRef: 'telegram-7', surface: 'telegram', receivedAt: Date.now() - 60_000 });
     expect(seen).toHaveLength(1);
-    expect(seen[0]).toMatchObject({ ownWordsOnly: false });
+    return seen[0]!;
+  };
+  const entry = (id: string, parentId: string | null, role: 'user' | 'assistant', text: string, extra: Partial<ConversationEntry> = {}) => ({
+    id, ownerId: 'owner', chatId: 'telegram-7', parentId, threadAnchorId: null, surface: 'telegram', modelPayload: text, appPayload: text,
+    modelProjection: { mode: 'include' }, role, ...(role === 'user' ? { inputOrigin: 'owner', ownerWordsOnly: true } : {}), createdAt: Date.now() - 120_000, ...extra }) as ConversationEntry;
+
+  it('with no words of the owner\'s in it, is not their own words', async () => {
+    expect(await late('', [])).toMatchObject({ ownerMessage: { ownWordsOnly: false } });
+  });
+
+  it('on a chat that read someone else\'s mail, carries that in, as the message itself would have', async () => {
+    const history = [entry('t1', null, 'user', 'What did the canteen send?'), entry('t1-reply', 't1', 'assistant', 'They sent an invoice.', { readOutside: true })];
+    expect(await late('ok, handle it', history)).toMatchObject({ ownerMessage: { ownWordsOnly: true }, carriedOutside: true });
+    expect(await late('ok, handle it', [])).toMatchObject({ carriedOutside: false });
   });
 });
 
