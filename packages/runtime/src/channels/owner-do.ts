@@ -364,6 +364,8 @@ type OwnerRuntime = Readonly<{
   listener: TelegramOwnerListener | null;
   control: TurnControl;
   welcome: OwnerWelcome;
+  // The onboarding summary's model call over its input.
+  onboardingSummary(input: string): Promise<string>;
   // The owner look-up the owner's yes starts: written or stopped as the yes stands, and let start once the first reply is out.
   lookup: Readonly<{ reconcile(): Promise<void>; afterReply(): Promise<void> }>;
   // The first-week read of the owner's own Google data (WELCOME_V2): written once, when the welcome build has begun and Google
@@ -2135,6 +2137,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             ...consentSwitches(this.env),hideText:texts=>this.hideRetainedText(texts),stopLookup:()=>{for(const id of this.jobs().cancelMachine('owner_lookup')){this.tasks.cancelled(id);this.setup('app').log({trace:`task:${id}`,hop:'lookup_cancelled',ms:0,ok:true,job_id:id});}},
             goal:onboardingGoal(this.ctx.storage.kv,{set:(args,user)=>this.setup('app').quests.set(args,user),open:()=>this.setup('app').quests.open()},()=>this.ctx.storage.kv.get<string>('owner_principal_ref')??name),
             loops:loopBook(this.ctx.storage.sql,{newId:()=>crypto.randomUUID().slice(0,8),now:Date.now}),healthMemory:()=>healthMemoryOn(this.ctx.storage.kv),
+            summarise:input=>this.setup('app').onboardingSummary(input),
             chat:chatChannelLinks({env:this.env,kv:this.ctx.storage.kv,doName:name,auth:consoleAuth(this.env)}),bothDefault:proactiveBothDefault(this.env),
             signedInRecently:async()=>signedInRecently((await consoleAuth(this.env)!.listSessions(name)).find(row=>row.session===hash)?.signed_in_at,Date.now()),
             act:action=>this.setup('app').act(action,current),
@@ -6925,6 +6928,14 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       try { const said = await this.asOwnerJob('dreaming', `welcome:${stage}`, () => responder.welcome!(trace, stage, text, version)); answered = true; return said; }
       finally { log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: answered, detail }); }
     };
+    // The onboarding summary's one model call, as an owner job like a welcome stage. Never through this.serial: the onboarding
+    // route that asks for it already runs in the serial lane.
+    const onboardingSummary = async (text: string) => {
+      const started = Date.now(), trace = `onboarding-summary:${started}`;
+      let answered = false;
+      try { const said = await this.asOwnerJob('dreaming', 'onboarding:summary', () => responder.onboardingSummary!(trace, text)); answered = true; return said; }
+      finally { log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: answered, detail: 'onboarding_summary' }); }
+    };
     const welcome = ownerWelcome({ sql: storage.sql, transaction: (work) => storage.transactionSync(work), claims: memory, now: Date.now, timezone: () => clock.timezone, healthMemory: () => healthMemoryOn(identity), healthRead, google,
       goal: () => onboardingGoal(storage.kv, quests, ownerRef).line(), question: id => summaryQuestion(storage.sql, id),
       findings: () => findingStore(storage.sql, memory, consentLedger(storage.sql, consentSwitches(this.env)), Date.now),
@@ -7003,7 +7014,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await armTaskJobsWake(storage, made.job.due_at ?? Date.now());
       },
     };
-    const runtime: OwnerRuntime = { welcome, lookup, getToKnow, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}), ...(getToKnowApply ? { get_to_know_you: getToKnowApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, push, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, reviseBriefForBody, healthChanged, healthTrigger, interventionReview, announcementPass, announcementsCurrent, placeMoved, placeArrived, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    const runtime: OwnerRuntime = { welcome, onboardingSummary, lookup, getToKnow, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}), ...(getToKnowApply ? { get_to_know_you: getToKnowApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, push, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, reviseBriefForBody, healthChanged, healthTrigger, interventionReview, announcementPass, announcementsCurrent, placeMoved, placeArrived, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       lookupToolHandlers: () => {
         const unlocated = webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch), this.lookupPages) : null;

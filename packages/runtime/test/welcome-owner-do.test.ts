@@ -23,6 +23,7 @@ vi.mock('../src/channels/telegram-turn', async load => {
     const body = JSON.stringify(request);
     // A held read waits on a flag the test clears; a promise made in the test's context would never settle in this one.
     if (model.hold && body.includes('Source: what the owner told')) { model.welcome.push(body); while (model.hold) await new Promise((resolve) => setTimeout(resolve, 10)); model.welcome.pop(); }
+    if (body.includes('onboarding_summary')) { model.welcome.push(body); return { ok: true as const, data: { model: request.model, text: JSON.stringify({ summary: 'You go by Asha and keep long stretches for focused work.', questions: [{ text: 'When do you usually train?' }, { text: 'Who do you plan your week with?' }] }), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } }; }
     const text = body.includes('welcome_nodes') ? (model.welcome.push(body), body.includes('Source: what the owner told Waldo') ? SETUP_ANSWER(/\[(c\d+)\] /.exec(body)?.[1]) : WELCOME_ANSWER)
       : '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}';
     return { ok: true as const, data: { model: request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
@@ -338,6 +339,36 @@ it('the goal given at setup reaches the first build with the other answers', asy
       const setup = model.welcome.find((body) => body.includes('Source: what the owner told'))!;
       expect(setup).toContain('[goal] Working toward, in their own words: \\"Finish my first HYROX\\", by 2027-03-14.');
       expect(setup).toContain('Wants to be called Asha');
+    } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
+  });
+});
+
+it('the onboarding summary is written by one traced owner job over the answers, and its questions are answered or left as open loops', async () => {
+  const name = `welcome-owner-summary-${crypto.randomUUID()}`;
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    claimStore(state.storage.sql);
+    ensureSchema(state.storage);
+    state.storage.kv.put('do_name', name);
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const post = (path: string, body: unknown) => owner.fetch(new Request(`https://telegram-owner${path}`, { method: 'POST',
+      headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'c'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify(body) }));
+    try {
+      expect((await post('/app/v1/onboarding/answers', { request_id: 'summary-answers-1', name: 'Asha', day: { shape: 'focus', own_words: '' } })).status).toBe(200);
+      const written = await post('/app/v1/onboarding/summary', { request_id: 'summary-owner-0001' });
+      expect(written.status).toBe(200);
+      const { summary } = await written.json() as { summary: { summary: string; questions: { id: string; text: string }[] } };
+      expect(summary.summary).toBe('You go by Asha and keep long stretches for focused work.');
+      const asked = model.welcome.find((body) => body.includes('onboarding_summary'))!;
+      expect(asked).toContain('Wants to be called Asha');
+      expect(asked).toContain('Needs long stretches of focus at work');
+      const roots = state.storage.sql.exec<{ trace: string; ok: number }>("SELECT trace, ok FROM trace_log WHERE hop = 'machine_turn' AND trace LIKE 'onboarding-summary:%'").toArray();
+      expect(roots).toEqual([expect.objectContaining({ ok: 1 })]);
+      const [train, plan] = summary.questions;
+      expect((await post('/app/v1/onboarding/summary/questions', { request_id: 'summary-owner-q1', question_id: train!.id, action: 'answer', text: 'Before work, three days a week.' })).status).toBe(200);
+      expect((await post('/app/v1/onboarding/summary/questions', { request_id: 'summary-owner-q2', question_id: plan!.id, action: 'defer' })).status).toBe(200);
+      expect(state.storage.sql.exec<{ text: string }>("SELECT text FROM claims WHERE status = 'active'").toArray().map((row) => row.text)).toContain('Answered a question at setup: "Before work, three days a week."');
+      expect(state.storage.sql.exec<{ title: string }>("SELECT title FROM loops WHERE status = 'open'").toArray().map((row) => row.title)).toEqual(['Ask the owner when it fits: Who do you plan your week with?']);
     } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
   });
 });
