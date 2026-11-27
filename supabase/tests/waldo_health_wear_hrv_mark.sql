@@ -1,13 +1,13 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(14);
+select plan(19);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
--- The series read marks the night's RMSSD from Waldo's own watch app, so the producer can count it as a trusted writer's
--- reading only while its switch is on. The mark needs all four of: signal overnight_hrv, method rmssd, read_api wear_sensor
--- and package com.heywaldo.app. Nothing else of the origin leaves the database. Synthetic owner and values throughout; each
--- reading's value is only its label here.
+-- The series read marks every reading from Waldo's own watch app, the night's RMSSD and the all-day readings alike, so the
+-- producer can count each only while its switch is on. The mark needs source health_connect, read_api wear_sensor and package
+-- com.heywaldo.app; signal and method do not matter. Nothing else of the origin leaves the database. Synthetic owner and
+-- values throughout; each reading's value is only its label here.
 create function pg_temp.sig(msg text,at bigint) returns text language sql as $$ select encode(extensions.hmac(at::text||'.'||msg,'fixture-router','sha256'),'hex') $$;
 create function pg_temp.h(op text,owner text,body jsonb default '{}') returns jsonb language plpgsql as $$
 declare t text:=body::text; a bigint:=extract(epoch from now())::bigint; r jsonb;
@@ -27,6 +27,8 @@ create function pg_temp.night(id text,signal text,unit text,method text,val nume
 create function pg_temp.hour(id text,val numeric,origin jsonb) returns jsonb language sql as $$
   select jsonb_build_object('sample_id',id,'revision',1,'signal','heart_rate_window','unit','beats_per_minute','value',val,'min',val-5,'max',val+8,'n_samples',40,
     'day',((date_trunc('hour',now())-interval '5 hours') at time zone 'UTC')::date,'start_at',pg_temp.iso(date_trunc('hour',now())-interval '5 hours'),'end_at',pg_temp.iso(date_trunc('hour',now())-interval '4 hours'),'utc_offset_minutes',0,'origin',origin) $$;
+create function pg_temp.steps(id text,val numeric,origin jsonb) returns jsonb language sql as $$
+  select pg_temp.hour(id,val,origin) - 'min' - 'max' - 'n_samples' || '{"signal":"steps_window","unit":"count"}'::jsonb $$;
 create function pg_temp.batch(rid text,before_anchor text,after_anchor text,samples jsonb,src text default 'health_connect') returns jsonb language sql as $$
   select jsonb_build_object('request_id',rid,'source',src,'consent_epoch',1,'timezone','UTC','anchor_before',before_anchor,'anchor_after',after_anchor,'samples',samples,'deletions','[]'::jsonb) $$;
 create function pg_temp.read(signals jsonb) returns jsonb language sql as $$
@@ -49,19 +51,36 @@ select is(pg_temp.h('ingest','wear-owner',pg_temp.batch('wear-0001',null::text,'
   pg_temp.night('h-samsung','overnight_hrv','milliseconds','rmssd',46,pg_temp.origin('health_connect','com.sec.android.app.shealth')))))->>'accepted','6','overnight HRV readings of every origin are stored');
 
 select is(pg_temp.marks('["overnight_hrv"]')->'41','{"wear":true,"samsung":false}'::jsonb,'the night''s RMSSD from Waldo''s watch app is marked as the watch''s');
-select is(pg_temp.marks('["overnight_hrv"]')->'42','{"wear":false,"samsung":false}'::jsonb,'an SDNN reading from the same origin is not');
+select is(pg_temp.marks('["overnight_hrv"]')->'42','{"wear":true,"samsung":false}'::jsonb,'so is an SDNN reading from the same origin: the method does not decide the mark');
 select is(pg_temp.marks('["overnight_hrv"]')->'43','{"wear":false,"samsung":false}'::jsonb,'Waldo''s package under another read API is not');
 select is(pg_temp.marks('["overnight_hrv"]')->'44','{"wear":false,"samsung":false}'::jsonb,'the watch read API with another package is not');
 select is(pg_temp.marks('["overnight_hrv"]')->'45','{"wear":false,"samsung":false}'::jsonb,'nor with no package recorded');
 select is(pg_temp.marks('["overnight_hrv"]')->'46','{"wear":false,"samsung":true}'::jsonb,'Samsung Health''s reading keeps its own mark, never the watch''s');
 
--- The watch's origin on any other signal earns no mark: a night's sleep, a resting rate or an hour of heart rate.
+-- The watch's all-day readings are marked as the night is: an hour of heart rate and of steps, a blood-oxygen reading and a
+-- resting rate. The phone's own Health Connect hour beside the watch's, under its own id, is not, nor is any other package's.
 select is(pg_temp.h('ingest','wear-owner',pg_temp.batch('wear-0002','wa1','wa2',jsonb_build_array(
   pg_temp.night('s-wear','sleep_duration','minutes','asleep_duration',421,pg_temp.wear()),
   pg_temp.night('r-wear','resting_heart_rate','beats_per_minute','overnight_resting',51,pg_temp.wear()),
-  pg_temp.hour('w-wear',61,pg_temp.wear()))))->>'accepted','3','sleep, resting and hourly heart-rate readings with the watch origin are stored');
-select is(pg_temp.marks('["sleep_duration","resting_heart_rate","heart_rate_window"]'),
-  '{"421":{"wear":false,"samsung":false},"51":{"wear":false,"samsung":false},"61":{"wear":false,"samsung":false}}'::jsonb,'and none of them is marked as the watch''s');
+  pg_temp.night('o-wear','spo2','percent',null,96,pg_temp.wear()),
+  pg_temp.hour('w-wear',61,pg_temp.wear()),
+  pg_temp.hour('w-phone',71,pg_temp.origin('health_connect','com.sec.android.app.shealth')),
+  pg_temp.hour('w-ring',81,pg_temp.origin('wear_sensor','com.example.ringapp')),
+  pg_temp.steps('st-wear',812,pg_temp.wear()),
+  pg_temp.steps('st-phone',790,pg_temp.origin('health_connect','com.google.android.apps.fitness')))))->>'accepted','8','sleep, resting, blood-oxygen, hourly heart-rate and step readings are stored, watch and phone side by side');
+select is(pg_temp.marks('["sleep_duration","resting_heart_rate","spo2"]'),
+  '{"421":{"wear":true,"samsung":false},"51":{"wear":true,"samsung":false},"96":{"wear":true,"samsung":false}}'::jsonb,'the watch''s sleep, resting rate and blood oxygen are each marked as the watch''s');
+select is(pg_temp.marks('["heart_rate_window"]'),
+  '{"61":{"wear":true,"samsung":false},"71":{"wear":false,"samsung":true},"81":{"wear":false,"samsung":false}}'::jsonb,'the watch''s heart-rate hour is the watch''s; the phone''s hour beside it and another package''s are not');
+select is(pg_temp.marks('["steps_window"]'),
+  '{"812":{"wear":true,"samsung":false},"790":{"wear":false,"samsung":false}}'::jsonb,'the watch''s step hour is the watch''s; the phone''s is not');
+-- An hour of heart rate is returned with its lowest and its highest, whoever wrote it; no other signal carries either.
+select is((select jsonb_build_object('min',s->'min','max',s->'max') from jsonb_array_elements(pg_temp.read('["heart_rate_window"]')->'sources'->0->'samples') s where s->>'value'='61'),
+  '{"min":56,"max":69}'::jsonb,'the watch''s heart-rate hour returns its lowest under min and its highest under max');
+select is((select jsonb_build_object('min',s->'min','max',s->'max') from jsonb_array_elements(pg_temp.read('["heart_rate_window"]')->'sources'->0->'samples') s where s->>'value'='71'),
+  '{"min":66,"max":79}'::jsonb,'and so does the phone''s');
+select ok(not exists (select 1 from jsonb_array_elements(pg_temp.read('["steps_window","spo2","resting_heart_rate"]')->'sources'->0->'samples') s where s ? 'min' or s ? 'max'),
+  'a step hour, a blood-oxygen reading and a resting rate carry no min or max');
 
 -- The same reading in another source's batch is not the watch's: the watch app's night rides the Health Connect batch only.
 select is(pg_temp.h('consent_grant','wear-owner',jsonb_build_object('request_id','grant-w-apple001','source','apple','purpose','storage_compute','version',2,'expected_epoch',0,'age_attested_18_plus',true))->'consent'->>'status','granted','the owner grants storage for Apple Health too');
@@ -69,8 +88,8 @@ select is(pg_temp.h('ingest','wear-owner',pg_temp.batch('wear-0003',null::text,'
 select is((select coalesce(s->'waldo_wear','false'::jsonb) from jsonb_array_elements(pg_temp.read('["overnight_hrv"]')->'sources') src, jsonb_array_elements(src->'samples') s
   where src->>'source'='apple' and s->>'value'='47'),'false'::jsonb,'but it is not marked as the watch''s');
 
-select ok(position('com.heywaldo.app' in pg_temp.read('["overnight_hrv","sleep_duration","resting_heart_rate","heart_rate_window"]')::text)=0
-  and position('wear_sensor' in pg_temp.read('["overnight_hrv","sleep_duration","resting_heart_rate","heart_rate_window"]')::text)=0,'no package name or read API appears anywhere in the read');
+select ok(position('com.heywaldo.app' in pg_temp.read('["overnight_hrv","sleep_duration","resting_heart_rate","heart_rate_window","steps_window","spo2"]')::text)=0
+  and position('wear_sensor' in pg_temp.read('["overnight_hrv","sleep_duration","resting_heart_rate","heart_rate_window","steps_window","spo2"]')::text)=0,'no package name or read API appears anywhere in the read');
 
 select * from finish();
 rollback;

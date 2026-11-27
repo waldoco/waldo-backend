@@ -54,6 +54,8 @@ export type AppHealthInput = Readonly<{
   formCurve?: boolean;
   // On, the night's RMSSD from Waldo's own watch app counts toward Recovery; off, the recompute leaves it out.
   wearHrv?: boolean;
+  // On, the watch app's all-day readings (hours of heart rate and steps, blood oxygen, resting rate) count; off, they are left out.
+  wearAllDay?: boolean;
   // On, the recompute reads the owner's health settings and computes on the sleep need they stated.
   coaching?: boolean;
   // The owner's calendar busy minutes for Weight, read from the owner's Durable Object. Without it Weight is unavailable.
@@ -267,7 +269,7 @@ const settings = async ({ request, doName, rpc, readBody, defer, notifySettings 
 
 // A batch that changed nothing (a replay, or only ignored readings) leaves every derived row as it was. The recompute cannot
 // fail the ingest: it starts after the database has answered and its outcome is not part of the response.
-const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, notifyZoneChange, trainingLoad, coaching, wearHrv, scoreParts, usual, dayLoad, passiveLoad, stressCurve, formCurve }: AppHealthInput, result: unknown, timezone: string, woke: boolean, workout: boolean): void => {
+const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, notifyZoneChange, trainingLoad, coaching, wearHrv, wearAllDay, scoreParts, usual, dayLoad, passiveLoad, stressCurve, formCurve }: AppHealthInput, result: unknown, timezone: string, woke: boolean, workout: boolean): void => {
   const receipt = healthIngestReceiptV1Schema.safeParse(result);
   if (!defer || (!notifySamples && !compute) || !receipt.success || receipt.data.replayed || receipt.data.accepted + receipt.data.deleted === 0) return;
   const here = async () => compute && produceHealthScores({
@@ -284,6 +286,7 @@ const recompute = ({ rpc, doName, defer, notifySamples, compute, readDemand, not
     ...(stressCurve ? { stressCurve } : {}),
     ...(formCurve ? { formCurve, readCurves: () => invokeHealth(rpc, doName, 'form_curves_read', '{}') } : {}),
     ...(wearHrv ? { wearHrv } : {}),
+    ...(wearAllDay ? { wearAllDay } : {}),
     ...(coaching ? { readSettings: () => invokeHealth(rpc, doName, 'settings_read', '{}') } : {}),
     ...(readDemand ? { readDemand } : {}),
     ...(notifyZoneChange ? { onZoneChange: notifyZoneChange } : {}),

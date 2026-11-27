@@ -88,6 +88,13 @@ describe('HEALTH_WEAR_HRV in the Worker config', () => {
   });
 });
 
+describe('HEALTH_WEAR_ALL_DAY in the Worker config', () => {
+  it('is on in staging only, with migration 20261126100000 applied first, and off in production', () => {
+    expect(parsed.vars.HEALTH_WEAR_ALL_DAY).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_WEAR_ALL_DAY).toBe('1');
+  });
+});
+
 describe('MEDICATIONS in the Worker config', () => {
   // The owner turned it on for staging only; the staging deploy that carries it must have migration 20261101040000 applied.
   it('is on in staging only, and off in production', () => {

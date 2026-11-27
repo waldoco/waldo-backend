@@ -92,11 +92,14 @@ export const getHealthResultSchema = z.discriminatedUnion('state', [
       source: z.enum(['apple', 'samsung', 'health_connect', 'whoop']),
       // A wrist temperature is absolute or a delta against the platform's own baseline, never the two blended.
       method: z.enum(['asleep', 'rmssd', 'sdnn', 'absolute', 'baseline_delta']).nullable(),
-      days: z.array(z.strictObject({ day: healthReadDaySchema, value: z.number().nullable() })).optional(),
+      // The signal's readings came from Waldo's own watch app, which the owner can be told as "your watch". Absent otherwise.
+      from_watch: z.literal(true).optional(),
+      // heart_rate's days and hours carry the lowest and highest its hourly windows saw, when every window held them.
+      days: z.array(z.strictObject({ day: healthReadDaySchema, value: z.number().nullable(), min: z.number().optional(), max: z.number().optional() })).optional(),
       // Null when no asked day has a value: nothing is invented.
       summary: z.strictObject({ mean: z.number().nullable(), min: z.number().nullable(), max: z.number().nullable(), days_with_value: z.int().nonnegative() }).optional(),
       // An hourly read: each hour that has a value, oldest first, by its local start.
-      hours: z.array(z.strictObject({ at: healthReadLocalTimeSchema, value: z.number() })).max(HEALTH_READ_MAX_HOURLY_DAYS * 25).optional(),
+      hours: z.array(z.strictObject({ at: healthReadLocalTimeSchema, value: z.number(), min: z.number().optional(), max: z.number().optional() })).max(HEALTH_READ_MAX_HOURLY_DAYS * 25).optional(),
       // A nightly read: each night that has a value, oldest first, with its reading's local start and end.
       nights: z.array(z.strictObject({ day: healthReadDaySchema, from: healthReadLocalTimeSchema, to: healthReadLocalTimeSchema, value: z.number() })).max(HEALTH_READ_MAX_DAYS).optional(),
     })).max(healthReadSignalSchema.options.length),

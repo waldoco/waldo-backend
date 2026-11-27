@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  appHealthRoutesV1, checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_COACH_REVISION_V1, HEALTH_NUTRITION_REVISION_V1, HEALTH_OBSERVED_PEAK_REVISION_V1, HEALTH_WEAR_SENSOR_REVISION_V1, HEALTH_WEAR_PACKAGE_V1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
+  appHealthRoutesV1, checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_COACH_REVISION_V1, HEALTH_NUTRITION_REVISION_V1, HEALTH_OBSERVED_PEAK_REVISION_V1, HEALTH_WEAR_SENSOR_REVISION_V1, HEALTH_WEAR_ALL_DAY_REVISION_V1, HEALTH_WEAR_PACKAGE_V1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
   healthApiErrorV1Schema, healthBaselineV1Schema, healthChangeRejectionReasonV1Schema, healthDriverPhraseV1Schema, healthEnergyWindowV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema,
   healthConsentListV1Schema, healthConsentVersionV1, healthConsentWithdrawV1Schema, healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthSampleV1Schema,
   HEALTH_SCORES_HISTORY_REVISION_V1, healthScoresHistoryQueryV1Schema, healthScoresHistoryResponseV1Schema,
@@ -953,7 +953,7 @@ describe('health revision 15: an hour\'s heart-rate bins and the day\'s load cou
 });
 
 // Health revision 11: Waldo's own watch app measures beat intervals overnight and the phone sends one night's RMSSD from them.
-// Its origin is read_api wear_sensor with Waldo's package, and that origin rides an overnight RMSSD reading only.
+// Its origin is read_api wear_sensor with Waldo's package; overnight, that origin rides an RMSSD reading only.
 describe('health revision 11: the night\'s RMSSD from Waldo\'s watch app', () => {
   const wear = { read_api: 'wear_sensor', source_bundle_id: null, source_package_name: HEALTH_WEAR_PACKAGE_V1, source_version: null, source_revision: null, device_ref: null, recording_method: 'automatic' };
   const night = { ...common, sample_id: 'overnight_hrv:wear:rmssd:2026-10-10', start_at: '2026-10-09T23:10:00+05:30', end_at: '2026-10-10T06:40:00+05:30', origin: wear };
@@ -967,21 +967,62 @@ describe('health revision 11: the night\'s RMSSD from Waldo\'s watch app', () =>
     expect(healthIngestV1Schema.safeParse({ ...batch, source: 'health_connect', samples: [rmssd] }).success).toBe(true);
     expect(checkHealthChangeV1('sample', 0, rmssd)).toMatchObject({ ok: true });
   });
-  it('refuses the watch origin on anything but an overnight RMSSD reading from Waldo\'s package, and an unknown read API', () => {
-    const hourly = { ...hour, sample_id: 'wear:hr:1', origin: wear };
+  it('refuses the watch origin on an overnight reading that is not RMSSD, from another package, and an unknown read API', () => {
+    const hourly = { ...hour, sample_id: 'wear:hrv:1', origin: wear };
     rejected(healthSampleV1Schema, [
       { ...rmssd, method: 'sdnn' },
       { ...rmssd, origin: { ...wear, source_package_name: 'com.example.ringapp' } },
       { ...rmssd, origin: { ...wear, source_package_name: null } },
       { ...rmssd, origin: { ...wear, read_api: 'wear' } },
-      { ...hourly, signal: 'heart_rate_window', unit: 'beats_per_minute', value: 60, min: 52, max: 70, n_samples: 60 },
       { ...hourly, signal: 'hrv_window', unit: 'milliseconds', method: 'rmssd', value: 40 },
       { ...night, signal: 'sleep_duration', unit: 'minutes', method: 'asleep_duration', value: 420 },
-      { ...night, signal: 'resting_heart_rate', unit: 'beats_per_minute', method: 'overnight_resting', value: 52 },
     ]);
     expect(checkHealthChangeV1('sample', 2, { ...rmssd, method: 'sdnn' })).toMatchObject({ ok: false, rejection: { index: 2, signal: 'overnight_hrv', reason: 'invalid_sample' } });
   });
   it('leaves Waldo\'s package valid under any other read API, which no backend marks as the watch\'s', () => {
     expect(healthSampleV1Schema.safeParse({ ...rmssd, origin: { ...wear, read_api: 'health_connect' } }).success).toBe(true);
+  });
+});
+
+// Health revision 19: the watch app's all-day readings, in the same Health Connect batch under the same origin. Each is a kind
+// the contract already has, in its existing shape; the watch's hour has its own sample id beside the phone's.
+describe('health revision 19: the watch app\'s all-day readings', () => {
+  const wear = { read_api: 'wear_sensor', source_bundle_id: null, source_package_name: HEALTH_WEAR_PACKAGE_V1, source_version: null, source_revision: null, device_ref: null, recording_method: 'automatic' };
+  const watchHour = { ...hour, revision: 1_791_000_000, origin: wear };
+  const heart = { ...watchHour, sample_id: 'heart_rate_window:wear:2026-10-10T06', signal: 'heart_rate_window', unit: 'beats_per_minute', value: 64, min: 52, max: 97, n_samples: 58 };
+  const steps = { ...watchHour, sample_id: 'steps_window:wear:2026-10-10T06', signal: 'steps_window', unit: 'count', value: 812 };
+  const spo2 = { ...common, sample_id: 'spo2:wear:2026-10-10T03:12', start_at: '2026-10-10T03:12:00+05:30', end_at: '2026-10-10T03:12:00+05:30', origin: wear, signal: 'spo2', unit: 'percent', value: 96 };
+  const resting = { ...common, sample_id: 'resting_heart_rate:wear:2026-10-10', start_at: '2026-10-09T23:10:00+05:30', end_at: '2026-10-10T06:40:00+05:30', origin: wear, signal: 'resting_heart_rate', unit: 'beats_per_minute', method: 'overnight_resting', value: 51 };
+
+  it('is health revision 19, above every open health revision', () => expect(HEALTH_WEAR_ALL_DAY_REVISION_V1).toBe(19));
+  it('takes an hour of heart rate and of steps, a blood-oxygen reading and a resting rate, beside the phone\'s own hour', () => {
+    const phoneHour = { ...hour, sample_id: 'hc:heart_rate_window:2026-10-10T06', signal: 'heart_rate_window', unit: 'beats_per_minute', value: 66, min: 55, max: 94, n_samples: 60 };
+    expect(healthIngestV1Schema.safeParse({ ...batch, source: 'health_connect', samples: [heart, steps, spo2, resting, phoneHour] }).success).toBe(true);
+    [heart, steps, spo2, resting].forEach((sample, i) => expect(checkHealthChangeV1('sample', i, sample)).toMatchObject({ ok: true }));
+    expect(healthSampleV1Schema.safeParse({ ...resting, method: undefined }).success).toBe(true);
+  });
+  it('keeps each kind\'s own rules: an hour is a whole local hour, and its mean lies inside its range', () => {
+    rejected(healthSampleV1Schema, [
+      { ...heart, end_at: '2026-10-10T06:30:00+05:30' },
+      { ...heart, min: 70 },
+      { ...steps, start_at: '2026-10-10T06:15:00+05:30', end_at: '2026-10-10T07:15:00+05:30' },
+      { ...spo2, value: 40 },
+    ]);
+  });
+  it('refuses the watch origin on every other kind, and on the all-day kinds from another package', () => {
+    const others = [
+      { ...watchHour, sample_id: 'active_energy_window:wear:1', signal: 'active_energy_window', unit: 'kilocalories', value: 80 },
+      { ...watchHour, sample_id: 'hrv_window:wear:1', signal: 'hrv_window', unit: 'milliseconds', method: 'rmssd', value: 40 },
+      { ...watchHour, sample_id: 'stand_hour:wear:1', signal: 'stand_hour', unit: 'count', value: 1 },
+      { ...spo2, signal: 'respiratory_rate', unit: 'breaths_per_minute', value: 14 },
+    ];
+    others.forEach(sample => expect(healthSampleV1Schema.safeParse({ ...sample, origin: undefined }).success, sample.signal).toBe(true));
+    rejected(healthSampleV1Schema, [
+      ...others,
+      { ...heart, origin: { ...wear, source_package_name: 'com.example.ringapp' } },
+      { ...steps, origin: { ...wear, source_package_name: null } },
+      { ...spo2, origin: { ...wear, source_package_name: 'com.sec.android.app.shealth' } },
+    ]);
+    expect(checkHealthChangeV1('sample', 1, { ...heart, origin: { ...wear, source_package_name: 'com.example.ringapp' } })).toMatchObject({ ok: false, rejection: { index: 1, signal: 'heart_rate_window', reason: 'invalid_sample' } });
   });
 });

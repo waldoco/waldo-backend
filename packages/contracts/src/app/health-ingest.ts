@@ -223,13 +223,20 @@ export const HEALTH_NUTRITION_REVISION_V1 = 7;
 const grams = z.number().finite().min(0).max(1_000);
 // Health revision 11: Waldo's own watch app reads beat intervals overnight and the phone sends the night's RMSSD from them, in
 // its Health Connect batch, with origin read_api wear_sensor and Waldo's package. The intervals stay on the phone. That origin
-// is admitted on an overnight RMSSD reading only, whatever revision the request names: the number gates no behaviour. An older
-// build never sends it; an older backend rejects that reading alone.
+// is admitted on an overnight RMSSD reading, and on the all-day kinds of revision 19, whatever revision the request names: the
+// number gates no behaviour. An older build never sends it; an older backend rejects that reading alone.
 export const HEALTH_WEAR_SENSOR_REVISION_V1 = 11;
 export const HEALTH_WEAR_PACKAGE_V1 = 'com.heywaldo.app';
+// Health revision 19: the watch app's all-day readings ride the same batch under the same origin: an hour's heart rate (its
+// mean, lowest, highest and count) and steps, a blood-oxygen reading and a resting heart rate, each in its existing shape. A
+// watch hour carries its own sample id, so it never replaces the phone's Health Connect hour at ingest. As with revision 11,
+// the number gates no behaviour: the origin is admitted on these kinds whatever revision the request names.
+export const HEALTH_WEAR_ALL_DAY_REVISION_V1 = 19;
+const WEAR_ALL_DAY_SIGNALS: readonly string[] = ['heart_rate_window', 'steps_window', 'spo2', 'resting_heart_rate'];
 const isWearReading = (sample: { signal: string; method?: string | undefined; origin?: { read_api: string; source_package_name: string | null } | undefined }) =>
   sample.origin?.read_api !== 'wear_sensor'
-  || (sample.signal === 'overnight_hrv' && sample.method === 'rmssd' && sample.origin.source_package_name === HEALTH_WEAR_PACKAGE_V1);
+  || (sample.origin.source_package_name === HEALTH_WEAR_PACKAGE_V1
+    && ((sample.signal === 'overnight_hrv' && sample.method === 'rmssd') || WEAR_ALL_DAY_SIGNALS.includes(sample.signal)));
 // Time in five heart-rate zones. The phone reads the beats and buckets them on the bounds it names, so the backend never sees a
 // beat series: lower_bounds_bpm are where zones 2 to 5 start, rising, on the named basis. A provider that reports only zone
 // durations (WHOOP's zone zero folds into zone 1) has no bounds. The zones' time fits inside the session, with a minute's slack.
@@ -325,7 +332,7 @@ export const healthSampleV1Schema = z.discriminatedUnion('signal', [
   .refine(sample => !WINDOW_SIGNALS.includes(sample.signal) || isLocalHourBucket(sample), 'window signals are fixed local-hour buckets')
   .refine(sample => sample.signal !== 'heart_rate_window' || (sample.min <= sample.value && sample.value <= sample.max), 'heart-rate window mean outside its range')
   .refine(sample => sample.signal !== 'sleep_duration' || stagesMatchContext(sample), 'sleep stages disagree with their intervals')
-  .refine(isWearReading, 'the watch origin is an overnight RMSSD reading from Waldo\'s package');
+  .refine(isWearReading, 'the watch origin is a kind Waldo\'s watch app sends, from Waldo\'s package');
 export const healthSignalV1Schema = z.enum([
   'sleep_duration', 'sleep_efficiency', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'daylight_duration', 'movement_duration',
   'heart_rate_window', 'hrv_window', 'spo2', 'respiratory_rate', 'steps_window', 'active_energy_window', 'workout',

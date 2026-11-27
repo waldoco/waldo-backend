@@ -140,14 +140,16 @@ export const localDayOf = (now: Date, timeZone: string): string => {
   return `${get('year')}-${get('month')}-${get('day')}`;
 };
 
-type Group = Readonly<{ source: string; method: Method | null; readings: readonly Reading[] }>;
+type Group = Readonly<{ source: string; method: Method | null; fromWatch: boolean; readings: readonly Reading[] }>;
 // One source per signal, the one with the most readings; for a signal with methods one method as well, so they never blend.
+// The readings from Waldo's own watch app are a group of their own inside their source: the phone holds the same hour from
+// its own store under another id, so taking both would count an hour's steps twice. On a tie the phone's readings stand.
 // For a signal summed over a day, a part of a reading (a food entry's protein) is given for that day only when every reading
 // that day carries it, so a day's sum is never a partial one. A signal that takes one reading (a night's deep sleep) is
 // unaffected by another reading that lacks the part.
 export const chooseGroup = (signal: HealthReadSignal, sources: readonly Readonly<{ source: string; readings: readonly Reading[] }>[]): Group | null => {
   const spec = SIGNALS[signal];
-  const groups = new Map<string, { source: string; method: Method | null; readings: Reading[] }>();
+  const groups = new Map<string, { source: string; method: Method | null; fromWatch: boolean; readings: Reading[] }>();
   const partial = new Set<string>();
   for (const source of sources) {
     for (const reading of source.readings) {
@@ -157,14 +159,15 @@ export const chooseGroup = (signal: HealthReadSignal, sources: readonly Readonly
       if (spec.methods && method === null) continue;
       const value = spec.value ? spec.value(reading) : reading.value;
       if (value === null) { if (spec.fold === 'sum') partial.add(`${source.source}\u0000${reading.day}`); continue; }
-      const key = `${source.source}\u0000${method ?? ''}`;
-      const group = groups.get(key) ?? { source: source.source, method, readings: [] };
+      const fromWatch = reading.waldoWear === true;
+      const key = `${source.source}\u0000${method ?? ''}\u0000${fromWatch ? 'watch' : ''}`;
+      const group = groups.get(key) ?? { source: source.source, method, fromWatch, readings: [] };
       group.readings.push({ ...reading, value });
       groups.set(key, group);
     }
   }
   const whole = [...groups.values()].map(group => ({ ...group, readings: group.readings.filter(reading => !partial.has(`${group.source}\u0000${reading.day}`)) })).filter(group => group.readings.length > 0);
-  return whole.sort((a, b) => b.readings.length - a.readings.length || a.source.localeCompare(b.source) || (a.method ?? '').localeCompare(b.method ?? ''))[0] ?? null;
+  return whole.sort((a, b) => b.readings.length - a.readings.length || a.source.localeCompare(b.source) || (a.method ?? '').localeCompare(b.method ?? '') || Number(a.fromWatch) - Number(b.fromWatch))[0] ?? null;
 };
 
 export const foldDay = (fold: Fold, readings: readonly Reading[], timezone: string): number | null => {
@@ -175,6 +178,16 @@ export const foldDay = (fold: Fold, readings: readonly Reading[], timezone: stri
 };
 
 const methodOf = (signal: HealthReadSignal, group: Group): Method | null => (signal === 'sleep' ? 'asleep' : group.method);
+// Heart rate's lowest and highest over a day or an hour: the lowest of its windows' lowest and the highest of their highest,
+// each given only when every window carries it, so a range is never read from part of the day.
+const rangeOf = (signal: HealthReadSignal, readings: readonly Reading[]): Readonly<{ min?: number; max?: number }> => {
+  if (signal !== 'heart_rate' || readings.length === 0) return {};
+  const lows = readings.map(reading => reading.min), highs = readings.map(reading => reading.max);
+  return {
+    ...(lows.every((low): low is number => typeof low === 'number') ? { min: round1(Math.min(...lows)) } : {}),
+    ...(highs.every((high): high is number => typeof high === 'number') ? { max: round1(Math.max(...highs)) } : {}),
+  };
+};
 
 // The read names an hourly or a nightly read takes: those whose stored kind carries a value each hour, or once a night.
 const readsOfGrain = (grain: 'hour' | 'night'): HealthReadSignal[] => (Object.keys(SIGNALS) as HealthReadSignal[]).filter((signal) => HEALTH_SIGNALS[SIGNALS[signal].stored].grain === grain);
@@ -185,7 +198,7 @@ const byHour = (signal: HealthReadSignal, readings: readonly Reading[], timezone
   for (const reading of readings) if (reading.startAt) { const at = Date.parse(reading.startAt); hours.set(at, [...(hours.get(at) ?? []), reading]); }
   return [...hours.entries()].sort(([a], [b]) => a - b).flatMap(([at, held]) => {
     const value = foldDay(SIGNALS[signal].fold, held, timezone);
-    return value === null ? [] : [{ at: localIso(at, timezone), value }];
+    return value === null ? [] : [{ at: localIso(at, timezone), value, ...rangeOf(signal, held) }];
   });
 };
 // A day's night: its newest reading with a start and an end, and when it began and ended.
@@ -196,11 +209,12 @@ const nightOf = (day: string, readings: readonly Reading[], timezone: string) =>
 
 const allowlist = triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('get_health'));
 
-// wearHrv: the wear-HRV switch. Off, the night's RMSSD from Waldo's own watch app is left out here as in every score.
-export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock, options: Readonly<{ wearHrv?: boolean }> = {}): ToolHandler<GetHealthArgs, GetHealthResult, ToolDispatcherContext> => ({
+// wearHrv and wearAllDay: the wear switches. Off, the night's RMSSD and the all-day readings from Waldo's own watch app are
+// each left out here as in every score.
+export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock, options: Readonly<{ wearHrv?: boolean; wearAllDay?: boolean }> = {}): ToolHandler<GetHealthArgs, GetHealthResult, ToolDispatcherContext> => ({
   name: 'get_health',
   description:
-    "The owner's own health readings, up to 31 days ending today, one source per signal: by local day, a summary, hourly over at most two days (heart_rate, daytime_hrv, steps, movement, daylight, active_energy, stand_hours), or nightly with each night's start and end (sleep and its stages, sleep_midpoint, sleep_efficiency, hrv, wrist_temperature). Sleep is time asleep, never time in bed. HRV, daytime_hrv and wrist temperature carry their method, never blended. heart_rate, daytime_hrv, respiratory_rate, spo2 and hr_recovery are day means. food_energy, protein, carbs and fat are what the owner's food app logged; a macro is missing on a day an entry lacked it. Context for a plan, never a judgement of what the owner ate. The numbers stay in this turn and are never stored or logged.",
+    "The owner's own health readings, up to 31 days ending today, one source per signal: by local day, a summary, hourly over at most two days (heart_rate, daytime_hrv, steps, movement, daylight, active_energy, stand_hours), or nightly with each night's start and end (sleep and its stages, sleep_midpoint, sleep_efficiency, hrv, wrist_temperature). Sleep is time asleep, never time in bed. HRV, daytime_hrv and wrist temperature carry their method, never blended. heart_rate (with min and max), daytime_hrv, respiratory_rate, spo2 and hr_recovery are day means. food_energy, protein, carbs and fat are what the owner's food app logged; a macro is missing on a day an entry lacked it. Context for a plan, never a judgement of what the owner ate. The numbers stay in this turn and are never stored or logged.",
   schema: getHealthArgsSchema,
   trigger_allowlist: allowlist,
   autonomy_gated: false,
@@ -229,7 +243,7 @@ export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock, option
     const parsed = parseSeries(raw);
     if (parsed.kind === 'no_consent') return unavailable('consent_required');
     if (parsed.kind === 'failed') return unavailable('read_failed');
-    const read = options.wearHrv === true ? parsed.series : withoutWear(parsed.series);
+    const read = withoutWear(parsed.series, { hrv: options.wearHrv === true, allDay: options.wearAllDay === true });
     const sources = untruncated(read, 'get_health_truncated').sources.filter((source) => consent.sources.has(source.source));
     const days: string[] = [];
     for (let day = args.from; daysBetween(day, args.to) >= 0; day = shiftDay(day, 1)) days.push(day);
@@ -245,10 +259,10 @@ export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock, option
         byDay.set(reading.day, [...(byDay.get(reading.day) ?? []), reading]);
         newest = Math.max(newest, instantOf(reading, timezone));
       }
-      const values = days.map((day) => ({ day, value: foldDay(SIGNALS[signal].fold, byDay.get(day) ?? [], timezone) }));
+      const values = days.map((day) => ({ day, value: foldDay(SIGNALS[signal].fold, byDay.get(day) ?? [], timezone), ...rangeOf(signal, byDay.get(day) ?? []) }));
       const present = values.map((entry) => entry.value).filter((value): value is number => value !== null);
       valued += present.length;
-      const base = { signal, unit: SIGNALS[signal].unit, source: group.source as Available['source'], method: methodOf(signal, group) };
+      const base = { signal, unit: SIGNALS[signal].unit, source: group.source as Available['source'], method: methodOf(signal, group), ...(group.fromWatch ? { from_watch: true as const } : {}) };
       const held = (day: string) => byDay.get(day) ?? [];
       series.push(args.aggregation === 'summary'
         ? { ...base, summary: { mean: present.length ? round1(present.reduce((total, value) => total + value, 0) / present.length) : null, min: present.length ? Math.min(...present) : null, max: present.length ? Math.max(...present) : null, days_with_value: present.length } }

@@ -63,6 +63,84 @@ describe('get_health and the night\'s RMSSD from Waldo\'s watch app', () => {
   });
 });
 
+// The watch app's all-day readings ride the Health Connect batch beside the phone's own hours, each under its own id, so the
+// read can hold two readings of one hour: the watch's (marked waldo_wear) and the phone's. They are one group each.
+describe('get_health and the all-day readings from Waldo\'s watch app', () => {
+  const at = (hour: number) => ({ start_at: `2026-10-12T0${hour}:00:00Z`, end_at: `2026-10-12T0${hour + 1}:00:00Z` });
+  const phone = [
+    reading('steps_window', '2026-10-12', 400, at(3)), reading('steps_window', '2026-10-12', 600, at(4)),
+    reading('heart_rate_window', '2026-10-12', 62, { ...at(3), min: 55, max: 80 }), reading('heart_rate_window', '2026-10-12', 70, { ...at(4), min: 60, max: 95 }),
+    reading('resting_heart_rate', '2026-10-12', 56),
+  ];
+  const watch = [
+    ...[450, 640, 300].map((value, i) => reading('steps_window', '2026-10-12', value, { ...at(3 + i), waldo_wear: true })),
+    reading('heart_rate_window', '2026-10-12', 64, { ...at(3), min: 54, max: 82, waldo_wear: true }),
+    reading('heart_rate_window', '2026-10-12', 71, { ...at(4), min: 58, max: 99, waldo_wear: true }),
+    reading('heart_rate_window', '2026-10-12', 66, { ...at(5), min: 60, max: 74, waldo_wear: true }),
+    reading('spo2', '2026-10-12', 96, { start_at: '2026-10-11T21:40:00Z', end_at: '2026-10-11T21:40:00Z', waldo_wear: true }),
+    reading('overnight_hrv', '2026-10-12', 41.5, { method: 'rmssd', start_at: '2026-10-11T17:30:00Z', end_at: '2026-10-12T00:45:00Z', waldo_wear: true }),
+  ];
+  const day = (samples: unknown[]) => ({ access: 'granted', read_at: '2026-10-13T06:00:00.000Z', sources: [{ source: 'health_connect', consent_epoch: 3, samples }] });
+  const handlers = (samples: unknown[]) => {
+    const book = healthReadBook(async (fn: string) => (fn === 'health_consent_list' ? consent('granted', 'granted', 'health_connect') : day(samples)), 'do-x');
+    return { off: getHealthHandler(book, clock), allDay: getHealthHandler(book, clock, { wearAllDay: true }), both: getHealthHandler(book, clock, { wearHrv: true, wearAllDay: true }) };
+  };
+  const signals = (result: unknown) => {
+    const parsed = getHealthResultSchema.parse((result as { data: unknown }).data);
+    return parsed.state === 'available' ? Object.fromEntries(parsed.signals.map(entry => [entry.signal, entry])) : {};
+  };
+  const daily = { signals: ['steps' as const, 'heart_rate' as const, 'spo2' as const, 'hrv' as const, 'resting_hr' as const], from: '2026-10-12', to: '2026-10-12', aggregation: 'daily' as const };
+
+  it('off, reads only the phone\'s readings, as every score does, and says nothing of a watch', async () => {
+    const read = signals(await handlers([...phone, ...watch]).off.handle(daily, ctx));
+    expect(read.steps).toEqual({ signal: 'steps', unit: 'count', source: 'health_connect', method: null, days: [{ day: '2026-10-12', value: 1000 }] });
+    expect(read.heart_rate).toEqual({ signal: 'heart_rate', unit: 'bpm', source: 'health_connect', method: null, days: [{ day: '2026-10-12', value: 66, min: 55, max: 95 }] });
+    expect(read.resting_hr).toMatchObject({ days: [{ day: '2026-10-12', value: 56 }] });
+    expect(read.spo2).toBeUndefined();
+    expect(read.hrv).toBeUndefined();
+    expect(JSON.stringify(read)).not.toContain('from_watch');
+  });
+
+  it('on, takes the watch\'s readings of a signal whole when they are the larger group, never adding an hour the phone also holds', async () => {
+    const read = signals(await handlers([...phone, ...watch]).allDay.handle(daily, ctx));
+    expect(read.steps).toEqual({ signal: 'steps', unit: 'count', source: 'health_connect', method: null, from_watch: true, days: [{ day: '2026-10-12', value: 1390 }] });
+    expect(read.heart_rate).toEqual({ signal: 'heart_rate', unit: 'bpm', source: 'health_connect', method: null, from_watch: true, days: [{ day: '2026-10-12', value: 67, min: 54, max: 99 }] });
+    expect(read.spo2).toMatchObject({ from_watch: true, days: [{ day: '2026-10-12', value: 96 }] });
+    // A resting rate from each: one reading apiece, so the phone's stands.
+    expect(read.resting_hr).toEqual({ signal: 'resting_hr', unit: 'bpm', source: 'health_connect', method: null, days: [{ day: '2026-10-12', value: 56 }] });
+    // The night's RMSSD stays with the wear-HRV switch.
+    expect(read.hrv).toBeUndefined();
+    expect(signals(await handlers([...phone, ...watch]).both.handle(daily, ctx)).hrv).toMatchObject({ method: 'rmssd', from_watch: true, days: [{ day: '2026-10-12', value: 41.5 }] });
+  });
+
+  it('on, reads hours from one group too, with each hour\'s lowest and highest', async () => {
+    const result = await handlers([...phone, ...watch]).allDay.handle({ signals: ['steps', 'heart_rate'], from: '2026-10-12', to: '2026-10-12', aggregation: 'hourly' }, ctx);
+    const read = signals(result);
+    expect(read.steps).toMatchObject({ from_watch: true, hours: [{ at: '2026-10-12T08:30', value: 450 }, { at: '2026-10-12T09:30', value: 640 }, { at: '2026-10-12T10:30', value: 300 }] });
+    expect(read.heart_rate?.hours).toEqual([
+      { at: '2026-10-12T08:30', value: 64, min: 54, max: 82 }, { at: '2026-10-12T09:30', value: 71, min: 58, max: 99 }, { at: '2026-10-12T10:30', value: 66, min: 60, max: 74 },
+    ]);
+  });
+
+  it('on, keeps the phone\'s readings when the watch holds no more of a signal than the phone does', async () => {
+    const read = signals(await handlers([...phone, ...watch.filter(r => !(r.signal === 'steps_window' && r.start_at === at(5).start_at))]).allDay.handle(daily, ctx));
+    expect(read.steps).toEqual({ signal: 'steps', unit: 'count', source: 'health_connect', method: null, days: [{ day: '2026-10-12', value: 1000 }] });
+  });
+
+  it('gives heart rate a lowest or a highest only when every window that day or hour carries it', async () => {
+    const read = signals(await handlers([phone[2], { ...phone[3], min: undefined }]).off.handle({ signals: ['heart_rate'], from: '2026-10-12', to: '2026-10-12', aggregation: 'daily' }, ctx));
+    expect(read.heart_rate?.days).toEqual([{ day: '2026-10-12', value: 66, max: 95 }]);
+    const hourly = signals(await handlers([phone[2], { ...phone[3], min: undefined }]).off.handle({ signals: ['heart_rate'], from: '2026-10-12', to: '2026-10-12', aggregation: 'hourly' }, ctx));
+    expect(hourly.heart_rate?.hours).toEqual([{ at: '2026-10-12T08:30', value: 62, min: 55, max: 80 }, { at: '2026-10-12T09:30', value: 70, max: 95 }]);
+  });
+
+  it('tells the model heart rate carries its range, within the provider\'s description limit', () => {
+    const { handler } = fake({});
+    expect(handler.description).toContain('heart_rate (with min and max)');
+    expect(handler.description.length).toBeLessThanOrEqual(1024);
+  });
+});
+
 describe('get_health', () => {
   it('declares a turn-only output and serves owner turns', () => {
     const { handler } = fake({});
