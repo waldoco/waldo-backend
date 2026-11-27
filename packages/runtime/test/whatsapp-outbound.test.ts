@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { WHATSAPP_GRAPH_VERSION, WhatsAppApiError, createWhatsAppCaller, createWhatsAppMediaDownloader, createWhatsAppMediaUploader, deliverWhatsAppFile, whatsappTelegramShim } from '../src/channels/whatsapp-api';
 import { egressGuardedCaller } from '../src/channels/egress-guard';
-import { WA_LAST_INBOUND_KEY, WHATSAPP_HELD, WHATSAPP_HELD_RETENTION_MS, deliverHeldWhatsApp, SEND_UNASKED, recordWhatsAppInbound, templateFor, whatsappHeld, whatsappProactiveTemplateConfig, whatsappTemplateConfig, whatsappWindowCaller } from '../src/channels/whatsapp-window';
+import { WA_LAST_INBOUND_KEY, WHATSAPP_HELD, WHATSAPP_HELD_RETENTION_MS, WHATSAPP_KNOCK_EVERY_MS, deliverHeldWhatsApp, knockRevisitAt, SEND_UNASKED, recordWhatsAppInbound, templateFor, whatsappHeld, whatsappKnockFailed, whatsappProactiveTemplateConfig, whatsappTemplateConfig, whatsappWindowCaller } from '../src/channels/whatsapp-window';
 import { egressGate, gatedCaller } from '../src/channels/telegram-api';
 import { DOCX_MIME as DOCX } from '../src/channels/document-render';
 
@@ -315,6 +315,41 @@ describe('whatsapp 24-hour window', () => {
     clock.now = T0 + 30 * HOUR;
     await call('sendMessage', { chat_id: 1, text: 'd' });
     expect(graph).toHaveBeenCalledTimes(3);
+  });
+
+  it('with the daily knock, Waldo knocks at most once in 24 hours while something waits, whatever the owner wrote between', async () => {
+    const clock = { now: T0 };
+    const { kv, map, log } = setup(clock);
+    const graph = graphOk();
+    const call = whatsappWindowCaller(whatsappTelegramShim('tok', 'pn1', '15550001111', graph as unknown as typeof fetch), { kv, template, now: () => clock.now, log, dailyKnock: true });
+    await call('sendMessage', { chat_id: 1, text: 'a' });
+    clock.now = T0 + HOUR;
+    await call('sendMessage', { chat_id: 1, text: 'b' });
+    expect(sentBodies(graph).map(body => body.type)).toEqual(['template']);
+    // A reply that re-arms the per-window knock does not re-arm the daily one: Meta can close the window again the same day.
+    recordWhatsAppInbound(kv, [{ timestamp: String((T0 + 2 * HOUR) / 1000) }], T0 + 2 * HOUR);
+    kv.put('wa_window_refused_for', T0 + 2 * HOUR); kv.put('wa_window_refused_ids', []);
+    clock.now = T0 + 3 * HOUR;
+    await call('sendMessage', { chat_id: 1, text: 'c' });
+    expect(sentBodies(graph).map(body => body.type)).toEqual(['template']);
+    expect(knockRevisitAt(kv, clock.now)).toBe(T0 + WHATSAPP_KNOCK_EVERY_MS);
+    clock.now = T0 + WHATSAPP_KNOCK_EVERY_MS;
+    await call('sendMessage', { chat_id: 1, text: 'd' });
+    expect(sentBodies(graph).map(body => body.type)).toEqual(['template', 'template']);
+    expect([...map.keys()].filter(key => key.startsWith('wa_held:'))).toHaveLength(4);
+  });
+
+  it('a knock Meta accepted and then failed is logged by its closed reason, once, and other failures are not', async () => {
+    const clock = { now: T0 };
+    const graph = vi.fn(async () => Response.json({ messages: [{ id: 'wamid.knock' }] }));
+    const { kv, call, log } = setup(clock, graph as unknown as ReturnType<typeof graphOk>);
+    await call('sendMessage', { chat_id: 1, text: 'a' });
+    expect(log).toHaveBeenCalledWith(expect.objectContaining({ knocked: true }));
+    whatsappKnockFailed(kv, ['wamid.other'], log);
+    expect(log.mock.calls.filter(([event]) => event.code === 'knock_failed_after_accept')).toHaveLength(0);
+    whatsappKnockFailed(kv, ['wamid.other', 'wamid.knock'], log);
+    whatsappKnockFailed(kv, ['wamid.knock'], log);
+    expect(log.mock.calls.filter(([event]) => event.code === 'knock_failed_after_accept')).toHaveLength(1);
   });
 
   it('held messages go out in order once the owner replies, expired ones are dropped, and a failed send keeps the rest', async () => {
