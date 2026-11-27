@@ -325,10 +325,6 @@ export const createOwnerResponder = (
     hasApproval: ownerToolApproval,
     ...(privateOwner?.loopIsSourceBound ? { loopIsSourceBound: privateOwner.loopIsSourceBound } : {}), ...(privateOwner?.loopHasPassed ? { loopHasPassed: privateOwner.loopHasPassed } : {}),
     heldTool: (tool: string) => {
-      // A lean scheduled run is offered the shared menu but calls only its own job's list.
-      if (leanRun && backgroundToolNames !== undefined && !EVERY_RUN_TOOLS.includes(tool) && !backgroundToolNames.includes(tool)) {
-        return { ...toolError('forbidden'), fix: `Do not call it again; this run may call only: ${[...backgroundToolNames].sort().join(', ')}.` };
-      }
       if (!turnCapped() || !PAID_RUNG_TOOLS.has(tool)) return null;
       // The cost ledger counts each hold as a held:<tool> row, so the alpha shows how often the ceiling bites.
       log({ trace: traceId, hop: 'spend_hold', ms: 0, ok: false, code: `spend_ceiling_reached:${tool}`, error_code: 'spend_ceiling_reached' });
@@ -611,9 +607,13 @@ export const createOwnerResponder = (
       // Eligibility is read once here, so every round of this turn offers the same tool array.
       // Owner-turn-only tools: a job prompt never decides to bring back an approval, and only the owner's own turn has a chat waiting on a progress note.
       // A job's tool list names what it may reach; choosing a reviewed procedure reaches nothing, so every job may load one.
-      // A lean scheduled run is offered the shared menu; its own list is held at dispatch (safety.heldTool).
+      // With the harness loader, a run Waldo started with a list of tools reaches every tool the owner's turn would, through
+      // find_tools: its list only shapes its view (lean or not) and its direct tools. What it may do is checked per call at
+      // dispatch (taint, cards, held tools, the health fence), as in the owner's own turn. Without the loader every admitted
+      // tool would sit in the function list, so a run keeps its list; a lean run is offered the shared menu and may call all of it.
       const eligibilityStarted = Date.now();
-      const offered: readonly string[] | undefined = leanRun ? SCHEDULED_MENU : backgroundToolNames;
+      const fullReach = harnessLoader && backgroundToolNames !== undefined && backgroundToolNames.length > 0;
+      const offered: readonly string[] | undefined = fullReach ? undefined : leanRun ? SCHEDULED_MENU : backgroundToolNames;
       // A run that holds any tool can get a result too long to show, which points at read_tool_output, so it holds that too.
       const pointsBack = offered === undefined || offered.length > 0;
       // The owner's workspace opens only inside a live owner run's scope (owner-do openWorkspace), so a run that holds every tool

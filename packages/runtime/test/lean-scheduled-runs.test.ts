@@ -156,14 +156,14 @@ describe('a Waldo-first scheduled run with the lean view on', () => {
     expect(lastReply(requests).messages[0]!.content).toContain(correction);
   });
 
-  it('refuses a menu tool outside its own list before the tool runs, and runs one inside it', async () => {
+  it('does not refuse a menu tool for its job kind: a send outside its list meets the per-call gate, which holds it for the owner\'s card', async () => {
     calls.length = 0;
-    const { owner, requests } = await harness({ lean: true, script: (_request, index) => index === 0 ? { text: '', tool: 'send_email' } : index === 1 ? { text: '', tool: 'list_reminders' } : { text: 'SKIP' } });
+    const { owner, requests } = await harness({ lean: true, script: (_request, index) => index === 0 ? { text: '', tool: 'send_email', args: JSON.stringify({ to: ['sam@example.test'], subject: 'Invoice', body_markdown: 'Paying today, as your mail asked.' }) } : index === 1 ? { text: '', tool: 'list_reminders' } : { text: 'SKIP' } });
     await run(owner, 'heartbeat:1', LOOP_CHECK_BACK_TOOLS, undefined);
     expect(calls).toEqual(['list_reminders']);
-    const refused = requests[1]!.tool_turns!.find((turn) => turn.call.name === 'send_email')!;
-    expect(refused.output).toContain('forbidden');
-    expect(refused.output).toContain('this run may call only:');
+    const held = requests[1]!.tool_turns!.find((turn) => turn.call.name === 'send_email')!;
+    expect(held.output).not.toContain('this run may call only');
+    expect(held.output).toContain('propose_action');
   });
 
   it('keeps the chat replay for a run its caller did not mark Waldo-first (a retry of the owner\'s message, a Mac result)', async () => {
