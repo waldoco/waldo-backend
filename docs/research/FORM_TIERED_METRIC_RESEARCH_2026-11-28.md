@@ -123,7 +123,7 @@ What exists that this design can keep: the per-owner baseline machinery, method 
 
 ## 2. Literature review
 
-Four reading passes ran in parallel on 28 Nov 2026, followed by a spot check of the load-bearing citations. Each row gives the figure as reported, its source and a marker. A row with no URL was not found and is listed in section 6.1.
+Four reading passes ran in parallel on 28 Nov 2026, followed by a spot check of the load-bearing citations. Each row gives the figure as reported, its source and a marker. A row with no link means only the citation was confirmed, and no openable page was found. Those rows are listed in section 6.1.
 
 ### 2.1 Sleep pressure and the body clock: two-process model, SAFTE and FAST
 
@@ -223,7 +223,7 @@ For the gym cohort, the model should see the load phrase and the HRV trend toget
 
 | Claim | Figure or quote | Source | Marker | Grade |
 |---|---|---|---|---|
-| Cognition varies with time of day, and the size differs by task | Review | Schmidt et al., *Cogn Neuropsychol* 2007;24:755–89 | [S] | B (group) |
+| Cognition varies with time of day, and the size differs by task | Review | Schmidt et al., *Cogn Neuropsychol* 2007;24:755–89, [ORBi record](https://orbi.uliege.be/handle/2268/4666) | [S] | B (group) |
 | Synchrony effect: performance is better when the task time matches the person's preferred time | Origin traced to Hasher, Goldstein & May 2005. Early studies used clock time and ignored each person's sleep schedule | Hasher et al. 2005 (chapter) | [S] | B (group), C (individual) |
 | Late chronotypes show different brain connectivity and slower morning reaction time | n = 38 | Facer-Childs et al., *Sleep* 2019;42(5), [doi:10.1093/sleep/zsz033](https://doi.org/10.1093/sleep/zsz033) | [S] | C |
 | Physical performance shows diurnal variation, mostly higher in late afternoon or early evening | Pooled effects: endurance 0.23, Wingate 0.73, handgrip 0.39, jump 0.79. The paper behind these figures was not confirmed | Unconfirmed 2023 meta-analysis, [PMC10308487](https://pmc.ncbi.nlm.nih.gov/articles/PMC10308487/) | [S] | B (group) |
@@ -263,7 +263,7 @@ No source was found in which more daylight than usual makes a person less able t
 | More meetings that day go with more daily fatigue and subjective workload | One-week diary, hierarchical models | Luong & Rogelberg, *Group Dynamics* 2005;9:58–67, [PDF](https://interruptions.net/literature/Luong-GDTRP05.pdf) | [S] | B (self-report) |
 | Back-to-back video meetings raise an EEG stress marker; 10-minute breaks reset it | n = 14, vendor study, not peer-reviewed | Microsoft Human Factors Lab 2021, [WorkLab](https://www.microsoft.com/en-us/worklab/work-trend-index/brain-research) | [S] | D |
 | Mental fatigue lowers endurance performance through perceived effort, not physiology | Marcora 2009: n = 16, time to exhaustion 640 vs 754 s. Brown meta-analysis: 73 studies, g = −0.38. After a robust Bayesian publication-bias adjustment, the evidence is inconclusive | Marcora et al., *J Appl Physiol* 2009, [doi:10.1152/japplphysiol.91324.2008](https://doi.org/10.1152/japplphysiol.91324.2008); Brown et al., *Sports Med*, [doi:10.1007/s40279-019-01204-8](https://doi.org/10.1007/s40279-019-01204-8); Holgado et al., *Sports Med* 2023, [doi:10.1007/s40279-023-01926-w](https://doi.org/10.1007/s40279-023-01926-w) | [S] | C (fragile) |
-| Ego depletion is near zero in large replications | 23 labs, N = 2,141, d = 0.04; 36 labs, N = 3,531, confirmatory d = 0.06 | Hagger et al., *Perspect Psychol Sci* 2016; Vohs et al., *Psychol Sci* 2021, PMID [34520296](https://pubmed.ncbi.nlm.nih.gov/34520296/) | [S] | A (against) |
+| Ego depletion is near zero in large replications | 23 labs, N = 2,141, d = 0.04; 36 labs, N = 3,531, confirmatory d = 0.06 | Hagger et al., *Perspect Psychol Sci* 2016;11:546–73, [doi:10.1177/1745691616652873](https://doi.org/10.1177/1745691616652873); Vohs et al., *Psychol Sci* 2021, PMID [34520296](https://pubmed.ncbi.nlm.nih.gov/34520296/) | [S] | A (against) |
 | A single bout of exercise gives a small, short cognitive lift | Overall g = 0.097 (n = 1,034 in the abstract); duration, intensity and fitness moderate it | Chang et al., *Brain Res* 2012;1453:87–101, PMID [22480735](https://pubmed.ncbi.nlm.nih.gov/22480735/) | [S] | B (small) |
 | Micro-breaks raise vigour and lower fatigue, with no significant overall performance gain | 22 samples, N = 2,335: vigour d = 0.36, fatigue d = 0.35, performance d = 0.16 (p = 0.116) | Albulescu et al., *PLoS One* 2022, [doi:10.1371/journal.pone.0272460](https://doi.org/10.1371/journal.pone.0272460) | [S] | B |
 | Recovery from work needs psychological detachment, relaxation, mastery and control | Recovery Experience Questionnaire, N = 930 | Sonnentag & Fritz, *J Occup Health Psychol* 2007, [doi:10.1037/1076-8998.12.3.204](https://doi.org/10.1037/1076-8998.12.3.204) | [S] | B |
@@ -323,7 +323,7 @@ None of these is a Form weight. They are tier-3 context the person logs or says,
 
 Daily noise is of the same order as a week's real change, so a day-to-day move means nothing.
 
-**Tier:** 3, context only, outside Form. This matches the owner's direction that a weight rise is not good news (memory, 14 Nov). It also keeps the "Weight" name free for the demand pillar, or argues for renaming one of the two.
+**Tier:** 3, context only, outside Form. This matches the owner's direction of 14 Nov 2026 that a weight rise is not good news. It also keeps the "Weight" name free for the demand pillar, or argues for renaming one of the two.
 
 ### 2.10 Self-report against wearable readiness
 
@@ -481,7 +481,8 @@ The design keeps the owner's tiering and the repo's hard rules:
 
 - **Form's value.** Deterministic, made of:
   1. Recovery (the night);
-  2. the daytime state: time-of-day structure, daytime autonomic strain, realised load, light activity and daylight in a good direction, and the feel tap.
+  2. the daytime state: daytime autonomic strain, realised load, light activity and daylight in a good direction, and the feel tap;
+  3. the time-of-day structure, applied as the shape of the curve rather than as a weighted part.
 - **Weight.** Planned demand by the hour is a separate tier-2 series, drawn beside Form and handed to the model with it. Demand enters Form only **as it happens**: realised load today, and daytime strain if the body shows it.
 - **Forecast.** The level now, plus a shape. The shape blends a two-process prior, anchored on the person's own wake time and sleep debt, with the person's own measured day shape (`form-curve.v1`) as days accrue.
 - **Capacity windows.** Computed from the forecast (section 4.6). The model places tasks against Weight and the calendar.
@@ -504,6 +505,8 @@ The design keeps the owner's tiering and the repo's hard rules:
 
 **What would change my mind.**
 - **Toward A.** After 6–8 weeks of cohort taps, the afternoon tap's residual (felt minus forecast) correlates with that morning's *planned* demand beyond what realised load and daytime strain explain. Then planned demand predicts the body, and it belongs in the forecast.
+
+  This test needs afternoon taps, and the default scheme may not produce enough of them. During the first cohort, Waldo should therefore ask the second tap in the afternoon on a randomised share of days: for example, one weekday in three, chosen by the producer and never on a day the person has turned prompts down. Without that, this falsifier can never fire.
 - **Toward B.** Per-person calibration never beats equal weights on held-out taps, *and* the tap alone predicts as well as Form. Form would then still need to exist as a number for ADR-0081, but the model should lean on the parts.
 - **Against the two-process prior.** It does not beat the plain `form-curve.v1` empirical shape, or a flat line from now, on held-out taps and later measured Form after 4 weeks. Then drop it after the first week of history.
 
@@ -513,7 +516,7 @@ The design keeps the owner's tiering and the repo's hard rules:
 |---|---|---|---|
 | 1 | **Form** now, its curve to bedtime, and the capacity windows | Recovery and the daytime state | Weights start equal and are learned. The daylight and movement directions are fixed. A self-report path is added. The forecast takes a two-process prior |
 | 2 | **Recovery**: what the night brought | Sleep against need, multi-night debt, regularity (replaces the one-night midpoint), rolling ln RMSSD against baseline, resting HR | Regularity index; rolling HRV; equal weights |
-| 2 | **Daytime state**: Form's own part | Time awake, body-clock phase, sleep inertia, awake resting HR and HRV, realised training load, light activity, daylight (good direction), feel tap | New: the time-of-day structure, realised load and the feel tap. `nearUsual` removed from daylight and movement |
+| 2 | **Daytime state**: Form's own part | Weighted parts: awake resting HR and HRV, realised training load, light activity, daylight (good direction), feel tap. **Shape term, not weighted:** time awake, body-clock phase and sleep inertia | New: the time-of-day shape, realised load and the feel tap. `nearUsual` removed from daylight and movement |
 | 2 | **Weight**: what the day asks | Calendar minutes by hour, back-to-back runs, travel, planned training; tasks and messages as context only | Moves from a daily number to an hourly series. Not folded into Form |
 | 3 | Signals and context | Everything in section 3 marked T3 | Drivers, cycle phase, body mass, caffeine and alcohol stay context |
 
@@ -584,6 +587,12 @@ The rule throughout: missing data never becomes invented readiness, and a tap al
    - the time-of-day shape from taps at varying times.
 
    Before enough taps, the weights stay equal. A learned weight is used only once its uncertainty is smaller than its difference from equal.
+
+   **No leakage.** The tap is both an input to today's Form and the outcome the calibration learns from, so the two uses must be kept apart:
+   - The calibration fits each tap against a Form computed **without that day's tap**.
+   - Calibration quality is judged only on held-out taps that never entered Form.
+
+   Otherwise the fit is trivially good.
 3. **The one exception to the tap's authority.** When sleep debt is building over several nights, the tap's weight is reduced and the debt part keeps its pull, because the literature shows people stop noticing (Van Dongen 2003). The model is told both: "feels fine; carrying several short nights".
 4. **What else counts as an outcome.** Workout effort ratings, and later optional short reaction tests, are measures of state. Accepting or declining a suggestion measures preference, not state. It must not train Form.
 
@@ -598,11 +607,19 @@ Persisting learned parameters per owner is new health-pattern persistence. Under
 | Rolling windows for HRV (about 7 days) | Partly (practice consensus) | Plews 2013, AIS guide, vendor practice |
 | Forecast shape (inertia, morning rise, afternoon dip, evening fall) | Group-level shape only | Borbély 2016, Monk 2005, Hilditch 2019 |
 | Size of the shape for a person | No | Learned from taps and measured curves |
-| Starting weights | Principled default (equal), not measured | Dawes 1979 |
+| Starting weights | Principled default (equal), not measured | Dawes 1979. See the note below the table on where equal weights apply |
 | Personal weights, offset, drain from realised load | No | Learned per person from taps and effort ratings |
 | Sleep need | Floor from consensus; personal value learned or stated | Watson 2015; `baseline.ts` |
 | Zone cut points 80/60/40 | Convention | `zones.ts` |
 | Any planned-demand drain | No | Not used in C |
+
+**Where equal weights apply.** Unit weighting depends on how the parts are grouped. Weighting eight daytime parts equally against three night parts would shrink the night by accident, which is a weight invented by the grouping. So equal weights apply level by level, following the owner's tiers:
+- **Form's level** is the equal-weighted mean of its two body parts present: Recovery and the daytime state. Weight is not one of them under Design C.
+- **Within Recovery**, the parts present are weighted equally.
+- **Within the daytime state**, the weighted parts present are weighted equally: strain, realised load, light activity, daylight and the tap.
+- **The time-of-day structure** (time awake, body-clock phase, sleep inertia) is the forecast *shape*, applied on top of the level. It is never a weighted part.
+
+The grouping is a structural choice and should be stated as one. The calibration is what moves weights away from it.
 
 ---
 
@@ -612,15 +629,16 @@ Persisting learned parameters per owner is new health-pattern persistence. Under
 
 **Recommendation: no.** Form starts from the body and the moment. The day ahead is Weight, a separate series the model weighs.
 
-**Evidence.**
+**The reason that holds regardless of the physiology.** With the calendar inside Form, "heavy days give low Form" is true by construction. Form could then never be tested against how the person actually felt or did.
+
+**Supporting evidence, weaker.**
 - Anticipation of a demanding day already shows in morning physiology. The cortisol awakening response was larger on workdays than on weekends: a mean rise of 10.5 against 3.7 nmol/l in 196 Whitehall II civil servants, with no difference in waking cortisol (Kunz-Ebrecht et al., *Psychoneuroendocrinology* 2004;29:516–28, PMID [14749096](https://pubmed.ncbi.nlm.nih.gov/14749096/), [S]).
 - Fries, Dettenborn & Kirschbaum propose that anticipation of the day drives the response (*Int J Psychophysiol* 2009, [doi:10.1016/j.ijpsycho.2008.03.014](https://doi.org/10.1016/j.ijpsycho.2008.03.014), [S]).
 - Work overload and worry predict a bigger weekday response (Schlotz et al., *Psychosom Med* 2004, PMID [15039505](https://pubmed.ncbi.nlm.nih.gov/15039505/), [S]).
 
-Wearables do not measure cortisol. But whatever anticipation does to the night (shorter sleep, raised resting HR) is already in Recovery. Subtracting the calendar on top counts it twice.
+Wearables do not measure cortisol, and no study was found that tests anticipated workload against nocturnal HRV (section 6.1). So the following is [inference]: whatever anticipation does to the night that a wearable can see (shorter sleep, raised resting HR) is already in Recovery, and subtracting the calendar on top would count it twice.
 
-**Design reasons.**
-- With the calendar inside Form, "heavy days give low Form" is true by construction, and Form can no longer be validated.
+**Further design reasons.**
 - A meeting cancelled at 08:00 would change a "body" number.
 - Meeting-fatigue evidence is about meetings that happened (Luong & Rogelberg 2005), and Design C counts those as they happen.
 
@@ -647,9 +665,11 @@ The evidence supports a single item: KSS against PVT lapses r = 0.56 (Kaida 2006
 
 **The arithmetic of how many taps are needed.** Illustrative and synthetic:
 - Suppose a tap's day-to-day noise is σ points on a 5-point scale, and we want to detect a personal offset δ.
-- Roughly n ≈ (σ/δ)² taps are needed.
-- With a synthetic σ of 1 and δ of 0.5, that is about 4 taps for the offset.
-- Each learned weight needs several times more, because the parts are correlated. Shrinkage toward the cohort is what makes a few weeks enough.
+- To detect it with about 95% confidence, roughly n ≈ (2σ/δ)² independent taps are needed.
+- With a synthetic σ of 1 and δ of 0.5, that is about 16 taps for the offset: three weeks of daily taps after missed days.
+- Taps on neighbouring days are correlated, so the real number is higher.
+- Each learned weight needs several times more, because the parts are correlated with each other.
+- Shrinkage toward the cohort is what makes a month or so of taps useful rather than waiting far longer.
 
 **So.**
 - One prompted morning tap.
@@ -701,6 +721,11 @@ The evidence supports a single item: KSS against PVT lapses r = 0.56 (Kaida 2006
   - Sawka 2007 text;
   - Samsung and Fitbit methods.
 - **From memory:** Chauhan 2025 (cited by the skill), the caffeine half-life range, and the ACSM 2% figure.
+- **Citation confirmed, but no openable page:**
+  - Borbély 1982;
+  - Hasher, Goldstein & May 2005 (a book chapter);
+  - Wittbrodt & Millard-Stafford 2018 (the PMC link found may be a different paper);
+  - Sawka 2007.
 - **Not read in this session:** Linear HEY-517 and HEY-262 (Linear needs `/mcp` authorisation), live staging behaviour, and the app's handling of Form.
 - **Source facts read but not run:** no test was run for section 1.
 
@@ -732,11 +757,11 @@ The evidence supports a single item: KSS against PVT lapses r = 0.56 (Kaida 2006
 All values synthetic. Each test asserts on what the model is given and on what Waldo does. None pins wording.
 
 1. **Tap only (L3).** An owner with no health data taps "low". Form is available, labelled "from what you told me", with low confidence. No health-triggered proactive action is admitted that the tap does not support. No readiness is invented.
-2. **Heavy calendar, good night.**
+2. **Heavy calendar, good night** (Design C only; it inverts under A).
    - Two synthetic mornings with identical body inputs, one with an empty calendar and one booked 09:00–17:00.
    - Morning Form is equal on both.
    - Weight by the hour differs, and the model's context holds both.
-3. **Meetings that happened.** The booked day at 14:00, after a run of meetings with awake resting HR above usual: Form is lower than at 09:00 by more than the time-of-day shape alone.
+3. **Meetings that happened** (Design C only). The booked day at 14:00, after a run of meetings with awake resting HR above usual: Form is lower than at 09:00 by more than the time-of-day shape alone.
 4. **More daylight than usual.** All else equal, a day with synthetic daylight above the owner's usual never scores lower than a usual-daylight day.
 5. **Chronic restriction.**
    - Five synthetic short nights, and taps say "fine".
@@ -750,6 +775,9 @@ All values synthetic. Each test asserts on what the model is given and on what W
 11. **Hard session done.** A synthetic hard morning workout lowers the afternoon forecast only after the owner's own response has been learned. Before that, the model is told a session happened.
 12. **Illness pattern.** Wrist temperature and breathing-rate drivers rise and the tap says "fine": the model is given the possibility, no condition is named, and no hard session is proposed.
 13. **Body mass noise.** A day-to-day body-mass move within synthetic noise changes neither Form nor Waldo's behaviour.
-14. **Repeated disagreement.** An owner who taps one step above the data for many days: the calibration offset moves, and Form's error on held-out synthetic taps shrinks.
+14. **Repeated disagreement.** An owner taps one step above the data for many days.
+    - The calibration offset moves.
+    - Form's error shrinks on held-out synthetic taps that never entered Form.
+    - The fit uses Form computed without each day's own tap.
 15. **Score after tap.** The tap prompt is never shown after a Form score on the same surface that day.
 16. **No raw values downstream.** Across every scenario, model context, memory, logs and traces contain zone words, clock times and confidence bands. No digits for any reading or score appear outside the destinations ADR-0081 allows.
