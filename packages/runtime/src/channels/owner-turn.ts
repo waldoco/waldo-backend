@@ -122,6 +122,8 @@ export const newSessionCanaryTokens = (): string[] =>
 // message suffix, which a turn builds once and resends unchanged, so the provider's cached prefix is untouched; at most about
 // 8k tokens per request each.
 const EXTERNAL_DATA_MAX_BYTES = 32_768;
+// How long an owner message waits for the day-now read (a calendar call) before it goes on without it.
+const NOW_FRAME_MS = 2_000;
 // Outside data joins the owner turn item by item: each item passes the gate on its own or is left out, and the newest items
 // are kept whole within maxBytes.
 export const admitEach = async (items: readonly string[], admits: (item: string) => Promise<boolean>, maxBytes: number): Promise<string[]> => {
@@ -169,10 +171,12 @@ export type OwnerContextIntegration = Readonly<{ skills?: OwnerSkillCapability; 
   // once per call so every round offers the same list; and where a tool the model loaded or reached by name is noted.
   promotedTools?: () => readonly string[]; noteLoaded?: (names: readonly string[]) => void;
   // The messages the owner's outbox delivered to the owner lately, oldest first: what a lean scheduled run reads of what Waldo said.
-  waldoSent?: () => readonly Readonly<{ at: number; text: string }>[] }>;
+  waldoSent?: () => readonly Readonly<{ at: number; text: string }>[];
+  // What the owner's day holds now (channels/now-frame.ts), read once per owner message as outside data, one section per item.
+  nowFrame?: (trace: string) => Promise<readonly string[]> }>;
 // This owner's spend so far this month and the ceiling it is held to, read once when a turn starts.
 export type OwnerSpend = Readonly<{ spentUsd: number; ceilingUsd: number }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; finishedTasks?: (since: number) => string; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; loopHasPassed?: (id: string) => boolean; memoryChat?: (chain: string, principal: string) => string; promptOwnText?: (traceId: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; turnCharts?: (turnId: string) => readonly ConversationChart[]; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; jobOutcomeRows?: boolean; timelineSeed?: TimelineSeed; machineTime?: OwnerContextIntegration['machineTime']; leanScheduled?: boolean; promotedTools?: OwnerContextIntegration['promotedTools']; noteLoaded?: OwnerContextIntegration['noteLoaded']; waldoSent?: OwnerContextIntegration['waldoSent'] }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; finishedTasks?: (since: number) => string; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; loopHasPassed?: (id: string) => boolean; memoryChat?: (chain: string, principal: string) => string; promptOwnText?: (traceId: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; turnCharts?: (turnId: string) => readonly ConversationChart[]; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; jobOutcomeRows?: boolean; timelineSeed?: TimelineSeed; machineTime?: OwnerContextIntegration['machineTime']; leanScheduled?: boolean; promotedTools?: OwnerContextIntegration['promotedTools']; noteLoaded?: OwnerContextIntegration['noteLoaded']; waldoSent?: OwnerContextIntegration['waldoSent']; nowFrame?: OwnerContextIntegration['nowFrame'] }>;
 
 // Which scoped responder each owner field reaches. A scoped responder is built per run scope: the owner's own message
 // ('chat'), a Waldo-started run as the admitted owner ('job'), or a compaction pass over one chain ('compaction'). Every
@@ -181,7 +185,7 @@ type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCa
 type ScopedKind = 'chat' | 'job' | 'compaction';
 const SCOPED_FIELDS = {
   skillHost: ['chat'], skills: [], contextHost: ['chat'], context: [], history: ['chat', 'compaction'], jobHost: [],
-  ownerProfile: ['chat'], watchStatus: ['chat'], connectors: ['chat'], dayCards: ['chat', 'job'],
+  ownerProfile: ['chat'], watchStatus: ['chat'], connectors: ['chat'], dayCards: ['chat', 'job'], nowFrame: ['chat'],
   compactionFlush: ['chat', 'compaction'], timelineSeed: ['compaction'],
   memoryNotice: ['chat'], newerOwnerInput: ['chat'], newerOwnerMessages: ['chat'], finishedTasks: ['chat'],
   asyncTools: ['chat'], lightChat: ['chat'], lightRoles: ['chat'],
@@ -298,6 +302,19 @@ export const createOwnerResponder = (
   const earlierOwnerResults = async () => {
     const results = await toolLedger?.ownerTurnResults(heldTopics(), thread) ?? [];
     return barrier().texts(results, result => result, (_result, text) => text);
+  };
+  // The owner's day now, for their own message. A read that fails or is slow leaves the turn to go on without it.
+  const readNowFrame = async (trace: string): Promise<readonly string[]> => {
+    const read = privateOwner?.nowFrame;
+    if (!read) return [];
+    const started = Date.now();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([read(trace), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error('now_frame_timeout')), NOW_FRAME_MS); })]);
+    } catch (error) {
+      log({ trace, hop: 'now_frame', ms: Date.now() - started, ok: false, code: error instanceof Error && error.message === 'now_frame_timeout' ? 'timeout' : 'failed' });
+      return [];
+    } finally { clearTimeout(timer); }
   };
   // Tool outputs from the current turn; flushed to the ledger when the turn's entries persist.
   const pendingToolOutputs: Array<{ tool: string; ok: boolean; at: number; taint: 'external' | null; origin: 'owner' | 'machine'; summary: string; thread?: string }> = [];
@@ -803,6 +820,7 @@ export const createOwnerResponder = (
             && frozen.health === admittedHealth && frozen.held === heldKey;
           // A rebuild reads recall, earlier results and receipts afresh; a reused round reads none of them.
           const gather = async () => {
+            const nowRead = ownerTurnActive ? readNowFrame(trace) : Promise.resolve([] as readonly string[]);
             const rawTaskContext = skills?.taskContext ? await skills.taskContext(assertCurrent) : '';
             // External data joins the owner turn only when the safety gate admits it unchanged, session canaries included.
             const admitsExternal = async (payload: string): Promise<boolean> => {
@@ -829,8 +847,9 @@ export const createOwnerResponder = (
             // The receipts block is one receipt per line between Waldo's own lead and closing lines; with no receipt left, none.
             const receiptLines = rawTaskContext ? rawTaskContext.split('\n') : [];
             const receiptsShown = await admitEach(receiptLines, admitsExternal, EXTERNAL_DATA_MAX_BYTES);
+            const nowShown = await admitEach(await nowRead, admitsExternal, EXTERNAL_DATA_MAX_BYTES);
             return {
-              recalled, earlier: earlierShown.join('\n'),
+              recalled, earlier: earlierShown.join('\n'), now: nowShown.join('\n\n'),
               receipts: receiptsShown.length === receiptLines.length || receiptsShown.some(line => line.startsWith('{')) ? receiptsShown.join('\n') : '',
               // A committed receipt authenticates identity, not user/provider-authored path text. Externally authored path text
               // never joins the system prompt; receipts that pass the gate travel as fenced external data in the owner turn.
@@ -860,6 +879,7 @@ export const createOwnerResponder = (
             memory: { kind: 'sized', origin: 'owner_store', text: (room: number) => memory ? (privateOwner?.memorySelection ? selectedCore : privateOwner?.profileView ? ownerProfilePrompt : turnMemoryPrompt)(memoryFor(promptMemory()!), ownerCurrentText, room) : '' },
             recalled: { kind: 'lines', origin: 'owner_store', text: raw?.recalled ?? '' },
             earlier: { kind: 'lines', origin: 'external', text: raw?.earlier ?? '' },
+            now: { kind: 'text', origin: 'external', text: raw?.now ?? '' },
             receipts: { kind: 'text', origin: 'external', text: raw?.receipts ?? '' },
             taskContext: { kind: 'text', origin: 'code', text: raw?.taskContext ?? '' },
             turns: { kind: 'turns', turns },
@@ -875,6 +895,7 @@ export const createOwnerResponder = (
           const rebuilt = (): Readonly<{ prompt: TurnPrompt; suffix: FrozenSuffix }> => {
             const recall = cut.recalled ? fenced('memory recalled for this message', cut.recalled) + (cut.recalled.includes(QUIET_TAG) ? `\n${QUIET_NOTE}\n` : '') : '';
             const suffix = recall
+              + (cut.now ? fenced("the owner's day as it stands now", cut.now) : '')
               + (cut.earlier ? fenced('earlier tool results', cut.earlier) : '')
               + (cut.receipts ? fenced('external workspace receipts', cut.receipts) : '');
             const turnPrompt = assembleTurnPrompt({
