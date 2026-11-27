@@ -2092,7 +2092,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if(path===APP_DEVICE_CALENDAR_PATH||path.startsWith(APP_DEVICE_CALENDAR_PATH+'/'))return this.env.DEVICE_CALENDAR==='1'?deviceCalendarRequest(request,this.deviceCalendar(),work=>this.ctx.storage.transactionSync(work)):fail(404);
     if(path===APP_CHAT_UPLOAD_PATH&&request.method==='POST')return this.appUpload(request,name);
     if(path===APP_MEMORY_IMPORT_PATH_V1){
-      const host={on:this.env.MEMORY_IMPORT_DOC==='1',requests:requestBook(this.ctx.storage.sql,Date.now),importDoc:(source:AppMemoryImportSourceV1,text:string)=>{this.bindAppSubject(name);return this.setup('app').importDoc(source,text);}};
+      const host={on:this.env.MEMORY_IMPORT_DOC==='1',agreed:()=>consentLedger(this.ctx.storage.sql,consentSwitches(this.env)).stepsOpen(),requests:requestBook(this.ctx.storage.sql,Date.now),importDoc:(source:AppMemoryImportSourceV1,text:string)=>{this.bindAppSubject(name);return this.setup('app').importDoc(source,text);}};
       if(request.method==='GET')return appMemoryImportRequest(request,host);
       return this.serial(async()=>{try{return await appMemoryImportRequest(request,host);}catch(error){logAppReadFailure('app_memory_import',path,error);return fail(503);}});
     }
