@@ -5814,7 +5814,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
         const said = medication?.state === 'text' ? undefined : book.outside(entry.id)
           ? responder.prompt(trace, owner, outsideReminderCheckBackText(note, timing), time, OUTSIDE_TEXT_JOB_TOOLS, undefined, undefined, undefined, 'external')
-          : responder.remind(trace, owner, note, time, timing);
+          : responder.remind(trace, owner, note, time, timing, book.asked(entry.id));
         const text = said === undefined ? medication!.text : await said.then(checkBackReply, (error: unknown) => {
           if (!(error instanceof ModelUnavailableError)) throw error;
           log({ trace, hop: 'reminder_floor', ms: Date.now() - started, ok: true, code: error.reason });

@@ -58,7 +58,8 @@ export type JobSourceTaint = 'external' | 'as_read';
 export type OwnerResponder = Readonly<{
   respond(turn: OwnerTurnEnvelope, time: TurnTimer): Promise<string>;
   chooseReaction(turn: OwnerTurnEnvelope): Promise<string | null>;
-  remind(id: string, conversationRef: string, note: string, time: TurnTimer, surface?: string, timing?: ReminderTiming): Promise<string>;
+  // ownerAsked: the owner set it on their own words (ReminderBook.asked), so its inward, undoable writes need no card.
+  remind(id: string, conversationRef: string, note: string, time: TurnTimer, surface?: string, timing?: ReminderTiming, ownerAsked?: boolean): Promise<string>;
   // `turnContext` reaches the model with `said` on this turn only; it is never stored with the conversation.
   // `ownerModel` runs the job on the model the owner's own turn uses (still clamped past the spend ceiling): true for a job
   // that answers the owner's own message late. 'decides' is a job that decides something for the owner (meeting prep, a

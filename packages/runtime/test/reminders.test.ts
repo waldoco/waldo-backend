@@ -21,7 +21,7 @@ describe('reminder tools', () => {
   const book: ReminderBook = {
     async set(args, written) {
       if (args.at < '2026') throw new Error('already past');
-      calls.push(`set:${args.note}${written?.outside ? ':outside' : ''}`);
+      calls.push(`set:${args.note}${written?.outside ? ':outside' : ''}${written?.asked ? ':asked' : ''}`);
       return { id: 'reminder:1', ...args };
     },
     list: () => [{ id: 'reminder:1', note: 'water', at: '2026-09-23T18:30', repeat: 'daily' }],
@@ -30,6 +30,7 @@ describe('reminder tools', () => {
     async cancelAll() { return 0; },
     note: () => null,
     outside: () => false,
+    asked: () => false,
     fired: () => undefined,
   };
   const [set, list, cancel] = reminderHandlers(book);
@@ -106,5 +107,25 @@ describe('owner-local DST recurrence edge cases', () => {
     for (const trigger of ['daily', 'weekdays', 'weekly']) expect(setStandingOrderArgsSchema.safeParse({ scope: 'review', trigger, at: '09:00' }).success).toBe(true);
     expect(setStandingOrderArgsSchema.safeParse({ scope: 'review', trigger: 'cron', cron: '0 9 * * 1-5' }).success).toBe(true);
     for (const args of [{ trigger: 'cron' }, { trigger: 'cron', cron: '99 9 * * *' }, { trigger: 'daily', cron: '0 9 * * *' }]) expect(setStandingOrderArgsSchema.safeParse({ scope: 'review', ...args }).success).toBe(false);
+  });
+});
+
+// A reminder is the owner's own ask only when set_reminder ran on the owner's own words: a message of theirs alone, in a turn that
+// had read nothing outside and carried nothing in. Only such a reminder makes its inward, undoable writes with no card when it fires.
+describe('who asked for a reminder', () => {
+  const written: string[] = [];
+  const book = { set: async (args: { note: string }, how?: { outside?: boolean; asked?: boolean }) => { written.push(`${args.note}${how?.outside ? ':outside' : ''}${how?.asked ? ':asked' : ''}`); return { id: 'reminder:1', ...args }; } } as unknown as ReminderBook;
+  const [set] = reminderHandlers(book);
+  const owner = { runOrigin: 'owner', toolArgSourceTaint: null, ownerMessage: { ownWordsOnly: true, words: 'remind me at 9 to log dinner', messageRef: 'm1' } };
+  it.each([
+    ['the owner\'s own words', owner, 'dinner:asked'],
+    ['a turn that had read outside content', { ...owner, toolArgSourceTaint: 'external' }, 'dinner:outside'],
+    ['a turn that carried outside content in', { ...owner, carriedOutside: true }, 'dinner'],
+    ['a message that quoted someone else', { ...owner, ownerMessage: { ...owner.ownerMessage, ownWordsOnly: false } }, 'dinner'],
+    ['a run Waldo started', { runOrigin: 'waldo', toolArgSourceTaint: null }, 'dinner'],
+  ])('%s', async (_name, ctx, recorded) => {
+    written.length = 0;
+    await set!.handle({ note: 'dinner', at: '2030-09-23T21:00', repeat: 'none' } as never, ctx as never);
+    expect(written).toEqual([recorded]);
   });
 });
