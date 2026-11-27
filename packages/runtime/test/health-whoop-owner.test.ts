@@ -587,4 +587,12 @@ describe('WHOOP depth: cycles, body measurements, naps and the scopes a connecti
     expect(signals(h.plane)).toEqual([]);
     expect(JSON.stringify([...h.kv, h.logs])).not.toMatch(/11\.37|71\.4|33\.2|"61"/);
   });
+
+  it.each([[95, 'rate_remaining_high', true], [30, 'rate_remaining_mid', true], [7, 'rate_remaining_low', false]] as const)('reports, once a pass and as a word, the fewest requests WHOOP said were left (%s)', async (remaining, code, ok) => {
+    const h = await connected({}, 1);
+    h.world.remaining = remaining;
+    expect(await h.owner.sync()).toBe('synced');
+    expect(h.logs.filter(line => line.code.startsWith('rate_remaining_'))).toEqual([{ hop: 'whoop', ok, code }]);
+    expect(JSON.stringify(h.logs)).not.toContain(String(remaining));
+  });
 });

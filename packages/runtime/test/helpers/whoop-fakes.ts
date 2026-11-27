@@ -23,11 +23,11 @@ export type World = {
   sleeps: Record<string, unknown>[]; recoveries: Record<string, unknown>[]; workouts: Record<string, unknown>[]; cycles: Record<string, unknown>[]; body: Record<string, unknown> | null;
   // What WHOOP grants at the next authorization, said in its token answer when `scopeInAnswer`; a request for a kind whose scope
   // the access lacks answers `scopeStatus`.
-  grant: string | null; scopeInAnswer: boolean; granted: Map<string, readonly string[]>; scopeStatus: 401 | 403;
+  grant: string | null; scopeInAnswer: boolean; remaining: number | null; granted: Map<string, readonly string[]>; scopeStatus: 401 | 403;
   validAccess: Set<string>; validRefresh: Set<string>; spent: string[]; calls: string[]; issued: number;
   pageSize: number; limited: { until: number } | null; breakAfter: { path: string; count: number; status: number } | null; revokeStatus: number; account: number;
 };
-export const newWorld = (): World => ({ sleeps: [], recoveries: [], workouts: [], cycles: [], body: null, grant: null, scopeInAnswer: true, granted: new Map(), scopeStatus: 403, validAccess: new Set(), validRefresh: new Set(), spent: [], calls: [], issued: 0, pageSize: 25, limited: null, breakAfter: null, revokeStatus: 204, account: 70001 });
+export const newWorld = (): World => ({ sleeps: [], recoveries: [], workouts: [], cycles: [], body: null, grant: null, scopeInAnswer: true, remaining: null, granted: new Map(), scopeStatus: 403, validAccess: new Set(), validRefresh: new Set(), spent: [], calls: [], issued: 0, pageSize: 25, limited: null, breakAfter: null, revokeStatus: 204, account: 70001 });
 
 // One night, i days before today, with the recovery WHOOP scored for it.
 export const night = (i: number, over: { sleep?: Record<string, unknown>; recovery?: Record<string, unknown> | null } = {}) => {
@@ -44,7 +44,7 @@ export const whoopFetch = (world: World, clock: { now: number }): typeof fetch =
   const method = init?.method ?? 'GET';
   const path = url.pathname.replace('/developer/v2', '');
   world.calls.push(`${method} ${path}`);
-  const json = (body: unknown, status = 200) => Response.json(body, { status });
+  const json = (body: unknown, status = 200) => Response.json(body, { status, headers: world.remaining === null ? {} : { 'x-ratelimit-remaining': `${world.remaining}, 100;window=60` } });
   if (world.limited && clock.now < world.limited.until && path !== '/oauth/oauth2/token') return new Response('slow down', { status: 429, headers: { 'x-ratelimit-reset': '30' } });
   if (url.pathname === '/oauth/oauth2/token') {
     const form = new URLSearchParams(String(init?.body));

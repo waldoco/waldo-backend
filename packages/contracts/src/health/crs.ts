@@ -114,6 +114,19 @@ export const healthInventoryEntrySchema = z.strictObject({
 export type HealthInventoryEntry = z.infer<typeof healthInventoryEntrySchema>;
 export const healthInventorySchema = z.array(healthInventoryEntrySchema).max(healthSignalV1Schema.options.length);
 
+// WHOOP's own scores as the block names them: in words, against the owner's own WHOOP days, never a value. against_usual places
+// the newest reading against one spread either side of the mean of the owner's earlier ones in the window (the driver phrases'
+// statistic), or no_usual_yet below fourteen of them. Sleep is the newest WHOOP night against the need WHOOP set for it.
+const whoopUsualSchema = z.enum(['above_usual', 'usual', 'below_usual', 'no_usual_yet']);
+const whoopAt = { as_of_day: healthAsOfDaySchema, freshness: readingFreshnessSchema };
+export const whoopScoresViewSchema = z.strictObject({
+  recovery: z.strictObject({ ...whoopAt, against_usual: whoopUsualSchema, calibrating: z.boolean() }).optional(),
+  sleep: z.strictObject({ ...whoopAt, against_need: z.enum(['met', 'short']), need_counts_debt: z.boolean() }).optional(),
+  strain: z.strictObject({ ...whoopAt, against_usual: whoopUsualSchema, open: z.boolean() }).optional(),
+  workout: z.strictObject({ ...whoopAt, strain: z.boolean(), zones: z.boolean() }).optional(),
+}).refine((view) => Object.keys(view).length > 0, 'a WHOOP view names at least one score');
+export type WhoopScoresView = z.infer<typeof whoopScoresViewSchema>;
+
 const derivedViewShared = {
   authority: z.literal('backend'),
   provenance_refs: z.array(opaqueHealthProvenanceRefSchema).min(1).max(4),
@@ -132,6 +145,8 @@ const derivedViewShared = {
   missing_pillars: derivedMissingPillarsSchema.optional(),
   // What body data exists for the owner, whatever any score could make of it. Absent when it was not read.
   inventory: healthInventorySchema.optional(),
+  // WHOOP's own scores in words, when the owner's WHOOP sends them. Absent otherwise.
+  whoop: whoopScoresViewSchema.optional(),
 } as const;
 
 const derivedViewCommon = {

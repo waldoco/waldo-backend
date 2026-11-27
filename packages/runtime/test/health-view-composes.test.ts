@@ -29,10 +29,21 @@ const ROW: HealthContextRow = {
 };
 const EVERY_KIND = healthSignalV1Schema.options;
 const SOURCES = ['apple', 'oura', 'whoop', 'samsung', 'health_connect'] as const;
+const day = ago(3).slice(0, 10);
+const at = { day, start_at: ago(10), end_at: ago(3), utc_offset_minutes: 0, timezone: 'UTC' };
+const WHOOP_SAMPLES = [
+  { ...at, signal: 'provider_recovery', value: 61, method: 'whoop', provider: { calibrating: true } },
+  { ...at, signal: 'provider_sleep_need', value: 490, method: 'whoop', provider: { debt_minutes: 35 } },
+  { ...at, signal: 'sleep_duration', value: 430, method: 'asleep_duration' },
+  { ...at, signal: 'provider_day_strain', value: 11.4, method: 'whoop', provider: { open: true } },
+  { ...at, signal: 'workout', value: 50, activity: 'running', workout: { strain: { value: 9.4, method: 'whoop' }, hr_zones: { basis: 'provider', lower_bounds_bpm: null, seconds: [300, 900, 1200, 480, 120] } } },
+];
 const materialFor = async (kinds: readonly string[], sources: readonly string[] = ['apple'], row: HealthContextRow | null = ROW) => {
   const call = async (fn: string) => {
     if (fn === 'health_context_read') return row;
     if (fn === 'health_inventory_read') return { sources: sources.map(source => ({ source, kinds: kinds.map(signal => ({ signal, newest_at: ago(2), days: 25 })) })) };
+    // An owner whose WHOOP sends every score: the block also names each in words.
+    if (fn === 'health_series_read') return { access: 'granted', read_at: ago(1), sources: [{ source: 'whoop', consent_epoch: 1, truncated: false, samples: WHOOP_SAMPLES }] };
     throw new Error(`unexpected rpc ${fn}`);
   };
   const material = await healthContextBook(call, 'owner-every-kind', clock, undefined, undefined, { partial: true, inventory: true }).latest();
@@ -74,6 +85,10 @@ describe('the health view composes for an owner whose phone sends every kind', (
       expect(composed.ok, JSON.stringify(composed)).toBe(true);
       if (!composed.ok) return;
       expect(composed.prompt).toContain(`${HEALTH_SIGNALS[EVERY_KIND.at(-1)!].words} (`);
+      // And WHOOP's own scores, every one, in words and with no value.
+      // The readings ended three hours before the real clock, so their day word is today's or, just after midnight, yesterday's.
+      expect(composed.prompt).toMatch(/WHOOP's own scores \(WHOOP's measures, not Waldo's Recovery or Load; get_health reads the numbers\): (?:today|yesterday)'s recovery \(fresh\), with too few WHOOP days yet for a usual, and WHOOP says it is still calibrating for this owner; (?:last night's sleep|the sleep of the night before last) \(fresh\) fell short of the need WHOOP set for it, a need that includes sleep debt; (?:today|yesterday)'s day strain so far \(fresh\), with too few WHOOP days yet for a usual; newest workout (?:today|yesterday) \(fresh\), with WHOOP's strain and minutes in each heart-rate zone\./);
+      expect(composed.prompt).not.toMatch(/\b(?:61|490|430|11\.4|9\.4)\b/);
     }
   });
 });
@@ -87,6 +102,10 @@ const shared = {
   energy_windows: [['07:00', '09:00', 'peak'], ['13:00', '14:00', 'dip'], ['16:00', '18:00', 'peak'], ['21:00', '22:00', 'dip']].map(([start, end, kind]) => ({ start, end, kind })),
   missing_pillars: { recovery: 'stale_inputs', form: 'stale_inputs', load: 'calendar_demand_unavailable', sleep_debt: 'missing_sleep' },
   inventory: EVERY_KIND.map(signal => ({ signal, grain: HEALTH_SIGNAL_GRAINS[0], newest: 'today', regularity: 'nearly_every_day', freshness: 'fresh', sources: [...SOURCES] })),
+  whoop: {
+    recovery: { as_of_day: 'yesterday', freshness: 'stale', against_usual: 'no_usual_yet', calibrating: true }, sleep: { as_of_day: 'yesterday', freshness: 'stale', against_need: 'short', need_counts_debt: true },
+    strain: { as_of_day: 'yesterday', freshness: 'stale', against_usual: 'no_usual_yet', open: true }, workout: { as_of_day: 'yesterday', freshness: 'stale', strain: true, zones: true },
+  },
 };
 const common = { ...shared, trend: 'steady', freshness: 'fresh', confidence_band: 'high', as_of_day: 'yesterday' };
 const LARGEST = {

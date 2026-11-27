@@ -390,3 +390,62 @@ describe('get_health food from the owner\'s app', () => {
     ]);
   });
 });
+
+// Health revision 16: WHOOP's own measures, read as WHOOP stated them, beside Apple Health holding WHOOP's copy of the night.
+describe('get_health: WHOOP', () => {
+  const night = { start_at: '2026-10-11T17:30:00Z', end_at: '2026-10-12T01:15:00Z' };
+  const totals = { method: 'provider_totals', light: 220, deep: 100, rem: 110, awake: 30, no_data: 0, in_bed: 460, sleep_cycles: 4, disturbances: 9 };
+  const whoop = {
+    access: 'granted', read_at: '2026-10-13T06:00:00.000Z',
+    sources: [
+      { source: 'apple', consent_epoch: 3, samples: [
+        reading('sleep_duration', '2026-10-12', 431, { method: 'asleep_duration', whoop_writer: true, ...night }),
+        reading('sleep_duration', '2026-10-11', 402, { method: 'asleep_duration', whoop_writer: true, start_at: '2026-10-10T17:30:00Z', end_at: '2026-10-11T00:15:00Z' }),
+        reading('sleep_duration', '2026-10-10', 398, { method: 'asleep_duration', whoop_writer: true, start_at: '2026-10-09T17:30:00Z', end_at: '2026-10-10T00:15:00Z' }),
+      ] },
+      { source: 'whoop', consent_epoch: 1, samples: [
+        reading('sleep_duration', '2026-10-12', 430, { method: 'asleep_duration', stage_totals: totals, ...night }),
+        reading('provider_recovery', '2026-10-12', 61, { method: 'whoop', provider: { calibrating: true }, ...night }),
+        reading('provider_recovery', '2026-10-11', 48, { method: 'whoop', provider: { calibrating: false }, start_at: '2026-10-10T17:30:00Z', end_at: '2026-10-11T00:15:00Z' }),
+        reading('provider_sleep_need', '2026-10-12', 490, { method: 'whoop', provider: { baseline_minutes: 450, debt_minutes: 35, strain_minutes: 20, nap_minutes: -15 }, ...night }),
+        reading('provider_day_strain', '2026-10-12', 11.37, { method: 'whoop', provider: { open: false, step_count: 9_412 }, start_at: '2026-10-11T17:30:00Z', end_at: '2026-10-12T17:20:00Z' }),
+        reading('nap', '2026-10-12', 28, { method: 'asleep_duration', start_at: '2026-10-12T08:00:00Z', end_at: '2026-10-12T08:30:00Z' }),
+        reading('workout', '2026-10-12', 50, { activity: 'running', start_at: '2026-10-12T11:00:00Z', end_at: '2026-10-12T11:50:00Z',
+          workout: { energy_kcal: 400.1, avg_hr_bpm: 141, max_hr_bpm: 172, strain: { value: 9.4, method: 'whoop' }, percent_recorded: 96.5, hr_zones: { basis: 'provider', lower_bounds_bpm: null, seconds: [300, 900, 1200, 480, 120] } } }),
+      ] },
+    ],
+  };
+  const both6 = both(consent('granted', 'granted'), consent('granted', 'granted', 'whoop', 1));
+  const read = async (signals: string[], aggregation = 'daily') => {
+    const { handler } = fake({ consent: both6, series: whoop });
+    const out = await handler.handle({ signals, from: '2026-10-10', to: '2026-10-12', aggregation } as never, ctx);
+    if (!out.ok) throw new Error(out.error);
+    expect(getHealthResultSchema.safeParse(out.data).success).toBe(true);
+    return out.data as Extract<typeof out.data, { state: 'available' }>;
+  };
+  it('reads WHOOP\'s recovery by day with whether WHOOP is still calibrating for the newest night', async () => {
+    const data = await read(['whoop_recovery']);
+    expect(data.signals[0]).toMatchObject({ signal: 'whoop_recovery', source: 'whoop', unit: 'percent', calibrating: true, days: [{ day: '2026-10-10', value: null }, { day: '2026-10-11', value: 48 }, { day: '2026-10-12', value: 61 }] });
+  });
+  it('reads the need, its debt part, day strain and that cycle\'s steps', async () => {
+    const data = await read(['whoop_sleep_need', 'whoop_sleep_debt', 'whoop_strain', 'whoop_cycle_steps']);
+    expect(data.signals.map(s => [s.signal, s.unit, s.days?.at(-1)?.value])).toEqual([['whoop_sleep_need', 'minutes', 490], ['whoop_sleep_debt', 'minutes', 35], ['whoop_strain', 'strain', 11.37], ['whoop_cycle_steps', 'count', 9_412]]);
+    expect(data.signals.find(s => s.signal === 'whoop_strain')).not.toHaveProperty('calibrating');
+  });
+  it('reads a WHOOP night\'s time in bed, cycles, disturbances and stage minutes from its totals, never its awake time as waking in the night', async () => {
+    const data = await read(['time_in_bed', 'sleep_cycles', 'sleep_disturbances', 'sleep_deep', 'sleep_awake']);
+    expect(Object.fromEntries(data.signals.map(s => [s.signal, s.days?.at(-1)?.value]))).toEqual({ time_in_bed: 460, sleep_cycles: 4, sleep_disturbances: 9, sleep_deep: 100 });
+  });
+  it('reads sleep from the WHOOP API, not from Apple Health\'s copy of it, though the copy has more nights; the copy\'s other nights stay', async () => {
+    const data = await read(['sleep']);
+    expect(data.signals[0]).toMatchObject({ source: 'apple', days: [{ day: '2026-10-10', value: 398 }, { day: '2026-10-11', value: 402 }, { day: '2026-10-12', value: null }] });
+  });
+  it('reads naps apart from the night, and a WHOOP workout with its strain and zone minutes', async () => {
+    const data = await read(['naps', 'workouts']);
+    expect(data.signals.find(s => s.signal === 'naps')!.days?.at(-1)?.value).toBe(28);
+    expect(data.sessions).toEqual([{ day: '2026-10-12', activity: 'running', minutes: 50, energy_kcal: 400.1, avg_hr_bpm: 141, max_hr_bpm: 172, strain: 9.4, percent_recorded: 96.5, zone_minutes: [5, 15, 20, 8, 2] }]);
+  });
+  it('keeps the tool description inside the model contract\'s limit', () => {
+    expect(fake({}).handler.description.length).toBeLessThanOrEqual(1_024);
+  });
+});

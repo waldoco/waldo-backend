@@ -125,6 +125,9 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
     if (code === 'reauth_needed' || code === 'connection_unavailable') return needReconnect();
     return code === 'unavailable' && retry_after ? new RateLimited(retry_after * 1000) : new Failed(code);
   };
+  // The fewest requests WHOOP said were left in its window since the last pass ended, from its rate-limit headers; reported once a pass
+  // as a bounded word, never a count.
+  let lowestRemaining: number | null = null;
   // One refresh at a time. A caller that arrives with a stale version gets the winner's token from the edge, which never
   // spends a rotated refresh token twice.
   let refreshing: Promise<Conn> | null = null;
@@ -150,6 +153,8 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
     if (conn.expires_at !== null && conn.expires_at - EXPIRY_SKEW_MS <= deps.now()) conn = await refresh(conn);
     const attempt = async (current: Conn): Promise<EdgeReply> => {
       const reply = await proxy.fetch(doName(), current.id, method, path, query);
+      const remaining = Number.parseInt(reply.headers['x-ratelimit-remaining'] ?? '', 10);
+      if (Number.isFinite(remaining)) lowestRemaining = Math.min(lowestRemaining ?? remaining, remaining);
       if (reply.version !== current.version) remember({ ...current, version: reply.version });
       return reply;
     };
@@ -300,6 +305,8 @@ export const whoopOwner = (deps: WhoopOwnerDeps) => {
 
   const finish = async (result: SyncResult, code: string, next: number | null): Promise<SyncResult> => {
     deps.log({ hop: 'whoop', ok: result === 'synced' || result === 'idle', code });
+    if (lowestRemaining !== null) deps.log({ hop: 'whoop', ok: lowestRemaining >= 20, code: `rate_remaining_${lowestRemaining >= 50 ? 'high' : lowestRemaining >= 20 ? 'mid' : 'low'}` });
+    lowestRemaining = null;
     // The entry is a daily interval, so the scheduler keeps it armed after this run; a sooner `next` is a retry, and no `next` ends it.
     if (next !== null) await deps.arm(next);
     else await deps.disarm();

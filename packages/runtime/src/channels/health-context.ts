@@ -28,6 +28,9 @@ import { isPartialHealth } from '../context-composer/prompt';
 import type { ContextHealthMaterial, ZoneHealthMaterial } from '../context-composer/types';
 import { TRAINING_LOAD_PHRASES } from '../health/scores/training-load';
 import { shiftDay } from '../health/scores/time';
+import { parseSeries } from '../health/producer';
+import { whoopScoresView, WHOOP_CONTEXT_SIGNALS } from '../health/providers/whoop-context';
+import type { WhoopScoresView } from '@waldo/contracts';
 import { STEADY_SCORE_MOVE } from '../health/scores/zones';
 import type { OwnerClock } from '../tools/live/get-context';
 import { localIso } from './reminders';
@@ -402,12 +405,12 @@ const inventoryMaterial = (inventory: HealthInventory, clock: OwnerClock): Conte
 };
 
 // The inventory beside a view the row gave, re-checked whole; a view that cannot carry it is given without it.
-export const withInventory = (material: ContextHealthMaterial | null, inventory: HealthInventory | null, clock: OwnerClock): ContextHealthMaterial | null => {
+export const withInventory = (material: ContextHealthMaterial | null, inventory: HealthInventory | null, clock: OwnerClock, whoop: WhoopScoresView | null = null): ContextHealthMaterial | null => {
   if (inventory === null) return material;
-  if (material === null) return inventoryMaterial(inventory, clock);
-  if (inventory.entries.length === 0) return material;
-  const parsed = derivedHealthDestinationViewSchema.safeParse({ ...material.view, inventory: inventory.entries });
-  return parsed.success ? ({ ...material, view: parsed.data } as ContextHealthMaterial) : material;
+  const base = material ?? inventoryMaterial(inventory, clock);
+  if (base === null || (material !== null && inventory.entries.length === 0 && whoop === null)) return base;
+  const parsed = derivedHealthDestinationViewSchema.safeParse({ ...base.view, ...(inventory.entries.length > 0 ? { inventory: inventory.entries } : {}), ...(whoop ? { whoop } : {}) });
+  return parsed.success ? ({ ...base, view: parsed.data } as ContextHealthMaterial) : base;
 };
 
 // partial: the switch that gives the model a block for a row without Recovery, or too old to score, and fills the missing
@@ -573,9 +576,23 @@ export const healthContextBook = (
       return null;
     }
   };
+  // WHOOP's own scores in words, read only when the inventory shows the owner's WHOOP sends them. A failed read leaves them out.
+  const readWhoop = async (inventory: HealthInventory | null, trace?: string): Promise<WhoopScoresView | null> => {
+    if (!call || !doName || !inventory?.entries.some((entry) => entry.signal.startsWith('provider_') && entry.sources.includes('whoop'))) return null;
+    const today = localIso(clock.now().getTime(), clock.timezone).slice(0, 10);
+    const payload = JSON.stringify({ from: shiftDay(today, -(INVENTORY_DAYS - 1)), to: today, signals: WHOOP_CONTEXT_SIGNALS });
+    try {
+      const parsed = parseSeries(await call('health_series_read', `health.series_read.${doName}.${md5Hex(payload)}`, { p_do_name: doName, p_payload: payload }));
+      return parsed.kind === 'series' ? whoopScoresView(parsed.series, clock) : null;
+    } catch (error) {
+      onReadError?.(new Error(`whoop scores read failed: ${String(error)}`), trace);
+      return null;
+    }
+  };
   const read: HealthContextBook['read'] = async (trace) => {
     if (!call || !doName) return null;
     const inventoryRead = readInventory(trace);
+    const whoopRead = inventoryRead.then((inventory) => readWhoop(inventory, trace));
     let row: unknown;
     try {
       row = await call('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName });
@@ -587,7 +604,7 @@ export const healthContextBook = (
     const fromRow = row === null || typeof row !== 'object' ? null
       : toContextHealthMaterial(row as HealthContextRow, clock, (error) => { invalid = true; onReadError?.(error, trace); }, options);
     if (invalid) return 'unknown';
-    const material = withInventory(fromRow, await inventoryRead, clock);
+    const material = withInventory(fromRow, await inventoryRead, clock, await whoopRead);
     onReadSuccess?.(material !== null, trace, material !== null && isPartialHealth(material));
     return material;
   };

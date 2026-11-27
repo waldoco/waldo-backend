@@ -4,7 +4,7 @@ import {
 } from '@waldo/contracts';
 import type { z } from 'zod';
 import { md5Hex } from '../../channels/md5';
-import { parseSeries, untruncated, type Reading, type SleepStages } from '../../health/producer';
+import { parseSeries, untruncated, withoutWhoopEcho, type Reading, type SleepStages, type StageTotals } from '../../health/producer';
 import { localIso } from '../../channels/reminders';
 import { daysBetween, localDayWindow, shiftDay } from '../../health/scores/time';
 import type { ToolDispatcherContext } from '../dispatcher';
@@ -81,7 +81,12 @@ type Fold = 'newest' | 'sum' | 'mean';
 // stored: the plane's signal. asleep: only time asleep is read, never time in bed. methods: a signal read one method at a
 // time, never blended. value: what the signal reads from the stored reading, when it is not the reading's own value.
 type Spec = Readonly<{ stored: HealthSignal; unit: Available['unit']; fold: Fold; asleep?: true; methods?: readonly Method[]; value?: (reading: Reading) => number | null }>;
-const stage = (key: keyof SleepStages): Spec => ({ stored: 'sleep_duration', unit: 'minutes', fold: 'newest', asleep: true, value: reading => reading.stages?.[key] ?? null });
+// A provider night has stage totals rather than intervals; its light, deep and REM minutes read the same. Its time awake is
+// all its awake time in bed, not waking time inside the night, so sleep_awake never reads it.
+const TOTAL_OF: Partial<Record<keyof SleepStages, keyof StageTotals>> = { light: 'light', deep: 'deep', rem: 'rem' };
+const stage = (key: keyof SleepStages): Spec => ({ stored: 'sleep_duration', unit: 'minutes', fold: 'newest', asleep: true, value: reading => reading.stages?.[key] ?? (TOTAL_OF[key] ? reading.stageTotals?.[TOTAL_OF[key]!] ?? null : null) });
+const totals = (key: keyof StageTotals, unit: Available['unit']): Spec => ({ stored: 'sleep_duration', unit, fold: 'newest', asleep: true, value: reading => reading.stageTotals?.[key] ?? null });
+const part = (key: string) => (reading: Reading): number | null => { const value = reading.provider?.[key]; return typeof value === 'number' && Number.isFinite(value) ? value : null; };
 export const SIGNALS: Record<HealthReadSignal, Spec> = {
   sleep: { stored: 'sleep_duration', unit: 'minutes', fold: 'newest', asleep: true },
   sleep_midpoint: { stored: 'sleep_midpoint', unit: 'minute_of_day', fold: 'newest' },
@@ -111,6 +116,20 @@ export const SIGNALS: Record<HealthReadSignal, Spec> = {
   carbs: { stored: 'nutrition', unit: 'g', fold: 'sum', value: reading => reading.nutrition?.carbohydrate_g ?? null },
   fat: { stored: 'nutrition', unit: 'g', fold: 'sum', value: reading => reading.nutrition?.fat_g ?? null },
   daytime_hrv: { stored: 'hrv_window', unit: 'ms', fold: 'mean', methods: ['rmssd', 'sdnn'] },
+  whoop_recovery: { stored: 'provider_recovery', unit: 'percent', fold: 'newest' },
+  whoop_strain: { stored: 'provider_day_strain', unit: 'strain', fold: 'newest' },
+  whoop_cycle_steps: { stored: 'provider_day_strain', unit: 'count', fold: 'newest', value: part('step_count') },
+  whoop_sleep_need: { stored: 'provider_sleep_need', unit: 'minutes', fold: 'newest' },
+  whoop_sleep_debt: { stored: 'provider_sleep_need', unit: 'minutes', fold: 'newest', value: part('debt_minutes') },
+  whoop_sleep_performance: { stored: 'provider_sleep_performance', unit: 'percent', fold: 'newest' },
+  whoop_sleep_consistency: { stored: 'provider_sleep_consistency', unit: 'percent', fold: 'newest' },
+  naps: { stored: 'nap', unit: 'minutes', fold: 'sum' },
+  skin_temperature: { stored: 'skin_temperature', unit: 'celsius', fold: 'newest' },
+  time_in_bed: totals('in_bed', 'minutes'),
+  sleep_cycles: totals('sleep_cycles', 'count'),
+  sleep_disturbances: totals('disturbances', 'count'),
+  height: { stored: 'height', unit: 'm', fold: 'newest' },
+  max_hr: { stored: 'max_heart_rate', unit: 'bpm', fold: 'newest' },
 };
 type Session = z.infer<typeof healthWorkoutSessionSchema>;
 // One session as the tool shows it: each stored part kept only when it is the shape the result admits, and an average heart
@@ -118,7 +137,8 @@ type Session = z.infer<typeof healthWorkoutSessionSchema>;
 const sessionOf = (reading: Reading): Session | null => {
   const workout = reading.workout;
   if (!workout?.activity) return null;
-  const stored: Record<string, unknown> = { ...workout.detail, zone_minutes: workout.zoneSeconds?.map(seconds => round1(seconds / 60)) };
+  const strain = (workout.detail.strain as { value?: unknown } | undefined)?.value;
+  const stored: Record<string, unknown> = { ...workout.detail, strain, zone_minutes: workout.zoneSeconds?.map(seconds => round1(seconds / 60)) };
   const parts = Object.fromEntries(Object.entries(healthWorkoutSessionParts).flatMap(([key, part]) => {
     const parsed = part.safeParse(stored[key]);
     return stored[key] !== undefined && parsed.success ? [[key, parsed.data]] : [];
@@ -197,7 +217,7 @@ const allowlist = triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS
 export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolHandler<GetHealthArgs, GetHealthResult, ToolDispatcherContext> => ({
   name: 'get_health',
   description:
-    "The owner's own health readings, up to 31 days ending today, one source per signal: by local day, a summary, hourly over at most two days (heart_rate, daytime_hrv, steps, movement, daylight, active_energy, stand_hours), or nightly with each night's start and end (sleep and its stages, sleep_midpoint, sleep_efficiency, hrv, wrist_temperature). Sleep is time asleep, never time in bed. HRV, daytime_hrv and wrist temperature carry their method, never blended. heart_rate, daytime_hrv, respiratory_rate, spo2 and hr_recovery are day means. food_energy, protein, carbs and fat are what the owner's food app logged; a macro is missing on a day an entry lacked it. Context for a plan, never a judgement of what the owner ate. The numbers stay in this turn and are never stored or logged.",
+    "The owner's own health readings, up to 31 days ending today, one source per signal: by local day, a summary, hourly over at most two days (heart_rate, daytime_hrv, steps, movement, daylight, active_energy, stand_hours), or nightly with each night's start and end (sleep and its stages, sleep_midpoint, sleep_efficiency, hrv, wrist_temperature). Sleep is time asleep, never time in bed. HRV, daytime_hrv and wrist temperature carry their method, never blended. whoop_* are WHOOP's own measures, never Waldo's scores; naps are never the night. heart_rate, daytime_hrv, respiratory_rate, spo2 and hr_recovery are day means. food_energy, protein, carbs and fat are what the owner's food app logged; a macro is missing on a day an entry lacked it. Context for a plan, never a judgement of what the owner ate. The numbers stay in this turn and are never stored or logged.",
   schema: getHealthArgsSchema,
   trigger_allowlist: allowlist,
   autonomy_gated: false,
@@ -226,7 +246,7 @@ export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolH
     const parsed = parseSeries(raw);
     if (parsed.kind === 'no_consent') return unavailable('consent_required');
     if (parsed.kind === 'failed') return unavailable('read_failed');
-    const sources = untruncated(parsed.series, 'get_health_truncated').sources.filter((source) => consent.sources.has(source.source));
+    const sources = withoutWhoopEcho(untruncated(parsed.series, 'get_health_truncated')).sources.filter((source) => consent.sources.has(source.source));
     const days: string[] = [];
     for (let day = args.from; daysBetween(day, args.to) >= 0; day = shiftDay(day, 1)) days.push(day);
     let newest = Number.NEGATIVE_INFINITY;
@@ -244,7 +264,9 @@ export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolH
       const values = days.map((day) => ({ day, value: foldDay(SIGNALS[signal].fold, byDay.get(day) ?? [], timezone) }));
       const present = values.map((entry) => entry.value).filter((value): value is number => value !== null);
       valued += present.length;
-      const base = { signal, unit: SIGNALS[signal].unit, source: group.source as Available['source'], method: methodOf(signal, group) };
+      const newestRead = [...byDay.values()].flat().sort((a, b) => instantOf(b, timezone) - instantOf(a, timezone))[0];
+      const calibrating = signal === 'whoop_recovery' && typeof newestRead?.provider?.calibrating === 'boolean' ? { calibrating: newestRead.provider.calibrating } : {};
+      const base = { signal, unit: SIGNALS[signal].unit, source: group.source as Available['source'], method: methodOf(signal, group), ...calibrating };
       const held = (day: string) => byDay.get(day) ?? [];
       series.push(args.aggregation === 'summary'
         ? { ...base, summary: { mean: present.length ? round1(present.reduce((total, value) => total + value, 0) / present.length) : null, min: present.length ? Math.min(...present) : null, max: present.length ? Math.max(...present) : null, days_with_value: present.length } }

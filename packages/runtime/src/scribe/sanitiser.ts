@@ -298,6 +298,19 @@ const OWNER_HEALTH_READINGS: readonly RegExp[] = [
   reading(String.raw`${DAY_LABEL}(?:[^\n:]{0,40}?,\s*)?${READING_NUMBER}\s*(?:g|grams?)\s+(?:of\s+)?(?:protein|carbs?|carbohydrates?|fat)\b${LABEL_END}`),
   reading(String.raw`${DAY_LABEL}${READING_NUMBER}\s*%\s*(?:spo2|sp\s*o2|oxygen|blood\s+oxygen)\b`),
   reading(String.raw`\b(?:protein|carbs?|carbohydrates?|fat)\s*:\s*${READING_NUMBER}\s*(?:g|grams?)\b${LABEL_END}`),
+  // WHOOP's own measures as get_health gives them. Recovery is a percentage, so a market's or a project's recovery needs the
+  // WHOOP name or a percent sign beside it; strain is WHOOP's 0-21 scale, so a sprain or a mental strain carries no such value.
+  reading(String.raw`\bwhoop\s+recovery\b${BARE_GAP}\d{1,3}\b|\brecovery(?:\s+score)?\b${READING_GAP}\d{1,3}(?:[.,]\d+)?\s*(?:%|percent\b)(?!\s+of\b)|\b\d{1,3}(?:[.,]\d+)?\s*%\s+recovery\b(?!\s+(?:in|of|from|plan|rate)\b)`),
+  reading(String.raw`\b(?:(?:day|daily|whoop|workout)\s+)?strain\b${READING_GAP}(?:1?\d|2[01])(?:[.,]\d+)?\b(?!\s*(?:%|:\d|[ap]\.?m\b|(?:days?|weeks?|months?|times|hours?|mins?|minutes?)\b))|\b(?:1?\d|2[01])[.,]\d\s+strain\b`),
+  reading(String.raw`\bsleep\s+(?:need(?:ed)?|debt)\b${SLEEP_GAP}(?:${STAGE_DURATION}|${READING_NUMBER}\s*${DURATION})`),
+  reading(String.raw`\bsleep\s+(?:performance|consistency)\b${BARE_GAP}\d{1,3}(?:[.,]\d+)?\b|\b\d{1,3}(?:[.,]\d+)?\s*(?:%|percent)\s+sleep\s+(?:performance|consistency)\b`),
+  // A nap that happened, never one suggested ("take a 20 minute nap").
+  reading(String.raw`\bnapped\b(?:\s+for)?\s+(?:${STAGE_DURATION}|${READING_NUMBER}\s*${DURATION})|\bnaps?\b(?:\s*[:=]\s*|\s+(?:was|were|of|lasted)\s+)(?:${STAGE_DURATION}|${READING_NUMBER}\s*${DURATION})`),
+  reading(String.raw`\bskin\s+temp(?:erature)?\b${READING_GAP}${READING_NUMBER}`),
+  reading(String.raw`\b(?:time\s+)?in\s+bed\b${SLEEP_GAP}(?:${STAGE_DURATION}|${READING_NUMBER}\s*${DURATION})|\b(?:${STAGE_DURATION}|${READING_NUMBER}\s*${DURATION})\s+in\s+bed\b`),
+  reading(String.raw`\b\d{1,2}\s+(?:sleep\s+cycles|cycles\s+of\s+sleep)\b|\bsleep\s+cycles?\b${BARE_GAP}\d{1,2}\b`),
+  reading(String.raw`\b\d{1,3}\s+(?:sleep\s+)?disturbances\b|\b(?:sleep\s+)?disturbances\b${BARE_GAP}\d{1,3}\b|\bwoke(?:\s+up)?\s+\d{1,2}\s+times\b`),
+  reading(String.raw`\bheight\b${READING_GAP}(?:[12][.,]\d{1,2}\s*m\b|1\d{2}\s*cm\b)|\b(?:[12][.,]\d{1,2}\s*m|1\d{2}\s*cm)\s+tall\b`),
   reading(String.raw`\bcrs\b${BARE_GAP}\d`),
   reading(String.raw`\b(?:form|recovery|load|strain|readiness|sleep|hrv)\s+score\b${BARE_GAP}\d`),
   ...LAB_READINGS,

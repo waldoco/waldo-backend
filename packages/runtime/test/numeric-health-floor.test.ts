@@ -182,6 +182,20 @@ describe('the numeric health floor', () => {
 
   // Every signal get_health returns, in the units it returns it in, as Waldo relays it or the owner repeats it.
   const GET_HEALTH_READINGS: Record<HealthReadSignal, readonly string[]> = {
+    whoop_recovery: ['WHOOP recovery 61%', 'recovery score 61', 'your recovery was 61%', 'recovery of 61 percent', 'WHOOP recovery: 61', '61% recovery'],
+    whoop_strain: ['day strain 11.4', 'strain 11.4', 'WHOOP strain of 14', 'strain was 9.8 yesterday', 'a 14.2 strain day'],
+    whoop_cycle_steps: ['9,412 steps', 'steps 9412', '9.4k steps'],
+    whoop_sleep_need: ['sleep need 8h 10m', 'WHOOP said you needed 490 minutes of sleep', 'you needed 8.2 hours of sleep', 'sleep needed 490 min'],
+    whoop_sleep_debt: ['sleep debt 35 min', '35 minutes of sleep debt', 'sleep debt of 1h 5m', 'sleep debt was 35 minutes'],
+    whoop_sleep_performance: ['sleep performance 88%', '88% sleep performance', 'sleep performance was 88'],
+    whoop_sleep_consistency: ['sleep consistency 81%', '81% sleep consistency', 'sleep consistency was 81'],
+    naps: ['napped 28 minutes', 'your nap was 28 minutes', 'nap of 28 min', 'naps: 40 min'],
+    skin_temperature: ['skin temperature 33.2 °C', 'skin temp 33.2', 'skin temperature was 33.2 degrees'],
+    time_in_bed: ['time in bed 460 min', '7h 40m in bed', '460 minutes in bed', 'in bed for 7.7 hours'],
+    sleep_cycles: ['4 sleep cycles', 'sleep cycles: 4', '4 cycles of sleep'],
+    sleep_disturbances: ['9 disturbances', 'disturbances: 9', 'woke 9 times', '9 sleep disturbances'],
+    height: ['height 1.76 m', '176 cm tall', 'height 176 cm', '1.76 m tall'],
+    max_hr: ['max heart rate 189', 'max HR 189', 'maximum heart rate 189 bpm'],
     sleep: ['time asleep 412 min', '412 minutes asleep', 'sleep duration 412 minutes', 'slept 6.9 hours'],
     sleep_midpoint: ['sleep midpoint 03:12', 'sleep midpoint was 192'],
     hrv: ['HRV 48ms', 'HRV was 48ms', 'HRV (rmssd) 48 ms', 'HRV sdnn 52', 'rmssd 48'],
@@ -224,7 +238,8 @@ describe('the numeric health floor', () => {
   it.each(['average heart rate 152 bpm on the run', 'avg HR 152', 'max HR 181', 'peak heart rate 181', '25 minutes in zone 3', 'zone 2: 15 min', '15 min in heart rate zone 2'])('holds a workout session reading: %s', (text) => {
     expect(numericHealthIn(text)).toBe(true);
   });
-  it.each(['stood in line for 2 hours', 'stand-up at 9', 'zone 3 meeting room at 10', 'the max HR headcount is 12', 'lean startup chapter 3', 'body fat jokes'])('leaves an ordinary sentence alone: %s', (text) => {
+  it.each(['stood in line for 2 hours', 'stand-up at 9', 'zone 3 meeting room at 10', 'the max HR headcount is 12', 'lean startup chapter 3', 'body fat jokes',
+    'take a 20 minute nap after lunch', 'a 20% recovery in the market', 'recovery plan for Q3', 'strain on the team for 2 weeks', 'the project is under strain', 'in bed by 10', 'height of the season', '3 cycles of the washer', 'woke the team up'])('leaves an ordinary sentence alone: %s', (text) => {
     expect(numericHealthIn(text)).toBe(false);
   });
   // Lab results as a report or a clinic mail sets them out: a value with its unit, a reference range, a high or low flag.

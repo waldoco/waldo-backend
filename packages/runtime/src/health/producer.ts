@@ -123,7 +123,16 @@ export type SleepStages = Readonly<Record<(typeof STAGES)[number], number>>;
 // A workout's activity, and its zones and effort as the read returns them; detail is the rest of what it stored, unchecked,
 // for a reader that checks it. Null for any other signal. A food entry's grams likewise, each null when not a finite number.
 // max is an hourly heart-rate window's highest; bins an hour's heart-rate bins. Each is null for any other signal.
-export type Reading = Readonly<{ signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null; workout?: WorkoutDetail | null; nutrition?: NutritionGrams | null; max?: number | null; bins?: HeartRateBins | null }>;
+// stageTotals: a provider night's stage totals, without the intervals behind them. provider: a provider score's flag and parts
+// (calibrating, open, a cycle's energy, heart rate and steps, a need's parts), unchecked, for a reader that checks them.
+// whoopWriter: WHOOP's own app wrote this reading to the phone's health store.
+export type Reading = Readonly<{
+  signal: string; day: string; startAt: string | null; endAt: string | null; timezone: string | null; value: number; method: string | null; stages: SleepStages | null;
+  workout?: WorkoutDetail | null; nutrition?: NutritionGrams | null; max?: number | null; bins?: HeartRateBins | null;
+  stageTotals?: StageTotals | null; provider?: Readonly<Record<string, unknown>> | null; whoopWriter?: boolean;
+}>;
+const TOTALS = ['light', 'deep', 'rem', 'awake', 'no_data', 'in_bed', 'sleep_cycles', 'disturbances'] as const;
+export type StageTotals = Readonly<Record<(typeof TOTALS)[number], number>>;
 const MACROS = ['protein_g', 'carbohydrate_g', 'fat_g'] as const;
 export type NutritionGrams = Readonly<Record<(typeof MACROS)[number], number | null>>;
 export type HeartRateBins = Readonly<{ fromBpm: number; outside: readonly number[]; inside: readonly number[] }>;
@@ -165,6 +174,10 @@ const binsOf = (raw: unknown): HeartRateBins | null => {
   const fromBpm = r?.from_bpm;
   return outside && inside && outside.length === inside.length && typeof fromBpm === 'number' && Number.isInteger(fromBpm) && fromBpm % 5 === 0 && fromBpm >= 30 && fromBpm <= 225 ? { fromBpm, outside, inside } : null;
 };
+const totalsOf = (raw: unknown): StageTotals | null => {
+  const r = asRecord(raw);
+  return r && r.method === 'provider_totals' && TOTALS.every(key => typeof r[key] === 'number' && Number.isFinite(r[key]) && r[key] >= 0) ? Object.fromEntries(TOTALS.map(key => [key, r[key]])) as StageTotals : null;
+};
 // A reading the database returned that does not have the shape the math needs is dropped, never repaired.
 const reading = (raw: unknown): Reading | null => {
   const r = asRecord(raw);
@@ -177,6 +190,23 @@ const reading = (raw: unknown): Reading | null => {
     nutrition: r.signal === 'nutrition' ? nutritionOf(r.nutrition) : null,
     max: r.signal === 'heart_rate_window' && typeof r.max === 'number' && Number.isFinite(r.max) ? r.max : null,
     bins: r.signal === 'heart_rate_bins_window' ? binsOf(r.bins) : null,
+    stageTotals: r.signal === 'sleep_duration' ? totalsOf(r.stage_totals) : null,
+    provider: r.signal.startsWith('provider_') ? asRecord(r.provider) : null,
+    whoopWriter: r.whoop_writer === true,
+  };
+};
+
+// The kinds the WHOOP API gives Waldo directly. WHOOP's app also writes them to Apple Health and Health Connect; when the owner
+// has both, the API's own record is the one kept: a device source's reading WHOOP's app wrote is dropped on a day the WHOOP
+// source holds the same kind, so one night or workout is never two. On a day the API has not delivered yet, the echo stays.
+const WHOOP_API_KINDS: readonly string[] = ['sleep_duration', 'sleep_efficiency', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'spo2', 'respiratory_rate', 'workout', 'body_mass'] satisfies readonly HealthSignal[];
+export const withoutWhoopEcho = (series: Series): Series => {
+  const whoop = series.sources.find(source => source.source === 'whoop');
+  if (!whoop || !series.sources.some(source => source !== whoop && source.readings.some(r => r.whoopWriter))) return series;
+  const held = new Set(whoop.readings.filter(r => WHOOP_API_KINDS.includes(r.signal)).map(r => `${r.signal}\u0000${r.day}`));
+  return {
+    ...series,
+    sources: series.sources.map(source => source === whoop ? source : { ...source, readings: source.readings.filter(r => !(r.whoopWriter && held.has(`${r.signal}\u0000${r.day}`))) }),
   };
 };
 
@@ -595,7 +625,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     // Without its vital readings a day still scores exactly as it would with them; only those drivers are missing.
     const vitals = await vitalsRead;
     if (vitals.kind !== 'series') console.log(JSON.stringify({ hop: 'health_series', ok: false, code: 'vitals_unread' }));
-    const series = withVitals(untruncated(parsed.series, 'series_truncated'), vitals.kind === 'series' ? untruncated(vitals.series, 'vitals_truncated') : null);
+    const series = withoutWhoopEcho(withVitals(untruncated(parsed.series, 'series_truncated'), vitals.kind === 'series' ? untruncated(vitals.series, 'vitals_truncated') : null));
     // Without its bins read a day's load is v1, as with the switch off: nothing is claimed about a passive part it could not read.
     const passiveParsed = passiveRead && await passiveRead;
     if (passiveParsed && passiveParsed.kind !== 'series') console.log(JSON.stringify({ hop: 'health_series', ok: false, code: 'passive_unread' }));
