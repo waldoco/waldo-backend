@@ -17,6 +17,7 @@ describe('runFailureCode', () => {
     const named = (error: unknown) => runFailureCode(error);
     expect(named(new ModelUnavailableError('timeout' as never))).toBe('model_unavailable');
     expect(named(new Error('live model failed: invalid_args (invalid_response)'))).toBe('model_failed');
+    expect(named(new Error('conversation model returned empty output'))).toBe('model_failed');
     expect(named(new Error('turn timed out after 90000ms'))).toBe('timed_out');
     expect(named(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }))).toBe('timed_out');
     expect(named(Object.assign(new Error('signal timed out'), { name: 'TimeoutError' }))).toBe('timed_out');
@@ -57,11 +58,19 @@ describe('recordingFailures', () => {
     expect(lastRunFailure(kv, 'card:brief')).toBeNull();
   });
 
-  it('a run that waits for the model is no failure and leaves the record as it was', async () => {
+  it('each run starts by forgetting the last one\'s reason, so a run cut off without a throw (an eviction) never leaves a stale one', async () => {
     const { kv } = kvOf();
     kv.put('schedule_failure_v1:card:brief', { code: 'timed_out', at: 5 });
-    const executors = recordingFailures({ brief: async () => 'waiting_on_model' as const }, kv, () => 9);
+    let seen: unknown = 'unread';
+    const executors = recordingFailures({ brief: async () => { seen = lastRunFailure(kv, 'card:brief'); return 'waiting_on_model' as const; } }, kv, () => 9);
     expect(await executors.brief!(entry('card:brief'))).toBe('waiting_on_model');
-    expect(lastRunFailure(kv, 'card:brief')).toEqual({ code: 'timed_out', at: 5 });
+    expect(seen).toBeNull();
+    expect(lastRunFailure(kv, 'card:brief')).toBeNull();
+  });
+
+  it('a stored code outside the closed set reads as none, so it can never break the card', () => {
+    const { kv } = kvOf();
+    kv.put('schedule_failure_v1:card:brief', { code: 'the model said no', at: 5 });
+    expect(lastRunFailure(kv, 'card:brief')).toBeNull();
   });
 });

@@ -21,9 +21,9 @@ export const runFailureCode = (error: unknown): RunFailureCode => {
   if (turn === 'turn_timeout') return 'timed_out';
   if (turn === 'sql_binding_mismatch' || turn === 'journal_transition') return 'storage';
   if (turn === 'owner_mismatch') return 'owner_check';
-  if (turn === 'model_empty') return 'model_unavailable';
-  // owner-turn's model call, failed for a reason other than an outage (a refused request, a safety halt): fixed text, so its
-  // shape is matched and nothing after the prefix is kept.
+  if (turn === 'model_empty') return 'model_failed';
+  // owner-turn's model call, failed for a reason other than an outage (a refused request, a safety halt, or a call the turn's
+  // deadline cut off, which this message cannot tell apart): fixed text, so its shape is matched and nothing after it is kept.
   if (/^live model failed: [a-z_]+ /.test(error.message)) return 'model_failed';
   // owner-do's sentOrThrow and the outbox's own refusals.
   if (error.message === 'telegram send blocked' || error.message === 'send held for the owner, not delivered') return 'not_delivered';
@@ -48,14 +48,18 @@ export const pausedLine = (code: RunFailureCode, tries: number): string => `Paus
 type Kv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void; delete(key: string): unknown }>;
 const KEY = 'schedule_failure_v1:';
 export type RunFailure = Readonly<{ code: RunFailureCode; at: number }>;
-export const lastRunFailure = (kv: Pick<Kv, 'get'>, scheduleId: string): RunFailure | null => kv.get<RunFailure>(`${KEY}${scheduleId}`) ?? null;
+const CODES: ReadonlySet<string> = new Set(RUN_FAILURE_CODES);
+// A stored code outside the closed set (written by another version) reads as none, so it never reaches the card.
+export const lastRunFailure = (kv: Pick<Kv, 'get'>, scheduleId: string): RunFailure | null => {
+  const stored = kv.get<RunFailure>(`${KEY}${scheduleId}`);
+  return stored && CODES.has(stored.code) && Number.isFinite(stored.at) ? stored : null;
+};
 
-// Wraps the jobs the scheduler runs: a run that throws keeps its code under the job's id and rethrows the same error, so the
-// scheduler's own retry and pause stand as they are; a run that goes well forgets it. Waiting for the model is no failure.
+// Wraps the jobs the scheduler runs. Each run starts by forgetting the last one's reason, so a run cut off without a throw (an
+// eviction, which the scheduler still counts) leaves none rather than a stale one; a run that throws keeps its code under the
+// job's id and rethrows the same error, so the scheduler's own retry and pause stand as they are.
 export const recordingFailures = (executors: ScheduleExecutors, kv: Kv, now: () => number): ScheduleExecutors =>
   Object.fromEntries(Object.entries(executors).map(([kind, executor]) => [kind, async (entry: Parameters<NonNullable<ScheduleExecutors[keyof ScheduleExecutors]>>[0]) => {
-    let result: Awaited<ReturnType<NonNullable<typeof executor>>>;
-    try { result = await executor!(entry); } catch (error) { kv.put(`${KEY}${entry.id}`, { code: runFailureCode(error), at: now() } satisfies RunFailure); throw error; }
-    if (result !== 'waiting_on_model') kv.delete(`${KEY}${entry.id}`);
-    return result;
+    kv.delete(`${KEY}${entry.id}`);
+    try { return await executor!(entry); } catch (error) { kv.put(`${KEY}${entry.id}`, { code: runFailureCode(error), at: now() } satisfies RunFailure); throw error; }
   }])) as ScheduleExecutors;
