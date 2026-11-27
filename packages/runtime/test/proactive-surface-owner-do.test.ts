@@ -997,6 +997,16 @@ describe('the knock for proactive work outside the 24-hour window', { timeout: 2
     }, { surface: 'both', window: 'open', env: REENGAGE });
   });
 
+  it('a reminder that reaches the app pushes once; its WhatsApp copy, delivered in the same pass, pushes nothing', async () => {
+    await withOwner('push-copy-delivered-open', async (owner, state, ctx) => {
+      await dueReminder(state);
+      await passes(owner, state, ctx);
+      await arrived(owner, state);
+      expect(copies(state).map(record => record.status)).toEqual(['delivered']);
+      expect(wire.pushes).toEqual(['event']);
+    }, { surface: 'both', window: 'open', env: REENGAGE });
+  });
+
   it('with the re-engage knock on, a push in an earlier closed window does not stand for this one', async () => {
     await withOwner('knock-reengage-earlier-window', async (owner, state, ctx) => {
       state.storage.kv.put('wa_window_pushed_for', AT - 3 * 86_400_000);

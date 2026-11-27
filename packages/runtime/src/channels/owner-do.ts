@@ -539,6 +539,8 @@ const SENDS_CAN_WAIT: Readonly<Partial<Record<ChannelKind, typeof whatsappWindow
 // Surfaces that show the day's cards and can revise one in place, and raise a phone push for it. Elsewhere a revision goes out
 // as a new message, which is itself the notification, so quiet hours hold it there.
 const REVISES_CARDS: Readonly<Partial<Record<ChannelKind, true>>> = { app: true };
+// Surfaces where a message Waldo writes outside a turn reaches the owner's phone only by Waldo's own push.
+const PUSHED_ON_DELIVERY: Readonly<Partial<Record<ChannelKind, true>>> = { app: true };
 // Whether a surface's media stays with its provider, so the owner's file list can point at it later (owner_files). An app
 // attachment is dropped once its message closes, so the list would keep a name and caption with nothing behind them.
 const MEDIA_STAYS_WITH_PROVIDER: Readonly<Record<ChannelKind, boolean>> = { telegram: true, whatsapp: true, app: false, imessage: false };
@@ -6851,7 +6853,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       log({ trace: record.trace, hop: 'outbox_delivery', ms: 0, ok: delivered,
         detail: record.status, ...(record.reason ? { code: record.reason } : {}) });
       if (record.status === 'pending') return;
-      noteUndelivered(this.ctx.storage.kv, record, recordSurface(record, this.ctx.storage.kv.get<string>('whatsapp_subject'), { surface: channel, owner: String(owner) }), clock.timezone, Date.now());
+      const surface = recordSurface(record, this.ctx.storage.kv.get<string>('whatsapp_subject'), { surface: channel, owner: String(owner) });
+      noteUndelivered(this.ctx.storage.kv, record, surface, clock.timezone, Date.now());
       if (record.reason === 'expired' || record.reason === 'superseded') {
         const now = Date.now(), kv = this.ctx.storage.kv, settings = loops.proactivity(), whatsapp = kv.get<string>('whatsapp_subject');
         const toWhatsApp = boundForWhatsApp(record, whatsapp);
@@ -6867,9 +6870,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // A revision counts once it reached the owner on any surface; its push, only from the app, beside the drain like a prep note's.
       if (record.revision && delivered) plans.revised(record.revision.day, record.revision.card, Date.now(), record.id);
       if (record.updatePush && delivered && REVISES_CARDS[channel]) this.ctx.waitUntil(push('update', undefined, record.updatePush.line, record.updatePush.card));
-      // Any other record that reached the app is pushed once, as a message, now that every part is there. An in-place edit of a
-      // card tells the owner nothing new, so it raises none.
-      if (delivered && channel === 'app' && !record.calendarPrep && !record.updatePush && !record.inPlace) this.ctx.waitUntil(push('message'));
+      // Any other record that reached the app is pushed once, as a message, now that every part is there. The surface is the
+      // record's own, not the settling pass's: one pass also settles what it sent by Telegram. An in-place edit of a card tells
+      // the owner nothing new, so it raises none.
+      if (delivered && surface && PUSHED_ON_DELIVERY[surface] && !record.calendarPrep && !record.updatePush && !record.inPlace) this.ctx.waitUntil(push('message'));
       // An update card counts as sent, for the next main card, only once it reached the owner.
       if (record.update) {
         if (delivered) updates.pushed(record.update.recordId, record.payload.text, Date.now());
