@@ -165,7 +165,8 @@ export const mailStage = (google: GoogleAccess) => async (): Promise<StageInput>
 // The owner's own setup answers, as they are now: owner-grounded words only, never Waldo's reads or outside text, and nothing a
 // forget still holds. An owner who keeps health out of memory gets neither their health picks nor a stated reading here, and no
 // health node from this stage.
-export const setupStage = (claims: ClaimStore, healthMemory: () => boolean) => async (): Promise<StageInput> => {
+export const setupStage = (claims: ClaimStore, healthMemory: () => boolean) => async (): Promise<StageInput> => setupInput(claims, healthMemory);
+const setupInput = (claims: ClaimStore, healthMemory: () => boolean): StageInput => {
   const health = healthMemory(), held = holdsIn(heldTopicsOf(claims));
   const said = [...claims.claims(), ...claims.claims('promoted')].filter((claim) => isSetupRef(claim.source_ref) && claim.origin === 'owner'
     && claim.verification_status === 'owner-grounded' && !held(claim.text) && (health || (claim.kind !== 'health' && !numericHealthIn(claim.text))));
@@ -218,12 +219,23 @@ export const ownerWelcome = (deps: Readonly<{
   build: () => welcomeBuild(deps.sql, deps.now),
   // Something to do: a stage due, or a skipped stage to check for its source.
   wanted: () => { const build = welcomeBuild(deps.sql, deps.now); return build.due().length > 0 || build.reopenable().length > 0; },
+  // After a run: a skipped stage asked to be checked meanwhile. Each check stamps the stage, so this never asks twice in a row.
+  recheckDue: (): boolean => welcomeBuild(deps.sql, deps.now).reopenable().length > 0,
   // Health readings may have landed since an empty health stage: take it up once more, within a day of it settling.
   lateHealth: (): boolean => deps.transaction(() => welcomeBuild(deps.sql, deps.now).lateHealth(deps.v2 !== undefined)),
+  // Readings landed while the health stage sits skipped (the build began before health was connected): check for it next run.
+  healthArrived: (): boolean => deps.transaction(() => welcomeBuild(deps.sql, deps.now).recheck('health')),
   // The look-up under this grant ended: a web stage that settled without it reads the findings once (second build only).
   lateWeb: (grant: number): boolean => deps.v2 !== undefined && deps.transaction(() => welcomeBuild(deps.sql, deps.now).lateWeb(grant)),
   // A Google account was connected: calendar and mail read again once, within a day of settling (second build only).
   googleConnected: (): boolean => deps.v2 !== undefined && deps.transaction(() => welcomeBuild(deps.sql, deps.now).googleConnected()),
+  // The setup answers changed since the setup stage built from them: it reads them again (second build only; the first has no
+  // way to add to a node, so a second read would write copies).
+  refine: (): boolean => {
+    if (deps.v2 === undefined) return false;
+    const read = setupInput(deps.claims, deps.healthMemory);
+    return deps.transaction(() => welcomeBuild(deps.sql, deps.now).refineSetup(read.kind === 'input' ? [...new Set(read.cites?.values() ?? [])] : []));
+  },
   run: () => runWelcome({
     build: welcomeBuild(deps.sql, deps.now), claims: deps.claims, now: deps.now, transaction: deps.transaction, ask: deps.ask, available: welcomeSourceAvailable(deps),
     read: { health: healthStage(deps.healthRead, deps.timezone, deps.now, deps.healthMemory), calendar: calendarStage(deps.google, deps.now), mail: mailStage(deps.google), web: () => webStage(deps.findings(), deps.v2 !== undefined)(), setup: setupStage(deps.claims, deps.healthMemory) },

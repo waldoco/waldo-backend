@@ -4060,9 +4060,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       .then((result) => { if (result) console.log(JSON.stringify({ hop: 'rating_score', ok: result.ok, code: result.code })); }, () => undefined);
     this.ctx.waitUntil(this.ratingScores);
   }
+  // Answers sent, or readings landed, while a run is in flight are caught when it ends: one more run takes them up together.
   private continueWelcome(runtime: OwnerRuntime): void {
-    if (this.welcomeRun || !runtime.welcome.wanted()) return;
-    this.welcomeRun = runtime.welcome.run().catch(() => { console.error(JSON.stringify({ hop: 'welcome', ok: false })); }).finally(() => { this.welcomeRun = null; });
+    if (this.welcomeRun) return;
+    runtime.welcome.refine();
+    if (!runtime.welcome.wanted()) return;
+    this.welcomeRun = runtime.welcome.run().catch(() => { console.error(JSON.stringify({ hop: 'welcome', ok: false })); })
+      .finally(() => {
+        this.welcomeRun = null;
+        try { if (runtime.welcome.refine() || runtime.welcome.recheckDue()) this.continueWelcome(runtime); } catch { console.error(JSON.stringify({ hop: 'welcome_refine', ok: false })); }
+      });
     this.ctx.waitUntil(this.welcomeRun);
   }
   // A fixed one-minute window per owner DO: 90 console reads, 20 console actions.
@@ -6082,7 +6089,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }, forgetDemand: day => forgetDemandDay(storage.sql, day, Date.now()),
       wakes: { enabled: () => schedPrefs.enabled('health_proposals'), woken: healthWoken,
         readContext: readModelHealth, noted: startedAt => (this.env.WORKOUT_WAKE === '1' && workoutStillFresh(storage.kv.get(WORKOUT_NOTED_KEY), startedAt) ? ['workout_ended'] : []) } });
-    // An upload or a wearable sync changed the readings; an empty welcome health stage reads them once more.
+    // An upload or a wearable sync changed the readings; an empty welcome health stage reads them once more, and a skipped one
+    // (the build began before health was connected) is checked for them.
     // A new stated need changes no reading, so it never spends the welcome's one retry for late health data.
     const healthSamples = async (cause: HealthRecomputeCause = 'readings', woke = false, workout = false) => {
       // WORKOUT_WAKE: a workout just ended. The time is noted before the recompute is asked for, so a recompute already due
@@ -6093,7 +6101,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // would otherwise be written from the rows as they were before the upload.
       if (woke && this.env.WAKE_BRIEF === '1') storage.kv.put(NIGHT_NOTED_KEY, Date.now());
       await recompute.ask();
-      if (cause === 'readings' && runtime.welcome.lateHealth()) this.continueWelcome(runtime);
+      if (cause === 'readings' && (runtime.welcome.lateHealth() || runtime.welcome.healthArrived())) this.continueWelcome(runtime);
     };
     // BRIEF_BODY_REVISION (brief-revision.ts): today's first row written after the Brief went out has the Brief looked at again
     // once, on the surface that took it.
