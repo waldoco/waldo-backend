@@ -128,4 +128,10 @@ describe('who asked for a reminder', () => {
     await set!.handle({ note: 'dinner', at: '2030-09-23T21:00', repeat: 'none' } as never, ctx as never);
     expect(written).toEqual([recorded]);
   });
+
+  it('a repeating reminder never carries the ask: it would hold it with no end, as a standing grant would', async () => {
+    written.length = 0;
+    await set!.handle({ note: 'dinner', at: '2030-09-23T21:00', repeat: 'daily' } as never, owner as never);
+    expect(written).toEqual(['dinner']);
+  });
 });

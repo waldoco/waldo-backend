@@ -24,7 +24,8 @@ describe('the gate for a reminder the owner asked for', () => {
     const asked = { ownerInitiated: false, ownerAskedInward: true };
     expect(await taintedCallNeedsOwnerApproval('log_meal', 'external', { description: 'dal and rice' }, asked)).toBe(false);
     expect(await taintedCallNeedsOwnerApproval('log_meal', 'external', { description: 'dal and rice' }, { ownerInitiated: false })).toBe(true);
-    for (const tool of ['set_standing_order', 'forget_memory', 'delete_health_log', 'execute_action', 'call_mcp_tool', 'send_message'] as const) {
+    // start_task and steer_task hand work to a background worker, which may reach the web: the ask never covers them.
+    for (const tool of ['start_task', 'steer_task', 'set_standing_order', 'forget_memory', 'delete_health_log', 'execute_action', 'call_mcp_tool', 'send_message'] as const) {
       expect(await taintedCallNeedsOwnerApproval(tool, 'external', {}, asked)).toBe(true);
     }
   });
@@ -66,6 +67,28 @@ describe('an owner reminder that fires and reads mail', () => {
     const { owner, calls } = responder(script());
     await owner.remind('reminder:2:1', 'telegram-7', 'Log dinner', time, 'telegram', timing);
     expect(calls).toEqual(['search_communication']);
+  });
+});
+
+// What a late answer to the owner's message carries: an empty message is no one's words, so nothing it sets is the owner's ask.
+describe('a late answer to the owner\'s message', () => {
+  it('with no words of the owner\'s in it, is not their own words', async () => {
+    const seen: unknown[] = [];
+    const steps = [{ tool: 'set_reminder', args: { note: 'pay the canteen', at: '2030-03-05T09:00', repeat: 'none' } }];
+    const fake = { name: 'set_reminder' as ToolName, description: 'The set_reminder tool.', schema: z.object({}).passthrough(), trigger_allowlist: allowed('set_reminder'),
+      handle: async (_args: unknown, ctx: { ownerMessage?: unknown }) => { seen.push(ctx.ownerMessage); return { ok: true as const, data: { id: 'reminder:1' }, source_taint: null }; } };
+    const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {
+      const next = request.response_format ? undefined : steps.shift();
+      return { ok: true, data: { model: request.model, text: request.response_format ? '{}' : next ? '' : 'Done.', ...(next ? { tool_calls: [{ call_id: 'c1', name: next.tool, arguments: JSON.stringify(next.args) }] } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
+    } };
+    const saved: ConversationEntry[] = [];
+    const store: ConversationStore = { load: async () => ({ entries: [...saved], leafId: saved.at(-1)?.id ?? null }), save: async (rows) => { saved.push(...rows); } };
+    const args: Parameters<typeof createOwnerResponder> = [{ openaiApiKey: 'fixture', toolLoader: 'harness' }];
+    args[1] = store; args[3] = () => undefined; args[5] = [fake] as never; args[7] = false; args[10] = gateway;
+    await createOwnerResponder(...args).prompt('late:1', 'telegram-7', 'Answer the owner\'s message now.', time, 'telegram', undefined, undefined, undefined, undefined, undefined, true, undefined, undefined, undefined,
+      { text: '', messageRef: 'm1', conversationRef: 'telegram-7', surface: 'telegram', receivedAt: Date.now() - 60_000 });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ ownWordsOnly: false });
   });
 });
 

@@ -574,11 +574,14 @@ export const recordNeedsOwnerCard = async (
     case 'narrows': return clearsEverything(tool, args);
     case 'source_bound': return !(await boundToObservedSource(tool, args, ctx)) && !(await passedOwnerLoop(tool, args, ctx));
     case 'commits_on_card': return !typedBrowserStep(tool, args);
-    // The owner's own turn, or a reminder they set on their own words firing (their ask, made earlier).
-    case 'owner_inward': return (ctx.ownerInitiated !== true && ctx.ownerAskedInward !== true) || combinedTask(tool, args);
+    // The owner's own turn, or a reminder they set on their own words firing (their ask, made earlier). That ask covers writes
+    // into their own space only, never work handed to a background worker, which may reach the web.
+    case 'owner_inward': return !(ctx.ownerInitiated === true || (ctx.ownerAskedInward === true && !HANDS_WORK_ON.has(tool))) || combinedTask(tool, args);
     default: return true;
   }
 };
+
+const HANDS_WORK_ON: ReadonlySet<ToolName> = new Set(['start_task', 'steer_task']);
 
 // A background task whose worker would hold the owner's private reads and a way out together. Started after outside text, its
 // brief may carry instructions to read the inbox and fetch a URL with it, so only the owner's card starts it.

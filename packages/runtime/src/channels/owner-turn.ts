@@ -1112,7 +1112,7 @@ export const createOwnerResponder = (
   // The owner's own message that started this turn, for a tool that acts on their word: only a turn started by their message
   // alone, with no quote, forward or other person's words in it. Its ref is the surface's message id, else the host's trace.
   const ownerMessage = () => runOrigin() === 'owner' && activeOwnerTurn
-    ? { ownerMessage: { messageRef: activeOwnerTurn.messageRef?.id ?? activeOwnerTurn.traceId, receivedAt: ownerTurnStartedAt, ownWordsOnly: activeOwnerTurn.parts.every((part) => part.authorship === 'owner'),
+    ? { ownerMessage: { messageRef: activeOwnerTurn.messageRef?.id ?? activeOwnerTurn.traceId, receivedAt: ownerTurnStartedAt, ownWordsOnly: activeOwnerTurn.parts.length > 0 && activeOwnerTurn.parts.every((part) => part.authorship === 'owner'),
       words: activeOwnerTurn.parts.filter((part) => part.authorship === 'owner').map((part) => part.text).join('\n') } } : {};
   const quoteContext = async (reply: ReplyContext | undefined): Promise<string> => {
     if (!reply) return '';
@@ -1205,7 +1205,8 @@ export const createOwnerResponder = (
     try {
       const userEntry = tree.get(id) ?? { id, ownerId, chatId: conversationRef, parentId: conversationLeaves.get(conversationRef) ?? null, threadAnchorId: null, surface, modelPayload: said, appPayload: received, modelProjection: { mode: 'include' as const }, role:'user' as const, inputOrigin: fromOwner ? 'owner' as const : 'machine' as const, ...(fromOwner && turnOwnWordsOnly ? { ownerWordsOnly: true as const } : {}), createdAt: Date.now() };
       // Read once from the chain as it stood before this message, the same rows the window is cut from.
-      turnCarriedOutside = fromOwner && userEntry.parentId !== null && chainCarriesOutside(tree, userEntry.parentId, compaction);
+      // A late answer to the owner's message reads the same chain the message would have, so it counts what that chain carried.
+      turnCarriedOutside = (fromOwner || activeOwnerTurn !== undefined) && userEntry.parentId !== null && chainCarriesOutside(tree, userEntry.parentId, compaction);
       // A run whose mark follows its reads starts marked when what it is shown besides its caller's text may hold someone
       // else's words: a chain that read outside content, or (lean) what Waldo delivered lately, which may carry what it read.
       if (markFollowsReads && ((userEntry.parentId !== null && chainCarriesOutside(tree, userEntry.parentId, compaction)) || (leanRun && (privateOwner?.waldoSent?.().length ?? 0) > 0))) backgroundSourceTaint = 'external';

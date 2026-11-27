@@ -144,7 +144,8 @@ export const reminderHandlers = (book: ReminderBook) => [
     mutates_state: true,
     async handle(args: SetReminderArgs, ctx?: ToolDispatcherContext) {
       try {
-        return { ok: true, data: await book.set(args, { outside: ctx?.toolArgSourceTaint === 'external', asked: ownerAsked(ctx) }), source_taint: null };
+        // Only a one-off reminder carries the owner's ask: a repeating one would hold it with no end, as a standing grant would.
+        return { ok: true, data: await book.set(args, { outside: ctx?.toolArgSourceTaint === 'external', asked: args.repeat === 'none' && ownerAsked(ctx) }), source_taint: null };
       } catch (error) {
         return { ok: false, code: 'invalid_args', error: error instanceof Error ? error.message : String(error) };
       }
