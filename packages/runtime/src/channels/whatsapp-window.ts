@@ -17,6 +17,13 @@ const WINDOW_MARGIN_MS = 5 * 60 * 1000;
 // Error 131047: "More than 24 hours have passed since the recipient last replied to the sender number."
 // (https://developers.facebook.com/docs/whatsapp/cloud-api/support/error-codes)
 export const WHATSAPP_REENGAGEMENT_ERROR = 131047;
+// Error 131042: "Business eligibility payment issue", no valid payment method on the WhatsApp Business account, so Meta fails
+// every message it would charge for, the knock among them. Only Waldo's team can fix it: Waldo records it and says so, and
+// never sends around it.
+export const WHATSAPP_PAYMENT_ERROR = 131042;
+// Why Meta failed a message it had accepted, as a closed code.
+export type WhatsAppFailureReason = 'whatsapp_payment_required' | 'provider_failed';
+export const whatsappFailureReason = (code: number | undefined): WhatsAppFailureReason => code === WHATSAPP_PAYMENT_ERROR ? 'whatsapp_payment_required' : 'provider_failed';
 // Meta keeps trying an undeliverable message for up to 30 days; a held message older than that is dropped, not sent late.
 export const WHATSAPP_HELD_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -29,6 +36,10 @@ export const WHATSAPP_KNOCK_EVERY_MS = 24 * 60 * 60 * 1000;
 // The message id Meta gave the last knock it accepted: Meta can still fail it by a later status (131042 with no payment
 // method), and only that status says the knock never reached the owner.
 const KNOCK_ID_KEY = 'wa_knock_id';
+// Why Meta failed the last knock, and when it said so. It stands until the owner writes (the window opens, so what waited goes
+// out) or a later knock arrives: while it stands, what waits for the window reaches the owner only if they write first.
+const KNOCK_FAILURE_KEY = 'wa_knock_failure';
+export type KnockFailure = Readonly<{ reason: WhatsAppFailureReason; at: number }>;
 // Meta stamps a message in whole seconds, so the owner's messages at the latest stamp are told apart by id.
 const LAST_INBOUND_IDS_KEY = 'wa_last_inbound_ids';
 // Meta can refuse a send for the window after accepting it (a failed status with 131047). The marker is the inbound time
@@ -100,10 +111,10 @@ export const recordWhatsAppInbound = (kv: Kv, messages: readonly object[], now: 
     if (at > latest) { latest = at; ids.clear(); }
     if (at === latest && typeof id === 'string') ids.add(id);
   }
-  if (latest > previous) kv.put(WA_LAST_INBOUND_KEY, latest);
+  if (latest > previous) { kv.put(WA_LAST_INBOUND_KEY, latest); kv.delete(KNOCK_FAILURE_KEY); }
   if (ids.size !== before.length || latest > previous) kv.put(LAST_INBOUND_IDS_KEY, [...ids]);
   // A new message in the same second is a reply all the same: it re-arms the knock as a later stamp does.
-  if (latest === previous && ids.size !== before.length) kv.delete(KNOCKED_KEY);
+  if (latest === previous && ids.size !== before.length) { kv.delete(KNOCKED_KEY); kv.delete(KNOCK_FAILURE_KEY); }
 };
 // The window as Meta refused it: the latest inbound time and the messages seen at it.
 const refuseWindow = (kv: Kv, last: number): void => {
@@ -165,14 +176,24 @@ export const whatsappKnock = async (kv: Kv, knock: (template: WhatsAppTemplate) 
     log({ hop: 'whatsapp_window', ok: false, held: true, code: error instanceof WhatsAppApiError && error.code !== null ? error.code : 'knock_failed' });
   }
 };
-// Meta failed a knock it had accepted: the knock never reached the owner, so it is logged by its closed reason, once. The
-// next knock still waits its turn: a failure such as a missing payment method would fail it again.
-export const whatsappKnockFailed = (kv: Kv, failedIds: readonly string[], log: Log): void => {
-  const id = kv.get<string>(KNOCK_ID_KEY);
-  if (id === undefined || !failedIds.includes(id)) return;
+// Meta failed a knock it had accepted: the knock never reached the owner, so it is logged by its closed reason, once, and the
+// reason is kept (whatsappKnockFailure). Nothing is sent again for it: the next knock still waits its turn, and a failure such
+// as a missing payment method would fail it again. Answers the failure it recorded, or null for a report on anything else.
+export const whatsappKnockFailed = (kv: Kv, failed: readonly Readonly<{ id: string; code?: number }>[], log: Log, now: number): KnockFailure | null => {
+  const id = kv.get<string>(KNOCK_ID_KEY), report = failed.find(row => row.id === id);
+  if (id === undefined || !report) return null;
+  const failure: KnockFailure = { reason: whatsappFailureReason(report.code), at: now };
   kv.delete(KNOCK_ID_KEY);
-  log({ hop: 'whatsapp_window', ok: false, held: true, code: 'knock_failed_after_accept' });
+  kv.put(KNOCK_FAILURE_KEY, failure);
+  log({ hop: 'whatsapp_window', ok: false, held: true, code: 'knock_failed_after_accept', reason: failure.reason });
+  return failure;
 };
+// A knock Meta reports on the owner's phone: the channel reaches them again, so an earlier knock's failure no longer stands.
+export const whatsappKnockArrived = (kv: Kv, arrivedIds: readonly string[]): void => {
+  const id = kv.get<string>(KNOCK_ID_KEY);
+  if (id !== undefined && arrivedIds.includes(id)) kv.delete(KNOCK_FAILURE_KEY);
+};
+export const whatsappKnockFailure = (kv: Kv): KnockFailure | null => kv.get<KnockFailure>(KNOCK_FAILURE_KEY) ?? null;
 // With the daily knock, when a record still waiting for the window is next looked at: the next time a knock is allowed.
 export const knockRevisitAt = (kv: Kv, now: number): number => (kv.get<number>(KNOCK_AT_KEY) ?? now) + WHATSAPP_KNOCK_EVERY_MS;
 const reengagement = (error: unknown): boolean => error instanceof WhatsAppApiError && error.code === WHATSAPP_REENGAGEMENT_ERROR;

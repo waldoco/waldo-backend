@@ -107,7 +107,8 @@ export type DeliveryReceipt = Readonly<{ messageId?: number; providerMessageId?:
 export type DeliveryAck = DeliveryReceipt | 'held' | 'refused' | null;
 // A surface's later report on one message id: it reached the recipient, it was refused for now (the record goes back to
 // pending and that part is sent again), or it failed for good.
-export type SurfaceStatus = Readonly<{ id: string; kind: 'arrived' | 'refused' | 'failed'; at: number }>;
+// A failure may name its closed reason (whatsappFailureReason); without one it ends as provider_failed.
+export type SurfaceStatus = Readonly<{ id: string; kind: 'arrived' | 'refused' | 'failed'; at: number; reason?: string }>;
 // Telegram's acknowledgement names the message and the chat it landed in, which must be the record's own.
 export const telegramReceipt = (result: unknown, chatId: number): DeliveryAck => {
   const ack = result as { message_id?: unknown; chat?: { id?: unknown } } | undefined;
@@ -423,7 +424,7 @@ export const unconfirmedCards = (records: readonly FinalRecord[], day: string): 
   new Set(records.flatMap(record => record.status === 'accepted' && record.dayCard?.day === day ? [record.dayCard.card] : []));
 
 type StatusKv = Pick<DurableObjectStorage['kv'], 'get' | 'put'>;
-type EarlyStatuses = Record<string, { kind: SurfaceStatus['kind']; at: number; seen: number }>;
+type EarlyStatuses = Record<string, { kind: SurfaceStatus['kind']; at: number; seen: number; reason?: string }>;
 const writeRows = (kv: StatusKv, rows: FinalRecord[]): void => {
   kv.put(FINAL_OUTBOX_KEY, rows);
   const due = rows.flatMap(row => row.status === 'pending' || row.status === 'attempting' || !row.settled ? [row.dueAt] : row.payload.text ? [row.createdAt + 86400000] : []);
@@ -434,7 +435,7 @@ const writeRows = (kv: StatusKv, rows: FinalRecord[]): void => {
 // record that has already ended (delivered, blocked, expired, unconfirmed), about a part sent again since, or a refusal or
 // failure about a part that already arrived (a replayed report) is ignored.
 // Answers whether the record changed.
-const applyStatus = (row: FinalRecord, index: number, kind: SurfaceStatus['kind'], now: number): boolean => {
+const applyStatus = (row: FinalRecord, index: number, kind: SurfaceStatus['kind'], now: number, reason?: string): boolean => {
   if (row.status !== 'accepted' && row.status !== 'pending') return false;
   const arrived = [...(row.arrived ?? [])];
   while (arrived.length < (row.parts?.length ?? 1)) arrived.push(false);
@@ -446,7 +447,7 @@ const applyStatus = (row: FinalRecord, index: number, kind: SurfaceStatus['kind'
   }
   if (arrived[index]) return false;
   if (kind === 'failed' || row.forgotten) {
-    row.status = 'blocked'; row.reason = kind === 'failed' ? 'provider_failed' : 'owner_forget'; row.settled = false; row.dueAt = now;
+    row.status = 'blocked'; row.reason = kind === 'failed' ? reason ?? 'provider_failed' : 'owner_forget'; row.settled = false; row.dueAt = now;
     return true;
   }
   // Refused for now: this part goes again, in part order, with whatever else is still unsent.
@@ -464,7 +465,7 @@ const applyEarlyStatuses = (kv: StatusKv, row: FinalRecord, now: number): void =
   for (const [index, id] of (row.providerMessageIds ?? []).entries()) {
     const status = id ? early[id] : undefined;
     if (!status || !id) continue;
-    applyStatus(row, index, status.kind, now); delete early[id]; used = true;
+    applyStatus(row, index, status.kind, now, status.reason); delete early[id]; used = true;
   }
   if (used) kv.put(EARLY_STATUS_KEY, early);
 };
@@ -479,8 +480,8 @@ export const observeSurfaceStatuses = (kv: StatusKv, statuses: readonly SurfaceS
   const changed = new Set<FinalRecord>();
   for (const status of statuses) {
     const row = rows.find(record => addressed(record) && record.providerMessageIds?.includes(status.id));
-    if (!row || row.status === 'attempting') { early[status.id] ??= { kind: status.kind, at: status.at, seen: now }; continue; }
-    if (applyStatus(row, row.providerMessageIds!.indexOf(status.id), status.kind, now)) changed.add(row);
+    if (!row || row.status === 'attempting') { early[status.id] ??= { kind: status.kind, at: status.at, seen: now, ...(status.reason ? { reason: status.reason } : {}) }; continue; }
+    if (applyStatus(row, row.providerMessageIds!.indexOf(status.id), status.kind, now, status.reason)) changed.add(row);
   }
   // The surface also reports on messages that are not records (every direct reply and knock), and each of those lands here until
   // a record claims it. Uncapped, one storage value grows with the owner's chat volume until it outgrows what a value can hold;

@@ -4,6 +4,7 @@ import { redactSecretUrls } from './egress-guard';
 import { recordKind } from './proactive-surface';
 import { localIso } from './reminders';
 import type { FinalRecord } from './telegram-final-outbox';
+import type { KnockFailure } from './whatsapp-window';
 
 // A message of Waldo's that ended without reaching the owner, or without proof it did, waits for the owner's next turn as one
 // line the model reads beside their words: what it was, where it went, when, why, and how it began. So Waldo never tells the
@@ -22,6 +23,7 @@ const WHY: Readonly<Record<string, string>> = {
   provider_rejected_terminal: 'the provider refused it', surface_unlinked: 'that surface was unlinked', owner_binding: 'that surface no longer admitted the owner',
   egress_blocked: 'the send gate stopped it', delivery_unconfirmed: 'no arrival report came', send_unknown: 'the send ended with no answer',
   restart_during_send: 'a restart cut the send short', invalid_ack: 'the provider gave no usable receipt',
+  whatsapp_payment_required: "WhatsApp refused it: Waldo's WhatsApp account has no payment method",
 };
 
 // surface: where the record went (recordSurface), or null when that cannot be told.
@@ -33,10 +35,19 @@ export const noteUndelivered = (kv: Kv, record: FinalRecord, surface: Surface | 
   const outcome = record.status === 'quarantined' ? 'may not have reached the owner' : 'did not reach the owner';
   const text = `[Delivery: your ${what}${surface ? ` for ${SURFACES[surface]}` : ''}, written ${localIso(record.createdAt, timezone).slice(0, 16).replace('T', ' ')}, ${outcome}`
     + ` (${WHY[record.reason ?? ''] ?? record.reason ?? record.status}). It began: ${JSON.stringify(excerpt)}]`;
-  kv.put(`${NOTE}${record.id}`, { at: now, text } satisfies Row);
+  keep(kv, record.id, text, now);
+};
+const keep = (kv: Kv, id: string, text: string, now: number): void => {
+  kv.put(`${NOTE}${id}`, { at: now, text } satisfies Row);
   const rows = [...kv.list<Row>({ prefix: NOTE })].sort(([, a], [, b]) => b.at - a.at);
   rows.forEach(([key, row], index) => { if (index >= KEPT || now - row.at >= RETENTION_MS) kv.delete(key); });
 };
+
+// The knock asking the owner to open WhatsApp failed, so nothing Waldo started there can reach them until they write: the next
+// turn reads why, once, and can say so truthfully instead of implying the owner saw it.
+export const noteKnockFailed = (kv: Kv, failure: KnockFailure, timezone: string): void => keep(kv, `knock:${failure.at}`,
+  `[Delivery: Waldo's WhatsApp knock at ${localIso(failure.at, timezone).slice(0, 16).replace('T', ' ')}, asking the owner to open WhatsApp so what waits there can go out,`
+  + ` did not reach them (${WHY[failure.reason] ?? 'the provider refused it'}). What waits for WhatsApp goes out only once the owner writes there.]`, failure.at);
 
 // The waiting lines, oldest first, taken by the turn that reads them.
 export const takeDeliveryNotes = (kv: Kv, now: number): string[] => {

@@ -281,9 +281,9 @@ import { WHATSAPP_LINK_CONFIRM_ACTION, whatsappLinkConfirmAction, whatsappLinkCo
 import { WHATSAPP_LINK_PATH, whatsappLinkDirectory } from '../identity/whatsapp-link';
 import { WA_LAST_INBOUND_ID_KEY, WHATSAPP_PARTIAL_NOTICE, whatsappAckId, whatsappForwarded, claimNewWhatsAppMessages, plainOwnerText, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim, whatsappTurnMessage, type WaIngressMessage } from './whatsapp-api';
 import { whatsAppWaldoNumber } from './whatsapp-send-url';
-import { forgetDeliveryNotes, noteUndelivered, takeDeliveryNotes } from './delivery-notes';
+import { forgetDeliveryNotes, noteKnockFailed, noteUndelivered, takeDeliveryNotes } from './delivery-notes';
 import { forgetWhatsAppContext, noteWhatsAppReaction, recordWhatsAppSent, takeWhatsAppReactionNotes, whatsappSentText } from './whatsapp-context';
-import { SEND_UNASKED, bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, whatsappKnockFailed, recordWhatsAppInbound, releaseWhatsAppOutbox, templateFor, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute, whatsappTemplates, markWindowPushed, windowPushed } from './whatsapp-window';
+import { SEND_UNASKED, bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, whatsappKnockArrived, whatsappKnockFailed, whatsappFailureReason, recordWhatsAppInbound, releaseWhatsAppOutbox, templateFor, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute, whatsappTemplates, markWindowPushed, windowPushed } from './whatsapp-window';
 import { readDriveHandler } from '../tools/live/drive';
 import { mcpServers, callMcpToolHandler, readMcpToolHandler, searchMcpToolsHandler, executeMcp, McpConnectError, type McpGoogleAuth, type McpGoogleResolution } from '../tools/live/mcp';
 import { connectorsLine, googleConnectionFacts, mcpConnections, McpRefusal, MCP_FINISH_PATH, MCP_START_PATH, type ConnectOutcome, type McpConnections } from '../connectors/mcp-connections';
@@ -2939,9 +2939,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (!/^\d{6,15}$/.test(subject) || kv.get<string>('whatsapp_subject') !== subject) return new Response('forbidden', { status: 403 });
     let parsed: { refused?: unknown; delivered?: unknown; failed?: unknown };
     try { parsed = JSON.parse(body) as typeof parsed; } catch { return new Response('bad request', { status: 400 }); }
-    const valid = (row: unknown): row is { id: string; at: number | null } => {
-      const { id, at } = (row ?? {}) as { id?: unknown; at?: unknown };
-      return typeof id === 'string' && id !== '' && id.length <= 256 && (at === null || (typeof at === 'number' && Number.isSafeInteger(at) && at >= 0));
+    const valid = (row: unknown): row is { id: string; at: number | null; code?: number } => {
+      const { id, at, code } = (row ?? {}) as { id?: unknown; at?: unknown; code?: unknown };
+      return typeof id === 'string' && id !== '' && id.length <= 256 && (at === null || (typeof at === 'number' && Number.isSafeInteger(at) && at >= 0))
+        && (code === undefined || (typeof code === 'number' && Number.isSafeInteger(code) && code > 0));
     };
     const rows = (value: unknown) => value === undefined ? [] : Array.isArray(value) && value.length <= 100 && value.every(valid) ? value : null;
     const refused = rows(parsed?.refused), delivered = rows(parsed?.delivered), failed = rows(parsed?.failed);
@@ -2955,10 +2956,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       unaskedRefusal = named.length > 0 && named.every(row => row !== undefined && unaskedRecord(row));
       for (const { id, at } of refused) closed = whatsappWindowRefused(kv, { providerMessageId: id, refusedAt: at ?? now }, records.some(row => addressed(row) && row.providerMessageIds?.includes(id)), now, log) || closed;
       changed = observeSurfaceStatuses(kv, [...refused.map(({ id }) => ({ id, kind: 'refused' as const, at: now })), ...delivered.map(({ id, at }) => ({ id, kind: 'arrived' as const, at: at ?? now })),
-        ...failed.map(({ id, at }) => ({ id, kind: 'failed' as const, at: at ?? now }))], addressed, now);
+        ...failed.map(({ id, at, code }) => ({ id, kind: 'failed' as const, at: at ?? now, reason: whatsappFailureReason(code) }))], addressed, now);
       // Approval cards skip the outbox, so a refusal or failure of one is the desk's to settle: the card waits again.
       for (const { id } of [...refused, ...failed]) runtime.desk.cardNotDelivered(id);
-      whatsappKnockFailed(kv, failed.map(({ id }) => id), log);
+      // A failed knock is kept by its reason, and the owner's next turn reads it once; a knock that arrived clears it.
+      const knock = whatsappKnockFailed(kv, failed, log, now);
+      if (knock) noteKnockFailed(kv, knock, kv.get<string>('timezone') ?? this.env.WALDO_OWNER_TIMEZONE ?? 'UTC');
+      whatsappKnockArrived(kv, delivered.map(({ id }) => id));
     });
     await this.rearmEveryWake();
     // An arrival for a direct reply, or a repeat, changes nothing: the common case needs no follow-up.
