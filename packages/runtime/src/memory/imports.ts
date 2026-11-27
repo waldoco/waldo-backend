@@ -3,7 +3,7 @@ import {
   type ImportMemoriesArgs, type ImportSource, type ReadImportArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
 import { WorkspaceError, type WorkspaceStore } from '@waldo/workspace';
-import { normalizeForGrounding, type ClaimStore } from './claims';
+import { normalizeForGrounding, type ClaimStore, type NewClaim } from './claims';
 import { IMPORT_SOURCE_NAMES, importEvidence, importRef, importSourceOf } from './import-ref';
 import { carriesSecretOrCanary, HEALTH_SPAN_MARKER, numericHealthIn } from '../scribe/sanitiser';
 import type { SemanticRecall } from './semantic-recall';
@@ -112,11 +112,29 @@ type Loaded = Readonly<{ digest: string; conversations: readonly ImportedConvers
 type Deps = Readonly<{
   open(ctx: MemoryToolContext): Promise<WorkspaceStore>;
   store: ClaimStore;
-  sql: Pick<SqlStorage, 'exec'>;
   now?: () => Date;
   transaction?<T>(work: () => T): T;
   semantic?: Pick<SemanticRecall, 'kick'>;
 }>;
+
+export type ImportOutcome = Readonly<{ status: 'stored' | 'duplicate'; id: number }> | Readonly<{ status: 'refused'; reason: string }>;
+// Keeps a batch of imported claims, each with an import source_ref, and answers for each in order. The caller runs it in one
+// transaction. Every row counts, whatever its status: the same claim held, from this import or from anywhere else, or the same
+// quote already brought in from the same assistant, is not added twice; and a text the owner dismissed, retired or corrected is
+// their decision, which a later import does not undo. A row being forgotten is the barrier's to hold.
+export const keepImported = (store: ClaimStore, claims: readonly NewClaim[], at: string): ImportOutcome[] => {
+  const rows = store.allClaims().filter(row => row.status !== 'purging');
+  return claims.map(claim => {
+    const source = importSourceOf(claim.source_ref);
+    const same = rows.find(row => normalizeForGrounding(row.text) === normalizeForGrounding(claim.text) || (row.evidence === claim.evidence && importSourceOf(row.source_ref) === source));
+    if (same && (same.status === 'active' || same.status === 'promoted')) return { status: 'duplicate', id: same.id };
+    if (same) return { status: 'refused', reason: 'owner_already_decided' };
+    store.add(claim, at);
+    const id = store.lastClaimId();
+    rows.push({ ...claim, id, status: 'active' } as (typeof rows)[number]);
+    return { status: 'stored', id };
+  });
+};
 
 export const importHandlers = (deps: Deps): ToolHandler<any, unknown, MemoryToolContext>[] => {
   const now = () => (deps.now?.() ?? new Date()).toISOString();
@@ -198,8 +216,7 @@ export const importHandlers = (deps: Deps): ToolHandler<any, unknown, MemoryTool
         if (!ctx.memoryTurn || ctx.memoryTurn.ownerId !== ctx.authenticatedUserId) return fail('forbidden', 'Importing runs only in the owner\'s own chat turn.', null);
         const read = await load(args, ctx, null);
         if (!loaded(read)) return read;
-        type Outcome = { status: 'stored' | 'duplicate'; id: number } | { status: 'refused'; reason: string };
-        const outcomes: Outcome[] = [];
+        const outcomes: ImportOutcome[] = [];
         const accepted: { index: number; claim: Parameters<ClaimStore['add']>[0] }[] = [];
         for (const [index, item] of args.claims.entries()) {
           const conversation = read.conversations.find(candidate => candidate.id === item.conversation_id);
@@ -214,21 +231,7 @@ export const importHandlers = (deps: Deps): ToolHandler<any, unknown, MemoryTool
           } });
         }
         await ready(ctx);
-        // One commit for the batch. Every row counts, whatever its status: the same claim held, from this export or from
-        // anywhere else, or the same quote already brought in, is not added twice; and a text the owner dismissed, retired or
-        // corrected is their decision, which a later import does not undo. A row being forgotten is the barrier's to hold.
-        const write = () => {
-          const rows = deps.store.allClaims().filter(row => row.status !== 'purging');
-          for (const { index, claim } of accepted) {
-            const same = rows.find(row => normalizeForGrounding(row.text) === normalizeForGrounding(claim.text) || (row.evidence === claim.evidence && importSourceOf(row.source_ref) === args.source));
-            if (same && (same.status === 'active' || same.status === 'promoted')) { outcomes[index] = { status: 'duplicate', id: same.id }; continue; }
-            if (same) { outcomes[index] = { status: 'refused', reason: 'owner_already_decided' }; continue; }
-            deps.store.add(claim, now());
-            const id = deps.sql.exec<{ id: number }>('SELECT last_insert_rowid() AS id').one().id;
-            outcomes[index] = { status: 'stored', id };
-            rows.push({ ...claim, id, status: 'active' } as (typeof rows)[number]);
-          }
-        };
+        const write = () => { for (const [at, outcome] of keepImported(deps.store, accepted.map(item => item.claim), now()).entries()) outcomes[accepted[at]!.index] = outcome; };
         const atomic = () => deps.transaction ? deps.transaction(write) : write();
         if (ctx.runScope) ctx.runScope.commit(atomic); else atomic();
         if (outcomes.some(outcome => outcome.status === 'stored')) deps.semantic?.kick();

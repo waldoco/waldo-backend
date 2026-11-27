@@ -8,7 +8,7 @@ import { PASS_HEALTH_MEMORY_RULES } from './health-rules';
 import { RESTORES_DRAINS_MEMORY_RULE } from './restores-drains';
 import { NODE_STATEMENT, nodeConfirmation, nodeSources, nodeStatementIds, nodeSupports, nodeWording, othersWords, statementConfirms, statementRef, supportIds } from './node-sources';
 import type { ForgetSource, ForgetBatch, ForgetHeldBy } from './selective-forget';
-import { importSourceOf } from './import-ref';
+import { importSourceOf, isDocImport } from './import-ref';
 import { MAX_FORGET_SOURCES } from './selective-forget';
 import { ensurePeopleSchema, peopleTables } from './people';
 
@@ -79,7 +79,7 @@ export const textFingerprint = (text: string): string => {
 };
 export type ConstellationNode = Readonly<{ id: number; domain: string; label: string; summary: string; strength: number; status: string; first_seen: string; last_confirmed: string; supporting_spots: string }>;
 export type ConstellationEdge = Readonly<{ from_id: number; to_id: number; relation: string; strength: number; evidence_count: number }>;
-type NewClaim = Readonly<{ kind: string; text: string; source: string; evidence: string; origin?: string; source_ref?: string; supersedes_id?: number; aliases?: readonly string[]; area?: string; on_date?: string }>;
+export type NewClaim = Readonly<{ kind: string; text: string; source: string; evidence: string; origin?: string; source_ref?: string; supersedes_id?: number; aliases?: readonly string[]; area?: string; on_date?: string }>;
 // The part of the owner's life a claim is filed under, as stored: unsorted is NULL, and anything outside the set is unsorted.
 const filedArea = (area: string | null | undefined): LifeArea | null =>
   area !== 'unsorted' && (LIFE_AREAS as readonly (string | null | undefined)[]).includes(area) ? area as LifeArea : null;
@@ -1385,6 +1385,7 @@ export const memoryPrompt = (store: ClaimStore): string => {
 // remember writes 'agent' with an owner source ref when the quote is the owner's but the turn had read outside content, and
 // the background passes do when the quote answers a reply that carried outside content.
 const evidenceLabel = (claim: Claim): string => claim.origin !== 'agent' ? ''
+  : isDocImport(claim.source_ref) ? ' (from a summary of the owner that another assistant wrote and the owner pasted in, which may be wrong or out of date, so Waldo\'s read until the owner confirms it)'
   : importSourceOf(claim.source_ref) ? ' (quoted from the owner\'s side of a chat export they imported, which may hold text they pasted and may be out of date, so Waldo\'s read until the owner confirms it)'
   : claim.source_ref?.startsWith(COMBINED_REF) ? ' (Waldo\'s wording, written in place of the notes named, so Waldo\'s read until the owner confirms it)'
   : claim.source_ref?.startsWith(WALDO_RUN_REF) ? ' (Waldo\'s own note from a run it started, not the owner\'s words, so Waldo\'s read until the owner confirms it)'

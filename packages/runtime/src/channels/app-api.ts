@@ -23,6 +23,7 @@ import { replyChartSeriesPartV1Schema } from '../../../contracts/src/app/parts';
 import type { ChartSeriesPart } from '../tools/live/show-chart';
 import { appDeviceMutationResultV1Schema, appDeviceRegisterV1Schema, appDeviceRevokeV1Schema, appDevicesResultV1Schema } from '../../../contracts/src/app/devices';
 import { APP_ONBOARDING_PATHS } from './app-onboarding';
+import { APP_MEMORY_IMPORT_MAX_REQUEST_BYTES_V1, APP_MEMORY_IMPORT_PATH_V1 } from '../../../contracts/src/app/memory-import';
 import { APP_PROVIDERS_PATH, handleAppHealthProviders } from '../health/providers/app-providers';
 import { fenceSession } from './session-fence';
 import { CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS, CONSOLE_OTP_SEND_LIMIT, CONSOLE_OTP_VERIFY_LIMIT } from './console-signin';
@@ -87,6 +88,20 @@ export const forwardAppUpload = async (request: Request, env: Readonly<{ owners:
     'content-type': request.headers.get('content-type') ?? '', [APP_CHAT_UPLOAD_KIND_HEADER]: request.headers.get(APP_CHAT_UPLOAD_KIND_HEADER) ?? '',
     ...(request.headers.has(APP_CHAT_UPLOAD_NAME_HEADER) ? { [APP_CHAT_UPLOAD_NAME_HEADER]: request.headers.get(APP_CHAT_UPLOAD_NAME_HEADER)! } : {}),
   } });
+  try { return await env.owners.get(env.owners.idFromName(doName)).fetch(forwarded); } catch { return fail(503); }
+};
+
+// The Worker's half of the memory import, for the app's bearer and the console's owner cookie alike: its own per-owner budget
+// for the import, bounded at the request cap before it is read. The owner object answers whether imports are on.
+export const forwardMemoryImport = async (request: Request, env: Readonly<{ owners: DurableObjectNamespace; limiter: RateLimit }>, doName: string, sessionHash: string): Promise<Response> => {
+  if (request.method !== 'GET' && request.method !== 'POST') return fail(405);
+  try { if (!(await env.limiter.limit({ key: `${request.method === 'POST' ? 'app-memory-import' : 'app-read'}:${doName}` })).success) return fail(429); } catch { return fail(503); }
+  const length = request.headers.get('content-length');
+  if (length && (!/^\d+$/.test(length) || Number(length) > APP_MEMORY_IMPORT_MAX_REQUEST_BYTES_V1)) return fail(413);
+  const body = request.method === 'POST' ? await readBoundedBody(request, APP_MEMORY_IMPORT_MAX_REQUEST_BYTES_V1) : undefined;
+  if (body === null) return fail(413);
+  const forwarded = new Request(`https://telegram-owner${APP_MEMORY_IMPORT_PATH_V1}`, { method: request.method, headers: {
+    'x-waldo-do-name': doName, 'x-waldo-app-session-hash': sessionHash, 'content-type': 'application/json' }, ...(body ? { body } : {}) });
   try { return await env.owners.get(env.owners.idFromName(doName)).fetch(forwarded); } catch { return fail(503); }
 };
 
@@ -298,6 +313,7 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
     const secret = env.WALDO_ROUTER_HMAC_SECRET;
     return handleAppDeviceContext({ request, url, doName: who.doName, rpc: signedRpc(env), readBody: readBoundedBody, ...(secret ? { moved: () => notifyOwnerPlaceMoved(owners, secret, who.doName) } : {}), ...(secret && env.ARRIVAL_LOOK === '1' ? { arrived: (place: ArrivalPlace) => notifyOwnerPlaceArrived(owners, secret, who.doName, place) } : {}), ...(defer ? { defer } : {}) });
   }
+  if (url.pathname === APP_MEMORY_IMPORT_PATH_V1) return forwardMemoryImport(request, { owners, limiter: env.RESPONSIBILITY_RATE_LIMITER }, who.doName, await linkCodeHash(sessionIdOf(who.credential)!));
   if (url.pathname === APP_CHAT_UPLOAD_PATH) return forwardAppUpload(request, { owners, limiter: env.RESPONSIBILITY_RATE_LIMITER, on: env.APP_CHAT_ATTACHMENTS === '1' }, who.doName, await linkCodeHash(sessionIdOf(who.credential)!));
   // The phone's calendar spends its own per-owner budget and is answered by the owner's object, which holds its consent and
   // events. Off, the routes are not there.

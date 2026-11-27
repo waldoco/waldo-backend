@@ -123,6 +123,19 @@ The owner brings their past in by uploading another assistant's chat export to W
 **Importing from another assistant (draft passage)**
 > If you upload a chat export from another assistant, such as ChatGPT or Claude, and ask Waldo to use it, Waldo reads the messages you wrote there. It does not read the other assistant's replies. What it keeps from them, such as people in your life, goals and plans, is listed in What Waldo knows as Waldo's read until you confirm or correct it. Your messages go to the companies that provide Waldo's AI models (today OpenAI and Anthropic) while Waldo reads them, and what Waldo keeps goes to them when it is relevant to a reply. You can tell Waldo to forget everything from one assistant's export. Uploading the same export again will not bring back those items or the passages they were quoted from. The file you uploaded stays in your files until you delete it.
 
+### A summary pasted from another assistant
+
+The lighter path, for an owner who has no export to hand: Settings (app and website) and a skippable setup step show a prompt (`APP_MEMORY_IMPORT_PROMPT_V1`) the owner copies into ChatGPT, Claude, Gemini, Grok or another assistant, which writes one Markdown document about them. The owner pastes it back (`POST /app/v1/memory/import`, at most 40,000 characters). It runs wherever `MEMORY_IMPORT_DOC` is `"1"` (staging); production is off.
+
+- **What the model reads.** The pasted summary, once, in one structured call with no tools and no memory beside it (`memory_import_doc`, so no trace keeps its text). A line carrying a secret is withheld before the call. The summary is the other assistant's writing, not the owner's words, and the call is told it is outside content and never instructions.
+- **Who decides what is kept.** The model picks the claims. Code keeps one only when its quote appears in the summary (whitespace aside, on word edges) and neither its text nor its quote carries a health reading, a secret or a forgotten topic; with health notes off, no claim of kind `health` is kept. The owner's earlier dismissals and corrections stand, as for an export.
+- **Storage.** As for an export: each claim is Waldo's read (`inferred`, `agent`) until the owner confirms it. Its evidence reads `the summary of the owner they pasted from Gemini: "<quote>"`, and its `source_ref` is `import:<source>:<first 16 hex of the text's SHA-256>:doc`. The summary itself is not stored; the route keeps only its counts for a week against the `request_id`, so a retry answers from the first read.
+- **Egress.** The summary reaches the owner's model providers for that one call; kept claims reach them when relevant, as any memory. No log, no R2 copy, no third-party send.
+- **Forget.** `forget_memory` with `import_source` takes every source here (`chatgpt`, `claude`, `gemini`, `grok`, `other`) and removes what both paths brought in from that assistant.
+
+**Bringing in memories from another AI (draft passage)**
+> If you paste in what another AI, such as ChatGPT, wrote about you, Waldo reads it once and keeps what it says about you in What Waldo knows as Waldo's read until you confirm or correct it. It does not keep the document itself, and it never keeps passwords, card numbers or health readings from it. The document goes to the companies that provide Waldo's AI models (today OpenAI and Anthropic) while Waldo reads it. You can tell Waldo to forget everything it brought in from one AI.
+
 ## Privacy notice, copy version 1 (draft: the owner approves the wording)
 
 These are the passages the privacy notice must carry before any owner is offered the look-up or diagnostic recording. They are written to be merged into the privacy and terms draft, which is not published. Grants are recorded against notice version 1 because no notice has been shown to any owner yet; once one has, any change to these passages is a new version, which asks every owner again.

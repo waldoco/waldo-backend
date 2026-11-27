@@ -1,6 +1,7 @@
 import { APP_CHAT_UPLOAD_PATH, APP_CONTRACT_HEADER, APP_SEND_MAX_WIRE_BYTES, appContractHeaderV1Schema, appSendRequestV1Schema } from '../../../contracts/src/app/core';
 import { appThreadArchiveV1Schema, appThreadCreateV1Schema, appThreadDeleteV1Schema, appThreadIdV1Schema, appThreadRenameV1Schema, appThreadSendV1Schema } from '../../../contracts/src/app/threads';
-import { APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, forwardAppUpload, readBoundedBody } from './app-api';
+import { APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, forwardAppUpload, forwardMemoryImport, readBoundedBody } from './app-api';
+import { APP_MEMORY_IMPORT_PATH_V1 } from '../../../contracts/src/app/memory-import';
 import { DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
 import { consoleAuth, type ConsoleAuth } from '../identity/console-auth';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
@@ -32,8 +33,9 @@ const sameSite = (request: Request, url: URL): boolean => {
 };
 
 type Checked = Readonly<{ safeParse(value: unknown): Readonly<{ success: boolean }> }>;
-// upload: the app's chat upload route, whose raw bytes and budget the app's own upload handling owns.
-type Route = Readonly<{ target: string; bucket: 'app-read' | 'app-chat-send'; method: 'GET' | 'POST'; body?: Checked; upload?: true }>;
+// upload: the app's chat upload route, whose raw bytes and budget the app's own upload handling owns. memoryImport: the app's
+// memory import, whose body cap and budget are its own.
+type Route = Readonly<{ target: string; bucket: 'app-read' | 'app-chat-send'; method: 'GET' | 'POST'; body?: Checked; upload?: true; memoryImport?: true }>;
 const CLIENT = /^[A-Za-z0-9_-]{8,64}$/;
 const OPERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 // Only the query keys the app route reads pass through.
@@ -58,6 +60,7 @@ const route = (url: URL, method: string): Route | null => {
   const [head, id, action, ...rest] = segments;
   if (head === undefined) return method === 'GET' ? { target: withQuery(APP_CHAT_PATH, url, ['cursor', 'limit']), bucket: 'app-read', method: 'GET' } : null;
   if (head === 'messages') return messageRoute(APP_CHAT_SEND_PATH, segments.slice(1), method, appSendRequestV1Schema);
+  if (head === 'memory-import') return id === undefined && (method === 'GET' || method === 'POST') ? { target: APP_MEMORY_IMPORT_PATH_V1, bucket: 'app-read', method, memoryImport: true } : null;
   if (head === 'uploads') return id === undefined && method === 'POST' ? { target: APP_CHAT_UPLOAD_PATH, bucket: 'app-chat-send', method: 'POST', upload: true } : null;
   if (head === 'day') return id === undefined && method === 'GET' ? { target: '/app/v1/controls?view=day', bucket: 'app-read', method: 'GET' } : null;
   if (head === 'days') {
@@ -98,6 +101,7 @@ export const handleConsoleChat = async (request: Request, env: ChatEnv, auth: Co
   // The app's own per-owner buckets: chat from the app and the console shares one budget, sized for the app's polling.
   if (!env.RESPONSIBILITY_RATE_LIMITER) return answer(503, { error: 'chat_unavailable' });
   // An attachment is staged exactly as the app stages one, on the app's upload budget; the send that names it comes after.
+  if (chosen.memoryImport) return relay(await forwardMemoryImport(request, { owners, limiter: env.RESPONSIBILITY_RATE_LIMITER }, doName, sessionHash));
   if (chosen.upload) return relay(await forwardAppUpload(request, { owners, limiter: env.RESPONSIBILITY_RATE_LIMITER, on: env.APP_CHAT_ATTACHMENTS === '1' }, doName, sessionHash));
   try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `${chosen.bucket}:${doName}` })).success) return answer(429, { error: 'rate_limited' }, { 'retry-after': '60' }); }
   catch { return answer(503, { error: 'chat_unavailable' }); }

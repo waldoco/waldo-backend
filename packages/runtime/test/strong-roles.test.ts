@@ -33,17 +33,19 @@ const roles = (strongRoles: boolean) => runInDurableObject(env.OWNER_DO!.get(env
   };
   await responder.consolidate('nightly-1', 'owner: I moved to Lisbon.');
   await responder.planDay('day-1', 'Calendar: standup at 10.').catch(() => '');
+  await responder.importDoc!('import-1', 'A summary of the owner.').catch(() => '');
   const prep = await job('meeting_prep', 'decides', { name: 'calendar_prep', schema: { type: 'object' } });
   const plan = await job('day_card', 'plans');
   const unmarked = await job('unmarked', undefined);
   const late = await job('late_answer', true);
-  return [...seen.filter((call) => call.kind === 'claim_ops' || call.kind === 'day_plan'), ...prep, ...plan, ...unmarked, ...late];
+  return [...seen.filter((call) => call.kind === 'claim_ops' || call.kind === 'day_plan' || call.kind === 'doc_import'), ...prep, ...plan, ...unmarked, ...late];
 });
 
 it('with the switch off, memory, the day plan and deciding jobs stay on the auxiliary model at its own effort', async () => {
   expect(await roles(false)).toEqual([
     { kind: 'claim_ops', model: ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, effort: 'low' },
     { kind: 'day_plan', model: ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, effort: 'low' },
+    { kind: 'doc_import', model: ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, effort: 'low' },
     { kind: 'meeting_prep', model: ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, effort: 'low' },
     { kind: 'day_card', model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, effort: 'medium' },
     { kind: 'unmarked', model: ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, effort: 'low' },
@@ -55,6 +57,7 @@ it('with the switch on, memory and deciding jobs move to the chat model, and pla
   expect(await roles(true)).toEqual([
     { kind: 'claim_ops', model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, effort: 'medium' },
     { kind: 'day_plan', model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, effort: 'high' },
+    { kind: 'doc_import', model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, effort: 'medium' },
     { kind: 'meeting_prep', model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, effort: 'medium' },
     { kind: 'day_card', model: ANTHROPIC_CLAUDE_SONNET_5_5_MODEL, effort: 'high' },
     { kind: 'unmarked', model: ANTHROPIC_CLAUDE_HAIKU_5_5_MODEL, effort: 'low' },
