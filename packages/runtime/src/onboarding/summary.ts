@@ -68,8 +68,12 @@ export const onboardingSummary = (sql: Sql, deps: Readonly<{
   const row = (): Row | null => sql.exec<Row>('SELECT written_at, summary, questions_json, day, writes FROM onboarding_summary WHERE id = 1').toArray()[0] ?? null;
   const today = () => new Date(deps.now()).toISOString().slice(0, 10);
   const questions = (run: Row): Question[] => JSON.parse(run.questions_json) as Question[];
+  // A forget does not edit this row, and once it settles the topic's words are gone, so no text check could hold. Instead any
+  // forget made since the summary was written retires it: it reads as none, its questions can no longer be decided, and the
+  // next summary is written over what memory holds now.
+  const live = (): Row | null => { const run = row(); return run && !deps.claims.barriers().some((barrier) => Date.parse(barrier.created_at) >= run.written_at) ? run : null; };
   const decide = (id: string, state: 'answered' | 'deferred', work: (question: Question) => void): 'answered' | 'deferred' | 'not_found' | 'decided' => {
-    const run = row(), all = run ? questions(run) : [], question = all.find((candidate) => candidate.id === id);
+    const run = live(), all = run ? questions(run) : [], question = all.find((candidate) => candidate.id === id);
     if (!run || !question) return 'not_found';
     if (question.state !== 'open') return 'decided';
     work(question);
@@ -78,7 +82,7 @@ export const onboardingSummary = (sql: Sql, deps: Readonly<{
   };
   return {
     view(): AppOnboardingSummaryV1 {
-      const run = row();
+      const run = live();
       return run ? { state: 'ready', summary: run.summary, written_at: run.written_at, questions: questions(run) } : { state: 'none', summary: null, written_at: null, questions: [] };
     },
     // Whether today's writes leave room for another.

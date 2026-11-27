@@ -94,6 +94,23 @@ describe('onboarding summary', () => {
     });
   });
 
+  it('a forget made after the summary was written retires it: none is served and its questions cannot be decided until the next one', async () => {
+    await withSql(async (sql, transaction) => {
+      let n = 0, now = T0;
+      const claims = claimStore(sql, transaction);
+      const book = onboardingSummary(sql, { now: () => now, newId: () => `abcdefgh${n++}`, transaction, claims, loops: loopBook(sql, { newId: () => 'loop1', now: () => now }) });
+      transaction(() => book.write(reply('You keep mornings for training.', 'How is the divorce going?')));
+      const divorce = book.view().questions[0]!.id;
+      now += 60_000;
+      claims.barrier('divorce', new Date(now).toISOString());
+      expect(book.view()).toEqual({ state: 'none', summary: null, written_at: null, questions: [] });
+      expect(transaction(() => book.answer(divorce, 'Fine.'))).toBe('not_found');
+      now += 60_000;
+      transaction(() => book.write(reply('You keep mornings for training.', 'Who do you plan your week with?')));
+      expect(book.view().questions.map((question) => question.text)).toEqual(['Who do you plan your week with?']);
+    });
+  });
+
   it('asks the model for structured output only', () => {
     expect(openAIStrictParameters(SUMMARY_SCHEMA)).toEqual(SUMMARY_SCHEMA);
   });
