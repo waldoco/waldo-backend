@@ -12,10 +12,10 @@ const said = (store: ClaimStore, text: string, ref: string) => {
   store.add({ kind: 'preference', text, source: 'stated', evidence: `"${text}"`, origin: 'owner', source_ref: ref }, AT);
   return store.claims().find((claim) => claim.text === text)!.id;
 };
-const nightly = (store: ClaimStore, ops: Readonly<{ pin?: readonly unknown[]; unpin?: readonly number[]; dismiss?: readonly number[] }>): ClaimOutcome => {
+const nightly = (store: ClaimStore, ops: Readonly<{ pin?: readonly unknown[]; unpin?: readonly number[]; dismiss?: readonly number[]; retire?: readonly unknown[] }>, owner?: string): ClaimOutcome => {
   let outcome: ClaimOutcome | undefined;
-  applyClaimOps(store, JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: ops.dismiss ?? [], forget_claims: [], forget_nodes: [], forget_topic: null, pin: ops.pin ?? [], unpin: ops.unpin ?? [] }),
-    AT, 'owner agreed', undefined, undefined, false, (result) => { outcome = result; }, true);
+  applyClaimOps(store, JSON.stringify({ add: [], corrections: [], retire: ops.retire ?? [], seen: [], confirm: [], dismiss: ops.dismiss ?? [], forget_claims: [], forget_nodes: [], forget_topic: null, pin: ops.pin ?? [], unpin: ops.unpin ?? [] }),
+    AT, 'owner agreed', undefined, owner === undefined ? undefined : { owner }, false, (result) => { outcome = result; }, true, true);
   return outcome!;
 };
 const row = (store: ClaimStore, id: number) => store.allClaims().find((claim) => claim.id === id)!;
@@ -29,6 +29,10 @@ describe('the nightly pass and the owner\'s pins', () => {
       expect(nightly(store, { unpin: [id] })).toMatchObject({ unpinned: 0 });
       expect(nightly(store, { pin: [{ id, block: 'profile', order: 0 }] })).toMatchObject({ pinned: 0 });
       expect(nightly(store, { dismiss: [id] })).toMatchObject({ dismissed: 0 });
+      // The same retire on the owner's own words ends a claim that is not pinned, and leaves the pinned one.
+      const loose = said(store, 'Keeps evenings for reading', 'owner, app-7');
+      nightly(store, { retire: [{ id, replaced_by_text: null, evidence: '"I gave up deep work mornings"' }, { id: loose, replaced_by_text: null, evidence: '"I gave up reading in the evenings"' }] }, 'I gave up deep work mornings. I gave up reading in the evenings');
+      expect(row(store, loose).status).toBe('superseded');
       expect(JSON.stringify(row(store, id))).toBe(before);
       expect(row(store, id)).toMatchObject({ pinned: 'facts', pin_order: 2, pinned_by: 'owner', status: 'active' });
     });

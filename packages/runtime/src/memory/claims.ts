@@ -1923,10 +1923,12 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   }
   // A fact the day showed is no longer true ends here, on the owner's own words: it stays as dated history and is never
   // deleted. Waldo does not end a claim on an outside reader's say-so, or on a quote that is not the owner's.
+  // A model never ends or dismisses a pin the owner set: the owner unpins it, corrects it or forgets it.
+  const ownerPinned = new Set(store.claims().filter(ownersPin).map((claim) => claim.id));
   let retired = 0;
   if (retireAllowed === true && grounding?.owner !== undefined) {
     for (const op of ops.retire ?? []) {
-      if (!op || !Number.isSafeInteger(op.id) || !known.has(op.id) || correctionIds.has(op.id) || typeof op.evidence !== 'string' || ground(op.evidence, grounding) !== 'owner' || onlyAnswersOutside(op.evidence, grounding)) continue;
+      if (!op || !Number.isSafeInteger(op.id) || !known.has(op.id) || correctionIds.has(op.id) || ownerPinned.has(op.id) || typeof op.evidence !== 'string' || ground(op.evidence, grounding) !== 'owner' || onlyAnswersOutside(op.evidence, grounding)) continue;
       const next = typeof op.replaced_by_text === 'string' && op.replaced_by_text.trim()
         ? store.claims().find((claim) => claim.id !== op.id && claim.origin === 'owner' && normalizeForGrounding(claim.text) === normalizeForGrounding(op.replaced_by_text!))?.id : undefined;
       if (store.retire(op.id, at, next)) retired += 1;
@@ -1958,8 +1960,6 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     if (typeof id === 'number' && known.has(id) && typeof area === 'string' && store.setArea(id, area as LifeArea, 'model')) filed += 1;
   }
   for (const id of ops.confirm.filter((id) => known.has(id))) store.confirm(id, evidence, at);
-  // A model never dismisses a pin the owner set.
-  const ownerPinned = new Set(store.claims().filter(ownersPin).map((claim) => claim.id));
   const dismissible = ops.dismiss.filter((id) => known.has(id) && !correctionIds.has(id) && !ownerPinned.has(id));
   for (const id of dismissible) store.setStatus(id, 'dismissed');
   const forgetIds = forgetsAllowed ? ops.forget_claims.filter((id) => forgettable.has(id) && !correctionIds.has(id)) : [];
@@ -1992,7 +1992,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   });
   const reasons = holdReasons.size ? `(${[...holdReasons].join(',')})` : '';
   const blockedForgets = forgetsAllowed ? 0 : ops.forget_claims.length + ops.forget_nodes.length + (ops.forget_topic?.trim() ? 1 : 0);
-  return `+${written} held${held.length + heldCorrections}${reasons} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${forgetIds.length + (forgetsAllowed ? ops.forget_nodes.length : 0)}${blockedForgets ? ` forget-blocked${blockedForgets}(no-intent)` : ''}${downgraded ? ` downgraded${downgraded}` : ''}${corrected.size ? ` corrected${corrected.size}` : ''}${combined ? ` combined${combined}` : ''}${pinned ? ` pinned${pinned}` : ''}${filed ? ` filed${filed}` : ''}${unpinned ? ` unpinned${unpinned}` : ''}${blockedPins ? ` pin-blocked${blockedPins}` : ''}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;
+  return `+${written} held${held.length + heldCorrections}${reasons} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${dismissible.length} forgot${forgetIds.length + (forgetsAllowed ? ops.forget_nodes.length : 0)}${blockedForgets ? ` forget-blocked${blockedForgets}(no-intent)` : ''}${downgraded ? ` downgraded${downgraded}` : ''}${corrected.size ? ` corrected${corrected.size}` : ''}${combined ? ` combined${combined}` : ''}${pinned ? ` pinned${pinned}` : ''}${filed ? ` filed${filed}` : ''}${unpinned ? ` unpinned${unpinned}` : ''}${blockedPins ? ` pin-blocked${blockedPins}` : ''}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;
 };
 
 
