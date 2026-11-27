@@ -172,7 +172,7 @@ export type OwnerContextIntegration = Readonly<{ skills?: OwnerSkillCapability; 
   promotedTools?: () => readonly string[]; noteLoaded?: (names: readonly string[]) => void;
   // The messages the owner's outbox delivered to the owner lately, oldest first: what a lean scheduled run reads of what Waldo said.
   waldoSent?: () => readonly Readonly<{ at: number; text: string }>[];
-  // What the owner's day holds now (channels/now-frame.ts), read once per owner message as outside data, one section per item.
+  // What the owner's day holds now (channels/now-frame.ts), read once per owner message and fenced as data, one section per item.
   nowFrame?: (trace: string) => Promise<readonly string[]> }>;
 // This owner's spend so far this month and the ceiling it is held to, read once when a turn starts.
 export type OwnerSpend = Readonly<{ spentUsd: number; ceilingUsd: number }>;
