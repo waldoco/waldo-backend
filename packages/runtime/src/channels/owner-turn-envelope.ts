@@ -84,6 +84,8 @@ export type OwnerResponder = Readonly<{
   promote(trace: string, gate?: Readonly<{ last: string | undefined; promoted(digest: string): void }>): Promise<string>;
   // One welcome-build stage's structured answer; its input and output never reach a trace. version 2 is the second build's.
   welcome?(trace: string, stage: string, input: string, version?: 2): Promise<string>;
+  // The onboarding summary with its open questions; its input and output never reach a trace.
+  onboardingSummary?(trace: string, input: string): Promise<string>;
   planDay(trace: string, input: string): Promise<string>;
   // After a reply is delivered: compact the chain's older rows into one summary row when the last window dropped rows or
   // ran near its budget. Never throws; a failure is one content-free `compaction` hop. Inert while the switch is off.
