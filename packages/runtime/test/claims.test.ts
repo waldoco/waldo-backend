@@ -359,7 +359,7 @@ describe('claims', () => {
     });
   });
 
-  it('golden: a once-seen, shared, legacy or unknown claim cannot create a node or edge', async () => {
+  it('golden: a legacy or unknown claim cannot support a constellation, and a link to one not in the reply is not written', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);
       store.add({ kind: 'observation', text: 'Owner sleep once', source: 'stated', evidence: 'I slept badly', origin: 'owner' }, AT);
@@ -367,8 +367,8 @@ describe('claims', () => {
       store.add({ kind: 'observation', text: 'Legacy sleep', source: 'stated', evidence: 'old text' }, '2026-09-26T04:00:00Z');
       const [once, shared, legacy] = [...store.claims()].sort((a, b) => a.id - b.id);
       const detail = applyPromotion(store, JSON.stringify({
-        nodes: [{ id: null, domain: 'sleep', label: 'Unsupported', summary: 'Should be held', strength: 0.9, status: 'active', durable: true, reason: 'lasting owner pattern', supporting_spots: [once!.id, shared!.id, legacy!.id, 9999] }],
-        edges: [{ from: 'new:0', to: '12345', relation: 'co-occurs with', strength: 1, evidence_count: 9 }],
+        constellations: [{ id: null, replaces: [], area: 'body', label: 'Unsupported', summary: 'Should be held', strength: 0.9, spots: [once!.id, legacy!.id, 9999] }],
+        links: [{ from: 'new:0', to: '12345', relation: 'co-occurs with' }],
         promoted: [once!.id, shared!.id, legacy!.id],
       }), AT);
       expect(detail).toContain('nodes0 edges0');
@@ -634,8 +634,8 @@ describe('claim origin classes (gate provenance)', () => {
       const byText = new Map(store.claims().map((claim) => [claim.text, claim]));
       for (const claim of store.claims()) store.seen(claim.id, AT); // both recur, so origin alone differentiates
       const detail = applyPromotion(store, JSON.stringify({
-        nodes: [{ id: null, domain: 'sleep', label: 'Sleep', summary: 'Sleep patterns', strength: 0.6, status: 'active', durable: true, reason: 'lasting owner pattern', supporting_spots: [] }],
-        edges: [],
+        constellations: [],
+        links: [],
         promoted: [byText.get('External-content observation')!.id, byText.get('Owner observation')!.id],
       }), AT);
       // Only the owner-origin observation promotes; the untrusted one is excluded structurally.
@@ -651,14 +651,14 @@ describe('claim origin classes (gate provenance)', () => {
       store.add({ kind: 'observation', text: 'Single episode', source: 'stated', evidence: 'said once', origin: 'owner' }, AT);
       const once = store.claims()[0]!;
       const detail = applyPromotion(store, JSON.stringify({
-        nodes: [{ id: null, domain: 'sleep', label: 'X', summary: 'x', strength: 0.5, status: 'active', durable: true, reason: 'lasting owner pattern', supporting_spots: [] }],
-        edges: [],
+        constellations: [],
+        links: [],
         promoted: [once.id],
       }), AT);
       expect(detail).toBe('nodes0 edges0 promoted0 rejected1');
       expect(store.claims()[0]!.status).toBe('active');
       store.seen(once.id, AT);
-      const second = applyPromotion(store, JSON.stringify({ nodes: [], edges: [], promoted: [once.id] }), AT);
+      const second = applyPromotion(store, JSON.stringify({ constellations: [], links: [], promoted: [once.id] }), AT);
       expect(second).toBe('nodes0 edges0 promoted0 rejected1');
       expect(store.claims('promoted')).toEqual([]);
     });
