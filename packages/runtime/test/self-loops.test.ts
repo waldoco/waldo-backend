@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { FOLLOWUP_WAKE_PREFIX, loopBook, loopHandlers, loopsSection, openLoopsPrompt, SELF_LOOPS_PER_DAY, SELF_LOOP_CHAIN_DEPTH, SELF_LOOP_WAKES_PER_DAY, type Loop } from '../src/channels/loops';
+import { FOLLOWUP_WAKE_PREFIX, loopBook, loopHandlers, loopsSection, openLoopsPrompt, SELF_LOOPS_PER_DAY, type Loop } from '../src/channels/loops';
 import { armFollowupWake } from '../src/channels/heartbeat';
 import { loopCheckBackText } from '../src/channels/check-back';
 
@@ -58,27 +58,30 @@ describe('Waldo\'s own follow-ups', () => {
     expect(await open.handle({ title: 'Send the deck', due: null }, ctx({ runOrigin: 'owner' }))).toMatchObject({ ok: true, data: { origin: 'owner', chain_depth: 0 } });
   }));
 
-  it('bounds hold in code: a time is needed, within two weeks, at most a day\'s worth, and a chain stops at its depth', async () => withBook('self-bounds', async sql => {
-    const loops = book(sql);
-    const open = opener(loopHandlers(loops, () => null, false, true));
+  it('a follow-up needs a time, and may be up to a year ahead: a race in March is set months out', async () => withBook('self-ahead', async sql => {
+    const open = opener(loopHandlers(book(sql), () => null, false, true));
     expect(await open.handle({ ...gym, due: null }, ctx())).toMatchObject({ ok: false, code: 'rejected', error: expect.stringMatching(/needs a due time/) });
-    expect(await open.handle({ ...gym, due: '2030-03-25T09:00' }, ctx())).toMatchObject({ ok: false, code: 'rejected', error: expect.stringMatching(/two weeks/) });
+    expect(await open.handle({ ...gym, title: 'race week', due: '2030-11-20T07:00' }, ctx())).toMatchObject({ ok: true });
+    expect(await open.handle({ ...gym, title: 'too far', due: '2031-04-01T07:00' }, ctx())).toMatchObject({ ok: false, code: 'rejected', error: expect.stringMatching(/a year/) });
+  }));
+
+  it('only a runaway reaches the day\'s backstop: a busy day of follow-ups opens, the one past the backstop is refused', async () => withBook('self-backstop', async sql => {
+    const open = opener(loopHandlers(book(sql), () => null, false, true));
+    expect(SELF_LOOPS_PER_DAY).toBeGreaterThanOrEqual(48);
     for (let i = 0; i < SELF_LOOPS_PER_DAY; i += 1) expect(await open.handle({ ...gym, title: `check ${i}` }, ctx())).toMatchObject({ ok: true });
     expect(await open.handle(gym, ctx())).toMatchObject({ ok: false, code: 'rejected', error: expect.stringMatching(/today/) });
   }));
 
-  it('a check-back that sets the next follow-up extends its chain, up to the depth', async () => withBook('self-chain', async sql => {
+  it('a check-back that sets the next follow-up extends its chain with no depth limit: "look again tomorrow" runs all week', async () => withBook('self-chain', async sql => {
     const loops = book(sql);
     let given = new Set<string>();
     const open = opener(loopHandlers(loops, () => given, false, true));
     let last = (await open.handle(gym, ctx()) as { ok: true; data: { id: string; chain_depth: number } }).data;
-    for (let depth = 2; depth <= SELF_LOOP_CHAIN_DEPTH; depth += 1) {
+    for (let depth = 2; depth <= 10; depth += 1) {
       given = new Set([last.id]);
       last = (await open.handle({ ...gym, title: `again ${depth}` }, ctx()) as { ok: true; data: { id: string; chain_depth: number } }).data;
       expect(last.chain_depth).toBe(depth);
     }
-    given = new Set([last.id]);
-    expect(await open.handle({ ...gym, title: 'one too many' }, ctx())).toMatchObject({ ok: false, code: 'rejected', error: expect.stringMatching(/chain/) });
   }));
 });
 
@@ -94,7 +97,7 @@ describe('what an owner turn reads of Waldo\'s own follow-ups', () => {
   }));
 });
 
-// Ruling 4: a follow-up of Waldo's own due at a minute wakes at that minute, up to SELF_LOOP_WAKES_PER_DAY a day.
+// A follow-up of Waldo's own due at a minute wakes at that minute.
 describe('the exact-time wake of Waldo\'s own follow-ups', () => {
   type Armed = { id: string; kind: string; dueAt: number; recurrence: unknown };
   const fakeScheduler = (armed: Armed[], fail = false) => ({ schedule: async (entry: Armed) => { if (fail) throw new Error('synthetic'); armed.push(entry); } }) as never;
@@ -119,15 +122,14 @@ describe('the exact-time wake of Waldo\'s own follow-ups', () => {
     expect(calls).toBe(0);
   }));
 
-  it('past the day\'s wakes a follow-up still opens and waits for the heartbeat; a date-only, past or check-backs-off one never arms', async () => withBook('wake-bounds', async sql => {
+  it('every follow-up due at a minute gets its own wake; a date-only, past or check-backs-off one never arms', async () => withBook('wake-bounds', async sql => {
     const loops = book(sql), armed: Armed[] = [];
     const open = opener(loopHandlers(loops, () => null, false, true));
     const opened: Loop[] = [];
-    for (let i = 0; i <= SELF_LOOP_WAKES_PER_DAY; i += 1) opened.push(((await open.handle({ ...gym, title: `check ${i}` }, ctx())) as { data: Loop }).data);
+    for (let i = 0; i < 20; i += 1) opened.push(((await open.handle({ ...gym, title: `check ${i}` }, ctx())) as { data: Loop }).data);
     const codes = [];
     for (const loop of opened) codes.push(await arm(loops, armed)(loop));
-    expect(codes).toEqual([...Array(SELF_LOOP_WAKES_PER_DAY).fill('armed'), 'capped']);
-    expect(armed).toHaveLength(SELF_LOOP_WAKES_PER_DAY);
+    expect(codes).toEqual(Array(20).fill('armed'));
     const one = opened[0]!;
     expect(await arm(loops, [])({ ...one, due: '2030-03-04' })).toBe('date_only');
     expect(await arm(loops, [])({ ...one, due: '2030-03-04T09:00' })).toBe('past');
