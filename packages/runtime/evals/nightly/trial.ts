@@ -27,7 +27,7 @@ import { triagePrompt } from '../../src/prompt/update-cards';
 // The cards a triage turn can raise: a send, a calendar change, or any other tool through propose_action.
 export const TRIAGE_CARDS: readonly string[] = ['mail.send.proposed', 'calendar.change.proposed', 'action.proposed'];
 import type { EmbeddingRunner } from '../../src/memory/semantic-recall';
-import { constellationSoFar, welcomeStageText, type WelcomeStage } from '../../src/onboarding/welcome';
+import { welcomeStageText, type WelcomeStage } from '../../src/onboarding/welcome';
 
 export type Step =
   | Readonly<{ say: string }>
@@ -209,11 +209,11 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         if (!raised && chosen !== 'invalid' && chosen.decision === 'tell') transcript.push({ role: 'waldo', surface: chosen.push ? 'notification' : 'chat', text: chosen.say ?? chosen.revise!.text });
       } else if ('welcome' in step) {
         const { stage, sources, text } = step.welcome;
-        transcript.push({ role: 'world', text: `The welcome build reads the owner's ${stage} source and writes constellation nodes, which the owner reads.` });
-        const raw = await responder.welcome!(`${scenario.id}-welcome-${stage}`, stage, welcomeStageText(stage, sources, constellationSoFar({ allClaims: () => [], nodes: () => [] }), text), 2);
-        // An answer that is not a node list writes nothing, as the build settles that stage unavailable.
-        const nodes = (() => { try { return (JSON.parse(raw) as { nodes?: readonly Readonly<{ label?: string; summary?: string }>[] }).nodes; } catch { return undefined; } })();
-        transcript.push({ role: 'waldo', text: !Array.isArray(nodes) ? '(the answer was not a node list; nothing written)' : nodes.length ? nodes.map((node) => `${node.label}: ${node.summary}`).join('\n') : '(no nodes)' });
+        transcript.push({ role: 'world', text: `The welcome build reads the owner's ${stage} source and writes spots, which the join pass reads and the owner sees.` });
+        const raw = await responder.welcome!(`${scenario.id}-welcome-${stage}`, stage, welcomeStageText(stage, sources, text), 2);
+        // An answer that is not a spot list writes nothing, as the build settles that stage unavailable.
+        const spots = (() => { try { return (JSON.parse(raw) as { spots?: readonly Readonly<{ area?: string; text?: string }>[] }).spots; } catch { return undefined; } })();
+        transcript.push({ role: 'waldo', text: !Array.isArray(spots) ? '(the answer was not a spot list; nothing written)' : spots.length ? spots.map((spot) => `${spot.area}: ${spot.text}`).join('\n') : '(no spots)' });
       } else if ('mail_arrives' in step) {
         world.deliver(step.mail_arrives);
         transcript.push({ role: 'world', text: `New mail arrives from ${step.mail_arrives.from}: "${step.mail_arrives.subject}".` });

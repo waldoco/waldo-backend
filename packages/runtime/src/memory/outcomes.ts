@@ -97,9 +97,9 @@ export const outcomeBook = (sql: Sql): OutcomeBook => {
 
 // The zones read answers a window of at most 31 days, so the body is read for the newest outcomes' days only.
 const ZONE_WINDOW_DAYS = 31;
-const zonesAnswer = z.object({ zones: z.object({ days: z.array(z.object({ day: z.string(), recovery: z.string().nullable(), form: z.string().nullable() })) }) });
+export const zonesAnswer = z.object({ zones: z.object({ days: z.array(z.object({ day: z.string(), recovery: z.string().nullable(), form: z.string().nullable() })) }) });
 type DayZones = Readonly<{ recovery: string | null; form: string | null }>;
-const zoneWords = (raw: { recovery: string | null; form: string | null }): DayZones => ({ recovery: fromRowZone('recovery', raw.recovery), form: fromRowZone('form', raw.form) });
+export const zoneWords = (raw: { recovery: string | null; form: string | null }): DayZones => ({ recovery: fromRowZone('recovery', raw.recovery), form: fromRowZone('form', raw.form) });
 const said = (zones: DayZones | undefined): string | null => {
   const words = [zones?.recovery ? `Recovery ${zones.recovery}` : null, zones?.form ? `Form ${zones.form}` : null].filter(Boolean);
   return words.length ? words.join(', ') : null;

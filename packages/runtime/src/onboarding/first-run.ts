@@ -4,6 +4,7 @@ import {
   appSetupSpotV1Schema, type AppSetupAnswersRequestV1, type AppSetupAnswersResultV1,
 } from '../../../contracts/src/app/onboarding';
 import type { ClaimStore } from '../memory/claims';
+import { SETUP_REF } from '../memory/node-sources';
 import type { ConsentLedger } from './consent-ledger';
 import { CURRENT_CONSENT_VERSION } from './consent-ledger';
 import { numericHealthIn } from '../scribe/sanitiser';
@@ -36,7 +37,7 @@ export type FirstRunError = 'stale_version' | 'agreements_required' | 'not_start
 
 // The request the first look sends into main chat on the owner's tap. It reads as what the owner asked for, because it is.
 export const FIRST_LOOK_TEXT = 'Show me today as you see it, and what you noticed about how I work.';
-const NAME_REF = 'owner, first run: name', PRIORITY_REF = 'owner, first run: priority';
+const NAME_REF = `${SETUP_REF}name`, PRIORITY_REF = `${SETUP_REF}priority`;
 const calledText = (name: string) => `Wants to be called ${name}`;
 const named = (claims: ClaimStore) => claims.claims().some(candidate => candidate.source_ref === NAME_REF);
 
@@ -46,9 +47,9 @@ const named = (claims: ClaimStore) => claims.claims().some(candidate => candidat
 // since they describe a stretch of the owner's life and may carry a reading the owner stated.
 type SetupAnswer = Exclude<keyof AppSetupAnswersRequestV1, 'request_id'>;
 const SETUP_REFS: Readonly<Record<SetupAnswer, string>> = {
-  name: NAME_REF, day: 'owner, first run: day', slips: 'owner, first run: slips', wearable: 'owner, first run: wearable',
-  matters: 'owner, first run: matters', spots: 'owner, first run: spots', protect: 'owner, first run: protect', rope: 'owner, first run: rope',
-  season: 'owner, first run: season', low: 'owner, first run: low', train: 'owner, first run: train',
+  name: NAME_REF, day: `${SETUP_REF}day`, slips: `${SETUP_REF}slips`, wearable: `${SETUP_REF}wearable`,
+  matters: `${SETUP_REF}matters`, spots: `${SETUP_REF}spots`, protect: `${SETUP_REF}protect`, rope: `${SETUP_REF}rope`,
+  season: `${SETUP_REF}season`, low: `${SETUP_REF}low`, train: `${SETUP_REF}train`,
 };
 const SETUP_PINS: Readonly<Record<SetupAnswer, Readonly<{ block: 'profile' | 'facts'; order: number }>>> = {
   name: { block: 'profile', order: 0 }, day: { block: 'profile', order: 1 }, slips: { block: 'profile', order: 2 }, wearable: { block: 'profile', order: 3 },

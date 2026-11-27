@@ -362,6 +362,8 @@ type OwnerRuntime = Readonly<{
   listener: TelegramOwnerListener | null;
   control: TurnControl;
   welcome: OwnerWelcome;
+  // The one join pass, queued on the owner's serial lane: run after the owner's setup answers change, and by the welcome build.
+  joinConstellations(reason: string): Promise<string>;
   // The owner look-up the owner's yes starts: written or stopped as the yes stands, and let start once the first reply is out.
   lookup: Readonly<{ reconcile(): Promise<void>; afterReply(): Promise<void> }>;
   // The first-week read of the owner's own Google data (WELCOME_V2): written once, when the welcome build has begun and Google
@@ -2134,7 +2136,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             chat:chatChannelLinks({env:this.env,kv:this.ctx.storage.kv,doName:name,auth:consoleAuth(this.env)}),bothDefault:proactiveBothDefault(this.env),
             signedInRecently:async()=>signedInRecently((await consoleAuth(this.env)!.listSessions(name)).find(row=>row.session===hash)?.signed_in_at,Date.now()),
             act:action=>this.setup('app').act(action,current),
-            setupDone:()=>{this.bindAppSubject(name);const runtime=this.setup('app');runtime.welcome.build().start();this.continueWelcome(runtime);this.reconcileLookup(runtime);this.reconcileGetToKnow(runtime);},
+            setupDone:()=>{this.bindAppSubject(name);const runtime=this.setup('app');if(!runtime.welcome.build().start())this.ctx.waitUntil(runtime.joinConstellations('setup').catch(()=>undefined));this.continueWelcome(runtime);this.reconcileLookup(runtime);this.reconcileGetToKnow(runtime);},
             lookupChanged:()=>{this.bindAppSubject(name);this.reconcileLookup(this.setup('app'));},
             admit:async(client,text)=>{
               this.bindAppSubject(name);
@@ -5081,9 +5083,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const contextCaps = this.env.WALDO_CONTEXT_CAPS === '1';
     const callCeilings = this.env.WALDO_CALL_CEILINGS === '1';
     const plans = dayPlanBook(storage.sql);
-    // MEMORY_OUTSIDE_NOTES: the turn also recalls notes learned from mail and calendar, shown as not the owner's words.
+    // MEMORY_OUTSIDE_NOTES: the turn also recalls notes learned from mail and calendar, shown as not the owner's words. The
+    // owner's health memory setting rides on the store, read when a pass runs.
     const ownerClaims = claimStore(storage.sql, (work) => storage.transactionSync(work));
-    const memory = this.env.MEMORY_OUTSIDE_NOTES === '1' ? withOutsideNotes(ownerClaims) : ownerClaims;
+    const memory: ClaimStore = { ...(this.env.MEMORY_OUTSIDE_NOTES === '1' ? withOutsideNotes(ownerClaims) : ownerClaims), keepsHealth: () => healthMemoryOn(identity) };
     // Semantic recall, behind MEMORY_SEMANTIC_RECALL. Its sweep embeds what any writer stored since the last one; it runs once
     // here, after each stored claim and after each recall that used it.
     const semantic = semanticRecallFromEnv(this.env, { sql: storage.sql, transaction: (work) => storage.transactionSync(work), kv: storage.kv, defer: (work) => this.ctx.waitUntil(work),
@@ -6904,6 +6907,24 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (delivered && record.reaction) await api.setMessageReaction({ chat_id: record.payload.chat_id,
         message_id: record.reaction.message_id, reaction: [{ type: 'emoji', emoji: record.reaction.emoji }] }).catch(() => undefined);
     };
+    // The join pass (memory/claims.ts): one strong-role call reads every spot beside the constellations and writes them. It asks
+    // the model only when what it reads changed since it last ran, so a second run over the same spots changes nothing.
+    // joinHere runs where it is called, for work already on the serial lane; joinConstellations queues on the lane. Its trace
+    // closes with a machine_turn root, like a welcome call's.
+    const joinHere = (reason: string): Promise<string> => this.asOwnerJob('dreaming', `join:${reason}`, async () => {
+      const started = Date.now(), trace = `join:${reason}:${started}`;
+      let ok = false;
+      try {
+        const detail = await responder.promote(trace, { last: storage.kv.get<string>(CONSTELLATION_DIGEST_KEY), promoted: digest => storage.kv.put(CONSTELLATION_DIGEST_KEY, digest) });
+        log({ trace, hop: 'constellation', ms: Date.now() - started, ok: true, detail, ...(detail === 'unchanged' ? { code: 'unchanged' } : {}) });
+        ok = true;
+        return detail;
+      } catch (error) {
+        log({ trace, hop: 'constellation', ms: Date.now() - started, ok: false, error: String(error) });
+        throw error;
+      } finally { log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok, detail: 'join' }); }
+    });
+    const joinConstellations = (reason: string): Promise<string> => this.serial(() => joinHere(reason));
     // The welcome build's model calls run on the queue as an owner job, like the nightly pass; its reads run beside it.
     // Each welcome call closes its own trace with a machine_turn root, so the trace exporter flushes it. The trace is per run:
     // a build taken up again after a cut must not add to a trace an earlier run already closed.
@@ -6913,10 +6934,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       try { const said = await this.asOwnerJob('dreaming', `welcome:${stage}`, () => responder.welcome!(trace, stage, text, version)); answered = true; return said; }
       finally { log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: answered, detail }); }
     };
-    const welcome = ownerWelcome({ sql: storage.sql, transaction: (work) => storage.transactionSync(work), claims: memory, now: Date.now, timezone: () => clock.timezone, healthMemory: () => healthMemoryOn(identity), healthRead, google,
+    const welcome = ownerWelcome({ sql: storage.sql, transaction: (work) => storage.transactionSync(work), claims: memory, now: Date.now, timezone: () => clock.timezone, healthMemory: () => healthMemoryOn(identity), healthRead, readZones, google,
       findings: () => findingStore(storage.sql, memory, consentLedger(storage.sql, consentSwitches(this.env)), Date.now),
       // The build runs beside the serial lane, so each call queues on it.
       ask: (stage, text, version) => this.serial(() => askWelcome(stage, text, version)),
+      join: () => joinConstellations('welcome'),
       // The second build (WELCOME_V2) waits for a look-up still running, inside the tour's watch.
       ...(this.env.WELCOME_V2 === '1' ? { v2: { lookupOpen: () => lookupOn
         ? lookupPending({ book: this.jobs(), consent: lookupConsent(), started: lookupStarted }, ownerName(memory) !== null) : openLookup(this.jobs()) !== null } } : {}) });
@@ -6977,8 +6999,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // come back through the welcome build's own call and admission, filed under mail. Its apply already runs in the jobs lane,
     // inside the serial lane, so its call does not queue on it again.
     const getToKnowOn = this.env.WELCOME_V2 === '1';
-    const getToKnowApply = getToKnowOn ? getToKnowApplier({ claims: memory, build: welcomeBuild(storage.sql, Date.now), now: Date.now, transaction: work => storage.transactionSync(work),
-      healthMemory: () => healthMemoryOn(identity), ask: text => askWelcome('mail', text, 2, 'get_to_know') }) : null;
+    const getToKnowApply = getToKnowOn ? getToKnowApplier({ claims: memory, now: Date.now, transaction: work => storage.transactionSync(work),
+      healthMemory: () => healthMemoryOn(identity), ask: text => askWelcome('mail', text, 2, 'get_to_know'), join: () => joinHere('get_to_know') }) : null;
     const getToKnow: OwnerRuntime['getToKnow'] = {
       reconcile: async () => {
         if (!getToKnowOn) return;
@@ -6990,7 +7012,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await armTaskJobsWake(storage, made.job.due_at ?? Date.now());
       },
     };
-    const runtime: OwnerRuntime = { welcome, lookup, getToKnow, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}), ...(getToKnowApply ? { get_to_know_you: getToKnowApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, push, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, reviseBriefForBody, healthChanged, healthTrigger, interventionReview, announcementPass, announcementsCurrent, placeMoved, placeArrived, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    const runtime: OwnerRuntime = { welcome, joinConstellations, lookup, getToKnow, machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}), ...(getToKnowApply ? { get_to_know_you: getToKnowApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, push, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, reviseBriefForBody, healthChanged, healthTrigger, interventionReview, announcementPass, announcementsCurrent, placeMoved, placeArrived, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       lookupToolHandlers: () => {
         const unlocated = webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch), this.lookupPages) : null;

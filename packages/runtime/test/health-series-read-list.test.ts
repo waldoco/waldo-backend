@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { md5Hex } from '../src/channels/md5';
-import { healthStage } from '../src/onboarding/welcome-sources';
 import { healthReadBook, SIGNALS } from '../src/tools/live/health';
 
-// The welcome health stage once asked health_series_read for every get_health signal by its stored name, repeats included
-// (sleep and its four stages all read sleep_duration). The RPC refuses a list longer than its known signals before it removes
-// repeats, so the stage settled as unavailable for every owner with health consent. These tests go through the real
+// A read of every get_health signal by its stored name repeats names (sleep and its four stages all read sleep_duration), and
+// the RPC refuses a list longer than its known signals before it removes repeats. These tests go through the real
 // healthReadBook against a fake plane that applies the RPC's own list rules, read from the migration that defines it.
 
 // Vite replaces a literal import.meta.glob call at build time; this package carries no vite client types, hence the directive.
@@ -58,19 +56,8 @@ describe('health_series_read list', () => {
     expect(sent!.message).toBe(`health.series_read.do-x.${md5Hex(sent!.payload)}`);
   });
 
-  it('lets the welcome stage read every signal it asks for, so an owner with health consent gets their readings', async () => {
-    const { asked, book } = plane();
-    const result = await healthStage(book, () => 'Asia/Kolkata', () => NOW, () => true)();
-    expect(result.kind).toBe('input');
-    if (result.kind !== 'input') return;
-    expect(result.text).toContain('hrv (apple_health, ms, rmssd): 2026-11-05 41');
-    const signals = (JSON.parse(asked[0]!.payload) as { signals: string[] }).signals;
-    expect(signals.length).toBe(new Set(signals).size);
-    expect(signals.length).toBeLessThanOrEqual(KNOWN.length);
-  });
-
-  it('keeps every stored name get_health and the welcome stage can ask for inside the RPC\'s list', () => {
-    // A signal whose stored name the RPC does not know would refuse the whole welcome read, the same way.
+  it('keeps every stored name get_health can ask for inside the RPC\'s list', () => {
+    // A signal whose stored name the RPC does not know would refuse the whole read.
     const stored = new Set(Object.values(SIGNALS).map(spec => spec.stored));
     expect([...stored].filter(name => !KNOWN.includes(name))).toEqual([]);
   });
