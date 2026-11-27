@@ -622,14 +622,14 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
     },
     // One note written in place of others: a merge of several, or a rewrite of one. Those notes end here and stay, linked from
     // it. The wording is Waldo's, written by a pass that also reads outside content, so the note is never the owner's: it is
-    // outside content if any note it replaced was, Waldo's read otherwise, until the owner confirms it. No health note is
-    // merged or rewritten, and no reading is written this way. Returns the new note's id, or null when nothing was written.
+    // outside content if any note it replaced was, Waldo's read otherwise, until the owner confirms it. No health note and no pinned
+    // note is merged or rewritten (a pin is the owner's word to keep it as it is), and no reading is written this way. Returns the new note's id, or null when nothing was written.
     combine(ids: readonly number[], claim: Readonly<{ kind: string; text: string }>, at: string): number | null {
       const unique = [...new Set(ids)], text = claim.text.trim();
       if (!transaction || !unique.length || !text || claim.kind === 'health' || numericHealthIn(text)) return null;
       return transaction(() => {
         const old = sql.exec<Claim>(`SELECT * FROM claims WHERE id IN (${marks(unique)}) AND status IN ('active', 'promoted') AND kind != '${NODE_STATEMENT}'`, ...unique).toArray();
-        if (old.length !== unique.length || old.some((note) => note.kind === 'health' || numericHealthIn(note.text))) return null;
+        if (old.length !== unique.length || old.some((note) => note.kind === 'health' || numericHealthIn(note.text) || note.pinned)) return null;
         const live = sql.exec<{ id: number; text: string }>(`SELECT id, text FROM claims WHERE status IN ('active', 'promoted') AND id NOT IN (${marks(unique)})`, ...unique).toArray();
         if (live.some((note) => normalizeForGrounding(note.text) === normalizeForGrounding(text))) return null;
         const outside = old.filter((note) => note.origin === 'untrusted');
