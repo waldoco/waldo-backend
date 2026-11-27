@@ -8,10 +8,11 @@ import { readMemoryGraph } from '../src/channels/memory-graph';
 import { barrierMemory } from '../src/context-composer/forget-barrier';
 import { ownerProfilePrompt } from '../src/memory/owner-profile';
 import {
-  confirmWelcomeNode, correctWelcomeNode, runWelcome, WELCOME_HEALTH_NOT_SHARED, WELCOME_MAX_NODES, WELCOME_V2_MAX_NODES, WELCOME_SCHEMA, WELCOME_STAGE_BUDGET_MS, welcomeBuild, welcomeSupportIds,
+  confirmWelcomeNode, correctWelcomeNode, runWelcome, WELCOME_HEALTH_NOT_SHARED, WELCOME_MAX_NODES, WELCOME_V2_MAX_NODES, WELCOME_SCHEMA, WELCOME_SCHEMA_V2, WELCOME_STAGE_BUDGET_MS, welcomeBuild, welcomeSupportIds,
   type StageInput, type WelcomeDeps, type WelcomeStage,
 } from '../src/onboarding/welcome';
 import { setupStage } from '../src/onboarding/welcome-sources';
+import { openAIStrictParameters } from '../src/llm/strict-schema';
 import { WELCOME_LATE_HEALTH_MS, WELCOME_PARTIAL_HEALTH_MS, WELCOME_RECHECK_MS, WELCOME_WEB_WAIT_MS } from '../src/onboarding/welcome';
 
 let sequence = 0;
@@ -295,6 +296,10 @@ describe('welcome build: admission', () => {
 
   it('asks the model for structured output only', () => {
     expect(WELCOME_SCHEMA).toMatchObject({ type: 'object', additionalProperties: false, required: ['nodes'] });
+  });
+
+  it('the second build\'s schema, people and links included, is already inside the strict subset: nothing to drop or loosen', () => {
+    expect(openAIStrictParameters(WELCOME_SCHEMA_V2 as Record<string, unknown>)).toEqual(WELCOME_SCHEMA_V2);
   });
 });
 
