@@ -249,6 +249,17 @@ describe('drawingOn: a health card under the owner\'s limits', () => {
     });
   });
 
+  it('an owner on low volume gets no health card, as they get nothing else unasked beyond the day cards', async () => {
+    await withKv((state) => {
+      const book = interruptBook(state.storage.kv, { now: () => NOW, timezone: () => 'UTC', ownerSpokeSince: () => false });
+      let asked = 0;
+      const free = interruptLimits({}, { quiet_start: null, quiet_end: null, volume: 'low' });
+      const budget = drawingOn({ admit: () => { asked += 1; return { verdict: 'send' }; }, charge: () => undefined }, book, () => free, () => null, () => false);
+      expect([budget.admit('health:2026-11-05'), asked]).toEqual([{ verdict: 'spent' }, 0]);
+      expect(drawingOn({ admit: () => ({ verdict: 'send' }), charge: () => undefined }, book, () => free, () => null, () => true).admit('health:2026-11-05')).toEqual({ verdict: 'send' });
+    });
+  });
+
   it('the delivery gate\'s own answer still holds when the owner has budget left', async () => {
     await withKv((state) => {
       const book = interruptBook(state.storage.kv, { now: () => NOW, timezone: () => 'UTC', ownerSpokeSince: () => false });

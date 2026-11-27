@@ -6196,7 +6196,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const trace = `${entry.id}:${entry.occurrence_at}`, doName = identity.get<string>('do_name'), rpc = signedRpc(this.env), timezone = clock.timezone;
       const current = async () => { if (!schedPrefs.enabled('health_proposals')) throw new Error('health proposals turned off'); };
       const gateBudget = healthCardBudget(calendarGate, String(owner), timezone, Date.now);
-      const budget = interrupts ? drawingOn(gateBudget, interrupts.book, interrupts.limits, interrupts.reopens) : gateBudget;
+      const budget = interrupts ? drawingOn(gateBudget, interrupts.book, interrupts.limits, interrupts.reopens, () => loops.proactivity().volume !== 'low') : gateBudget;
       const healthActions = this.env.HEALTH_ACTIONS === '1' ? CURATED_PACK_SKILLS.find(skill => skill.name === 'health-protocols')?.body_markdown ?? null : null;
       // The run and its model call each close their own trace with a machine_turn root, so the trace exporter flushes both.
       const started = Date.now();

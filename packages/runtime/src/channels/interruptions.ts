@@ -112,14 +112,15 @@ export const interruptBook = (kv: Kv, deps: Readonly<{
 export type InterruptBook = ReturnType<typeof interruptBook>;
 
 // A card budget of its own (the delivery gate's for health proposals) that also draws on the owner's limits: a health card
-// stops at the owner's own number and holds outside the owner's day like any other unasked message. Quiet hours and consent
-// stay with the caller.
-export const drawingOn = (inner: Readonly<{ admit(id: string): HealthCardAdmission; charge(id: string): void }>, book: InterruptBook, limits: () => InterruptLimits, reopens: () => number | null) => ({
+// stops at the owner's own number and holds outside the owner's day like any other unasked message. consent: false for an
+// owner on low volume, who gets nothing unasked beyond the day cards. Quiet hours stay with the caller.
+export const drawingOn = (inner: Readonly<{ admit(id: string): HealthCardAdmission; charge(id: string): void }>, book: InterruptBook, limits: () => InterruptLimits, reopens: () => number | null,
+  consent: () => boolean = () => true) => ({
   admit: (id: string): HealthCardAdmission => {
     const until = reopens();
     if (until !== null) return { verdict: 'wait', until };
-    const now = limits(), held = book.hold({ consent: true, quiet: false, asks: false, urgent: false, limits: now });
-    if (held === 'budget') return { verdict: 'spent' };
+    const now = limits(), held = book.hold({ consent: consent(), quiet: false, asks: false, urgent: false, limits: now });
+    if (held === 'budget' || held === 'consent') return { verdict: 'spent' };
     return inner.admit(id);
   },
   charge: (id: string): void => { inner.charge(id); book.spend(limits(), false, id); },
