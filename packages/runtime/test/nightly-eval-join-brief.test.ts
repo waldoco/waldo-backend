@@ -33,6 +33,14 @@ describe('the join\'s pattern reaching the next Brief', () => {
     expect(record.transcript.some((turn) => turn.text.includes(`- ${LABEL}:`))).toBe(true);
     expect(brief(record)).toContain(LABEL);
     expect(brief(record)).toContain('Weekly sync with the US team');
+    // Its words ride with the shared health; the health notes under it stay out of the Brief's memory.
+    expect(brief(record)).not.toContain('Recovery sits low on Tuesday and Thursday mornings');
+  });
+
+  it('carries the pattern with the owner\'s shared health: a Brief without shared health shows none of it', async () => {
+    const record = await run(scenario!.steps.filter((step) => !('health' in step)));
+    expect(record.transcript.some((turn) => turn.text.includes('confirms 1 of'))).toBe(true);
+    expect(brief(record)).not.toContain(LABEL);
   });
 
   it('keeps an unconfirmed pattern out of the Brief: one resting on calendar spots waits for the owner\'s word', async () => {

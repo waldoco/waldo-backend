@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { applyPromotion, claimStore, memoryPrompt, turnMemoryPrompt, type ClaimStore } from '../src/memory/claims';
 import { nodeConfirmation } from '../src/memory/node-sources';
-import { outsideView } from '../src/memory/outside-view';
+import { confirmedBodyPatterns, outsideView } from '../src/memory/outside-view';
 import { readMemoryGraph } from '../src/channels/memory-graph';
 import { confirmWelcomeNode, correctWelcomeNode } from '../src/onboarding/welcome';
 import { memoryHandlers, type MemoryToolContext } from '../src/tools/live/memory';
@@ -181,6 +181,36 @@ describe('the statement is a record of the owner\'s yes, never a memory fact', (
       const tool = memoryHandlers({ sql, store: outside, conversationRef: 'telegram-1', hideHistory: async () => undefined }).find((candidate) => candidate.name === 'read_memory')!;
       const machine = { authenticatedUserId: 'owner:1', trigger: 'user_message' } as unknown as MemoryToolContext;
       for (const args of [{ query: 'weekend sleeper' }, {}]) expect(JSON.stringify(await tool.handle(tool.schema.parse(args), machine))).not.toContain('Late weekend sleeper');
+    });
+  });
+
+  it('rides with the shared health only once the owner confirmed its wording, words only, while they keep health in memory', async () => {
+    await withStore((store) => {
+      const { id, support } = healthNode(store);
+      const mail = mailNode(store).id;
+      expect(confirmedBodyPatterns(store)).toEqual([]);
+      expect(confirmWelcomeNode(store, id, AT)).toBe(true);
+      expect(confirmWelcomeNode(store, mail, AT)).toBe(true);
+      // A pattern drawn from outside content alone already reaches such a run through memory; it is not carried twice.
+      expect(confirmedBodyPatterns(store)).toEqual(['Late weekend sleeper: Sleeps in on weekends']);
+      expect(confirmedBodyPatterns(store).join()).not.toContain(String(support));
+      expect(confirmedBodyPatterns({ ...store, keepsHealth: () => false })).toEqual([]);
+      // The memory view of a run built from outside content still never holds it.
+      expect(outsideView(store).nodes().map((node) => node.id)).not.toContain(id);
+    });
+  });
+
+  it('never carries a wording that states a reading, or a pattern whose notes are gone', async () => {
+    await withStore((store) => {
+      const reading = read(store, 'Nights end later on weekends', 'apple_health', 'agent');
+      const stated = store.saveNode({ id: null, domain: 'body', label: 'Low after late nights', summary: 'HRV 47.3 the morning after', strength: 0.5, status: 'active', supporting_spots: [reading] }, AT);
+      expect(confirmWelcomeNode(store, stated, AT)).toBe(true);
+      expect(confirmedBodyPatterns(store)).toEqual([]);
+      const { id, support } = healthNode(store);
+      expect(confirmWelcomeNode(store, id, AT)).toBe(true);
+      expect(confirmedBodyPatterns(store)).toHaveLength(1);
+      store.forget(support);
+      expect(confirmedBodyPatterns(store)).toEqual([]);
     });
   });
 

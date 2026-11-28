@@ -50,11 +50,12 @@ import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
 import { fitPromptToBudget } from '../prompt/fit-prompt';
 import { ownerProfilePrompt } from '../memory/owner-profile';
-import { FORGOTTEN, QUIET_NOTE, QUIET_TAG, withoutBringUpLess, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, knownPeopleBlock, SOURCE_PEOPLE_CLAIMS_SCHEMA, SOURCE_PEOPLE_RULE, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, promotionInstruction, PROMOTION_SCHEMA, promotionInput, SOURCE_CLAIMS_SCHEMA, SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput, OUTCOME_MEMORY_INSTRUCTION, outcomesInput, withoutHealthClaims, type ClaimStore, barrierPrompt, memoryPrompt, RETIRE_RULES } from '../memory/claims';
+import { CONSTELLATION_BLOCK_MAX_CHARS, fence, fittingLines, FORGOTTEN, QUIET_NOTE, QUIET_TAG, withoutBringUpLess, applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, knownPeopleBlock, SOURCE_PEOPLE_CLAIMS_SCHEMA, SOURCE_PEOPLE_RULE, FLUSH_INSTRUCTION, flushInput, HEALTH_NOTES_OFF, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, promotionInstruction, PROMOTION_SCHEMA, promotionInput, SOURCE_CLAIMS_SCHEMA, SOURCE_MEMORY_INSTRUCTION, sourceUpdatesInput, OUTCOME_MEMORY_INSTRUCTION, outcomesInput, withoutHealthClaims, type ClaimStore, barrierPrompt, memoryPrompt, RETIRE_RULES } from '../memory/claims';
 import { OWNER_WORDS_CHECK_FORMAT, OWNER_WORDS_CHECK_INSTRUCTION, ownerWordsCheckInput, ownerWordsStated, type OwnerWordsCheck } from '../memory/owner-words-check';
 import { CAPACITY_INSTRUCTION, CAPACITY_SCHEMA } from '../prompt/capacity';
 import { sha256Hex } from '../context-composer/canonical';
-import { outsideView } from '../memory/outside-view';
+import { confirmedBodyPatterns, outsideView } from '../memory/outside-view';
+import { HEALTH_PATTERN_MAX_CHARS, HEALTH_PATTERNS_MAX } from '../context-composer/admission';
 import { episodesFromSearchTool, previousOwnerMessage, RECALL_MAX_CHARS, recallForTurn, withinReach } from '../memory/turn-recall';
 import type { SemanticRecall } from '../memory/semantic-recall';
 import { coreMemory, CORE_ROOM, LEXICAL_DEADLINE_MS, recallWithin, SEMANTIC_DEADLINE_MS, type MemorySelection } from '../memory/select-memory';
@@ -550,6 +551,15 @@ export const createOwnerResponder = (
   const forgetBarrierMode: ForgetBarrierMode = privateOwner?.forgetBarrier ?? 'reads';
   const barrier = () => forgetBarrier(heldTopics(), forgetBarrierMode);
   const promptMemory = (): ClaimStore | undefined => memory && barrierMemory(memory, heldTopics);
+  // A run Waldo starts reads memory through the outside view, which keeps out every pattern drawn from health. The ones the owner
+  // confirmed ride with the shared health they rest on: the one block such a run may already hold the owner's body in.
+  const machineHealth = async (trace: string): Promise<HealthRead> => {
+    const read = await health!(trace), view = promptMemory();
+    if (read === null || read === 'unreadable' || !view) return read;
+    const shown = confirmedBodyPatterns(withoutBringUpLess(view)).map(fence).filter((pattern) => pattern.length <= HEALTH_PATTERN_MAX_CHARS);
+    const patterns = fittingLines(shown.slice(0, HEALTH_PATTERNS_MAX), CONSTELLATION_BLOCK_MAX_CHARS);
+    return patterns.length ? { ...read, patterns } : read;
+  };
   // A job built from outside content reads memory without health: no health note, stated reading or node drawn from health, in
   // any memory block or in recall. Every other turn reads the store as it is.
   // A turn that speaks unprompted never sees a claim the owner asked Waldo to bring up less; the nightly review reads memory whole.
@@ -601,7 +611,7 @@ export const createOwnerResponder = (
     return round;
   };
   // A turn without a composed owner context (tests, probes) composes from the local fixture.
-  const composer = context?.composer ?? localTrustedBriefContextComposer({ ...(privateSystemSkills ? { localSystemSkills: privateSystemSkills } : {}), toolOutputs: recentToolResults, ...(health === undefined ? {} : { health: async () => health(traceId) }),
+  const composer = context?.composer ?? localTrustedBriefContextComposer({ ...(privateSystemSkills ? { localSystemSkills: privateSystemSkills } : {}), toolOutputs: recentToolResults, ...(health === undefined ? {} : { health: async () => ownerTurnActive ? health(traceId) : machineHealth(traceId) }),
     onComposerPhase: (phase, previousMs) => log({ trace: traceId, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }) });
   const contextInputs = () => ({ ...(context?.snapshot() ?? localTrustedBriefTurnSnapshot()), canary_tokens: CANARIES, replay_context_ref: null });
   // The store a turn reads its chain from carries the settings it read under, so the view and the trigger agree with it.
@@ -1106,7 +1116,7 @@ export const createOwnerResponder = (
       ...(surfaceChain === undefined ? {} : { conversationRef: jobHost.chain(admission, surfaceChain) }),
       ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}),
       toolOutputs: recentToolResults,
-      ...(health ? { health: () => healthRead ??= health(trace) } : {}),
+      ...(health ? { health: () => healthRead ??= machineHealth(trace) } : {}),
       onPhase: (phase, previousMs) => log({ trace, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }),
     });
     const jobSkills = jobHost.skills?.(jobContext.invocation.verified_authority.principal_ref, trace, () => jobContext.assertCurrent());

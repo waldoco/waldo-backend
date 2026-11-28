@@ -202,7 +202,7 @@ export function renderHealth(health: ContextHealthMaterial | null, absent?: Heal
     return 'Derived health context could not be read just now: the read failed. That says nothing about whether the owner shares health data, so do not tell them you cannot see it or that they share none. If get_health is in your function list, call it before saying anything about their body; if it fails too, say the read failed.';
   }
   if (health === null) return 'No derived health context is available for this invocation.';
-  if (isPartialHealth(health)) return renderPartialHealth(health.view, health.narrative.day_summary, health.narrative.upcoming_high_stakes);
+  if (isPartialHealth(health)) return [renderPartialHealth(health.view, health.narrative.day_summary, health.narrative.upcoming_high_stakes), ...renderPatterns(health.patterns)].join('\n');
   const missing = health.view.missing_components.length === 0
     ? 'none'
     : health.view.missing_components.join(', ');
@@ -225,8 +225,13 @@ export function renderHealth(health: ContextHealthMaterial | null, absent?: Heal
     ...renderEnergyWindows(health.view.energy_windows),
     `Day summary: ${health.narrative.day_summary}`,
     ...highStakes,
+    ...renderPatterns(health.patterns),
   ].join('\n');
 }
+
+// One line, inside the health paragraph, so the trace scrub withholds it with the rest of the block.
+const renderPatterns = (patterns: readonly string[] | undefined): readonly string[] =>
+  patterns?.length ? [`Patterns the owner confirmed about their body, in their own confirmed words (never readings): ${patterns.join(' | ')}`] : [];
 
 // A day whose body data made no Recovery: what the row shows arrived, what it could not compute and why, the one step that
 // would fill the first gap, and that get_health can say what else arrived. The row records missing inputs, not every

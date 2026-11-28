@@ -21,6 +21,7 @@ import {
 } from '../src/context-composer';
 import type { ResolvedSkillBudget } from '../src/skills/budget';
 import { toContextHealthMaterial, toHealthInventory, withInventory } from '../src/channels/health-context';
+import { scrubTraceHealth } from '../src/observability/trace-health-scrub';
 
 const SNAPSHOT_AT = Date.parse('2026-07-15T12:00:00.000Z');
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'] as const;
@@ -795,6 +796,37 @@ describe('ContextComposer', () => {
     }
     const zoned = { ...partial, narrative: { ...partial.narrative, recovery_descriptor: 'solid' } };
     expect(await createContextComposer(withHealth(zoned)).compose(trustedEnvelope(), RUNTIME_INPUTS)).toEqual({ ok: false, failure: { code: 'health_context_invalid' } });
+  });
+
+  it('carries the owner\'s confirmed body patterns inside the health block, withheld from traces with it, and fails closed on a malformed list', async () => {
+    const base = dependencies();
+    const partial = toContextHealthMaterial({
+      context: {
+        id: 'ctx-patterns', day: '2026-07-15', compiled_at: '2026-07-15T11:00:00.000Z', basis: [{ source: 'apple', consent_epoch: 1 }],
+        recovery: { reason: 'missing_resting_signal' }, form: { reason: 'missing_resting_signal' }, weight: { reason: 'calendar_demand_unavailable' },
+        sleep_debt: { state: 'partial', confidence: 0.5, algorithm_version: 'sleep-debt.v2', activation: 'accepted' },
+        drivers: [], confidence: null, freshness: 'fresh', tags: [],
+      },
+      previous: null,
+    }, { timezone: 'UTC', now: () => new Date(SNAPSHOT_AT) }, undefined, { partial: true });
+    if (partial === null) throw new Error('partial fixture missing');
+    const withHealth = (health: unknown) => ({
+      ...base,
+      materials: { async load(request: Parameters<typeof base.materials.load>[0]) { return { ...(await base.materials.load(request)), health } as never; } },
+    });
+    const pattern = 'Late calls, then a low next day: Late calls come before a short night and a low morning.';
+    const ok = await createContextComposer(withHealth({ ...partial, patterns: [pattern] })).compose(trustedEnvelope(), RUNTIME_INPUTS);
+    expect(ok.ok, ok.ok ? undefined : ok.failure.code).toBe(true);
+    if (ok.ok) {
+      const block = ok.prompt.split(/\n[ \t]*\n/).find((paragraph) => paragraph.includes('Partial health context:'))!;
+      expect(block).toContain(pattern);
+      const traced = scrubTraceHealth({ trace: 't', hop: 'llm_reply', ms: 0, ok: true, text: { input: ok.prompt } });
+      expect(traced.text!.input).not.toContain('Late calls');
+    }
+    for (const patterns of ['one', [7], [''], ['x'.repeat(183)], Array.from({ length: 13 }, (_, index) => `pattern ${String.fromCharCode(97 + index)}`)]) {
+      expect(await createContextComposer(withHealth({ ...partial, patterns })).compose(trustedEnvelope(), RUNTIME_INPUTS), JSON.stringify(patterns).slice(0, 40))
+        .toEqual({ ok: false, failure: { code: 'health_context_invalid' } });
+    }
   });
 
   it('composes the body data on hand through the Scribe pass, beside a partial row and alone', async () => {

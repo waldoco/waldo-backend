@@ -382,6 +382,7 @@ export function prepareHealth(
       upcoming_high_stakes: Object.freeze([...preparedNarrative.upcoming_high_stakes]),
     }),
     source: health.source,
+    ...(health.patterns?.length ? { patterns: Object.freeze(health.patterns.map((pattern) => preparePromptSourceText(pattern, null, canaries, 'narrative'))) } : {}),
   }) as ContextHealthMaterial };
 }
 
