@@ -1,8 +1,8 @@
-import { literalTextRedactor, LLM_ATTACHMENTS_MAX } from '@waldo/contracts';
+import { literalTextRedactor, LLM_ATTACHMENTS_MAX, OWNER_TEXT_INBOUND_MAX_CHARS } from '@waldo/contracts';
 import { carriesTopic } from '../memory/forget-guard';
 import { WHATSAPP_INBOX_DUE_KEY } from '../scheduler/alarm-slot';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
-import { burstOwnerMessage, plainOwnerText, WA_UPDATE_BASE, WHATSAPP_TEXT_MAX_CHARS, type WaSyntheticUpdate } from './whatsapp-api';
+import { burstOwnerMessage, plainOwnerText, WA_UPDATE_BASE, type WaSyntheticUpdate } from './whatsapp-api';
 
 // Owner-DO side of WhatsApp ingress: one durable row per owner message, written in the same synchronous step that claims its
 // wamid and before Meta gets its 200. The alarm drains the rows one turn at a time, so a message that arrives while another
@@ -113,7 +113,7 @@ export class WhatsAppOwnerInbox {
    * Claims the next turn in one step: running, with a new attempt and its deadline. When the oldest waiting row is a burst
    * message (text, a forward or a file the owner sent), the burst messages from the same sender right behind it ride in its
    * turn under the newest one (its update id and wamid), and their own rows close: plain texts join into one text while it fits
-   * one message, and any other burst keeps the newest message as the update and the rest, oldest first, as `earlier`. Null when no row waits, or while the owner may still be typing; the inbox's due wake
+   * the inbound text bound, and any other burst keeps the newest message as the update and the rest, oldest first, as `earlier`. Null when no row waits, or while the owner may still be typing; the inbox's due wake
    * brings the drain back when the quiet window ends.
    */
   claimNext(deadline: number): WhatsAppInboxRecord | null {
@@ -126,8 +126,8 @@ export class WhatsAppOwnerInbox {
       if (run.length > 1) {
         const members = run.flatMap(row => [...(row.earlier ?? []), row.update!]);
         const joined = members.every(plainOwnerText) ? members.map(update => (update as { message: { text: string } }).message.text).join('\n') : null;
-        // Joined text past one message's limit would not parse as the turn's update, so those messages ride whole instead.
-        if (joined !== null && joined.length <= WHATSAPP_TEXT_MAX_CHARS) {
+        // Joined text past the inbound bound would not parse as the turn's update, so those messages ride whole instead.
+        if (joined !== null && joined.length <= OWNER_TEXT_INBOUND_MAX_CHARS) {
           r.update = { ...last.update!, message: { ...(last.update!.message as object), text: joined } };
           delete r.earlier;
         } else { r.update = last.update; r.earlier = members.slice(0, -1); }

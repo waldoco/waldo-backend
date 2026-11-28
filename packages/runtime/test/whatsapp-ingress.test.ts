@@ -1,6 +1,7 @@
 import { claimNewWhatsAppMessages, WAMID_RETENTION_MS } from '../src/channels/whatsapp-api';
 import { describe, expect, it, vi } from 'vitest';
-import { WA_UPDATE_BASE, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim, type WaIngressMessage } from '../src/channels/whatsapp-api';
+import { OWNER_TEXT_INBOUND_MAX_CHARS } from '@waldo/contracts';
+import { WA_UPDATE_BASE, boundedOwnerText, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim, type WaIngressMessage } from '../src/channels/whatsapp-api';
 import { gatedCaller } from '../src/channels/telegram-api';
 import { isForward, TelegramPollingAdapter } from '../src/channels/telegram-polling';
 
@@ -245,4 +246,48 @@ it('ordinary normalized WhatsApp text is accepted by the actual shared polling s
  const {updates}=whatsappIngressUpdates([{from:'15550001111',id:'wamid.normalized',type:'text',text:{body:'Read supplied material.'}}],'15550001111',0);
  const polled=await new TelegramPollingAdapter({getUpdates:async()=>updates}).poll(0);
  expect(polled.accepted).toHaveLength(1);expect(polled.dropped).toBe(0);expect(polled.accepted[0]?.text).toBe('Read supplied material.');
+});
+
+describe('owner text past the inbound bound', () => {
+  const owner = '15550001111';
+  const textOf = (body: string) => (whatsappIngressUpdates([{ id: 'wamid.t', from: owner, type: 'text', text: { body } }], owner, 0).updates[0] as { message: { text: string } }).message.text;
+
+  it('passes text at the bound through unchanged, with no note', () => {
+    const atBound = `${'word '.repeat(Math.floor(OWNER_TEXT_INBOUND_MAX_CHARS / 5))}x`;
+    expect(atBound.length).toBe(OWNER_TEXT_INBOUND_MAX_CHARS);
+    expect(textOf(atBound)).toBe(atBound);
+  });
+
+  it('cuts text one character past the bound at a word and says how much was cut, within the bound', async () => {
+    const over = `${'word '.repeat(Math.floor(OWNER_TEXT_INBOUND_MAX_CHARS / 5))}xy`;
+    expect(over.length).toBe(OWNER_TEXT_INBOUND_MAX_CHARS + 1);
+    const read = textOf(over);
+    const [kept, note] = read.split('\n\n[Waldo: ');
+    const cut = Number(/its last (\d+) characters were cut and not read/.exec(note ?? '')?.[1]);
+    expect(read.length).toBeLessThanOrEqual(OWNER_TEXT_INBOUND_MAX_CHARS);
+    expect(kept!.endsWith('word')).toBe(true);
+    expect(over.startsWith(kept!)).toBe(true);
+    expect(cut).toBe(over.length - kept!.length);
+    expect(note).toContain('Tell the owner, so they can send the rest.');
+    // It still parses as the turn's update, so the model reads the note rather than the owner getting an unsupported reply.
+    const { accepted } = await new TelegramPollingAdapter({ getUpdates: async () => whatsappIngressUpdates([{ id: 'wamid.t', from: owner, type: 'text', text: { body: over } }], owner, 0).updates }, 0).poll(0);
+    expect(accepted).toHaveLength(1);
+  });
+
+  it('cuts a run with no space at the bound without splitting a character, and says so', () => {
+    const run = '😀'.repeat(OWNER_TEXT_INBOUND_MAX_CHARS);
+    const read = boundedOwnerText(run, OWNER_TEXT_INBOUND_MAX_CHARS);
+    const kept = read.slice(0, read.indexOf('\n\n[Waldo: '));
+    expect(read.length).toBeLessThanOrEqual(OWNER_TEXT_INBOUND_MAX_CHARS);
+    expect(kept.length % 2).toBe(0);
+    expect(read).toContain(`its last ${run.length - kept.length} characters were cut`);
+  });
+
+  it('bounds a caption at the update\'s caption limit with the same note, never a silent slice', () => {
+    const caption = 'caption '.repeat(200);
+    const { updates } = whatsappIngressUpdates([{ id: 'wamid.i', from: owner, type: 'image', image: { id: 'media-1', caption } }], owner, 0);
+    const read = (updates[0] as { message: { caption: string } }).message.caption;
+    expect(read.length).toBeLessThanOrEqual(1024);
+    expect(read).toContain('were cut and not read');
+  });
 });

@@ -1,14 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
-import { pushNotificationSchema } from '../../contracts/src/ui/notification';
-import { EVENT_PUSH_DAILY_LIMIT, ownerPush, PUSH_DAILY_LIMIT, PUSHES, type OwnerPushDeps, type PushTarget } from '../src/channels/expo-push';
+import { APPROVAL_PUSH_CATEGORY, pushNotificationSchema } from '../../contracts/src/ui/notification';
+import { EVENT_PUSH_DAILY_LIMIT, ownerPush, PUSH_DAILY_LIMIT, PUSHES, pushReceipts, RECEIPT_AFTER_MS, REPLY_PUSH_DAILY_LIMIT, type OwnerPushDeps, type PushTarget } from '../src/channels/expo-push';
 
 const EXPO = 'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]', OTHER = 'ExpoPushToken[bbbbbbbbbbbbbbbbbbbb]';
 const ACCESS = 'synthetic-expo-access';
 const BRIEF = { trigger: 'brief', variant: 'morning', card_ref: 'card:brief' };
 const target = (token: string, n = 1, epoch = 1) => ({ installation_id: `4${n}000000-0000-4000-8000-000000000001`, device_epoch: epoch, token });
 const fixture = (over: Partial<OwnerPushDeps> = {}) => {
+  const clock = { now: Date.parse('2026-10-13T09:00:00Z') };
   const store = new Map<string, unknown>(), logged: { code: string; count: number }[] = [], posted: { url: string; headers: Headers; body: unknown }[] = [];
-  const retired: PushTarget[] = [];
+  const retired: Pick<PushTarget, 'installation_id' | 'device_epoch'>[] = [];
   const send = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body)) as unknown[];
     posted.push({ url: String(url), headers: new Headers(init?.headers), body });
@@ -16,8 +17,8 @@ const fixture = (over: Partial<OwnerPushDeps> = {}) => {
   });
   const deps: OwnerPushDeps = { accessToken: ACCESS, kv: { get: <T>(key: string) => store.get(key) as T | undefined, put: (key: string, value: unknown) => { store.set(key, value); } },
     targets: async () => [target(EXPO)], retire: async device => { retired.push(device); return true; }, send: send as unknown as typeof fetch,
-    today: () => '2026-10-13', quiet: () => false, log: (code, count) => { logged.push({ code, count }); }, ...over };
-  return { push: ownerPush(deps), logged, posted, send, store, retired };
+    today: () => '2026-10-13', quiet: () => false, now: () => clock.now, log: (code, count) => { logged.push({ code, count }); }, ...over };
+  return { push: ownerPush(deps), receipts: pushReceipts(deps), logged, posted, send, store, retired, clock };
 };
 const answering = (tickets: unknown[]) => (async () => Response.json({ data: tickets })) as unknown as typeof fetch;
 const gone = { status: 'error', message: 'not registered', details: { error: 'DeviceNotRegistered' } };
@@ -45,7 +46,7 @@ describe('pushing the owner\'s app', () => {
     const { push, logged, posted } = fixture({ targets: async () => [target(EXPO), target(OTHER, 2)] });
     await push('approval', 'p0001');
     expect(posted).toHaveLength(1);
-    expect(posted[0]!.body).toEqual([EXPO, OTHER].map(to => ({ to, body: 'Waldo has a suggestion for your day', data: { trigger: 'approval', approval_id: 'p0001' }, sound: 'default' })));
+    expect(posted[0]!.body).toEqual([EXPO, OTHER].map(to => ({ to, body: 'Waldo has a suggestion for your day', data: { trigger: 'approval', approval_id: 'p0001' }, sound: 'default', categoryId: APPROVAL_PUSH_CATEGORY })));
     expect(logged).toEqual([{ code: 'sent', count: 2 }]);
     expect(Object.keys((posted[0]!.body as { data: object }[])[0]!.data).sort()).toEqual(['approval_id', 'trigger']);
   });
@@ -206,5 +207,108 @@ describe('an event push', () => {
     expect(store.get('app_push_proactive_budget_v1')).toBeUndefined();
     await push('update', undefined, 'Your 15:00 moved to 17:00');
     expect(posted).toHaveLength(EVENT_PUSH_DAILY_LIMIT + 1);
+  });
+});
+
+describe('a message or a reply in the app chat', () => {
+  it('a message pushes the fixed line that opens Main chat, on the proactive ceiling, and holds in quiet hours', async () => {
+    const { push, posted, logged } = fixture();
+    await push('message');
+    expect(posted[0]!.body).toEqual([{ to: EXPO, body: 'Waldo has a new message for you', data: { trigger: 'event' }, sound: 'default' }]);
+    const quiet = fixture({ quiet: () => true });
+    await quiet.push('message');
+    expect([quiet.posted.length, quiet.logged]).toEqual([0, [{ code: 'quiet', count: 0 }]]);
+    expect(logged).toEqual([{ code: 'sent', count: 1 }]);
+  });
+
+  it('a reply goes in quiet hours, since the owner just wrote, on its own backstop that the proactive pushes never use up', async () => {
+    const { push, posted, logged } = fixture({ quiet: () => true });
+    await push('reply');
+    expect(posted[0]!.body).toEqual([{ to: EXPO, body: 'Waldo replied', data: { trigger: 'event' }, sound: 'default' }]);
+    const busy = fixture();
+    for (let n = 0; n < 30; n += 1) await busy.push('message');
+    await busy.push('reply');
+    expect(busy.logged.at(-1)).toEqual({ code: 'sent', count: 1 });
+    for (let n = 1; n < REPLY_PUSH_DAILY_LIMIT; n += 1) await busy.push('reply');
+    await busy.push('reply');
+    expect(busy.logged.at(-1)).toEqual({ code: 'daily_limit', count: 0 });
+    expect(logged).toEqual([{ code: 'sent', count: 1 }]);
+  });
+
+  it('only an approval push carries a category', async () => {
+    for (const kind of ['brief', 'prep', 'update', 'event', 'copy', 'message', 'reply'] as const) {
+      const { push, posted } = fixture();
+      await push(kind);
+      expect(JSON.stringify(posted[0]!.body)).not.toContain('categoryId');
+    }
+  });
+});
+
+describe('Expo\'s push receipts', () => {
+  const receiptsAnswer = (data: unknown, posted: { url: string; body: unknown }[]) => vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as unknown;
+    posted.push({ url: String(url), body });
+    if (String(url).endsWith('/getReceipts')) return Response.json({ data });
+    return Response.json({ data: (body as unknown[]).map((_, index) => ({ status: 'ok', id: `ticket-${index}` })) });
+  }) as unknown as typeof fetch;
+
+  it('are read once old enough; a dead token retires its registration and every failure is logged by its reason', async () => {
+    const posted: { url: string; body: unknown }[] = [];
+    const h = fixture({ targets: async () => [target(EXPO), target(OTHER, 2, 3)],
+      send: receiptsAnswer({ 'ticket-0': { status: 'error', details: { error: 'DeviceNotRegistered' } }, 'ticket-1': { status: 'error', details: { error: 'MessageTooBig' } } }, posted) });
+    await h.push('brief');
+    await h.receipts();
+    expect(posted.filter(call => call.url.endsWith('/getReceipts'))).toEqual([]);
+    h.clock.now += RECEIPT_AFTER_MS;
+    await h.receipts();
+    expect(posted.at(-1)).toEqual({ url: 'https://exp.host/--/api/v2/push/getReceipts', body: { ids: ['ticket-0', 'ticket-1'] } });
+    expect(h.logged.slice(1)).toEqual([{ code: 'receipt_device_not_registered', count: 1 }, { code: 'receipt_too_big', count: 1 }, { code: 'retired', count: 1 }]);
+    expect(h.retired).toEqual([{ installation_id: target(EXPO).installation_id, device_epoch: 1 }]);
+    await h.receipts();
+    expect(posted.filter(call => call.url.endsWith('/getReceipts'))).toHaveLength(1);
+  });
+
+  it('a receipt not ready is asked for again; one Expo no longer keeps is dropped as missing', async () => {
+    const posted: { url: string; body: unknown }[] = [];
+    const h = fixture({ send: receiptsAnswer({}, posted) });
+    await h.push('brief');
+    h.clock.now += RECEIPT_AFTER_MS;
+    await h.receipts();
+    await h.receipts();
+    expect(posted.filter(call => call.url.endsWith('/getReceipts'))).toHaveLength(2);
+    h.clock.now += 24 * 60 * 60_000;
+    await h.receipts();
+    expect(h.logged.at(-1)).toEqual({ code: 'receipt_missing', count: 1 });
+    expect(posted.filter(call => call.url.endsWith('/getReceipts'))).toHaveLength(2);
+  });
+
+  it('a receipt read that fails (Expo 5xx, no answer) keeps the tickets for the next read and never throws', async () => {
+    let fail = true;
+    const posted: { url: string; body: unknown }[] = [];
+    const ok = receiptsAnswer({ 'ticket-0': { status: 'ok' } }, posted);
+    const h = fixture({ send: (async (url: RequestInfo | URL, init?: RequestInit) => String(url).endsWith('/getReceipts') && fail ? new Response('down', { status: 503 }) : ok(url, init)) as typeof fetch });
+    await h.push('brief');
+    h.clock.now += RECEIPT_AFTER_MS;
+    await h.receipts();
+    expect(h.logged.at(-1)).toEqual({ code: 'receipts_refused', count: 0 });
+    fail = false;
+    await h.receipts();
+    expect(h.logged.at(-1)).toEqual({ code: 'receipt_ok', count: 1 });
+    const thrown = fixture({ send: (async (url: RequestInfo | URL, init?: RequestInit) => { if (String(url).endsWith('/getReceipts')) throw new Error('reset'); return ok(url, init); }) as typeof fetch });
+    await thrown.push('brief');
+    thrown.clock.now += RECEIPT_AFTER_MS;
+    await expect(thrown.receipts()).resolves.toBeUndefined();
+    expect(thrown.logged.at(-1)).toEqual({ code: 'receipts_unavailable', count: 0 });
+  });
+
+  it('keeps no ticket for a push Expo refused, and logs no token', async () => {
+    const h = fixture({ send: answering([gone]) });
+    await h.push('brief');
+    h.clock.now += RECEIPT_AFTER_MS;
+    await h.receipts();
+    expect(h.store.get('app_push_tickets_v1')).toBeUndefined();
+    const kept = fixture();
+    await kept.push('brief');
+    expect(JSON.stringify(kept.store.get('app_push_tickets_v1'))).not.toContain('Token');
   });
 });

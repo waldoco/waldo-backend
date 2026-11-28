@@ -171,6 +171,8 @@ export const toolNameSchema = z.enum([
   // from them as its read, quoted from the owner's words, until the owner confirms it. Owner chat turns only.
   'read_import',
   'import_memories',
+  // end_run: how a run Waldo started ends, chosen by the model: send, ask the owner, nothing to send, or a follow-up set for later.
+  'end_run',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -329,6 +331,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'send_email',
     'send_agent_mail',
     'offer_replies',
+    'end_run',
     'show_chart',
     'show_health_chart',
     'propose_schedule',

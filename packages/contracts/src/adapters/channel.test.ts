@@ -37,6 +37,7 @@ import {
   linkTokenKindSchema,
   linkTokenSchema,
   MAX_MESSAGE_BRANCH_DEPTH,
+  OWNER_TEXT_INBOUND_MAX_CHARS,
   messageThreadBindingSchema,
   resolveResultSchema,
   SLACK_PERSONA,
@@ -456,13 +457,11 @@ describe('telegram gate-2 shapes', () => {
     ).toBe(false);
   });
 
-  it('rejects text over the length bound', () => {
-    expect(
-      telegramMessageUpdateSchema.safeParse({
-        ...baseTgMessage,
-        message: { ...baseTgMessage.message, text: 'x'.repeat(4097) },
-      }).success,
-    ).toBe(false);
+  it('takes owner text up to the inbound bound and rejects one character more', () => {
+    const withText = (text: string) => telegramMessageUpdateSchema.safeParse({ ...baseTgMessage, message: { ...baseTgMessage.message, text } }).success;
+    expect(withText('x'.repeat(4097))).toBe(true);
+    expect(withText('x'.repeat(OWNER_TEXT_INBOUND_MAX_CHARS))).toBe(true);
+    expect(withText('x'.repeat(OWNER_TEXT_INBOUND_MAX_CHARS + 1))).toBe(false);
   });
 
   it('checks the callback private chat under callback_query.message.chat (no top-level chat)', () => {

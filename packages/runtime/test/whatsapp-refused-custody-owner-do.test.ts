@@ -99,7 +99,9 @@ const owned = async (name: string, script: (steps: Readonly<{
   planned(): { sent: boolean; state?: string } | undefined;
   runs(): Run[];
   outbox(): Record[];
-}>) => Promise<void>, wrote = HOUR) => {
+  // The lines waiting for the owner's next turn about what did not reach them.
+  notes(): string[];
+}>) => Promise<void>, wrote = HOUR, switches: Readonly<{ [name: string]: string }> = {}) => {
   // Each start gets its own owner, since every scenario runs once per start.
   const doName = `${name}-${startedAt}`;
   await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(doName)), async (_instance, state) => {
@@ -112,7 +114,7 @@ const owned = async (name: string, script: (steps: Readonly<{
     const plans = dayPlanBook(state.storage.sql);
     for (const card of ['card:brief', 'card:midday', 'card:close'] as const) plans.save(today(), { card, time: null, reason: 'planned by the fixture' });
     const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
-    const owner = new OwnerDO(state, { ...env, ...directory, ...whatsapp, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const owner = new OwnerDO(state, { ...env, ...directory, ...whatsapp, ...switches, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
     const turn = vi.spyOn(owner as unknown as { turn(): Promise<void> }, 'turn').mockImplementation(async () => { wire.events.push('turn'); });
     const records = () => state.storage.kv.get<Record[]>('telegram_final_outbox_v1') ?? [];
     const settled = async () => {
@@ -163,6 +165,7 @@ const owned = async (name: string, script: (steps: Readonly<{
         settled,
         ids: () => { expect(records()).toHaveLength(1); return records()[0]!.providerMessageIds ?? []; },
         texts: () => wire.events.filter(event => event.startsWith('text:')).map(event => event.slice('text:'.length)),
+        notes: () => [...state.storage.kv.list<{ text: string }>({ prefix: 'delivery_note:' })].map(([, note]) => note.text),
         held: () => [...state.storage.kv.list<{ body: { text: string } }>({ prefix: 'wa_held:' })].map(([, record]) => record.body.text),
         update: () => { updateBook(state.storage.sql).record(today(), Date.now() - 60_000, [{ source: 'calendar', kind: 'added', detail: '{"title":"Lunch"}' }], null); },
         folded: () => state.storage.sql.exec<{ folded: number }>('SELECT folded FROM update_cards ORDER BY id').toArray().map(row => row.folded),
@@ -278,8 +281,8 @@ describe.each([['just after midnight', '2026-10-22T00:30:00Z'], ['just before mi
     });
   });
 
-  it.each(['at the send', 'by status'] as const)('a refused card expires unsent when the owner writes only after its day (%s)', async refusal => {
-    await owned(`wa-refused-stale-${refusal.replace(' ', '-')}`, async ({ alarms, reply, later, card, status, ids, texts, update, folded, planned, outbox }) => {
+  it.each(['at the send', 'by status'] as const)('a refused card nothing replaced goes out when the owner writes only after its day (%s)', async refusal => {
+    await owned(`wa-refused-stale-${refusal.replace(' ', '-')}`, async ({ alarms, reply, later, card, status, ids, texts, update, planned, outbox, notes }) => {
       if (refusal === 'at the send') wire.refuse.add(CARD);
       update();
       await card();
@@ -289,11 +292,10 @@ describe.each([['just after midnight', '2026-10-22T00:30:00Z'], ['just before mi
 
       wire.refuse.delete(CARD);
       await later(24 * HOUR, reply);
-      expect(texts()).toEqual(refusal === 'by status' ? [CARD] : []);
-      expect(wire.events.at(-1)).toBe('turn');
-      expect(outbox()).toMatchObject([{ id: CARD_ID(), status: 'blocked', reason: 'expired' }]);
+      expect(texts()).toEqual(refusal === 'by status' ? [CARD, CARD] : [CARD]);
+      expect(outbox()).toMatchObject([{ id: CARD_ID(), status: 'accepted' }]);
       expect(planned()).toMatchObject({ sent: false });
-      expect(folded()).toEqual([0]);
+      expect(notes()).toEqual([]);
     });
   });
 
@@ -350,7 +352,7 @@ describe.each([['just after midnight', '2026-10-22T00:30:00Z'], ['just before mi
   });
 
   it('a card Meta accepted and then failed for another reason ends unsent and is never resent', async () => {
-    await owned('wa-failed-other', async ({ alarms, reply, card, status, ids, texts, planned, outbox }) => {
+    await owned('wa-failed-other', async ({ alarms, reply, card, status, ids, texts, planned, outbox, notes }) => {
       await card();
       await alarms(3);
       await status('failed', ids());
@@ -358,6 +360,9 @@ describe.each([['just after midnight', '2026-10-22T00:30:00Z'], ['just before mi
       expect(planned()).toMatchObject({ sent: false });
       await reply();
       expect(texts()).toEqual([CARD]);
+      // The owner's next turn will read that the Brief never reached them.
+      expect(notes()).toEqual([expect.stringContaining('[Delivery: your day card (brief) for WhatsApp')]);
+      expect(notes()[0]).toContain('did not reach the owner (the provider refused it)');
     });
   });
 
@@ -382,6 +387,26 @@ describe.each([['just after midnight', '2026-10-22T00:30:00Z'], ['just before mi
       expect(outbox()[0]).toMatchObject({ status: 'blocked', reason: 'lapsed' });
       expect(runs()).toEqual([{ status: 'stopped', summary: 'order ran; its report waited 30 days for your WhatsApp window and was not sent' }]);
     }, 30 * HOUR);
+  });
+
+  it('with the daily knock a report waiting for a closed window knocks again a day later, not before, and a knock Meta then fails is logged', async () => {
+    const lines = vi.spyOn(console, 'log');
+    try {
+      await owned('wa-daily-knock', async ({ alarms, later, order, endOrder, status, outbox }) => {
+        await order();
+        await alarms(3);
+        endOrder();
+        expect(outbox()).toEqual([{ id: expect.stringMatching(/^standing-order:/), status: 'pending' }]);
+        expect(wire.events).toEqual([REPLY_KNOCK]);
+        await later(2 * HOUR, () => alarms(2));
+        expect(wire.events).toEqual([REPLY_KNOCK]);
+        await later(24 * HOUR + 60_000, () => alarms(2));
+        expect(wire.events).toEqual([REPLY_KNOCK, REPLY_KNOCK]);
+        expect(outbox()).toEqual([{ id: expect.stringMatching(/^standing-order:/), status: 'pending' }]);
+        await status('failed', [`wamid.out.${wire.wamid}`]);
+        expect(lines.mock.calls.map(call => String(call[0])).filter(line => line.includes('"code":"knock_failed_after_accept"'))).toHaveLength(1);
+      }, 30 * HOUR, { WHATSAPP_DAILY_KNOCK: '1' });
+    } finally { lines.mockRestore(); }
   });
 
   // The same order runs for an owner on iMessage, so the line names no surface.
@@ -450,15 +475,14 @@ describe.each([['just after midnight', '2026-10-22T00:30:00Z'], ['just before mi
       expect(texts()).toEqual([CARD]);
     });
     wire.events = [];
-    await owned('wa-status-after-expiry', async ({ alarms, reply, later, card, status, ids, texts, planned, outbox }) => {
+    await owned('wa-status-after-failure', async ({ alarms, later, card, status, ids, texts, planned, outbox }) => {
       await card();
       await alarms(3);
       const [first] = ids();
-      await status('refused', [first!]);
-      await later(24 * HOUR, reply);
-      expect(outbox()).toMatchObject([{ status: 'blocked', reason: 'expired' }]);
+      await status('failed', [first!]);
+      expect(outbox()).toMatchObject([{ status: 'blocked', reason: 'provider_failed' }]);
       await later(24 * HOUR, () => status('delivered', [first!]));
-      expect(outbox()).toMatchObject([{ status: 'blocked', reason: 'expired' }]);
+      expect(outbox()).toMatchObject([{ status: 'blocked', reason: 'provider_failed' }]);
       expect(planned()).toMatchObject({ sent: false });
       expect(texts()).toEqual([CARD]);
     });

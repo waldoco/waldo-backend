@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { APPROVAL_PUSH_CATEGORY } from '../../contracts/src/ui/notification';
 import type { CalendarItem } from '../src/connectors/google';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { dayPlanBook } from '../src/channels/day-cards';
@@ -193,18 +194,30 @@ describe('the health trigger on the owner object', () => {
 describe('the push that tells the app a health card is up', () => {
   const PUSH = { ...CONFIG, EXPO_ACCESS_TOKEN: 'synthetic-expo-access' };
 
-  it('sends one push once the card is up: fixed text and the approval id, nothing the card or the reading says', async () => {
+  it('sends one push once the card is up in the app: fixed text and the approval id, nothing the card or the reading says', async () => {
     await withOwner(async ({ state, pass, notify }) => {
+      // An owner with push devices has the app, so the card opens there too.
+      state.storage.kv.put('owner_principal_ref', 'owner:prn_synthetic');
       await notify();
       await pass();
       const [run] = runs(state);
       expect(run).toMatchObject({ outcome: 'proposed' });
-      expect(fixture.pushes).toHaveLength(1);
-      expect(fixture.pushes[0]).toEqual([{ to: 'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]', body: 'Waldo has a suggestion for your day', data: { trigger: 'approval', approval_id: run!.approval_id }, sound: 'default' }]);
+      await vi.waitFor(() => expect(fixture.pushes).toHaveLength(1), { timeout: 5_000, interval: 20 });
+      expect(fixture.pushes[0]).toEqual([{ to: 'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]', body: 'Waldo has a suggestion for your day', data: { trigger: 'approval', approval_id: run!.approval_id }, sound: 'default', categoryId: APPROVAL_PUSH_CATEGORY }]);
       const wire = JSON.stringify(fixture.pushes);
       for (const text of [...LEAKS, 'Recovery', 'compromised', 'slower morning', 'Quarterly', 'low', 'depleted']) expect(wire, text).not.toContain(text);
       await pass();
       expect(fixture.pushes).toHaveLength(1);
+    }, PUSH);
+  });
+
+  it('sends no approval push for an owner without the app: there is no app card for it to open', async () => {
+    await withOwner(async ({ state, pass, notify }) => {
+      await notify();
+      await pass();
+      expect(runs(state)[0]).toMatchObject({ outcome: 'proposed' });
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(fixture.pushes).toEqual([]);
     }, PUSH);
   });
 

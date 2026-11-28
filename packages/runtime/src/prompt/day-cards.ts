@@ -12,7 +12,6 @@ export type CardId = 'card:brief' | 'card:midday' | 'card:close';
 // body: plan lets the owner's shared health shape the day's plan; line keeps it to one line.
 export type DayCard = Readonly<{ id: CardId; name: string; defaultTime: string; calendar: 'today' | 'rest_of_today' | 'tomorrow'; body: 'plan' | 'line'; instruction: string }>;
 
-export const SKIP_CARD = 'SKIP';
 
 // post-mvp-cleanup: fallback times until onboarding seeds the routine.
 export const DAY_CARDS: readonly DayCard[] = [
@@ -30,7 +29,7 @@ export const DAY_CARDS: readonly DayCard[] = [
     instruction: [
       'It is early afternoon. Send the owner a short afternoon check-in: what still matters today and what comes next.',
       'Cover what is left on the calendar, anything still waiting on them, and what changed since the morning. Offer one decision that would steady the rest of the day, when one would help.',
-      `If nothing is left and nothing changed, reply with exactly ${SKIP_CARD} and send nothing else.`,
+      'If nothing is left and nothing changed, end the run with end_run as nothing_to_send, and send nothing else.',
     ].join('\n'),
   },
   {
@@ -105,7 +104,7 @@ const DAY_SHAPE: Readonly<Partial<Record<CardId, string>>> = {
   'card:midday': [
     'It is early afternoon. Check the morning\'s plan against how the day has gone: what was planned (the Brief, the cards the owner approved, their deep-work blocks) and what happened or moved since.',
     'Only if the plan slipped (something that mattered did not happen or got squeezed, or a new clash now threatens the rest of the day), send a short check-in with one decision that would put it back on track, on an approval card when it changes the calendar.',
-    `If the plan is holding, reply with exactly ${SKIP_CARD} and send nothing else.`,
+    'If the plan is holding, end the run with end_run as nothing_to_send, and send nothing else.',
   ].join('\n'),
   'card:close': [
     DAY_CARDS.find(card => card.id === 'card:close')!.instruction,

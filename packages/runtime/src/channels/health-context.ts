@@ -1,4 +1,5 @@
 import {
+  readingFreshness,
   derivedBaselineStateSchema,
   derivedEnergyWindowsSchema,
   derivedHealthDestinationViewSchema,
@@ -244,6 +245,12 @@ const daySummaryParts = (context: RowContext): string[] => {
   return parts;
 };
 
+// A row's or reading's local day against the owner's local today.
+const asOfDayOf = (day: string, clock: OwnerClock): PartialHealthView['as_of_day'] => {
+  const now = clock.now().getTime();
+  return day === localIso(now, clock.timezone).slice(0, 10) ? 'today' : day === localIso(now - 24 * HOUR_MS, clock.timezone).slice(0, 10) ? 'yesterday' : 'earlier';
+};
+
 type RowStamp = Readonly<{ compiledAt: string; freshness: 'fresh' | 'stale' | 'expired' }>;
 // compiled_at is the row's own compilation time (app updated_at), never the read time:
 // prepareHealth requires it at or before the turn's snapshot time, and a read-time stamp
@@ -292,9 +299,7 @@ const lastScoredDayParts = (context: RowContext, previous: HealthContextRow['pre
 // A day whose body data made no Recovery, or whose newest row is over three days old. It says only what the row records, in
 // words; an expired row gives nothing of its old day but its age and sources.
 const partialMaterial = (context: RowContext, previous: HealthContextRow['previous'], clock: OwnerClock, stamp: RowStamp, onError?: (error: unknown) => void): ContextHealthMaterial | null => {
-  const now = clock.now().getTime();
-  const asOfDay: PartialHealthView['as_of_day'] = context.day === localIso(now, clock.timezone).slice(0, 10) ? 'today'
-    : context.day === localIso(now - 24 * HOUR_MS, clock.timezone).slice(0, 10) ? 'yesterday' : 'earlier';
+  const asOfDay = asOfDayOf(context.day, clock);
   const shared = {
     authority: 'backend' as const, availability: 'partial' as const, freshness: stamp.freshness, as_of_day: asOfDay,
     sources: sourcesOf(context.basis),
@@ -367,7 +372,8 @@ export const toHealthInventory = (raw: unknown, clock: OwnerClock): HealthInvent
   }
   const entries = HEALTH_SIGNAL_NAMES.flatMap((signal) => {
     const held = merged.get(signal);
-    return held === undefined ? [] : [{ signal, grain: HEALTH_SIGNALS[signal].grain, newest: newestWord(held.newestAt, now, clock.timezone), regularity: regularityWord(held.days), sources: [...held.sources].sort() }];
+    return held === undefined ? [] : [{ signal, grain: HEALTH_SIGNALS[signal].grain, newest: newestWord(held.newestAt, now, clock.timezone), regularity: regularityWord(held.days),
+      freshness: readingFreshness(now - held.newestAt), sources: [...held.sources].sort() }];
   });
   const parsed = healthInventorySchema.safeParse(entries);
   return parsed.success ? { entries: parsed.data, newestAt: Math.max(...[...merged.values()].map((held) => held.newestAt), Number.NEGATIVE_INFINITY) } : null;
@@ -382,8 +388,7 @@ const inventoryMaterial = (inventory: HealthInventory, clock: OwnerClock): Conte
   const day = localIso(inventory.newestAt, clock.timezone).slice(0, 10);
   const view = {
     authority: 'backend' as const, availability: 'partial' as const, no_score_row: true as const,
-    freshness: age <= 36 * HOUR_MS ? 'fresh' as const : age <= 72 * HOUR_MS ? 'stale' as const : 'expired' as const,
-    as_of_day: day === localIso(now, clock.timezone).slice(0, 10) ? 'today' as const : day === localIso(now - 24 * HOUR_MS, clock.timezone).slice(0, 10) ? 'yesterday' as const : 'earlier' as const,
+    freshness: readingFreshness(age), as_of_day: asOfDayOf(day, clock),
     sources: [...new Set(inventory.entries.flatMap((entry) => entry.sources))].sort(), present: [], missing_pillars: {}, inventory: inventory.entries,
     provenance_refs: [`hpr_${md5Hex(`health-inventory.${compiledAt}`)}`], destination_eligibility: ['trigger_prompt' as const],
   };
@@ -483,7 +488,7 @@ export function toContextHealthMaterial(
     const { form: _form, ...notShownBesideForm } = notShown;
     const missingPillars = formShown ? notShownBesideForm : notShown;
     const common = {
-      authority: 'backend' as const, trend, freshness, confidence_band: confidenceBand,
+      authority: 'backend' as const, trend, freshness, confidence_band: confidenceBand, as_of_day: asOfDayOf(context.day, clock),
       provenance_refs: [`hpr_${md5Hex(`health-context.${context.id}`)}`], destination_eligibility: ['trigger_prompt' as const],
       ...(states.length === 0 ? {} : { baseline_state: Object.fromEntries(states) }),
       ...(sleepDebt === undefined ? {} : { sleep_debt: sleepDebt }),

@@ -40,6 +40,8 @@ export type FinalRecord = {
   notice?: true;
   // Under the owner's choice "both", WhatsApp gets a copy once the app has it (a task or job report, agent mail, a reconnect notice).
   copied?: true;
+  // On a copy of an app message: what the copied message was, so a newer copy replaces it only as a newer message would.
+  copyOf?: CopyOf;
   // accepted: every part was accepted by a surface that confirms arrival later (WhatsApp); not yet delivered, not settled.
   receiptUrls?: string[]; ownerSubject: string; doName: string; status: 'pending' | 'attempting' | 'accepted' | 'delivered' | 'quarantined' | 'blocked';
   dueAt: number; createdAt: number; attempts: number; settled?: boolean; messageId?: number; deliveredAt?: number; reason?: string;
@@ -83,10 +85,18 @@ export type FinalRecord = {
   // A standing order's report: the order's run finishes when the report is delivered, or when it ends unsent.
   standingOrder?: { runId: string; gate: StandingGate };
 };
+export type CopyOf = 'day_card' | 'day_update';
 type Kv = Pick<DurableObjectStorage['kv'], 'get' | 'put'>;
 // Whether the provider took any part of the record, whether or not it has arrived. Such a record is on the owner's phone in
 // part, so it is never superseded, moved to another surface, or ended as "not sent".
 export const tookPart = (record: Pick<FinalRecord, 'providerMessageIds'>): boolean => (record.providerMessageIds ?? []).some(Boolean);
+// Each waiting record the new one replaces, and that never went out (no part delivered or taken by the provider), ends
+// blocked as superseded and settles on the next drain.
+const supersede = (rows: FinalRecord[], supersedes: ((record: FinalRecord) => boolean) | undefined): void => {
+  if (supersedes) for (const row of rows) if (row.status === 'pending' && !row.deliveredParts && !tookPart(row) && supersedes(row)) {
+    row.status = 'blocked'; row.reason = 'superseded'; row.settled = false;
+  }
+};
 // What a record that stops waiting without going out again ends as: blocked when nothing went out, quarantined when part did.
 const endUnsent = (row: FinalRecord, reason: string): void => { row.status = tookPart(row) ? 'quarantined' : 'blocked'; row.reason = reason; };
 // What a surface's acknowledgement proves was sent. arrivalBy marks a surface that only accepted the message and reports later
@@ -160,9 +170,7 @@ export class TelegramFinalOutbox {
       ? { ...r, payload: { chat_id: r.payload.chat_id, text: '' }, parts: [], receiptUrls: [], reason: r.status === 'quarantined' ? 'expired_ambiguous_metadata' : r.reason } : r);
     await this.save(rows);
   }
-  // `supersedes` names the waiting records the new one replaces (a newer report of the same order). In the same save, each of
-  // them that never went out (pending, no part delivered or taken by the provider) ends blocked as superseded and settles on the
-  // next drain. A record any part of which reached the provider is never touched: it was sent.
+  // `supersedes` names the waiting records the new one replaces (a newer report of the same order); they end in the same save.
   async enqueue(input: Omit<FinalRecord, 'digest' | 'status' | 'dueAt' | 'createdAt' | 'attempts'>, options?: Readonly<{ supersedes?(record: FinalRecord): boolean }>): Promise<void> {
     input = { ...input, payload: guardedPayload(input.payload) };
     const hash = await digest(input);
@@ -179,16 +187,14 @@ export class TelegramFinalOutbox {
       if (index < 0) throw new Error('final outbox capacity');
       rows = rows.filter((_, i) => i !== index);
     }
-    for (const row of rows) if (row.status === 'pending' && !row.deliveredParts && !tookPart(row) && options?.supersedes?.(row)) {
-      row.status = 'blocked'; row.reason = 'superseded'; row.settled = false;
-    }
+    supersede(rows, options?.supersedes);
     rows.push({ ...input, payload: { ...input.payload }, parts: payloadParts(input.payload), digest: hash, status: 'pending', dueAt: this.now() + 250, createdAt: this.now(), attempts: 0 });
     await this.save(rows);
   }
   // Hash before entering the caller-owned atomic fence. The caller commits inbox closure
   // in the same synchronous transaction as these outbox writes, then rearms the shared alarm.
   async enqueueFenced(input: Omit<FinalRecord, 'digest' | 'status' | 'dueAt' | 'createdAt' | 'attempts'>,
-    commit: (work: () => void) => void): Promise<void> {
+    commit: (work: () => void) => void, supersedes?: (record: FinalRecord) => boolean): Promise<void> {
     input = { ...input, payload: guardedPayload(input.payload) };
     const hash = await digest(input);
     commit(() => {
@@ -200,6 +206,7 @@ export class TelegramFinalOutbox {
         if (index < 0) throw new Error('final outbox capacity');
         rows = rows.filter((_, i) => i !== index);
       }
+      supersede(rows, supersedes);
       rows.push({ ...input, payload: { ...input.payload }, parts: payloadParts(input.payload), digest: hash, status: 'pending', dueAt: this.now() + 250, createdAt: this.now(), attempts: 0 });
       this.kv.put(FINAL_OUTBOX_KEY, rows);
       this.kv.put(FINAL_OUTBOX_DUE_KEY, this.due(rows));

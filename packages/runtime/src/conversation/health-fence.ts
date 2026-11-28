@@ -42,6 +42,18 @@ export const healthInContext = async (items: readonly unknown[], ctx: Pick<ToolD
 };
 
 // A call is fenced by its own tool, or by the tool a proposal would run once the owner approves it.
+// A run no owner message started has no one to see what it sends out. Once the request a call was written from showed
+// outside content (a mail, a page, a connected tool), the same calls are refused for the rest of the run: their arguments could
+// carry the owner's data to wherever that content pointed. A run that starts from outside content is fenced from its first
+// call. The owner's card stays open: propose_action is not fenced here, so the owner can still approve a fetch themselves.
+export const OUTSIDE_EGRESS_ERROR: ToolError = toolError(
+  'egress_denied',
+  "This run started on its own and has read outside content (an email, a page or a connected tool), so nothing that sends text out of the owner's accounts runs for the rest of it. Nothing was sent.",
+  undefined,
+  'Finish from what you have. If more is needed, say so in your note to the owner, or put it on their card with propose_action.',
+);
+export const carriesOut = (call: Pick<LLMToolCall, 'name' | 'arguments'>): boolean => HEALTH_FENCED_TOOLS.has(toolOfCall(call) as ToolName);
+
 export const fencedCall = (call: Pick<LLMToolCall, 'name' | 'arguments'>): boolean => {
   const tool = toolOfCall(call);
   if (HEALTH_FENCED_TOOLS.has(tool as ToolName)) return true;

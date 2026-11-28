@@ -215,7 +215,7 @@ export function renderHealth(health: ContextHealthMaterial | null, absent?: Heal
     'form_zone' in health.view
       ? `Form zone: ${health.view.form_zone}.`
       : `Recovery zone: ${health.view.recovery_zone}.`,
-    `Trend: ${health.view.trend}. Freshness: ${health.view.freshness}.`,
+    `Trend: ${health.view.trend}. Freshness: ${health.view.freshness}${health.view.as_of_day === undefined ? '' : `; these scores are ${SCORE_DAY_WORDS[health.view.as_of_day]}`}.`,
     `Confidence: ${health.view.confidence_band}. Missing components: ${missing}.`,
     `Recovery: ${health.narrative.recovery_descriptor}. Load: ${health.narrative.load_descriptor ?? 'unavailable'}.`,
     ...renderMissingPillars(health.view.missing_pillars),
@@ -271,8 +271,11 @@ function renderPartialHealth(view: PartialHealthView, daySummary: string, highSt
   ].join('\n');
 }
 
-// What body data exists, kind by kind, in words: how often it carries a value, how recent the newest is and how regularly it
-// arrived this month. A source is named per kind only when the owner has more than one.
+// The day a scored view is for, in words.
+const SCORE_DAY_WORDS = { today: "today's", yesterday: "yesterday's", earlier: 'from an earlier day' } as const;
+// What body data exists, kind by kind, in words: how often it carries a value, how recent the newest is and how fresh that makes
+// it, and how regularly it arrived this month. A source is named per kind only when the owner has more than one.
+const FRESHNESS_SCALE = 'Each kind is fresh, stale or expired by its newest reading, on the scale get_health uses: fresh within a day and a half, stale within three days, expired after.';
 const GRAIN_WORDS = { hour: 'hourly', night: 'nightly', day: 'daily', session: 'per session', reading: 'per reading' } as const;
 const NEWEST_WORDS = { within_hours: 'newest within hours', today: 'newest today', yesterday: 'newest yesterday', this_week: 'newest this week', this_month: 'newest earlier this month' } as const;
 const REGULARITY_WORDS = { nearly_every_day: 'nearly every day', most_days: 'most days', some_days: 'some days', a_few_days: 'a few days' } as const;
@@ -281,9 +284,10 @@ function renderInventory(inventory: readonly HealthInventoryEntry[] | undefined)
   const several = new Set(inventory.flatMap((entry) => entry.sources)).size > 1;
   const kinds = inventory.map((entry) => {
     const from = several ? `; from ${joinNames(entry.sources.map((source) => SOURCE_NAMES[source]))}` : '';
-    return `${HEALTH_SIGNALS[entry.signal].words} (${GRAIN_WORDS[entry.grain]}; ${NEWEST_WORDS[entry.newest]}; ${REGULARITY_WORDS[entry.regularity]}${from})`;
+    return `${HEALTH_SIGNALS[entry.signal].words} (${GRAIN_WORDS[entry.grain]}; ${NEWEST_WORDS[entry.newest]}${entry.freshness === undefined ? '' : `, ${entry.freshness}`}; ${REGULARITY_WORDS[entry.regularity]}${from})`;
   });
-  return [`Body data on hand this month: ${kinds.join('; ')}.`];
+  return [`Body data on hand this month: ${kinds.join('; ')}.`,
+    ...(inventory.some((entry) => entry.freshness !== undefined) ? [FRESHNESS_SCALE] : [])];
 }
 
 // Each stored reason in words, and the one step that supplies what it lacks. Facts about inputs, never advice on the body.

@@ -1,5 +1,5 @@
 import {
-  getHealthArgsSchema, HEALTH_READ_MAX_HOURLY_DAYS, HEALTH_READ_MAX_SESSIONS, HEALTH_SIGNALS, healthWorkoutSessionParts, healthWorkoutSessionSchema, TOOL_PERMISSIONS, triggerTypeSchema,
+  getHealthArgsSchema, readingFreshness, HEALTH_READ_MAX_HOURLY_DAYS, HEALTH_READ_MAX_SESSIONS, HEALTH_SIGNALS, healthWorkoutSessionParts, healthWorkoutSessionSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type GetHealthArgs, type GetHealthResult, type HealthReadSignal, type HealthSignal, type ToolHandler,
 } from '@waldo/contracts';
 import type { z } from 'zod';
@@ -127,8 +127,6 @@ const sessionOf = (reading: Reading): Session | null => {
   const session = healthWorkoutSessionSchema.safeParse({ day: reading.day, activity: workout.activity, minutes: reading.value, ...parts });
   return session.success ? session.data : null;
 };
-const FRESH_MS = 36 * 3_600_000;
-const STALE_MS = 72 * 3_600_000;
 
 const round1 = (value: number): number => Math.round(value * 10) / 10;
 // A reading's instant is when it ended, so a night's sleep ages from waking, not from falling asleep.
@@ -263,7 +261,7 @@ export const getHealthHandler = (book: HealthReadBook, clock: OwnerClock): ToolH
     const age = clock.now().getTime() - newest;
     return result({
       state: 'available', timezone, from: args.from, to: args.to, read_at: parsed.series.readAt, signals: series,
-      freshness: age <= FRESH_MS ? 'fresh' : age <= STALE_MS ? 'stale' : 'expired',
+      freshness: readingFreshness(age),
       coverage: Math.round((valued / (signals.length * days.length)) * 1000) / 1000,
       ...(sessions ? { sessions } : {}),
     });

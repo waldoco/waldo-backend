@@ -12,8 +12,13 @@ export const OWNER_TURN_CALL_TIMEOUT_MS = 120_000;
 // A streamed call whose model has shown no output this long after the request goes to the next provider on its route,
 // when there is one. A call that started answering keeps the whole-call limit.
 export const FIRST_TOKEN_TIMEOUT_MS = 15_000;
+// A read that has not answered in this long is given up for this turn: the model hears a recoverable timeout and takes
+// another route, so one hung read cannot spend the turn. A long read (a browser page, a whole Drive file, a research
+// subagent) instead runs to the turn's tool deadline. A write is never cut: its effect may be under way, so it runs to its
+// own end and settles honestly, done or unconfirmed.
+export const READ_TOOL_TIMEOUT_MS = 30_000;
 // A turn's tool rounds and answer end this long before its run is closed without its reply. The margin covers the work
-// before the loop and any tool still running at the deadline, since started tools are never cut. A Telegram run is
+// before the loop and any write still running at the deadline, since a started write is never cut. A Telegram run is
 // closed 14 minutes after it is claimed, so its turn has 13.5; an app or iMessage run has 15 minutes, so its turn has 14.5.
 export const RUN_CLOSE_MARGIN_MS = 30_000;
 // Cloudflare stops an alarm handler at 15 minutes of wall time. Every run the owner object's alarm claims closes within

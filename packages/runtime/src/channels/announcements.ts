@@ -18,8 +18,6 @@ export const announcementPassKey = (release: string | undefined, now: number): s
 // After a directory read fails, the next try waits this long.
 export const ANNOUNCEMENTS_RETRY_KEY = 'announcements_retry_at_v1';
 export const ANNOUNCEMENTS_RETRY_MS = 60 * 60_000;
-// A message waits this long for the owner (a closed WhatsApp window waits for their reply); unsent, it goes to the card.
-export const ANNOUNCEMENT_MESSAGE_FRESH_MS = 3 * 24 * 60 * 60_000;
 
 export const ANNOUNCEMENT_PREREQUISITES = ['app', 'whatsapp', 'imessage', 'google', 'health'] as const;
 export type AnnouncementPrerequisite = (typeof ANNOUNCEMENT_PREREQUISITES)[number];
