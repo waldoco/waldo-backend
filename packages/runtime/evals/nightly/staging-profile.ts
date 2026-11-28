@@ -126,6 +126,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   HEALTH_CHARTS: gap('a trial turn has no app chat read to draw a chart in; test/show-health-chart.test.ts measures the tool and the live read; staging has it on'),
   PEOPLE_MAP: gap('the trial memory holds no people; test/people-map.test.ts measures the store, the reads and forgetting a person; staging has it on'),
   SCREEN_TIME: gap('the world serves no screen time and the trial offers no get_screen_time; staging has it on'),
+  HEALTH_CYCLE: gap('no trial holds cycle data and no turn reads it; staging has it off until the gate turns it on with migration 20261128120000'),
   DEVICE_PLACE: gap('the world serves no device place and the trial offers no get_device_context; staging has it on'),
   DEVICE_CALENDAR: gap('the world serves no phone calendar and the trial offers no query_phone_calendar; staging has it on'),
   CALENDAR_COVERAGE: gap('the coverage facts read Google calendars over two weeks and the phone calendar, which a trial world does not serve; no case judges the coverage question yet'),

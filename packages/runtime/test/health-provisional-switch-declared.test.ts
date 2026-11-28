@@ -162,6 +162,13 @@ describe('SCREEN_TIME in the Worker config', () => {
   });
 });
 
+describe('HEALTH_CYCLE in the Worker config', () => {
+  it('is off in production and in staging, until the gate turns it on with migration 20261128120000 applied', () => {
+    expect(parsed.vars.HEALTH_CYCLE).toBe('0');
+    expect(parsed.env.staging.vars.HEALTH_CYCLE).toBe('0');
+  });
+});
+
 describe('DEVICE_PLACE in the Worker config', () => {
   it('is off in production and on in staging, where the deploy applies migration 20261105180000 first', () => {
     expect(parsed.vars.DEVICE_PLACE).toBe('0');

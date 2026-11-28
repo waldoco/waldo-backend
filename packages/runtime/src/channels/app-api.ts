@@ -15,6 +15,7 @@ import { passiveLoadSources } from '../health/producer';
 import { APP_HEALTH_PATH, handleAppHealth } from './app-health';
 import { APP_DEVICE_CONTEXT_PATH, handleAppDeviceContext } from './app-device-context';
 import { APP_SCREEN_TIME_PATH, handleAppScreenTime } from './app-screen-time';
+import { APP_CYCLE_PATH, cycleRoutesOf, handleAppCycle } from './app-cycle';
 import { APP_CALENDAR_DAY_PATH } from './app-calendar-day';
 import { APP_CALENDAR_PROPOSALS_PATH } from './app-calendar-proposal';
 import { APP_TODAY_PATH, appToday } from './app-today';
@@ -46,7 +47,7 @@ export const APP_DEVICES_PATH = `${APP_PATH}/devices`;
 const MAX_BODY_BYTES = 8192;
 
 // APP_ID_TOKEN_SIGNIN "1" serves Sign in with Apple and Google; otherwise the route answers 404 and the app offers the email code.
-type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_SCORE_PARTS?: string; HEALTH_USUAL?: string; HEALTH_DAY_LOAD?: string; HEALTH_PASSIVE_LOAD?: string; HEALTH_STRESS_CURVE?: string; HEALTH_FORM_CURVE?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string; DEVICE_PLACE?: string; DEVICE_CALENDAR?: string; WAKE_BRIEF?: string; WAKE_BRIEF_FRESH_MIN?: string; APP_CHAT_ATTACHMENTS?: string; WORKOUT_WAKE?: string; ARRIVAL_LOOK?: string }>;
+type AppEnv = OwnerDirectoryEnv & PublicOriginEnv & OpenSignupEnv & Readonly<{ OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; IMESSAGE_WALDO_ADDRESS?: string; APP_ID_TOKEN_SIGNIN?: string; HEALTH_PROVISIONAL_SCORES?: string; HEALTH_TRAINING_LOAD?: string; HEALTH_SCORE_PARTS?: string; HEALTH_USUAL?: string; HEALTH_DAY_LOAD?: string; HEALTH_PASSIVE_LOAD?: string; HEALTH_STRESS_CURVE?: string; HEALTH_FORM_CURVE?: string; HEALTH_COACHING?: string; SCREEN_TIME?: string; HEALTH_CYCLE?: string; DEVICE_PLACE?: string; DEVICE_CALENDAR?: string; WAKE_BRIEF?: string; WAKE_BRIEF_FRESH_MIN?: string; APP_CHAT_ATTACHMENTS?: string; WORKOUT_WAKE?: string; ARRIVAL_LOOK?: string }>;
 
 const UPLOAD_READ_MS = 60_000;
 // Errors before authentication share one shape so the app cannot learn who is invited.
@@ -272,6 +273,14 @@ export const handleApp = async (request: Request, env: AppEnv, auth: ConsoleAuth
   // Throws when the directory cannot list the sessions. The table loads lazily: its routes reach Durable Object modules,
   // which cannot load in plain Node.
   const signedIn = async () => { const hash = await linkCodeHash(sessionIdOf(who.credential) ?? ''); return signedInRecently((await auth.listSessions(who.doName)).find(row => row.session === hash)?.signed_in_at, Date.now()); };
+  // Cycle context sits under the health path but spends its own per-owner budget. Off, the routes are not there; paused, the
+  // owner can still read the Cycle row and withdraw.
+  if (url.pathname === APP_CYCLE_PATH || url.pathname.startsWith(`${APP_CYCLE_PATH}/`)) {
+    const routes = cycleRoutesOf(env.HEALTH_CYCLE);
+    if (!routes) return fail(404);
+    try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-cycle:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
+    return handleAppCycle({ request, url, doName: who.doName, rpc: signedRpc(env), routes, readBody: readBoundedBody });
+  }
   // Health uploads can arrive in long runs, so they spend their own per-owner budget and never the chat one.
   if (url.pathname === APP_HEALTH_PATH || url.pathname.startsWith(`${APP_HEALTH_PATH}/`)) {
     try { if (!(await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `app-health:${who.doName}` })).success) return fail(429); } catch { return fail(503); }
