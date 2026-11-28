@@ -51,6 +51,9 @@ export const APP_COPY_OF: unique symbol = Symbol('send.app_copy_of');
 // A message the app writes without its own push: the sender raises a push of its kind (the Brief, an event) or, for an
 // outbox record, the settlement does once the whole record is delivered. Only the app reads it; a symbol key.
 export const APP_NO_PUSH: unique symbol = Symbol('send.app_no_push');
+// A message the delivery outbox hands the app: the outbox records how it ended (send-outcomes.ts), so the app write does not
+// record it again. Only the app reads it; a symbol key.
+export const APP_OUTBOX_RECORD: unique symbol = Symbol('send.app_outbox_record');
 
 export type Admission = 'admitted' | 'dormant' | 'retry';
 

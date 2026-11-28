@@ -19,6 +19,7 @@ const INSTALLATION = '0f1e2d3c-4b5a-4968-8776-655443322110';
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway: LLMGatewayAdapter = { async complete(request) {
+    (globalThis as { asked?: string[] }).asked?.push(JSON.stringify(request.request));
     const content = request.request.messages.at(-1)?.content ?? '';
     const text = String(content).includes('[Scheduled card') && !(globalThis as { skipBrief?: boolean }).skipBrief ? CARD_TEXT : 'SKIP';
     return { ok: true, data: { model: request.request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
@@ -102,6 +103,35 @@ it('an app owner\'s Brief reaches the app chat, then pushes the fixed line to th
     expect(wire.authorization).toEqual([`Bearer ${EXPO_ACCESS_TOKEN}`]);
     expect(pushLog(state)).toEqual([{ ok: 1, note: expect.stringMatching(/^sent\b/) }]);
   });
+});
+
+it('a Brief written straight into the app chat is recorded once as delivered there, and the next run reads it without its words', async () => {
+  await briefFires('sent-brief-app', 'app', async (owner, state) => {
+    expect(await appChat(owner, 'sent-brief-app')).toEqual([CARD_TEXT]);
+    const rows = [...state.storage.kv.list<Record<string, unknown>>({ prefix: 'send_outcome:' })].map(([, row]) => row);
+    expect(rows).toEqual([{ id: expect.stringMatching(/^scheduled-/), kind: 'day_card', surface: 'app', at: AT, outcome: 'delivered', endedAt: AT }]);
+    const ledger = await (owner as unknown as { setup(channel: string): { ledger(): Promise<string> } }).setup('app').ledger();
+    expect(ledger).toContain('Messages Waldo sent first today (not replies)');
+    expect(ledger).toContain('\n- 09:00 day card to the app: delivered');
+    expect(ledger).not.toContain(CARD_TEXT);
+  });
+});
+
+it('the next run reads what Waldo already sent today: the Close is written knowing the Brief reached the app', async () => {
+  const asked: string[] = [];
+  (globalThis as { asked?: string[] }).asked = asked;
+  try {
+    await briefFires('sent-next-run', 'app', async (owner, state) => {
+      expect(await appChat(owner, 'sent-next-run')).toEqual([CARD_TEXT]);
+      asked.length = 0;
+      dayPlanBook(state.storage.sql).save(DAY, { card: 'card:close', time: '00:01', reason: 'planned' });
+      await new Scheduler(state.storage.sql, state.storage, productionDeps())
+        .schedule({ id: 'card:close', kind: 'brief', payloadRefs: { id: 'card:close' }, occurrenceAt: AT - 500, dueAt: AT - 500, recurrence: null });
+      await owner.alarm();
+      const closeRun = asked.find(request => request.includes('[Scheduled card'));
+      expect(closeRun).toContain('day card to the app: delivered');
+    });
+  } finally { delete (globalThis as { asked?: string[] }).asked; }
 });
 
 it('the Close, like any message Waldo writes to the app chat outside a turn, pushes one fixed line that opens Main chat', async () => {

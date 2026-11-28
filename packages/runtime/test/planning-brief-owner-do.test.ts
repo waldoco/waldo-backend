@@ -26,6 +26,7 @@ import { renderHealth } from '../src/context-composer/prompt';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 import { routerSignature } from '../src/identity/owner-directory';
+import { recordSendEnded } from '../src/channels/send-outcomes';
 
 type Call = Readonly<{ name: string; arguments: Record<string, unknown> }>;
 type Round = Readonly<{ calls: readonly Call[] }> | Readonly<{ text: string }>;
@@ -550,6 +551,17 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
       await tick(state, owner);
       expect(model.ownerRequests).toEqual([]);
       expect(wakeRows(state).map(row => row.outcome)).toEqual(['held']);
+    });
+  });
+
+  it('the wake reads what Waldo already sent first today and what became of it, as every run built on the ledger does', async () => {
+    await owned('general-wake-sent-today', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner }) => {
+      recordSendEnded(state.storage.kv, { id: 'whatsapp-copy:row-1', trace: 't', payload: { chat_id: 1, text: 'synthetic' }, digest: 'd', ownerSubject: '15550003333', doName: 'general-wake-sent-today',
+        status: 'blocked', reason: 'whatsapp_payment_required', dueAt: 0, createdAt: AT - 60_000, attempts: 0 }, 'whatsapp', AT - 60_000);
+      model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Nothing new.' } }] }];
+      await tick(state, owner);
+      expect(model.ownerRequests[0]).toContain('Messages Waldo sent first today (not replies)');
+      expect(model.ownerRequests[0]).toContain('whatsapp copy to WhatsApp: failed (whatsapp_payment_required)');
     });
   });
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { appContractRevision } from './core';
-import { APP_ACT_WITHOUT_ASKING_RECEIPTS_V1, APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1, APP_ACT_WITHOUT_ASKING_CONTRACT, APP_ACT_WITHOUT_ASKING_CONTRACT_REVISION, declaresActWithoutAsking, APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, appNodeSourceV13Schema, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_PROACTIVE_SURFACE_RECEIPTS_V1, APP_CONTROLS_SCHEDULE_REVISION, APP_CONTROLS_QUESTS_REVISION, APP_QUESTS_MAX_V1, APP_SCHEDULE_RECEIPTS_V1, appClock12V1, appScheduleTimeReceiptV1, APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1, APP_AGENT_MAIL_RECEIPTS_V1, APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema, APP_WELCOME_STAGES_V1, APP_WELCOME_STAGES_V5, appWelcomeBuildV1Schema } from './controls';
+import { APP_CONTROLS_SENT_TODAY_REVISION, APP_SENT_TODAY_MAX_V1, APP_ACT_WITHOUT_ASKING_RECEIPTS_V1, APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1, APP_ACT_WITHOUT_ASKING_CONTRACT, APP_ACT_WITHOUT_ASKING_CONTRACT_REVISION, declaresActWithoutAsking, APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, appNodeSourceV13Schema, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_PROACTIVE_SURFACE_RECEIPTS_V1, APP_CONTROLS_SCHEDULE_REVISION, APP_CONTROLS_QUESTS_REVISION, APP_QUESTS_MAX_V1, APP_SCHEDULE_RECEIPTS_V1, appClock12V1, appScheduleTimeReceiptV1, APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1, APP_AGENT_MAIL_RECEIPTS_V1, APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema, APP_WELCOME_STAGES_V1, APP_WELCOME_STAGES_V5, appWelcomeBuildV1Schema } from './controls';
 
 const revision = 'f'.repeat(64);
 const connections = {
@@ -126,6 +126,35 @@ describe('account deletion from the app', () => {
   it('refuses extra keys in the account projection', () => {
     expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'account', data: { deletion_available: true, plan: 'free' } }).success).toBe(false);
     expect(appControlProjectionV1Schema.safeParse({ version: 1, state: 'available', revision, view: 'account', data: {} }).success).toBe(false);
+  });
+});
+
+describe('controls revision 26: what Waldo sent first today and what became of each', () => {
+  const day = (sent_today: unknown) => ({
+    version: 1, state: 'available', revision, view: 'day',
+    data: { timezone: 'Europe/London', date: '2026-11-27', cards: [], proactivity: { quiet_start: null, quiet_end: null, volume: 'normal' }, schedules: { daily_brief: true, followups: true, event_briefs: true, nightly: true, heartbeat: true }, sent_today },
+  });
+  const at = Date.parse('2026-11-27T09:00:00Z');
+
+  it('lists each send by kind, surface, time and outcome, with a short code for what failed, what holds it or why it is unknown', () => {
+    expect(APP_CONTROLS_SENT_TODAY_REVISION).toBe(26);
+    expect(appControlProjectionV1Schema.safeParse(day({ total: 4, items: [
+      { kind: 'day_card', surface: 'app', at, outcome: 'delivered' },
+      { kind: 'whatsapp_copy', surface: 'whatsapp', at, outcome: 'failed', code: 'whatsapp_payment_required' },
+      { kind: 'standing_order', surface: 'whatsapp', at, outcome: 'waiting', code: 'window_closed:knock_failed:whatsapp_payment_required' },
+      { kind: 'reminder', surface: null, at, outcome: 'unknown', code: 'send_unknown' },
+    ] })).success).toBe(true);
+    expect(appControlProjectionV1Schema.safeParse(day({ total: 60, items: [] })).success).toBe(true);
+  });
+
+  it('refuses words where a code goes, an unknown outcome or surface, an internal id, a delivered send with a code, and a total below the page', () => {
+    const row = { kind: 'day_card', surface: 'app', at, outcome: 'failed', code: 'provider_failed' };
+    for (const invalid of [
+      { total: 1, items: [{ ...row, code: 'The provider refused it' }] }, { total: 1, items: [{ ...row, outcome: 'sent' }] },
+      { total: 1, items: [{ ...row, surface: 'console' }] }, { total: 1, items: [{ ...row, id: 'day-card:2026-11-27:card:brief' }] },
+      { total: 1, items: [{ ...row, outcome: 'delivered' }] }, { total: 0, items: [row] }, { total: 1, items: [{ ...row, kind: 'Day card' }] },
+      { total: 51, items: Array.from({ length: APP_SENT_TODAY_MAX_V1 + 1 }, () => row) },
+    ]) expect(appControlProjectionV1Schema.safeParse(day(invalid)).success).toBe(false);
   });
 });
 
