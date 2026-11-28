@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_CHAT_MEMORY_USED_MAX_V1, APP_CHAT_MEMORY_USED_REVISION, APP_CHAT_ACTIVITY_KINDS, APP_CHAT_ACTIVITY_REVISION, APP_CHAT_DRAFT_REVISION, APP_CHAT_RATING_REVISION, APP_CONTRACT_HEADER, appAuthOptionsV1Schema, appCodeRequestSchema, appContractHeaderV1Schema, appContractRevision, appCoreRoutesV1, appErrorCodeV1Schema, appHistoryResultV1Schema, appIdTokenRequestV1Schema, appIdTokenResultV1Schema, appMessageReceiptV1Schema, appMessageV1Schema, appProblemV1Schema, appRatingRequestV1Schema, appRatingResultV1Schema, appVerifyRequestV1Schema, appVerifyResultV1Schema } from './core';
+import { APP_CHAT_MEMORY_USED_MAX_V1, APP_CHAT_MEMORY_USED_REVISION, APP_CHAT_ACTIVITY_KINDS, APP_CHAT_ACTIVITY_REVISION, APP_CHAT_DRAFT_REVISION, APP_CHAT_RATING_REVISION, APP_CONTRACT_HEADER, appAuthOptionsV1Schema, appCodeRequestSchema, appContractHeaderV1Schema, appContractRevision, appCoreRoutesV1, appErrorCodeV1Schema, appHistoryResultV1Schema, appIdTokenRequestV1Schema, appIdTokenResultV1Schema, appMessageReceiptV1Schema, appMessageV1Schema, appProblemV1Schema, appRatingRequestV1Schema, appRatingResultV1Schema, appVerifyRequestV1Schema, appVerifyResultV1Schema, appSessionDeviceRequestV1Schema, appSessionDeviceResultV1Schema, APP_SESSION_MODEL_MAX_V1 } from './core';
 import { REPLY_TEXT_MAX_CHARS } from './parts';
 
 const fallback_text = 'Open Waldo to see this.';
@@ -273,5 +273,19 @@ describe('memory_used, chat revision 7', () => {
     expect(appMessageV1Schema.safeParse({ ...base, memory_used: many }).success).toBe(true);
     for (const memory_used of [[], [...many, { id: 'memory:claim:99', text: 'x' }], [{ id: 'memory:node:4', text: 'x' }], [{ id: 'memory:claim:4', text: '' }], [{ id: 'memory:claim:4', text: 'x'.repeat(301) }], [{ id: 'memory:claim:4', text: 'x', extra: 1 }]])
       expect(appMessageV1Schema.safeParse({ ...base, memory_used }).success, JSON.stringify(memory_used).slice(0, 60)).toBe(false);
+  });
+});
+
+describe('the device a session names (PUT /app/v1/session/device)', () => {
+  const device = { platform: 'ios', model: 'iPhone 17 Pro', os_version: '26.0.1' } as const;
+  it('takes the platform, model and OS version, with an optional phone or tablet', () => {
+    for (const valid of [device, { ...device, kind: 'tablet', model: 'iPad Pro 13-inch (M4)' }, { platform: 'android', model: 'Pixel 9', os_version: '15', kind: 'phone' }, { ...device, model: 'x'.repeat(APP_SESSION_MODEL_MAX_V1) }])
+      expect(appSessionDeviceRequestV1Schema.safeParse(valid).success).toBe(true);
+    expect(appCoreRoutesV1.find(entry => entry.path === '/app/v1/session/device')).toMatchObject({ method: 'PUT', request: appSessionDeviceRequestV1Schema, response: appSessionDeviceResultV1Schema, authenticated: true });
+  });
+  it('refuses free text past its bounds, another platform, a device name field and a non-numeric version', () => {
+    for (const invalid of [{ ...device, model: '' }, { ...device, model: 'x'.repeat(APP_SESSION_MODEL_MAX_V1 + 1) }, { ...device, platform: 'windows' }, { ...device, name: "Sam's iPhone" },
+      { ...device, os_version: '26 beta' }, { ...device, os_version: '1.2.3.4.5' }, { ...device, kind: 'computer' }, { platform: 'ios', model: 'iPhone' }])
+      expect(appSessionDeviceRequestV1Schema.safeParse(invalid).success).toBe(false);
   });
 });

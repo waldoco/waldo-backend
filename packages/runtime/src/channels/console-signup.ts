@@ -5,6 +5,7 @@ import { signupAuth, signupName, SIGNUP_COOKIE, SIGNUP_NAME_MAX, SIGNUP_TTL_SECO
 import { CONSOLE_COOKIE, CONSOLE_PATH, consoleCookie, grantHeaders } from './console';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
 import { APP_PRIVACY_NOTICE_URL_V1, APP_TERMS_URL_V1 } from '../../../contracts/src/app/onboarding';
+import { noteBrowserSession } from '../identity/session-device';
 
 export const CONSOLE_SIGNUP_PATH = '/console/signup';
 const SIGNUP_WELCOME_PATH = `${CONSOLE_SIGNUP_PATH}/welcome`;
@@ -129,6 +130,7 @@ export const handleSignup = async (request: Request, env: SignupEnv, auth: Conso
       if (!grant) return withCookie(finish(saved, unavailable), value);
       const ownerCookie = await auth.ownerCookie(doName, request);
       if (!ownerCookie) return withCookie(finish(saved, unavailable), value);
+      await noteBrowserSession(env.OWNER_DO, doName, ownerCookie, request);
       const headers = new Headers({ location: SIGNUP_WELCOME_PATH, 'cache-control': 'no-store', 'referrer-policy': 'same-origin' });
       headers.append('set-cookie', consoleCookie(CONSOLE_COOKIE, grant));
       headers.append('set-cookie', consoleCookie(OWNER_COOKIE, ownerCookie));
