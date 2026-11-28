@@ -104,7 +104,7 @@ import { TelegramFinalOutbox, standingOrderFinalId, dayCardFinalId, tookPart, ob
 import { computeAdmission } from '../delivery-gate/gate';
 import { drawingOn, interruptBook, interruptLimits, reopensAt } from './interruptions';
 import { ANNOUNCEMENTS_CHECKED_KEY, ANNOUNCEMENTS_RETRY_KEY, ANNOUNCEMENTS_RETRY_MS, announcementPassKey, requiresOf, type AnnouncementRow, announcementBook, announcementCardSection, announcementPrompt, announcementsFeedSchema, runAnnouncementPass, switchOn, WHATS_NEW_WINDOW_MS, whatsNewSection, type AnnouncementOutcome, type AnnouncementPrerequisite } from './announcements';
-import { forgetWakeReasons, GENERAL_WAKE_TOOLS, generalWake, wakeOutcomeBook, wakeRole } from './wake';
+import { forgetWakeReasons, GENERAL_WAKE_TOOLS, generalWake, wakeCostMonth, wakeOutcomeBook, wakeRole } from './wake';
 import type { RunEndReport } from './owner-turn';
 import { armInterventionReview, interventionApplier, interventionEveryMs, interventionSpec, INTERVENTION_REVIEW_ID, lookCause, MOVE_PULL_KEY, movePullAllowed, nextLocalHour, nextLookAt } from './interventions';
 import { DeliveryGateStore } from '../delivery-gate/store';
@@ -6688,7 +6688,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         } finally { wakeEnds.delete(trace); }
       },
       deliver: lookDeliver,
-      record: row => wakeOutcomeBook(storage.sql).record(row),
+      // Each wake's row, and the month's running total of what wakes cost this owner (owner-local month), logged as numbers only
+      // so the cost target can be checked from staging; the admin console's spend section has the owner's whole model spend.
+      record: row => {
+        wakeOutcomeBook(storage.sql).record(row);
+        const month = wakeCostMonth(storage.kv).add(localIso(row.at, clock.timezone).slice(0, 7), row.spend?.usd);
+        log({ trace: row.id, hop: 'wake_cost', ms: 0, ok: true, detail: `usd=${row.spend?.usd ?? 'unknown'} calls=${row.spend?.calls ?? 0} in=${row.spend?.input ?? 0} cached=${row.spend?.cached ?? 0} out=${row.spend?.output ?? 0} month=${month.month} month_wakes=${month.wakes} month_usd=${month.usd}` });
+      },
       chose: (trace, code) => log({ trace, hop: 'wake', ms: 0, ok: code !== 'failed', code }),
     }) : null;
     // What's new: on the first wake of each release this owner's Waldo reads the team's announcements for its environment and

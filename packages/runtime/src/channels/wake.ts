@@ -112,6 +112,25 @@ export const wakeOutcomeBook = (sql: Sql) => {
     },
   };
 };
+// What wakes cost this owner in a calendar month (the owner's own), kept apart from the rows (which keep only the newest 200)
+// so the month's total can be checked against the cost target. Numbers only; a new month starts from zero. A wake whose cost
+// is unknown counts as a wake, not as spend.
+type Kv = Readonly<{ get<T>(key: string): T | undefined; put(key: string, value: unknown): void }>;
+export const WAKE_COST_MONTH_KEY = 'wake_cost_month_v1';
+export type WakeCostMonth = Readonly<{ month: string; wakes: number; priced: number; usd: number }>;
+export const wakeCostMonth = (kv: Kv) => ({
+  read(month: string): WakeCostMonth {
+    const stored = kv.get<WakeCostMonth>(WAKE_COST_MONTH_KEY);
+    return stored?.month === month ? stored : { month, wakes: 0, priced: 0, usd: 0 };
+  },
+  add(month: string, usd: number | null | undefined): WakeCostMonth {
+    const was = this.read(month);
+    const next = { month, wakes: was.wakes + 1, priced: was.priced + (typeof usd === 'number' ? 1 : 0), usd: Math.round((was.usd + (typeof usd === 'number' ? usd : 0)) * 1e8) / 1e8 };
+    kv.put(WAKE_COST_MONTH_KEY, next);
+    return next;
+  },
+});
+
 // A forget reaches a wake's reason as it reaches a run's summary: a reason that carries a forgotten text goes, the row stays.
 // It returns how many reasons still carry one, which is none once it has run.
 export const forgetWakeReasons = (sql: Sql, texts: readonly string[]): number => {

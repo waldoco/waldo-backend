@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { LookCause } from '../src/channels/interventions';
 import type { RunEndReport, RunSpend } from '../src/channels/owner-turn';
-import { GENERAL_WAKE_TOOLS, generalWake, wakeOutcomeBook, wakeRole, WITHHELD_REASON, type WakeCode, type WakeRow } from '../src/channels/wake';
+import { GENERAL_WAKE_TOOLS, generalWake, wakeCostMonth, wakeOutcomeBook, wakeRole, WITHHELD_REASON, type WakeCode, type WakeRow } from '../src/channels/wake';
 
 // GENERAL_WAKE: Waldo's general wake replaces the look. The model judges; code holds the wake only for the owner's no to
 // follow-ups and their quiet hours, before it runs and again when it decides to speak. There is no daily count. A fake run stands in for
@@ -117,5 +117,15 @@ describe('what a wake holds', () => {
 
   it('its model role is configuration, with plans (the chat model) when unset or unknown', () => {
     expect([wakeRole(undefined), wakeRole('decides'), wakeRole('chat'), wakeRole('auxiliary'), wakeRole('fastest')]).toEqual(['plans', 'decides', true, false, 'plans']);
+  });
+
+  it('the month\'s wake cost is a running total per owner month, apart from the kept rows, and a new month starts from zero', async () => {
+    await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('wake-cost-month')), async (_instance, state) => {
+      const month = wakeCostMonth(state.storage.kv);
+      month.add('2026-11', 0.0312); month.add('2026-11', null); month.add('2026-11', 0.0188);
+      expect(month.read('2026-11')).toEqual({ month: '2026-11', wakes: 3, priced: 2, usd: 0.05 });
+      expect(month.add('2026-12', 0.01)).toEqual({ month: '2026-12', wakes: 1, priced: 1, usd: 0.01 });
+      expect(month.read('2026-11')).toEqual({ month: '2026-11', wakes: 0, priced: 0, usd: 0 });
+    });
   });
 });

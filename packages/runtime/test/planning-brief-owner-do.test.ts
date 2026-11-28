@@ -473,6 +473,8 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
       expect(wakeRows(state)).toEqual([{ outcome: 'nothing', reason: 'Nothing moved since the Brief; the 15:00 still fits.', tools: '[]' }]);
       // What the run cost is on its row, so wakes can be measured against the owner's cost target.
       expect(wakeCost(state)).toEqual([{ model: expect.any(String), calls: 1, tokens_in: 1, tokens_out: 1 }]);
+      expect(state.storage.kv.get('wake_cost_month_v1')).toMatchObject({ month: '2030-03', wakes: 1 });
+      expect(hops()).toContain('wake_cost');
       expect(hops()).toContain('wake');
     });
   });
