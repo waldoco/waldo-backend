@@ -11,6 +11,7 @@ import type { LLMGatewayAdapter } from '../src/llm/provider';
 import { taintedCallNeedsOwnerApproval, taintedCallRefused } from '../src/hooks/registry';
 import { TOOL_RECORDS } from '../src/tools/records';
 import { FIND_TOOLS, USE_TOOL } from '../src/tools/loader';
+import { standingOrderFireTools } from '../src/channels/standing-orders';
 
 // Every run Waldo starts reaches the owner's whole admitted catalogue through find_tools and use_tool, as the owner's own
 // turn does; what keeps it safe is the check each call meets at dispatch, not which tools its job kind was handed.
@@ -24,7 +25,7 @@ const harness = async (steps: Step[], { lean = true, loader = true }: { lean?: b
   const calls: string[] = [];
   const fake = (name: string) => ({ name: name as ToolName, description: `The ${name} tool.`, schema: z.object({}).passthrough(), trigger_allowlist: allowed(name),
     handle: async () => { calls.push(name); return { ok: true as const, data: { done: name }, source_taint: (EXTERNAL_ORIGIN_TOOLS as readonly string[]).includes(name) ? 'external' as const : null }; } });
-  const tools = [...new Set([...SCHEDULED_MENU, 'web_search', 'browse_page', 'search_communication', 'send_message', 'set_reminder'])].filter((name) => name !== 'get_context').map(fake);
+  const tools = [...new Set([...SCHEDULED_MENU, 'web_search', 'browse_page', 'search_communication', 'send_message', 'set_reminder', 'cancel_reminder'])].filter((name) => name !== 'get_context').map(fake);
   const requests: LLMRequest[] = [];
   const logs: TurnLogEntry[] = [];
   const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {
@@ -99,6 +100,18 @@ describe('a Waldo-started run reaches the owner\'s whole catalogue', () => {
     expect(outputOf(requests, 'set_reminder')).toContain('propose_action');
   });
 
+  it('a run started from mail that cancels one reminder on the mail\'s word runs it and must say so; cancelling all is carded', async () => {
+    const { owner, calls, requests } = await harness([
+      { tool: FIND_TOOLS, args: { names: ['cancel_reminder'] } },
+      { tool: USE_TOOL, args: { name: 'cancel_reminder', arguments: { id: 'r1' } } },
+      { tool: USE_TOOL, args: { name: 'cancel_reminder', arguments: { all: true } } },
+    ]);
+    await wake(owner, 'triage:3', DAY_CARD_TOOLS);
+    expect(calls).toEqual(['cancel_reminder']);
+    const all = requests.at(-1)!.tool_turns!.filter((turn) => turn.call.arguments.includes('"all":true'))[0]!.output;
+    expect(all).toContain('propose_action');
+  });
+
   it('without the harness loader a run keeps its job kind\'s list, so its function list does not grow to every tool', async () => {
     const { owner, requests } = await harness([], { lean: false, loader: false });
     await wake(owner, 'card:brief:2', DAY_CARD_TOOLS);
@@ -139,6 +152,21 @@ describe('a Waldo-started run that has read outside content sends nothing out', 
     expect(calls).toEqual(['web_search', 'search_communication', 'list_reminders']);
     const refused = requests.at(-1)!.tool_turns!.find((turn) => turn.call.name === 'browse_page')!;
     expect(refused.output).toContain('outside content');
+  });
+});
+
+describe('a confirm_first standing order changes nothing until the owner confirms, under full tool reach', () => {
+  it('its fire reads and puts the change on the owner\'s card; a write, even one exempt under taint, is refused before it runs', async () => {
+    const { owner, calls, requests } = await harness([
+      { tool: 'list_reminders', args: {} },
+      { tool: FIND_TOOLS, args: { names: ['cancel_reminder', 'set_reminder'] } },
+      { tool: USE_TOOL, args: { name: 'cancel_reminder', arguments: { id: 'r1' } } },
+      { tool: USE_TOOL, args: { name: 'set_reminder', arguments: { note: 'stretch', at: '2026-11-28T07:00' } } },
+      { tool: 'remember', args: { text: 'the owner stretches daily' } },
+    ], { lean: false });
+    await owner.prompt('order:1', CHAIN, 'Standing order due: tidy my reminders.', time, 'telegram', standingOrderFireTools({ gate: 'confirm_first' }), undefined, undefined, undefined, undefined, 'decides', undefined, undefined, undefined, undefined, true);
+    expect(calls).toEqual(['list_reminders']);
+    for (const tool of ['cancel_reminder', 'set_reminder', 'remember']) expect(outputOf(requests, tool)).toContain('confirm');
   });
 });
 

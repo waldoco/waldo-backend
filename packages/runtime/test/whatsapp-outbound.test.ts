@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { WHATSAPP_GRAPH_VERSION, WhatsAppApiError, createWhatsAppCaller, createWhatsAppMediaDownloader, createWhatsAppMediaUploader, deliverWhatsAppFile, whatsappTelegramShim } from '../src/channels/whatsapp-api';
 import { egressGuardedCaller } from '../src/channels/egress-guard';
-import { WA_LAST_INBOUND_KEY, WHATSAPP_HELD, WHATSAPP_HELD_RETENTION_MS, WHATSAPP_KNOCK_EVERY_MS, deliverHeldWhatsApp, knockRevisitAt, SEND_UNASKED, recordWhatsAppInbound, templateFor, whatsappHeld, whatsappKnockFailed, whatsappProactiveTemplateConfig, whatsappTemplateConfig, whatsappWindowCaller } from '../src/channels/whatsapp-window';
+import { bindWhatsAppNumber, WA_LAST_INBOUND_KEY, WHATSAPP_HELD, WHATSAPP_HELD_RETENTION_MS, WHATSAPP_KNOCK_EVERY_MS, deliverHeldWhatsApp, knockRevisitAt, SEND_UNASKED, recordWhatsAppInbound, templateFor, whatsappHeld, whatsappKnockFailed, whatsappKnockFailure, whatsappKnockArrived, whatsappProactiveTemplateConfig, whatsappTemplateConfig, whatsappWindowCaller } from '../src/channels/whatsapp-window';
 import { egressGate, gatedCaller } from '../src/channels/telegram-api';
 import { DOCX_MIME as DOCX } from '../src/channels/document-render';
 
@@ -345,11 +345,59 @@ describe('whatsapp 24-hour window', () => {
     const { kv, call, log } = setup(clock, graph as unknown as ReturnType<typeof graphOk>);
     await call('sendMessage', { chat_id: 1, text: 'a' });
     expect(log).toHaveBeenCalledWith(expect.objectContaining({ knocked: true }));
-    whatsappKnockFailed(kv, ['wamid.other'], log);
+    whatsappKnockFailed(kv, [{ id: 'wamid.other' }], log, T0);
     expect(log.mock.calls.filter(([event]) => event.code === 'knock_failed_after_accept')).toHaveLength(0);
-    whatsappKnockFailed(kv, ['wamid.other', 'wamid.knock'], log);
-    whatsappKnockFailed(kv, ['wamid.knock'], log);
+    whatsappKnockFailed(kv, [{ id: 'wamid.other' }, { id: 'wamid.knock' }], log, T0);
+    whatsappKnockFailed(kv, [{ id: 'wamid.knock' }], log, T0);
     expect(log.mock.calls.filter(([event]) => event.code === 'knock_failed_after_accept')).toHaveLength(1);
+  });
+
+  it('a knock Meta failed for want of a payment method keeps that reason until the owner writes or a later knock arrives, and is never sent again for it', async () => {
+    const clock = { now: T0 };
+    const graph = vi.fn(async () => Response.json({ messages: [{ id: 'wamid.knock' }] }));
+    const { kv, call, log } = setup(clock, graph as unknown as ReturnType<typeof graphOk>);
+    await call('sendMessage', { chat_id: 1, text: 'a' });
+    expect(whatsappKnockFailure(kv)).toBeNull();
+    clock.now = T0 + 60_000;
+    whatsappKnockFailed(kv, [{ id: 'wamid.knock', code: 131042 }], log, clock.now);
+    expect(whatsappKnockFailure(kv)).toEqual({ reason: 'whatsapp_payment_required', at: T0 + 60_000 });
+    expect(log).toHaveBeenCalledWith(expect.objectContaining({ code: 'knock_failed_after_accept', reason: 'whatsapp_payment_required' }));
+    // Recording the reason sends nothing: no second knock, no other template, no free-form try.
+    expect(graph).toHaveBeenCalledTimes(1);
+    // Another code is a failure all the same, under its generic reason.
+    whatsappKnockFailed(kv, [{ id: 'wamid.knock' }], log, clock.now);
+    expect(whatsappKnockFailure(kv)).toEqual({ reason: 'whatsapp_payment_required', at: T0 + 60_000 });
+    // The owner writing opens the window: what waited goes out, so the failed knock no longer stands between them.
+    recordWhatsAppInbound(kv, [{ timestamp: String((T0 + 2 * HOUR) / 1000) }], T0 + 2 * HOUR);
+    expect(whatsappKnockFailure(kv)).toBeNull();
+  });
+
+  it('a knock failure goes with the number: a new or no WhatsApp number starts without it', async () => {
+    const clock = { now: T0 };
+    const graph = vi.fn(async () => Response.json({ messages: [{ id: 'wamid.knock' }] }));
+    const { kv, call, log } = setup(clock, graph as unknown as ReturnType<typeof graphOk>);
+    kv.put('whatsapp_subject', '15550001111');
+    await call('sendMessage', { chat_id: 1, text: 'a' });
+    whatsappKnockFailed(kv, [{ id: 'wamid.knock', code: 131042 }], log, T0);
+    expect(whatsappKnockFailure(kv)).not.toBeNull();
+    bindWhatsAppNumber(kv, '15550002222');
+    expect(whatsappKnockFailure(kv)).toBeNull();
+  });
+
+  it('a knock that later arrives clears the failure an earlier one left', async () => {
+    const clock = { now: T0 };
+    let n = 0;
+    const graph = vi.fn(async () => Response.json({ messages: [{ id: `wamid.knock${++n}` }] }));
+    const { kv, call, log } = setup(clock, graph as unknown as ReturnType<typeof graphOk>);
+    await call('sendMessage', { chat_id: 1, text: 'a' });
+    whatsappKnockFailed(kv, [{ id: 'wamid.knock1', code: 131042 }], log, T0);
+    expect(whatsappKnockFailure(kv)?.reason).toBe('whatsapp_payment_required');
+    kv.put('wa_knocked_for', -1);
+    await call('sendMessage', { chat_id: 1, text: 'b' });
+    whatsappKnockArrived(kv, ['wamid.other']);
+    expect(whatsappKnockFailure(kv)).not.toBeNull();
+    whatsappKnockArrived(kv, ['wamid.knock2']);
+    expect(whatsappKnockFailure(kv)).toBeNull();
   });
 
   it('held messages go out in order once the owner replies, expired ones are dropped, and a failed send keeps the rest', async () => {

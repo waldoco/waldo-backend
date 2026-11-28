@@ -64,7 +64,7 @@ afterEach(() => { vi.unstubAllGlobals(); delete (globalThis as { skipBrief?: boo
 type Owner = Readonly<{ setup(channel: string): { ready: Promise<unknown> }; fetch(request: Request): Promise<Response>; alarm(): Promise<void> }>;
 
 // An owner bound to the app, or to Telegram only, with a Brief due now and nothing else scheduled.
-const briefFires = async (name: string, surface: 'app' | 'telegram', check: (owner: Owner, state: DurableObjectState) => Promise<void>, configured = true) => {
+const briefFires = async (name: string, surface: 'app' | 'telegram', check: (owner: Owner, state: DurableObjectState) => Promise<void>, configured = true, card: 'card:brief' | 'card:close' = 'card:brief') => {
   const stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   await runInDurableObject(stub, async (_instance, state) => {
     const originalNow = Date.now;
@@ -80,9 +80,9 @@ const briefFires = async (name: string, surface: 'app' | 'telegram', check: (own
         WALDO_OWNER_TELEGRAM_ID: undefined, EXPO_ACCESS_TOKEN: configured ? EXPO_ACCESS_TOKEN : undefined }) as unknown as Owner;
       await owner.setup(surface).ready;
       state.storage.sql.exec('DELETE FROM schedule');
-      dayPlanBook(state.storage.sql).save(DAY, { card: 'card:brief', time: '00:00', reason: 'planned' });
+      dayPlanBook(state.storage.sql).save(DAY, { card, time: '00:00', reason: 'planned' });
       await new Scheduler(state.storage.sql, state.storage, productionDeps())
-        .schedule({ id: 'card:brief', kind: 'brief', payloadRefs: { id: 'card:brief' }, occurrenceAt: AT - 1000, dueAt: AT - 1000, recurrence: null });
+        .schedule({ id: card, kind: 'brief', payloadRefs: { id: card }, occurrenceAt: AT - 1000, dueAt: AT - 1000, recurrence: null });
       state.storage.kv.put('owner_alarm_last_v1', 1);
       await owner.alarm();
       await check(owner, state);
@@ -102,6 +102,15 @@ it('an app owner\'s Brief reaches the app chat, then pushes the fixed line to th
     expect(wire.authorization).toEqual([`Bearer ${EXPO_ACCESS_TOKEN}`]);
     expect(pushLog(state)).toEqual([{ ok: 1, note: expect.stringMatching(/^sent\b/) }]);
   });
+});
+
+it('the Close, like any message Waldo writes to the app chat outside a turn, pushes one fixed line that opens Main chat', async () => {
+  await briefFires('push-close-app', 'app', async (owner, state) => {
+    expect(await appChat(owner, 'push-close-app')).toEqual([CARD_TEXT]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(wire.pushes).toEqual([[{ to: EXPO_TOKEN, body: 'Waldo has a new message for you', data: { trigger: 'event' }, sound: 'default' }]]);
+    expect(pushLog(state)).toEqual([{ ok: 1, note: expect.stringMatching(/^sent\b/) }]);
+  }, true, 'card:close');
 });
 
 it('a Telegram-only owner\'s Brief pushes nothing and never asks for push devices', async () => {
