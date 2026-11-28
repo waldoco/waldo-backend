@@ -2,8 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ownerPush, PUSHES, type PushKind } from '../src/channels/expo-push';
 import { prepPushBody } from '../src/channels/event-briefs';
 
-// A prep note on the app raises its own push. Pushes for unasked messages keep no daily count (the owner's ruling of 27
-// November): whether to send at all is the model's call, and each message pushes once.
+// A prep note on the app raises its own push. Pushes for unasked messages keep no daily count: whether to send at all is the model's call, and each message pushes once.
 const INSTALLATION = '0f1e2d3c-4b5a-4968-8776-655443322110';
 const harness = () => {
   const kv = new Map<string, unknown>();

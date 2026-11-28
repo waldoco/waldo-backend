@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { APPROVAL_PUSH_CATEGORY, pushNotificationSchema } from '../../contracts/src/ui/notification';
-import { ownerPush, PUSHES, pushReceipts, RECEIPT_AFTER_MS, REPLY_PUSH_DAILY_LIMIT, type OwnerPushDeps, type PushTarget } from '../src/channels/expo-push';
+import { ownerPush, PUSHES, pushReceipts, RECEIPT_AFTER_MS, REPLY_PUSH_DAILY_LIMIT, UNASKED_PUSH_BACKSTOP, type OwnerPushDeps, type PushTarget } from '../src/channels/expo-push';
 
 const EXPO = 'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]', OTHER = 'ExpoPushToken[bbbbbbbbbbbbbbbbbbbb]';
 const ACCESS = 'synthetic-expo-access';
@@ -207,6 +207,21 @@ describe('a message or a reply in the app chat', () => {
     await busy.push('reply');
     expect(busy.logged.at(-1)).toEqual({ code: 'daily_limit', count: 0 });
     expect(logged).toEqual([{ code: 'sent', count: 1 }]);
+  });
+
+  it('unasked pushes keep no daily count, only a backstop a sender loop reaches: it is counted before the send, by the owner\'s day, apart from replies', async () => {
+    let day = '2026-10-13';
+    const loop = fixture({ today: () => day, send: (async () => { throw new Error('synthetic'); }) as unknown as typeof fetch });
+    for (let n = 0; n < UNASKED_PUSH_BACKSTOP; n += 1) await loop.push(n % 2 ? 'message' : 'update');
+    expect(loop.logged.filter(entry => entry.code === 'send_failed')).toHaveLength(UNASKED_PUSH_BACKSTOP);
+    await loop.push('brief');
+    expect(loop.logged.at(-1)).toEqual({ code: 'loop_backstop', count: 0 });
+    await loop.push('reply');
+    expect(loop.logged.at(-1)).toEqual({ code: 'send_failed', count: 0 });
+    day = '2026-10-14';
+    await loop.push('message');
+    expect(loop.logged.at(-1)).toEqual({ code: 'send_failed', count: 0 });
+    expect(UNASKED_PUSH_BACKSTOP).toBeGreaterThanOrEqual(REPLY_PUSH_DAILY_LIMIT);
   });
 
   it('only an approval push carries a category', async () => {

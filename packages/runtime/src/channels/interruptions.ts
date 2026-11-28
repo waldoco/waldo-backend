@@ -2,8 +2,8 @@ import type { HealthCardAdmission } from '../health/trigger';
 import type { Proactivity } from './loops';
 import { localIso } from './reminders';
 
-// The owner's limits on Waldo reaching out unasked, beyond the day cards: an update, a clash, something it noticed. By the
-// owner's ruling of 27 November there is no notification cap: Waldo keeps no daily count and no gap between two messages of
+// The owner's limits on Waldo reaching out unasked, beyond the day cards: an update, a clash, something it noticed. There is
+// no notification cap: Waldo keeps no daily count and no gap between two messages of
 // its own, and whether something is worth saying, whether it asks a question and whether it is urgent are the model's call,
 // made from what Waldo already sent today and what became of each (send-outcomes.ts). Code holds only consent, quiet hours,
 // the owner's day, one question waiting, and a daily number the owner set for themselves (set_proactivity), which is their

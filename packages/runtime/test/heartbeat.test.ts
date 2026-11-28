@@ -124,7 +124,7 @@ describe('heartbeat tick (H1, scheduler-owned run history)', () => {
     });
   });
 
-  // Waldo writes first about what is open with no count of its own (the owner's ruling of 27 November): the model judges what
+  // Waldo writes first about what is open with no count of its own: the model judges what
   // is worth raising, and each loop's own re-notify spacing keeps one loop from repeating.
   it('keeps no count of its own: nine loops falling due through the morning each get their check-back', async () => {
     await withBeat(at('2026-09-26T10:30:00Z'), async ({ sql, beat, sent }) => {

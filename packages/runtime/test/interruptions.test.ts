@@ -7,7 +7,7 @@ import { isQuiet, loopBook, loopHandlers, proactivityLine } from '../src/channel
 import { dayPlanBook } from '../src/channels/day-cards';
 import { episodeIndex, ownerSpokeSince, OWNER_SAID } from '../src/channels/episodes';
 
-// The owner's limits on unasked messages (ruling of 27 Nov: no notification cap; the model judges). Code holds consent, quiet
+// The owner's limits on unasked messages (no notification cap; the model judges). Code holds consent, quiet
 // hours, the owner's day and one question waiting, and a daily number only when the owner set one for themselves; there is no
 // gap between two messages. Past the owner's own number the model's urgent goes from a small allowance, never past the rest.
 const LIMITS: InterruptLimits = { perDay: 2, urgentPerDay: 1 };

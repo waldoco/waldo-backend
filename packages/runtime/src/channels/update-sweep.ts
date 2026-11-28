@@ -374,7 +374,7 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
     // With the owner's limits the turn may act or tell past the budget when it judges the batch urgent, so it keeps its card
     // tools while some urgent allowance is left; any card past the budget or the gap draws on that allowance, marked or not.
     const ownHold = (urgent: boolean, asks: boolean) => own!.book.hold({ consent: true, quiet: day.quiet(), closed: own!.closed, asks, urgent, limits: own!.limits });
-    // Triage keeps no budget or gap of its own (the owner's ruling of 27 November): only quiet hours hold it, and the owner's
+    // Triage keeps no budget or gap of its own: only quiet hours hold it, and the owner's
     // own limits when they are on.
     const hold = day.quiet() ? 'quiet' as const : null;
     const canAct = own ? ownHold(true, false) === null : hold === null;

@@ -32,7 +32,7 @@ const WAKE_SCAN_LIMIT = 200;
 // still past due. The notified-occurrence key is (loop_id, due), so editing the due time starts a
 // fresh occurrence that notifies again immediately. A check that found nothing to say holds it too.
 const RENOTIFY_COOLDOWN_MS = 4 * 60 * 60_000;
-// Check-backs keep no count of their own (the owner's ruling of 27 November): the model judges what is worth raising. Only a
+// Check-backs keep no count of their own: the model judges what is worth raising. Only a
 // number the owner set for themselves (checkBacksPerDay) caps them, counted from the outbox over 24 hours; a due loop over it
 // is not dropped, it waits for a later tick.
 const DAY_MS = 24 * 60 * 60_000;

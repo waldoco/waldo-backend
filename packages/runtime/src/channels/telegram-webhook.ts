@@ -350,7 +350,7 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // '1': each owner-facing schedule toggle gates only what its label says. Notes before events off stops meeting prep, not the
   // sweep that carries the update cards, and follow-ups off no longer holds those cards. Anything else keeps the old coupling.
   SEPARATE_TOGGLES?: string;
-  // No longer read (the owner's ruling of 27 November: no notification cap). Still set in the deploy config, which only the owner
+  // No longer read: there is no notification cap. Still set in the deploy config, which only the owner
   // changes; remove them there.
   PROACTIVE_INTERRUPTS_PER_DAY?: string;
   // The urgent allowance past a daily number the owner set for themselves (default 1).
@@ -368,7 +368,7 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1": when today's first health row is written after the Daily Brief reached the owner, one turn reads it against the Brief
   // and may revise it (in place where cards can be edited). Once a day. Off unless "1".
   BRIEF_BODY_REVISION?: string;
-  // No longer read (the owner's ruling of 27 November): an event push keeps no daily count of its own, only the owner's limits.
+  // No longer read: an event push keeps no daily count of its own, only the owner's limits and a loop backstop.
   EVENT_PUSH_PER_DAY?: string;
   // "1": Waldo knocks on a closed WhatsApp window at most once in 24 hours while something waits, and looks again each day
   // instead of once per closed window. Off unless "1".

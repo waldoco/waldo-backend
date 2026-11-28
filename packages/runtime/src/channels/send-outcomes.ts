@@ -76,7 +76,7 @@ const said = (row: SendRow, spokeSince?: (at: number) => boolean): string => row
   : row.outcome === 'waiting' ? `waiting${row.code ? ` (${row.code})` : ''}`
     : `${row.outcome === 'failed' ? 'failed' : 'unknown, it may not have arrived'}${row.code ? ` (${row.code})` : ''}`;
 // One host fact for the next run: what Waldo already sent today on its own, and what became of each: how it ended and, once
-// delivered, whether the owner has written since. With no daily count (the owner's ruling of 27 November) this is what the
+// delivered, whether the owner has written since. With no daily count, this is what the
 // model judges the next unasked message by. Kinds, times, surfaces and codes only, never the words, which stay in their chat.
 export const sendsTodaySection = (deps: SendsDeps): string => {
   const rows = sendsToday(deps);

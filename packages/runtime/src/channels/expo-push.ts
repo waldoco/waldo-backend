@@ -41,11 +41,16 @@ export const pushTitle = (title: unknown): string | null => {
   if (!plain || HOST.test(probe) || numericHealthIn(probe)) return null;
   return plain.length <= PUSH_TITLE_CHARS ? plain : `${plain.slice(0, PUSH_TITLE_CHARS - 1).trim()}…`;
 };
-// A push for an unasked message keeps no daily count (the owner's ruling of 27 November): each message Waldo sends pushes once,
+// A push for an unasked message keeps no daily count: each message Waldo sends pushes once,
 // and whether to send it at all is the model's judgment, under the owner's own limits (OwnerPushDeps.held) and quiet hours.
-// Reply pushes keep a backstop against a sender loop; they answer the owner, and a busy conversation stays far under it.
+// Each class keeps only a backstop against a sender loop, which no day of real messages reaches: replies answer the owner,
+// and unasked pushes ride on messages already admitted. Counted apart, so a long conversation never holds an unasked push.
 export const REPLY_PUSH_DAILY_LIMIT = 60;
-const REPLY_BUDGET_KEY = 'app_push_reply_budget_v1';
+export const UNASKED_PUSH_BACKSTOP = 60;
+const BACKSTOPS = {
+  reply: { key: 'app_push_reply_budget_v1', limit: REPLY_PUSH_DAILY_LIMIT, code: 'daily_limit' },
+  unasked: { key: 'app_push_unasked_backstop_v1', limit: UNASKED_PUSH_BACKSTOP, code: 'loop_backstop' },
+} as const;
 // Expo's ticket for each push it accepted, until its receipt is read: Expo has the receipt about 15 minutes after the send
 // and keeps it for a day. A ticket names its device so a receipt that says the token is dead retires that registration.
 const TICKETS_KEY = 'app_push_tickets_v1';
@@ -92,7 +97,7 @@ const unregistered = (ticket: unknown) => {
 };
 
 // Sends one push to the owner's Expo devices, never in quiet hours (a reply excepted) and never past the owner's own limits. A
-// reply push is counted before it is sent, so an unknown outcome never lets a retry pass its backstop. Failures are logged as a
+// push is counted against its backstop before it is sent, so an unknown outcome never lets a retry pass it. Failures are logged as a
 // code and never thrown, so the work that triggered the push is not affected. The send and the read of its receipt are bounded.
 export const ownerPush = (deps: OwnerPushDeps) => async (kind: PushKind, approvalId?: string, checkedBody?: string, cardRef?: string): Promise<void> => {
   if (!deps.accessToken) return deps.log('not_configured', 0);
@@ -104,13 +109,14 @@ export const ownerPush = (deps: OwnerPushDeps) => async (kind: PushKind, approva
   if (kind !== 'reply' && deps.quiet()) return deps.log('quiet', 0);
   const held = deps.held?.(kind);
   if (held) return deps.log(`held_${held}`, 0);
-  const day = deps.today(), budget = kind === 'reply' ? deps.kv.get<{ day: string; sent: number }>(REPLY_BUDGET_KEY) : undefined;
+  const backstop = BACKSTOPS[kind === 'reply' ? 'reply' : 'unasked'];
+  const day = deps.today(), budget = deps.kv.get<{ day: string; sent: number }>(backstop.key);
   const sent = budget?.day === day ? budget.sent : 0;
-  if (kind === 'reply' && sent >= REPLY_PUSH_DAILY_LIMIT) return deps.log('daily_limit', 0);
+  if (sent >= backstop.limit) return deps.log(backstop.code, 0);
   let devices: readonly PushTarget[];
   try { devices = readTargets(await deps.targets()); } catch { return deps.log('targets_unavailable', 0); }
   if (!devices.length) return deps.log('no_devices', 0);
-  if (kind === 'reply') deps.kv.put(REPLY_BUDGET_KEY, { day, sent: sent + 1 });
+  deps.kv.put(backstop.key, { day, sent: sent + 1 });
   deps.spent?.(kind);
   let response: Response;
   try {
