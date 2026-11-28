@@ -5,8 +5,8 @@ import type { LookCause } from '../src/channels/interventions';
 import type { RunEndReport, RunSpend } from '../src/channels/owner-turn';
 import { GENERAL_WAKE_TOOLS, generalWake, wakeOutcomeBook, wakeRole, WITHHELD_REASON, type WakeCode, type WakeRow } from '../src/channels/wake';
 
-// GENERAL_WAKE: Waldo's general wake replaces the look. The model judges; code holds a message only for the owner's no to
-// follow-ups and their quiet hours, and only when the run decides to speak. There is no daily count. A fake run stands in for
+// GENERAL_WAKE: Waldo's general wake replaces the look. The model judges; code holds the wake only for the owner's no to
+// follow-ups and their quiet hours, before it runs and again when it decides to speak. There is no daily count. A fake run stands in for
 // the model, and these check what ran, what went, what was held, and the one outcome row each run leaves (with its reason and
 // cost), never the model's judgment.
 const NOW = Date.parse('2026-11-28T10:00:00Z');
@@ -16,19 +16,18 @@ const end = (reason: string, why?: string, tools: readonly string[] = []): RunEn
 
 type Wake = Readonly<{ code: WakeCode | 'threw'; delivered: string[]; runs: number; prompts: string[]; rows: readonly WakeRow[] }>;
 let seq = 0;
-const wake = (reply: string, ended: RunEndReport | undefined, setup: Readonly<{ cause?: LookCause; quiet?: boolean; consent?: boolean; cards?: number; throws?: boolean }> = {}) =>
+const wake = (reply: string, ended: RunEndReport | undefined, setup: Readonly<{ cause?: LookCause; quiet?: boolean; quietLater?: boolean; consent?: boolean; throws?: boolean; deliverThrows?: boolean }> = {}) =>
   runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`general-wake-${seq += 1}`)), async (_instance, state): Promise<Wake> => {
     const outcomes = wakeOutcomeBook(state.storage.sql);
     const out = { delivered: [] as string[], runs: 0, prompts: [] as string[] };
     const run = generalWake({
       now: () => NOW, localNow: () => '2026-11-28T10:00',
-      consent: () => setup.consent ?? true, quiet: () => setup.quiet ?? false,
+      consent: () => setup.consent ?? true, quiet: () => (setup.quiet ?? false) || (setup.quietLater === true && out.runs > 0),
       transaction: work => state.storage.transactionSync(work),
       context: async () => ({ changes: '- invite moved: Board prep now 16:00 (was 14:00)', calendar: '- 16:00-17:00 Board prep (3 attending)', cards: 'The Brief reached them at 08:00.',
         today: '[08:00] Waldo: Morning. Deck block 9 to 12.\n[08:05] Owner: thanks', ledger: '- Send Ana the deck [loop:l1]', goals: '- Get the Q4 board deck out by Friday', style: 'chat' }),
       run: async (_trace, text) => { out.runs += 1; out.prompts.push(text); if (setup.throws) throw new Error('provider down'); return { reply, end: ended }; },
-      cardsSince: () => setup.cards ?? 0,
-      deliver: async (id, _trace, text, commit) => { state.storage.transactionSync(commit); out.delivered.push(`${id.split(':')[0]}:${text}`); },
+      deliver: async (id, _trace, text, commit) => { if (setup.deliverThrows) throw new Error('outbox down'); state.storage.transactionSync(commit); out.delivered.push(`${id.split(':')[0]}:${text}`); },
       record: row => outcomes.record(row),
       chose: () => undefined,
     });
@@ -51,17 +50,31 @@ describe('Waldo\'s general wake', () => {
     expect(out.rows.map(row => [row.outcome, row.reason, row.spend?.usd])).toEqual([['nothing', 'Looked: the deck block is on track and nothing moved since the Brief.', 0.0312]]);
   });
 
-  it('the owner\'s no to follow-ups and their quiet hours hold the message, not the look', async () => {
+  it('the owner\'s no to follow-ups and their quiet hours hold the wake before it runs: a card it raised would reach them too', async () => {
     for (const [setup, code] of [[{ consent: false }, 'held_consent'], [{ quiet: true }, 'held_quiet']] as const) {
       const out = await wake(NUDGE, end('send', 'Worth raising.'), setup);
-      expect([out.runs, out.code, out.delivered, out.rows.map(row => row.outcome)]).toEqual([1, code, [], ['held']]);
+      expect([out.runs, out.code, out.delivered, out.rows.map(row => [row.outcome, row.spend])]).toEqual([0, code, [], [['held', null]]]);
     }
   });
 
-  it('a question goes as one; a card it raised is the notification, with no message', async () => {
+  it('quiet hours that begin while the run thinks hold its message at send', async () => {
+    const out = await wake(NUDGE, end('send', 'Worth raising.'), { quietLater: true });
+    expect([out.runs, out.code, out.delivered, out.rows.map(row => row.outcome)]).toEqual([1, 'held_quiet', [], ['held']]);
+  });
+
+  it('a run whose ending is unknown sends nothing, and an outbox that fails leaves a failed row', async () => {
+    const unknown = await wake('Half a thought the run never chose to send', undefined);
+    expect([unknown.code, unknown.delivered, unknown.rows.map(row => row.outcome)]).toEqual(['failed', [], ['failed']]);
+    const outbox = await wake(NUDGE, end('send', 'Worth raising.'), { deliverThrows: true });
+    expect([outbox.code, outbox.rows.map(row => row.outcome)]).toEqual(['threw', ['failed']]);
+  });
+
+  it('a question goes as one; a card the run raised is the notification, so no message goes with it', async () => {
     expect((await wake('Do you still want the 16:00 board prep, now that it moved?', end('ask_owner', 'Only they know.'))).code).toBe('asked');
-    const carded = await wake('SKIP', end('nothing_to_send', 'Put the move on a card.', ['propose_calendar_change']), { cards: 1 });
+    const carded = await wake('SKIP', end('nothing_to_send', 'Put the move on a card.', ['query_calendar', 'propose_calendar_change']));
     expect([carded.code, carded.delivered]).toEqual(['carded', []]);
+    const both = await wake(NUDGE, end('send', 'Card and a note.', ['propose_action']));
+    expect([both.code, both.delivered]).toEqual(['carded', []]);
   });
 
   it('a follow-up it set for itself, or a note it kept, is its own outcome', async () => {

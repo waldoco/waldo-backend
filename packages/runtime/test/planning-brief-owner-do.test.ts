@@ -477,14 +477,24 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
     });
   });
 
-  it('with the owner\'s no to unasked messages the wake still looks; what it wants to say is held, and recorded', async () => {
-    await owned('general-wake-declined', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner, history }) => {
+  it('with the owner\'s no to follow-ups the wake is held before it runs, and recorded: a card it raised would reach them', async () => {
+    await owned('general-wake-declined', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner }) => {
       loopBook(state.storage.sql, { newId: () => 'l', now: () => AT }).setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', followups: false });
       model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'send', reason: 'The 15:00 runs into the gym slot.', message: 'Your 15:00 now runs into the gym slot. Move the gym to 18:00?' } }] }];
       await tick(state, owner);
-      expect(model.ownerRequests.length).toBeGreaterThan(0);
+      expect(model.ownerRequests).toEqual([]);
       expect(wakeRows(state).map(row => row.outcome)).toEqual(['held']);
-      expect(JSON.stringify((await history()).messages)).not.toContain('gym slot');
+    });
+  });
+
+  it('the wake never reads the owner\'s volume: on low it still runs, and its prompt does not name volume', async () => {
+    await owned('general-wake-low', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner }) => {
+      loopBook(state.storage.sql, { newId: () => 'l', now: () => AT }).setProactivity({ quiet_start: null, quiet_end: null, volume: 'low' });
+      model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Nothing new.' } }] }];
+      await tick(state, owner);
+      expect(model.ownerRequests.length).toBeGreaterThan(0);
+      expect(String(JSON.parse(model.ownerRequests[0]!).messages.at(-1).content)).not.toMatch(/volume/i);
+      expect(wakeRows(state).map(row => row.outcome)).toEqual(['nothing']);
     });
   });
 

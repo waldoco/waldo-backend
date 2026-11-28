@@ -5,15 +5,16 @@ import { numericHealthIn } from '../scribe/sanitiser';
 import type { LookCause } from './interventions';
 import type { OwnerJobModel } from './owner-turn-envelope';
 import type { RunEndReport, RunSpend } from './owner-turn';
+import { WHY_TOOLS } from '../tools/why-trail';
 import { triageTools } from './update-sweep';
 
 // GENERAL_WAKE: the look becomes Waldo's general wake. One run in the brain, no reader worker: it starts from the same
 // context every time (what is open, what was said today, the rest of today, what changed, the body as the composer gives it)
 // and holds the full tool set, memory and health reads included. Through find_tools it reaches everything else the owner's
 // own turn would; what it may do is checked per call at dispatch, as for any run over outside content. The regular look is a
-// baseline: the run sets its own next look with a follow-up when it wants one sooner. No count of messages a day is kept;
-// code holds a message only for the owner's own no to follow-ups and their quiet hours, and only when the run decides to
-// speak. Every run leaves one outcome row with the reason it gave and what it cost, including when it chose to say nothing.
+// baseline: the run sets its own next look with a follow-up when it wants one sooner. No count of messages a day is kept,
+// and the owner's volume is never read. The owner's own no to follow-ups and their quiet hours hold the wake before it runs
+// (a card it raised would reach them as a message), and again when it decides to speak. Every run leaves one outcome row with the reason it gave and what it cost, including when it chose to say nothing.
 export const GENERAL_WAKE_TOOLS: readonly ToolName[] = [...new Set<ToolName>([...triageTools(false, true), 'close_loop', 'remember', 'open_loop'])];
 
 // The model role a wake runs on is configuration, one value per kind of wake. plans and chat both run on the chat model
@@ -130,8 +131,6 @@ export type GeneralWakeDeps = Readonly<{
   context(): Promise<WakeContext>;
   // The wake's run on the owner's chain, Waldo-first, over outside content: its reply, and how it ended.
   run(trace: string, text: string): Promise<Readonly<{ reply: string; end: RunEndReport | undefined }>>;
-  // Approval cards raised since `at`: what the run offered.
-  cardsSince(at: number): number;
   // Queues the message under its id, `commit` in the same transaction.
   deliver(id: string, trace: string, text: string, commit: () => void): Promise<void>;
   record(row: WakeRow): void;
@@ -139,8 +138,10 @@ export type GeneralWakeDeps = Readonly<{
 }>;
 
 const MESSAGE_ENDS: ReadonlySet<string> = new Set(['send', 'ask_owner', 'replied']);
-const quietEnd = (end: RunEndReport | undefined, cards: number): WakeOutcome =>
-  cards > 0 ? 'carded'
+// The tools whose success puts something on the owner's card: the run's own cards, never one another run raised meanwhile.
+const CARD_TOOLS: ReadonlySet<string> = new Set(WHY_TOOLS);
+const quietEnd = (end: RunEndReport | undefined): WakeOutcome =>
+  end?.tools.some(tool => CARD_TOOLS.has(tool)) ? 'carded'
     : end?.reason === 'follow_up' || end?.tools.includes('open_loop') ? 'followed_up'
       : end?.tools.includes('remember') ? 'noted' : 'nothing';
 
@@ -152,6 +153,9 @@ export const generalWake = (deps: GeneralWakeDeps) => async (trace: string, kind
     deps.transaction(() => { deps.record(row(outcome, end)); });
     return code;
   };
+  const hold = (): WakeHold | null => (!deps.consent() ? 'consent' : deps.quiet() ? 'quiet' : null);
+  const before = hold();
+  if (before !== null) return settle(`held_${before}`, 'held', undefined);
   let reply: string, end: RunEndReport | undefined;
   try {
     ({ reply, end } = await deps.run(trace, wakePrompt(deps.localNow(), cause, await deps.context())));
@@ -160,15 +164,21 @@ export const generalWake = (deps: GeneralWakeDeps) => async (trace: string, kind
     throw error;
   }
   const text = reply.trim();
-  if (!text || sendsNothing(text) || (end !== undefined && !MESSAGE_ENDS.has(end.reason))) {
-    const outcome = quietEnd(end, deps.cardsSince(started));
-    return settle(outcome, outcome, end);
-  }
-  // Checked when the run wants to speak, never before it looks: the owner's no to follow-ups, and their quiet hours.
-  const held: WakeHold | null = !deps.consent() ? 'consent' : deps.quiet() ? 'quiet' : null;
+  // A run whose ending is unknown sends nothing: words it left (an unfinished run's) are not a message it chose.
+  if (end === undefined) return text && !sendsNothing(text) ? settle('failed', 'failed', end) : settle('nothing', 'nothing', end);
+  // A card it raised is the notification; a run that ends without wanting to speak is its own outcome.
+  const quietOutcome = quietEnd(end);
+  if (!text || sendsNothing(text) || !MESSAGE_ENDS.has(end.reason) || quietOutcome === 'carded') return settle(quietOutcome, quietOutcome, end);
+  // Checked again when the run wants to speak: quiet hours may have begun, or follow-ups been turned off, while it ran.
+  const held = hold();
   if (held !== null) return settle(`held_${held}`, 'held', end);
-  const outcome: WakeOutcome = end?.reason === 'ask_owner' ? 'asked' : 'spoke';
+  const outcome: WakeOutcome = end.reason === 'ask_owner' ? 'asked' : 'spoke';
   deps.chose(trace, outcome);
-  await deps.deliver(`wake:${trace}`, trace, text, () => { deps.record(row(outcome, end)); });
+  try {
+    await deps.deliver(`wake:${trace}`, trace, text, () => { deps.record(row(outcome, end)); });
+  } catch (error) {
+    settle('failed', 'failed', end);
+    throw error;
+  }
   return outcome;
 };

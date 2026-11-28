@@ -2053,6 +2053,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       { name: 'whatsapp_inbox', run: (texts) => redactWhatsAppInboxEntries(storage, texts, FORGOTTEN).remaining },
       { name: 'waiting_cards', run: (texts) => forgetWaitingCards(storage.sql, texts, Date.now()).remaining },
       { name: 'why_trails', run: (texts) => forgetTrails(storage.sql, texts) + dayPlanBook(storage.sql).forgetWhy(texts) },
+      { name: 'wake_reasons', run: (texts) => forgetWakeReasons(storage.sql, texts) },
       { name: 'imessage', run: (texts) => redactIMessageEntries(storage, texts, FORGOTTEN).remaining },
       { name: 'thread_titles', run: (texts) => redactThreadTitles(kv, texts, FORGOTTEN).remaining },
       this.taskJobsForgetStore(),
@@ -6686,7 +6687,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           return { reply, end: wakeEnds.get(trace) ?? undefined };
         } finally { wakeEnds.delete(trace); }
       },
-      cardsSince: lookCardsSince, deliver: lookDeliver,
+      deliver: lookDeliver,
       record: row => wakeOutcomeBook(storage.sql).record(row),
       chose: (trace, code) => log({ trace, hop: 'wake', ms: 0, ok: code !== 'failed', code }),
     }) : null;
