@@ -18,7 +18,8 @@ describe('a forget reaches Waldo\'s own notes', () => {
       book.write({ text: PAGE, revision: 0, by: 'waldo', outside: true, at: AT });
       expect(forgetWaldoNotes(state.storage.sql, ['the gym'], AT)).toBe(0);
       expect(book.read().text).toBe(PAGE);
-      expect(forgetWaldoNotes(state.storage.sql, ['priya marsh'], AT)).toBe(1);
+      // The page is cleared, so nothing is left for the purge to retry.
+      expect(forgetWaldoNotes(state.storage.sql, ['priya marsh'], AT)).toBe(0);
       expect(book.read()).toMatchObject({ text: '', revision: 2, written_by: 'forget' });
       expect(JSON.stringify(state.storage.sql.exec('SELECT * FROM waldo_notes').toArray())).not.toContain('Priya');
     });
