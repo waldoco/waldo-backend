@@ -95,3 +95,14 @@ it('declares the app routes under health, each consent route answering with the 
   ]);
   expect(appCycleRoutesV1.slice(0, 3).every(route => route.response === cycleStatusV1Schema)).toBe(true);
 });
+
+describe('the scores basis (health revision 20)', () => {
+  it('is cycle_phase with the backend line, as an optional key a build below 20 is never sent', async () => {
+    const { HEALTH_CYCLE_REVISION_V1, healthScoresBasisV1Schema, healthScoresV1Schema } = await import('./health-ingest');
+    expect(HEALTH_CYCLE_REVISION_V1).toBe(20);
+    expect(healthScoresBasisV1Schema.safeParse({ kind: 'cycle_phase', explanation: 'Read against your own usual for this part of your cycle.' }).success).toBe(true);
+    expect(healthScoresBasisV1Schema.safeParse({ kind: 'cycle_phase', explanation: '' }).success).toBe(false);
+    expect(healthScoresBasisV1Schema.safeParse({ kind: 'cycle_phase', explanation: 'x', phase: 'luteal' }).success).toBe(false);
+    expect(healthScoresV1Schema.shape.basis.safeParse(undefined).success).toBe(true);
+  });
+});

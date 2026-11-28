@@ -1,4 +1,5 @@
 import { circularStanding, labelOf, standing } from './baseline';
+import type { PhasePrior } from './cycle';
 import { ALGORITHM, PROVISIONAL_ALGORITHM, provisionalRecoveryBasis, recoveryBasis } from './recovery';
 import { BASELINE_DAYS, circularZScore, combine, higherIsBetter, lowerIsBetter, mean, nearUsual, zScore, logZScore, type Component } from './stats';
 import { localDayWindow, wallMinute } from './time';
@@ -78,9 +79,9 @@ export const formReading = (record: DayRecord, asOf: string | null, provisional:
   return { stale, settled: filling ? horizon - HOUR_MS : horizon };
 };
 
-export const formScore = (record: DayRecord, earlier: readonly DayRecord[], sleepNeedMinutes: number | null, asOf: string | null, provisional = false, detail = false): FormResult => {
+export const formScore = (record: DayRecord, earlier: readonly DayRecord[], sleepNeedMinutes: number | null, asOf: string | null, provisional = false, detail = false, phase: PhasePrior | null = null): FormResult => {
   const target = formHours(record, provisional), prior = earlier.map(day => formHours(day, provisional));
-  const recovery = provisional ? provisionalRecoveryBasis(target, prior, sleepNeedMinutes) : recoveryBasis(target, prior, sleepNeedMinutes);
+  const recovery = provisional ? provisionalRecoveryBasis(target, prior, sleepNeedMinutes, phase) : recoveryBasis(target, prior, sleepNeedMinutes, phase);
   if ('reason' in recovery) return { state: 'unavailable', reason: recovery.reason };
   const reading = formReading(target, asOf, provisional);
   if (reading === null) return { state: 'unavailable', reason: 'intraday_inputs_unavailable' };

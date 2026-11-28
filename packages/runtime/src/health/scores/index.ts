@@ -1,4 +1,5 @@
 import { labelOf } from './baseline';
+import { CYCLE_PHASE_BASIS, phasePriorOf, type PhasePrior } from './cycle';
 import { driverRanges, driversOf, SUBJECT_SIGNALS } from './drivers';
 import { formScore } from './form';
 import { ALGORITHM, PROVISIONAL_ALGORITHM, provisionalRecoveryBasis, recoveryBasis } from './recovery';
@@ -14,6 +15,7 @@ import { ownRange } from './drivers';
 import type { DailyScores, DailyScoresInput, DayRecord, PartsByPillar, RecoveryResult, Unavailable, UnavailableReason, UsualRow } from './types';
 
 export type { DailyScores, DailyScoresInput, DayRecord, DayVitals, HourlyBucket, PartRow, UnavailableReason, UsualRow } from './types';
+export type { CycleContext } from './cycle';
 
 const everywhere = (reason: UnavailableReason): DailyScores => {
   const unavailable: Unavailable = { state: 'unavailable', reason };
@@ -42,7 +44,22 @@ export const byLocalDay = (days: readonly DayRecord[]): ReadonlyMap<string, DayR
 };
 
 // One owner, one target day. Pure: no clock, no I/O, same input gives the same output.
+// With cycle context the day is computed twice: against the ordinary baselines and with the phase prior. The phase reading is
+// returned, marked with its basis, only when it changed a score, a zone or a driver; otherwise the ordinary reading is returned as
+// it is, so an unknown phase, or one that changed nothing, is exactly the output without cycle context.
 export const computeDailyScores = (input: DailyScoresInput): DailyScores => {
+  const ordinary = scoresOn(input, null);
+  const phase = input.access === 'granted' && input.cycle ? phasePriorOf(input.targetDay, input.cycle) : null;
+  if (!phase) return ordinary;
+  const phased = scoresOn(input, phase);
+  return readingOf(phased) === readingOf(ordinary) ? ordinary : { ...phased, basis: CYCLE_PHASE_BASIS };
+};
+
+// What the owner reads off a day: each phase-read pillar's score and zone, or why it has none, and the drivers.
+const readingOf = (scores: DailyScores): string =>
+  JSON.stringify([...[scores.recovery, scores.form].map(pillar => (pillar.state === 'available' ? [pillar.score, pillar.zone] : pillar.reason)), scores.drivers]);
+
+const scoresOn = (input: DailyScoresInput, phase: PhasePrior | null): DailyScores => {
   if (input.access !== 'granted') return everywhere(input.access);
   if (input.days.length === 0) return everywhere('no_readings');
 
@@ -53,7 +70,7 @@ export const computeDailyScores = (input: DailyScoresInput): DailyScores => {
   const prior = priorDays(input.targetDay, byDay);
 
   const provisional = input.provisional === true;
-  const basis = provisional ? provisionalRecoveryBasis(target, prior, input.sleepNeedMinutes) : recoveryBasis(target, prior, input.sleepNeedMinutes);
+  const basis = provisional ? provisionalRecoveryBasis(target, prior, input.sleepNeedMinutes, phase) : recoveryBasis(target, prior, input.sleepNeedMinutes, phase);
   let recovery: RecoveryResult;
   if ('reason' in basis) recovery = { state: 'unavailable', reason: basis.reason };
   else {
@@ -66,11 +83,11 @@ export const computeDailyScores = (input: DailyScoresInput): DailyScores => {
   const debt = sleepDebt(input.targetDay, byDay, prior, input.sleepNeedMinutes, provisional);
   // Asked for, a provisional computation also keeps what each score was made of; none of it changes a score.
   const detail = provisional && (input.parts === true || input.usual === true);
-  const form = formScore(target, prior, input.sleepNeedMinutes, input.asOf, provisional, detail);
+  const form = formScore(target, prior, input.sleepNeedMinutes, input.asOf, provisional, detail, phase);
   const weight = weightScore(target, prior, provisional, detail);
   const scores: DailyScores = {
     recovery,
-    drivers: driversOf(target, prior),
+    drivers: driversOf(target, prior, phase),
     sleep_debt: debt,
     form,
     weight,
@@ -91,7 +108,7 @@ export const computeDailyScores = (input: DailyScoresInput): DailyScores => {
   const usual: UsualRow[] = inUsualOrder([
     ...(recoveryRead?.components.flatMap(component => (component.usual ? [component.usual] : [])) ?? []),
     ...(form.state === 'available' ? form.usual ?? [] : []),
-    ...driverRanges(target, prior).map(({ subject, method, range }) => usualOfRange(SUBJECT_SIGNALS[subject], method, range)),
+    ...driverRanges(target, prior, phase).map(({ subject, method, range }) => usualOfRange(SUBJECT_SIGNALS[subject], method, range)),
     ...(energy ? [usualOfRange('active_energy', null, energy)] : []),
   ]);
   return {

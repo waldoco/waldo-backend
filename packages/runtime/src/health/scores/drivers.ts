@@ -1,4 +1,5 @@
 import { BASELINE_DAYS, bounded, mean } from './stats';
+import { spansCycles, type PhasePrior } from './cycle';
 import type { DayRecord, DayVitals, TemperatureMethod } from './types';
 
 // A driver says that one of the owner's signals is outside their own usual range today, which way, and whether far: a
@@ -42,19 +43,27 @@ export const ownRange = (target: DayRecord, prior: readonly DayRecord[], read: (
 const deviation = (range: OwnRange): number => bounded(range.today - range.mean, range.sd);
 const vitalsRead = (read: Read) => (day: DayRecord): number | null => (day.vitals ? read(day.vitals) : null);
 
+// Breathing rate and wrist temperature are read against their same-phase days first, when those days give a range and span
+// two cycles (D5); the other subjects are never phase-read.
+const PHASE_READ: ReadonlySet<Subject> = new Set(['breathing rate', 'wrist temperature']);
+const phaseRange = (target: DayRecord, phase: PhasePrior, read: (day: DayRecord) => number | null): OwnRange | null => {
+  const range = ownRange(target, phase.days, read);
+  return range && spansCycles(phase, phase.days.filter(day => read(day) !== null).map(day => day.day)) ? range : null;
+};
+
 // The range each subject's reading is judged against today, as the first method that has one reads it; the subjects with no
 // range today are left out. A usual band and a driver phrase for one subject are the same statistic.
-export const driverRanges = (target: DayRecord, prior: readonly DayRecord[]): { subject: Subject; method: TemperatureMethod | null; range: OwnRange }[] =>
+export const driverRanges = (target: DayRecord, prior: readonly DayRecord[], phase: PhasePrior | null = null): { subject: Subject; method: TemperatureMethod | null; range: OwnRange }[] =>
   READS.flatMap(([subject, reads]) => {
     for (const [method, read] of reads) {
-      const range = ownRange(target, prior, vitalsRead(read));
+      const range = (phase && PHASE_READ.has(subject) ? phaseRange(target, phase, vitalsRead(read)) : null) ?? ownRange(target, prior, vitalsRead(read));
       if (range !== null) return [{ subject, method, range }];
     }
     return [];
   });
 
-export const driversOf = (target: DayRecord, prior: readonly DayRecord[]): string[] =>
-  driverRanges(target, prior).map(({ subject, range }) => ({ subject, z: deviation(range) }))
+export const driversOf = (target: DayRecord, prior: readonly DayRecord[], phase: PhasePrior | null = null): string[] =>
+  driverRanges(target, prior, phase).map(({ subject, range }) => ({ subject, z: deviation(range) }))
     .filter(({ z }) => Math.abs(z) >= OUTSIDE)
     .map(({ subject, z }) => ({ z, phrase: `${subject}${Math.abs(z) >= FAR ? ' far' : ''} ${z > 0 ? 'above' : 'below'} usual` }))
     .sort((a, b) => Math.abs(b.z) - Math.abs(a.z)).slice(0, MAX_DRIVERS).map(driver => driver.phrase);

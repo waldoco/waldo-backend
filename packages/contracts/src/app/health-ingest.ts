@@ -644,6 +644,13 @@ export const healthStressCurveV1Schema = z.strictObject({
 }).refine(curve => curve.hours.every((hour, i) => i === 0 || Date.parse(curve.hours[i - 1]!.at) < Date.parse(hour.at)), { error: 'hours run forward in time', path: ['hours'] })
   .refine(curve => curve.hours.some(hour => hour.value !== null), { error: 'a curve with no hour that has a value is no curve', path: ['hours'] });
 
+// Health revision 20: what the scores were read against, when that changed them. cycle_phase: with cycle context on (cycle.ts),
+// the owner's HRV, resting heart rate, wrist temperature and breathing rate were read against their own baseline for the same
+// part of their cycle, and that changed a score, a zone or a driver. Absent whenever it did not, including every day the backend
+// cannot place in a phase. explanation is the backend's one line for the app to show as written; it never names a phase or a
+// date. Shown only to a build that names revision 20, only on the app, and never after the owner withdraws cycle context.
+export const HEALTH_CYCLE_REVISION_V1 = 20;
+export const healthScoresBasisV1Schema = z.strictObject({ kind: z.literal('cycle_phase'), explanation: z.string().min(1).max(200) });
 export const healthScoresQueryV1Schema = z.strictObject({ day: healthDayV1Schema.optional() });
 // compiled_at is the row's own compile time on the backend, never the read time and never a device clock.
 export const healthScoresV1Schema = z.strictObject({
@@ -665,6 +672,8 @@ export const healthScoresV1Schema = z.strictObject({
   // Revision 14 and later; absent when the row has none. Today's row only.
   day_load: healthDayLoadV1Schema.optional(),
   stress_curve: healthStressCurveV1Schema.optional(),
+  // Revision 20 and later; absent when the row has none.
+  basis: healthScoresBasisV1Schema.optional(),
 });
 // Builds pinned before the app took sleep_debt parse the scores strictly without it, so it is shown only to a build that
 // names health revision 2 or later, whose pin always has it. A need that leans on the prior (blended_average) is a third
