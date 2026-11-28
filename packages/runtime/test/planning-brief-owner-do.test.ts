@@ -459,6 +459,32 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
     });
   });
 
+  // GENERAL_WAKE: the tick runs Waldo's general wake in the brain instead of a reader job, and the owner's limits wait for
+  // the send. Every run leaves one outcome row with the reason it gave.
+  const wakeRows = (state: DurableObjectState) => state.storage.sql.exec<{ outcome: string; reason: string | null; tools: string }>('SELECT outcome, reason, tools FROM wake_outcomes').toArray();
+  it('with the general wake on, the tick starts no reader job: one run in the brain, one outcome row with its reason', async () => {
+    await owned('general-wake-tick', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner, hops }) => {
+      model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Nothing moved since the Brief; the 15:00 still fits.' } }] }];
+      await tick(state, owner);
+      expect(looks(state)).toBe(0);
+      expect(model.ownerRequests.length).toBeGreaterThan(0);
+      expect(model.ownerRequests[0]).toContain("Waldo's own wake");
+      expect(wakeRows(state)).toEqual([{ outcome: 'nothing', reason: 'Nothing moved since the Brief; the 15:00 still fits.', tools: '[]' }]);
+      expect(hops()).toContain('wake');
+    });
+  });
+
+  it('with the owner\'s no to unasked messages the wake still looks; what it wants to say is held, and recorded', async () => {
+    await owned('general-wake-declined', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner, history }) => {
+      loopBook(state.storage.sql, { newId: () => 'l', now: () => AT }).setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', followups: false });
+      model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'send', reason: 'The 15:00 runs into the gym slot.', message: 'Your 15:00 now runs into the gym slot. Move the gym to 18:00?' } }] }];
+      await tick(state, owner);
+      expect(model.ownerRequests.length).toBeGreaterThan(0);
+      expect(wakeRows(state).map(row => row.outcome)).toEqual(['held']);
+      expect(JSON.stringify((await history()).messages)).not.toContain('gym slot');
+    });
+  });
+
   it('a phone that moved brings the look to now, and the look it starts knows why; off, or for a forged notice, nothing moves', async () => {
     const moved = async (owner: Steps['owner'], name: string, sig?: string) => owner.fetch(new Request('https://telegram-owner/app/v1/internal/place-moved', { method: 'POST', body: '{}',
       headers: { 'content-type': 'application/json', 'x-waldo-do-name': name, 'x-waldo-moved-sig': sig ?? await routerSignature(directory.WALDO_ROUTER_HMAC_SECRET, 0, `placemoved.${name}`) } }));

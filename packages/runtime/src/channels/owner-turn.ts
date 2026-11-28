@@ -44,7 +44,7 @@ import { InMemoryCircuitBreaker, ModelUnavailableError, modelDownReason, observe
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine, voiceVersion } from '../prompt/messaging-behavior';
 import { assembleTurnPrompt, fenced, TURN_CONTEXT_HEADER, type TurnPrompt } from '../prompt/turn-prompt';
 import { brainTools, offeredPlacement, TOOL_RECORDS, toolActivity, toolsWhere } from '../tools/records';
-import { FIND_TOOLS, harnessToolLoader, META_TOOLS } from '../tools/loader';
+import { FIND_TOOLS, harnessToolLoader, META_TOOLS, toolOfCall } from '../tools/loader';
 import { eligibleHandlers } from '../tools/eligibility';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { composeDayPlanInput } from './day-cards';
@@ -184,10 +184,13 @@ export type OwnerContextIntegration = Readonly<{ skills?: OwnerSkillCapability; 
   // The messages the owner's outbox delivered to the owner lately, oldest first: what a lean scheduled run reads of what Waldo said.
   waldoSent?: () => readonly Readonly<{ at: number; text: string }>[];
   // What the owner's day holds now (channels/now-frame.ts), read once per owner message and fenced as data, one section per item.
-  nowFrame?: (trace: string) => Promise<readonly string[]> }>;
+  nowFrame?: (trace: string) => Promise<readonly string[]>;
+  // How a Waldo-started run ended, once per return of its loop: the end it chose and the tools that succeeded, by name only.
+  runEnded?: (trace: string, end: RunEndReport) => void }>;
+export type RunEndReport = Readonly<{ reason: string; why?: string; tools: readonly string[] }>;
 // This owner's spend so far this month and the ceiling it is held to, read once when a turn starts.
 export type OwnerSpend = Readonly<{ spentUsd: number; ceilingUsd: number }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; finishedTasks?: (since: number) => string; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; loopHasPassed?: (id: string) => boolean; memoryChat?: (chain: string, principal: string) => string; promptOwnText?: (traceId: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; turnCharts?: (turnId: string) => readonly ConversationChart[]; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; jobOutcomeRows?: boolean; timelineSeed?: TimelineSeed; machineTime?: OwnerContextIntegration['machineTime']; leanScheduled?: boolean; promotedTools?: OwnerContextIntegration['promotedTools']; noteLoaded?: OwnerContextIntegration['noteLoaded']; waldoSent?: OwnerContextIntegration['waldoSent']; nowFrame?: OwnerContextIntegration['nowFrame']; modelSetWakes?: boolean }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; finishedTasks?: (since: number) => string; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; loopHasPassed?: (id: string) => boolean; memoryChat?: (chain: string, principal: string) => string; promptOwnText?: (traceId: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; turnCharts?: (turnId: string) => readonly ConversationChart[]; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; jobOutcomeRows?: boolean; timelineSeed?: TimelineSeed; machineTime?: OwnerContextIntegration['machineTime']; leanScheduled?: boolean; promotedTools?: OwnerContextIntegration['promotedTools']; noteLoaded?: OwnerContextIntegration['noteLoaded']; waldoSent?: OwnerContextIntegration['waldoSent']; nowFrame?: OwnerContextIntegration['nowFrame']; modelSetWakes?: boolean; runEnded?: OwnerContextIntegration['runEnded'] }>;
 
 // Which scoped responder each owner field reaches. A scoped responder is built per run scope: the owner's own message
 // ('chat'), a Waldo-started run as the admitted owner ('job'), or a compaction pass over one chain ('compaction'). Every
@@ -211,6 +214,8 @@ const SCOPED_FIELDS = {
   memoryChat: ['job'], promptOwnText: ['job'], machineTime: ['job'], leanScheduled: ['job'], jobOutcomeRows: ['job'], waldoSent: ['job'],
   // MODEL_SET_WAKES: a run Waldo starts may leave itself a follow-up; the owner's own turn opens loops as the owner.
   modelSetWakes: ['job'],
+  // The general wake records one outcome row per run from how its run ended (channels/wake.ts).
+  runEnded: ['job'],
 } as const satisfies Record<keyof PrivateOwner, readonly ScopedKind[]>;
 export const scopedOwner = (kind: ScopedKind, owner: PrivateOwner | undefined, own: PrivateOwner): PrivateOwner => {
   const picked: Record<string, unknown> = {};
@@ -646,6 +651,7 @@ export const createOwnerResponder = (
       // dispatch (taint, cards, held tools, the health fence), as in the owner's own turn. Without the loader every admitted
       // tool would sit in the function list, so a run keeps its list; a lean run is offered the shared menu and may call all of it.
       const eligibilityStarted = Date.now();
+      const ranTools: string[] = [];
       const fullReach = harnessLoader && backgroundToolNames !== undefined && backgroundToolNames.length > 0;
       const offered: readonly string[] | undefined = fullReach ? undefined : leanRun ? SCHEDULED_MENU : backgroundToolNames;
       // A run that holds any tool can get a result too long to show, which points at read_tool_output, so it holds that too.
@@ -997,6 +1003,7 @@ export const createOwnerResponder = (
           const receipt = event.call.name === 'remember' && event.ok ? JSON.parse(event.output) as { data?: { status?: string } } : undefined;
           // Loaded definitions are the turn's own catalogue: no receipt, and nothing a later turn should read back as a result.
           const loaded = event.call.name === FIND_TOOLS;
+          if (event.ok && !loaded && event.call.name !== END_RUN_TOOL) ranTools.push(toolOfCall(event.call));
           if (event.ok && privateOwner?.noteLoaded) noteToolsLoaded(event.call.name, event.output, privateOwner.noteLoaded);
           if (receipt?.data?.status !== 'duplicate' && !loaded) turnToolEvents.push({ seq: turnToolEvents.length + 1, call: { name: event.call.name, args: parseToolArgs(event.call.arguments, event.call.name) }, ok: event.ok, at: Date.now(), ...(event.code ? { code: event.code } : {}), ...(event.reason ? { reason: event.reason } : {}), ...(event.ok && proposalApplied(event.call.name, event.output) ? { applied: true as const } : {}) });
           privateRunScope?.admit();
@@ -1007,7 +1014,10 @@ export const createOwnerResponder = (
         },
         // How the run closed, on every return: the root hop's outcome alone cannot tell a run that chose silence from one that
         // had nothing to say.
-        onRunEnd: (end) => log({ trace, hop: 'run_end', ms: 0, ok: end.reason !== 'no_reply', code: end.reason, ...(end.why ? { detail: end.why } : {}) }),
+        onRunEnd: (end) => {
+          log({ trace, hop: 'run_end', ms: 0, ok: end.reason !== 'no_reply', code: end.reason, ...(end.why ? { detail: end.why } : {}) });
+          privateOwner?.runEnded?.(trace, { reason: end.reason, ...(end.why ? { why: end.why } : {}), tools: [...ranTools] });
+        },
         ...(offerConnect ? { onConnect: offerConnect } : {}),
       });
     },
