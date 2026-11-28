@@ -1,6 +1,32 @@
 # The general wake, and one `wake()` entry for every run Waldo starts (28 November 2026)
 
-> **Status: Proposed, design note only. Revised again on 28 Nov for the owner's rulings on the design page's open questions (its section 8): one model, reviews as a baseline, a cost limit, volume removed, and inward undoable changes with no card.** This is slice 4 of HEY-377 (one agent loop). It is revised to match the orchestrator's design page, *How Waldo wakes and thinks: design for the general wake* (Linear, 28 Nov, proposed), and the findings it rests on, *Why Waldo feels weak when it wakes* (Linear, 28 Nov; staging logs in waldoco/waldo-app#257). It builds on [MODEL_SET_WAKES_2026-11-16.md](https://github.com/waldoco/waldo-backend/pull/2157) §3.2 and §3.7 and on what has been built since: full tool reach (#2230, merged), model-set wakes (#2234), the follow-up bounds proposal (#2235), the outside-content mark following what a run reads (#2238), and the calendar now frame (#2239). Code references are to `packages/runtime/src` at #2234's head `17904ba88`; line numbers (≈) are approximate. Each build step below is its own draft PR behind its own switch, off by default.
+> **Status: Built in part (28 Nov 2026).** The general wake replaced the look and is live on staging (`GENERAL_WAKE = "1"` since about 13:45Z on 28 Nov). Notes, one inbox, the Home card and undoable inward changes are open PRs. "What was built" below says what landed, where the build departed from this note, and what is left. The rest of the note is the design as proposed, kept for its reasoning. Its line references are to #2234's head `17904ba88`.
+
+## What was built (28 Nov 2026)
+
+| Step | PR | State | Switch |
+|---|---|---|---|
+| The general wake replaces the look: one brain run with the full tool set, Waldo's lens (the ten philosophies the owner accepted, word for word), eight steps, the `health-protocols` skill on demand, one `wake_outcomes` row per run with its reason and cost, and limits checked only when it decides to speak | #2251 | Merged (`f24cf88a6`); live on staging | `GENERAL_WAKE` (staging `"1"`, production `"0"`) |
+| Waldo's own notes: one page per owner that every wake reads first and rewrites last, words only, revision-checked, reached by forget | #2253 | Open | rides `GENERAL_WAKE` |
+| One inbox with merging: body facts, phone moves, mail and calendar news and app opens land in one inbox, and events close together are one wake. The separate health trigger and the sweep's own triage job go quiet while the wake is on | #2254 | Open | rides `GENERAL_WAKE`; `WAKE_EVENT_GAP_MIN` (config, 30) spaces event wakes |
+| The Home card as an outcome: the wake writes the one card the owner sees first, and `GET /app/v1/home-card` serves it with no model call | #2255 | Open | rides `GENERAL_WAKE` |
+| Undoable inward changes go ahead and are told; irreversible ones are carded (the owner's 28 Nov rule) | #2256 | Open | `UNDOABLE_INWARD` (`"0"` everywhere) |
+| A Waldo-started run's outside mark follows what it reads | #2238 | Open | none (provenance only) |
+| Waldo's own follow-ups: one runaway backstop, a year ahead, every one woken at its minute | #2235 | Open | rides `MODEL_SET_WAKES` |
+| The calendar in the chat's now frame, and an owner's own reminder doing its inward writes with no card | #2239 | Open; its "reminder sends to others" design was rejected on 28 Nov and is not built | `WALDO_DAY_STATE` for the frame |
+
+**Where the build departed from this note:**
+- **No single `wake()` entry for every run.** Only the look became the general wake. The day cards, check-backs, the mail follow-up and the health trigger keep their own entries. The inbox (#2254) folds the health trigger and the sweep's triage job into the wake while it is on. Model-set follow-ups (`MODEL_SET_WAKES`) still fire the check-back job, not the wake; moving them would change #2234's contract.
+- **App open needs no app change.** The phone's zone report on every open (`POST /app/v1/device/timezone`) also counts as "the owner opened the app".
+- **The Home card dropped `did`, and gained `from_outside`** after its security review. A field can come back behind a revision.
+- **Decision 3, built narrower than proposed.** Only a one-time reminder goes ahead with no card today.
+  - **Kept carded:** repeating reminders and anything carrying a health number.
+  - **Not undoable yet:** workspace and artifact writes, because their ways back don't exist.
+  - **Next:** the owner's own calendar blocks, which need the desk to apply them directly with its existing undo.
+  - **Carded until a reopen tool exists:** closing the owner's loops. A reopen tool needs a tool-budget ruling (about 3 tokens left).
+- **"Offer, never take"** is gone from the wake's day-shaping block. Every other run keeps it until the prompt rewrite (HEY-331).
+
+**Left to build:** own calendar blocks moving freely (an event with attendees needs a yes), the changes Waldo makes alone shown on the Home card, model-set follow-ups through the wake, and the one-model change for the calls still on the small model (the gate measures cost first).
 
 ## The problem
 
@@ -180,13 +206,13 @@ Staging today, at #2234's head. `roleModel` is the chat model when `WALDO_STRONG
 
 The overnight logs show the small model (`gpt-6-luna`) in 3 Brief, 4 look and 7 reader calls on staging. All three run on the chat model by role there. So those calls are the provider's fallback ladder or the spend clamp, not a role choice. [inference: the log lines carry `fallback_fired`, which I have not read for these calls.]
 
-## Open rulings for the owner
+## Owner rulings (answered 28 Nov)
 
-1. Does "one model" cover the calls in the table above that still use the small model? Production would need `WALDO_STRONG_ROLES = "1"`, and the always-small calls would each need a change.
-2. Health words in a wake's reason: readings with numbers are withheld, but words ("recovery is low") are kept in the per-owner outcome table, which a forget reaches. Keep, or keep no free-text reason?
-3. How far a fired owner reminder carries the owner's say-so: inward writes only, or sends too (#2239).
-4. Owners who said no through volume `low` or a daily count of 0: the wake no longer reads either, so they would get wake messages. Move them to follow-ups off, or accept it as part of removing volume?
-5. Turning `GENERAL_WAKE` on in staging.
+1. **One model:** Sonnet for every call, including nightly memory passes and decision calls. The gate measures the cost first.
+2. **Health words in a wake's reason:** kept as words, never numbers. A forget clears them.
+3. **A fired owner reminder:** inward writes only (#2239). It never sends to other people without a card, even with "Just do it".
+4. **Volume:** removed. The wake never reads it, and follow-ups off is the real off switch.
+5. **`GENERAL_WAKE` in staging:** on since 28 Nov, after the gate's egress test passed.
 
 ## Rollback
 
