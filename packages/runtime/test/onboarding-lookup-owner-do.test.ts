@@ -17,8 +17,9 @@ vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
     const body = JSON.stringify(request);
-    if (body.includes('welcome_nodes')) model.welcome.push(body); else model.replies += 1;
-    const text = body.includes('welcome_nodes') ? '{"nodes":[]}'
+    if (body.includes('welcome_nodes')) model.welcome.push(body); else if (!body.includes('"name":"promotion"')) model.replies += 1;
+    const text = body.includes('welcome_nodes') ? '{"spots":[]}'
+      : body.includes('"name":"promotion"') ? '{"constellations":[],"links":[],"promoted":[]}'
       : body.includes('claim_ops') ? '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}' : 'Here is your week.';
     return { ok: true as const, data: { model: request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
   } };
@@ -89,10 +90,11 @@ it('the yes and the setup answers write one look-up job carrying only the name, 
     expect(brief.context).toContain('Asha');
     expect(job!.due_at).toBeGreaterThan(Date.now());
     // The welcome build's web stage waits on the running look-up.
-    await vi.waitFor(() => expect(model.welcome.some(body => body.includes('Source: what the owner told Waldo'))).toBe(true), { timeout: 10_000, interval: 25 });
+    const stage = (name: string) => (JSON.parse(state.storage.sql.exec<{ stages_json: string }>('SELECT stages_json FROM welcome_builds').one().stages_json) as Record<string, { state: string }>)[name]!.state;
+    await vi.waitFor(() => expect(stage('setup')).toBe('done'), { timeout: 10_000, interval: 25 });
     expect(model.welcome.some(body => body.includes('Source: what the owner look-up found'))).toBe(false);
     // The build began before the job was written, and still waits for it: the web stage is pending, not settled empty.
-    const web = () => (JSON.parse(state.storage.sql.exec<{ stages_json: string }>('SELECT stages_json FROM welcome_builds').one().stages_json) as Record<string, { state: string }>).web!.state;
+    const web = () => stage('web');
     expect(web()).toBe('pending');
     // The owner's first message is answered before the look-up's worker may take the serial lane.
     const sent = await app('/app/v1/chat/main/messages', { client_message_id: 'lookup-first-message', text: 'Show me today as you see it.' });

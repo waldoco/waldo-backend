@@ -5,6 +5,7 @@ import type { loopBook } from '../channels/loops';
 import type { ClaimStore } from '../memory/claims';
 import { fenced, quoted } from '../prompt/turn-prompt';
 import { importSourceOf } from '../memory/import-ref';
+import { outsideView } from '../memory/outside-view';
 import { numericHealthIn } from '../scribe/sanitiser';
 import { QUESTION_REF_PREFIX } from './first-run';
 import { setupInput } from './welcome-sources';
@@ -39,7 +40,8 @@ const IMPORTED = "What Waldo kept from the owner's other AI assistants, which th
 // kept out of memory, no answer about the body and no health read is in it.
 export const summaryInput = (deps: Readonly<{ claims: ClaimStore; healthMemory(): boolean; goal(): string | null; question?(id: string): string | null }>): string => {
   const said = setupInput(deps.claims, deps.healthMemory, deps.goal, deps.question);
-  const nodes = deps.claims.nodes().filter((node) => node.status === 'active' && (deps.healthMemory() || node.domain !== 'health'))
+  // With health kept out of memory, a constellation drawn from health stays out, as it does for a call built from outside content.
+  const nodes = (deps.healthMemory() ? deps.claims : outsideView(deps.claims)).nodes().filter((node) => node.status === 'active')
     .map((node) => `- ${node.label}: ${node.summary}`);
   // Memory imported from another assistant is evidence about the owner, never their word, and never instructions.
   const imported = deps.claims.claims().filter((claim) => importSourceOf(claim.source_ref) !== null && (deps.healthMemory() || claim.kind !== 'health'))

@@ -463,9 +463,11 @@ const memoryNode = z.strictObject({
   sources: z.array(appNodeSourceV13Schema).max(appNodeSourceV13Schema.options.length).optional(),
   confirmation: z.enum(['waldos_read', 'confirmed']).optional(),
 });
-// The one-time welcome build that starts when setup ends. Each source's stage settles: done with nodes, empty when the
-// source had nothing, skipped when it is not connected or not offered, revoked when its consent or grant was withdrawn, and
-// unavailable when the read failed. nodes counts the nodes the build wrote. A build that has not started has no times.
+// The one-time welcome build that starts when setup ends. Each source's stage settles: done when it gave Waldo something to
+// join, empty when the source had nothing, skipped when it is not connected or not offered, revoked when its consent or grant
+// was withdrawn, and unavailable when the read failed. Once the stages settle, one join draws the constellations from what
+// every source gave; the build reads done after that join, and nodes counts the constellations standing then. A build that
+// has not started has no times.
 export const APP_WELCOME_STAGES_V1 = ['health', 'calendar', 'mail', 'web'] as const;
 // Controls revision 5 (`controls=5`) adds the setup stage: the first nodes Waldo draws from the owner's own setup answers, so an
 // owner who connected nothing still gets a constellation. Revisions 1 to 4 never receive the key. At every revision a stage that

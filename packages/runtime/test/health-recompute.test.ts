@@ -210,7 +210,7 @@ describe('a change of the stated sleep need', () => {
     vi.setSystemTime(NOW);
     await withOwner(async ({ state, upload, needChanged }) => {
       const welcome = () => welcomeBuild(state.storage.sql, Date.now);
-      welcome().start(); welcome().begin('health'); welcome().settle('health', 'empty', 0);
+      welcome().start(); welcome().begin('health'); welcome().settle('health', 'empty');
       await needChanged();
       expect(entry(state)).toMatchObject({ kind: 'provider_sync', status: 'armed', due_at: NOW + HEALTH_RECOMPUTE_WINDOW_MS });
       expect(welcome().view().stages.health).toBe('empty');

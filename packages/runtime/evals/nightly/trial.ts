@@ -24,10 +24,11 @@ import { CHAT_REF, evalWorld, TIMEZONE, type Effect, type MemoryMode, type SeedM
 import { changeLines, type Change } from '../../src/channels/update-cards';
 import { parseTriage, triageTools, TRIAGE_INTERRUPTS_PER_DAY } from '../../src/channels/update-sweep';
 import { triagePrompt } from '../../src/prompt/update-cards';
+import { GENERAL_WAKE_TOOLS, wakePrompt } from '../../src/channels/wake';
 // The cards a triage turn can raise: a send, a calendar change, or any other tool through propose_action.
 export const TRIAGE_CARDS: readonly string[] = ['mail.send.proposed', 'calendar.change.proposed', 'action.proposed'];
 import type { EmbeddingRunner } from '../../src/memory/semantic-recall';
-import { constellationSoFar, welcomeStageText, type WelcomeStage } from '../../src/onboarding/welcome';
+import { welcomeStageText, type WelcomeStage } from '../../src/onboarding/welcome';
 
 export type Step =
   | Readonly<{ say: string }>
@@ -52,7 +53,10 @@ export type Step =
   // external, with its card tools offered; its decision is recorded as a 'triage.decision' effect.
   | Readonly<{ triage: readonly Change[] }>
   // One stage of the second welcome build reads this source text, as the owner object asks it, over an empty constellation.
-  | Readonly<{ welcome: Readonly<{ stage: WelcomeStage; sources: readonly string[]; text: string }> }>;
+  | Readonly<{ welcome: Readonly<{ stage: WelcomeStage; sources: readonly string[]; text: string }> }>
+  // GENERAL_WAKE: Waldo wakes on its own with these changes since its last look, through the production wake prompt over the
+  // world's calendar, tainted external, with the wake's tools; what it says reaches the owner as a notification.
+  | Readonly<{ wake: string }>;
 // What one trial cost and how the model got there, as counts: never text. rounds are the owner-reply calls (a structured side
 // call, the memory writer's among them, is not one); fallback_calls the answers a second provider gave. light_steps are the
 // owner turns that took a light step (WALDO_LIGHT_CHAT), light_handovers those the light model handed to the chat model.
@@ -207,13 +211,21 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         const raised = carded() > before;
         world.note('triage.decision', { decision: raised ? 'act' : chosen === 'invalid' ? 'invalid' : chosen.decision === 'act' ? 'act_without_card' : chosen.decision });
         if (!raised && chosen !== 'invalid' && chosen.decision === 'tell') transcript.push({ role: 'waldo', surface: chosen.push ? 'notification' : 'chat', text: chosen.say ?? chosen.revise!.text });
+      } else if ('wake' in step) {
+        turn += 1;
+        transcript.push({ role: 'world', text: `At ${world.localNow()} (${TIMEZONE}) Waldo wakes on its own to look across the owner's day. Changed since its last look:\n${step.wake}` });
+        skills.turn(`${scenario.id}-wake-${turn}`);
+        const offered = new Set(world.handlers.map((handler) => handler.name));
+        const prompt = wakePrompt(world.localNow(), null, { changes: step.wake, calendar: await world.wakeCalendar(), cards: '', today: '', ledger: world.wakeLedger(), goals: world.goals(), style: '', shaping: world.wakeShaping() });
+        const said = await responder.prompt(`${scenario.id}-wake-${turn}`, 1, prompt, time, GENERAL_WAKE_TOOLS.filter((name) => offered.has(name)) as never, undefined, undefined, undefined, 'external', 'plans', undefined, undefined, true);
+        if (!isSkip(said)) transcript.push({ role: 'waldo', surface: 'notification', text: said });
       } else if ('welcome' in step) {
         const { stage, sources, text } = step.welcome;
-        transcript.push({ role: 'world', text: `The welcome build reads the owner's ${stage} source and writes constellation nodes, which the owner reads.` });
-        const raw = await responder.welcome!(`${scenario.id}-welcome-${stage}`, stage, welcomeStageText(stage, sources, constellationSoFar({ allClaims: () => [], nodes: () => [] }), text), 2);
-        // An answer that is not a node list writes nothing, as the build settles that stage unavailable.
-        const nodes = (() => { try { return (JSON.parse(raw) as { nodes?: readonly Readonly<{ label?: string; summary?: string }>[] }).nodes; } catch { return undefined; } })();
-        transcript.push({ role: 'waldo', text: !Array.isArray(nodes) ? '(the answer was not a node list; nothing written)' : nodes.length ? nodes.map((node) => `${node.label}: ${node.summary}`).join('\n') : '(no nodes)' });
+        transcript.push({ role: 'world', text: `The welcome build reads the owner's ${stage} source and writes spots, which the join pass reads and the owner sees.` });
+        const raw = await responder.welcome!(`${scenario.id}-welcome-${stage}`, stage, welcomeStageText(stage, sources, text), 2);
+        // An answer that is not a spot list writes nothing, as the build settles that stage unavailable.
+        const spots = (() => { try { return (JSON.parse(raw) as { spots?: readonly Readonly<{ area?: string; text?: string }>[] }).spots; } catch { return undefined; } })();
+        transcript.push({ role: 'waldo', text: !Array.isArray(spots) ? '(the answer was not a spot list; nothing written)' : spots.length ? spots.map((spot) => `${spot.area}: ${spot.text}`).join('\n') : '(no spots)' });
       } else if ('mail_arrives' in step) {
         world.deliver(step.mail_arrives);
         transcript.push({ role: 'world', text: `New mail arrives from ${step.mail_arrives.from}: "${step.mail_arrives.subject}".` });

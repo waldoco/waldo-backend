@@ -352,14 +352,14 @@ describe('claims', () => {
       store.add({ kind: 'observation', text: 'Private owner sleep statement', source: 'stated', evidence: 'private', origin: 'owner' }, AT);
       const claim = store.claims()[0]!;
       const receipts: unknown[] = [];
-      applyPromotion(store, JSON.stringify({ nodes: [{ id: null, domain: 'sleep', label: 'Private label', summary: 'Private summary', strength: 0.8, status: 'active', durable: true, reason: 'lasting owner pattern', supporting_spots: [claim.id, 999999] }], edges: [], promoted: [] }), AT, (receipt) => receipts.push(receipt));
+      applyPromotion(store, JSON.stringify({ constellations: [{ id: null, replaces: [], area: 'body', label: 'Private label', summary: 'Private summary', strength: 0.8, spots: [claim.id, 999999] }], links: [], promoted: [] }), AT, (receipt) => receipts.push(receipt));
       expect(receipts).toEqual([{ outcome: 'held', reason: 'untrusted_or_missing', source_kind: 'owner_observation_pattern', count: 1 }]);
       expect(JSON.stringify(receipts)).not.toContain('Private');
       expect(store.nodes()).toEqual([]);
     });
   });
 
-  it('golden: a once-seen, shared, legacy or unknown claim cannot create a node or edge', async () => {
+  it('golden: a legacy or unknown claim cannot support a constellation, and a link to one not in the reply is not written', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);
       store.add({ kind: 'observation', text: 'Owner sleep once', source: 'stated', evidence: 'I slept badly', origin: 'owner' }, AT);
@@ -367,8 +367,8 @@ describe('claims', () => {
       store.add({ kind: 'observation', text: 'Legacy sleep', source: 'stated', evidence: 'old text' }, '2026-09-26T04:00:00Z');
       const [once, shared, legacy] = [...store.claims()].sort((a, b) => a.id - b.id);
       const detail = applyPromotion(store, JSON.stringify({
-        nodes: [{ id: null, domain: 'sleep', label: 'Unsupported', summary: 'Should be held', strength: 0.9, status: 'active', durable: true, reason: 'lasting owner pattern', supporting_spots: [once!.id, shared!.id, legacy!.id, 9999] }],
-        edges: [{ from: 'new:0', to: '12345', relation: 'co-occurs with', strength: 1, evidence_count: 9 }],
+        constellations: [{ id: null, replaces: [], area: 'body', label: 'Unsupported', summary: 'Should be held', strength: 0.9, spots: [once!.id, legacy!.id, 9999] }],
+        links: [{ from: 'new:0', to: '12345', relation: 'co-occurs with' }],
         promoted: [once!.id, shared!.id, legacy!.id],
       }), AT);
       expect(detail).toContain('nodes0 edges0');
@@ -395,7 +395,7 @@ describe('claims', () => {
     });
   });
 
-  it('golden: two owner-grounded supports from separate timestamps earn a node; an orphan edge does not', async () => {
+  it('golden: two owner-grounded spots earn a constellation; an orphan link does not', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);
       store.add({ kind: 'pattern', text: 'Short sleep before busy days', source: 'stated', evidence: 'first', origin: 'owner' }, AT);
@@ -403,8 +403,8 @@ describe('claims', () => {
       const claims = [...store.claims()].sort((a, b) => a.id - b.id);
       for (const claim of claims) store.seen(claim.id, '2026-09-26T04:00:00Z');
       const detail = applyPromotion(store, JSON.stringify({
-        nodes: [{ id: null, domain: 'sleep', label: 'Busy-day sleep', summary: 'Owner supported', strength: 0.8, status: 'active', durable: true, reason: 'lasting owner pattern', supporting_spots: claims.map((claim) => claim.id) }],
-        edges: [{ from: 'new:0', to: 'new:1', relation: 'co-occurs with', strength: 0.6, evidence_count: 2 }],
+        constellations: [{ id: null, replaces: [], area: 'body', label: 'Busy-day sleep', summary: 'Owner supported', strength: 0.8, spots: claims.map((claim) => claim.id) }],
+        links: [{ from: 'new:0', to: 'new:1', relation: 'co-occurs with' }],
         promoted: claims.map((claim) => claim.id),
       }), '2026-09-26T04:00:00Z');
       expect(detail).toBe('nodes1 edges0 promoted2');
@@ -414,7 +414,7 @@ describe('claims', () => {
     });
   });
 
-  it('promotes supported observations and forgetting a node drops its edges', async () => {
+  it('promotes supported observations and forgetting a constellation drops its links', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);
       store.add({ kind: 'observation', text: 'Short sleep before long meeting days', source: 'stated', evidence: 'day one', origin: 'owner' }, AT);
@@ -424,9 +424,9 @@ describe('claims', () => {
       const [first, second, third, goal] = [...store.claims()].sort((a, b) => a.id - b.id);
       store.seen(first!.id, AT);
       const detail = applyPromotion(store, JSON.stringify({
-        nodes: [{ id: null, domain: 'sleep', label: 'Short sleep', summary: 'Sleeps less before big days', strength: 0.7, status: 'active', durable: true, reason: 'lasting owner pattern', supporting_spots: [first!.id, second!.id] },
-          { id: null, domain: 'work rhythm', label: 'Long meeting days', summary: 'Heavy days', strength: 0.6, status: 'active', durable: true, reason: 'lasting owner pattern', supporting_spots: [second!.id, third!.id] }],
-        edges: [{ from: 'new:1', to: 'new:0', relation: 'tends to precede', strength: 0.5, evidence_count: 3 }],
+        constellations: [{ id: null, replaces: [], area: 'body', label: 'Short sleep', summary: 'Sleeps less before big days', strength: 0.7, spots: [first!.id, second!.id] },
+          { id: null, replaces: [], area: 'work', label: 'Long meeting days', summary: 'Heavy days', strength: 0.6, spots: [second!.id, third!.id] }],
+        links: [{ from: 'new:1', to: 'new:0', relation: 'tends to precede' }],
         promoted: [first!.id, goal!.id],
       }), AT);
       expect(detail).toBe('nodes2 edges1 promoted1 rejected1');
@@ -634,8 +634,8 @@ describe('claim origin classes (gate provenance)', () => {
       const byText = new Map(store.claims().map((claim) => [claim.text, claim]));
       for (const claim of store.claims()) store.seen(claim.id, AT); // both recur, so origin alone differentiates
       const detail = applyPromotion(store, JSON.stringify({
-        nodes: [{ id: null, domain: 'sleep', label: 'Sleep', summary: 'Sleep patterns', strength: 0.6, status: 'active', durable: true, reason: 'lasting owner pattern', supporting_spots: [] }],
-        edges: [],
+        constellations: [],
+        links: [],
         promoted: [byText.get('External-content observation')!.id, byText.get('Owner observation')!.id],
       }), AT);
       // Only the owner-origin observation promotes; the untrusted one is excluded structurally.
@@ -651,52 +651,39 @@ describe('claim origin classes (gate provenance)', () => {
       store.add({ kind: 'observation', text: 'Single episode', source: 'stated', evidence: 'said once', origin: 'owner' }, AT);
       const once = store.claims()[0]!;
       const detail = applyPromotion(store, JSON.stringify({
-        nodes: [{ id: null, domain: 'sleep', label: 'X', summary: 'x', strength: 0.5, status: 'active', durable: true, reason: 'lasting owner pattern', supporting_spots: [] }],
-        edges: [],
+        constellations: [],
+        links: [],
         promoted: [once.id],
       }), AT);
       expect(detail).toBe('nodes0 edges0 promoted0 rejected1');
       expect(store.claims()[0]!.status).toBe('active');
       store.seen(once.id, AT);
-      const second = applyPromotion(store, JSON.stringify({ nodes: [], edges: [], promoted: [once.id] }), AT);
+      const second = applyPromotion(store, JSON.stringify({ constellations: [], links: [], promoted: [once.id] }), AT);
       expect(second).toBe('nodes0 edges0 promoted0 rejected1');
       expect(store.claims('promoted')).toEqual([]);
     });
   });
 
-  it('clamps model-proposed strengths and keeps only eligible supporting claims', async () => {
+  it('clamps model-proposed strengths, keeps only spots it was shown, and gives a link the weaker strength of its ends', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);
       store.add({ kind: 'observation', text: 'First owner pattern', source: 'stated', evidence: 'first', origin: 'owner' }, AT);
       store.add({ kind: 'pattern', text: 'Second owner pattern', source: 'stated', evidence: 'second', origin: 'owner' }, '2026-09-25T04:00:00Z');
       const [first, second] = [...store.claims()].sort((a, b) => a.id - b.id);
       applyPromotion(store, JSON.stringify({
-        nodes: [{ id: null, domain: 'sleep', label: 'X', summary: 'x', strength: 4.7, status: 'active', durable: true, reason: 'lasting owner pattern', supporting_spots: [first!.id, second!.id, 9999] },
-          { id: null, domain: 'work', label: 'Y', summary: 'y', strength: -2, status: 'active', durable: true, reason: 'lasting owner pattern', supporting_spots: [first!.id, second!.id] }],
-        edges: [{ from: 'new:0', to: 'new:1', relation: 'co-occurs with', strength: 9, evidence_count: 0 }],
+        constellations: [{ id: null, replaces: [], area: 'body', label: 'X', summary: 'x', strength: 4.7, spots: [first!.id, second!.id, 9999] },
+          { id: null, replaces: [], area: 'work', label: 'Y', summary: 'y', strength: -2, spots: [first!.id, second!.id] }],
+        links: [{ from: 'new:0', to: 'new:1', relation: 'co-occurs with' }],
         promoted: [],
       }), AT);
       const node = store.nodes().find((n) => n.label === 'X')!;
       expect(node.strength).toBe(1);
       expect(JSON.parse(node.supporting_spots)).toEqual([first!.id, second!.id]);
       const edge = store.edges()[0]!;
-      expect(edge.strength).toBe(1);
+      expect(edge.strength).toBe(0);
       expect(edge.evidence_count).toBe(1);
       expect(store.nodes().find((n) => n.label === 'Y')!.strength).toBe(0);
     });
-  });
-});
-
-it('nightly promotion uses the model durable field rather than host wording heuristics', async () => {
-  await withSql(sql => {
-    const store = claimStore(sql);
-    store.add({ kind: 'observation', text: 'One owner pattern', evidence: 'first', source: 'stated', origin: 'owner' }, AT);
-    store.add({ kind: 'pattern', text: 'Another owner pattern', evidence: 'second', source: 'stated', origin: 'owner' }, '2026-09-25T04:00:00Z');
-    const node = { id: null, domain: 'work', label: 'Check the calendar today', summary: 'Owner pattern', strength: 0.8, status: 'active', supporting_spots: store.claims().map(claim => claim.id), durable: false, reason: 'momentary' };
-    expect(applyPromotion(store, JSON.stringify({ nodes: [node], edges: [], promoted: [] }), AT)).toContain('nodes0');
-    expect(store.nodes()).toEqual([]);
-    expect(applyPromotion(store, JSON.stringify({ nodes: [{ ...node, durable: true, reason: 'lasting routine' }], edges: [], promoted: [] }), AT)).toContain('nodes1');
-    expect(store.nodes()[0]?.label).toBe('Check the calendar today');
   });
 });
 
