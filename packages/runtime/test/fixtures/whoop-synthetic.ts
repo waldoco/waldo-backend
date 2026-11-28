@@ -26,3 +26,11 @@ export const workoutRecord = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 export const webhookBody = (over: Record<string, unknown> = {}) => ({ user_id: 70001, id: '3f6c1a52-9b0e-4d7a-8c11-2a5e7d9b0c01', type: 'sleep.updated', trace_id: 'a1b2c3d4-0000-4000-8000-00000000aa01', ...over });
+// A closed cycle from the night's start to the next, and the owner's body measurements, both invented.
+export const cycleRecord = (over: Record<string, unknown> = {}) => ({
+  id: 810001, user_id: 70001, created_at: '2026-10-19T22:15:00.000Z', updated_at: '2026-10-20T22:20:00.000Z',
+  start: '2026-10-19T22:10:00.000Z', end: '2026-10-20T22:05:00.000Z', timezone_offset: '+01:00', score_state: 'SCORED',
+  score: { strain: 11.37, kilojoule: 9_204, average_heart_rate: 68, max_heart_rate: 172 }, step_count: 9_412,
+  ...over,
+});
+export const bodyRecord = (over: Record<string, unknown> = {}) => ({ height_meter: 1.762, weight_kilogram: 71.4, max_heart_rate: 189, ...over });

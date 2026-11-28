@@ -279,7 +279,7 @@ describe('the WHOOP start link', () => {
     expect(response.status).toBe(303);
     const location = new URL(response.headers.get('location')!), query = location.searchParams;
     expect([location.origin + location.pathname, query.get('client_id'), query.get('response_type'), query.get('redirect_uri'), query.get('state')]).toEqual(['https://api.prod.whoop.com/oauth/oauth2/auth', 'client-id-fixture', 'code', 'https://worker.example.invalid/oauth/whoop/callback', 'AbCd1234']);
-    expect(query.get('scope')).toBe('offline read:profile read:sleep read:recovery read:workout');
+    expect(query.get('scope')).toBe('offline read:profile read:body_measurement read:cycles read:recovery read:sleep read:workout');
     expect(response.headers.get('location')).not.toContain(CLIENT_SECRET);
     expect(response.headers.get('cache-control')).toBe('no-store');
     expect(response.headers.get('referrer-policy')).toBe('no-referrer');

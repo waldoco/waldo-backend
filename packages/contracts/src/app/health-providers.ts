@@ -9,11 +9,16 @@ export const healthProviderV1Schema = z.enum(HEALTH_PROVIDER_SOURCES_V1);
 // connected: syncing. needs_reconnect: the provider no longer accepts the saved access, so the owner connects again.
 // consent_required: connected, but the owner's consent is not live (it was withdrawn), so nothing is stored.
 export const healthProviderStateV1Schema = z.enum(['not_connected', 'connected', 'needs_reconnect', 'consent_required']);
+// What a connection may lack: WHOOP's physiological cycles (day strain) and its body measurements.
+export const healthProviderKindV1Schema = z.enum(['day_strain', 'body_measurements']);
 export const healthProviderStatusV1Schema = z.strictObject({
   provider: healthProviderV1Schema,
   state: healthProviderStateV1Schema,
   // The last time a sync committed readings, or null. Never a reading.
   last_sync_at: healthInstantV1Schema.nullable(),
+  // Health revision 16, served only to a build that names it: kinds of data this connection was not granted, because it was
+  // made before Waldo asked for them. Everything else keeps syncing; connecting again with the current request adds them.
+  reconnect_for: z.array(healthProviderKindV1Schema).min(1).max(healthProviderKindV1Schema.options.length).optional(),
 });
 export const healthProviderListV1Schema = z.strictObject({ providers: z.array(healthProviderStatusV1Schema).max(HEALTH_PROVIDER_SOURCES_V1.length) });
 

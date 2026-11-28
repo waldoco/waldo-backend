@@ -26,6 +26,15 @@ describe('the app provider routes', () => {
     expect([response.status, json]).toEqual([200, { providers: [status] }]);
     expect(sent).toEqual([{ op: 'status', text: '{}', doName: 'owner-1' }]);
   });
+  it('names the kinds a reconnect would add only to a build at health revision 16, and leaves them off for an older build that parses strictly', async () => {
+    const lacking = { ...status, reconnect_for: ['day_strain', 'body_measurements'] };
+    const newer = await run('GET', '', { answer: () => Response.json({ providers: [lacking] }), headers: { 'x-waldo-app-contract': 'health=16' } });
+    expect([newer.response.status, newer.json]).toEqual([200, { providers: [lacking] }]);
+    const older = await run('GET', '', { answer: () => Response.json({ providers: [lacking] }), headers: { 'x-waldo-app-contract': 'health=15' } });
+    expect([older.response.status, older.json]).toEqual([200, { providers: [status] }]);
+    const drifted = await run('GET', '', { answer: () => Response.json({ providers: [{ ...status, reconnect_for: ['sleep'] }] }), headers: { 'x-waldo-app-contract': 'health=16' } });
+    expect(drifted.response.status).toBe(503);
+  });
 
   it('starts a connection and answers with the provider\'s page and an expiry', async () => {
     const answer = { provider: 'whoop', authorize_url: 'https://api.prod.whoop.com/oauth/oauth2/auth?client_id=x&state=AbCd1234', expires_at: 1_790_000_000_000 };

@@ -14,6 +14,7 @@ import {
 } from '@waldo/contracts';
 import { sanitiseVerifyOnly } from '../scribe/sanitiser';
 import { MODEL_CONTEXT_MAX_CHARS, sanitiseInputSchema, sanitiseResultSchema, type SanitisationFailureSource, type SanitiseFailureReason } from '@waldo/contracts';
+import type { WhoopScoresView } from '@waldo/contracts';
 import { sha256Prefixed } from './canonical';
 import { FailClosed } from './faults';
 import type {
@@ -220,6 +221,7 @@ export function renderHealth(health: ContextHealthMaterial | null, absent?: Heal
     `Recovery: ${health.narrative.recovery_descriptor}. Load: ${health.narrative.load_descriptor ?? 'unavailable'}.`,
     ...renderMissingPillars(health.view.missing_pillars),
     ...renderInventory(health.view.inventory),
+    ...renderWhoop(health.view.whoop),
     ...renderBaseline(health.view.baseline_state),
     ...renderSleepDebt(health.view.sleep_debt),
     ...renderEnergyWindows(health.view.energy_windows),
@@ -246,6 +248,7 @@ function renderPartialHealth(view: PartialHealthView, daySummary: string, highSt
       `Partial health context: the newest body data${sourceNames.length === 0 ? '' : ` (from ${sourceNames})`} is more than three days old, so there is no current recovery, readiness or load reading.`,
       `Would fix it: ${MISSING_FIX.no_readings}.`,
       ...renderInventory(view.inventory),
+      ...renderWhoop(view.whoop),
       'If get_health is in your function list, call it to see what did arrive and when before telling the owner nothing is available.',
     ].join('\n');
   }
@@ -260,6 +263,7 @@ function renderPartialHealth(view: PartialHealthView, daySummary: string, highSt
     ...(view.inventory === undefined
       ? [`In the row: ${view.present.length === 0 ? 'none of the inputs these scores use' : view.present.map((item) => (item === 'last_night_sleep' ? NIGHT_WORDS[view.as_of_day] : PRESENT_WORDS[item])).join('; ')}.`]
       : renderInventory(view.inventory)),
+    ...renderWhoop(view.whoop),
     ...renderMissingPillars(view.missing_pillars),
     ...(view.load_zone === undefined ? [] : [`Load: ${view.load_zone}.`]),
     ...renderBaseline(view.baseline_state),
@@ -269,6 +273,23 @@ function renderPartialHealth(view: PartialHealthView, daySummary: string, highSt
     ...(highStakes.length === 0 ? [] : [`Upcoming high-stakes: ${highStakes.join('; ')}`]),
     lookFurther,
   ].join('\n');
+}
+
+// WHOOP's own scores, in words and on one line: each against the owner's own WHOOP days, the day it is for and how fresh it is.
+// They are WHOOP's measures, never Waldo's Recovery or Load, and the numbers are get_health's.
+const WHOOP_USUAL = { above_usual: 'above its usual for this owner', usual: 'within its usual for this owner', below_usual: 'below its usual for this owner', no_usual_yet: 'with too few WHOOP days yet for a usual' } as const;
+const WHOOP_DAY = { today: "today's", yesterday: "yesterday's", earlier: "an earlier day's" } as const;
+const WHOOP_ON = { today: 'today', yesterday: 'yesterday', earlier: 'on an earlier day' } as const;
+const WHOOP_NIGHT = { today: "last night's sleep", yesterday: 'the sleep of the night before last', earlier: 'the sleep of an earlier night' } as const;
+function renderWhoop(whoop: WhoopScoresView | undefined): string[] {
+  if (whoop === undefined) return [];
+  const parts = [
+    ...(whoop.recovery ? [`${WHOOP_DAY[whoop.recovery.as_of_day]} recovery (${whoop.recovery.freshness}), ${WHOOP_USUAL[whoop.recovery.against_usual]}${whoop.recovery.calibrating ? ', and WHOOP says it is still calibrating for this owner' : ''}`] : []),
+    ...(whoop.sleep ? [`${WHOOP_NIGHT[whoop.sleep.as_of_day]} (${whoop.sleep.freshness}) ${whoop.sleep.against_need === 'met' ? 'met' : 'fell short of'} the need WHOOP set for it${whoop.sleep.need_counts_debt ? ', a need that includes sleep debt' : ''}`] : []),
+    ...(whoop.strain ? [`${WHOOP_DAY[whoop.strain.as_of_day]} day strain${whoop.strain.open ? ' so far' : ''} (${whoop.strain.freshness}), ${WHOOP_USUAL[whoop.strain.against_usual]}`] : []),
+    ...(whoop.workout ? [`newest workout ${WHOOP_ON[whoop.workout.as_of_day]} (${whoop.workout.freshness})${whoop.workout.strain || whoop.workout.zones ? `, with ${[whoop.workout.strain ? "WHOOP's strain" : '', whoop.workout.zones ? 'minutes in each heart-rate zone' : ''].filter(Boolean).join(' and ')}` : ''}`] : []),
+  ];
+  return parts.length === 0 ? [] : [`WHOOP's own scores (WHOOP's measures, not Waldo's Recovery or Load; get_health reads the numbers): ${parts.join('; ')}.`];
 }
 
 // The day a scored view is for, in words.

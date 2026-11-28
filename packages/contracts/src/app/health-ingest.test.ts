@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  appHealthRoutesV1, checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_COACH_REVISION_V1, HEALTH_NUTRITION_REVISION_V1, HEALTH_OBSERVED_PEAK_REVISION_V1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1,
+  appHealthRoutesV1, checkHealthChangeV1, HEALTH_BASELINE_REVISION_V1, HEALTH_COACH_REVISION_V1, HEALTH_NUTRITION_REVISION_V1, HEALTH_OBSERVED_PEAK_REVISION_V1, HEALTH_INGEST_MAX_REQUEST_BYTES_V1, HEALTH_CONSENT_VERSION_V1, HEALTH_PER_SAMPLE_REVISION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_REVISION_V1, HEALTH_PROVIDER_SCORES_CONSENT_VERSION_V1,
+  HEALTH_PROVIDER_SCORES_REVISION_V1, HEALTH_PROVIDER_SCORE_SIGNALS_V1, healthSleepStageTotalsV1Schema,
   healthApiErrorV1Schema, healthBaselineV1Schema, healthChangeRejectionReasonV1Schema, healthDriverPhraseV1Schema, healthEnergyWindowV1Schema, healthConsentChangeV1Schema, healthConsentGrantV1Schema,
   healthConsentListV1Schema, healthConsentVersionV1, healthConsentWithdrawV1Schema, healthIngestEnvelopeV1Schema, healthIngestReceiptV1Schema, healthIngestV1Schema, healthSampleV1Schema,
   HEALTH_SCORES_HISTORY_REVISION_V1, healthScoresHistoryQueryV1Schema, healthScoresHistoryResponseV1Schema,
@@ -31,8 +32,13 @@ describe('health consent', () => {
     rejected(healthConsentGrantV1Schema, [{ ...grant, source: 'garmin' }, { ...grant, source: 'oura' }]);
   });
   it('carries the copy version that names intraday window summaries for a device source and the WHOOP-specific notice for WHOOP', () => {
-    expect([HEALTH_CONSENT_VERSION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1]).toEqual([2, 4]);
-    expect((['apple', 'samsung', 'health_connect', 'whoop'] as const).map(healthConsentVersionV1)).toEqual([2, 2, 2, 4]);
+    expect([HEALTH_CONSENT_VERSION_V1, HEALTH_PROVIDER_CONSENT_VERSION_V1, HEALTH_PROVIDER_SCORES_CONSENT_VERSION_V1]).toEqual([2, 6, 6]);
+    expect((['apple', 'samsung', 'health_connect', 'whoop'] as const).map(healthConsentVersionV1)).toEqual([2, 2, 2, 6]);
+  });
+  it('lets a WHOOP grant name copy 4, which a build still shows, or copy 6, and nothing else', () => {
+    for (const version of [4, 6]) expect(healthConsentGrantV1Schema.safeParse({ ...grant, source: 'whoop', version }).success, `whoop ${version}`).toBe(true);
+    rejected(healthConsentGrantV1Schema, [5, 7, 2, 3].map(version => ({ ...grant, source: 'whoop', version })));
+    expect(healthConsentListV1Schema.safeParse({ consents: [{ consent_class: 'health_processing', source: 'whoop', purpose: 'model_processing', version: 6, status: 'granted', epoch: 1, granted_at: '2026-10-10T00:00:00Z', withdrawn_at: null, deletion_state: 'not_required' }] }).success).toBe(true);
   });
   it('ties a grant to the copy of its own source: WHOOP on the device copy, or a device source on the WHOOP copy, is refused', () => {
     expect(healthConsentGrantV1Schema.safeParse({ ...grant, source: 'whoop', version: HEALTH_PROVIDER_CONSENT_VERSION_V1 }).success).toBe(true);
@@ -949,5 +955,75 @@ describe('health revision 15: an hour\'s heart-rate bins and the day\'s load cou
         { ...v1, parts: { ...v1.parts, passive: { state: 'unavailable', reason: 'watch_off' } } }, { ...v1, parts: { ...v1.parts, passive: { state: 'unavailable' } } }, { ...v1, parts: null },
       ]);
     });
+  });
+});
+
+describe('health revision 16: a provider\'s own measures, naps, skin temperature and body measurements', () => {
+  // Synthetic values only. A provider record is placed on the day the provider's own offset gives it.
+  const at = { revision: 1_764_200_000, day: '2026-11-26', start_at: '2026-11-25T23:10:00+05:30', end_at: '2026-11-26T07:05:00+05:30', utc_offset_minutes: 330 };
+  const recovery = { ...at, sample_id: 'whoop:sleep-1:provider_recovery', signal: 'provider_recovery', unit: 'percent', method: 'whoop', value: 61, calibrating: false };
+  const strain = { ...at, sample_id: 'whoop:cycle:9:provider_day_strain', signal: 'provider_day_strain', unit: 'strain', method: 'whoop', value: 12.4, open: false, energy_kcal: 2_310.5, avg_hr_bpm: 71, max_hr_bpm: 168, step_count: 8_234 };
+  const need = { ...at, sample_id: 'whoop:sleep-1:provider_sleep_need', signal: 'provider_sleep_need', unit: 'minutes', method: 'whoop', value: 505, baseline_minutes: 460, debt_minutes: 40, strain_minutes: 25, nap_minutes: -20 };
+  const performance = { ...at, sample_id: 'whoop:sleep-1:provider_sleep_performance', signal: 'provider_sleep_performance', unit: 'percent', method: 'whoop', value: 83 };
+  const consistency = { ...performance, sample_id: 'whoop:sleep-1:provider_sleep_consistency', signal: 'provider_sleep_consistency', value: 71 };
+  const nap = { ...at, sample_id: 'whoop:nap-1:nap', signal: 'nap', unit: 'minutes', method: 'asleep_duration', value: 24 };
+  const skin = { ...at, sample_id: 'whoop:sleep-1:skin_temperature', signal: 'skin_temperature', unit: 'celsius', method: 'absolute', value: 33.6 };
+  const height = { ...at, sample_id: 'whoop:body:height', signal: 'height', unit: 'meters', value: 1.78 };
+  const maxHr = { ...at, sample_id: 'whoop:body:max_heart_rate', signal: 'max_heart_rate', unit: 'beats_per_minute', method: 'provider_estimate', value: 191 };
+  const totals = { method: 'provider_totals', light: 210, deep: 95, rem: 110, awake: 40, no_data: 0, in_bed: 475, sleep_cycles: 5, disturbances: 12 };
+  const asleep = { ...at, sample_id: 'whoop:sleep-1:sleep_duration', signal: 'sleep_duration', unit: 'minutes', method: 'asleep_duration', value: 415, stage_totals: totals };
+  const workout = { ...at, sample_id: 'whoop:w-1:workout', signal: 'workout', unit: 'minutes', activity: 'running', value: 45, start_at: '2026-11-26T18:00:00+05:30', end_at: '2026-11-26T18:45:00+05:30',
+    avg_hr_bpm: 148, max_hr_bpm: 181, hr_zones: { basis: 'provider', lower_bounds_bpm: null, seconds: [300, 600, 900, 600, 300] }, strain: { value: 11.2, method: 'whoop' }, percent_recorded: 98.5, elevation_change_m: -12 };
+  const valid = { recovery, strain, need, performance, consistency, nap, skin, height, maxHr, asleep, workout };
+  it('is health revision 16, and names the five provider scores', () => {
+    expect(HEALTH_PROVIDER_SCORES_REVISION_V1).toBe(16);
+    expect(HEALTH_PROVIDER_SCORES_REVISION_V1).toBeGreaterThan(HEALTH_PASSIVE_LOAD_REVISION_V1);
+    expect([...HEALTH_PROVIDER_SCORE_SIGNALS_V1]).toEqual(['provider_recovery', 'provider_day_strain', 'provider_sleep_need', 'provider_sleep_performance', 'provider_sleep_consistency']);
+    for (const signal of [...HEALTH_PROVIDER_SCORE_SIGNALS_V1, 'nap', 'skin_temperature', 'height', 'max_heart_rate']) expect(healthSignalV1Schema.safeParse(signal).success, signal).toBe(true);
+  });
+  it.each(Object.entries(valid))('takes a valid %s', (_name, sample) => {
+    expect(healthSampleV1Schema.safeParse(sample).success).toBe(true);
+    expect(checkHealthChangeV1('sample', 0, sample)).toMatchObject({ ok: true });
+  });
+  it('takes an open cycle, a cycle with no steps, an unscored nap by its span, and a need with no debt', () => {
+    const { step_count: _steps, ...noSteps } = strain;
+    for (const sample of [{ ...strain, open: true }, noSteps, { ...nap, method: 'span', value: 31 }, { ...need, value: 465, debt_minutes: 0, nap_minutes: 0, strain_minutes: 5 }]) {
+      expect(healthSampleV1Schema.safeParse(sample).success, JSON.stringify(sample)).toBe(true);
+    }
+  });
+  it('refuses a provider score without its provider label, out of scale, or without its flag', () => {
+    const { calibrating: _c, ...unflagged } = recovery;
+    const { open: _o, ...openless } = strain;
+    rejected(healthSampleV1Schema, [
+      { ...recovery, method: 'oura' }, { ...recovery, method: undefined }, { ...recovery, value: 101 }, { ...recovery, value: -1 }, unflagged, { ...recovery, calibrating: 'no' },
+      { ...strain, value: 21.5 }, openless, { ...strain, avg_hr_bpm: 170 }, { ...strain, step_count: 1.5 }, { ...strain, unit: 'score' },
+      { ...need, value: 600 }, { ...need, nap_minutes: 10, value: 535 }, { ...need, baseline_minutes: -1, value: 44 },
+      { ...performance, value: 100.5 }, { ...consistency, method: 'waldo' }, { ...performance, recovery: 61 },
+    ]);
+  });
+  it('refuses a nap, skin temperature or body measurement on the wrong scale or method', () => {
+    rejected(healthSampleV1Schema, [
+      { ...nap, method: 'time_in_bed' }, { ...nap, value: 1_441 }, { ...skin, method: 'baseline_delta' }, { ...skin, value: 92 }, { ...skin, value: 0.4 },
+      { ...height, value: 178 }, { ...height, unit: 'centimeters' }, { ...maxHr, value: 300 }, { ...maxHr, method: 'measured' },
+    ]);
+  });
+  it('takes stage totals on time asleep only, adding up to it, never beside interval stages, and fitting the time in bed', () => {
+    expect(healthSleepStageTotalsV1Schema.safeParse(totals).success).toBe(true);
+    rejected(healthSleepStageTotalsV1Schema, [{ ...totals, method: 'intervals' }, { ...totals, in_bed: 300 }, { ...totals, sleep_cycles: 2.5 }, { ...totals, disturbances: -1 }, { ...totals, rem: 1_441 }]);
+    rejected(healthSampleV1Schema, [
+      { ...asleep, value: 380 }, { ...asleep, method: 'time_in_bed' },
+      { ...asleep, stages: { light: 210, deep: 95, rem: 110, unspecified: 0, awake: 40 } },
+    ]);
+  });
+  it('refuses a workout strain off the scale or without its provider, a recorded share over 100, and an impossible altitude change', () => {
+    rejected(healthSampleV1Schema, [
+      { ...workout, strain: { value: 22, method: 'whoop' } }, { ...workout, strain: { value: 11 } }, { ...workout, strain: 11.2 },
+      { ...workout, percent_recorded: 100.1 }, { ...workout, elevation_change_m: 30_000 },
+    ]);
+  });
+  it('lets a deletion name each new kind', () => {
+    for (const signal of [...HEALTH_PROVIDER_SCORE_SIGNALS_V1, 'nap', 'skin_temperature', 'height', 'max_heart_rate']) {
+      expect(healthIngestV1Schema.safeParse({ ...batch, source: 'whoop', samples: [], deletions: [{ sample_id: `whoop:x:${signal}`, signal, revision: 2 }] }).success, signal).toBe(true);
+    }
   });
 });
