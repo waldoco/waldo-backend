@@ -1,4 +1,4 @@
--- Rolls back 20261127120000: drops the uncapped open join and restores the throttle's ceiling of 100 (as of 20261101060000).
+-- Rolls back 20261128090000: drops the uncapped open join and restores the throttle's ceiling of 100 (as of 20261101060000).
 -- Run only after the Worker is back on a build that calls signup_owner_open with caps, or open joins fail closed. Joins already
 -- made stay; open_signup_days keeps their count.
 drop function if exists waldo.signup_owner_open_uncapped(uuid, text, text, text, text, bigint, text);
