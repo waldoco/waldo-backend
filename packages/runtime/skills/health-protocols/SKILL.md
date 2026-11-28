@@ -1,6 +1,6 @@
 ---
 name: health-protocols
-description: Shape a day or a proposal around sleep, light, caffeine, training, recovery and focus, reasoning from graded evidence for this person. Words, not numbers; no clinical advice.
+description: Load when a decision turns on how sleep, light, caffeine, training, recovery, stress or food will shape this person's day or week. Graded evidence; words, not numbers; no clinical advice.
 tools: ["get_health", "query_calendar", "propose_calendar_change"]
 ---
 
