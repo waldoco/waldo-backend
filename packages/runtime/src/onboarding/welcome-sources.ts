@@ -5,11 +5,11 @@ import { localDayOf, type HealthReadBook } from '../tools/live/health';
 import { zonesAnswer, zoneWords } from '../memory/outcomes';
 import type { GoogleAccess } from '../tools/live/google';
 import type { FindingStore } from './findings';
-import type { ClaimStore } from '../memory/claims';
+import { fence, textFingerprint, type ClaimStore } from '../memory/claims';
 import { heldTopicsOf, holdsIn } from '../memory/forget-guard';
 import { numericHealthIn } from '../scribe/sanitiser';
-import { fenced } from '../prompt/turn-prompt';
-import { isSetupRef } from './first-run';
+import { fenced, quoted } from '../prompt/turn-prompt';
+import { isSetupRef, QUESTION_REF_PREFIX } from './first-run';
 import { runWelcome, WELCOME_HEALTH_DAYS, welcomeBuild, type StageInput, type WelcomeStage } from './welcome';
 
 // What each source gives the welcome build: bounded reads, as pointers to the items, never their contents.
@@ -150,18 +150,46 @@ export const mailStage = (google: GoogleAccess) => async (): Promise<StageInput>
 };
 
 // The owner's own setup answers, as they are now: owner-grounded words only, never Waldo's reads or outside text, and nothing a
-// forget still holds. They are spots already, so the stage says only whether there are any. An owner who keeps health out of
-// memory gets neither their health picks nor a stated reading here.
-export const setupStage = (claims: ClaimStore, healthMemory: () => boolean) => async (): Promise<StageInput> => {
+// forget still holds. An owner who keeps health out of memory gets neither their health picks nor a stated reading here.
+// goal: the goal the owner gave at setup, kept as their quest, as one line; it is their own words too.
+const setupSaid = (claims: ClaimStore, healthMemory: () => boolean, goal: () => string | null) => {
   const health = healthMemory(), held = holdsIn(heldTopicsOf(claims));
   const said = [...claims.claims(), ...claims.claims('promoted')].filter((claim) => isSetupRef(claim.source_ref) && claim.origin === 'owner'
     && claim.verification_status === 'owner-grounded' && !held(claim.text) && (health || (claim.kind !== 'health' && !numericHealthIn(claim.text))));
-  if (!said.length) return settled('skipped');
+  const aim = goal(), aimed = aim !== null && !held(aim) && (health || !numericHealthIn(aim)) ? aim : null;
+  return { health, held, said, aimed };
+};
+const askedOf = (claim: Readonly<{ source_ref?: string | null }>, question: (id: string) => string | null) =>
+  claim.source_ref?.startsWith(QUESTION_REF_PREFIX) ? question(claim.source_ref.slice(QUESTION_REF_PREFIX.length)) : null;
+
+// The answers are spots already, so the stage says only whether there are any; the join pass after it reads them.
+// question: the text of the onboarding question an answer replied to, shown beside it as Waldo's question.
+export const setupStage = (claims: ClaimStore, healthMemory: () => boolean, goal: () => string | null = () => null, question: (id: string) => string | null = () => null) => async (): Promise<StageInput> => setupInput(claims, healthMemory, goal, question);
+const GOAL_POINTER = 'goal';
+export const setupInput = (claims: ClaimStore, healthMemory: () => boolean, goal: () => string | null = () => null, question: (id: string) => string | null = () => null): StageInput => {
+  const { health, said, aimed } = setupSaid(claims, healthMemory, goal);
+  if (!said.length && aimed === null) return settled('skipped');
+  // An answer to an onboarding question is shown with the question, which is Waldo's: the owner's claim holds only their words.
+  const shown = (claim: Readonly<{ text: string; source_ref?: string | null }>) => {
+    const asked = askedOf(claim, question);
+    return asked ? `${claim.text} (in reply to Waldo's question, not their words: "${asked}")` : claim.text;
+  };
   const pointer = (id: number) => `c${id}`;
   return {
-    kind: 'input', text: said.map((claim) => `[${pointer(claim.id)}] ${claim.text}`).join('\n'), sources: ['setup'],
-    pointers: new Set(said.map((claim) => pointer(claim.id))), ...(health ? {} : { noHealth: true }),
+    kind: 'input', text: [...(aimed === null ? [] : [`[${GOAL_POINTER}] ${aimed}`]), ...said.map((claim) => `[${pointer(claim.id)}] ${shown(claim)}`)].join('\n'), sources: ['setup'],
+    pointers: new Set([...(aimed === null ? [] : [GOAL_POINTER]), ...said.map((claim) => pointer(claim.id))]),
+    read: [...said.map((claim) => claim.id), ...(aimed === null ? [] : [textFingerprint(aimed)])],
+    ...(health ? {} : { noHealth: true }),
   };
+};
+
+// What the join pass reads beside the spots from setup: the owner's goal, which is a quest and not a spot, and for each answer
+// to an onboarding question, the question it answered, which is Waldo's words and never the owner's. Null when there is neither.
+export const setupJoinContext = (claims: ClaimStore, healthMemory: () => boolean, goal: () => string | null, question: (id: string) => string | null): string | null => {
+  const { held, said, aimed } = setupSaid(claims, healthMemory, goal);
+  const asked = said.flatMap((claim) => { const text = askedOf(claim, question); return text && !held(text) ? [`Spot ${claim.id} answers Waldo's setup question (Waldo's words, not the owner's): ${quoted(text)}`] : []; });
+  const lines = [...(aimed === null ? [] : [`The owner's goal from setup. ${fence(aimed)}`]), ...asked];
+  return lines.length ? lines.join('\n') : null;
 };
 
 // The public web reaches the gift only as look-up findings. In the first build this stage writes no node: it says whether
@@ -180,7 +208,7 @@ export const webStage = (findings: Pick<FindingStore, 'offered' | 'lookup' | 'pa
 export const WEB_FENCE = 'What the owner look-up found on the public web, outside text';
 
 // Whether a stage's source is there now, for a stage that settled skipped: a cheap check, no read of the source itself.
-export const welcomeSourceAvailable = (deps: Readonly<{ claims: ClaimStore; healthMemory(): boolean; healthRead: HealthReadBook; google: GoogleAccess; findings(): Pick<FindingStore, 'offered' | 'lookup'> }>) =>
+export const welcomeSourceAvailable = (deps: Readonly<{ claims: ClaimStore; healthMemory(): boolean; healthRead: HealthReadBook; google: GoogleAccess; findings(): Pick<FindingStore, 'offered' | 'lookup'>; goal?(): string | null; question?(id: string): string | null }>) =>
   async (stage: WelcomeStage): Promise<boolean> => {
     const accounts = async (wants: (account: Account) => boolean) => ((await deps.google.state?.()) ?? []).some((account) => wants(account) && account.error === null);
     switch (stage) {
@@ -188,7 +216,7 @@ export const welcomeSourceAvailable = (deps: Readonly<{ claims: ClaimStore; heal
       case 'calendar': return accounts((account) => account.calendar || account.tasks);
       case 'mail': return accounts((account) => account.mail);
       case 'web': { const findings = deps.findings(); return findings.offered() && findings.lookup() === 'granted'; }
-      case 'setup': return (await setupStage(deps.claims, deps.healthMemory)()).kind === 'input';
+      case 'setup': return (await setupStage(deps.claims, deps.healthMemory, deps.goal, deps.question)()).kind === 'input';
     }
   };
 
@@ -201,19 +229,32 @@ export const ownerWelcome = (deps: Readonly<{
   ask(stage: WelcomeStage, input: string, version?: 2): Promise<string>;
   join(): Promise<unknown>;
   v2?: Readonly<{ lookupOpen(): boolean }>;
+  // The goal the owner gave at setup, as one line, or null.
+  goal?(): string | null;
+  // The onboarding question an answer replied to, by its id.
+  question?(id: string): string | null;
 }>) => ({
   build: () => welcomeBuild(deps.sql, deps.now),
   // Something to do: a stage due, or a skipped stage to check for its source.
   wanted: () => { const build = welcomeBuild(deps.sql, deps.now); return build.due().length > 0 || build.reopenable().length > 0; },
+  // After a run: a skipped stage asked to be checked meanwhile. Each check stamps the stage, so this never asks twice in a row.
+  recheckDue: (): boolean => welcomeBuild(deps.sql, deps.now).reopenable().length > 0,
   // Health readings may have landed since an empty health stage: take it up once more, within a day of it settling.
   lateHealth: (): boolean => deps.transaction(() => welcomeBuild(deps.sql, deps.now).lateHealth(deps.v2 !== undefined)),
+  // Readings landed while the health stage sits skipped (the build began before health was connected): check for it next run.
+  healthArrived: (): boolean => deps.transaction(() => welcomeBuild(deps.sql, deps.now).recheck('health')),
   // The look-up under this grant ended: a web stage that settled without it reads the findings once (second build only).
   lateWeb: (grant: number): boolean => deps.v2 !== undefined && deps.transaction(() => welcomeBuild(deps.sql, deps.now).lateWeb(grant)),
   // A Google account was connected: calendar and mail read again once, within a day of settling (second build only).
   googleConnected: (): boolean => deps.v2 !== undefined && deps.transaction(() => welcomeBuild(deps.sql, deps.now).googleConnected()),
+  // The setup answers changed since the setup stage settled on them: it is taken up again, and the join after it reads them.
+  refine: (): boolean => {
+    const read = setupInput(deps.claims, deps.healthMemory, deps.goal, deps.question);
+    return deps.transaction(() => welcomeBuild(deps.sql, deps.now).refineSetup(read.kind === 'input' ? read.read ?? [] : []));
+  },
   run: () => runWelcome({
     build: welcomeBuild(deps.sql, deps.now), claims: deps.claims, now: deps.now, transaction: deps.transaction, ask: deps.ask, join: deps.join, available: welcomeSourceAvailable(deps),
-    read: { health: healthStage(deps.healthRead, deps.readZones, deps.timezone, deps.now, deps.healthMemory), calendar: calendarStage(deps.google, deps.now), mail: mailStage(deps.google), web: () => webStage(deps.findings(), deps.v2 !== undefined)(), setup: setupStage(deps.claims, deps.healthMemory) },
+    read: { health: healthStage(deps.healthRead, deps.readZones, deps.timezone, deps.now, deps.healthMemory), calendar: calendarStage(deps.google, deps.now), mail: mailStage(deps.google), web: () => webStage(deps.findings(), deps.v2 !== undefined)(), setup: setupStage(deps.claims, deps.healthMemory, deps.goal, deps.question) },
     ...(deps.v2 ? { v2: deps.v2 } : {}),
   }),
 });

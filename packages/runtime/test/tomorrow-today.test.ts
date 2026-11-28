@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cardExpiry, cardWindow, dayWindow } from '../src/channels/day-cards';
+import { cardWindow, dayWindow } from '../src/channels/day-cards';
 import { CAPACITY_LINES } from '../src/prompt/capacity';
 import { DAY_CARDS, dayCardPrompt, TOMORROW_TODAY_INSTRUCTION } from '../src/prompt/day-cards';
 
@@ -31,14 +31,12 @@ describe('the window a card reads', () => {
 });
 
 describe('the owner\'s day around a clock change', () => {
-  it('is whole on London\'s 25-hour and 23-hour days, so a card waiting that day expires at its real end', () => {
+  it('is whole on London\'s 25-hour and 23-hour days', () => {
     expect(dayWindow(Date.parse('2026-10-25T10:00:00Z'), 'Europe/London')).toEqual({ from: Date.parse('2026-10-24T23:00:00Z'), to: Date.parse('2026-10-26T00:00:00Z') });
     expect(dayWindow(Date.parse('2027-03-28T10:00:00Z'), 'Europe/London')).toEqual({ from: Date.parse('2027-03-28T00:00:00Z'), to: Date.parse('2027-03-28T23:00:00Z') });
-    expect(cardExpiry(Date.parse('2026-10-25T20:30:00Z'), 'Europe/London', [])).toBe(Date.parse('2026-10-26T00:00:00Z'));
   });
-  it('ends at the jump where the clock skips midnight, so a card made late that evening is not already expired', () => {
+  it('ends at the jump where the clock skips midnight', () => {
     expect(dayWindow(Date.parse('2026-09-06T03:30:00Z'), 'America/Santiago').to).toBe(Date.parse('2026-09-06T04:00:00Z'));
-    expect(cardExpiry(Date.parse('2026-03-08T04:30:00Z'), 'America/Havana', [])).toBe(Date.parse('2026-03-08T05:00:00Z'));
   });
 });
 
