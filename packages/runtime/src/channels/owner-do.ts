@@ -5191,8 +5191,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const healthLogLines = async () => healthSection(await healthLogs.recent(10), clock.timezone);
     // Only the server's name: its questions are server text, so they reach the model through search_mcp_tools, stamped external.
     const mcpWaiting = () => { const servers = this.mcp().waitingServers(); return servers.length ? `MCP questions\n- ${servers.join(', ')} asked the owner a question before running a tool; search_mcp_tools shows it.` : ''; };
-    const promptLedger = async () =>
-      [loopsSection(loops, clock.timezone, Date.now()), desk.ledger(book.list()), mcpWaiting(), unreadableRemindersLine(book.unreadable()), proactivityLine(loops.proactivity(), this.env.PROACTIVE_GATE === '1'), schedulePreferencesLine(schedPrefs.all(), schedPrefs.healthMode())]
+    // The general wake reads the ledger without the proactivity line: it neither reads nor branches on the owner's volume.
+    const promptLedger = async (proactivity = true) =>
+      [loopsSection(loops, clock.timezone, Date.now()), desk.ledger(book.list()), mcpWaiting(), unreadableRemindersLine(book.unreadable()), proactivity ? proactivityLine(loops.proactivity(), this.env.PROACTIVE_GATE === '1') : '', schedulePreferencesLine(schedPrefs.all(), schedPrefs.healthMode())]
         .filter((section) => section !== '')
         .join('\n\n');
     const ledger = async () => [await promptLedger(), await healthLogLines()].filter((section) => section !== '').join('\n\n');
@@ -6662,16 +6663,17 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }) : null;
     // GENERAL_WAKE (with the look on): the look's tick runs Waldo's general wake in the brain (channels/wake.ts) instead of a
     // reader job. It reads what changed, the rest of today, what is open and what was said today; the body comes as every run's
-    // does. The owner's limits are checked when it decides to speak, never before it looks. Off, the look runs as before.
+    // does. It keeps no daily count and never reads the owner's volume: a message waits only for the owner's no to follow-ups
+    // or their quiet hours, checked when it decides to speak, never before it looks. Off, the look runs as before.
     const runGeneralWake = interventions && this.env.GENERAL_WAKE === '1' ? generalWake({
-      book: interventions.book, limits: interventions.limits, now: () => Date.now(), localNow: () => localIso(Date.now(), clock.timezone),
-      consent: reachesOut, quiet, closed: interventions.closed, transaction: work => storage.transactionSync(work),
+      now: () => Date.now(), localNow: () => localIso(Date.now(), clock.timezone),
+      consent: () => loops.proactivity().followups !== false, quiet, transaction: work => storage.transactionSync(work),
       context: async () => {
         const now = Date.now(), client = await google.client(), midnight = localToEpoch(`${localIso(now, clock.timezone).slice(0, 10)}T00:00`, clock.timezone);
         return {
           changes: updates.unfolded(clock.timezone, now),
           calendar: await readCalendar({ from: now, to: dayWindow(now, clock.timezone).to }, clock.timezone, client, !client && google.configured()),
-          cards: dayCards(), today: transcript(episodes.since(midnight, 30_000), clock.timezone), ledger: await promptLedger(),
+          cards: dayCards(), today: transcript(episodes.since(midnight, 30_000), clock.timezone), ledger: await promptLedger(false),
           goals: claimStore(storage.sql).claims().filter(claim => claim.kind === 'goal').slice(-12).map(claim => `- ${claim.text}`).join('\n'),
           style: channelStyle(PROACTIVE_READS[channel](storage.kv, proactiveBothDefault(this.env))), shaping: await dayShaping('wake'),
         };

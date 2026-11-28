@@ -70,7 +70,7 @@ describe('the general wake reaches what is connected and keeps going', () => {
     expect(requests.at(-1)!.tool_turns!.find((turn) => turn.call.name === FIND_TOOLS)!.output).not.toContain('"name":"read_drive"');
     expect(calls).toEqual(['search_communication']);
     expect(reply).toBe('Ana asked for the deck by Thursday.');
-    expect(ends).toEqual([['intervention-review:drive', { reason: 'send', why: 'The deck thread has a new ask.', tools: ['search_communication'] }]]);
+    expect(ends).toEqual([['intervention-review:drive', { reason: 'send', why: 'The deck thread has a new ask.', tools: ['search_communication'], spend: expect.objectContaining({ calls: 3, input: 3, output: 3 }) }]]);
   });
 
   it('a tool that fails is one result: the run reads on and ends as it chooses, and only what succeeded is reported', async () => {
@@ -81,6 +81,6 @@ describe('the general wake reaches what is connected and keeps going', () => {
     ], ['query_calendar']);
     await run('intervention-review:fails');
     expect(calls).toEqual(['query_calendar', 'get_health']);
-    expect(ends).toEqual([['intervention-review:fails', { reason: 'nothing_to_send', why: 'Calendar unreadable just now; the body reads steady and nothing else moved.', tools: ['get_health'] }]]);
+    expect(ends).toEqual([['intervention-review:fails', { reason: 'nothing_to_send', why: 'Calendar unreadable just now; the body reads steady and nothing else moved.', tools: ['get_health'], spend: expect.objectContaining({ calls: 3 }) }]]);
   });
 });

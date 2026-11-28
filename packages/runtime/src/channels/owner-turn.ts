@@ -39,7 +39,7 @@ import { COMPACTION, COMPACTION_INSTRUCTION, chainCarriesOutside, compactedHisto
 import { ownerReadings, readingBeyondOwner, sanitise } from '../scribe/sanitiser';
 import { lightRoutePolicy, MODEL_UNREACHABLE_REPLY, ownerModelAccess, ownerModelGateway, ownerModels, ownerRoutePolicy, strongRoutePolicy, type OwnerModelAccess } from '../llm/owner-routes';
 import { MODEL_CALL_TIMEOUT_MS, OWNER_TURN_CALL_TIMEOUT_MS, toolRoundsFor, turnDeadlineFor, withCallDeadline } from '../llm/time-budget';
-import { usageAnomalous } from '../llm/pricing';
+import { modelCost, usageAnomalous } from '../llm/pricing';
 import { InMemoryCircuitBreaker, ModelUnavailableError, modelDownReason, observedBreaker, RuntimeLLMProvider, TurnSanitiseMemo, type LLMGatewayAdapter, type RouteSpendState } from '../llm/provider';
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine, voiceVersion } from '../prompt/messaging-behavior';
 import { assembleTurnPrompt, fenced, TURN_CONTEXT_HEADER, type TurnPrompt } from '../prompt/turn-prompt';
@@ -187,7 +187,10 @@ export type OwnerContextIntegration = Readonly<{ skills?: OwnerSkillCapability; 
   nowFrame?: (trace: string) => Promise<readonly string[]>;
   // How a Waldo-started run ended, once per return of its loop: the end it chose and the tools that succeeded, by name only.
   runEnded?: (trace: string, end: RunEndReport) => void }>;
-export type RunEndReport = Readonly<{ reason: string; why?: string; tools: readonly string[] }>;
+// What a run's model calls cost: the last model that answered, tokens summed over its calls, and dollars where every call's
+// model has a price (null when one has none).
+export type RunSpend = Readonly<{ calls: number; model: string; input: number; cached: number; output: number; usd: number | null }>;
+export type RunEndReport = Readonly<{ reason: string; why?: string; tools: readonly string[]; spend?: RunSpend }>;
 // This owner's spend so far this month and the ceiling it is held to, read once when a turn starts.
 export type OwnerSpend = Readonly<{ spentUsd: number; ceilingUsd: number }>;
 type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; finishedTasks?: (since: number) => string; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; loopHasPassed?: (id: string) => boolean; memoryChat?: (chain: string, principal: string) => string; promptOwnText?: (traceId: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; turnCharts?: (turnId: string) => readonly ConversationChart[]; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; jobOutcomeRows?: boolean; timelineSeed?: TimelineSeed; machineTime?: OwnerContextIntegration['machineTime']; leanScheduled?: boolean; promotedTools?: OwnerContextIntegration['promotedTools']; noteLoaded?: OwnerContextIntegration['noteLoaded']; waldoSent?: OwnerContextIntegration['waldoSent']; nowFrame?: OwnerContextIntegration['nowFrame']; modelSetWakes?: boolean; runEnded?: OwnerContextIntegration['runEnded'] }>;
@@ -308,6 +311,15 @@ export const createOwnerResponder = (
   const CANARIES = newSessionCanaryTokens();
   const cacheKey = `waldo:${ownerId}`;
   let traceId = '';
+  // A run's reply calls, summed for its run-end report and taken when the run ends; capped so traces never read cannot pile up.
+  const runSpend = new Map<string, RunSpend>();
+  const addRunSpend = (trace: string, usage: Parameters<typeof modelCost>[0]) => {
+    const was = runSpend.get(trace), cost = modelCost(usage);
+    runSpend.delete(trace);
+    runSpend.set(trace, { calls: (was?.calls ?? 0) + 1, model: usage.model, input: (was?.input ?? 0) + usage.input, cached: (was?.cached ?? 0) + usage.cached,
+      output: (was?.output ?? 0) + usage.output, usd: cost === null || (was !== undefined && was.usd === null) ? null : (was?.usd ?? 0) + cost.total });
+    if (runSpend.size > 64) runSpend.delete(runSpend.keys().next().value!);
+  };
   // Read once per turn: the provider's prompt cache matches an unchanged prefix, and a clock that moved each minute
   // re-billed the whole prompt on the next call. get_context gives the model the exact time mid-turn.
   let turnClockLine: string | undefined;
@@ -535,6 +547,9 @@ export const createOwnerResponder = (
     });
     // A failed attempt the provider still billed is spend of the model that billed it; the answering model's own usage is on the line above.
     for (const entry of billedAttemptEntries(result.attempts, { trace, hop: `llm_${light ? 'reply_light' : purpose}_attempt`, ...costKind })) log(entry);
+    if (result.ok && !floor && purpose === 'reply') addRunSpend(trace, { model: result.usage.model, input: result.usage.input_tokens, output: result.usage.output_tokens, cached: result.usage.cache_read_input_tokens,
+      ...(result.usage.cache_write_input_tokens ? { cache_write: result.usage.cache_write_input_tokens } : {}), ...(result.usage.cache_write_1h_input_tokens ? { cache_write_1h: result.usage.cache_write_1h_input_tokens } : {}),
+      web_searches: response!.output_items?.filter((item) => item.type === 'web_search_call').length ?? 0 });
     if (result.ok && !floor && usageAnomalous({ input: result.usage.input_tokens, cached: result.usage.cache_read_input_tokens, ...(result.usage.cache_write_input_tokens ? { cache_write: result.usage.cache_write_input_tokens } : {}) })) {
       log({ trace, hop: 'usage_anomaly', ms: 0, ok: false, code: 'cache_exceeds_input', ...(served ? { provider: served.provider } : {}) });
     }
@@ -1016,7 +1031,9 @@ export const createOwnerResponder = (
         // had nothing to say.
         onRunEnd: (end) => {
           log({ trace, hop: 'run_end', ms: 0, ok: end.reason !== 'no_reply', code: end.reason, ...(end.why ? { detail: end.why } : {}) });
-          privateOwner?.runEnded?.(trace, { reason: end.reason, ...(end.why ? { why: end.why } : {}), tools: [...ranTools] });
+          const spent = runSpend.get(trace);
+          runSpend.delete(trace);
+          privateOwner?.runEnded?.(trace, { reason: end.reason, ...(end.why ? { why: end.why } : {}), tools: [...ranTools], ...(spent ? { spend: spent } : {}) });
         },
         ...(offerConnect ? { onConnect: offerConnect } : {}),
       });

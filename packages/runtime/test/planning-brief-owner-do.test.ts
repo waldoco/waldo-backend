@@ -462,6 +462,7 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
   // GENERAL_WAKE: the tick runs Waldo's general wake in the brain instead of a reader job, and the owner's limits wait for
   // the send. Every run leaves one outcome row with the reason it gave.
   const wakeRows = (state: DurableObjectState) => state.storage.sql.exec<{ outcome: string; reason: string | null; tools: string }>('SELECT outcome, reason, tools FROM wake_outcomes').toArray();
+  const wakeCost = (state: DurableObjectState) => state.storage.sql.exec<{ model: string | null; calls: number | null; tokens_in: number | null; tokens_out: number | null }>('SELECT model, calls, tokens_in, tokens_out FROM wake_outcomes').toArray();
   it('with the general wake on, the tick starts no reader job: one run in the brain, one outcome row with its reason', async () => {
     await owned('general-wake-tick', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner, hops }) => {
       model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Nothing moved since the Brief; the 15:00 still fits.' } }] }];
@@ -470,6 +471,8 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
       expect(model.ownerRequests.length).toBeGreaterThan(0);
       expect(model.ownerRequests[0]).toContain("Waldo's own wake");
       expect(wakeRows(state)).toEqual([{ outcome: 'nothing', reason: 'Nothing moved since the Brief; the 15:00 still fits.', tools: '[]' }]);
+      // What the run cost is on its row, so wakes can be measured against the owner's cost target.
+      expect(wakeCost(state)).toEqual([{ model: expect.any(String), calls: 1, tokens_in: 1, tokens_out: 1 }]);
       expect(hops()).toContain('wake');
     });
   });

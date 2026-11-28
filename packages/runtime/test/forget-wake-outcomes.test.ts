@@ -11,7 +11,7 @@ describe('a forget reaches the wake outcome rows', () => {
   it('the outcome table keeps the newest rows only, and a forget clears a reason that carries the forgotten text', async () => {
     await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('wake-outcomes-book')), async (_instance, state) => {
       const book = wakeOutcomeBook(state.storage.sql);
-      for (let index = 0; index < WAKE_ROWS_KEPT + 5; index += 1) book.record({ id: `w${index}`, at: NOW + index, kind: 'look', ref: 'cadence', outcome: 'nothing', reason: index === WAKE_ROWS_KEPT + 4 ? 'Waiting on Priya Marsh to reply about the lease.' : 'Nothing new.', tools: [], outside: true });
+      for (let index = 0; index < WAKE_ROWS_KEPT + 5; index += 1) book.record({ id: `w${index}`, at: NOW + index, kind: 'look', ref: 'cadence', outcome: 'nothing', reason: index === WAKE_ROWS_KEPT + 4 ? 'Waiting on Priya Marsh to reply about the lease.' : 'Nothing new.', tools: [], outside: true, spend: null });
       expect(state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM wake_outcomes').one().n).toBe(WAKE_ROWS_KEPT);
       expect(forgetWakeReasons(state.storage.sql, ['priya marsh'])).toBe(0);
       expect(book.recent(1)[0]).toMatchObject({ id: `w${WAKE_ROWS_KEPT + 4}`, reason: null });
