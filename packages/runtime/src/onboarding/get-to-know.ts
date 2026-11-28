@@ -4,11 +4,12 @@ import { fenced } from '../prompt/turn-prompt';
 import { numericHealthIn } from '../scribe/sanitiser';
 import type { JobBook } from '../tasks/jobs';
 import { enqueueMachine, type MachineEnqueued, type MachineHandler } from '../tasks/machine';
-import { admitWelcomeNodes, constellationSoFar, type WelcomeBuild } from './welcome';
+import { admitWelcomeSpots, WELCOME_HEALTH_NOT_KEPT, type WelcomeBuild } from './welcome';
 
 // The first-week read: one reader job on a worker, in the agent loop every task runs in, with the machine reader's tools (the
 // owner's mail threads, calendar, Drive and contacts; no web, no memory, no send). It hands back findings; the brain's welcome
-// call turns them into Waldo's reads in the constellation, with the people they name, as the welcome build's sources do.
+// call turns them into spots, Waldo's reads with the people they name, as the welcome build's sources do, and the join pass
+// then reads them with every other spot.
 export const GET_TO_KNOW_DAYS = 7;
 // The worker's Google reads share the owner's lane with the first reply, so it waits until the tour is over.
 export const GET_TO_KNOW_DELAY_MS = 5 * 60_000;
@@ -52,15 +53,17 @@ export const startGetToKnow = (deps: GetToKnowDeps, googleConnected: boolean): G
   return made;
 };
 
-// A finding's source a node may be filed under; Drive files and contacts have no node source yet, so they are context only.
+// A finding's source a spot may be filed under; Drive files and contacts have no node source yet, so they are context only.
 const NODE_SOURCES: Readonly<Record<string, AppNodeSourceV13>> = { gmail: 'gmail', calendar: 'calendar', tasks: 'tasks' };
-const HEADER = 'Source: what Waldo read in the owner\'s first week across their mail threads, calendar, Drive files and contacts, as findings each naming the item it rests on. Pointers are the ids in brackets; a Drive file or contact is context, not something a node can rest on.';
+const HEADER = 'Source: what Waldo read in the owner\'s first week across their mail threads, calendar, Drive files and contacts, as findings each naming the item it rests on. Pointers are the ids in brackets; a Drive file or contact is context, not something a spot can rest on.';
 const FENCE = 'What Waldo read in the owner\'s first week, outside text';
 
 export type GetToKnowApplierDeps = Readonly<{
-  claims: ClaimStore; build: WelcomeBuild; now(): number; transaction<T>(work: () => T): T; healthMemory(): boolean;
+  claims: ClaimStore; now(): number; transaction<T>(work: () => T): T; healthMemory(): boolean;
   // The welcome build's structured call (second build's instruction and schema) over this input; its text is never stored.
   ask(text: string): Promise<string>;
+  // The join pass, once the spots are in.
+  join?(): Promise<unknown>;
 }>;
 
 export const getToKnowApplier = (deps: GetToKnowApplierDeps): MachineHandler => ({
@@ -77,12 +80,14 @@ export const getToKnowApplier = (deps: GetToKnowApplierDeps): MachineHandler => 
     }
     if (!pointers.size) { deps.transaction(() => io.settle()); return 'skipped'; }
     const input = { kind: 'input' as const, text: fenced(FENCE, lines.join('\n')).trim(), sources: [...sources], pointers, ...(deps.healthMemory() ? {} : { noHealth: true }) };
-    const raw = await deps.ask([`${HEADER}\nSources to name (a node's source is exactly one of these): ${input.sources.join(', ')}`, constellationSoFar(deps.claims), input.text].join('\n\n'));
+    const raw = await deps.ask([`${HEADER}\nSources to name (a spot's source is exactly one of these): ${input.sources.join(', ')}`, input.noHealth ? WELCOME_HEALTH_NOT_KEPT : null, input.text].filter(Boolean).join('\n\n'));
     await io.current();
-    deps.transaction(() => {
-      admitWelcomeNodes(deps.claims, deps.build, 'mail', input, raw, new Date(deps.now()).toISOString(), true);
+    const written = deps.transaction(() => {
+      const added = admitWelcomeSpots(deps.claims, 'mail', input, raw, new Date(deps.now()).toISOString(), true);
       io.settle();
+      return added;
     });
+    if (written) await deps.join?.().catch(() => undefined);
     return 'skipped';
   },
 });

@@ -3,7 +3,6 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { TaskResult } from '@waldo/contracts';
 import { claimStore } from '../src/memory/claims';
-import { nodeSources } from '../src/memory/node-sources';
 import { GET_TO_KNOW_DAYS, GET_TO_KNOW_DELAY_MS, getToKnowApplier, startGetToKnow } from '../src/onboarding/get-to-know';
 import { welcomeBuild } from '../src/onboarding/welcome';
 import { jobBook, taskBrief, type JobRow } from '../src/tasks/jobs';
@@ -57,16 +56,15 @@ const row = (id = 'job-1'): JobRow => ({ id, origin: 'machine:get_to_know_you', 
 const result = (findings: TaskResult['findings']): TaskResult => ({ status: 'done', summary: 'Read the first week.', findings, proposals: [], left: [] });
 
 describe('the first-week get-to-know read: what it writes', () => {
-  it('turns the worker\'s findings into Waldo\'s reads in the constellation, with the people they name, in one model call', async () => {
+  it('turns the worker\'s findings into Waldo\'s spots, with the people they name, in one model call, then runs the join once', async () => {
     await withSql(async (sql, transaction) => {
-      const claims = claimStore(sql, transaction), build = welcomeBuild(sql, () => T0);
-      build.start();
+      const claims = claimStore(sql, transaction);
       const asked: string[] = [];
-      let settled = 0;
-      const apply = getToKnowApplier({ claims, build, now: () => T0, transaction, healthMemory: () => true,
-        ask: async (text) => { asked.push(text); return JSON.stringify({ nodes: [
-          { domain: 'goals', label: 'Training for a spring marathon', summary: 'You are building toward a spring marathon.', observation: 'Coach thread plans the build to race day.', source: 'gmail', pointers: ['thr_9'], extends: null, people: [{ name: 'Maya Coach', address: 'maya@run.example', relation: 'running coach' }], links_to: [] },
-          { domain: 'work', label: 'Weekly sync with Priya', summary: 'You meet Priya every Tuesday.', observation: 'A Tuesday sync with Priya repeats.', source: 'calendar', pointers: ['evt_2'], extends: null, people: [{ name: 'Priya Shah', address: 'priya@studio.example', relation: null }], links_to: [] },
+      let settled = 0, joined = 0;
+      const apply = getToKnowApplier({ claims, now: () => T0, transaction, healthMemory: () => true, join: async () => { joined += 1; },
+        ask: async (text) => { asked.push(text); return JSON.stringify({ spots: [
+          { area: 'goals', text: 'A coach thread plans the build to a spring marathon', source: 'gmail', pointers: ['thr_9'], people: [{ name: 'Maya Coach', address: 'maya@run.example', relation: 'running coach' }] },
+          { area: 'work', text: 'A Tuesday design sync with Priya repeats weekly', source: 'calendar', pointers: ['evt_2'], people: [{ name: 'Priya Shah', address: 'priya@studio.example', relation: null }] },
         ] }); } });
       const outcome = await apply.apply(row(), result([
         { text: 'Maya Coach <maya@run.example> sends a training plan building to a spring marathon.', source_ref: 'gmail:thr_9' },
@@ -75,37 +73,40 @@ describe('the first-week get-to-know read: what it writes', () => {
         { text: 'A doc titled "2027 plan".', source_ref: 'drive:file_1' },
       ]), { trace: 'task:job-1', current: async () => undefined, settle: () => { settled += 1; } });
       expect(outcome).toBe('skipped');
-      expect(settled).toBe(1);
+      expect([settled, joined]).toEqual([1, 1]);
       expect(asked).toHaveLength(1);
-      // A reading in a finding never reaches the model call or memory; a file is context, not something a node can cite.
+      // A reading in a finding never reaches the model call or memory; a file is context, not something a spot can cite.
       expect(asked[0]).not.toMatch(/48|thr_10/);
       expect(asked[0]).toContain('[file_1]');
-      expect(asked[0]).toMatch(/Sources to name \(a node's source is exactly one of these\): gmail, calendar/);
-      const nodes = claims.nodes().filter((node) => node.status === 'active');
-      expect(nodes.map((node) => node.label)).toEqual(['Training for a spring marathon', 'Weekly sync with Priya']);
-      expect(nodes.map((node) => nodeSources(claims.allClaims(), node))).toEqual([['gmail'], ['calendar']]);
+      expect(asked[0]).toMatch(/Sources to name \(a spot's source is exactly one of these\): gmail, calendar/);
+      // The read writes spots only; constellations are the join's.
+      expect(claims.nodes()).toEqual([]);
+      const spots = claims.claims();
+      expect(spots.map((claim) => [claim.kind, claim.source_ref]).sort()).toEqual([['observation', 'welcome:calendar:evt_2'], ['observation', 'welcome:gmail:thr_9']]);
       expect(claims.people.all().map((person) => person.name).sort()).toEqual(['Maya Coach', 'Priya Shah']);
       expect(claims.allClaims().every((claim) => claim.origin === 'untrusted')).toBe(true);
     });
   });
 
-  it('settles without a model call when the worker found nothing it could cite', async () => {
+  it('settles without a model call or a join when the worker found nothing it could cite', async () => {
     await withSql(async (sql, transaction) => {
-      const claims = claimStore(sql, transaction), build = welcomeBuild(sql, () => T0);
-      let asked = 0, settled = 0;
-      const apply = getToKnowApplier({ claims, build, now: () => T0, transaction, healthMemory: () => true, ask: async () => { asked += 1; return '{"nodes":[]}'; } });
+      const claims = claimStore(sql, transaction);
+      let asked = 0, settled = 0, joined = 0;
+      const apply = getToKnowApplier({ claims, now: () => T0, transaction, healthMemory: () => true, join: async () => { joined += 1; }, ask: async () => { asked += 1; return '{"spots":[]}'; } });
       await apply.apply(row(), result([{ text: 'A doc titled "notes".', source_ref: 'drive:file_1' }, { text: 'No source given.' }]), { trace: 't', current: async () => undefined, settle: () => { settled += 1; } });
-      expect([asked, settled]).toEqual([0, 1]);
+      expect([asked, settled, joined]).toEqual([0, 1, 0]);
     });
   });
 
-  it('an owner who keeps health out of memory gets no health node from it', async () => {
+  it('an owner who keeps health out of memory gets no body or mind spot from it, and is told so', async () => {
     await withSql(async (sql, transaction) => {
-      const claims = claimStore(sql, transaction), build = welcomeBuild(sql, () => T0);
-      const apply = getToKnowApplier({ claims, build, now: () => T0, transaction, healthMemory: () => false,
-        ask: async () => JSON.stringify({ nodes: [{ domain: 'health', label: 'Sleeps late', summary: 'You sleep late.', observation: 'Late replies at night.', source: 'gmail', pointers: ['thr_1'], extends: null, people: [], links_to: [] }] }) });
+      const claims = claimStore(sql, transaction);
+      const asked: string[] = [];
+      const apply = getToKnowApplier({ claims, now: () => T0, transaction, healthMemory: () => false,
+        ask: async (text) => { asked.push(text); return JSON.stringify({ spots: [{ area: 'body', text: 'Replies late at night, so sleeps late', source: 'gmail', pointers: ['thr_1'], people: [] }, { area: 'mind', text: 'Sounds stressed in late replies', source: 'gmail', pointers: ['thr_1'], people: [] }] }); } });
       await apply.apply(row(), result([{ text: 'Replies late at night.', source_ref: 'gmail:thr_1' }]), { trace: 't', current: async () => undefined, settle: () => undefined });
-      expect(claims.nodes()).toEqual([]);
+      expect(asked[0]).toContain('keeps health out of memory');
+      expect(claims.claims()).toEqual([]);
     });
   });
 });

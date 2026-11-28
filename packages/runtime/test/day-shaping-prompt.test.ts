@@ -105,4 +105,10 @@ describe('where it reaches the model', () => {
     expect(prompt).toContain('Phone calendar: not shared.');
     expect(interventionPrompt('2026-11-09T14:40', { goals: '', cards: '', limits: '', style: '' })).not.toContain(FREE_WINDOW_INSTRUCTION);
   });
+  it('the general wake reads the window lines without "Offer, never take", since its own order decides when to act; every other run keeps it', () => {
+    const wake = dayShapingContext({ coverage: null, offers: true, protocols: false, wake: true });
+    expect(wake).not.toContain('Offer, never take');
+    expect(wake).toContain('propose_calendar_change with action create');
+    expect(dayShapingContext({ coverage: null, offers: true, protocols: false })).toContain('Offer, never take');
+  });
 });

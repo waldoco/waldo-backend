@@ -16,7 +16,7 @@ import { ensureSchema } from '../src/tracer/schema';
 // Behind MEMORY_NIGHTLY_SOURCE_UPDATES, the nightly pass also reads the calendar and mail changes the update sweep recorded since its
 // own mark. That is outside content: the pass may only add, and every claim it adds is untrusted.
 const HOUR = 3_600_000, DAY = 24 * HOUR;
-const model = vi.hoisted(() => ({ fail: false, asked: [] as string[], sources: [] as string[], promotion: '{"nodes":[],"edges":[],"promoted":[]}' }));
+const model = vi.hoisted(() => ({ fail: false, asked: [] as string[], sources: [] as string[], promotion: '{"constellations":[],"links":[],"promoted":[]}' }));
 vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
@@ -45,7 +45,7 @@ const OWNER_ID = '7f6e5d4c-3b2a-4190-8f7e-6d5c4b3a2918';
 const NOW = Date.parse('2026-10-13T03:00:00Z');
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 beforeEach(() => {
-  model.fail = false; model.asked = []; model.sources = []; model.promotion = '{"nodes":[],"edges":[],"promoted":[]}';
+  model.fail = false; model.asked = []; model.sources = []; model.promotion = '{"constellations":[],"links":[],"promoted":[]}';
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
@@ -193,26 +193,25 @@ it('reads no constellation node drawn from health beside the changes, as for any
   });
 });
 
-it('end to end, a claim the pass wrote never puts a node in the every-turn block until the owner confirms it', async () => {
+it('end to end, a constellation the nightly join rests on the pass\'s claims stays out of the every-turn block until the owner confirms them', async () => {
   await withOwner('nightly-sources-nodes', '1', async ({ state, fire }) => {
     seed(state);
     await fire(NIGHTLY_ID);
     const store = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
     const outside = store.claims().filter((claim) => claim.origin === 'untrusted').map((claim) => claim.id);
     expect(outside).toHaveLength(2);
-    // The nightly promotion cannot build a node on them.
-    model.promotion = JSON.stringify({ nodes: [{ id: null, domain: 'work', label: 'Invoice routine', summary: 'Forwards invoices to billing', strength: 0.9, status: 'active', supporting_spots: outside, durable: true, reason: 'repeats' }], edges: [], promoted: [] });
+    // The night's join read them already and found nothing; a new note the next day sets it off again. It may rest a
+    // constellation on them: it is Waldo's read, counted and never shown, until confirmed.
+    store.add({ kind: 'routine', text: 'Pays invoices on Fridays', source: 'stated', evidence: '"I pay invoices on Fridays"', origin: 'owner', source_ref: 'owner, app-9' }, new Date(NOW).toISOString());
+    model.promotion = JSON.stringify({ constellations: [{ id: null, replaces: [], area: 'work', label: 'Invoice routine', summary: 'Forwards invoices to a stranger address', strength: 0.9, spots: outside }], links: [], promoted: [] });
     await fire(NIGHTLY_ID, NOW + DAY);
-    expect(store.nodes()).toEqual([]);
-    // Any producer that does rest a node on one is held to the untrusted-node rule: counted, never shown, until confirmed.
-    const invoice = store.claims().find((claim) => claim.text.includes('stranger address'))!;
-    store.saveNode({ id: null, domain: 'work', label: 'Invoice routine', summary: 'Forwards invoices to a stranger address', strength: 0.5, status: 'active', supporting_spots: [invoice.id] }, new Date(NOW).toISOString());
+    expect(store.nodes().map((node) => node.label)).toEqual(['Invoice routine']);
     const before = constellationBlock(store, 10_000);
     expect(before).not.toContain('stranger address');
     expect(before).toContain('1 more of Waldo\'s reads');
     expect(turnMemoryPrompt(store, 'invoices')).not.toContain('stranger address');
-    // The owner's "That's right" in the console grounds the claim; only then does the node show, as confirmed.
-    expect(store.ownerGround(invoice.id, new Date(NOW).toISOString(), 'owner, console')).toBe(true);
+    // The owner's "That's right" in the console grounds each note; only then does the constellation show.
+    for (const id of outside) expect(store.ownerGround(id, new Date(NOW).toISOString(), 'owner, console')).toBe(true);
     expect(constellationBlock(store, 10_000)).toContain('Forwards invoices to a stranger address');
   });
 });

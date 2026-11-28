@@ -8,7 +8,7 @@ const seen = vi.hoisted(() => ({ inputs: [] as string[] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
   const input = JSON.stringify(body);
   seen.inputs.push(input);
-  const output_text = input.includes('"name":"promotion"') ? '{"nodes":[],"edges":[],"promoted":[]}'
+  const output_text = input.includes('"name":"promotion"') ? '{"constellations":[],"links":[],"promoted":[]}'
     : '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null,"pin":[],"unpin":[]}';
   return { id: 'fixture', output_text, output: [], usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
 } }; } }));

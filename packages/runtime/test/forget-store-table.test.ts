@@ -17,6 +17,7 @@ const TEXT_JSON = 'text-bearing JSON or free text; no purge wired, contents not 
 const TABLES: Record<string, Row> = {
   // Memory and derived stores
   reminder_notes: purged('memory-forget-do-provider.test.ts'),
+  wake_outcomes: purged('forget-wake-outcomes.test.ts'),
   reminder_outside: exempt('a reminder id, kept while that reminder\'s note was written after outside text; no owner text'),
   responsibility_outside: exempt('a responsibility id, kept once its text was written after outside text or holds a worker\'s report; no owner text'),
   claims: purged('forget-coverage.test.ts'), episodes: purged('forget-coverage.test.ts'),
@@ -33,6 +34,7 @@ const TABLES: Record<string, Row> = {
   model_auth_incidents: exempt('a provider name and the time its key was first refused; no owner text'),
   claim_recall_ready: exempt('claim ids'),
   claim_rests_on: exempt('claim ids only: a merged or rewritten note and the notes it replaced; a row goes when either claim is deleted'),
+  constellation_dismissals: exempt('claim ids only: the spots a constellation the owner forgot or corrected rested on, and a time; never its words'),
   node_statement_backfill: exempt('an empty marker that the one-time node statement backfill ran'),
   claim_vectors: purged('forget-semantic-recall.test.ts'),
   owner_findings: purged('forget-owner-findings.test.ts'),
