@@ -103,7 +103,7 @@ type WakeOutcome = 'spoke' | 'asked' | 'followed_up' | 'noted' | 'carded' | 'not
 - **Reviews are a baseline, not a limit** (owner ruling). The wake's regular look and, later, the standing reviews come round on their own. A wake that wants another look sooner, or at a set minute, leaves itself a follow-up (`open_loop`, #2234), which wakes it then. No fixed count of reviews is kept in code.
 - **Authority comes from `asked`; the mark from `shown` and the reads (#2238).** `owner` is an owner reminder recorded with the owner's ask (#2239). `standing` is a standing order, `confirm_first` held. `waldo` is everything else: changes go on the owner's card and egress is fenced.
 - **One model** (owner ruling: "stick to one model", because switching models loses the per-owner prompt cache). Every wake runs on the chat model. The role stays configuration (`WAKE_MODEL_LOOK`, default `plans`: the chat model at planning effort), not a model name in code. No cheaper model first.
-- **Cost.** The owner set $4.50 per owner as the limit for now. Whether that is a target or a hard stop is open. Until he answers, each wake's cost goes on its row so it can be measured, and no new stop is added under the existing $50 spend ceiling.
+- **Cost** (owner ruling): **$15 a person a month is the target to measure against. The existing $50 spend ceiling is the hard stop.** The earlier $4.50 is withdrawn. Each wake's cost goes on its row, and a running total per owner month is logged with each wake. The admin console's spend section has the owner's whole model spend. No stop is added under $50.
 
 ## Build order, each test-first from a real miss
 
@@ -146,7 +146,7 @@ PR 1 stacks on #2234 only. It takes none of #2235, #2238 or #2239, so a no on an
 ## Falsifiers
 
 - If owners who switch the wake on start muting Waldo or turning follow-ups off, the model is reaching out more than they want without a count; measure unasked messages a day per owner from the outbox, the week before and after.
-- If the cost per wake on its rows puts the baseline above the owner's $4.50, the cadence, the starting context or the cache order needs work before more wakes are added.
+- If the month's wake total on staging puts the baseline near or above $15 a person, the cadence, the starting context or the cache order needs work before more wakes are added.
 - If any `asked: 'waldo'` wake makes a change without a card, the authority split is wrong; the registry-wide test should catch it first.
 - If wakes on staging still end in `nothing` almost every time once they can see the body and memory, the starting context is not the cause; look at the prompt and the skills next.
 
@@ -183,9 +183,9 @@ The overnight logs show the small model (`gpt-6-luna`) in 3 Brief, 4 look and 7 
 ## Open rulings for the owner
 
 1. Does "one model" cover the calls in the table above that still use the small model? Production would need `WALDO_STRONG_ROLES = "1"`, and the always-small calls would each need a change.
-2. Is $4.50 per owner a target or a hard stop, and per month?
-3. Health words in a wake's reason: readings with numbers are withheld, but words ("recovery is low") are kept in the per-owner outcome table, which a forget reaches. Keep, or keep no free-text reason?
-4. How far a fired owner reminder carries the owner's say-so: inward writes only, or sends too (#2239).
+2. Health words in a wake's reason: readings with numbers are withheld, but words ("recovery is low") are kept in the per-owner outcome table, which a forget reaches. Keep, or keep no free-text reason?
+3. How far a fired owner reminder carries the owner's say-so: inward writes only, or sends too (#2239).
+4. Owners who said no through volume `low` or a daily count of 0: the wake no longer reads either, so they would get wake messages. Move them to follow-ups off, or accept it as part of removing volume?
 5. Turning `GENERAL_WAKE` on in staging.
 
 ## Rollback
