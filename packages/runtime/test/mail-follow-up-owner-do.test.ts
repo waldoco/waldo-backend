@@ -6,10 +6,10 @@ import { loopBook } from '../src/channels/loops';
 import { dayPlanBook } from '../src/channels/day-cards';
 import { FINAL_OUTBOX_KEY, type FinalRecord } from '../src/channels/telegram-final-outbox';
 import { reportMachineJobs } from './helpers/heartbeat-job';
-const fixture = vi.hoisted(() => ({ mail: false, loopId: '', sent: [] as string[], prompts: [] as string[] }));
+const fixture = vi.hoisted(() => ({ mail: false, extra: false, loopId: '', sent: [] as string[], prompts: [] as string[] }));
 vi.mock('../src/connectors/google', async load => {
   const original = await load<typeof import('../src/connectors/google')>();
-  return { ...original, googleClient: () => ({ changedEvents: async () => [], newMail: async () => fixture.mail ? [{ id: 'mail-message-1', thread_id: 'mail-thread-1', from: 'Pat <pat@example.test>', subject: 'Review by 10 today', snippet: 'Please review the deck by 10 UTC', at: '2026-10-03T07:00:00Z' }] : [], events: async () => [] }) };
+  return { ...original, googleClient: () => ({ changedEvents: async () => [], newMail: async () => [...(fixture.mail ? [{ id: 'mail-message-1', thread_id: 'mail-thread-1', from: 'Pat <pat@example.test>', subject: 'Review by 10 today', snippet: 'Please review the deck by 10 UTC', at: '2026-10-03T07:00:00Z' }] : []), ...(fixture.extra ? [{ id: 'mail-message-2', thread_id: 'mail-thread-2', from: 'Sam <sam@example.test>', subject: 'Lunch?', snippet: 'Free for lunch on Monday?', at: '2026-10-03T09:30:00Z' }] : [])], events: async () => [] }) };
 });
 vi.mock('../src/channels/telegram-api', async load => {
   const original = await load<typeof import('../src/channels/telegram-api')>();
@@ -37,7 +37,7 @@ it('actual default owner mail followup', async () => {
     const originalNow = Date.now;
     let now = Date.parse('2026-10-03T06:59:00Z');
     Date.now = () => now;
-    fixture.mail = false; fixture.loopId = ''; fixture.sent = []; fixture.prompts = [];
+    fixture.mail = false; fixture.extra = false; fixture.loopId = ''; fixture.sent = []; fixture.prompts = [];
     const config = { ...env, MAIL_SOURCE_FOLLOWUPS: '1', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };
     let owner = new OwnerDO(state, config);
     state.storage.kv.put('do_name', 'synthetic-mail-owner'); state.storage.kv.put('telegram_subject', '7');
@@ -88,6 +88,46 @@ it('actual default owner mail followup', async () => {
       expect(loops.closed()[0]?.status).toBe('done');
       now += 600_000; await incoming('/fire fetch');
       expect(fixture.sent.filter(text => text.startsWith('Have you handled'))).toHaveLength(1);
+    } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
+  });
+});
+
+// With the general wake on, the sweep starts no job to judge waiting mail, so a due follow-up must not wait for one.
+it('a due mail follow-up is reviewed while the general wake is on and new mail is waiting', async () => {
+  await runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName('mail-follow-up-owner-wake')), async (_instance, state) => {
+    const originalNow = Date.now;
+    let now = Date.parse('2026-10-03T06:59:00Z');
+    Date.now = () => now;
+    fixture.mail = false; fixture.extra = false; fixture.loopId = ''; fixture.sent = []; fixture.prompts = [];
+    const config: Record<string, unknown> = { ...env, MAIL_SOURCE_FOLLOWUPS: '1', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };
+    let owner = new OwnerDO(state, config as typeof env);
+    state.storage.kv.put('do_name', 'synthetic-mail-owner-wake'); state.storage.kv.put('telegram_subject', '7');
+    await state.storage.put('origin', 'https://fixture.invalid');
+    await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.compose'] }]);
+    let update = 100;
+    const incoming = async (text: string) => {
+      const response = await owner.fetch(new Request('https://owner.invalid/turn', { method: 'POST', body: JSON.stringify({ update_id: update++, message: { message_id: update, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text } }) }));
+      expect(response.status).toBe(200);
+    };
+    try {
+      await incoming('/fire fetch');
+      const loops = loopBook(state.storage.sql, { now: () => now, newId: () => 'test-only' });
+      loops.setProactivity({ quiet_start: '20:00', quiet_end: '08:00', volume: 'normal' });
+      fixture.mail = true; now += 61_000;
+      await incoming('/fire fetch');
+      fixture.mail = false; now = Date.parse('2026-10-03T09:00:00Z');
+      dayPlanBook(state.storage.sql).sent('2026-10-03', 'card:brief');
+      await incoming('/fire fetch');
+      expect(reportMachineJobs(state.storage.sql)).toHaveLength(1);
+      await (owner as unknown as { drainJobs(channel: string): Promise<void> }).drainJobs('telegram');
+      fixture.loopId = loops.list()[0]!.id;
+      Object.assign(config, { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' });
+      owner = new OwnerDO(state, config as typeof env);
+      fixture.extra = true; now += 300_000;
+      await incoming('/fire fetch');
+      expect(reportMachineJobs(state.storage.sql)).toHaveLength(0);
+      const queued = state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY)!.filter(r => r.mailFollowup);
+      expect(queued).toHaveLength(1);
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
   });
 });

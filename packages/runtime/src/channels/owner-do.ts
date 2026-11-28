@@ -5251,14 +5251,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // The event is always kept; the wake it brings comes no sooner than WAKE_EVENT_GAP_MIN after the last wake that ran (config,
     // the owner's cost lever: the event is delayed, never dropped). Outside the owner's day nothing is armed here: the day's first
     // regular look reads it, so it does not land on top of the Brief.
-    const wakeGapMs = Math.max(0, Number(this.env.WAKE_EVENT_GAP_MIN ?? '30') || 0) * 60_000;
+    const gapMinutes = Number(this.env.WAKE_EVENT_GAP_MIN?.trim() || 'NaN');
+    const wakeGapMs = (Number.isFinite(gapMinutes) && gapMinutes >= 0 ? gapMinutes : 30) * 60_000;
+    // The last wake that ran to an outcome (what the app open reads as fresh), and the last that spent on a model run whatever its
+    // outcome (what the gap is measured from, so a wake that failed to deliver still spaces the next).
     const lastWakeRan = () => wakeOutcomeBook(storage.sql).recent(20).find(row => row.outcome !== 'held' && row.outcome !== 'failed')?.at;
+    const lastWakeSpent = () => wakeOutcomeBook(storage.sql).recent(20).find(row => row.spend !== null || (row.outcome !== 'held' && row.outcome !== 'failed'))?.at;
     const wakeSoon = async (kind: InboxKind, refs: readonly string[]): Promise<void> => {
       if (!generalWakeOn || !refs.length) return;
       const now = Date.now();
       for (const ref of refs) wakeInbox.add(kind, ref, now);
       if (!schedPrefs.enabled('heartbeat') || !armable('heartbeat')) return;
-      const soonest = Math.max(now + WAKE_MERGE_MS, (lastWakeRan() ?? 0) + wakeGapMs);
+      const soonest = Math.max(now + WAKE_MERGE_MS, (lastWakeSpent() ?? 0) + wakeGapMs);
       const at = nextLookAt(soonest, 0, clock.timezone, day => plans.window(day, clock.timezone));
       if (at > soonest) return;
       const armed = scheduler.lookup(INTERVENTION_REVIEW_ID);
@@ -6653,7 +6657,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
         const gate = sweepGate(day);
         const canSend = gate === null || gate === 'held_window';
-        await reviewMailFollowup({ loops, now, timezone: clock.timezone, allowed: sourceFollowups && canSend && check.analysis === 0 && check.code !== 'held_open_job',
+        await reviewMailFollowup({ loops, now, timezone: clock.timezone, // With the wake on no sweep job judges pending mail, so a due follow-up does not wait for one.
+          allowed: sourceFollowups && canSend && (generalWakeOn || check.analysis === 0) && check.code !== 'held_open_job',
           ledger: promptLedger, prompt: said => { followupPrompted = true; return ledgerJob(`${trace}:mail-followup`, said, ['get_context', 'read_memory', 'search_episodes'], undefined, 'decides'); },
           enqueue: async (text, mailFollowup) => {
             const id = `mail-followup:${mailFollowup.loopId}:${mailFollowup.due}:${mailFollowup.timezone}:${mailFollowup.messageId}`;
@@ -6747,7 +6752,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       context: async () => {
         const now = Date.now(), client = await google.client(), midnight = localToEpoch(`${localIso(now, clock.timezone).slice(0, 10)}T00:00`, clock.timezone);
         const context = {
-          changes: updates.unfolded(clock.timezone, now),
           calendar: await readCalendar({ from: now, to: dayWindow(now, clock.timezone).to }, clock.timezone, client, !client && google.configured()),
           cards: dayCards(), today: transcript(episodes.since(midnight, 30_000), clock.timezone), ledger: await promptLedger(false),
           goals: claimStore(storage.sql).claims().filter(claim => claim.kind === 'goal').slice(-12).map(claim => `- ${claim.text}`).join('\n'),
@@ -6757,7 +6761,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const read = wakeInbox.pending();
         inboxReadAt = Date.now();
         inboxKinds = [...new Set(read.map(row => row.kind))];
-        return { ...context, inbox: inboxSection(read, at => localIso(at, clock.timezone).slice(0, 16).replace('T', ' ')) };
+        return { ...context, changes: updates.unfolded(clock.timezone, inboxReadAt), inbox: inboxSection(read, at => localIso(at, clock.timezone).slice(0, 16).replace('T', ' ')) };
       },
       refOf: () => (inboxKinds.length ? `inbox:${inboxKinds.join(',')}` : null),
       run: async (trace, text) => {
@@ -6849,6 +6853,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       await armLook(now, true);
       if (runGeneralWake) {
         // A wake that fails has recorded its failed row and trace hop; the look armed above is its retry.
+        inboxReadAt = null; inboxKinds = [];
         await runGeneralWake(trace, 'look', lookCause(entry)).catch((error: unknown) => log({ trace, hop: 'wake_error', ms: 0, ok: false, code: error instanceof Error ? error.name : 'unknown' }));
         return;
       }

@@ -640,15 +640,19 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
     });
   });
 
-  it('an event right after a wake ran is kept, and its wake comes no sooner than the configured gap after the last one', async () => {
-    await owned('wake-inbox-gap', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1', WAKE_EVENT_GAP_MIN: '30' }, async ({ state, owner }) => {
-      model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Nothing new.' } }] }];
-      await tick(state, owner);
-      const ran = state.storage.sql.exec<{ at: number }>('SELECT at FROM wake_outcomes').one().at;
-      await runtime(owner).placeMoved();
-      expect(inbox(state)).toEqual([{ kind: 'place', ref: 'place_moved', count: 1 }]);
-      expect(dueOf(state, INTERVENTION_REVIEW_ID)).toBeGreaterThanOrEqual(ran + 30 * 60_000);
-    });
+  it('an event right after a wake ran is kept, and its wake comes no sooner than the configured gap after the last one; a gap that does not read as minutes is the default', async () => {
+    for (const [gap, minutes] of [['45', 45], ['abc', 30], ['', 30]] as const) {
+      await owned(`wake-inbox-gap-${minutes}-${gap || 'empty'}`, { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1', WAKE_EVENT_GAP_MIN: gap }, async ({ state, owner }) => {
+        model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Nothing new.' } }] }];
+        await tick(state, owner);
+        const ran = state.storage.sql.exec<{ at: number }>('SELECT at FROM wake_outcomes').one().at;
+        await runtime(owner).placeMoved();
+        expect(inbox(state)).toEqual([{ kind: 'place', ref: 'place_moved', count: 1 }]);
+        const due = dueOf(state, INTERVENTION_REVIEW_ID)!;
+        expect(due, gap).toBeGreaterThanOrEqual(ran + minutes * 60_000);
+        expect(due, gap).toBeLessThan(ran + (minutes + 1) * 60_000);
+      });
+    }
   });
 
   it('a health-trigger entry armed before the switch never runs beside the wake', async () => {
