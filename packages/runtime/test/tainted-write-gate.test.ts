@@ -107,6 +107,31 @@ describe('a tainted turn sends every write to the owner card', () => {
     }
   });
 
+  // UNDOABLE_INWARD, the owner's 28 Nov rule: reversibility decides, not where the run's words came from. A write that names its
+  // way back runs with no card in any run, Waldo-started and over outside text included; everything else answers as before.
+  const UNDOABLE = new Set<ToolName>(['set_reminder', 'update_todo', 'track_responsibility', 'workspace_write', 'create_artifact', 'revise_artifact', 'restore_artifact']);
+  it('with UNDOABLE_INWARD on, an inward write the owner can undo runs under outside text with no owner in the turn; the health logs stay carded', async () => {
+    for (const [tool, args] of INWARD) {
+      const undoable = UNDOABLE.has(tool);
+      expect(await taintedCallNeedsOwnerApproval(tool, 'external', args, { undoableInward: true }), tool).toBe(!undoable);
+      if (!allowlist(tool).includes('user_message')) continue;
+      const { handler, runs } = recording(tool);
+      const result = await dispatchTool({ id: `${tool}-u`, name: tool, args }, tainted({ undoableInward: true }), { handlers: [handler] });
+      expect(result, tool).toMatchObject(undoable ? { ok: true } : { ok: false, error_code: 'taint_needs_approval' });
+      expect(runs, tool).toHaveLength(undoable ? 1 : 0);
+    }
+  });
+
+  it('with UNDOABLE_INWARD on, the switch changes the answer for exactly the records that name their way back, and nothing that sends, spends, deletes or closes an owner\'s loop', async () => {
+    const changed: ToolName[] = [];
+    for (const [tool, record] of Object.entries(TOOL_RECORDS) as [ToolName, ToolRecord][]) {
+      if (await recordNeedsOwnerCard(tool, record, {}, {}) !== await recordNeedsOwnerCard(tool, record, {}, { undoableInward: true })) changed.push(tool);
+    }
+    expect(changed.sort()).toEqual([...UNDOABLE].sort());
+    for (const tool of ['send_email', 'send_message', 'forget_memory', 'close_loop', 'log_meal', 'log_workout', 'start_task', 'delete_health_log'] as const)
+      expect(await taintedCallNeedsOwnerApproval(tool, 'external', {}, { undoableInward: true }), tool).toBe(true);
+  });
+
   it('a call that only ends or stops something runs under outside text, owner in the turn or not', async () => {
     for (const [tool, args] of NARROWS) {
       const { handler, runs } = recording(tool);

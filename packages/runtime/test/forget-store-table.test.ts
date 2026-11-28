@@ -18,6 +18,7 @@ const TABLES: Record<string, Row> = {
   // Memory and derived stores
   reminder_notes: purged('memory-forget-do-provider.test.ts'),
   wake_outcomes: purged('forget-wake-outcomes.test.ts'),
+  wake_untold: purged('forget-wake-untold.test.ts'),
   reminder_outside: exempt('a reminder id, kept while that reminder\'s note was written after outside text; no owner text'),
   responsibility_outside: exempt('a responsibility id, kept once its text was written after outside text or holds a worker\'s report; no owner text'),
   claims: purged('forget-coverage.test.ts'), episodes: purged('forget-coverage.test.ts'),

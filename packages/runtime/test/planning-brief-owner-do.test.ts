@@ -19,6 +19,8 @@ import { interruptBook } from '../src/channels/interruptions';
 import { ownerSpokeSince } from '../src/channels/episodes';
 import { armInterventionReview, INTERVENTION_REVIEW_ID } from '../src/channels/interventions';
 import { loopBook } from '../src/channels/loops';
+import { FINAL_OUTBOX_KEY } from '../src/channels/telegram-final-outbox';
+import { INWARD_RECEIPTS_HEADER } from '../src/conversation/inward-receipts';
 import { schedulePreferences } from '../src/channels/schedule-preferences';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { toContextHealthMaterial } from '../src/channels/health-context';
@@ -490,6 +492,52 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
   // the send. Every run leaves one outcome row with the reason it gave.
   const wakeRows = (state: DurableObjectState) => state.storage.sql.exec<{ outcome: string; reason: string | null; tools: string }>('SELECT outcome, reason, tools FROM wake_outcomes').toArray();
   const wakeCost = (state: DurableObjectState) => state.storage.sql.exec<{ model: string | null; calls: number | null; tokens_in: number | null; tokens_out: number | null }>('SELECT model, calls, tokens_in, tokens_out FROM wake_outcomes').toArray();
+  // UNDOABLE_INWARD, the owner's 28 Nov rule, through a real wake that read a stranger's mail: what can be undone and stays in the
+  // owner's own space happens and is told with its way back; what reaches another person goes on a card and is never sent.
+  const wakeOutbox = (state: DurableObjectState) => (state.storage.kv.get<{ id: string; payload: { text: string } }[]>(FINAL_OUTBOX_KEY) ?? []).filter(record => record.id.startsWith('wake:'));
+  const outsideReminders = (state: DurableObjectState) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'reminder_outside'").one().n
+    ? state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM reminder_outside').one().n : 0;
+  const strangerAsks = (tool: string, args: Record<string, unknown>) => [
+    { calls: [{ name: 'search_communication', arguments: { query: 'from:pat@vendor.example' } }] },
+    { calls: [{ name: 'find_tools', arguments: { names: [tool] } }] },
+    { calls: [{ name: 'use_tool', arguments: { name: tool, arguments: args } }] },
+    { calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Did what the vendor mail asked where it was mine to do.' } }] },
+  ];
+  const REMINDER_ASK = { note: 'Send Pat the signed quote', at: '2030-03-06T09:00', repeat: 'none' };
+  it('a stranger\'s mail asks for something undoable: with UNDOABLE_INWARD on, the reminder is set, marked as from outside, and told with its way back; off, it waits for a card', async () => {
+    await owned('wake-undoable-on', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1', WALDO_TOOL_LOADER: 'harness', UNDOABLE_INWARD: '1' }, async ({ state, owner, approvals }) => {
+      model.owner = strangerAsks('set_reminder', REMINDER_ASK);
+      await tick(state, owner);
+      expect(outsideReminders(state)).toBe(1);
+      const [told] = wakeOutbox(state);
+      expect(told?.payload.text).toContain(INWARD_RECEIPTS_HEADER);
+      expect(told?.payload.text).toContain('(you can cancel it)');
+      expect(wakeRows(state)).toEqual([expect.objectContaining({ outcome: 'told' })]);
+      expect(await approvals()).toEqual([]);
+    });
+    await owned('wake-undoable-off', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1', WALDO_TOOL_LOADER: 'harness' }, async ({ state, owner }) => {
+      model.ownerRequests = [];
+      model.owner = strangerAsks('set_reminder', REMINDER_ASK);
+      await tick(state, owner);
+      expect(outsideReminders(state)).toBe(0);
+      expect(wakeOutbox(state)).toEqual([]);
+      const turns = model.ownerRequests.flatMap(request => (JSON.parse(request) as { tool_turns?: { call: { name: string; arguments: string }; output: string }[] }).tool_turns ?? []);
+      expect(turns.find(turn => turn.call.name === 'use_tool' && turn.call.arguments.includes('set_reminder'))?.output).toContain('propose_action');
+    });
+  });
+
+  it('a stranger\'s mail asks for something irreversible: with UNDOABLE_INWARD on, mail to another person still goes on the owner\'s card and is never sent', async () => {
+    await owned('wake-irreversible', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1', WALDO_TOOL_LOADER: 'harness', UNDOABLE_INWARD: '1' }, async ({ state, owner, approvals }) => {
+      model.owner = strangerAsks('send_email', { to: ['accounts@vendor.example'], subject: 'Signed quote', body_markdown: 'Attached is the signed quote, as you asked.' });
+      await tick(state, owner);
+      const cards = await approvals();
+      expect(cards).toHaveLength(1);
+      expect(health.out.filter(host => /gmail|googleapis/.test(host))).toEqual([]);
+      expect(wakeOutbox(state)).toEqual([]);
+      expect(wakeRows(state)).toEqual([expect.objectContaining({ outcome: 'carded' })]);
+    });
+  });
+
   it('the wake reads the free-window lines without "Offer, never take": its own order decides when to act', async () => {
     await owned('general-wake-windows', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1', FREE_WINDOW_OFFERS: '1' }, async ({ state, owner }) => {
       model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Nothing new.' } }] }];

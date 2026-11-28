@@ -195,6 +195,8 @@ export type HookRuntimeContext = {
   // mail source, is Waldo's own note. It keeps the run's taint, wakes only a check-back that reads and cards, is bounded by
   // the loop book, and its title never reaches an owner prompt after outside text (openLoopsPrompt).
   waldoOwnFollowUp?: () => boolean;
+  // UNDOABLE_INWARD: a record that names its way back runs without a card in any run (tools/records.ts undo).
+  undoableInward?: boolean;
   // Set by the host on a turn the owner's own message started, quotes and forwards included: its reply goes to the owner.
   ownerInitiated?: boolean;
   egressAllowlist?: readonly string[];
@@ -552,17 +554,18 @@ const ownerStatedFigure = (args: unknown, ctx: Pick<HookRuntimeContext, 'ownerIn
 // owner's card instead of running. A tool changes something when its receipt can back a claim, so the set is read from the
 // tool's record, and a record without an exemption is carded. Privileged actions are carded by their own law first.
 export const taintedCallNeedsOwnerApproval = async (
-  tool: ToolName, taint: SourceTaint, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound' | 'loopHasPassed' | 'ownerInitiated' | 'waldoOwnFollowUp'>,
+  tool: ToolName, taint: SourceTaint, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound' | 'loopHasPassed' | 'ownerInitiated' | 'waldoOwnFollowUp' | 'undoableInward'>,
 ): Promise<boolean> => taintGateBlocksDirectExecution(tool, taint)
   || (isExternalSourceTaint(taint) && await recordNeedsOwnerCard(tool, TOOL_RECORDS[tool], args, ctx));
 
 // One record's answer for a tainted call. own_card is not admitted here: the dispatcher admits it per call from the
 // handler's proposal_only declaration, so the exemption holds only while the handler actually only proposes.
 export const recordNeedsOwnerCard = async (
-  tool: ToolName, record: Pick<ToolRecord, 'claim' | 'tainted'>, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound' | 'loopHasPassed' | 'ownerInitiated' | 'waldoOwnFollowUp'>,
+  tool: ToolName, record: Pick<ToolRecord, 'claim' | 'tainted'>, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound' | 'loopHasPassed' | 'ownerInitiated' | 'waldoOwnFollowUp' | 'undoableInward'>,
 ): Promise<boolean> => {
   const tainted = record.tainted;
   if (record.claim === null || (tainted !== undefined && 'refused' in tainted)) return false;
+  if (ctx.undoableInward === true && tainted !== undefined && 'exempt' in tainted && tainted.undo !== undefined) return false;
   switch (tainted?.exempt) {
     case 'draft': case 'honest_origin': case 'instructions_only': return false;
     case 'narrows': return clearsEverything(tool, args);
