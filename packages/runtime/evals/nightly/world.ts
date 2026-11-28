@@ -482,7 +482,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     // connected account read a few minutes ago. Waldo has placed no blocks here, so there is no block section.
     wakeCalendar: () => readCalendar({ from: now(), to: dayWindow(now(), TIMEZONE).to }, TIMEZONE, client, false),
     wakeLedger: () => loopsSection(loops, TIMEZONE, now()),
-    wakeShaping: () => dayShapingContext({ offers: true, protocols: false, brief: false,
+    wakeShaping: () => dayShapingContext({ offers: true, protocols: false, brief: false, wake: true,
       coverage: { accounts: [{ email: 'owner@example.test', calendar: true, failing: false, read_minutes_ago: 4 }], phone: { state: 'not_shared' }, weekdays: { counts: [7, 8, 7, 8, 6, 1, 0], days: 28 } } }),
     // CAPACITY_BUDGET: the rest of this world's week, as the owner object hands it to the planning Brief.
     weekAhead: () => capacityBudgetContext(now(), TIMEZONE, client, false, ''),

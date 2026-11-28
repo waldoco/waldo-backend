@@ -5282,7 +5282,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // How Waldo plans the real day (CALENDAR_COVERAGE, FREE_WINDOW_OFFERS): the facts and intent a planning turn reads. A health
     // move is a candidate only while the owner shares their health and CAPACITY_PLAN is on; a read that fails counts as not shared.
     // A health move is offered only from the planning Brief, whose calendar proposals pass the deterministic health-word screen.
-    const dayShaping = async (trace: string, card: 'brief' | 'close' | null = null): Promise<string> => {
+    const dayShaping = async (trace: string, card: 'brief' | 'close' | 'wake' | null = null): Promise<string> => {
       const coverage = this.env.CALENDAR_COVERAGE === '1', offers = this.env.FREE_WINDOW_OFFERS === '1', brief = card === 'brief';
       // BLOCK_LIFECYCLE: Waldo's own blocks from yesterday to two days ahead, and how to look after them (and, at the Close, learn
       // from them).
@@ -5292,7 +5292,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       })() : '';
       if (card === 'close' || (!coverage && !offers)) return lifecycle;
       const protocols = protocolMovesAllowed({ brief, offers, capacityPlan: this.env.CAPACITY_PLAN === '1' }) && await healthContext.read(trace).then(read => read !== null && read !== 'unknown', () => false);
-      return dayShapingContext({ offers, protocols, brief, coverage: coverage ? await coverageFacts({ now: Date.now(), timezone: clock.timezone, cache: storage.kv,
+      return dayShapingContext({ offers, protocols, brief, wake: card === 'wake', coverage: coverage ? await coverageFacts({ now: Date.now(), timezone: clock.timezone, cache: storage.kv,
         accounts: async () => await google.state(), readAt: id => updates.calendarReadAt(id),
         pastEvents: async (email, from, to, limit) => { const reader = await google.client('calendar', undefined, undefined, email); return reader ? reader.events(from, to, limit, true) : null; },
         phone: this.env.DEVICE_CALENDAR === '1' ? this.deviceCalendar() : null }) : null }) + (lifecycle ? `\n\n${lifecycle}` : '');
@@ -6676,7 +6676,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           calendar: await readCalendar({ from: now, to: dayWindow(now, clock.timezone).to }, clock.timezone, client, !client && google.configured()),
           cards: dayCards(), today: transcript(episodes.since(midnight, 30_000), clock.timezone), ledger: await promptLedger(false),
           goals: claimStore(storage.sql).claims().filter(claim => claim.kind === 'goal').slice(-12).map(claim => `- ${claim.text}`).join('\n'),
-          style: channelStyle(PROACTIVE_READS[channel](storage.kv, proactiveBothDefault(this.env))), shaping: await dayShaping('wake'),
+          style: channelStyle(PROACTIVE_READS[channel](storage.kv, proactiveBothDefault(this.env))), shaping: await dayShaping('wake', 'wake'),
         };
       },
       run: async (trace, text) => {

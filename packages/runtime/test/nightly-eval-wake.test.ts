@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { scriptedGateway } from '../src/testing/scripted-gateway';
 import { WALDO_LENS } from '../src/channels/wake';
-import { COVERAGE_NOT_HERE, FREE_WINDOW_INSTRUCTION } from '../src/prompt/day-shaping';
+import { COVERAGE_NOT_HERE, WAKE_FREE_WINDOW_INSTRUCTION } from '../src/prompt/day-shaping';
 import { callBudget } from '../evals/nightly/budget';
 import { NIGHTLY_SCENARIOS } from '../evals/nightly/catalogue';
 import { failedReceipts, STATE_INVARIANTS } from '../evals/nightly/receipts';
@@ -47,7 +47,7 @@ describe('a wake in the nightly world', () => {
     const { failed, sent } = await wake('wake-lens-slipped-task', 'Third slip on the Q4 plan, and your Form is 44.2. Want the block back at 9:30 tomorrow?');
     expect(failed).toEqual(['no score or reading reaches the owner']);
     const text = JSON.stringify(sent[0]);
-    for (const shown of ['Write the Q4 plan', FREE_WINDOW_INSTRUCTION, COVERAGE_NOT_HERE]) expect(text).toContain(JSON.stringify(shown).slice(1, -1));
+    for (const shown of ['Write the Q4 plan', WAKE_FREE_WINDOW_INSTRUCTION, COVERAGE_NOT_HERE]) expect(text).toContain(JSON.stringify(shown).slice(1, -1));
   });
 
   it('a quiet wake on a good day sends nothing and passes', async () => {
