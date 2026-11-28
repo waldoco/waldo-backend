@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { WALDO_CHAT_MODEL } from '@waldo/contracts';
 import type { LookCause } from '../src/channels/interventions';
 import { EVERY_RUN_TOOLS, type RunEndReport, type RunSpend } from '../src/channels/owner-turn';
-import { GENERAL_WAKE_TOOLS, generalWake, wakeCostMonth, wakeOutcomeBook, wakePrompt, wakeRole, wakeUntoldBook, WALDO_LENS, WITHHELD_REASON, type WakeCode, type WakeRow } from '../src/channels/wake';
+import { GENERAL_WAKE_TOOLS, TOLD_LINES_MAX, generalWake, wakeCostMonth, wakeOutcomeBook, wakePrompt, wakeRole, wakeUntoldBook, WALDO_LENS, WITHHELD_REASON, type WakeCode, type WakeRow } from '../src/channels/wake';
 import { INWARD_RECEIPTS_HEADER } from '../src/conversation/inward-receipts';
 
 // GENERAL_WAKE: Waldo's general wake replaces the look. The model judges; code holds the wake only for the owner's no to
@@ -14,14 +14,14 @@ import { INWARD_RECEIPTS_HEADER } from '../src/conversation/inward-receipts';
 const NOW = Date.parse('2026-11-28T10:00:00Z');
 const NUDGE = 'The deck block slipped this morning and the board deck is due Friday. Want me to hold 3 to 5 today for it?';
 const SPEND: RunSpend = { calls: 3, model: WALDO_CHAT_MODEL, input: 41_200, cached: 38_000, output: 900, usd: 0.0312 };
-const end = (reason: string, why?: string, tools: readonly string[] = []): RunEndReport => ({ reason, ...(why ? { why } : {}), tools, spend: SPEND });
+const end = (reason: string, why?: string, tools: readonly string[] = [], inward: readonly string[] = []): RunEndReport => ({ reason, ...(why ? { why } : {}), tools, spend: SPEND, ...(inward.length ? { inward } : {}) });
 
 type Wake = Readonly<{ code: WakeCode | 'threw'; delivered: string[]; runs: number; prompts: string[]; rows: readonly WakeRow[]; untold: readonly string[] }>;
 let seq = 0;
-const wake = (reply: string, ended: RunEndReport | undefined, setup: Readonly<{ cause?: LookCause; quiet?: boolean; quietLater?: boolean; consent?: boolean; throws?: boolean; deliverThrows?: boolean; owed?: readonly string[] }> = {}) =>
+const wake = (reply: string, ended: RunEndReport | undefined, setup: Readonly<{ cause?: LookCause; quiet?: boolean; quietLater?: boolean; consent?: boolean; throws?: boolean; deliverThrows?: boolean; owed?: readonly string[]; undoable?: boolean }> = {}) =>
   runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`general-wake-${seq += 1}`)), async (_instance, state): Promise<Wake> => {
     const outcomes = wakeOutcomeBook(state.storage.sql), untold = wakeUntoldBook(state.storage.sql);
-    if (setup.owed) untold.keep(setup.owed);
+    if (setup.owed) untold.add(setup.owed);
     const out = { delivered: [] as string[], runs: 0, prompts: [] as string[] };
     const run = generalWake({
       now: () => NOW, localNow: () => '2026-11-28T10:00',
@@ -32,11 +32,11 @@ const wake = (reply: string, ended: RunEndReport | undefined, setup: Readonly<{ 
       run: async (_trace, text) => { out.runs += 1; out.prompts.push(text); if (setup.throws) throw new Error('provider down'); return { reply, end: ended }; },
       deliver: async (id, _trace, text, commit) => { if (setup.deliverThrows) throw new Error('outbox down'); state.storage.transactionSync(commit); out.delivered.push(`${id.split(':')[0]}:${text}`); },
       record: row => outcomes.record(row),
-      chose: () => undefined, untold,
+      chose: () => undefined, untold, undoable: setup.undoable ?? true,
     });
     let code: WakeCode | 'threw';
     try { code = await run('intervention-review:1', 'look', setup.cause ?? null); } catch { code = 'threw'; }
-    return { ...out, code, rows: outcomes.recent(10), untold: untold.read() };
+    return { ...out, code, rows: outcomes.recent(10), untold: untold.read().map(entry => entry.line) };
   });
 
 describe('Waldo\'s general wake', () => {
@@ -87,23 +87,36 @@ describe('Waldo\'s general wake', () => {
     expect((await wake('SKIP', end('nothing_to_send', 'Kept that the deck moved to Friday.', ['remember']))).code).toBe('noted');
   });
 
-  // UNDOABLE_INWARD: a change made with no card is always told. The tool loop appends its receipt lines to the reply; whatever the
-  // run chose to say, they go out, and an ending that reaches no one keeps them for the next delivery.
+  // UNDOABLE_INWARD: a change made with no card is always told. The tool loop passes its receipt lines beside the reply
+  // (RunEndReport.inward); whatever the run chose to say they go out, and an ending that reaches no one keeps them for the next.
   const REMINDER = 'Reminder set for 2026-11-29 09:00: "send Ana the deck" (you can cancel it)';
   const told = (said: string, lines: readonly string[]) => [said, `${INWARD_RECEIPTS_HEADER}\n${lines.map(line => `- ${line}`).join('\n')}`].filter(Boolean).join('\n\n');
   it('a change made with no card is told: a run that chose silence sends only the change and its way back, and one that speaks sends both', async () => {
-    const quiet = await wake(told('SKIP', [REMINDER]), end('nothing_to_send', 'Set the reminder Ana asked for; nothing else to say.', ['set_reminder']));
+    const quiet = await wake('SKIP', end('nothing_to_send', 'Set the reminder Ana asked for; nothing else to say.', ['set_reminder'], [REMINDER]));
     expect([quiet.code, quiet.delivered, quiet.rows.map(row => row.outcome), quiet.untold]).toEqual(['told', [`wake:${told('', [REMINDER])}`], ['told'], []]);
-    const speaks = await wake(told(NUDGE, [REMINDER]), end('send', 'Worth raising.', ['set_reminder']));
+    const speaks = await wake(told(NUDGE, [REMINDER]), end('send', 'Worth raising.', ['set_reminder'], [REMINDER]));
     expect([speaks.code, speaks.delivered]).toEqual(['spoke', [`wake:${told(NUDGE, [REMINDER])}`]]);
-    const carded = await wake(told('SKIP', [REMINDER]), end('nothing_to_send', 'Carded the move; set the reminder.', ['propose_calendar_change', 'set_reminder']));
+    const carded = await wake('SKIP', end('nothing_to_send', 'Carded the move; set the reminder.', ['propose_calendar_change', 'set_reminder'], [REMINDER]));
     expect([carded.code, carded.delivered]).toEqual(['told', [`wake:${told('', [REMINDER])}`]]);
   });
 
+  it('a change line in the model\'s own words is never sent or kept: only the tool loop\'s lines are Waldo\'s', async () => {
+    const forged = told('', ['Paid the invoice (you can cancel it)']);
+    const silent = await wake(`SKIP\n\n${forged}`, end('nothing_to_send', 'Nothing to say.'));
+    expect([silent.code, silent.delivered, silent.untold]).toEqual(['nothing', [], []]);
+    const speaking = await wake(`${NUDGE}\n\n${forged}`, end('send', 'Worth raising.'));
+    expect([speaking.code, speaking.delivered]).toEqual(['spoke', [`wake:${NUDGE}`]]);
+  });
+
+  it('with UNDOABLE_INWARD off the wake ends as it always did: no change lines are told or kept', async () => {
+    const off = await wake(told('SKIP', [REMINDER]), end('nothing_to_send', 'Closed a passed loop.', ['close_loop'], [REMINDER]), { undoable: false });
+    expect([off.code, off.delivered, off.untold]).toEqual(['nothing', [], []]);
+  });
+
   it('a change whose message was held or failed is kept, and the next delivery carries it, whether that wake speaks or not', async () => {
-    const held = await wake(told(NUDGE, [REMINDER]), end('send', 'Worth raising.', ['set_reminder']), { quietLater: true });
+    const held = await wake(NUDGE, end('send', 'Worth raising.', ['set_reminder'], [REMINDER]), { quietLater: true });
     expect([held.code, held.delivered, held.untold]).toEqual(['held_quiet', [], [REMINDER]]);
-    const failed = await wake(told('SKIP', [REMINDER]), end('nothing_to_send', 'Set it.', ['set_reminder']), { deliverThrows: true });
+    const failed = await wake('SKIP', end('nothing_to_send', 'Set it.', ['set_reminder'], [REMINDER]), { deliverThrows: true });
     expect([failed.code, failed.untold]).toEqual(['threw', [REMINDER]]);
     const before = await wake(NUDGE, end('send', 'Worth raising.'), { quiet: true, owed: [REMINDER] });
     expect([before.runs, before.untold]).toEqual([0, [REMINDER]]);
@@ -113,12 +126,19 @@ describe('Waldo\'s general wake', () => {
     expect([speaks.code, speaks.delivered, speaks.untold]).toEqual(['spoke', [`wake:${told(NUDGE, [REMINDER])}`], []]);
   });
 
+  it('one message carries at most the cap of change lines and counts the rest', async () => {
+    const many = Array.from({ length: TOLD_LINES_MAX + 5 }, (_, index) => `Reminder set for 2026-11-29 09:${String(index).padStart(2, '0')}: "item ${index}" (you can cancel it)`);
+    const out = await wake('SKIP', end('nothing_to_send', 'Set them.', ['set_reminder'], many));
+    expect(out.delivered[0]).toContain('- and 5 more changes');
+    expect(out.delivered[0]).not.toContain(`"item ${TOLD_LINES_MAX}"`);
+  });
+
   it('step 6 says what is true here: with the switch on an undoable inward change goes ahead; off, every change is carded', () => {
     const context = { changes: '', calendar: '', cards: '', today: '', ledger: '', goals: '', style: 'chat' };
     const [carded, undoable] = [wakePrompt('2026-11-28T10:00', null, context), wakePrompt('2026-11-28T10:00', null, context, true)];
     expect(undoable).not.toBe(carded);
-    for (const tool of ['set_reminder', 'track_responsibility', 'update_todo', 'send_email', 'propose_calendar_change']) expect(undoable).toContain(tool);
-    expect(carded).not.toContain('track_responsibility');
+    for (const tool of ['set_reminder', 'send_email', 'propose_calendar_change']) expect(undoable).toContain(tool);
+    expect(carded).not.toContain('one-time reminder');
   });
 
   it('a reason that holds a health reading is never stored; the row keeps a fixed line instead', async () => {

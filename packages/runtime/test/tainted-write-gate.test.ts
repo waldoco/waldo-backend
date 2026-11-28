@@ -109,8 +109,8 @@ describe('a tainted turn sends every write to the owner card', () => {
 
   // UNDOABLE_INWARD, the owner's 28 Nov rule: reversibility decides, not where the run's words came from. A write that names its
   // way back runs with no card in any run, Waldo-started and over outside text included; everything else answers as before.
-  const UNDOABLE = new Set<ToolName>(['set_reminder', 'update_todo', 'track_responsibility', 'workspace_write', 'create_artifact', 'revise_artifact', 'restore_artifact']);
-  it('with UNDOABLE_INWARD on, an inward write the owner can undo runs under outside text with no owner in the turn; the health logs stay carded', async () => {
+  const UNDOABLE = new Set<ToolName>(['set_reminder', 'update_todo', 'track_responsibility']);
+  it('with UNDOABLE_INWARD on, an inward write the owner can undo runs under outside text with no owner in the turn; the health logs, workspace and artifacts stay carded', async () => {
     for (const [tool, args] of INWARD) {
       const undoable = UNDOABLE.has(tool);
       expect(await taintedCallNeedsOwnerApproval(tool, 'external', args, { undoableInward: true }), tool).toBe(!undoable);
@@ -130,6 +130,14 @@ describe('a tainted turn sends every write to the owner card', () => {
     expect(changed.sort()).toEqual([...UNDOABLE].sort());
     for (const tool of ['send_email', 'send_message', 'forget_memory', 'close_loop', 'log_meal', 'log_workout', 'start_task', 'delete_health_log'] as const)
       expect(await taintedCallNeedsOwnerApproval(tool, 'external', {}, { undoableInward: true }), tool).toBe(true);
+  });
+
+  it('with UNDOABLE_INWARD on, a repeating reminder and a call carrying a health number keep their card', async () => {
+    const on = { undoableInward: true };
+    expect(await taintedCallNeedsOwnerApproval('set_reminder', 'external', { note: 'Pay the vendor', at: '2026-11-07T15:00', repeat: 'none' }, on)).toBe(false);
+    expect(await taintedCallNeedsOwnerApproval('set_reminder', 'external', { note: 'Pay the vendor', at: '2026-11-07T15:00' }, on)).toBe(false);
+    for (const repeat of ['daily', 'weekdays', 'weekly', 'cron']) expect(await taintedCallNeedsOwnerApproval('set_reminder', 'external', { note: 'Ping', at: '2026-11-07T15:00', repeat, ...(repeat === 'cron' ? { cron: '* * * * *' } : {}) }, on), repeat).toBe(true);
+    expect(await taintedCallNeedsOwnerApproval('set_reminder', 'external', { note: 'Your HRV was 31 ms, take it easy', at: '2026-11-07T15:00', repeat: 'none' }, on)).toBe(true);
   });
 
   it('a call that only ends or stops something runs under outside text, owner in the turn or not', async () => {

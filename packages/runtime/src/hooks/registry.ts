@@ -1,3 +1,4 @@
+import { numericHealthIn } from '../scribe/sanitiser';
 import type {
   BrowserTaskCommand,
   CanaryTokens,
@@ -558,6 +559,17 @@ export const taintedCallNeedsOwnerApproval = async (
 ): Promise<boolean> => taintGateBlocksDirectExecution(tool, taint)
   || (isExternalSourceTaint(taint) && await recordNeedsOwnerCard(tool, TOOL_RECORDS[tool], args, ctx));
 
+// UNDOABLE_INWARD's hard limits on a call that skips the card: a reminder that repeats spends a model run and a message each time
+// it fires, so only a one-time reminder is undoable here; and a health number in what outside content asked for is never written
+// from that path (the owner's 22 Oct ruling), so that call keeps its card.
+const stringsIn = (value: unknown): string[] => typeof value === 'string' ? [value] : Array.isArray(value) ? value.flatMap(stringsIn)
+  : value !== null && typeof value === 'object' ? Object.values(value).flatMap(stringsIn) : [];
+const undoableCall = (tool: ToolName, args: unknown): boolean => {
+  const repeat = typeof args === 'object' && args !== null ? (args as { repeat?: unknown }).repeat : undefined;
+  if (tool === 'set_reminder' && repeat !== undefined && repeat !== 'none') return false;
+  return !stringsIn(args).some(text => numericHealthIn(text));
+};
+
 // One record's answer for a tainted call. own_card is not admitted here: the dispatcher admits it per call from the
 // handler's proposal_only declaration, so the exemption holds only while the handler actually only proposes.
 export const recordNeedsOwnerCard = async (
@@ -565,7 +577,7 @@ export const recordNeedsOwnerCard = async (
 ): Promise<boolean> => {
   const tainted = record.tainted;
   if (record.claim === null || (tainted !== undefined && 'refused' in tainted)) return false;
-  if (ctx.undoableInward === true && tainted !== undefined && 'exempt' in tainted && tainted.undo !== undefined) return false;
+  if (ctx.undoableInward === true && tainted !== undefined && 'exempt' in tainted && tainted.undo !== undefined && undoableCall(tool, args)) return false;
   switch (tainted?.exempt) {
     case 'draft': case 'honest_origin': case 'instructions_only': return false;
     case 'narrows': return clearsEverything(tool, args);

@@ -61,7 +61,9 @@ export const proposeActionHandler = (desk: TaintedActionDesk, host: ProposeActio
     // still put it on the owner's card.
     const record = TOOL_RECORDS[tool.data].tainted;
     const narrows = record !== undefined && 'exempt' in record && record.exempt === 'narrows';
-    if (!narrows && !(await taintedCallNeedsOwnerApproval(tool.data, 'external', args.args, ctx))) return { ok: false, error: `${tool.data} needs no approval; call it directly.`, code: 'rejected' };
+    // A change that could go ahead because it can be undone (UNDOABLE_INWARD) may still go on the card when the run would rather ask.
+    const undoable = record !== undefined && 'exempt' in record && record.undo !== undefined;
+    if (!narrows && !undoable && !(await taintedCallNeedsOwnerApproval(tool.data, 'external', args.args, ctx))) return { ok: false, error: `${tool.data} needs no approval; call it directly.`, code: 'rejected' };
     if (host.raisesOwnCard?.(tool.data) === true) return { ok: false, error: `${tool.data} already asks the owner on its own card; call it directly.`, code: 'rejected' };
     // use_mac admits only an untainted owner turn by its own law, so an approved replay could never run it.
     if (tool.data === 'use_mac' || host.replayable?.(tool.data) === false) {

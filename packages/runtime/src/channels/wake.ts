@@ -16,7 +16,7 @@ import { triageTools } from './update-sweep';
 // baseline: the run leaves itself a follow-up (open_loop, a check-back at its minute) when it wants one sooner. No count of messages a day is kept,
 // and the owner's volume is never read. The owner's own no to follow-ups and their quiet hours hold the wake before it runs
 // (a card it raised would reach them as a message), and again when it decides to speak. Every run leaves one outcome row with the reason it gave and what it cost, including when it chose to say nothing.
-export const GENERAL_WAKE_TOOLS: readonly ToolName[] = [...new Set<ToolName>([...triageTools(false, true), 'close_loop', 'remember', 'open_loop'])];
+export const GENERAL_WAKE_TOOLS: readonly ToolName[] = [...new Set<ToolName>([...triageTools(false, true), 'close_loop', 'remember', 'open_loop', 'set_reminder'])];
 
 // The model role a wake runs on is configuration, one value per kind of wake. plans and chat both run on the chat model
 // (plans at the planning effort); auxiliary is the small model. Unset or unknown, plans.
@@ -59,7 +59,7 @@ export const WALDO_LENS = [
 
 // The order a wake thinks in: an orientation, not rules. No step is a threshold.
 const CARDED_STEP_6 = '6. Act, then tell. Ask first only when it reaches other people, spends money or cannot be undone. For now every change to their calendar, mail or tasks still goes on the owner\'s card (propose_calendar_change, propose_action, send_email): the card is the notification, so it needs no message as well, and never say a change is made when only a card was raised. Say why in words: never a reading.';
-const UNDOABLE_STEP_6 = '6. Act, then tell. A change the owner can undo that stays in their own space goes ahead without asking: a reminder (set_reminder), something to track for them (track_responsibility), a step on their to-do (update_todo), a file in their workspace or an artifact. Waldo lists each one in the message with how to undo it. Anything that reaches other people, spends money, deletes, or cannot be undone goes on the owner\'s card and waits for their yes: mail to anyone (send_email), every change to their calendar for now (propose_calendar_change), anything else (propose_action). The card is the notification, so it needs no message as well, and never say a change is made when only a card was raised. Say why in words: never a reading.';
+const UNDOABLE_STEP_6 = '6. Act, then tell. A change the owner can undo that stays in their own space goes ahead without asking: today that is a one-time reminder (set_reminder). Waldo lists it in the message with how to undo it. When something looks off, you may still put it on the card instead. Anything that reaches other people, spends money, deletes, or cannot be undone goes on the owner\'s card and waits for their yes: mail to anyone (send_email), every change to their calendar for now (propose_calendar_change), anything else (propose_action). The card is the notification, so it needs no message as well, and never say a change is made when only a card was raised. Say why in words: never a reading.';
 // Step 6 says what is true for this deployment: with UNDOABLE_INWARD on, an undoable inward change goes ahead and is told.
 const WAKE_ORDER = (STEP_6: string) => [
   'How to think this wake through:',
@@ -187,7 +187,7 @@ export type GeneralWakeDeps = Readonly<{
   // UNDOABLE_INWARD: step 6 lets an undoable inward change go ahead; off, every change is carded.
   undoable?: boolean;
   // Changes a wake made with no card that have not reached the owner yet (a held or failed send): the next delivery carries them.
-  untold?: Readonly<{ read(): readonly string[]; keep(lines: readonly string[]): void; clear(): void }>;
+  untold?: Readonly<{ read(): readonly Readonly<{ seq: number; line: string }>[]; add(lines: readonly string[]): void; settle(through: number): void }>;
 }>;
 
 const MESSAGE_ENDS: ReadonlySet<string> = new Set(['send', 'ask_owner', 'replied']);
@@ -198,22 +198,23 @@ const quietEnd = (end: RunEndReport | undefined): WakeOutcome =>
     : end?.tools.includes('open_loop') ? 'followed_up'
       : end?.tools.includes('remember') ? 'noted' : 'nothing';
 
-// The receipt lines the tool loop appended for changes made with no card (conversation/inward-receipts), and the words before them.
-const receiptsOf = (text: string): Readonly<{ said: string; made: readonly string[] }> => {
-  const at = text.indexOf(INWARD_RECEIPTS_HEADER);
-  return at < 0 ? { said: text, made: [] }
-    : { said: text.slice(0, at).trim(), made: text.slice(at + INWARD_RECEIPTS_HEADER.length).split('\n').flatMap(line => line.startsWith('- ') ? [line.slice(2)] : []) };
-};
-const receiptList = (lines: readonly string[]) => `${INWARD_RECEIPTS_HEADER}\n${lines.map(line => `- ${line}`).join('\n')}`;
+// Waldo's own header for the changes it made with no card. Text from the model never carries it: anything from the header on is
+// dropped from what the run said, and the lines come from the tool loop beside the reply (RunEndReport.inward).
+const saidOnly = (text: string): string => { const at = text.indexOf(INWARD_RECEIPTS_HEADER); return (at < 0 ? text : text.slice(0, at)).trim(); };
+// One message carries at most this many change lines; the rest are counted, and stay listed in the owner's own views.
+export const TOLD_LINES_MAX = 20;
+const receiptList = (lines: readonly string[]) => [INWARD_RECEIPTS_HEADER, ...lines.slice(0, TOLD_LINES_MAX).map(line => `- ${line}`),
+  ...(lines.length > TOLD_LINES_MAX ? [`- and ${lines.length - TOLD_LINES_MAX} more changes`] : [])].join('\n');
 
 export const generalWake = (deps: GeneralWakeDeps) => async (trace: string, kind: string, cause: LookCause | null): Promise<WakeCode> => {
   const started = deps.now();
-  const owed = deps.untold?.read() ?? [];
+  // UNDOABLE_INWARD: only then may a wake change something with no card, so only then does it tell; off, it ends as it always did.
+  const tells = deps.undoable === true && deps.untold !== undefined;
   const row = (outcome: WakeOutcome, end: RunEndReport | undefined): WakeRow => ({ id: trace, at: started, kind, ref: cause ?? 'cadence', outcome, reason: keptReason(end?.why), tools: end?.tools ?? [], outside: true, spend: end?.spend ?? null });
-  // Every ending that reaches no one keeps what was changed and not yet told, so a change is never made unseen.
-  const settle = (code: WakeCode, outcome: WakeOutcome, end: RunEndReport | undefined, untold: readonly string[] = owed) => {
+  // An ending that reaches no one keeps what the run changed and has not told, so a change is never made unseen.
+  const settle = (code: WakeCode, outcome: WakeOutcome, end: RunEndReport | undefined) => {
     deps.chose(trace, code);
-    deps.transaction(() => { deps.record(row(outcome, end)); if (untold.length) deps.untold?.keep(untold); });
+    deps.transaction(() => { deps.record(row(outcome, end)); if (tells && end?.inward?.length) deps.untold!.add(end.inward); });
     return code;
   };
   const hold = (): WakeHold | null => (!deps.consent() ? 'consent' : deps.quiet() ? 'quiet' : null);
@@ -226,41 +227,46 @@ export const generalWake = (deps: GeneralWakeDeps) => async (trace: string, kind
     settle('failed', 'failed', undefined);
     throw error;
   }
-  const { said, made } = receiptsOf(reply.trim());
-  const untold = [...new Set([...owed, ...made])];
+  const text = tells ? saidOnly(reply.trim()) : reply.trim();
   // A run whose ending is unknown sends nothing: words it left (an unfinished run's) are not a message it chose.
-  if (end === undefined) return said && !sendsNothing(said) ? settle('failed', 'failed', end, untold) : settle('nothing', 'nothing', end, untold);
-  // A card it raised is the notification; a run that ends without wanting to speak is its own outcome, unless it changed something.
+  if (end === undefined) return text && !sendsNothing(text) ? settle('failed', 'failed', end) : settle('nothing', 'nothing', end);
+  // A card it raised is the notification; a run that ends without wanting to speak is its own outcome, unless there are changes to tell.
   const quietOutcome = quietEnd(end);
-  const speaks = said !== '' && !sendsNothing(said) && MESSAGE_ENDS.has(end.reason) && quietOutcome !== 'carded';
-  if (!speaks && !untold.length) return settle(quietOutcome, quietOutcome, end, untold);
+  const speaks = text !== '' && !sendsNothing(text) && MESSAGE_ENDS.has(end.reason) && quietOutcome !== 'carded';
+  const owed = tells ? deps.untold!.read() : [];
+  const lines = [...owed.map(entry => entry.line), ...(tells ? end.inward ?? [] : [])];
+  if (!speaks && !lines.length) return settle(quietOutcome, quietOutcome, end);
   // Checked again when the run wants to speak: quiet hours may have begun, or follow-ups been turned off, while it ran.
   const held = hold();
-  if (held !== null) return settle(`held_${held}`, 'held', end, untold);
+  if (held !== null) return settle(`held_${held}`, 'held', end);
   const outcome: WakeOutcome = !speaks ? 'told' : end.reason === 'ask_owner' ? 'asked' : 'spoke';
-  const text = [speaks ? said : '', untold.length ? receiptList(untold) : ''].filter(Boolean).join('\n\n');
+  const message = [speaks ? text : '', lines.length ? receiptList(lines) : ''].filter(Boolean).join('\n\n');
+  const through = owed.at(-1)?.seq;
   deps.chose(trace, outcome);
   try {
-    await deps.deliver(`wake:${trace}`, trace, text, () => { deps.record(row(outcome, end)); deps.untold?.clear(); });
+    await deps.deliver(`wake:${trace}`, trace, message, () => { deps.record(row(outcome, end)); if (through !== undefined) deps.untold!.settle(through); });
   } catch (error) {
-    settle('failed', 'failed', end, untold);
+    settle('failed', 'failed', end);
     throw error;
   }
   return outcome;
 };
 
-// The untold changes, one line each, in a lazy owner-object table; a forget removes any line carrying what it forgets.
+// The untold changes, one row each in a lazy owner-object table, appended and settled by sequence so a wake never drops or repeats
+// a line another wrote meanwhile. A line holding a health reading is kept as a fixed line instead; a forget removes any line
+// carrying what it forgets.
+export const WITHHELD_CHANGE = 'A change whose line held a health reading; it is listed in the app.';
 const untoldExists = (sql: Sql) => sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'wake_untold'").one().n > 0;
 export const wakeUntoldBook = (sql: Sql) => ({
-  read(): readonly string[] {
-    return untoldExists(sql) ? sql.exec<{ line: string }>('SELECT line FROM wake_untold ORDER BY seq').toArray().map(row => row.line) : [];
+  read(): readonly Readonly<{ seq: number; line: string }>[] {
+    return untoldExists(sql) ? sql.exec<{ seq: number; line: string }>('SELECT seq, line FROM wake_untold ORDER BY seq').toArray() : [];
   },
-  keep(lines: readonly string[]): void {
-    sql.exec('CREATE TABLE IF NOT EXISTS wake_untold (seq INTEGER PRIMARY KEY, line TEXT NOT NULL)');
-    sql.exec('DELETE FROM wake_untold');
-    lines.forEach((line, seq) => sql.exec('INSERT INTO wake_untold (seq, line) VALUES (?, ?)', seq, line));
+  add(lines: readonly string[]): void {
+    sql.exec('CREATE TABLE IF NOT EXISTS wake_untold (seq INTEGER PRIMARY KEY AUTOINCREMENT, line TEXT NOT NULL)');
+    for (const line of lines) sql.exec('INSERT INTO wake_untold (line) VALUES (?)', numericHealthIn(line) ? WITHHELD_CHANGE : line);
   },
-  clear(): void { if (untoldExists(sql)) sql.exec('DELETE FROM wake_untold'); },
+  // The lines a delivered message carried, up to the last one it read.
+  settle(through: number): void { if (untoldExists(sql)) sql.exec('DELETE FROM wake_untold WHERE seq <= ?', through); },
 });
 export const forgetWakeUntold = (sql: Sql, texts: readonly string[]): number => {
   const topics = [...new Set(texts.map(text => text.trim().toLowerCase()).filter(Boolean))];

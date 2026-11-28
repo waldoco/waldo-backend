@@ -191,7 +191,7 @@ export type OwnerContextIntegration = Readonly<{ skills?: OwnerSkillCapability; 
 // What a run's model calls cost: the last model that answered, tokens summed over its calls, and dollars where every call's
 // model has a price (null when one has none).
 export type RunSpend = Readonly<{ calls: number; model: string; input: number; cached: number; output: number; usd: number | null }>;
-export type RunEndReport = Readonly<{ reason: string; why?: string; tools: readonly string[]; spend?: RunSpend }>;
+export type RunEndReport = Readonly<{ reason: string; why?: string; tools: readonly string[]; spend?: RunSpend; inward?: readonly string[] }>;
 // This owner's spend so far this month and the ceiling it is held to, read once when a turn starts.
 export type OwnerSpend = Readonly<{ spentUsd: number; ceilingUsd: number }>;
 type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; finishedTasks?: (since: number) => string; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; loopHasPassed?: (id: string) => boolean; memoryChat?: (chain: string, principal: string) => string; promptOwnText?: (traceId: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; turnCharts?: (turnId: string) => readonly ConversationChart[]; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; jobOutcomeRows?: boolean; timelineSeed?: TimelineSeed; machineTime?: OwnerContextIntegration['machineTime']; leanScheduled?: boolean; promotedTools?: OwnerContextIntegration['promotedTools']; noteLoaded?: OwnerContextIntegration['noteLoaded']; waldoSent?: OwnerContextIntegration['waldoSent']; nowFrame?: OwnerContextIntegration['nowFrame']; modelSetWakes?: boolean; undoableInward?: boolean; runEnded?: OwnerContextIntegration['runEnded'] }>;
@@ -1051,7 +1051,7 @@ export const createOwnerResponder = (
           log({ trace, hop: 'run_end', ms: 0, ok: end.reason !== 'no_reply', code: end.reason, ...(end.why ? { detail: end.why } : {}) });
           const spent = runSpend.get(trace);
           runSpend.delete(trace);
-          privateOwner?.runEnded?.(trace, { reason: end.reason, ...(end.why ? { why: end.why } : {}), tools: [...ranTools], ...(spent ? { spend: spent } : {}) });
+          privateOwner?.runEnded?.(trace, { reason: end.reason, ...(end.why ? { why: end.why } : {}), tools: [...ranTools], ...(spent ? { spend: spent } : {}), ...(end.inward?.length ? { inward: end.inward } : {}) });
         },
         ...(offerConnect ? { onConnect: offerConnect } : {}),
       });

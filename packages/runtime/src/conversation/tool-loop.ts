@@ -308,7 +308,7 @@ export async function runToolLoop(input: Readonly<{
   // Every return goes through here, so no run ends without its exit and its closed reason.
   const close = (settled: LoopExit, end: RunEnd, reply: string): string => {
     input.onSettle?.(settled);
-    input.onRunEnd?.(end);
+    input.onRunEnd?.(inward.length ? { ...end, inward: [...inward] } : end);
     return withInwardReceipts(reply, inward);
   };
   for (let round = 0; ; round += 1) {
