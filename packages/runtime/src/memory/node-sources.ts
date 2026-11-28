@@ -10,7 +10,10 @@ export const sourceRef = (source: WelcomeSource, pointers: readonly string[]): s
 export const isWelcomeRef = (ref: string | null | undefined): boolean => ref?.startsWith(PREFIX) === true;
 export const refPointers = (ref: string | null | undefined): readonly string[] =>
   ref?.startsWith(PREFIX) ? ref.slice(PREFIX.length).split(':').slice(1).join(':').split(',').filter(Boolean) : [];
+// The owner's setup answers are filed under refs that start with this.
+export const SETUP_REF = 'owner, first run: ';
 export const refSource = (ref: string | null | undefined): AppNodeSourceV13 | null => {
+  if (ref?.startsWith(SETUP_REF)) return 'setup';
   if (!ref?.startsWith(PREFIX)) return null;
   const parsed = appNodeSourceV13Schema.safeParse(ref.slice(PREFIX.length).split(':')[0]);
   return parsed.success ? parsed.data : null;

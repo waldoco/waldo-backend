@@ -26,6 +26,7 @@ import { renderHealth } from '../src/context-composer/prompt';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 import { routerSignature } from '../src/identity/owner-directory';
+import { recordSendEnded } from '../src/channels/send-outcomes';
 
 type Call = Readonly<{ name: string; arguments: Record<string, unknown> }>;
 type Round = Readonly<{ calls: readonly Call[] }> | Readonly<{ text: string }>;
@@ -75,7 +76,7 @@ const STARTUP = { id: 'ev-startup', title: 'Startup time', start: `${DAY}T15:00:
 const BLOCK = { action: 'create', title: 'Deck', start: `${DAY}T09:30:00Z`, end: `${DAY}T12:30:00Z`, block: 'deep_work', reason: 'Hold the morning for the deck' };
 const ANSWERS = ['Finish the deck', 'Gym first', 'Something else'];
 // The owner's shared health for one test; every other test shares none. Distinct words, so their absence from storage is a real check.
-const health = vi.hoisted(() => ({ shared: false, unreadable: false }));
+const health = vi.hoisted(() => ({ shared: false, unreadable: false, series: null as unknown, out: [] as string[] }));
 const HEALTH_WORDS = ['Form zone:', 'slept 52 minutes under baseline', 'Recovery: low'];
 const NO_HEALTH = 'No derived health context is available for this invocation.';
 const HEALTH_ROW = { context: { id: 'planning-health', day: DAY, form: { score: 41, zone: 'low' }, recovery: { score: 38, zone: 'low' },
@@ -94,11 +95,14 @@ const storedText = (state: DurableObjectState) => {
 };
 
 beforeEach(() => {
-  model.briefModels = []; model.brief = []; model.owner = []; model.briefTools = []; model.ownerTools = []; model.briefAsked = []; model.briefRequests = []; model.ownerRequests = []; model.results = []; health.shared = false; health.unreadable = false;
+  model.briefModels = []; model.brief = []; model.owner = []; model.briefTools = []; model.ownerTools = []; model.briefAsked = []; model.briefRequests = []; model.ownerRequests = []; model.results = []; health.shared = false; health.unreadable = false; health.series = null; health.out = [];
   calendar.events = [STARTUP]; calendar.created = []; calendar.moved = 0;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
+    if (!fn) health.out.push(new URL(String(input instanceof Request ? input.url : input)).host);
+    if (health.series && fn === 'health_consent_list') return Response.json({ consents: ['storage_compute', 'model_processing'].map(purpose => ({ consent_class: 'health_processing', source: 'apple', purpose, version: 2, status: 'granted', epoch: 1, granted_at: '2030-03-01T00:00:00Z', withdrawn_at: null, deletion_state: 'not_required' })) });
+    if (health.series && fn === 'health_series_read') return Response.json(health.series);
     if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: asked.p_do_name, state_version: 1, admission_revision: '5' });
     if (fn === 'app_session_authority') return Response.json({ owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
     if (fn === 'health_log_recent') return Response.json([]);
@@ -456,6 +460,105 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
         expect(looks(state)).toBe(0);
         expect(armed().map(row => row.due_at)).toEqual([AT + 24 * 3_600_000]);
       } finally { Date.now = tickAt; }
+    });
+  });
+
+  // GENERAL_WAKE: the tick runs Waldo's general wake in the brain instead of a reader job, and the owner's limits wait for
+  // the send. Every run leaves one outcome row with the reason it gave.
+  const wakeRows = (state: DurableObjectState) => state.storage.sql.exec<{ outcome: string; reason: string | null; tools: string }>('SELECT outcome, reason, tools FROM wake_outcomes').toArray();
+  const wakeCost = (state: DurableObjectState) => state.storage.sql.exec<{ model: string | null; calls: number | null; tokens_in: number | null; tokens_out: number | null }>('SELECT model, calls, tokens_in, tokens_out FROM wake_outcomes').toArray();
+  it('the wake reads the free-window lines without "Offer, never take": its own order decides when to act', async () => {
+    await owned('general-wake-windows', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1', FREE_WINDOW_OFFERS: '1' }, async ({ state, owner }) => {
+      model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Nothing new.' } }] }];
+      await tick(state, owner);
+      expect(model.ownerRequests[0]).toContain('propose_calendar_change with action create');
+      expect(model.ownerRequests[0]).not.toContain('Offer, never take');
+    });
+  });
+
+  it('a wake that read mail and the body cannot send anything out: web_search and browse_page reached through use_tool are refused in the owner object, and no request leaves for them', async () => {
+    await owned('general-wake-egress', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1', BRAVE_SEARCH_API_KEY: 'synthetic-fixture', WALDO_TOOL_LOADER: 'harness' }, async ({ state, owner }) => {
+      // The owner's own synthetic reading, granted for model processing, so get_health returns it beside the mail just read.
+      health.series = { access: 'granted', read_at: `${DAY}T07:00:00.000Z`, sources: [{ source: 'apple', consent_epoch: 1, samples: [
+        { signal: 'overnight_hrv', day: '2030-03-04', start_at: '2030-03-03T22:00:00Z', end_at: '2030-03-04T05:00:00Z', timezone: 'UTC', value: 47, method: 'sdnn' }] }] };
+      model.owner = [
+        { calls: [{ name: 'search_communication', arguments: { query: 'vendor quote' } }] },
+        { calls: [{ name: 'get_health', arguments: { signals: ['hrv'], from: '2030-03-04', to: DAY } }] },
+        { calls: [{ name: 'find_tools', arguments: { names: ['web_search', 'browse_page'] } }] },
+        { calls: [{ name: 'use_tool', arguments: { name: 'web_search', arguments: { query: 'vendor quote reply short sleep' } } }] },
+        { calls: [{ name: 'use_tool', arguments: { name: 'browse_page', arguments: { url: 'https://vendor.example/reply?note=short-sleep' } } }] },
+        { calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Could not look it up from here.' } }] },
+      ];
+      await tick(state, owner);
+      const turns = model.ownerRequests.flatMap(request => (JSON.parse(request) as { tool_turns?: { call: { name: string; arguments: string }; output: string }[] }).tool_turns ?? []);
+      const reached = (tool: string) => turns.filter(turn => turn.call.name === 'use_tool' && turn.call.arguments.includes(`"${tool}"`));
+      for (const tool of ['web_search', 'browse_page']) {
+        expect(reached(tool).length, tool).toBeGreaterThan(0);
+        for (const turn of reached(tool)) expect(turn.output, tool).toContain('egress_denied');
+      }
+      expect(turns.find(turn => turn.call.name === 'search_communication')?.output).toContain('external data from search_communication');
+      expect(turns.find(turn => turn.call.name === 'get_health')?.output).toContain('"state":"available"');
+      // Nothing left for the search provider or the page: the only requests out are the owner's own stores.
+      expect(health.out.filter(host => /brave|vendor\.example/.test(host))).toEqual([]);
+      expect(wakeRows(state)).toEqual([expect.objectContaining({ outcome: 'nothing' })]);
+    });
+  });
+
+  it('with the general wake on, the tick starts no reader job: one run in the brain, one outcome row with its reason', async () => {
+    await owned('general-wake-tick', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner, hops }) => {
+      model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Nothing moved since the Brief; the 15:00 still fits.' } }] }];
+      await tick(state, owner);
+      expect(looks(state)).toBe(0);
+      expect(model.ownerRequests.length).toBeGreaterThan(0);
+      expect(model.ownerRequests[0]).toContain("Waldo's own wake");
+      expect(wakeRows(state)).toEqual([{ outcome: 'nothing', reason: 'Nothing moved since the Brief; the 15:00 still fits.', tools: '[]' }]);
+      // What the run cost is on its row, so wakes can be measured against the owner's cost target.
+      expect(wakeCost(state)).toEqual([{ model: expect.any(String), calls: 1, tokens_in: 1, tokens_out: 1 }]);
+      expect(state.storage.kv.get('wake_cost_month_v1')).toMatchObject({ month: '2030-03', wakes: 1 });
+      expect(hops()).toContain('wake_cost');
+      expect(hops()).toContain('wake');
+    });
+  });
+
+  it('with the owner\'s no to follow-ups the wake is held before it runs, and recorded: a card it raised would reach them', async () => {
+    await owned('general-wake-declined', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner }) => {
+      loopBook(state.storage.sql, { newId: () => 'l', now: () => AT }).setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', followups: false });
+      model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'send', reason: 'The 15:00 runs into the gym slot.', message: 'Your 15:00 now runs into the gym slot. Move the gym to 18:00?' } }] }];
+      await tick(state, owner);
+      expect(model.ownerRequests).toEqual([]);
+      expect(wakeRows(state).map(row => row.outcome)).toEqual(['held']);
+    });
+  });
+
+  it('the wake reads what Waldo already sent first today and what became of it, as every run built on the ledger does', async () => {
+    await owned('general-wake-sent-today', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner }) => {
+      recordSendEnded(state.storage.kv, { id: 'whatsapp-copy:row-1', trace: 't', payload: { chat_id: 1, text: 'synthetic' }, digest: 'd', ownerSubject: '15550003333', doName: 'general-wake-sent-today',
+        status: 'blocked', reason: 'whatsapp_payment_required', dueAt: 0, createdAt: AT - 60_000, attempts: 0 }, 'whatsapp', AT - 60_000);
+      model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Nothing new.' } }] }];
+      await tick(state, owner);
+      expect(model.ownerRequests[0]).toContain('Messages Waldo sent first today (not replies)');
+      expect(model.ownerRequests[0]).toContain('whatsapp copy to WhatsApp: failed (whatsapp_payment_required)');
+    });
+  });
+
+  it('the wake never reads the owner\'s volume: on low it still runs, and its prompt does not name volume', async () => {
+    await owned('general-wake-low', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner }) => {
+      loopBook(state.storage.sql, { newId: () => 'l', now: () => AT }).setProactivity({ quiet_start: null, quiet_end: null, volume: 'low' });
+      model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Nothing new.' } }] }];
+      await tick(state, owner);
+      expect(model.ownerRequests.length).toBeGreaterThan(0);
+      expect(String(JSON.parse(model.ownerRequests[0]!).messages.at(-1).content)).not.toMatch(/volume/i);
+      expect(wakeRows(state).map(row => row.outcome)).toEqual(['nothing']);
+    });
+  });
+
+  it('a wake can load the health-protocols skill: skills_load is offered and the skill index says when to load it', async () => {
+    await owned('general-wake-skill', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1', HEALTH_ACTIONS: '1' }, async ({ state, owner }) => {
+      model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Nothing new.' } }] }];
+      await tick(state, owner);
+      const request = JSON.parse(model.ownerRequests[0]!) as { tools?: { name: string }[] };
+      expect((request.tools ?? []).map(tool => tool.name)).toContain('skills_load');
+      expect(model.ownerRequests[0]).toContain(`health-protocols@`);
     });
   });
 

@@ -134,3 +134,14 @@ it('the host keeps handlers without a check and handlers whose check throws, and
   expect(kept.map(handler => handler.name)).toEqual(['connect_service', 'get_tasks']);
   expect(report).toEqual({ not_connected: 1, not_configured: 1, check_failed: 1, unconnected: ['mail'] });
 });
+
+// HEY-367: on staging the look's reader was offered read_drive for owners whose Google grant held mail but not Drive, and it
+// ended blocked on the first auth_failed. Drive is offered like mail and calendar: only while a connected account holds it.
+it('read_drive is offered only while a connected account holds the Drive grant', async () => {
+  const drive = (accounts: readonly Readonly<Record<string, unknown>>[]) => readDriveHandler({ client: async () => null, state: async () => accounts as never }, true).eligible!();
+  expect(await drive([{ ...account(), drive: false }])).toEqual({ ok: false, reason: 'not_connected', connect: { status: 'auth_required', service: 'google', reason: 'scope_missing', feature: 'drive' } });
+  expect(await drive([])).toEqual({ ok: false, reason: 'not_connected', connect: { status: 'auth_required', service: 'google', reason: 'not_connected', feature: 'drive' } });
+  expect(await drive([{ ...account(), drive: false }, { ...account({ id: 'acct-2', email: 'work@example.test' }), drive: true }])).toEqual({ ok: true });
+  // A Waldo with Drive reads off is not offered it at all, whatever the grant.
+  expect(await readDriveHandler({ client: async () => null, state: async () => [{ ...account(), drive: true }] as never }, false).eligible!()).toEqual({ ok: false, reason: 'not_configured' });
+});

@@ -125,7 +125,7 @@ describe('a pattern the nightly promotion draws', () => {
     return store.allClaims().find((claim) => claim.text === text)!.id;
   };
   const promote = (store: ClaimStore, node: Readonly<{ id: number | null; label: string; summary: string }>, spots: readonly number[]) =>
-    applyPromotion(store, JSON.stringify({ nodes: [{ ...node, domain: 'work', strength: 0.6, status: 'active', supporting_spots: spots, durable: true, reason: 'two days' }], edges: [], promoted: [] }), DAY2);
+    applyPromotion(store, JSON.stringify({ constellations: [{ ...node, replaces: [], area: 'work', strength: 0.6, spots }], links: [], promoted: [] }), DAY2);
 
   it('is Waldo\'s read in every turn when its notes came from outside content, though the owner confirmed each note', async () => {
     await withStore((store, sql) => {
@@ -139,7 +139,7 @@ describe('a pattern the nightly promotion draws', () => {
     });
   });
 
-  it('keeps the owner\'s yes through a nightly re-save of the same wording, and drops it when the wording changes', async () => {
+  it('keeps the owner\'s yes through a nightly re-save, and a pass that would reword it keeps the owner\'s words', async () => {
     await withStore((store) => {
       const supports = [owned(store, 'Writes before ten'), owned(store, 'Mutes chat until noon', DAY2)];
       expect(promote(store, { id: null, label: 'Deep mornings', summary: 'Focus first' }, supports)).toBe('nodes1 edges0 promoted0');
@@ -148,8 +148,8 @@ describe('a pattern the nightly promotion draws', () => {
       promote(store, { id, label: 'Deep mornings', summary: 'Focus first' }, supports);
       expect(confirmation(store, id)).toBe('confirmed');
       promote(store, { id, label: 'Deep mornings', summary: 'Focus until noon' }, supports);
-      expect(confirmation(store, id)).toBe('waldos_read');
-      expect(statements(store).filter((claim) => claim.status !== 'superseded')).toEqual([]);
+      expect(confirmation(store, id)).toBe('confirmed');
+      expect(store.nodes().find((node) => node.id === id)!.summary).toBe('Focus first');
     });
   });
 });
@@ -191,7 +191,7 @@ describe('the statement is a record of the owner\'s yes, never a memory fact', (
       const statement = statements(store)[0]!.id;
       const pattern = owned(store, 'Answers investors first');
       const held: string[] = [];
-      applyPromotion(store, JSON.stringify({ nodes: [{ id: null, domain: 'work', label: 'Investor focus', summary: 'Puts investors first', strength: 0.8, status: 'active', supporting_spots: [statement, pattern], durable: true, reason: 'two days' }], edges: [], promoted: [] }), AT,
+      applyPromotion(store, JSON.stringify({ constellations: [{ id: null, replaces: [], area: 'work', label: 'Investor focus', summary: 'Puts investors first', strength: 0.8, spots: [statement, pattern] }], links: [], promoted: [] }), AT,
         (receipt) => { if (receipt.reason) held.push(receipt.reason); });
       expect(held).toEqual(['untrusted_or_missing']);
       expect(store.nodes().map((node) => node.label)).not.toContain('Investor focus');

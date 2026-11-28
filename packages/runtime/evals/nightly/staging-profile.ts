@@ -81,6 +81,8 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   EVENT_PUSH_PER_DAY: inert('no longer read: an event push keeps no daily count'),
   WHATSAPP_DAILY_KNOCK: inert('how often a closed WhatsApp window is knocked on; no model turn runs for it'),
   PROACTIVE_ACT_AHEAD: gap('the sweep worker and triage are not run in a trial, and the day-card cases run the Check-in and Close as before'),
+  GENERAL_WAKE: gap('the general wake runs on the scheduler, which a trial does not run; a wake step runs the production wake prompt and tools on its own, whatever this says'),
+  WAKE_MODEL_LOOK: gap('the model role a general wake runs on; a trial\'s wake step runs on plans, the chat model, the default'),
   PROACTIVE_INTERVENTIONS: gap('Waldo\'s own look runs on the scheduler and the job lane, which a trial does not run; no case judges the look yet'),
   WHATS_NEW: gap('the what\'s new pass runs on the release wake and folds into day cards, neither of which a trial runs; with no announcement decided, an owner turn carries no what\'s new section'),
   PROACTIVE_REVIEW_EVERY_MIN: inert('how often the look is scheduled; a trial turn is not an alarm pass'),

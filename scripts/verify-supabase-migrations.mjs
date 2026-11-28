@@ -130,6 +130,7 @@ const expectedMigrations = [
   '20261116130000_health_form_curve.sql',
   '20261116140000_health_inventory.sql',
   '20261128090000_waldo_open_signup_uncapped.sql',
+  '20261128100000_health_zones_history.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);

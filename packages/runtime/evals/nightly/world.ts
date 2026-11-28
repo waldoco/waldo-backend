@@ -8,13 +8,14 @@ import { IsolatedSourceWorld } from '../../scenarios/isolated-source-world';
 import { isolatedGoogleClient } from '../../scenarios/isolated-google-client';
 import { localIso, reminderHandlers, type ReminderBook } from '../../src/channels/reminders';
 import { standingOrderHandlers, type StandingOrder, type StandingOrderBook } from '../../src/channels/standing-orders';
-import { loopBook, loopHandlers } from '../../src/channels/loops';
+import { loopBook, loopHandlers, loopsSection } from '../../src/channels/loops';
 import { episodeIndex, indexedConversationStore, scrubEpisodeTexts } from '../../src/channels/episodes';
 import { durableConversationStore } from '../../src/channels/conversation-store';
 import { toContextHealthMaterial, type HealthContextRow } from '../../src/channels/health-context';
 import { comingItemsFrom, healthTriggerBook, runHealthTrigger, type HealthDecisionFormat, type HealthTriggerOutcome } from '../../src/health/trigger';
 import type { HealthWakeReason } from '../../src/health/wakes';
-import { composeDayCard } from '../../src/channels/day-cards';
+import { composeDayCard, dayWindow, readCalendar } from '../../src/channels/day-cards';
+import { dayShapingContext } from '../../src/prompt/day-shaping';
 import { capacityBudgetContext } from '../../src/channels/capacity';
 import { DAY_CARDS, type CardId } from '../../src/prompt/day-cards';
 import { connectServiceHandler, googleHandlers, type EffectDesk, type GoogleAccess } from '../../src/tools/live/google';
@@ -476,6 +477,13 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     },
     // A day card's prompt as the owner object composes it, over this world's calendar; no ledger or conversation yet.
     dayCard: (id: CardId, capacity = false, tomorrow = false, planning = false) => composeDayCard(DAY_CARDS.find((card) => card.id === id)!, now(), TIMEZONE, { google: client, connectable: false, ledger: '', today: '', updates: '', ...(capacity ? { capacity } : {}), ...(tomorrow ? { tomorrow } : {}), ...(planning ? { planning } : {}) }).then((card) => card.text),
+    // GENERAL_WAKE: what the owner object hands a wake beside its prompt head: the rest of today's calendar, what is open (the
+    // loops this world holds), and the day-shaping block as staging builds it (coverage, free-window offers), over one
+    // connected account read a few minutes ago. Waldo has placed no blocks here, so there is no block section.
+    wakeCalendar: () => readCalendar({ from: now(), to: dayWindow(now(), TIMEZONE).to }, TIMEZONE, client, false),
+    wakeLedger: () => loopsSection(loops, TIMEZONE, now()),
+    wakeShaping: () => dayShapingContext({ offers: true, protocols: false, brief: false, wake: true,
+      coverage: { accounts: [{ email: 'owner@example.test', calendar: true, failing: false, read_minutes_ago: 4 }], phone: { state: 'not_shared' }, weekdays: { counts: [7, 8, 7, 8, 6, 1, 0], days: 28 } } }),
     // CAPACITY_BUDGET: the rest of this world's week, as the owner object hands it to the planning Brief.
     weekAhead: () => capacityBudgetContext(now(), TIMEZONE, client, false, ''),
     // The seeded claims are embedded before the first turn, as a long-lived owner's would be.
