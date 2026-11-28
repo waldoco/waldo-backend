@@ -20,6 +20,7 @@ const TABLES: Record<string, Row> = {
   wake_outcomes: purged('forget-wake-outcomes.test.ts'),
   waldo_notes: purged('forget-waldo-notes.test.ts'),
   reminder_outside: exempt('a reminder id, kept while that reminder\'s note was written after outside text; no owner text'),
+  reminder_asked: exempt('a reminder id, kept while that one-off reminder was set on the owner\'s own words; no owner text'),
   responsibility_outside: exempt('a responsibility id, kept once its text was written after outside text or holds a worker\'s report; no owner text'),
   claims: purged('forget-coverage.test.ts'), episodes: purged('forget-coverage.test.ts'),
   memory_backups: purged('forget-coverage.test.ts'), spots: purged('forget-coverage.test.ts'), core_file_revisions: purged('forget-coverage.test.ts'),

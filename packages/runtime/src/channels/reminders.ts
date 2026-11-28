@@ -4,13 +4,15 @@ import {
 } from '@waldo/contracts';
 import { nextOccurrence, UnreadableScheduleRowError, type Scheduler } from '../scheduler/multiplexer';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
+import { ownerAsked } from './owner-asked';
 import type { OwnerClock } from '../tools/live/get-context';
 
 // outside: set in a turn that had read outside text, so the note may carry that text's words, not the owner's.
+// asked: set by set_reminder on the owner's own words (approvals' ownerAsked), so when it fires it is their ask, made earlier.
 type Reminder = Readonly<{ id: string; note: string; at: string; repeat: SetReminderArgs['repeat']; cron?: string; outside?: true }>;
 
 export type ReminderBook = Readonly<{
-  set(args: SetReminderArgs, written?: Readonly<{ outside?: boolean }>): Promise<Reminder>;
+  set(args: SetReminderArgs, written?: Readonly<{ outside?: boolean; asked?: boolean }>): Promise<Reminder>;
   list(): readonly Reminder[];
   // Reminders kept in a form this version cannot read: left out of list(), but they still exist.
   unreadable(): number;
@@ -18,6 +20,7 @@ export type ReminderBook = Readonly<{
   cancelAll(): Promise<number>;
   note(id: string): string | null;
   outside(id: string): boolean;
+  asked(id: string): boolean;
   fired(entry: ScheduleEntry): void;
 }>;
 
@@ -27,10 +30,12 @@ export const reminderBook = (sql: SqlStorage, scheduler: Scheduler, clock: Owner
   sql.exec('CREATE TABLE IF NOT EXISTS reminder_notes (id TEXT PRIMARY KEY, note TEXT NOT NULL, created_at INTEGER NOT NULL)');
   // The reminders whose note was written in a turn that had read outside text; a row here goes when its note does.
   sql.exec('CREATE TABLE IF NOT EXISTS reminder_outside (id TEXT PRIMARY KEY)');
+  // The reminders the owner asked for in their own words; a row here goes when its note does.
+  sql.exec('CREATE TABLE IF NOT EXISTS reminder_asked (id TEXT PRIMARY KEY)');
   const local = (at: number) => localIso(at, clock.timezone);
   const toReminder = (row: { id: string; note: string; due_at: number; recurrence_json: string | null; outside: number }): Reminder =>
     ({ id: row.id, note: row.note, at: local(row.due_at), ...repeatFromRecurrence(row.recurrence_json === null ? null : JSON.parse(row.recurrence_json) as ScheduleRecurrence), ...(row.outside ? { outside: true as const } : {}) });
-  const forget = (id: string) => sql.exec('DELETE FROM reminder_outside WHERE id = ?', id);
+  const forget = (id: string) => { sql.exec('DELETE FROM reminder_outside WHERE id = ?', id); sql.exec('DELETE FROM reminder_asked WHERE id = ?', id); };
   return {
     async set({ note, at, repeat, cron }, written) {
       const now = clock.now().getTime();
@@ -42,6 +47,7 @@ export const reminderBook = (sql: SqlStorage, scheduler: Scheduler, clock: Owner
       const id = `reminder:${newId()}`;
       sql.exec('INSERT INTO reminder_notes (id, note, created_at) VALUES (?, ?, ?)', id, note, now);
       if (written?.outside === true) sql.exec('INSERT INTO reminder_outside (id) VALUES (?)', id);
+      else if (written?.asked === true) sql.exec('INSERT INTO reminder_asked (id) VALUES (?)', id);
       let entry: ScheduleEntry;
       try {
         entry = await scheduler.schedule({
@@ -79,6 +85,7 @@ export const reminderBook = (sql: SqlStorage, scheduler: Scheduler, clock: Owner
     async cancelAll() {
       sql.exec('DELETE FROM reminder_notes');
       sql.exec('DELETE FROM reminder_outside');
+      sql.exec('DELETE FROM reminder_asked');
       return scheduler.cancelKind('reminder');
     },
     note(id) {
@@ -86,6 +93,9 @@ export const reminderBook = (sql: SqlStorage, scheduler: Scheduler, clock: Owner
     },
     outside(id) {
       return sql.exec('SELECT 1 FROM reminder_outside WHERE id = ?', id).toArray().length > 0;
+    },
+    asked(id) {
+      return sql.exec('SELECT 1 FROM reminder_asked WHERE id = ?', id).toArray().length > 0;
     },
     fired(entry) {
       if (entry.recurrence !== null) return;
@@ -134,7 +144,8 @@ export const reminderHandlers = (book: ReminderBook) => [
     mutates_state: true,
     async handle(args: SetReminderArgs, ctx?: ToolDispatcherContext) {
       try {
-        return { ok: true, data: await book.set(args, { outside: ctx?.toolArgSourceTaint === 'external' }), source_taint: null };
+        // Only a one-off reminder carries the owner's ask: a repeating one would hold it with no end, as a standing grant would.
+        return { ok: true, data: await book.set(args, { outside: ctx?.toolArgSourceTaint === 'external', asked: args.repeat === 'none' && ownerAsked(ctx) }), source_taint: null };
       } catch (error) {
         return { ok: false, code: 'invalid_args', error: error instanceof Error ? error.message : String(error) };
       }

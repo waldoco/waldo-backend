@@ -274,6 +274,12 @@ export const updateBook = (sql: Sql) => {
         event.event_id, event.start, event.end, event.all_day ? 1 : 0, event.title_digest, event.attendees ?? null, at);
     },
     unsee(eventId: string): void { sql.exec('DELETE FROM calendar_last_seen WHERE event_id = ?', eventId); },
+    // Every event as last seen, times and how many attend only (the owner turn's now frame), and the owner day the calendar was
+    // last read in full, or null when it never was.
+    seenTimes: (): readonly Readonly<{ start: string; end: string; all_day: boolean; attendees?: number }>[] =>
+      sql.exec<{ start_at: string; end_at: string; all_day: number; attendees: number | null }>('SELECT start_at, end_at, all_day, attendees FROM calendar_last_seen').toArray()
+        .map((row) => ({ start: row.start_at, end: row.end_at, all_day: row.all_day === 1, ...(row.attendees === null ? {} : { attendees: row.attendees }) })),
+    seenDay: (): string | null => state('calendar_seen_day'),
     seeded(day: string, now: number): void {
       setState('calendar_seen_day', day);
       sql.exec('DELETE FROM calendar_last_seen WHERE seen_at < ?', now - LAST_SEEN_KEPT_MS);

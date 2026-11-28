@@ -306,6 +306,10 @@ export const createOwnerResponder = (
   // send stays that of a run over outside content (runOrigin 'external', tools/run-authority).
   let markFollowsReads = false;
   let backgroundOwnerModel = false;
+  // A reminder the owner set on their own words is firing: their ask, made earlier. Its inward, undoable writes need no card
+  // (the gate's owner_inward exemption); nothing else it may do changes.
+  let reminderAsked = false;
+  const ownerReminder = () => reminderAsked ? { ownerAskedInward: true } : {};
   // The running job is a planning run (its ownerModel is 'plans').
   let planningRun = false;
   const assertCurrent = async () => { privateRunScope?.admit(); await context?.assertCurrent(); await skills?.admission?.assertCurrent(); await backgroundCurrent?.(); privateRunScope?.admit(); };
@@ -791,7 +795,7 @@ export const createOwnerResponder = (
           budget: turnBudget,
           // The child starts with whatever outside text the parent has read by now, so its reads write nothing on that text's say,
           // and a child whose task was written after the owner's readings were shown fences its egress once it is tainted.
-          ctx: { ...safety, ...memoryContext(), ...(readOthersWords() || turnLoopCtx?.toolArgSourceTaint === 'external' ? { toolArgSourceTaint: 'external' as const } : {}), ...(turnLoopCtx?.healthShown ? { healthShown: true } : {}), runOrigin: runOrigin(), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
+          ctx: { ...safety, ...memoryContext(), ...ownerReminder(), ...(readOthersWords() || turnLoopCtx?.toolArgSourceTaint === 'external' ? { toolArgSourceTaint: 'external' as const } : {}), ...(turnLoopCtx?.healthShown ? { healthShown: true } : {}), runOrigin: runOrigin(), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
           controlRound: consumeRound,
           complete: async (content, tools, turns) => {
             await assertCurrent();
@@ -821,7 +825,7 @@ export const createOwnerResponder = (
       let turnSuffix: FrozenSuffix | undefined;
       // The turn's reads, kept only while a proposing tool can take steps behind its card.
       const turnReads: TrailRead[] | undefined = turnHandlers.some(handler => handler.takes_why) ? [] : undefined;
-      const loopCtx = { ...safety, ...memoryContext(), ...ownerMessage(), ...(turnCarriedOutside ? { carriedOutside: true } : {}), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), runOrigin: runOrigin(), turnId: trace, openFile: openedFiles.open, ...(privateRunScope ? { runScope: privateRunScope } : {}), ...(turnReads ? { turnReads } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
+      const loopCtx = { ...safety, ...memoryContext(), ...ownerReminder(), ...ownerMessage(), ...(turnCarriedOutside ? { carriedOutside: true } : {}), ...(readOthersWords() ? { toolArgSourceTaint: 'external' as const } : {}), runOrigin: runOrigin(), turnId: trace, openFile: openedFiles.open, ...(privateRunScope ? { runScope: privateRunScope } : {}), ...(turnReads ? { turnReads } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
       turnLoopCtx = loopCtx;
       let contextHealthCheck: Readonly<{ key: string; holds: Promise<boolean> }> | undefined;
       return runToolLoop({
@@ -1108,7 +1112,7 @@ export const createOwnerResponder = (
   // The owner's own message that started this turn, for a tool that acts on their word: only a turn started by their message
   // alone, with no quote, forward or other person's words in it. Its ref is the surface's message id, else the host's trace.
   const ownerMessage = () => runOrigin() === 'owner' && activeOwnerTurn
-    ? { ownerMessage: { messageRef: activeOwnerTurn.messageRef?.id ?? activeOwnerTurn.traceId, receivedAt: ownerTurnStartedAt, ownWordsOnly: activeOwnerTurn.parts.every((part) => part.authorship === 'owner'),
+    ? { ownerMessage: { messageRef: activeOwnerTurn.messageRef?.id ?? activeOwnerTurn.traceId, receivedAt: ownerTurnStartedAt, ownWordsOnly: activeOwnerTurn.parts.length > 0 && activeOwnerTurn.parts.every((part) => part.authorship === 'owner'),
       words: activeOwnerTurn.parts.filter((part) => part.authorship === 'owner').map((part) => part.text).join('\n') } } : {};
   const quoteContext = async (reply: ReplyContext | undefined): Promise<string> => {
     if (!reply) return '';
@@ -1201,7 +1205,8 @@ export const createOwnerResponder = (
     try {
       const userEntry = tree.get(id) ?? { id, ownerId, chatId: conversationRef, parentId: conversationLeaves.get(conversationRef) ?? null, threadAnchorId: null, surface, modelPayload: said, appPayload: received, modelProjection: { mode: 'include' as const }, role:'user' as const, inputOrigin: fromOwner ? 'owner' as const : 'machine' as const, ...(fromOwner && turnOwnWordsOnly ? { ownerWordsOnly: true as const } : {}), createdAt: Date.now() };
       // Read once from the chain as it stood before this message, the same rows the window is cut from.
-      turnCarriedOutside = fromOwner && userEntry.parentId !== null && chainCarriesOutside(tree, userEntry.parentId, compaction);
+      // A late answer to the owner's message reads the same chain the message would have, so it counts what that chain carried.
+      turnCarriedOutside = (fromOwner || activeOwnerTurn !== undefined) && userEntry.parentId !== null && chainCarriesOutside(tree, userEntry.parentId, compaction);
       // A run whose mark follows its reads starts marked when what it is shown besides its caller's text may hold someone
       // else's words: a chain that read outside content, or (lean) what Waldo delivered lately, which may carry what it read.
       if (markFollowsReads && ((userEntry.parentId !== null && chainCarriesOutside(tree, userEntry.parentId, compaction)) || (leanRun && (privateOwner?.waldoSent?.().length ?? 0) > 0))) backgroundSourceTaint = 'external';
@@ -1411,8 +1416,8 @@ export const createOwnerResponder = (
         turnCarriedOutside = false;
       }
     },
-    async remind(id, conversationRef, note, time, surface, timing) {
-      const asOwner = await asOwnerJob(id, job => job.remind(id, conversationRef, note, time, surface, timing), conversationRef);
+    async remind(id, conversationRef, note, time, surface, timing, ownerAsked) {
+      const asOwner = await asOwnerJob(id, job => job.remind(id, conversationRef, note, time, surface, timing, ownerAsked), conversationRef);
       if (asOwner !== undefined) return asOwner;
       await restored();
       pending = undefined;
@@ -1420,9 +1425,11 @@ export const createOwnerResponder = (
       // model with every tool a Waldo-started run may hold: anything that reaches another person goes on the owner's card, and
       // once it reads outside content the taint gate holds as in any turn. Its note is Waldo's wording of the request, not the
       // owner's own words, so it grounds no memory as theirs. A reminder set while reading outside content runs elsewhere.
+      // One the owner asked for in their own words makes its inward, undoable writes with no card, as their own turn would.
       backgroundOwnerModel = true;
+      reminderAsked = ownerAsked === true;
       try { return await converse(id, conversationRef, reminderCheckBackText(note, timing), time, false, surface); }
-      finally { backgroundOwnerModel = false; }
+      finally { backgroundOwnerModel = false; reminderAsked = false; }
     },
     async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments, directTools, waldoFirst, lateOwner, holdChanges) {
       const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments, directTools, waldoFirst, lateOwner, holdChanges), conversationRef, (sourceTaint === 'external' || sourceTaint === 'as_read') && !lateOwner);

@@ -199,6 +199,8 @@ export type HookRuntimeContext = {
   waldoOwnFollowUp?: () => boolean;
   // Set by the host on a turn the owner's own message started, quotes and forwards included: its reply goes to the owner.
   ownerInitiated?: boolean;
+  // A reminder the owner set on their own words, firing: their ask, made earlier. Only the owner_inward exemption reads it.
+  ownerAskedInward?: boolean;
   egressAllowlist?: readonly string[];
   sanitise?: (input: SanitiseInput) => MaybePromise<SanitiseResult>;
   // Typed store provenance from the dispatcher/store boundary (owner review on #212): the
@@ -556,14 +558,14 @@ const ownerStatedFigure = (args: unknown, ctx: Pick<HookRuntimeContext, 'ownerIn
 // owner's card instead of running. A tool changes something when its receipt can back a claim, so the set is read from the
 // tool's record, and a record without an exemption is carded. Privileged actions are carded by their own law first.
 export const taintedCallNeedsOwnerApproval = async (
-  tool: ToolName, taint: SourceTaint, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound' | 'loopHasPassed' | 'ownerInitiated' | 'waldoOwnFollowUp'>,
+  tool: ToolName, taint: SourceTaint, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound' | 'loopHasPassed' | 'ownerInitiated' | 'waldoOwnFollowUp' | 'ownerAskedInward'>,
 ): Promise<boolean> => taintGateBlocksDirectExecution(tool, taint)
   || (isExternalSourceTaint(taint) && await recordNeedsOwnerCard(tool, TOOL_RECORDS[tool], args, ctx));
 
 // One record's answer for a tainted call. own_card is not admitted here: the dispatcher admits it per call from the
 // handler's proposal_only declaration, so the exemption holds only while the handler actually only proposes.
 export const recordNeedsOwnerCard = async (
-  tool: ToolName, record: Pick<ToolRecord, 'claim' | 'tainted'>, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound' | 'loopHasPassed' | 'ownerInitiated' | 'waldoOwnFollowUp'>,
+  tool: ToolName, record: Pick<ToolRecord, 'claim' | 'tainted'>, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound' | 'loopHasPassed' | 'ownerInitiated' | 'waldoOwnFollowUp' | 'ownerAskedInward'>,
 ): Promise<boolean> => {
   const tainted = record.tainted;
   if (record.claim === null || (tainted !== undefined && 'refused' in tainted)) return false;
@@ -572,10 +574,14 @@ export const recordNeedsOwnerCard = async (
     case 'narrows': return clearsEverything(tool, args);
     case 'source_bound': return !(await boundToObservedSource(tool, args, ctx)) && !(await passedOwnerLoop(tool, args, ctx));
     case 'commits_on_card': return !typedBrowserStep(tool, args);
-    case 'owner_inward': return ctx.ownerInitiated !== true || combinedTask(tool, args);
+    // The owner's own turn, or a reminder they set on their own words firing (their ask, made earlier). That ask covers writes
+    // into their own space only, never work handed to a background worker, which may reach the web.
+    case 'owner_inward': return !(ctx.ownerInitiated === true || (ctx.ownerAskedInward === true && !HANDS_WORK_ON.has(tool))) || combinedTask(tool, args);
     default: return true;
   }
 };
+
+const HANDS_WORK_ON: ReadonlySet<ToolName> = new Set(['start_task', 'steer_task']);
 
 // A background task whose worker would hold the owner's private reads and a way out together. Started after outside text, its
 // brief may carry instructions to read the inbox and fetch a URL with it, so only the owner's card starts it.
