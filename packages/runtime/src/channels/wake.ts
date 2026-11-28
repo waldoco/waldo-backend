@@ -35,6 +35,8 @@ export type WakeContext = Readonly<{
   style: string; shaping?: string;
   // Waldo's own notes as notesSection renders them: read first, rewritten last.
   notes?: string;
+  // What came in since the last wake (wake-inbox inboxSection): body facts, places, changes, the owner opening the app.
+  inbox?: string;
 }>;
 
 const section = (label: string, text: string) => (text.trim() ? fenced(label, text).trimStart() : '');
@@ -91,6 +93,7 @@ export const wakePrompt = (localNow: string, cause: LookCause | null, context: W
   ...(context.shaping ? [context.shaping] : []),
   ...(context.notes ? [context.notes] : []),
   section('the rest of today on the owner\'s calendar', context.calendar),
+  ...(context.inbox ? [context.inbox] : []),
   section('what changed since Waldo last looked (mail and calendar changes not yet on a day card)', context.changes) || 'No mail or calendar change is waiting since the last day card.',
   `[It is ${localNow} in the owner's time zone. ${cause ? `Why now: ${CAUSES[cause]}.` : 'Why now: Waldo\'s regular look across the owner\'s day.'}]`,
   RUN_END_INSTRUCTION,
@@ -180,6 +183,8 @@ export type GeneralWakeDeps = Readonly<{
   // Queues the message under its id, `commit` in the same transaction.
   deliver(id: string, trace: string, text: string, commit: () => void): Promise<void>;
   record(row: WakeRow): void;
+  // A wake that ran to an outcome settles the inbox it read, in the same write as its row; one held or failed leaves it for the next.
+  settleInbox?(): void;
   chose(trace: string, code: WakeCode): void;
 }>;
 
@@ -196,7 +201,7 @@ export const generalWake = (deps: GeneralWakeDeps) => async (trace: string, kind
   const row = (outcome: WakeOutcome, end: RunEndReport | undefined): WakeRow => ({ id: trace, at: started, kind, ref: cause ?? 'cadence', outcome, reason: keptReason(end?.why), tools: end?.tools ?? [], outside: true, spend: end?.spend ?? null });
   const settle = (code: WakeCode, outcome: WakeOutcome, end: RunEndReport | undefined) => {
     deps.chose(trace, code);
-    deps.transaction(() => { deps.record(row(outcome, end)); });
+    deps.transaction(() => { deps.record(row(outcome, end)); if (outcome !== 'held' && outcome !== 'failed') deps.settleInbox?.(); });
     return code;
   };
   const hold = (): WakeHold | null => (!deps.consent() ? 'consent' : deps.quiet() ? 'quiet' : null);
@@ -221,7 +226,7 @@ export const generalWake = (deps: GeneralWakeDeps) => async (trace: string, kind
   const outcome: WakeOutcome = end.reason === 'ask_owner' ? 'asked' : 'spoke';
   deps.chose(trace, outcome);
   try {
-    await deps.deliver(`wake:${trace}`, trace, text, () => { deps.record(row(outcome, end)); });
+    await deps.deliver(`wake:${trace}`, trace, text, () => { deps.record(row(outcome, end)); deps.settleInbox?.(); });
   } catch (error) {
     settle('failed', 'failed', end);
     throw error;

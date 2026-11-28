@@ -21,7 +21,8 @@ import { changeDetail, changeLines, CONTEXT_KINDS, CursorMovedError, heldWhen, r
 
 // Why an update card cannot go out now: the owner turned follow-ups off, the day's last card went, volume is low, quiet
 // hours, or the owner's surface would only hold it. The changes still wait for the next main card.
-export type SweepGate = 'held_preference' | 'held_closed' | 'held_volume' | 'held_quiet' | 'held_window';
+// held_by_wake (GENERAL_WAKE): the changes are recorded for the general wake, which reads them; no separate job starts and nothing is held.
+export type SweepGate = 'held_preference' | 'held_closed' | 'held_volume' | 'held_quiet' | 'held_window' | 'held_by_wake';
 export type SweepCheck = 'unchanged' | 'held_open_job' | 'held_breaker' | 'held_debounce' | 'held_cursor_moved' | SweepGate | MachineEnqueued['code'];
 
 // With the day state the judge runs at most once in this gap: a tick inside it reads nothing, so what it would have read
@@ -34,7 +35,7 @@ export const UPDATE_JUDGE_WAKE_KEY = 'update_judge_wake_v1';
 const UPDATE_SWEEP_DEADLINE_MS = 60 * 60_000;
 // HELD_RAISE: how many held batches one job takes, oldest first. The rest wait for the next job or the next day card.
 const HELD_PER_RAISE = 10;
-const heldOf = (gate: SweepGate | `held_${string}`): HeldCode | null => gate === 'held_preference' ? null : gate.slice('held_'.length) as HeldCode;
+const heldOf = (gate: SweepGate | `held_${string}`): HeldCode | null => gate === 'held_preference' || gate === 'held_by_wake' ? null : gate.slice('held_'.length) as HeldCode;
 
 export type SweepCheckDeps = Readonly<{
   updates: UpdateBook; jobs: JobBook; google: Pick<GoogleClient, 'changedEvents' | 'newMail' | 'events' | 'mailDelta' | 'calendarDelta' | 'changedEventsPage'>;

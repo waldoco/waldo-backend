@@ -106,6 +106,7 @@ import { drawingOn, interruptBook, interruptLimits, reopensAt } from './interrup
 import { ANNOUNCEMENTS_CHECKED_KEY, ANNOUNCEMENTS_RETRY_KEY, ANNOUNCEMENTS_RETRY_MS, announcementPassKey, requiresOf, type AnnouncementRow, announcementBook, announcementCardSection, announcementPrompt, announcementsFeedSchema, runAnnouncementPass, switchOn, WHATS_NEW_WINDOW_MS, whatsNewSection, type AnnouncementOutcome, type AnnouncementPrerequisite } from './announcements';
 import { forgetWakeReasons, GENERAL_WAKE_TOOLS, generalWake, wakeCostMonth, wakeOutcomeBook, wakeRole } from './wake';
 import { forgetWaldoNotes, notesSection, waldoNotesBook, waldoNotesHandlers } from './waldo-notes';
+import { inboxSection, WAKE_MERGE_MS, wakeInboxBook, type InboxKind } from './wake-inbox';
 import type { RunEndReport } from './owner-turn';
 import { armInterventionReview, interventionApplier, interventionEveryMs, interventionSpec, INTERVENTION_REVIEW_ID, lookCause, MOVE_PULL_KEY, movePullAllowed, nextLocalHour, nextLookAt } from './interventions';
 import { DeliveryGateStore } from '../delivery-gate/store';
@@ -413,6 +414,9 @@ type OwnerRuntime = Readonly<{
   reviseBriefForBody(trace: string): Promise<BriefBodyCode>;
   // The health trigger: a day marked by a zone change, and the scheduled evaluation of it.
   healthChanged(day: string): Promise<void>;
+  // GENERAL_WAKE: the owner opened the app (the phone sends its zone on every open). A wake comes now when something waits in the
+  // inbox or the last wake is older than the look's cadence, so the app shows a fresh read without a model call on every open.
+  appOpened(): Promise<void>;
   // PROACTIVE_INTERVENTIONS: Waldo's own look across the owner's plate, a patrol entry beside the health trigger's.
   interventionReview(entry: ScheduleEntry): Promise<void>;
   // What's new: once per release, this owner's Waldo decides how and whether to tell them about new capabilities.
@@ -3155,6 +3159,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const before = zoneState(this.ctx.storage.kv);
     if (deviceZoneApplies(before, zone) && (await this.setup('app').act({ action: 'timezone.set', id: '', value: zone, made: DEVICE_ZONE_MADE }, current)) !== true)
       return reply({ error: 'unavailable' }, 503);
+    // The phone sends its zone on every app open: the open is an event for the general wake. A failure there never fails the zone.
+    await this.setup('app').appOpened().catch(() => undefined);
     return reply(appDeviceTimezoneResultV1Schema.parse(deviceZoneAnswer(before, zoneState(this.ctx.storage.kv), zone)));
   }
 
@@ -5237,6 +5243,21 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // The look runs only inside the owner's day, from the Brief to the Close (interrupts.closed); its next run is armed there.
     const armLook = (now: number, again = false) => armInterventionReview(scheduler,
       nextLookAt(now, interventionEveryMs(this.env.PROACTIVE_REVIEW_EVERY_MIN), clock.timezone, day => plans.window(day, clock.timezone)), again);
+    // GENERAL_WAKE: the one inbox. An event lands in it and brings the wake to within the merge window, so a burst is read by one
+    // wake; a wake already due sooner keeps its time. Inside the owner's day only, as the look; the owner's no to follow-ups and
+    // their quiet hours still hold the wake itself.
+    const generalWakeOn = interventions !== null && this.env.GENERAL_WAKE === '1';
+    const wakeInbox = wakeInboxBook(storage.sql);
+    const wakeSoon = async (kind: InboxKind, ref: string): Promise<void> => {
+      if (!generalWakeOn || !schedPrefs.enabled('heartbeat') || !armable('heartbeat')) return;
+      const now = Date.now();
+      wakeInbox.add(kind, ref, now);
+      const at = nextLookAt(now + WAKE_MERGE_MS, 0, clock.timezone, day => plans.window(day, clock.timezone));
+      const armed = scheduler.lookup(INTERVENTION_REVIEW_ID);
+      if (armed.state === 'entry' && armed.entry.due_at <= at) return;
+      await armInterventionReview(scheduler, at, true);
+      log({ trace: `wake-inbox:${now}`, hop: 'wake_inbox', ms: 0, ok: true, code: kind });
+    };
     const lookFollows = async (on: boolean) => { if (interventions && on && armable('heartbeat')) await armLook(Date.now()); else await dropLook(); };
     const dropLook = async () => { if (scheduler.lookup(INTERVENTION_REVIEW_ID).state !== 'absent') { await scheduler.cancelReadable(INTERVENTION_REVIEW_ID); cancelMachine('intervention'); } };
     // The app's push: fixed text to the owner's own devices, read from the directory for each send.
@@ -6167,13 +6188,17 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       await scheduler.schedule({ id: HEALTH_TRIGGER_ID, kind: 'patrol', occurrenceAt: due, dueAt: due, payloadRefs: { id: HEALTH_TRIGGER_ID } });
     };
     const healthChanged = async (day: string) => {
+      // With the general wake on, a body fact the code computed always brings a wake; the separate health trigger is not armed.
+      if (generalWakeOn) return wakeSoon('health', 'zone_change');
       healthBook.mark(day, Date.now());
       await armHealthTrigger();
     };
     // A wake the recompute found in the stored rows: noted once per reason per day, and armed only when one is new.
     const healthWoken = async (day: string, reasons: readonly HealthWakeReason[]) => {
       if (reasons.includes('workout_ended')) storage.kv.delete(WORKOUT_NOTED_KEY);
-      if (reasons.filter(reason => healthBook.markOnce(day, Date.now(), reason)).length) await armHealthTrigger();
+      const fresh = reasons.filter(reason => healthBook.markOnce(day, Date.now(), reason));
+      if (generalWakeOn) { for (const reason of fresh) await wakeSoon('health', reason); return; }
+      if (fresh.length) await armHealthTrigger();
     };
     const healthRpc = (operation: string, payload: string) => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', operation, payload);
     // The newest derived row under model-use consent: with that consent withdrawn it returns nothing.
@@ -6563,6 +6588,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return triageHold(updates.interrupts(localIso(now, clock.timezone).slice(0, 10)), now, false) === null;
     };
     const sweepGate = (day: string): SweepGate | null => {
+      if (generalWakeOn) return 'held_by_wake';
       const { followups, volume } = loops.proactivity();
       return followups === false && !sweepCarriesUpdates ? 'held_preference' : !dayState && plans.read(day).some((row) => row.sent && row.card === 'card:close') ? 'held_closed'
         : volume === 'low' ? 'held_volume' : quiet() && !(dayState && revisesCards) ? 'held_quiet' : writesFirstNow() ? null : 'held_window';
@@ -6608,6 +6634,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace, hop: 'machine_check', ms: Date.now() - started, ok: true, code: check.code, detail: `changes=${check.changes}:analysis=${check.analysis}${check.delta ? `:delta=${check.delta.join(',')}` : ''}` });
         if (check.seedCapped) log({ trace, hop: 'day_state_seed', ms: 0, ok: true, code: 'seed_capped', detail: 'seed_capped' });
         if (check.wakeAt !== undefined) storage.kv.put(UPDATE_JUDGE_WAKE_KEY, check.wakeAt);
+        if (generalWakeOn && check.changes > 0) await wakeSoon('changes', 'mail_calendar');
         emitObserved(observers, observedEvents(check, day, now));
         if (check.code === 'enqueued') {
           log({ trace, hop: 'machine_enqueued', ms: 0, ok: true, job_id: check.job!.id, job_profile: 'reader' });
@@ -6702,12 +6729,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // reader job. It reads what changed, the rest of today, what is open and what was said today; the body comes as every run's
     // does. It keeps no daily count and never reads the owner's volume: a message waits only for the owner's no to follow-ups
     // or their quiet hours, checked when it decides to speak, never before it looks. Off, the look runs as before.
-    const runGeneralWake = interventions && this.env.GENERAL_WAKE === '1' ? generalWake({
+    let inboxReadAt: number | null = null;
+    const runGeneralWake = generalWakeOn ? generalWake({
       now: () => Date.now(), localNow: () => localIso(Date.now(), clock.timezone),
       consent: () => loops.proactivity().followups !== false, quiet, transaction: work => storage.transactionSync(work),
       context: async () => {
         const now = Date.now(), client = await google.client(), midnight = localToEpoch(`${localIso(now, clock.timezone).slice(0, 10)}T00:00`, clock.timezone);
+        inboxReadAt = now;
         return {
+          inbox: inboxSection(wakeInbox.pending(), at => localIso(at, clock.timezone).slice(11, 16)),
           changes: updates.unfolded(clock.timezone, now),
           calendar: await readCalendar({ from: now, to: dayWindow(now, clock.timezone).to }, clock.timezone, client, !client && google.configured()),
           cards: dayCards(), today: transcript(episodes.since(midnight, 30_000), clock.timezone), ledger: await promptLedger(false),
@@ -6731,6 +6761,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const month = wakeCostMonth(storage.kv).add(localIso(row.at, clock.timezone).slice(0, 7), row.spend?.usd);
         log({ trace: row.id, hop: 'wake_cost', ms: 0, ok: true, detail: `usd=${row.spend?.usd ?? 'unknown'} calls=${row.spend?.calls ?? 0} in=${row.spend?.input ?? 0} cached=${row.spend?.cached ?? 0} out=${row.spend?.output ?? 0} month=${month.month} month_wakes=${month.wakes} month_usd=${month.usd}` });
       },
+      settleInbox: () => { if (inboxReadAt !== null) wakeInbox.settle(inboxReadAt); },
       chose: (trace, code) => log({ trace, hop: 'wake', ms: 0, ok: code !== 'failed', code }),
     }) : null;
     // What's new: on the first wake of each release this owner's Waldo reads the team's announcements for its environment and
@@ -6823,6 +6854,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // The look runs on its cadence; a move brings it to now, or to the owner's next day when theirs is over. Everything after is the
     // look's own: the owner's limits, and the model judging whether the new place changes anything worth saying.
     const lookNow = async (cause: 'place_moved' | 'arrived_home' | 'arrived_gym') => {
+      if (generalWakeOn) return wakeSoon('place', cause);
       if (!interventions || !schedPrefs.enabled('heartbeat') || !armable('heartbeat')) return;
       const now = Date.now();
       if (!movePullAllowed(identity.get<number>(MOVE_PULL_KEY), now, interventionEveryMs(this.env.PROACTIVE_REVIEW_EVERY_MIN))) {
@@ -6837,6 +6869,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       identity.put(MOVE_PULL_KEY, now);
     };
     const placeMoved = () => lookNow('place_moved');
+    const appOpened = async () => {
+      if (!generalWakeOn) return;
+      try {
+        const last = wakeOutcomeBook(storage.sql).recent(20).find(row => row.outcome !== 'held' && row.outcome !== 'failed')?.at;
+        if (last === undefined || Date.now() - last >= interventionEveryMs(this.env.PROACTIVE_REVIEW_EVERY_MIN) || wakeInbox.pending().length) await wakeSoon('app_open', 'app');
+      } catch (error) {
+        log({ trace: `wake-inbox:${Date.now()}`, hop: 'wake_inbox', ms: 0, ok: false, code: error instanceof Error ? error.name : 'unknown' });
+      }
+    };
     const placeArrived = (place: ArrivalPlace) => lookNow(place === 'home' ? 'arrived_home' : 'arrived_gym');
     const writeCard = async (entry: ScheduleEntry) => {
       const card = cardFor(entry.id);
@@ -7157,7 +7198,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await armTaskJobsWake(storage, made.job.due_at ?? Date.now());
       },
     };
-    const runtime: OwnerRuntime = { welcome, onboardingSummary, lookup, getToKnow, sentToday: () => sendsToday(sendsDeps()), machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}), ...(getToKnowApply ? { get_to_know_you: getToKnowApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, push, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, reviseBriefForBody, healthChanged, healthTrigger, interventionReview, announcementPass, announcementsCurrent, placeMoved, placeArrived, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    const runtime: OwnerRuntime = { welcome, onboardingSummary, lookup, getToKnow, sentToday: () => sendsToday(sendsDeps()), machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}), ...(getToKnowApply ? { get_to_know_you: getToKnowApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, push, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, reviseBriefForBody, healthChanged, appOpened, healthTrigger, interventionReview, announcementPass, announcementsCurrent, placeMoved, placeArrived, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       lookupToolHandlers: () => {
         const unlocated = webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch), this.lookupPages) : null;

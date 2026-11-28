@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { NO_REPLAYS } from './helpers/no-replays';
 import { runInDurableObject } from 'cloudflare:test';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { TaskResult } from '@waldo/contracts';
 import type { CalendarChange, GoogleClient, MailItem } from '../src/connectors/google';
 import type { TurnLogEntry } from '../src/channels/owner-turn-types';
@@ -100,6 +100,20 @@ describe('the sweep check writes a machine job', () => {
       expect((await h.check()).code).toBe('held_quiet');
       expect(h.jobs()).toEqual([]);
       expect(h.rows()).toHaveLength(1);
+      expect(h.since()).toEqual([T0, T0]);
+    });
+  });
+
+  it('with the general wake on, the changes are recorded for the wake to read: no separate job starts and nothing is held for a later raise', async () => {
+    await withSweep(async (h) => {
+      h.mail.push(MAIL);
+      h.gate.code = 'held_by_wake';
+      const raise = vi.fn(() => true);
+      const result = await h.check({ raise });
+      expect([result.code, result.changes]).toEqual(['held_by_wake', 1]);
+      expect(h.jobs()).toEqual([]);
+      expect(h.rows()).toHaveLength(1);
+      expect(h.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM update_cards WHERE held_at IS NOT NULL").one().n).toBe(0);
       expect(h.since()).toEqual([T0, T0]);
     });
   });
