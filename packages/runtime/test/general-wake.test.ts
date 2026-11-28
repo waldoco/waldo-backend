@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { LookCause } from '../src/channels/interventions';
-import type { RunEndReport, RunSpend } from '../src/channels/owner-turn';
+import { EVERY_RUN_TOOLS, type RunEndReport, type RunSpend } from '../src/channels/owner-turn';
 import { GENERAL_WAKE_TOOLS, generalWake, wakeCostMonth, wakeOutcomeBook, wakeRole, WALDO_LENS, WITHHELD_REASON, type WakeCode, type WakeRow } from '../src/channels/wake';
 
 // GENERAL_WAKE: Waldo's general wake replaces the look. The model judges; code holds the wake only for the owner's no to
@@ -108,6 +108,10 @@ describe('Waldo\'s general wake', () => {
     expect(a.indexOf(WALDO_LENS)).toBeGreaterThan(0);
     expect(a.indexOf(WALDO_LENS)).toBeLessThan(a.indexOf('Send Ana the deck'));
     expect(b).toContain(WALDO_LENS);
+    // Every tool the orientation names is one a wake is offered, or one every run has.
+    const named = new Set(a.slice(0, a.indexOf('Get the Q4')).match(/\b[a-z]+(?:_[a-z]+)+\b/g));
+    expect([...named].filter(name => ![...GENERAL_WAKE_TOOLS, ...EVERY_RUN_TOOLS].includes(name))).toEqual([]);
+    expect(named.size).toBeGreaterThan(3);
   });
 });
 
