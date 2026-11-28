@@ -5,7 +5,7 @@ import type { ConsoleAuth } from '../src/identity/console-auth';
 const env = { SUPABASE_PROJECT_URL: 'https://db.test', SUPABASE_PUBLISHABLE_KEY: 'pub', WALDO_ROUTER_HMAC_SECRET: 'test-router', RESPONSIBILITY_RATE_LIMITER: { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit };
 const consoleAuth = { sendCode: vi.fn(async () => true), throttle: vi.fn(async () => true) } as unknown as ConsoleAuth;
 describe('signup entry', () => {
-  it.each(['GET', 'HEAD'])('serves %s without OTP, invite reads or consumption', async method => {
+  it.each(['GET', 'HEAD'])('serves %s as a pointer to the app, without OTP, invite reads or consumption', async method => {
     const fetcher = vi.fn();
     const response = await handleSignup(new Request('https://w.test/console/signup', { method }), env, consoleAuth, signupAuth(env, fetcher)!);
     expect(response.status).toBe(200);
@@ -14,10 +14,12 @@ describe('signup entry', () => {
     expect(fetcher).not.toHaveBeenCalled();
     expect(consoleAuth.sendCode).not.toHaveBeenCalled();
     if (method === 'GET') {
+      // New accounts start in the app, where the agreements are accepted: the page asks for no invite and sends no code.
       const html = await response.text();
-      expect(html).toContain('<label for="email">');
-      expect(html).toContain('history.replaceState');
-      expect(html).toContain("addEventListener('hashchange'");
+      expect(html).toContain('Waldo starts in the app');
+      expect(html).not.toMatch(/invite/i);
+      expect(html).not.toContain('action="/console/signup/send"');
+      expect(html).toContain('<a href="/console/signin">');
       expect(html).not.toMatch(/src="https?:/);
       expect(html).toContain('<a href="https://www.heywaldo.in/terms">Terms of Use</a>');
       expect(html).toContain('<a href="https://www.heywaldo.in/privacy">Privacy Policy</a>');
@@ -72,7 +74,7 @@ it('retains legacy contact continuation through resend, refresh and repeated sub
   expect(again.status).toBe(303);
   expect(s.fetcher.mock.calls.every(c => !String(c[0]).includes('owner_for_auth'))).toBe(true);
   const fresh = await handleSignup(new Request('https://w.test/console/signup?restart=1', { headers: { cookie: pendingCookie } }), env, s.a, s.signup);
-  expect(await fresh.text()).toContain('id="invite"');
+  expect(await fresh.text()).toContain('Waldo starts in the app');
   expect(fresh.headers.get('set-cookie')).toContain('Max-Age=0');
 });
 it.each(['https://attacker.test', 'null', ''])('rejects cross-origin POST (%s) before OTP or directory calls', async origin => {
