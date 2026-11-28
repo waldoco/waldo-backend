@@ -79,6 +79,8 @@ describe('Waldo\'s general wake', () => {
 
   it('a follow-up it set for itself, or a note it kept, is its own outcome', async () => {
     expect((await wake('SKIP', end('follow_up', 'Check after the 16:00.', ['open_loop']))).code).toBe('followed_up');
+    // A follow-up end whose open_loop never succeeded left nothing behind.
+    expect((await wake('SKIP', end('follow_up', 'Meant to check back.', []))).code).toBe('nothing');
     expect((await wake('SKIP', end('nothing_to_send', 'Kept that the deck moved to Friday.', ['remember']))).code).toBe('noted');
   });
 

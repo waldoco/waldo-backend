@@ -12,7 +12,7 @@ import { triageTools } from './update-sweep';
 // context every time (what is open, what was said today, the rest of today, what changed, the body as the composer gives it)
 // and holds the full tool set, memory and health reads included. Through find_tools it reaches everything else the owner's
 // own turn would; what it may do is checked per call at dispatch, as for any run over outside content. The regular look is a
-// baseline: the run sets its own next look with a follow-up when it wants one sooner. No count of messages a day is kept,
+// baseline: the run leaves itself a follow-up (open_loop, a check-back at its minute) when it wants one sooner. No count of messages a day is kept,
 // and the owner's volume is never read. The owner's own no to follow-ups and their quiet hours hold the wake before it runs
 // (a card it raised would reach them as a message), and again when it decides to speak. Every run leaves one outcome row with the reason it gave and what it cost, including when it chose to say nothing.
 export const GENERAL_WAKE_TOOLS: readonly ToolName[] = [...new Set<ToolName>([...triageTools(false, true), 'close_loop', 'remember', 'open_loop'])];
@@ -52,7 +52,7 @@ const ORIENTATION = [
   ].join('\n'),
   'Use your tools: read mail threads, the calendar, memory, earlier conversation, health. If a tool fails or a service is not connected, carry on with what you can read and say what you could not check.',
   'Anything that reaches another person, spends, deletes or cannot be undone goes on the owner\'s card (propose_action, propose_calendar_change, send_email); the card is the notification. Keep what you concluded that is worth keeping with remember.',
-  'Your regular look comes round on its own; it is a baseline, not a limit. When something needs a look sooner, or at a set minute (after a meeting, when a reply is due), leave yourself a follow-up with open_loop for that minute: it wakes you then.',
+  'Your regular look comes round on its own; it is a baseline, not a limit. When something needs checking sooner, or at a set minute (after a meeting, when a reply is due), leave yourself a follow-up with open_loop for that minute, with a note of what to check and why: Waldo checks back on it then.',
 ].join('\n\n');
 
 export const wakePrompt = (localNow: string, cause: LookCause | null, context: WakeContext): string => [
@@ -142,7 +142,7 @@ const MESSAGE_ENDS: ReadonlySet<string> = new Set(['send', 'ask_owner', 'replied
 const CARD_TOOLS: ReadonlySet<string> = new Set(WHY_TOOLS);
 const quietEnd = (end: RunEndReport | undefined): WakeOutcome =>
   end?.tools.some(tool => CARD_TOOLS.has(tool)) ? 'carded'
-    : end?.reason === 'follow_up' || end?.tools.includes('open_loop') ? 'followed_up'
+    : end?.tools.includes('open_loop') ? 'followed_up'
       : end?.tools.includes('remember') ? 'noted' : 'nothing';
 
 export const generalWake = (deps: GeneralWakeDeps) => async (trace: string, kind: string, cause: LookCause | null): Promise<WakeCode> => {

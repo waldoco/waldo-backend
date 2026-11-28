@@ -1170,6 +1170,7 @@ export const createOwnerResponder = (
     windowingRef = conversationRef;
     backgroundToolNames = fromOwner ? undefined : toolNames;
     traceId = id;
+    runSpend.delete(id);
     turnClockLine = undefined;
     ownerTurnActive = fromOwner;
     turnSanitise = { forgets: '', memo: new TurnSanitiseMemo() };
