@@ -69,7 +69,7 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 let startedAt = '';
-type Record = { id: string; status: string; reason?: string; providerMessageIds?: (string | null)[] };
+type Record = { id: string; status: string; reason?: string; failure?: string; providerMessageIds?: (string | null)[] };
 type Run = { status: string; summary: string | null };
 
 // Unless a test says otherwise the owner last wrote an hour ago, so by our clock the window is open. Today's cards are already
@@ -85,7 +85,8 @@ const owned = async (name: string, script: (steps: Readonly<{
   endOrder(): void;
   // Meta's status callbacks, as the webhook forwards them: a 131047 refusal, evidence the message reached the phone
   // (delivered, read or played), or any other failure.
-  status(kind: 'refused' | 'delivered' | 'failed', ids: readonly (string | null)[], at?: number): Promise<void>;
+  // A failure may carry Meta's first numeric error code, as the webhook forwards it.
+  status(kind: 'refused' | 'delivered' | 'failed', ids: readonly (string | null)[], at?: number, code?: number): Promise<void>;
   // The same report, answered without waiting for the owner's queue (which a stalled pass holds).
   report(kind: 'delivered', ids: readonly (string | null)[]): Promise<void>;
   settled(): Promise<void>;
@@ -149,9 +150,9 @@ const owned = async (name: string, script: (steps: Readonly<{
           await standingOrderBook(state.storage.sql, scheduler, clock, () => 'ord1').set({ scope: 'check the forecast', trigger: 'daily', at, gate: 'act_and_report', escalation: 'log_only' });
         },
         endOrder: () => { state.storage.sql.exec("DELETE FROM schedule WHERE kind = 'standing_order'"); },
-        status: async (kind, ids, at = Date.now()) => {
+        status: async (kind, ids, at = Date.now(), code) => {
           const response = await owner.fetch(new Request('https://telegram-owner/whatsapp-status', {
-            method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ [kind]: ids.map(id => ({ id, at })) }),
+            method: 'POST', headers: { 'x-waldo-whatsapp-subject': SUBJECT }, body: JSON.stringify({ [kind]: ids.map(id => ({ id, at, ...(code === undefined ? {} : { code }) })) }),
           }));
           expect(response.status).toBe(200);
           await settled();
@@ -177,7 +178,7 @@ const owned = async (name: string, script: (steps: Readonly<{
         },
         planned: () => dayPlanBook(state.storage.sql).read(today()).find(row => row.card === 'card:brief'),
         runs: () => state.storage.sql.exec<Run>("SELECT status, summary FROM background_runs WHERE kind = 'standing_order' ORDER BY started_at").toArray(),
-        outbox: () => records().map(({ id, status, reason, providerMessageIds }) => ({ id, status, ...(reason ? { reason } : {}), ...(providerMessageIds ? { providerMessageIds } : {}) })),
+        outbox: () => records().map(({ id, status, reason, failure, providerMessageIds }) => ({ id, status, ...(reason ? { reason } : {}), ...(failure ? { failure } : {}), ...(providerMessageIds ? { providerMessageIds } : {}) })),
       });
     } finally { await state.storage.deleteAlarm(); turn.mockRestore(); }
   });
@@ -366,6 +367,42 @@ describe.each([['just after midnight', '2026-10-22T00:30:00Z'], ['just before mi
     });
   });
 
+  it('a card Meta failed for want of a payment method (131042) ends naming that reason, is never resent, and the owner\'s next turn reads why', async () => {
+    await owned('wa-failed-payment', async ({ alarms, reply, card, status, ids, texts, outbox, notes }) => {
+      await card();
+      await alarms(3);
+      await status('failed', ids(), Date.now(), 131042);
+      expect(outbox()).toMatchObject([{ id: CARD_ID(), status: 'blocked', reason: 'provider_failed', failure: 'whatsapp_payment_required' }]);
+      await reply();
+      expect(texts()).toEqual([CARD]);
+      expect(notes()).toEqual([expect.stringContaining('[Delivery: your day card (brief) for WhatsApp')]);
+      expect(notes()[0]).toContain("did not reach the owner (WhatsApp refused it: Waldo's WhatsApp account has no payment method)");
+    });
+  });
+
+  it('a knock Meta failed for want of a payment method is recorded and logged by that reason, the owner\'s next turn reads it once, and nothing is sent again for it', async () => {
+    const lines = vi.spyOn(console, 'log');
+    try {
+      await owned('wa-knock-payment', async ({ alarms, order, endOrder, status, outbox, notes }) => {
+        await order();
+        await alarms(3);
+        endOrder();
+        expect(wire.events).toEqual([REPLY_KNOCK]);
+        await status('failed', [`wamid.out.${wire.wamid}`], Date.now(), 131042);
+        expect(lines.mock.calls.map(call => String(call[0])).filter(line => line.includes('"reason":"whatsapp_payment_required"'))).toHaveLength(1);
+        // The report keeps waiting for the owner to write; the failed knock is not retried, by another template or otherwise.
+        expect(outbox()).toEqual([{ id: expect.stringMatching(/^standing-order:/), status: 'pending' }]);
+        await alarms(2);
+        expect(wire.events).toEqual([REPLY_KNOCK]);
+        expect(notes()).toEqual([expect.stringContaining("[Delivery: Waldo's WhatsApp knock")]);
+        expect(notes()[0]).toContain("Waldo's WhatsApp account has no payment method");
+        // A replayed report changes nothing and leaves no second line.
+        await status('failed', [`wamid.out.${wire.wamid}`], Date.now(), 131042);
+        expect(notes()).toHaveLength(1);
+      }, 30 * HOUR);
+    } finally { lines.mockRestore(); }
+  });
+
   it('a report Meta accepted but never reports as arrived or refused ends unconfirmed after Meta\'s 30 days, not delivered', async () => {
     await owned('wa-accepted-lapsed', async ({ alarms, later, order, runs, outbox }) => {
       await order();
@@ -416,6 +453,16 @@ describe.each([['just after midnight', '2026-10-22T00:30:00Z'], ['just before mi
       await alarms(3);
       await status('failed', ids());
       expect(outbox()[0]).toMatchObject({ status: 'blocked', reason: 'provider_failed' });
+      expect(runs()).toEqual([{ status: 'stopped', summary: 'order ran; its report could not be delivered' }]);
+    });
+  });
+
+  it('a report Meta failed for want of a payment method is a provider failure like any other, naming its reason beside it', async () => {
+    await owned('wa-order-failed-payment', async ({ alarms, order, status, ids, runs, outbox }) => {
+      await order();
+      await alarms(3);
+      await status('failed', ids(), Date.now(), 131042);
+      expect(outbox()[0]).toMatchObject({ status: 'blocked', reason: 'provider_failed', failure: 'whatsapp_payment_required' });
       expect(runs()).toEqual([{ status: 'stopped', summary: 'order ran; its report could not be delivered' }]);
     });
   });
