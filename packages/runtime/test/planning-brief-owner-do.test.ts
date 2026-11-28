@@ -303,6 +303,30 @@ describe('the planning Brief on the app', { timeout: 30_000 }, () => {
     });
   });
 
+  it('with health shared, is shown the owner\'s confirmed body pattern and keeps its wording off the calendar', async () => {
+    health.shared = true;
+    const label = 'Late calls, then a low next day';
+    const base = { action: 'create', start: `${DAY}T13:00:00Z`, end: `${DAY}T14:00:00Z`, block: 'rest', reason: 'A lighter hour before Startup time' };
+    model.brief = [{ calls: [{ name: 'propose_calendar_change', arguments: { ...base, title: label } }] },
+      { calls: [{ name: 'propose_calendar_change', arguments: { ...base, title: 'Buffer' } }] }, { text: 'The Brief\nI put a buffer before Startup time on a card for your yes.' }];
+    await owned('planning-brief-egress-pattern', { PLANNING_BRIEF: '1' }, async ({ brief, approvals, state }) => {
+      const claims = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
+      const at = new Date(AT - 86_400_000).toISOString();
+      claims.add({ kind: 'observation', text: 'Takes a late call with the US team on Wednesdays', source: 'inferred', evidence: 'welcome build', origin: 'untrusted', source_ref: 'welcome:calendar:us-wed', area: 'work' }, at);
+      claims.add({ kind: 'observation', text: 'Recovery sits low on Thursday mornings', source: 'inferred', evidence: 'welcome build', origin: 'agent', source_ref: 'welcome:apple_health:recovery', area: 'body' }, at);
+      const node = claims.saveNode({ id: null, domain: 'body', label, summary: 'A late US call comes before a low morning.', strength: 0.7, status: 'active', supporting_spots: claims.claims().map((claim) => claim.id) }, at);
+      expect(claims.confirmNode(node, 'app:node.confirm', at)).toBe(true);
+      await brief();
+      expect(model.briefRequests[0]).toContain(label);
+      expect(model.briefRequests[0]).not.toContain('Recovery sits low on Thursday mornings');
+      expect(model.results.some(result => result.includes('"code":"rejected"'))).toBe(true);
+      const cards = await approvals();
+      expect(cards).toHaveLength(1);
+      expect(cards[0]).toMatchObject({ kind: 'calendar_change', exact: { changes: { action: 'create', title: 'Buffer' } } });
+      expect(calendar.created).toEqual([]);
+    });
+  });
+
   it('without health shared, still keeps the general health words off the calendar', async () => {
     const base = { action: 'create', start: `${DAY}T13:00:00Z`, end: `${DAY}T14:00:00Z`, block: 'rest', reason: 'A lighter hour' };
     model.brief = [{ calls: [{ name: 'propose_calendar_change', arguments: { ...base, title: 'Sleep in' } }] }, { text: 'The Brief\nNo change today.' }];

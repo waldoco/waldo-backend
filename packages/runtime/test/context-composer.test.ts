@@ -823,6 +823,17 @@ describe('ContextComposer', () => {
       const traced = scrubTraceHealth({ trace: 't', hop: 'llm_reply', ms: 0, ok: true, text: { input: ok.prompt } });
       expect(traced.text!.input).not.toContain('Late calls');
     }
+    // A pattern that holds a blank line still sits inside the health paragraph, so nothing of it reaches a trace.
+    const split = await createContextComposer(withHealth({ ...partial, patterns: ['Late calls first.\n\nLate calls after a break.'] })).compose(trustedEnvelope(), RUNTIME_INPUTS);
+    expect(split.ok).toBe(true);
+    if (split.ok) expect(scrubTraceHealth({ trace: 't', hop: 'llm_reply', ms: 0, ok: true, text: { input: split.prompt } }).text!.input).not.toContain('Late calls');
+    // A pattern the sanitiser refuses is left out alone; the run and the owner's other patterns go on.
+    const refused = await createContextComposer(withHealth({ ...partial, patterns: ['Mornings 100%ED after late calls', pattern] })).compose(trustedEnvelope(), RUNTIME_INPUTS);
+    expect(refused.ok, refused.ok ? undefined : refused.failure.code).toBe(true);
+    if (refused.ok) {
+      expect(refused.prompt).toContain(pattern);
+      expect(refused.prompt).not.toContain('100%ED');
+    }
     for (const patterns of ['one', [7], [''], ['x'.repeat(183)], Array.from({ length: 13 }, (_, index) => `pattern ${String.fromCharCode(97 + index)}`)]) {
       expect(await createContextComposer(withHealth({ ...partial, patterns })).compose(trustedEnvelope(), RUNTIME_INPUTS), JSON.stringify(patterns).slice(0, 40))
         .toEqual({ ok: false, failure: { code: 'health_context_invalid' } });

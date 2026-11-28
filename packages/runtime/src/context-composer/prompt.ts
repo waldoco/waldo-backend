@@ -229,9 +229,10 @@ export function renderHealth(health: ContextHealthMaterial | null, absent?: Heal
   ].join('\n');
 }
 
-// One line, inside the health paragraph, so the trace scrub withholds it with the rest of the block.
+// Inside the health paragraph, so the trace scrub withholds them with the rest of the block: a pattern never holds a line break,
+// which could open a paragraph the scrub reads on its own.
 const renderPatterns = (patterns: readonly string[] | undefined): readonly string[] =>
-  patterns?.length ? [`Patterns the owner confirmed about their body, in their own confirmed words (never readings): ${patterns.join(' | ')}`] : [];
+  patterns?.length ? ['Patterns the owner confirmed about their body, in their own confirmed words (never readings):', ...patterns.map((pattern) => pattern.replace(/\s+/g, ' '))] : [];
 
 // A day whose body data made no Recovery: what the row shows arrived, what it could not compute and why, the one step that
 // would fill the first gap, and that get_health can say what else arrived. The row records missing inputs, not every

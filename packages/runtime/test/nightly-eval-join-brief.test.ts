@@ -43,6 +43,13 @@ describe('the join\'s pattern reaching the next Brief', () => {
     expect(brief(record)).not.toContain(LABEL);
   });
 
+  it('gives the owner\'s own chat turn no pattern line beside their health: it reads the pattern from memory as before', async () => {
+    const record = await run([...scenario!.steps, { say: 'What does tomorrow look like?' }]);
+    const turn = record.model_inputs.at(-1)!.text;
+    expect(turn).toContain('What does tomorrow look like?');
+    expect(turn).not.toContain('Patterns the owner confirmed about their body');
+  });
+
   it('keeps an unconfirmed pattern out of the Brief: one resting on calendar spots waits for the owner\'s word', async () => {
     const record = await run(scenario!.steps.filter((step) => !('confirm_patterns' in step)));
     expect(record.transcript.some((turn) => turn.text.includes(`- ${LABEL}:`))).toBe(true);

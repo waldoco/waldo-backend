@@ -277,7 +277,7 @@ export const healthWordsOf = (view: HealthTriggerView | null): readonly string[]
 };
 const mentions = (text: string, words: readonly string[]): boolean => {
   const lower = text.toLowerCase();
-  return words.some(word => new RegExp(`(^|[^a-z])${word}([^a-z]|$)`).test(lower));
+  return words.some(word => new RegExp(`(^|[^a-z])${word.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z]|$)`).test(lower));
 };
 
 const zoneLine = (zones: Zones): string =>

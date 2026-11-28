@@ -551,14 +551,15 @@ export const createOwnerResponder = (
   const forgetBarrierMode: ForgetBarrierMode = privateOwner?.forgetBarrier ?? 'reads';
   const barrier = () => forgetBarrier(heldTopics(), forgetBarrierMode);
   const promptMemory = (): ClaimStore | undefined => memory && barrierMemory(memory, heldTopics);
-  // A run Waldo starts reads memory through the outside view, which keeps out every pattern drawn from health. The ones the owner
-  // confirmed ride with the shared health they rest on: the one block such a run may already hold the owner's body in.
-  const machineHealth = async (trace: string): Promise<HealthRead> => {
-    const read = await health!(trace), view = promptMemory();
-    if (read === null || read === 'unreadable' || !view) return read;
+  // A run built from outside content reads memory through the outside view, which keeps out every pattern drawn from health. The
+  // ones the owner confirmed ride with the shared health they rest on, the one block such a run may already hold the owner's body
+  // in. They are read on each compose, so a forget made mid-run takes them out at once.
+  const withPatterns = async (read: Promise<HealthRead>): Promise<HealthRead> => {
+    const shared = await read, view = promptMemory();
+    if (shared === null || shared === 'unreadable' || !view) return shared;
     const shown = confirmedBodyPatterns(withoutBringUpLess(view)).map(fence).filter((pattern) => pattern.length <= HEALTH_PATTERN_MAX_CHARS);
     const patterns = fittingLines(shown.slice(0, HEALTH_PATTERNS_MAX), CONSTELLATION_BLOCK_MAX_CHARS);
-    return patterns.length ? { ...read, patterns } : read;
+    return patterns.length ? { ...shared, patterns } : shared;
   };
   // A job built from outside content reads memory without health: no health note, stated reading or node drawn from health, in
   // any memory block or in recall. Every other turn reads the store as it is.
@@ -611,7 +612,7 @@ export const createOwnerResponder = (
     return round;
   };
   // A turn without a composed owner context (tests, probes) composes from the local fixture.
-  const composer = context?.composer ?? localTrustedBriefContextComposer({ ...(privateSystemSkills ? { localSystemSkills: privateSystemSkills } : {}), toolOutputs: recentToolResults, ...(health === undefined ? {} : { health: async () => ownerTurnActive ? health(traceId) : machineHealth(traceId) }),
+  const composer = context?.composer ?? localTrustedBriefContextComposer({ ...(privateSystemSkills ? { localSystemSkills: privateSystemSkills } : {}), toolOutputs: recentToolResults, ...(health === undefined ? {} : { health: async () => backgroundSourceTaint === 'external' ? withPatterns(health(traceId)) : health(traceId) }),
     onComposerPhase: (phase, previousMs) => log({ trace: traceId, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }) });
   const contextInputs = () => ({ ...(context?.snapshot() ?? localTrustedBriefTurnSnapshot()), canary_tokens: CANARIES, replay_context_ref: null });
   // The store a turn reads its chain from carries the settings it read under, so the view and the trigger agree with it.
@@ -1106,7 +1107,7 @@ export const createOwnerResponder = (
   // Machine work outside an owner turn runs in a responder bound to the owner the job host admitted, so its cache key,
   // composed context and tools' authenticated owner are that owner's. A job that converses passes its surface's chain, and
   // writes the chain the host names for it; a job that doesn't keeps the owner's default and writes no chain.
-  const asOwnerJob = async <T>(trace: string, work: (responder: OwnerResponder) => Promise<T>, surfaceChain?: string): Promise<T | undefined> => {
+  const asOwnerJob = async <T>(trace: string, work: (responder: OwnerResponder) => Promise<T>, surfaceChain?: string, outside = false): Promise<T | undefined> => {
     const jobHost = context ? undefined : privateOwner?.jobHost;
     if (!jobHost) return undefined;
     const admission = await jobHost.admit();
@@ -1116,7 +1117,7 @@ export const createOwnerResponder = (
       ...(surfaceChain === undefined ? {} : { conversationRef: jobHost.chain(admission, surfaceChain) }),
       ...(privateOwner?.ownerProfile ? { ownerProfile: privateOwner.ownerProfile } : {}),
       toolOutputs: recentToolResults,
-      ...(health ? { health: () => healthRead ??= machineHealth(trace) } : {}),
+      ...(health ? { health: () => { healthRead ??= health(trace); return outside ? withPatterns(healthRead) : healthRead; } } : {}),
       onPhase: (phase, previousMs) => log({ trace, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }),
     });
     const jobSkills = jobHost.skills?.(jobContext.invocation.verified_authority.principal_ref, trace, () => jobContext.assertCurrent());
@@ -1368,7 +1369,7 @@ export const createOwnerResponder = (
       finally { backgroundOwnerModel = false; }
     },
     async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments, directTools, waldoFirst, lateOwner) {
-      const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments, directTools, waldoFirst, lateOwner), conversationRef);
+      const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments, directTools, waldoFirst, lateOwner), conversationRef, sourceTaint === 'external' && !lateOwner);
       if (asOwner !== undefined) return asOwner;
       backgroundSourceTaint = sourceTaint ?? null;
       backgroundOwnerModel = ownerModel === true || ownerModel === 'plans' || (ownerModel === 'decides' && strongRoles);

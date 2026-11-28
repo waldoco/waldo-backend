@@ -214,6 +214,17 @@ describe('the statement is a record of the owner\'s yes, never a memory fact', (
     });
   });
 
+  it('carries a pattern the owner reworded as their words once, and nothing that is no longer active', async () => {
+    await withStore((store) => {
+      const { id } = healthNode(store);
+      expect(correctWelcomeNode(store, id, 'I sleep in after a late Saturday', AT)).not.toBeNull();
+      expect(confirmedBodyPatterns(store)).toEqual(['I sleep in after a late Saturday']);
+      const node = nodeOf(store, id);
+      store.saveNode({ id, domain: node.domain, label: node.label, summary: node.summary, strength: node.strength, status: 'retired', supporting_spots: JSON.parse(node.supporting_spots) as number[] }, AT);
+      expect(confirmedBodyPatterns(store)).toEqual([]);
+    });
+  });
+
   it('never counts as evidence for promoting another pattern', async () => {
     await withStore((store) => {
       const { id } = mailNode(store);
