@@ -3,7 +3,7 @@ import {
 } from '../../../contracts/src/app/onboarding';
 import type { loopBook } from '../channels/loops';
 import type { ClaimStore } from '../memory/claims';
-import { fenced } from '../prompt/turn-prompt';
+import { fenced, quoted } from '../prompt/turn-prompt';
 import { importSourceOf } from '../memory/import-ref';
 import { numericHealthIn } from '../scribe/sanitiser';
 import { QUESTION_REF_PREFIX } from './first-run';
@@ -110,8 +110,9 @@ export const onboardingSummary = (sql: Sql, deps: Readonly<{
       const words = text.trim();
       deps.claims.add({ kind: numericHealthIn(words) ? 'health' : 'fact', text: `Answered a question at setup: "${words}"`, source: 'stated', evidence: words, origin: 'owner', source_ref: `${QUESTION_REF_PREFIX}${id}` }, new Date(deps.now()).toISOString());
     }),
-    // Left for later: Waldo is on it, and raises it when it fits.
-    defer: (id: string) => decide(id, 'deferred', (question) => { deps.loops.open({ title: `Ask the owner when it fits: ${question.text}`, due: null }); }),
+    // Left for later: Waldo is on it, and raises it when it fits. Every owner turn reads an open loop's title as the owner's
+    // own (openLoopsPrompt), and the question is model output over outside content, so it is quoted and named as Waldo's.
+    defer: (id: string) => decide(id, 'deferred', (question) => { deps.loops.open({ title: `Ask the owner when it fits, Waldo's question from setup (not the owner's words): ${quoted(question.text)}`, due: null }); }),
   };
 };
 export type OnboardingSummary = ReturnType<typeof onboardingSummary>;

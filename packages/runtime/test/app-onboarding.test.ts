@@ -944,7 +944,7 @@ describe('onboarding summary routes', () => {
       expect(builds).toBe(before + 1);
       expect(claimStore(storage.sql).claims().map(claim => claim.text)).toContain('Answered a question at setup: "Yes, at six."');
       expect(await (await send('/app/v1/onboarding/summary/questions', { request_id: 'question-0002', question_id: plan!.id, action: 'defer' })).json()).toMatchObject({ outcome: 'deferred' });
-      expect(opened).toEqual([{ title: 'Ask the owner when it fits: Who do you plan your week with?', due: null }]);
+      expect(opened).toEqual([{ title: 'Ask the owner when it fits, Waldo\'s question from setup (not the owner\'s words): "Who do you plan your week with?"', due: null }]);
       expect((await send('/app/v1/onboarding/summary/questions', { request_id: 'question-0003', question_id: plan!.id, action: 'answer', text: 'My partner.' })).status).toBe(409);
       expect((await send('/app/v1/onboarding/summary/questions', { request_id: 'question-0004', question_id: 'oq_unknown00', action: 'defer' })).status).toBe(404);
       expect(((await (await send('/app/v1/onboarding/summary')).json()) as { questions: { state: string }[] }).questions.map(question => question.state)).toEqual(['answered', 'deferred']);

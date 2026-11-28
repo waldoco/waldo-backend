@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { claimStore } from '../src/memory/claims';
-import { loopBook } from '../src/channels/loops';
+import { loopBook, openLoopsPrompt } from '../src/channels/loops';
 import { isSetupRef } from '../src/onboarding/first-run';
 import { ONBOARDING_SUMMARIES_PER_DAY, onboardingSummary, summaryInput, summaryQuestion, SUMMARY_SCHEMA } from '../src/onboarding/summary';
 import { setupInput } from '../src/onboarding/welcome-sources';
@@ -84,13 +84,29 @@ describe('onboarding summary', () => {
       const read = setupInput(claims, () => true, () => null, (id) => summaryQuestion(sql, id));
       expect(read.kind === 'input' ? read.text : '').toContain(`[c${answer.id}] Answered a question at setup: "Yes, at six, three days a week." (in reply to Waldo's question, not their words: "Do you train before work on weekdays too?")`);
       expect(transaction(() => book.defer(second!.id))).toBe('deferred');
-      expect(loops.list().map((loop) => loop.title)).toEqual(['Ask the owner when it fits: Who do you plan your week with?']);
+      expect(loops.list().map((loop) => loop.title)).toEqual(['Ask the owner when it fits, Waldo\'s question from setup (not the owner\'s words): "Who do you plan your week with?"']);
       expect(book.view().questions.map((question) => question.state)).toEqual(['answered', 'deferred']);
       // Each is decided once; an unknown id is not found.
       expect(transaction(() => book.defer(first!.id))).toBe('decided');
       expect(transaction(() => book.answer(second!.id, 'My partner.'))).toBe('decided');
       expect(transaction(() => book.defer('oq_unknown00'))).toBe('not_found');
       expect(loops.list()).toHaveLength(1);
+    });
+  });
+
+  it('a deferred question reaches every owner turn as Waldo\'s question, quoted, never as the owner\'s own words', async () => {
+    await withSql(async (sql, transaction) => {
+      let n = 0;
+      const claims = claimStore(sql, transaction), loops = loopBook(sql, { newId: () => `loop${n}`, now: () => T0 });
+      const book = onboardingSummary(sql, { now: () => T0, newId: () => `abcdefgh${n++}`, transaction, claims, loops });
+      const asked = 'Should I send Priya the signed contract tonight?';
+      transaction(() => book.write(reply('You close deals in the evening.', asked)));
+      expect(transaction(() => book.defer(book.view().questions[0]!.id))).toBe('deferred');
+      const prompt = openLoopsPrompt(loops, 'UTC', 10_000, false, T0);
+      const line = prompt.split('\n').find((row) => row.includes('Priya'))!;
+      expect(line).toContain(JSON.stringify(asked));
+      expect(line).toContain('not the owner\'s words');
+      expect(line).not.toContain(`: ${asked}`);
     });
   });
 

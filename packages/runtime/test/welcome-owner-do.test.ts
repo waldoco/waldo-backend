@@ -368,7 +368,7 @@ it('the onboarding summary is written by one traced owner job over the answers, 
       expect((await post('/app/v1/onboarding/summary/questions', { request_id: 'summary-owner-q1', question_id: train!.id, action: 'answer', text: 'Before work, three days a week.' })).status).toBe(200);
       expect((await post('/app/v1/onboarding/summary/questions', { request_id: 'summary-owner-q2', question_id: plan!.id, action: 'defer' })).status).toBe(200);
       expect(state.storage.sql.exec<{ text: string }>("SELECT text FROM claims WHERE status = 'active'").toArray().map((row) => row.text)).toContain('Answered a question at setup: "Before work, three days a week."');
-      expect(state.storage.sql.exec<{ title: string }>("SELECT title FROM loops WHERE status = 'open'").toArray().map((row) => row.title)).toEqual(['Ask the owner when it fits: Who do you plan your week with?']);
+      expect(state.storage.sql.exec<{ title: string }>("SELECT title FROM loops WHERE status = 'open'").toArray().map((row) => row.title)).toEqual(['Ask the owner when it fits, Waldo\'s question from setup (not the owner\'s words): "Who do you plan your week with?"']);
     } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
   });
 });
