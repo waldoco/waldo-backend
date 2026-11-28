@@ -198,6 +198,7 @@ There is no authoritative list of staging secrets in the repo. Before copying th
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | `channels/google-oauth.ts:77` | no Google connect | **required**: the production client (S7) |
 | `BRAVE_SEARCH_API_KEY` | `owner-do.ts:3243` | `web_search` says it is not set up | recommended |
 | `ELEVENLABS_API_KEY` or `SMALLEST_AI_API_KEY` | `llm/transcriber.ts:17-18` | voice notes go untranscribed | optional |
+| `EXPO_ACCESS_TOKEN` | `channels/owner-do.ts` (the push deps and `pushReceipts`), checked first in `channels/expo-push.ts` (`ownerPush`) | every app push logs `app_push` `not_configured` and no phone is notified; messages still reach the app chat | **required** for app push: an access token from the Expo account that owns the app's EAS project (O.2). Staging logged `not_configured` on 28 Nov [inference: unset there] |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` | `observability/otlp-turns.ts:36-43` | no trace export | decision D7 |
 | `TELEGRAM_BOT_TOKEN` | `channels/telegram-webhook.ts:116` | Telegram off | **not set**. Telegram is retiring, and ADR-0055/ADR-0073 item 7 treat it as a privacy residual. If it is ever set, use a new bot: the owner DO re-registers the webhook whenever its origin changes (`owner-do.ts:1219-1228`), so two Workers sharing one bot steal it back and forth. |
 | `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_APP_SECRET`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` | `channels/whatsapp-webhook.ts:173-212` | WhatsApp off | not set until Meta verification and P5 (D5) |
@@ -245,7 +246,7 @@ There is no authoritative list of staging secrets in the repo. Before copying th
 | WhatsApp | Meta app callback is the staging webhook; system user `waldo-staging`; business verification in review (ECOFRESH GREENSYNC LLP, 22 Oct) | its own number, system user and callback, or a callback move; billing; a utility template (`docs/channels/whatsapp/NUMBER_SETUP_AND_SMOKE_TEST.md`) | blocked on Meta |
 | iMessage | connector on; host profile is fixtures-only | a real Apple Account, a dedicated host Mac, the number on iMessage | not started |
 | Telegram | team test bot | none (see 1.3) | by design |
-| App push | not built: no APNs, Expo or FCM sender; `app_push_register` has no runtime caller | nothing for the alpha, or build it | gap (outside this runbook) |
+| App push | Expo sender (`channels/expo-push.ts`), device registration (`app_push_register`, `channels/app-api.ts`) and receipt reads built; sends need `EXPO_ACCESS_TOKEN` (§1.3) and phones need the EAS project with an APNs key (O.2) | a fresh `EXPO_ACCESS_TOKEN` and a production build on the same EAS project | code done; blocked on `EXPO_ACCESS_TOKEN` and O.2 |
 | App build | `EXPO_PUBLIC_WALDO_APP_API_ORIGIN` = the staging origin | a production build pinned to the production origin (waldo-app repo) | cross-repo |
 | CI | `deploy-staging.yml` dispatch only, `--env staging` and the staging ref hard-coded; Actions dispatch returned 422 for the account | no production workflow exists; production stays a Mac-lane run | by design |
 
