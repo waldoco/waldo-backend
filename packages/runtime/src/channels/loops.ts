@@ -19,16 +19,14 @@ export const DEFAULT_PROACTIVITY: Proactivity = { quiet_start: null, quiet_end: 
 // nothing; it keeps the taint of the run that set it and its place in a chain of such follow-ups.
 export type LoopOrigin = 'owner' | 'waldo';
 export type LoopAuthor = Readonly<{ origin: 'owner' }> | Readonly<{ origin: 'waldo'; taint: 'external' | null; chainDepth: number }>;
-// Bounds on Waldo's own follow-ups, held in code whatever the model asks: a rolling day's worth, how far ahead, and how many
-// follow-ups may each be set by the check-back of the one before.
-export const SELF_LOOPS_PER_DAY = 12;
-export const SELF_LOOP_CHAIN_DEPTH = 3;
-// Of those, how many in a rolling day get their own wake at the minute they are due. The rest are checked at the heartbeat's
-// next tick, as an owner's loop is.
-export const SELF_LOOP_WAKES_PER_DAY = 8;
+// When and how often Waldo looks again is the model's call; a wake is a silent look, and speaking from it meets the owner's
+// limits at the heartbeat. Code holds one backstop that only a runaway loop reaches: one follow-up per heartbeat slot over a
+// rolling day. Each costs at most one check-back run, and past the owner's monthly spend ceiling runs move to the auxiliary
+// model, so a runaway is bounded in money as well as in count.
+export const SELF_LOOPS_PER_DAY = 48;
 // The one-shot heartbeat entry that wakes one follow-up at its due minute; its tick scans every due loop, as the grid's does.
 export const FOLLOWUP_WAKE_PREFIX = 'followup-wake:';
-const SELF_LOOP_AHEAD_MS = 14 * 86_400_000;
+const SELF_LOOP_AHEAD_MS = 366 * 86_400_000;
 // The owner's local due is read as if it were UTC, so a day of slack covers any zone.
 const ZONE_SLACK_MS = 86_400_000;
 export class SelfLoopRefused extends Error {}
@@ -50,8 +48,7 @@ export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): numb
       const self = by.origin === 'waldo' && !args.source_ref ? by : null;
       if (self) {
         if (args.due === null) throw new SelfLoopRefused('A follow-up of your own needs a due time.');
-        if (Date.parse(args.due.length === 10 ? `${args.due}T00:00Z` : `${args.due}Z`) - deps.now() > SELF_LOOP_AHEAD_MS + ZONE_SLACK_MS) throw new SelfLoopRefused('A follow-up of your own can be at most two weeks ahead.');
-        if (self.chainDepth > SELF_LOOP_CHAIN_DEPTH) throw new SelfLoopRefused('This chain of follow-ups is at its depth: decide now, or tell the owner.');
+        if (Date.parse(args.due.length === 10 ? `${args.due}T00:00Z` : `${args.due}Z`) - deps.now() > SELF_LOOP_AHEAD_MS + ZONE_SLACK_MS) throw new SelfLoopRefused('A follow-up of your own can be at most a year ahead.');
         const today = sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM loops WHERE origin = 'waldo' AND created_at > ?", deps.now() - 86_400_000).one().n;
         if (today >= SELF_LOOPS_PER_DAY) throw new SelfLoopRefused(`You have set ${today} follow-ups of your own today, the most allowed: decide now, or tell the owner.`);
       }
@@ -89,8 +86,6 @@ export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): numb
       const due = sql.exec<{ due: string }>("SELECT due FROM loops WHERE id = ? AND status = 'open' AND due IS NOT NULL", id).toArray()[0]?.due;
       return due !== undefined && passedLocal(due, now, timezone) !== '';
     },
-    // Whether one more of Waldo's own follow-ups may have its own wake today (SELF_LOOP_WAKES_PER_DAY).
-    wakeRoom: (): boolean => sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM loops WHERE origin = 'waldo' AND wake_at IS NOT NULL AND created_at > ?", deps.now() - 86_400_000).one().n < SELF_LOOP_WAKES_PER_DAY,
     markWake(id: string, at: number): void { sql.exec('UPDATE loops SET wake_at = ? WHERE id = ?', at, id); },
     // A loop the mail follow-through opened from an observed source; an owner's loop, or an unknown id, is not.
     sourceBound: (id: string): boolean => sql.exec('SELECT 1 FROM loop_mail_sources WHERE loop_id = ?', id).toArray().length > 0,
@@ -163,11 +158,18 @@ export const proactivityLine = (settings: Proactivity, limits = false): string =
 
 const ownCheck = (loop: Loop) => loop.origin === 'waldo' ? "(Waldo's own check) " : '';
 
+// The ledger lists the soonest of Waldo's own checks and counts the rest: a year of follow-ups set by a runaway never grows the
+// prompt of every job that reads the ledger. The owner's loops and mail follow-ups are listed whole, as before.
+const OWN_CHECKS_LISTED = 20;
 export const loopsSection = (book: LoopBook, timezone: string, now: number): string => {
-  const open = book.list();
+  const all = book.list();
+  const own = all.filter((loop) => loop.origin === 'waldo');
+  const later = new Set(own.slice(OWN_CHECKS_LISTED));
+  const open = all.filter((loop) => !later.has(loop));
   return [
     'Waldo is on',
     ...(open.length ? open.map((loop) => `- ${ownCheck(loop)}${loop.title}${loop.due ? ` (${withPassed('due', loop.due, now, timezone)})` : ''}${loop.source_ref ? ` [source ${loop.source_ref}; completion unknown]` : ''} [${loop.id}]`) : ['- nothing open']),
+    ...(later.size ? [`- and ${later.size} more of Waldo's own checks, due later`] : []),
     ...book.closed().map((loop) => `- ${loop.status}: ${loop.title} (${localIso(loop.closed_at ?? loop.created_at, timezone).slice(0, 10)})`),
   ].join('\n');
 };

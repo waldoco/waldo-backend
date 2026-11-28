@@ -53,10 +53,10 @@
   // intervention) its own event, the composed context, the owner's exchange and the day's sends within the chat's history
   // budget instead of the chat replay, offers every such run one tool menu (each still calls only its own) so the cached head is shared, keeps that
   // head an hour, and gives the day plan and wake decision the shared health block; "0" is the rollback.
-  // MODEL_SET_WAKES: "1" lets a run Waldo starts leave itself a follow-up (open_loop with no mail source): a due time, a note
-  // to its future self (what to check and why), which wakes a later check-back and grants nothing; bounded in code to 12 a day,
-  // two weeks ahead and a chain of 3. Up to 8 a day are checked at the minute they are due, by a one-shot heartbeat entry; the
-  // rest at the heartbeat's next tick. "0" is the rollback.
+  // MODEL_SET_WAKES: "1" lets a run Waldo starts leave itself a follow-up (open_loop with no mail source): a due time and a
+  // note to its future self (what to check and why), which wakes a later check-back at its own minute and grants nothing. When
+  // and how often to look again is the model's call; code holds a due time up to a year ahead and one runaway backstop of 48
+  // a day. A check-back's message meets the owner's limits as any check-back does. "0" is the rollback.
   // GENERAL_WAKE: "1" (with PROACTIVE_INTERVENTIONS) runs the look as Waldo's general wake: one run in the brain, no reader
   // worker, the full tool set, the owner's limits checked when it decides to speak, one wake_outcomes row per run with its
   // reason. WAKE_MODEL_LOOK is its model role (plans, decides, chat or auxiliary). "0" is the rollback: the look runs as before.
