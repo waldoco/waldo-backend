@@ -68,8 +68,11 @@ const BODY_MATTERS: readonly string[] = ['sleep', 'energy', 'stress', 'training'
 const HEALTH_PICKS: ReadonlySet<string> = new Set([...BODY_MATTERS, ...appSetupSpotV1Schema.options.filter(spot => BODY_MATTERS.includes(spot.slice(0, spot.indexOf('-'))))]);
 
 const setupParts = (answer: SetupAnswer) => [SETUP_REFS[answer], `${SETUP_REFS[answer]}${HEALTH_PART}`];
-// Whether a claim is a setup answer, by the ref this module writes it under.
-export const isSetupRef = (ref: string | null | undefined): boolean => ref !== null && ref !== undefined && (Object.keys(SETUP_REFS) as SetupAnswer[]).some(answer => setupParts(answer).includes(ref));
+// The owner's answer to an open question from the onboarding summary, under this ref and the question's id: a setup answer too.
+export const QUESTION_REF_PREFIX = 'owner, first run: question ';
+// Whether a claim is a setup answer, by the ref this module (or the summary, for an open question) writes it under.
+export const isSetupRef = (ref: string | null | undefined): boolean => ref !== null && ref !== undefined
+  && ((Object.keys(SETUP_REFS) as SetupAnswer[]).some(answer => setupParts(answer).includes(ref)) || ref.startsWith(QUESTION_REF_PREFIX));
 const DAY_TEXT = {
   meetings: 'Most workdays are meetings, often back to back.', focus: 'Needs long stretches of focus at work, and they are easy to break.',
   fixed: 'Workdays are a steady nine to five, much the same most days.', varies: 'Workdays are different every day, hard to plan more than a day ahead.',
