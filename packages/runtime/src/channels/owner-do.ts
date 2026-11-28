@@ -6079,6 +6079,25 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: false, code: 'outcomes_failed', error: error instanceof Error ? error.name : 'error' });
       }
     };
+    // The join pass (memory/claims.ts): one strong-role call reads every spot beside the constellations and writes them. It asks
+    // the model only when what it reads changed since it last ran, so a second run over the same spots changes nothing.
+    // joinHere runs where it is called, for work already on the serial lane; joinConstellations queues on the lane. Its trace
+    // closes with a machine_turn root, like a welcome call's.
+    const joinHere = (reason: string): Promise<string> => this.asOwnerJob('dreaming', `join:${reason}`, async () => {
+      const started = Date.now(), trace = `join:${reason}:${started}`;
+      let ok = false;
+      try {
+        const setup = setupJoinContext(memory, () => healthMemoryOn(identity), () => onboardingGoal(storage.kv, quests, ownerRef).line(), id => summaryQuestion(storage.sql, id)) ?? undefined;
+        const detail = await responder.promote(trace, { last: storage.kv.get<string>(CONSTELLATION_DIGEST_KEY), promoted: digest => storage.kv.put(CONSTELLATION_DIGEST_KEY, digest) }, setup);
+        log({ trace, hop: 'constellation', ms: Date.now() - started, ok: true, detail, ...(detail === 'unchanged' ? { code: 'unchanged' } : {}) });
+        ok = true;
+        return detail;
+      } catch (error) {
+        log({ trace, hop: 'constellation', ms: Date.now() - started, ok: false, error: String(error) });
+        throw error;
+      } finally { log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok, detail: 'join' }); }
+    });
+    const joinConstellations = (reason: string): Promise<string> => this.serial(() => joinHere(reason));
     const nightlyPass = recordedRun(runs, 'nightly', NIGHTLY_RUN, async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
       const started = Date.now();
@@ -6097,10 +6116,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (outcome === 'more' || outcome === 'failed') await armCatchUp();
         if (this.env.MEMORY_NIGHTLY_SOURCE_UPDATES === '1' && responder.sourceClaims) await consolidateSources(sourcesFor(trace), trace);
         await learnOutcomes(trace);
-        const promoting = Date.now();
-        await responder.promote(trace, { last: storage.kv.get<string>(CONSTELLATION_DIGEST_KEY), promoted: digest => storage.kv.put(CONSTELLATION_DIGEST_KEY, digest) })
-          .then((detail) => log({ trace, hop: 'constellation', ms: Date.now() - promoting, ok: true, detail, ...(detail === 'unchanged' ? { code: 'unchanged' } : {}) }))
-          .catch((error: unknown) => log({ trace, hop: 'constellation', ms: Date.now() - promoting, ok: false, error: String(error) }));
+        // The join pass, after the night has written its spots. A failure is logged on the join's own trace and the night goes on.
+        await joinHere('nightly').catch(() => undefined);
         if (this.env.CAPACITY_PLAN === '1' && responder.capacity) await keepCapacity(trace);
         if (schedPrefs.enabled('daily_brief')) await armDayCards(scheduler, plans, clock.timezone, Date.now());
         await planToday(`${trace}:plan`);
@@ -7024,25 +7041,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (delivered && record.reaction) await api.setMessageReaction({ chat_id: record.payload.chat_id,
         message_id: record.reaction.message_id, reaction: [{ type: 'emoji', emoji: record.reaction.emoji }] }).catch(() => undefined);
     };
-    // The join pass (memory/claims.ts): one strong-role call reads every spot beside the constellations and writes them. It asks
-    // the model only when what it reads changed since it last ran, so a second run over the same spots changes nothing.
-    // joinHere runs where it is called, for work already on the serial lane; joinConstellations queues on the lane. Its trace
-    // closes with a machine_turn root, like a welcome call's.
-    const joinHere = (reason: string): Promise<string> => this.asOwnerJob('dreaming', `join:${reason}`, async () => {
-      const started = Date.now(), trace = `join:${reason}:${started}`;
-      let ok = false;
-      try {
-        const setup = setupJoinContext(memory, () => healthMemoryOn(identity), () => onboardingGoal(storage.kv, quests, ownerRef).line(), id => summaryQuestion(storage.sql, id)) ?? undefined;
-        const detail = await responder.promote(trace, { last: storage.kv.get<string>(CONSTELLATION_DIGEST_KEY), promoted: digest => storage.kv.put(CONSTELLATION_DIGEST_KEY, digest) }, setup);
-        log({ trace, hop: 'constellation', ms: Date.now() - started, ok: true, detail, ...(detail === 'unchanged' ? { code: 'unchanged' } : {}) });
-        ok = true;
-        return detail;
-      } catch (error) {
-        log({ trace, hop: 'constellation', ms: Date.now() - started, ok: false, error: String(error) });
-        throw error;
-      } finally { log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok, detail: 'join' }); }
-    });
-    const joinConstellations = (reason: string): Promise<string> => this.serial(() => joinHere(reason));
     // The welcome build's model calls run on the queue as an owner job, like the nightly pass; its reads run beside it.
     // Each welcome call closes its own trace with a machine_turn root, so the trace exporter flushes it. The trace is per run:
     // a build taken up again after a cut must not add to a trace an earlier run already closed.

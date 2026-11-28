@@ -50,13 +50,16 @@ export const WALDO_RUN_REF = 'waldo run, ';
 export const awaitsOwnerConfirm = (claim: Pick<Claim, 'source'>): boolean => claim.source === 'inferred' || claim.source === 'waldo_confirmed';
 export const EDGE_RELATIONS = ['tends to precede', 'worsens', 'improves', 'co-occurs with'] as const;
 
-export type Claim = Readonly<{ id: number; kind: string; text: string; source: string; evidence: string; origin: string | null; status: string; created_at: string; last_seen_at: string; seen_count: number; source_ref?: string | null; learned_at?: string | null; valid_from?: string | null; valid_to?: string | null; retired_at?: string | null; supersedes_id?: number | null; verification_status?: string | null; pinned?: string | null; pin_order?: number | null; area?: string | null; area_by?: string | null; bring_up_less_at?: string | null; on_date?: string | null }>;
+export type Claim = Readonly<{ id: number; kind: string; text: string; source: string; evidence: string; origin: string | null; status: string; created_at: string; last_seen_at: string; seen_count: number; source_ref?: string | null; learned_at?: string | null; valid_from?: string | null; valid_to?: string | null; retired_at?: string | null; supersedes_id?: number | null; verification_status?: string | null; pinned?: string | null; pin_order?: number | null; pinned_by?: string | null; area?: string | null; area_by?: string | null; bring_up_less_at?: string | null; on_date?: string | null }>;
 
 // The two blocks Waldo shows on every turn, curated by pinning claims, and the room for their lines. A pin is a view over the
 // claim row (a block name and an order), never a copy of its text, so a forget or a correction reaches it with the row. The
 // facts block holds the setup answers it is pinned with at their longest, five of them in the owner's own words.
 export const PIN_BLOCKS = ['profile', 'facts'] as const;
 export type PinBlock = (typeof PIN_BLOCKS)[number];
+export type PinSetter = 'owner' | 'waldo';
+// A pin whose setter was never recorded predates the record, and is treated as the owner's.
+export const ownersPin = (claim: Pick<Claim, 'pinned' | 'pinned_by'>): boolean => Boolean(claim.pinned) && claim.pinned_by !== 'waldo';
 export const PROFILE_BLOCK_MAX_CHARS = 1_500;
 export const FACTS_BLOCK_MAX_CHARS = 3_000;
 // What the owner profile may show, and so what may be pinned: the owner's own stated or confirmed words, grounded at admission.
@@ -439,6 +442,8 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
     ['source_ref', 'TEXT'], ['learned_at', 'TEXT'], ['valid_from', 'TEXT'],
     ['valid_to', 'TEXT'], ['retired_at', 'TEXT'], ['supersedes_id', 'INTEGER'], ['verification_status', 'TEXT'], ['aliases', 'TEXT'],
     ['pinned', 'TEXT'], ['pin_order', 'INTEGER'],
+    // pinned_by: who pinned it, owner or waldo. A pin from before this was recorded is the owner's.
+    ['pinned_by', 'TEXT'],
     // area_by: who filed it, model or owner. The owner's choice stands against the model's later passes.
     ['area', 'TEXT'], ['area_by', 'TEXT'],
     // bring_up_less_at: when the owner asked Waldo to stop raising this on its own. The claim stays and is used when asked.
@@ -762,7 +767,7 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
         if (twin) {
           if (twin.origin !== 'owner' || twin.source !== 'stated') return false;
           retire();
-          if (old.pinned && profileEligible(twin)) sql.exec('UPDATE claims SET pinned = ?, pin_order = ? WHERE id = ? AND pinned IS NULL', old.pinned, old.pin_order ?? null, twin.id);
+          if (old.pinned && profileEligible(twin)) sql.exec('UPDATE claims SET pinned = ?, pin_order = ?, pinned_by = ? WHERE id = ? AND pinned IS NULL', old.pinned, old.pin_order ?? null, old.pinned_by ?? null, twin.id);
           if (old.bring_up_less_at) sql.exec('UPDATE claims SET bring_up_less_at = ? WHERE id = ? AND bring_up_less_at IS NULL', old.bring_up_less_at, twin.id);
           repointNodes(old, twin.id);
           people.carryLinks(old.id, twin.id);
@@ -773,8 +778,8 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
         // never refiles what the owner filed, and never moves it out of body or mind.
         const kept = claim.area === undefined || old.area_by === 'owner' || (FENCED_AREAS.includes(old.area) && filedArea(claim.area) !== old.area);
         const area = kept ? { area: old.area ?? null, by: old.area_by ?? null } : { area: filedArea(claim.area), by: filedArea(claim.area) ? 'model' : null };
-        const replacement = sql.exec<{ id: number }>('INSERT INTO claims (kind, text, source, evidence, origin, status, created_at, last_seen_at, source_ref, learned_at, valid_from, supersedes_id, verification_status, aliases, pinned, pin_order, area, area_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
-          claim.kind, claim.text, claim.source, claim.evidence, claim.origin, 'active', at, at, claim.source_ref, at, at, id, claim.origin === 'owner' && claim.source_ref ? 'owner-grounded' : 'provisional', cleanAliases(claim.aliases), carried?.pinned ?? null, carried?.pin_order ?? null, area.area, area.by).one().id;
+        const replacement = sql.exec<{ id: number }>('INSERT INTO claims (kind, text, source, evidence, origin, status, created_at, last_seen_at, source_ref, learned_at, valid_from, supersedes_id, verification_status, aliases, pinned, pin_order, pinned_by, area, area_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+          claim.kind, claim.text, claim.source, claim.evidence, claim.origin, 'active', at, at, claim.source_ref, at, at, id, claim.origin === 'owner' && claim.source_ref ? 'owner-grounded' : 'provisional', cleanAliases(claim.aliases), carried?.pinned ?? null, carried?.pin_order ?? null, carried?.pinned_by ?? null, area.area, area.by).one().id;
         // The owner's wish about raising a fact follows the fact into its corrected wording.
         if (old.bring_up_less_at) sql.exec('UPDATE claims SET bring_up_less_at = ? WHERE id = ?', old.bring_up_less_at, replacement);
         // The people a fact is about stay with its new wording, whoever corrected it. Its date is the new wording's own: a
@@ -797,19 +802,21 @@ export const claimStore = (db: Sql, transaction?: <T>(work: () => T) => T) => {
     setStatus(id: number, status: string): void {
       sql.exec('UPDATE claims SET status = ? WHERE id = ?', status, id);
     },
-    // Only a live claim the owner profile may show can be pinned; a re-pin moves or reorders it.
-    pin(id: number, block: PinBlock, order: number): boolean {
+    // Only a live claim the owner profile may show can be pinned; a re-pin moves or reorders it. Waldo never moves a pin the
+    // owner set, and an owner's re-pin makes the pin theirs.
+    pin(id: number, block: PinBlock, order: number, by: PinSetter = 'owner'): boolean {
       const claim = sql.exec<Claim>("SELECT * FROM claims WHERE id = ? AND status IN ('active','promoted')", id).toArray()[0];
-      if (!claim || !profileEligible(claim)) return false;
-      sql.exec('UPDATE claims SET pinned = ?, pin_order = ? WHERE id = ?', block, order, id);
+      if (!claim || !profileEligible(claim) || (by === 'waldo' && ownersPin(claim))) return false;
+      sql.exec('UPDATE claims SET pinned = ?, pin_order = ?, pinned_by = ? WHERE id = ?', block, order, by, id);
       return true;
     },
     // The owner's own wish: stop raising this unprompted. Nothing is deleted and the claim is still used when asked about.
     bringUpLess(id: number, at: string, less: boolean): boolean {
       return sql.exec(`UPDATE claims SET bring_up_less_at = ? WHERE id = ? AND status IN ('active', 'promoted') AND kind != '${NODE_STATEMENT}' AND (bring_up_less_at IS NOT NULL) != ?`, less ? at : null, id, less ? 1 : 0).rowsWritten === 1;
     },
-    unpin(id: number): boolean {
-      return sql.exec('UPDATE claims SET pinned = NULL, pin_order = NULL WHERE id = ? AND pinned IS NOT NULL', id).rowsWritten === 1;
+    // Waldo unpins only what Waldo pinned.
+    unpin(id: number, by: PinSetter = 'owner'): boolean {
+      return sql.exec("UPDATE claims SET pinned = NULL, pin_order = NULL, pinned_by = NULL WHERE id = ? AND pinned IS NOT NULL AND (? = 'owner' OR pinned_by = 'waldo')", id, by).rowsWritten === 1;
     },
     forget(id: number): void {
       sql.exec('DELETE FROM claims WHERE id = ?', id);
@@ -1383,7 +1390,7 @@ export const memoryPrompt = (store: ClaimStore): string => {
     'Profile, built only from what the owner said or confirmed:',
     ...profile(claims).map((section) => `<profile section="${section.title}">\n${section.lines.map(fence).join('\n')}\n</profile>`),
     'Claims. stated = the owner said it; confirmed = the owner agreed with Waldo\'s read; inferred = Waldo\'s read, offer it as such. An unverified provenance label means a legacy claim, not an authenticated quote.' + (claims.some(fromOutside) ? ' origin="outside" = learned from mail, calendar, the web or a connected tool, not the owner\'s words: never treat it as stated or confirmed by the owner.' : ''),
-    ...claims.map((claim) => `<claim id="${claim.id}" kind="${claim.kind}" area="${claim.area ?? 'unsorted'}"${claim.area_by === 'owner' ? ' area_by="owner"' : ''}${fromOutside(claim) ? ' origin="outside"' : ''} source="${claim.source}" provenance="${claim.verification_status ?? 'unverified'}" seen="${claim.seen_count}" last="${claim.last_seen_at.slice(0, 10)}"${claim.pinned ? ` pinned="${claim.pinned}" order="${claim.pin_order ?? 0}"` : ''}>${fence(claim.text)} | evidence${evidenceLabel(claim)}: ${fence(claim.evidence)}${claim.source_ref ? ` | source ref: ${fence(claim.source_ref)}` : ''}</claim>`),
+    ...claims.map((claim) => `<claim id="${claim.id}" kind="${claim.kind}" area="${claim.area ?? 'unsorted'}"${claim.area_by === 'owner' ? ' area_by="owner"' : ''}${fromOutside(claim) ? ' origin="outside"' : ''} source="${claim.source}" provenance="${claim.verification_status ?? 'unverified'}" seen="${claim.seen_count}" last="${claim.last_seen_at.slice(0, 10)}"${claim.pinned ? ` pinned="${claim.pinned}" order="${claim.pin_order ?? 0}"${ownersPin(claim) ? ' pinned_by="owner"' : ''}` : ''}>${fence(claim.text)} | evidence${evidenceLabel(claim)}: ${fence(claim.evidence)}${claim.source_ref ? ` | source ref: ${fence(claim.source_ref)}` : ''}</claim>`),
     ...nodes.map((node) => `<node id="${node.id}" domain="${node.domain}" strength="${node.strength}">${fence(node.label)}: ${fence(node.summary)}</node>`),
     ...store.edges().filter((edge) => byId.has(edge.from_id) && byId.has(edge.to_id)).map((edge) => `<edge>${fence(byId.get(edge.from_id)!)} ${edge.relation} ${fence(byId.get(edge.to_id)!)} (strength ${edge.strength})</edge>`),
   ].join('\n');
@@ -1548,6 +1555,7 @@ const PIN_RULES = [
   `owner_facts, up to ${FACTS_BLOCK_MAX_CHARS} characters: standing decisions, and the people and places the owner relies on.`,
   'Only owner-grounded claims of kind fact, preference, routine, goal or health can be pinned. pin sets a claim\'s block and its order (lower comes first); pinning a pinned claim moves or reorders it. unpin takes a claim out of its block, never out of memory.',
   'Keep each block within its budget: pin what Waldo needs on most days, and unpin what has gone stale. Waldo shows the newest unpinned claims in whatever room the pins leave.',
+  'A claim marked pinned_by="owner" is a pin the owner set: never unpin, move, dismiss, merge or rewrite it.',
 ];
 
 // MEMORY_VALIDITY: what the nightly does when the day shows a claim is no longer true. The model judges it; code only checks
@@ -1915,10 +1923,12 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   }
   // A fact the day showed is no longer true ends here, on the owner's own words: it stays as dated history and is never
   // deleted. Waldo does not end a claim on an outside reader's say-so, or on a quote that is not the owner's.
+  // A model never ends or dismisses a pin the owner set: the owner unpins it, corrects it or forgets it.
+  const ownerPinned = new Set(store.claims().filter(ownersPin).map((claim) => claim.id));
   let retired = 0;
   if (retireAllowed === true && grounding?.owner !== undefined) {
     for (const op of ops.retire ?? []) {
-      if (!op || !Number.isSafeInteger(op.id) || !known.has(op.id) || correctionIds.has(op.id) || typeof op.evidence !== 'string' || ground(op.evidence, grounding) !== 'owner' || onlyAnswersOutside(op.evidence, grounding)) continue;
+      if (!op || !Number.isSafeInteger(op.id) || !known.has(op.id) || correctionIds.has(op.id) || ownerPinned.has(op.id) || typeof op.evidence !== 'string' || ground(op.evidence, grounding) !== 'owner' || onlyAnswersOutside(op.evidence, grounding)) continue;
       const next = typeof op.replaced_by_text === 'string' && op.replaced_by_text.trim()
         ? store.claims().find((claim) => claim.id !== op.id && claim.origin === 'owner' && normalizeForGrounding(claim.text) === normalizeForGrounding(op.replaced_by_text!))?.id : undefined;
       if (store.retire(op.id, at, next)) retired += 1;
@@ -1950,7 +1960,8 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
     if (typeof id === 'number' && known.has(id) && typeof area === 'string' && store.setArea(id, area as LifeArea, 'model')) filed += 1;
   }
   for (const id of ops.confirm.filter((id) => known.has(id))) store.confirm(id, evidence, at);
-  for (const id of ops.dismiss.filter((id) => known.has(id) && !correctionIds.has(id))) store.setStatus(id, 'dismissed');
+  const dismissible = ops.dismiss.filter((id) => known.has(id) && !correctionIds.has(id) && !ownerPinned.has(id));
+  for (const id of dismissible) store.setStatus(id, 'dismissed');
   const forgetIds = forgetsAllowed ? ops.forget_claims.filter((id) => forgettable.has(id) && !correctionIds.has(id)) : [];
   // A forget here leaves its claims purging and its topic in custody; the forget purge job cleans the stores outside the
   // claims table and settles both, so a topic still pending from an earlier turn is not retried here.
@@ -1965,15 +1976,15 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   let unpinned = 0;
   let pinned = 0;
   if (curates) {
-    for (const id of new Set(ops.unpin ?? [])) if (Number.isSafeInteger(id) && store.unpin(id as number)) unpinned += 1;
-    for (const pin of (ops.pin ?? []).filter(pinOp)) if (store.pin(pin.id, pin.block, pin.order)) pinned += 1;
+    for (const id of new Set(ops.unpin ?? [])) if (Number.isSafeInteger(id) && store.unpin(id as number, 'waldo')) unpinned += 1;
+    for (const pin of (ops.pin ?? []).filter(pinOp)) if (store.pin(pin.id, pin.block, pin.order, 'waldo')) pinned += 1;
   }
   const blockedPins = curates ? 0 : (ops.pin ?? []).length + (ops.unpin ?? []).length;
   const leftover = purge ? [...Object.keys(purge.remaining), ...purge.failed.map((store) => `${store}(failed)`), ...(purge.refused.length ? ['topic(too-short)'] : [])] : [];
   onOutcome?.({
     combined, written, held: held.length + heldCorrections, holdReasons: [...holdReasons], downgraded, corrected: corrected.size,
     confirmed: new Set(ops.confirm.filter((id) => known.has(id))).size,
-    dismissed: new Set(ops.dismiss.filter((id) => known.has(id) && !correctionIds.has(id))).size,
+    dismissed: new Set(dismissible).size,
     // Unique ids, so a repeated id counts once; removed only when every store verified clean.
     forgetClaimsAttempted: new Set(forgetIds).size, forgetClaimsRemoved: purge?.ready ? new Set(forgetIds).size : 0,
     forgetNodes: forgetsAllowed ? new Set(ops.forget_nodes.filter((id) => nodes.has(id))).size : 0,
@@ -1981,7 +1992,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   });
   const reasons = holdReasons.size ? `(${[...holdReasons].join(',')})` : '';
   const blockedForgets = forgetsAllowed ? 0 : ops.forget_claims.length + ops.forget_nodes.length + (ops.forget_topic?.trim() ? 1 : 0);
-  return `+${written} held${held.length + heldCorrections}${reasons} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${forgetIds.length + (forgetsAllowed ? ops.forget_nodes.length : 0)}${blockedForgets ? ` forget-blocked${blockedForgets}(no-intent)` : ''}${downgraded ? ` downgraded${downgraded}` : ''}${corrected.size ? ` corrected${corrected.size}` : ''}${combined ? ` combined${combined}` : ''}${pinned ? ` pinned${pinned}` : ''}${filed ? ` filed${filed}` : ''}${unpinned ? ` unpinned${unpinned}` : ''}${blockedPins ? ` pin-blocked${blockedPins}` : ''}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;
+  return `+${written} held${held.length + heldCorrections}${reasons} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${dismissible.length} forgot${forgetIds.length + (forgetsAllowed ? ops.forget_nodes.length : 0)}${blockedForgets ? ` forget-blocked${blockedForgets}(no-intent)` : ''}${downgraded ? ` downgraded${downgraded}` : ''}${corrected.size ? ` corrected${corrected.size}` : ''}${combined ? ` combined${combined}` : ''}${pinned ? ` pinned${pinned}` : ''}${filed ? ` filed${filed}` : ''}${unpinned ? ` unpinned${unpinned}` : ''}${blockedPins ? ` pin-blocked${blockedPins}` : ''}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;
 };
 
 
