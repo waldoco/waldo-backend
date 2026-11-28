@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
+import { WALDO_CHAT_MODEL } from '@waldo/contracts';
 import type { LookCause } from '../src/channels/interventions';
 import { EVERY_RUN_TOOLS, type RunEndReport, type RunSpend } from '../src/channels/owner-turn';
 import { GENERAL_WAKE_TOOLS, generalWake, wakeCostMonth, wakeOutcomeBook, wakeRole, WALDO_LENS, WITHHELD_REASON, type WakeCode, type WakeRow } from '../src/channels/wake';
@@ -11,7 +12,7 @@ import { GENERAL_WAKE_TOOLS, generalWake, wakeCostMonth, wakeOutcomeBook, wakeRo
 // cost), never the model's judgment.
 const NOW = Date.parse('2026-11-28T10:00:00Z');
 const NUDGE = 'The deck block slipped this morning and the board deck is due Friday. Want me to hold 3 to 5 today for it?';
-const SPEND: RunSpend = { calls: 3, model: 'claude-sonnet-5-5', input: 41_200, cached: 38_000, output: 900, usd: 0.0312 };
+const SPEND: RunSpend = { calls: 3, model: WALDO_CHAT_MODEL, input: 41_200, cached: 38_000, output: 900, usd: 0.0312 };
 const end = (reason: string, why?: string, tools: readonly string[] = []): RunEndReport => ({ reason, ...(why ? { why } : {}), tools, spend: SPEND });
 
 type Wake = Readonly<{ code: WakeCode | 'threw'; delivered: string[]; runs: number; prompts: string[]; rows: readonly WakeRow[] }>;
