@@ -88,7 +88,7 @@ it('setup done in the app starts one welcome build for an app-only owner who has
       for (const text of ['Wants to be called Asha', ...HEALTH_SPOTS]) expect(model.joins[0]).toContain(text);
       // The gift is the owner's last thirty days of health: today in their zone and the twenty-nine days before it, as zones.
       const today = new Date().toISOString().slice(0, 10), from = new Date(Date.parse(`${today}T00:00:00Z`) - 29 * 86_400_000).toISOString().slice(0, 10);
-      expect(rpc.zones).toEqual([{ from, to: today }]);
+      expect(rpc.zones).toEqual([{ from, to: today, history: true }]);
       expect(rpc.called).not.toContain('health_series_read');
       const node = state.storage.sql.exec<{ label: string; supporting_spots: string }>('SELECT label, supporting_spots FROM constellation_nodes').toArray();
       expect(node.map(row => row.label)).toEqual(['Slow starts after weekends']);

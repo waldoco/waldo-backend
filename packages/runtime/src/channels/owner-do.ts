@@ -5108,7 +5108,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const cancelMachine = (job: MachineJob) => { for (const id of this.jobs().cancelMachine(job)) this.tasks.cancelled(id); };
     const orders = standingOrderBook(storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
     const quests = questBook(storage.sql, clock, () => crypto.randomUUID().replace(/-/g, '').slice(0, 12));
-    const readZones: ReadZones = (from, to) => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', 'zones_read', JSON.stringify({ from, to }));
+    const zonesRead = (payload: object) => invokeHealth(signedRpc(this.env), identity.get<string>('do_name') ?? '', 'zones_read', JSON.stringify(payload));
+    const readZones: ReadZones = (from, to) => zonesRead({ from, to });
     // A5: working-artifact store. Bodies ride R2 when the binding exists; a deploy missing it
     // degrades to per-DO-memory bodies (artifacts become session-scoped, turns never crash).
     const artifactBodies = this.env.ARTIFACTS ? r2ArtifactBodies(this.env.ARTIFACTS, this.ctx.id.toString()) : inMemoryArtifactBodies();
@@ -6935,7 +6936,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       try { const said = await this.asOwnerJob('dreaming', `welcome:${stage}`, () => responder.welcome!(trace, stage, text, version)); answered = true; return said; }
       finally { log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: answered, detail }); }
     };
-    const welcome = ownerWelcome({ sql: storage.sql, transaction: (work) => storage.transactionSync(work), claims: memory, now: Date.now, timezone: () => clock.timezone, healthMemory: () => healthMemoryOn(identity), healthRead, readZones, google,
+    const welcome = ownerWelcome({ sql: storage.sql, transaction: (work) => storage.transactionSync(work), claims: memory, now: Date.now, timezone: () => clock.timezone, healthMemory: () => healthMemoryOn(identity), healthRead, readZones: (from, to) => zonesRead({ from, to, history: true }), google,
       findings: () => findingStore(storage.sql, memory, consentLedger(storage.sql, consentSwitches(this.env)), Date.now),
       // The build runs beside the serial lane, so each call queues on it.
       ask: (stage, text, version) => this.serial(() => askWelcome(stage, text, version)),
