@@ -15,7 +15,7 @@ import { triageTools } from './update-sweep';
 // baseline: the run leaves itself a follow-up (open_loop, a check-back at its minute) when it wants one sooner. No count of messages a day is kept,
 // and the owner's volume is never read. The owner's own no to follow-ups and their quiet hours hold the wake before it runs
 // (a card it raised would reach them as a message), and again when it decides to speak. Every run leaves one outcome row with the reason it gave and what it cost, including when it chose to say nothing.
-export const GENERAL_WAKE_TOOLS: readonly ToolName[] = [...new Set<ToolName>([...triageTools(false, true), 'close_loop', 'remember', 'open_loop'])];
+export const GENERAL_WAKE_TOOLS: readonly ToolName[] = [...new Set<ToolName>([...triageTools(false, true), 'close_loop', 'remember', 'open_loop', 'read_notes', 'rewrite_notes'])];
 
 // The model role a wake runs on is configuration, one value per kind of wake. plans and chat both run on the chat model
 // (plans at the planning effort); auxiliary is the small model. Unset or unknown, plans.
@@ -33,6 +33,8 @@ export type WakeContext = Readonly<{
   changes: string; calendar: string;
   cards: string; today: string; ledger: string; goals: string;
   style: string; shaping?: string;
+  // Waldo's own notes as notesSection renders them: read first, rewritten last.
+  notes?: string;
 }>;
 
 const section = (label: string, text: string) => (text.trim() ? fenced(label, text).trimStart() : '');
@@ -59,14 +61,14 @@ export const WALDO_LENS = [
 // The order a wake thinks in: an orientation, not rules. No step is a threshold.
 const WAKE_ORDER = [
   'How to think this wake through:',
-  '1. What changed? Read it first (it is at the end, with the time).',
+  '1. What changed? Read your own notes from earlier runs, then what changed since (it is at the end, with the time).',
   '2. Where is this person right now? Body first, as a trend over days rather than one reading, and how fresh it is (the health block, or your health tools). Then what today and this week ask of them, their own sharp hours, what is open, what they last said, and the change they came to Waldo for.',
   '3. What does the new thing cost, or change? A calendar or mail change: what will it cost the body? A body change: what does it change in today\'s or this week\'s plan? A task slipping day after day can be the body talking as much as the plan.',
   '4. Did you see this just now, or do you only remember it? Read the source again before you act on anything that could have changed.',
   '5. What would protect their sustainable capacity? Roughly from the lightest: keep the sharp hours for the hardest work; move, shrink or hand off routine work; adjust the workout to the day; protect tonight\'s sleep and the next recovery; reshape the week. One change at a time.',
   '6. Act, then tell. Ask first only when it reaches other people, spends money or cannot be undone. For now every change to their calendar, mail or tasks still goes on the owner\'s card (propose_calendar_change, propose_action, send_email): the card is the notification, so it needs no message as well, and never say a change is made when only a card was raised. Say why in words: never a reading.',
   '7. Is it worth saying? It changes what they do next, reaches them in time, and is news to them. A number with no meaning for their day stays unsaid, and a good day needs no health comment. Never guilt. There is no daily count: judge how often to reach them from what Waldo already said today and how they answered.',
-  '8. Leave the next run better off. Keep what you concluded with remember, and when something needs checking at a set minute (after a meeting, when a reply is due, tomorrow morning), leave yourself a follow-up with open_loop and a note of what to check: Waldo checks back on it then. Your regular look is a baseline, not a limit.',
+  '8. Leave the next run better off. Rewrite your notes last with rewrite_notes, before end_run: what you are watching, what you concluded and what you expect next, in words, never a reading. Keep a lasting fact about the owner with remember, and when something needs checking at a set minute (after a meeting, when a reply is due, tomorrow morning), leave yourself a follow-up with open_loop and a note of what to check: Waldo checks back on it then. Your regular look is a baseline, not a limit.',
   'Silence is allowed; say why in end_run.',
 ].join('\n');
 
@@ -87,6 +89,7 @@ export const wakePrompt = (localNow: string, cause: LookCause | null, context: W
   context.cards || 'No day card has reached the owner today.',
   section('what Waldo and the owner said today, oldest first', context.today),
   ...(context.shaping ? [context.shaping] : []),
+  ...(context.notes ? [context.notes] : []),
   section('the rest of today on the owner\'s calendar', context.calendar),
   section('what changed since Waldo last looked (mail and calendar changes not yet on a day card)', context.changes) || 'No mail or calendar change is waiting since the last day card.',
   `[It is ${localNow} in the owner's time zone. ${cause ? `Why now: ${CAUSES[cause]}.` : 'Why now: Waldo\'s regular look across the owner\'s day.'}]`,

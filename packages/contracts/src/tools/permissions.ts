@@ -173,6 +173,10 @@ export const toolNameSchema = z.enum([
   'import_memories',
   // end_run: how a run Waldo started ends, chosen by the model: send, ask the owner, nothing to send, or a follow-up set for later.
   'end_run',
+  // read_notes/rewrite_notes: Waldo's own page of what it is watching, concluded and expects next; every general wake reads it
+  // first and rewrites it last, and the owner reads and corrects it in chat.
+  'read_notes',
+  'rewrite_notes',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -332,6 +336,8 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'send_agent_mail',
     'offer_replies',
     'end_run',
+    'read_notes',
+    'rewrite_notes',
     'show_chart',
     'show_health_chart',
     'propose_schedule',

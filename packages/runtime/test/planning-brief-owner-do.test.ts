@@ -564,6 +564,29 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
     });
   });
 
+  it('a wake reads its own notes first and rewrites them last: the page is kept as Waldo\'s, marked as read beside other people\'s words, and the next wake reads it', async () => {
+    await owned('general-wake-notes', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner }) => {
+      const page = 'Watching: the deck block slipped twice this week. Expect: Ana replies about the deck by Thursday.';
+      model.owner = [{ calls: [{ name: 'rewrite_notes', arguments: { text: page, revision: 0 } }] }, { calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Nothing to say yet; noted what to watch.' } }] }];
+      await tick(state, owner);
+      expect(model.ownerRequests[0]).toContain('waldo_notes revision=\\"0\\"');
+      expect(state.storage.sql.exec<{ text: string; written_by: string; outside: number }>('SELECT text, written_by, outside FROM waldo_notes').toArray()).toEqual([{ text: page, written_by: 'waldo', outside: 1 }]);
+      expect(wakeRows(state)).toEqual([expect.objectContaining({ outcome: 'nothing', tools: JSON.stringify(['rewrite_notes']) })]);
+      model.ownerRequests.length = 0;
+      model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Still waiting on Ana.' } }] }];
+      const later = AT + 2 * 3_600_000, before = Date.now;
+      Date.now = () => later;
+      try {
+        state.storage.sql.exec('DELETE FROM schedule');
+        await new Scheduler(state.storage.sql, state.storage, productionDeps())
+          .schedule({ id: INTERVENTION_REVIEW_ID, kind: 'patrol', payloadRefs: { id: INTERVENTION_REVIEW_ID }, occurrenceAt: later - 1000, dueAt: later - 1000, recurrence: null });
+        await owner.alarm();
+        await state.storage.deleteAlarm();
+      } finally { Date.now = before; }
+      expect(model.ownerRequests.join('\n')).toContain('the deck block slipped twice this week');
+    });
+  });
+
   it('a wake can load the health-protocols skill: skills_load is offered and the skill index says when to load it', async () => {
     await owned('general-wake-skill', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1', HEALTH_ACTIONS: '1' }, async ({ state, owner }) => {
       model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Nothing new.' } }] }];
