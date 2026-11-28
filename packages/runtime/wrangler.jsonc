@@ -492,7 +492,7 @@
           "REENGAGE_PROACTIVE": "1",
           "PROACTIVE_INTERVENTIONS": "1",
           "PROACTIVE_REVIEW_EVERY_MIN": "90",
-          "GENERAL_WAKE": "0",
+          "GENERAL_WAKE": "1",
           "WAKE_MODEL_LOOK": "plans",
           "WHATS_NEW": "1",
           "WAKE_BRIEF": "1",
