@@ -23,7 +23,7 @@ import { carriesSecretOrCanary, sanitise } from '../../scribe/sanitiser';
 
 export type GoogleAccess = Readonly<{
   client(feature?: GoogleFeature, intent?: ProxyIntent, assertTaskSourceCurrent?: () => Promise<void>, account?: string): Promise<GoogleClient | null>;
-  state?():Promise<readonly Readonly<{id:string;email:string;error:string|null;calendar:boolean;mail:boolean;tasks:boolean}>[]>;
+  state?():Promise<readonly Readonly<{id:string;email:string;error:string|null;calendar:boolean;mail:boolean;tasks:boolean;drive?:boolean}>[]>;
 }>;
 
 export type EffectDesk = Readonly<{
@@ -183,12 +183,13 @@ const readAccounts = async <T extends object>(google: GoogleAccess, tool: ToolNa
 // Eligibility reads granted scopes, never the recorded error: a failing grant keeps its tools so the call asks for a
 // reconnect. One in-flight state read serves every handler's check in a turn and is dropped when it settles.
 const pendingState = new WeakMap<GoogleAccess, ReturnType<NonNullable<GoogleAccess['state']>>>();
-const granted = (google: GoogleAccess, feature: 'calendar' | 'mail' | 'tasks') => async (): Promise<ToolEligibility> => {
+// Drive is reported only by states that know it; one that does not say keeps the tool offered (offer trimming, not authority).
+export const granted = (google: GoogleAccess, feature: 'calendar' | 'mail' | 'tasks' | 'drive') => async (): Promise<ToolEligibility> => {
   if (!google.state) return { ok: true };
   let read = pendingState.get(google);
   if (!read) { read = google.state().finally(() => pendingState.delete(google)); pendingState.set(google, read); }
   const accounts = await read;
-  return accounts.some((account) => account[feature]) ? { ok: true }
+  return accounts.some((account) => feature === 'drive' ? account.drive !== false : account[feature]) ? { ok: true }
     : { ok: false, reason: 'not_connected', connect: { status: 'auth_required', service: 'google', reason: accounts.length ? 'scope_missing' : 'not_connected', feature } };
 };
 
