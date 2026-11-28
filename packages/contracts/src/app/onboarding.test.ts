@@ -6,7 +6,9 @@ import {
   appFindingV1Schema, appOnboardingActionV1Schema, appOnboardingErrorV1Schema, appOnboardingResultV1Schema, appOnboardingRoutesV1,
   appOnboardingV1Schema, appConsentPurposeV1Schema, appChannelLinkCodeV1Schema, appChannelLinkRequestV1Schema, appOnboardingChannelsV1Schema,
   appSetupAnswersRequestV1Schema, appSetupAnswersResultV1Schema, appSetupAnswersFitRevision, appSetupAnswersResultAtRevision, appSetupSpotV1Schema,
-  APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1, APP_ONBOARDING_SETUP_TRAINING_REVISION_V1, APP_SETUP_TRAINING_SPOTS_V1, APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1, APP_ONBOARDING_CONSENT_VERSION_REVISION_V1, appConsentListAtRevision,
+  APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1, APP_ONBOARDING_SETUP_TRAINING_REVISION_V1, APP_ONBOARDING_SETUP_GOAL_REVISION_V1, APP_SETUP_TRAINING_SPOTS_V1,
+  appOnboardingSummaryV1Schema, appOnboardingSummaryRequestV1Schema, appOnboardingSummaryResultV1Schema, appOnboardingQuestionActionV1Schema, appOnboardingQuestionResultV1Schema,
+  APP_ONBOARDING_SUMMARY_MAX_CHARS_V1, APP_ONBOARDING_QUESTIONS_MAX_V1, APP_ONBOARDING_QUESTION_MAX_CHARS_V1, APP_ONBOARDING_QUESTION_ANSWER_MAX_CHARS_V1, APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1, APP_ONBOARDING_CONSENT_VERSION_REVISION_V1, appConsentListAtRevision,
 } from './onboarding';
 import { appJsonWireBytes } from './core';
 import { healthPurposeV1Schema, healthSourceV1Schema } from './health-ingest';
@@ -386,5 +388,96 @@ describe('published copy', () => {
     expect([APP_TERMS_VERSION_V1, APP_PRIVACY_NOTICE_VERSION_V1]).toEqual([1, 1]);
     expect(APP_TERMS_URL_V1).toBe('https://www.heywaldo.in/terms');
     expect(APP_PRIVACY_NOTICE_URL_V1).toBe('https://www.heywaldo.in/privacy');
+  });
+});
+
+describe('setup answers, onboarding revision 5: the goal', () => {
+  // What the owner is working toward, in their own words, and by when when there is a date.
+  const goal = { request_id: 'setup-answers-05', goal: { own_words: 'Finish my first HYROX', by: '2027-03-14' } };
+  it('is revision 5, after training at 4', () => {
+    expect([APP_ONBOARDING_SETUP_TRAINING_REVISION_V1, APP_ONBOARDING_SETUP_GOAL_REVISION_V1]).toEqual([4, 5]);
+  });
+  it('takes the goal in the owner\'s words with an optional calendar day, and null clears it', () => {
+    accepted(appSetupAnswersRequestV1Schema, [
+      goal, { request_id: 'setup-answers-05', goal: { own_words: 'Sleep through the night again', by: null } }, { request_id: 'setup-answers-05', goal: null },
+      { request_id: 'setup-answers-05', goal: { own_words: 'x'.repeat(280), by: '2028-02-29' } }, { ...goal, name: 'Asha' },
+    ]);
+    rejected(appSetupAnswersRequestV1Schema, [
+      { request_id: 'setup-answers-05', goal: { own_words: '', by: null } }, { request_id: 'setup-answers-05', goal: { own_words: '   ', by: '2027-03-14' } },
+      { request_id: 'setup-answers-05', goal: { own_words: 'x'.repeat(281), by: null } }, { request_id: 'setup-answers-05', goal: { own_words: 'Run a marathon' } },
+      { request_id: 'setup-answers-05', goal: { own_words: 'Run a marathon', by: '14/03/2027' } }, { request_id: 'setup-answers-05', goal: { own_words: 'Run a marathon', by: '2027-02-30' } },
+      { request_id: 'setup-answers-05', goal: { own_words: 'Run a marathon', by: '2027-03-14T00:00:00Z' } }, { request_id: 'setup-answers-05', goal: 'Run a marathon' },
+      { request_id: 'setup-answers-05', goal: { own_words: 'Run a marathon', by: null, when: 'spring' } },
+    ]);
+  });
+  it('lets only a build that declares revision 5 name the goal', () => {
+    const parsed = appSetupAnswersRequestV1Schema.parse(goal), cleared = appSetupAnswersRequestV1Schema.parse({ request_id: 'setup-answers-05', goal: null });
+    for (const revision of [1, 2, 3, 4]) expect([revision, appSetupAnswersFitRevision(parsed, revision), appSetupAnswersFitRevision(cleared, revision)]).toEqual([revision, false, false]);
+    for (const revision of [5, 6]) expect([revision, appSetupAnswersFitRevision(parsed, revision), appSetupAnswersFitRevision(cleared, revision)]).toEqual([revision, true, true]);
+    // Naming 5 turns on the training of revision 4 with it.
+    expect(appSetupAnswersFitRevision(appSetupAnswersRequestV1Schema.parse({ ...goal, train: { picked: ['early'], own_words: '' } }), 5)).toBe(true);
+  });
+  it('holds goal only for a build that reads revision 5; a build at 4 is answered as before', () => {
+    const all = { name: true, day: false, slips: false, wearable: true, matters: true, spots: true, protect: false, rope: true, season: true, low: false, train: true, goal: true };
+    const result = { request_id: 'setup-answers-05', held: all, replayed: false };
+    accepted(appSetupAnswersResultV1Schema, [result, { ...result, held: { ...all, goal: false } }]);
+    rejected(appSetupAnswersResultV1Schema, [{ ...result, held: { ...all, goal: 'yes' } }, { ...result, held: { ...all, goal: null } }]);
+    const { goal: _goal, ...four } = all, { train: _train, ...two } = four;
+    expect(appSetupAnswersResultAtRevision(result, 4)).toEqual({ ...result, held: four });
+    expect(appSetupAnswersResultAtRevision(result, 3)).toEqual({ ...result, held: two });
+    expect(appSetupAnswersResultAtRevision(result, 1)).toEqual({ ...result, held: { name: true, day: false, slips: false, wearable: true } });
+    for (const revision of [5, 6]) expect(appSetupAnswersResultAtRevision(result, revision)).toBe(result);
+  });
+  it('fits the longest answers, the goal among them, under the answers route cap', () => {
+    const words = '\u0001'.repeat(280), longest = {
+      request_id: 'x'.repeat(80), name: `a${'\u0001'.repeat(79)}`, day: { shape: 'varies', own_words: words }, slips: { picked: ['replies', 'overlaps', 'promises', 'breaks', 'evenings'], own_words: words },
+      wearable: 'garmin', matters: { picked: ['sleep', 'energy', 'stress', 'schedule', 'mail', 'promises', 'training'], own_words: words }, spots: appSetupSpotV1Schema.options,
+      protect: { picked: ['workouts', 'family', 'meals', 'mornings', 'focus'], own_words: words }, rope: 'suggest', season: { choice: 'none', own_words: words },
+      low: { picked: ['focus', 'patience', 'sleep', 'push', 'cancel'], own_words: words }, train: { picked: ['early', 'lunch', 'evening', 'weekend', 'gap'], own_words: words },
+      goal: { own_words: words, by: '2027-03-14' },
+    };
+    accepted(appSetupAnswersRequestV1Schema, [longest]);
+    expect(appJsonWireBytes(longest)).toBeLessThanOrEqual(APP_SETUP_ANSWERS_MAX_REQUEST_BYTES_V1);
+  });
+});
+
+describe('the summary before the last onboarding step, with open questions', () => {
+  const question = (n: number, state = 'open') => ({ id: `oq_${'a'.repeat(n)}`, text: 'Do you train before work on weekdays too?', state });
+  const ready = { state: 'ready', summary: 'You are training for your first HYROX in March and keep mornings for it.', written_at: 1_000, questions: [question(8), question(9, 'answered'), question(10, 'deferred')] };
+  it('reads none before the first summary, then the summary and its questions with their state', () => {
+    accepted(appOnboardingSummaryV1Schema, [{ state: 'none', summary: null, written_at: null, questions: [] }, ready, { ...ready, questions: [] }]);
+    rejected(appOnboardingSummaryV1Schema, [
+      { ...ready, summary: '' }, { ...ready, summary: 'x'.repeat(APP_ONBOARDING_SUMMARY_MAX_CHARS_V1 + 1) }, { state: 'none', summary: 'x', written_at: null, questions: [] },
+      { ...ready, questions: Array.from({ length: APP_ONBOARDING_QUESTIONS_MAX_V1 + 1 }, (_, n) => question(n + 1)) },
+      { ...ready, questions: [{ ...question(8), text: 'x'.repeat(APP_ONBOARDING_QUESTION_MAX_CHARS_V1 + 1) }] }, { ...ready, questions: [question(8, 'skipped')] },
+      { ...ready, questions: [{ ...question(8), id: 'q1' }] }, { ...ready, extra: true },
+    ]);
+  });
+  it('asks for a summary by request id, and answers it with the summary as written', () => {
+    accepted(appOnboardingSummaryRequestV1Schema, [{ request_id: 'onboarding-summary-1' }]);
+    rejected(appOnboardingSummaryRequestV1Schema, [{}, { request_id: 'onboarding-summary-1', text: 'x' }]);
+    accepted(appOnboardingSummaryResultV1Schema, [{ request_id: 'onboarding-summary-1', summary: ready, replayed: false }]);
+    rejected(appOnboardingSummaryResultV1Schema, [{ request_id: 'onboarding-summary-1', summary: { state: 'none', summary: null, written_at: null, questions: [] }, replayed: false }]);
+  });
+  it('answers a question in the owner\'s words, or leaves it for Waldo to ask later', () => {
+    accepted(appOnboardingQuestionActionV1Schema, [
+      { request_id: 'onboarding-question-1', question_id: 'oq_aaaaaaaa', action: 'answer', text: 'Yes, at six.' },
+      { request_id: 'onboarding-question-1', question_id: 'oq_aaaaaaaa', action: 'answer', text: 'x'.repeat(APP_ONBOARDING_QUESTION_ANSWER_MAX_CHARS_V1) },
+      { request_id: 'onboarding-question-1', question_id: 'oq_aaaaaaaa', action: 'defer' },
+    ]);
+    rejected(appOnboardingQuestionActionV1Schema, [
+      { request_id: 'onboarding-question-1', question_id: 'oq_aaaaaaaa', action: 'answer' }, { request_id: 'onboarding-question-1', question_id: 'oq_aaaaaaaa', action: 'answer', text: '  ' },
+      { request_id: 'onboarding-question-1', question_id: 'oq_aaaaaaaa', action: 'answer', text: 'x'.repeat(APP_ONBOARDING_QUESTION_ANSWER_MAX_CHARS_V1 + 1) },
+      { request_id: 'onboarding-question-1', question_id: 'oq_aaaaaaaa', action: 'defer', text: 'later' }, { request_id: 'onboarding-question-1', question_id: 'oq_aaaaaaaa', action: 'skip' },
+      { request_id: 'onboarding-question-1', question_id: 'nope', action: 'defer' },
+    ]);
+    accepted(appOnboardingQuestionResultV1Schema, [{ request_id: 'onboarding-question-1', question_id: 'oq_aaaaaaaa', outcome: 'answered', replayed: false }, { request_id: 'onboarding-question-1', question_id: 'oq_aaaaaaaa', outcome: 'deferred', replayed: true }]);
+    rejected(appOnboardingQuestionResultV1Schema, [{ request_id: 'onboarding-question-1', question_id: 'oq_aaaaaaaa', outcome: 'open', replayed: false }]);
+  });
+  it('lists the three routes, each authenticated, the writes idempotent by request id', () => {
+    const routes = appOnboardingRoutesV1.filter(route => route.path.startsWith('/app/v1/onboarding/summary'));
+    expect(routes.map(route => `${route.method} ${route.path}`)).toEqual(['GET /app/v1/onboarding/summary', 'POST /app/v1/onboarding/summary', 'POST /app/v1/onboarding/summary/questions']);
+    expect(routes.every(route => route.authenticated)).toBe(true);
+    expect(routes.filter(route => route.method === 'POST').every(route => 'idempotency_field' in route && route.idempotency_field === 'request_id')).toBe(true);
   });
 });
