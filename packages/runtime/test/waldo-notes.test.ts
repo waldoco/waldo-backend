@@ -32,8 +32,11 @@ describe('Waldo\'s own notes', () => {
       const { rewrite } = handlers(sql);
       await rewrite.handle({ text: PAGE, revision: 0 }, ctx({ toolArgSourceTaint: 'external' }));
       expect(waldoNotesBook(sql).read()).toMatchObject({ revision: 1, written_by: 'waldo', outside: true });
+      // Whoever reads that page reads outside content.
+      expect(await handlers(sql).read.handle()).toMatchObject({ ok: true, source_taint: 'external' });
       await rewrite.handle({ text: 'Not training for a marathon any more: stop watching long runs.', revision: 1 }, ctx({ ownerMessage: { messageRef: 'm1', receivedAt: 1 } }));
       expect(waldoNotesBook(sql).read()).toMatchObject({ revision: 2, written_by: 'owner', outside: false });
+      expect(await handlers(sql).read.handle()).toMatchObject({ ok: true, source_taint: null });
     });
   });
 

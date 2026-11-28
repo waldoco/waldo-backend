@@ -69,8 +69,11 @@ export const waldoNotesHandlers = (book: ReturnType<typeof waldoNotesBook>, now:
     schema: readNotesArgsSchema,
     trigger_allowlist: allowlist('read_notes'),
     autonomy_gated: false,
+    // A page written in a run that had read other people's words carries that mark into the turn that reads it, so the
+    // owner's turn treats what came from mail as outside content, as it would the mail itself.
     async handle() {
-      return { ok: true, data: book.read(), source_taint: null };
+      const notes = book.read();
+      return { ok: true, data: notes, source_taint: notes.outside ? 'external' : null };
     },
   } satisfies ToolHandler<ReadNotesArgs, WaldoNotes, ToolDispatcherContext>,
   {
