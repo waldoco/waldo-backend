@@ -60,3 +60,14 @@ describe('open_loop source_ref', () => {
     expect(openLoopArgsSchema.shape.source_ref.description).toMatch(/never an owner commitment or permission/);
   });
 });
+
+describe('open_loop note', () => {
+  it('are optional, bounded words for the future run', () => {
+    const base = { title: 'Check the gym block', due: '2026-11-17T19:20' };
+    expect(openLoopArgsSchema.safeParse(base).success).toBe(true);
+    expect(openLoopArgsSchema.safeParse({ ...base, note: 'Did the 18:00 block happen? Training quest wants three a week. Worth acting on if no workout or flat steps.' }).success).toBe(true);
+    for (const bad of [{ note: '' }, { note: 'x'.repeat(801) }, { watch_for: 'no workout' }, { note: 5 }, { kind: 'self' }]) {
+      expect(openLoopArgsSchema.safeParse({ ...base, ...bad }).success, JSON.stringify(bad).slice(0, 40)).toBe(false);
+    }
+  });
+});
