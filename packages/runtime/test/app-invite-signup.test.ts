@@ -53,7 +53,7 @@ const directory = async (options: { inviteLive?: boolean; member?: string } = {}
 describe('an invited person joins from the app', () => {
   it('is sent a code only when the invite reaches the code request', async () => {
     const { app, state, invited } = await directory();
-    expect(await app('/auth/code', { email: invited })).toEqual({ status: 200, body: { ok: true } });
+    expect(await app('/auth/code', { email: invited })).toEqual({ status: 403, body: { error: 'signup_closed' } });
     expect(state.otp).toEqual([]);
     expect(await app('/auth/code', { email: invited, invite: INVITE })).toEqual({ status: 200, body: { ok: true } });
     expect(state.otp).toEqual([invited]);

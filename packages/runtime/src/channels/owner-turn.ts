@@ -59,6 +59,7 @@ import { episodesFromSearchTool, previousOwnerMessage, RECALL_MAX_CHARS, recallF
 import type { SemanticRecall } from '../memory/semantic-recall';
 import { coreMemory, CORE_ROOM, LEXICAL_DEADLINE_MS, recallWithin, SEMANTIC_DEADLINE_MS, type MemorySelection } from '../memory/select-memory';
 import { WELCOME_INSTRUCTION, WELCOME_INSTRUCTION_V2, WELCOME_SCHEMA, WELCOME_SCHEMA_V2 } from '../onboarding/welcome';
+import { SUMMARY_INSTRUCTION, SUMMARY_SCHEMA } from '../onboarding/summary';
 import type { ConversationStore, WindowStart } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
 import { billedAttemptEntries } from './billed-attempts';
@@ -1497,6 +1498,13 @@ export const createOwnerResponder = (
       const asOwner = await asOwnerJob(trace, job => job.welcome!(trace, stage, input, version));
       if (asOwner !== undefined) return asOwner;
       return ask(trace, `memory_welcome_${stage}`, version === 2 ? WELCOME_INSTRUCTION_V2 : WELCOME_INSTRUCTION, input, { name: 'welcome_nodes', schema: version === 2 ? WELCOME_SCHEMA_V2 : WELCOME_SCHEMA }, undefined, undefined, undefined, roleModel);
+    },
+    // The onboarding summary's structured call, the same path as a welcome stage: the memory_ purpose keeps its text out of
+    // every trace, since it reads the owner's answers and Waldo's reads of their mail and calendar, fenced as data.
+    async onboardingSummary(trace, input) {
+      const asOwner = await asOwnerJob(trace, job => job.onboardingSummary!(trace, input));
+      if (asOwner !== undefined) return asOwner;
+      return ask(trace, 'memory_onboarding_summary', SUMMARY_INSTRUCTION, input, { name: 'onboarding_summary', schema: SUMMARY_SCHEMA }, undefined, undefined, undefined, roleModel);
     },
     async promote(trace, gate) {
       const asOwner = await asOwnerJob(trace, job => job.promote(trace, gate));
