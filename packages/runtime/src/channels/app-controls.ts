@@ -1,5 +1,5 @@
 import { APP_CONTROLS_PEOPLE_REVISION, APP_PEOPLE_MAX_V1, APP_MEMORY_PAGE_MAX_V1, APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_CONNECTIONS_CATALOGUE_REVISION, type AppWearableV1, APP_CONTROLS_QUESTS_REVISION, type AppQuestV1, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_CONTROLS_CARD_STATE_REVISION, APP_CONTROLS_DAY_CARD_REVISION, APP_CONTROLS_WHY_REVISION, APP_CONTROLS_DAY_HISTORY_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_CONTROLS_MEMORY_SIGNAL_REVISION, type AppWelcomeBuildV1, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlRequestIdV1Schema, appControlResultV1Schema, APP_CONTROLS_WELCOME_SETUP_REVISION, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_SCHEDULE_REVISION } from '../../../contracts/src/app/controls';
-import { APP_CONTROLS_SENT_TODAY_REVISION, APP_SENT_TODAY_MAX_V1, declaresActWithoutAsking } from '../../../contracts/src/app/controls';
+import { APP_CONTROLS_CARD_PAUSE_REASON_REVISION, APP_CONTROLS_SENT_TODAY_REVISION, APP_SENT_TODAY_MAX_V1, declaresActWithoutAsking } from '../../../contracts/src/app/controls';
 import { sentTodayPage, type SendRow } from './send-outcomes';
 import type { AppWhyV1 } from '../../../contracts/src/app/why';
 import { APP_CONTRACT_HEADER, appContractRevision } from '../../../contracts/src/app/core';
@@ -123,7 +123,10 @@ const withoutActWithoutAsking=<T extends {view:string;data:unknown}>(request:Req
 };
 // Controls revision 26 lists what Waldo sent first today; builds below it never receive it.
 const listsSentToday=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_SENT_TODAY_REVISION;
-const dayForRevision=(request:Request,day:Record<string,unknown>)=>{
+// Controls revision 27 says why a paused card's last run failed (state_code); builds below it never receive it.
+const namesPauseReason=(request:Request)=>appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_CARD_PAUSE_REASON_REVISION;
+const dayForRevision=(request:Request,given:Record<string,unknown>)=>{
+  const givenData=given.data as {cards:readonly Record<string,unknown>[]},day=namesPauseReason(request)?given:{...given,data:{...givenData,cards:givenData.cards.map(({state_code:_code,...card})=>card)}};
   const {schedule_controls:_schedules,...older}=day.data as Record<string,unknown>,shown=withoutActWithoutAsking(request,{...day,view:String(day.view),data:setsSchedules(request)?day.data:older});
   if(appContractRevision(request.headers.get(APP_CONTRACT_HEADER),'controls')>=APP_CONTROLS_CARD_STATE_REVISION)return shown;
   const data=shown.data as {cards:readonly Record<string,unknown>[]};

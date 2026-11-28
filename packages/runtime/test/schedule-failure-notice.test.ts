@@ -104,6 +104,20 @@ it('a reminder whose runs fail three times in a row says so once, with no conten
   expect(sentTo(w)).toEqual([line('Sat 2 Nov at 10:01am')]);
 }, 30_000);
 
+it('a pause says why in one trace an operator counts across owners: the job\'s kind and the closed reason of its last failed run, no text', async () => {
+  const lines = vi.spyOn(console, 'log');
+  const w = await world('notice-reason', '9111', Date.parse('2030-11-01T14:00:00Z'));
+  await remind(w, 'reminder:why', Date.now());
+  await failThrice(w, 'reminder:why');
+  const paused = lines.mock.calls.map(call => String(call[0])).filter(line => line.includes('"hop":"schedule_paused"')).map(line => JSON.parse(line) as { code: string; ok: boolean });
+  expect(paused).toEqual([expect.objectContaining({ ok: false, code: expect.stringMatching(/^reminder:[a-z_]+$/) })]);
+  expect(JSON.stringify(paused)).not.toContain('Sam');
+  const kept = await w.inObject(state => state.storage.kv.get<{ code: string }>('schedule_failure_v1:reminder:why'));
+  expect(paused[0]!.code).toBe(`reminder:${kept?.code}`);
+  // A refused model request (the fixture's 400) is the model failing the run, not an outage.
+  expect(paused[0]!.code).toBe('reminder:model_failed');
+}, 30_000);
+
 it('quiet hours hold the notice, and the line they let through names the real retry time', async () => {
   const w = await world('notice-quiet', '9102', Date.parse('2030-11-02T03:00:00Z')); // Fri 23:00 in New York
   await quietHours(w, '22:00', '07:00');

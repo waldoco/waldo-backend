@@ -136,6 +136,7 @@ import { armFollowupWake, armHeartbeat, HEARTBEAT_EVERY_MS, HEARTBEAT_ID, heartb
 import { heartbeatApplier, heartbeatJobSpec } from './heartbeat-job';
 import { checkBackReply, DAY_CARD_TOOLS, LOOP_CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS, outsideReminderCheckBackText, reminderFloorText } from './check-back';
 import { dueFailureNotices, failurePauseHolds, markFailureNoticed, pausedJobs } from '../scheduler/failure-notice';
+import { lastRunFailure, recordingFailures } from './run-failure';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
 import { consoleAuth, fromAnotherSite, OWNER_COOKIE, presenceRecheck, sessionFamily, signedInRecently, type OwnerSettings } from '../identity/console-auth';
@@ -3792,7 +3793,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             log({ trace: `alarm:${started}`, hop: outcome === 'drop' ? 'scheduled_drop' : 'scheduled_hold', ms: 0, ok: true, code, detail: code });
           };
           // Each job starts only with time for its turn left in this alarm; the rest stay due for a fresh one.
-          fired = await scheduler.dispatchDue(gateScheduleExecutors(jobs, schedulePreferences(this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now })), scheduler, held, onHeld, this.sweepCarriesUpdates()),
+          fired = await scheduler.dispatchDue(recordingFailures(gateScheduleExecutors(jobs, schedulePreferences(this.ctx.storage.sql, loopBook(this.ctx.storage.sql, { newId: () => crypto.randomUUID(), now: Date.now })), scheduler, held, onHeld, this.sweepCarriesUpdates()), this.ctx.storage.kv, Date.now),
             () => this.machineRoom(alarmEnd));
         } catch (error) {
           // A dispatch throw used to leave no trace at all - the wake was invisible in Langfuse.
@@ -6036,6 +6037,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           }
           markFailureNoticed(storage.kv, notice, now);
           log({ trace: notice.id, hop: 'schedule_notice', ms: 0, ok: true, code: notice.kind, ...(notice.text === null ? { detail: 'capped' } : {}) });
+          // One line per pause, by the job's kind and the closed reason of its last failed run: the count operators read.
+          if (notice.kind !== 'model_auth') log({ trace: notice.id, hop: 'schedule_paused', ms: 0, ok: false, code: `${notice.kind}:${lastRunFailure(storage.kv, notice.scheduleId)?.code ?? 'unknown'}` });
         }
       } catch (error) {
         // The jobs in this lane never wait on a notice: one that can't be queued is tried again on the next scheduled pass.
@@ -7190,7 +7193,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
             const row = planned.get(card.id);
             const status = cardStatus({ scheduler, book: plans, kv: identity, timezone: clock.timezone, now: Date.now(), queued: cardQueued }, card);
             return { id: card.id, name: card.name, defaultTime: card.defaultTime, time: row ? row.time : card.defaultTime, reason: row?.reason ?? 'not planned yet', sent: row?.sent ?? false, pin: pins[card.id] ?? null,
-              ...(status.state ? { state: status.state } : {}), ...(status.reason ? { stateReason: status.reason } : {}), ...(status.retriesLeft === undefined ? {} : { retriesLeft: status.retriesLeft }) };
+              ...(status.state ? { state: status.state } : {}), ...(status.reason ? { stateReason: status.reason } : {}), ...(status.code ? { stateCode: status.code } : {}), ...(status.retriesLeft === undefined ? {} : { retriesLeft: status.retriesLeft }) };
           }),
           ledger: await ledger(), proactivity: loops.proactivity(), schedules: schedPrefs.all(), wakeBrief: this.env.WAKE_BRIEF === '1', actWithoutAsking: actWithoutAsking(identity, this.env.AUTONOMOUS_BY_DEFAULT === '1'), pausedJobs: pausedJobs(this.ctx.storage.sql, Date.now(), clock.timezone), files: files.list(), steps: traces.steps(clock.timezone), lastRequest: traces.lastRequest(clock.timezone), trace: tracePage.rows,
           runs: runPage.rows.map((row) => ({ id: row.id, kind: row.kind, status: row.status, summary: (row.status === 'running' ? waitingNotes.get(row.id) : undefined) ?? row.summary, parent_id: row.parent_id, started: localIso(row.started_at, clock.timezone).slice(5, 16).replace('T', ' '), ended: row.ended_at === null ? null : localIso(row.ended_at, clock.timezone).slice(5, 16).replace('T', ' ') })),

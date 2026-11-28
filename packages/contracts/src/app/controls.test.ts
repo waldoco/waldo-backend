@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { appContractRevision } from './core';
-import { APP_CONTROLS_SENT_TODAY_REVISION, APP_SENT_TODAY_MAX_V1, APP_ACT_WITHOUT_ASKING_RECEIPTS_V1, APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1, APP_ACT_WITHOUT_ASKING_CONTRACT, APP_ACT_WITHOUT_ASKING_CONTRACT_REVISION, declaresActWithoutAsking, APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, appNodeSourceV13Schema, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_PROACTIVE_SURFACE_RECEIPTS_V1, APP_CONTROLS_SCHEDULE_REVISION, APP_CONTROLS_QUESTS_REVISION, APP_QUESTS_MAX_V1, APP_SCHEDULE_RECEIPTS_V1, appClock12V1, appScheduleTimeReceiptV1, APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1, APP_AGENT_MAIL_RECEIPTS_V1, APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema, APP_WELCOME_STAGES_V1, APP_WELCOME_STAGES_V5, appWelcomeBuildV1Schema } from './controls';
+import { APP_CONTROLS_CARD_PAUSE_REASON_REVISION, APP_CONTROLS_SENT_TODAY_REVISION, APP_SENT_TODAY_MAX_V1, APP_ACT_WITHOUT_ASKING_RECEIPTS_V1, APP_ACT_WITHOUT_ASKING_STILL_ASKS_V1, APP_ACT_WITHOUT_ASKING_CONTRACT, APP_ACT_WITHOUT_ASKING_CONTRACT_REVISION, declaresActWithoutAsking, APP_CONTROLS_CLAIM_CONTROLS_REVISION, APP_CONTROLS_WELCOME_WEB_REVISION, appNodeSourceV1Schema, appNodeSourceV13Schema, APP_CONTROLS_WHATSAPP_PROOF_REVISION, APP_CONTROLS_PROACTIVE_SURFACE_REVISION, APP_PROACTIVE_SURFACE_RECEIPTS_V1, APP_CONTROLS_SCHEDULE_REVISION, APP_CONTROLS_QUESTS_REVISION, APP_QUESTS_MAX_V1, APP_SCHEDULE_RECEIPTS_V1, appClock12V1, appScheduleTimeReceiptV1, APP_AGENT_MAIL_HANDLE_INPUT_MAX_V1, APP_AGENT_MAIL_RECEIPTS_V1, APP_CLAIM_TEXT_MAX_V1, APP_CONTROLS_AGENT_MAIL_REVISION, APP_CONTROLS_IDENTITY_REVISION, APP_CONTROLS_MEMORY_REVISION, APP_IMESSAGE_ENROLL_RECEIPTS_V1, APP_PHONE_SET_RECEIPTS_V1, APP_MEMORY_PAGE_MAX_V1, APP_NODE_CORRECTION_MAX_V1, appChannelStatusV1Schema, appControlActionV1Schema, appControlProjectionV1Schema, appControlQueryV1Schema, appControlReceiptV1Schema, appControlResultV1Schema, APP_WELCOME_STAGES_V1, APP_WELCOME_STAGES_V5, appWelcomeBuildV1Schema } from './controls';
 
 const revision = 'f'.repeat(64);
 const connections = {
@@ -177,6 +177,13 @@ describe('controls revision 3: day-card state and Try again', () => {
       { ...card, state: 'failed', state_reason: 'x'.repeat(121) }, { ...card, state: 'failed', state_reason: '' },
       { ...card, retries_left: 4 }, { ...card, retries_left: -1 }, { ...card, retries_left: 1.5 },
     ]) expect(appControlProjectionV1Schema.safeParse(day([invalid])).success).toBe(false);
+  });
+
+  it('controls revision 27: a paused card may say why its last run failed, by a closed code, and no other card carries one', () => {
+    expect(APP_CONTROLS_CARD_PAUSE_REASON_REVISION).toBe(27);
+    expect(appControlProjectionV1Schema.safeParse(day([{ ...card, state: 'paused', state_reason: 'Paused after 3 failed tries in a row: it was written but could not be delivered', state_code: 'not_delivered', retries_left: 3 }])).success).toBe(true);
+    for (const invalid of [{ ...card, state: 'failed', state_code: 'timed_out' }, { ...card, state: 'paused', state_code: 'the model said no' }, { ...card, state_code: 'unknown' }])
+      expect(appControlProjectionV1Schema.safeParse(day([invalid])).success).toBe(false);
   });
 
   it('takes card.retry on the day view for one of the three cards, and nothing else', () => {
