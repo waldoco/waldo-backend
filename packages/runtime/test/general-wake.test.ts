@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { LookCause } from '../src/channels/interventions';
 import type { RunEndReport, RunSpend } from '../src/channels/owner-turn';
-import { GENERAL_WAKE_TOOLS, generalWake, wakeCostMonth, wakeOutcomeBook, wakeRole, WITHHELD_REASON, type WakeCode, type WakeRow } from '../src/channels/wake';
+import { GENERAL_WAKE_TOOLS, generalWake, wakeCostMonth, wakeOutcomeBook, wakeRole, WALDO_LENS, WITHHELD_REASON, type WakeCode, type WakeRow } from '../src/channels/wake';
 
 // GENERAL_WAKE: Waldo's general wake replaces the look. The model judges; code holds the wake only for the owner's no to
 // follow-ups and their quiet hours, before it runs and again when it decides to speak. There is no daily count. A fake run stands in for
@@ -94,7 +94,7 @@ describe('Waldo\'s general wake', () => {
     expect([out.code, out.rows.map(row => [row.outcome, row.spend])]).toEqual(['threw', [['failed', null]]]);
   });
 
-  it('the prompt starts with the same orientation every time and ends with what changed and the moment; it sets its own next look', async () => {
+  it('the prompt starts with the same orientation and lens every time and ends with what changed and the moment', async () => {
     const plain = await wake('SKIP', end('nothing_to_send', 'Nothing.'));
     const moved = await wake('SKIP', end('nothing_to_send', 'Landed; nothing to change.'), { cause: 'place_moved' });
     const [a, b] = [plain.prompts[0]!, moved.prompts[0]!];
@@ -104,9 +104,10 @@ describe('Waldo\'s general wake', () => {
     expect(a.indexOf('Board prep now 16:00')).toBeGreaterThan(a.indexOf('Deck block 9 to 12'));
     expect(b.slice(shared)).toContain('another time zone or city');
     expect(moved.rows.map(row => row.ref)).toEqual(['place_moved']);
-    expect(a).toContain('open_loop');
-    expect(a).not.toMatch(/most looks end in nothing|nothing is normal|volume/i);
-    expect(a).toContain('end_run');
+    // The lens is one named block at the head of every wake, so its wording changes in one place.
+    expect(a.indexOf(WALDO_LENS)).toBeGreaterThan(0);
+    expect(a.indexOf(WALDO_LENS)).toBeLessThan(a.indexOf('Send Ana the deck'));
+    expect(b).toContain(WALDO_LENS);
   });
 });
 

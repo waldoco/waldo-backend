@@ -500,6 +500,16 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
     });
   });
 
+  it('a wake can load the health-protocols skill: skills_load is offered and the skill index says when to load it', async () => {
+    await owned('general-wake-skill', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1', HEALTH_ACTIONS: '1' }, async ({ state, owner }) => {
+      model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Nothing new.' } }] }];
+      await tick(state, owner);
+      const request = JSON.parse(model.ownerRequests[0]!) as { tools?: { name: string }[] };
+      expect((request.tools ?? []).map(tool => tool.name)).toContain('skills_load');
+      expect(model.ownerRequests[0]).toContain(`health-protocols@`);
+    });
+  });
+
   it('a phone that moved brings the look to now, and the look it starts knows why; off, or for a forged notice, nothing moves', async () => {
     const moved = async (owner: Steps['owner'], name: string, sig?: string) => owner.fetch(new Request('https://telegram-owner/app/v1/internal/place-moved', { method: 'POST', body: '{}',
       headers: { 'content-type': 'application/json', 'x-waldo-do-name': name, 'x-waldo-moved-sig': sig ?? await routerSignature(directory.WALDO_ROUTER_HMAC_SECRET, 0, `placemoved.${name}`) } }));

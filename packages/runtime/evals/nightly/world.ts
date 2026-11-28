@@ -14,7 +14,7 @@ import { durableConversationStore } from '../../src/channels/conversation-store'
 import { toContextHealthMaterial, type HealthContextRow } from '../../src/channels/health-context';
 import { comingItemsFrom, healthTriggerBook, runHealthTrigger, type HealthDecisionFormat, type HealthTriggerOutcome } from '../../src/health/trigger';
 import type { HealthWakeReason } from '../../src/health/wakes';
-import { composeDayCard } from '../../src/channels/day-cards';
+import { composeDayCard, dayWindow, readCalendar } from '../../src/channels/day-cards';
 import { capacityBudgetContext } from '../../src/channels/capacity';
 import { DAY_CARDS, type CardId } from '../../src/prompt/day-cards';
 import { connectServiceHandler, googleHandlers, type EffectDesk, type GoogleAccess } from '../../src/tools/live/google';
@@ -476,6 +476,8 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     },
     // A day card's prompt as the owner object composes it, over this world's calendar; no ledger or conversation yet.
     dayCard: (id: CardId, capacity = false, tomorrow = false, planning = false) => composeDayCard(DAY_CARDS.find((card) => card.id === id)!, now(), TIMEZONE, { google: client, connectable: false, ledger: '', today: '', updates: '', ...(capacity ? { capacity } : {}), ...(tomorrow ? { tomorrow } : {}), ...(planning ? { planning } : {}) }).then((card) => card.text),
+    // GENERAL_WAKE: the rest of today's calendar, as the owner object hands it to a wake.
+    wakeCalendar: () => readCalendar({ from: now(), to: dayWindow(now(), TIMEZONE).to }, TIMEZONE, client, false),
     // CAPACITY_BUDGET: the rest of this world's week, as the owner object hands it to the planning Brief.
     weekAhead: () => capacityBudgetContext(now(), TIMEZONE, client, false, ''),
     // The seeded claims are embedded before the first turn, as a long-lived owner's would be.
