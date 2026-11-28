@@ -4,6 +4,8 @@ import { EXTERNAL_ORIGIN_TOOLS, TOOL_PERMISSIONS, triggerTypeSchema, type Conver
 import { createOwnerResponder, type RunEndReport } from '../src/channels/owner-turn';
 import type { ConversationStore } from '../src/channels/conversation-store';
 import { GENERAL_WAKE_TOOLS } from '../src/channels/wake';
+import { waldoNotesHandlers, type waldoNotesBook } from '../src/channels/waldo-notes';
+import type { WaldoNotes } from '@waldo/contracts';
 import { ownerJobAdmission } from '../src/identity/surface-owner-admission';
 import type { LLMGatewayAdapter } from '../src/llm/provider';
 import { readDriveHandler } from '../src/tools/live/drive';
@@ -19,14 +21,16 @@ const time = async <T,>(_hop: string, work: () => Promise<T>) => work();
 const allowed = (name: string) => triggerTypeSchema.options.filter((trigger) => (TOOL_PERMISSIONS[trigger] as readonly string[]).includes(name));
 
 type Step = Readonly<{ tool: string; args: unknown }>;
-const harness = async (steps: Step[], failing: readonly string[] = [], extra: readonly string[] = []) => {
+const harness = async (steps: Step[], failing: readonly string[] = [], extra: readonly string[] = [], page?: WaldoNotes) => {
   const calls: string[] = [], ends: [string, RunEndReport][] = [];
   const fake = (name: string) => ({ name: name as ToolName, description: `The ${name} tool.`, schema: z.object({}).passthrough(), trigger_allowlist: allowed(name),
     handle: async () => { calls.push(name); const taint = (EXTERNAL_ORIGIN_TOOLS as readonly string[]).includes(name) ? 'external' as const : null;
       return failing.includes(name) ? { ok: false as const, code: 'transient' as const, error: `${name} is unavailable right now.`, source_taint: taint } : { ok: true as const, data: { done: name }, source_taint: taint }; } });
   // The owner's one Google account holds mail and calendar, not Drive; Drive reads are on for this Waldo.
   const drive = readDriveHandler({ client: async () => null, state: async () => [{ id: 'acct-1', email: 'owner@example.test', error: null, calendar: true, mail: true, tasks: true, drive: false }] }, true);
-  const tools = [...[...GENERAL_WAKE_TOOLS, ...extra].filter((name) => name !== 'get_context' && name !== 'read_drive').map(fake), drive, endRunHandler];
+  // With a page, the real notes handlers read it, so what they hand the loop is what production hands it.
+  const notes = page ? waldoNotesHandlers({ read: () => page, write: () => ({ ok: false, reason: 'stale', notes: page }) } as ReturnType<typeof waldoNotesBook>, () => '2026-11-28T10:00') : [];
+  const tools = [...[...GENERAL_WAKE_TOOLS, ...extra].filter((name) => name !== 'get_context' && name !== 'read_drive' && !(page && (name === 'read_notes' || name === 'rewrite_notes'))).map(fake), drive, endRunHandler, ...notes];
   const requests: LLMRequest[] = [];
   const gateway: LLMGatewayAdapter = { complete: async ({ request }) => {
     requests.push(request);
@@ -96,5 +100,20 @@ describe('the general wake reaches what is connected and keeps going', () => {
     await run('intervention-review:egress');
     expect(calls).toEqual(['search_communication', 'get_health']);
     for (const tool of ['web_search', 'browse_page']) expect(requests.at(-1)!.tool_turns!.find((turn) => turn.call.name === 'use_tool' && turn.call.arguments.includes(`"${tool}"`))!.output).toContain('egress_denied');
+  });
+
+  it('a page written beside other people\'s words reaches the loop as outside content, through use_tool as through a direct call', async () => {
+    const page = (outside: boolean): WaldoNotes => ({ text: 'Watching: the vendor asked to move Friday.', revision: 2, written_by: 'waldo', written_at: '2026-11-28T09:00', outside });
+    for (const outside of [true, false]) {
+      const { requests, run } = await harness([
+        { tool: FIND_TOOLS, args: { names: ['read_notes'] } },
+        { tool: 'use_tool', args: { name: 'read_notes', arguments: {} } },
+        { tool: 'end_run', args: { outcome: 'nothing_to_send', reason: 'Read the notes.' } },
+      ], [], [], page(outside));
+      await run(`intervention-review:notes-${outside}`);
+      const turn = requests.at(-1)!.tool_turns!.find((entry) => entry.call.name === 'use_tool')!;
+      expect(turn.output).toContain('the vendor asked to move Friday');
+      expect(turn.source_taint).toBe(outside ? 'external' : undefined);
+    }
   });
 });

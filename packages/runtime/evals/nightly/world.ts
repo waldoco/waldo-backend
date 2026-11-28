@@ -9,6 +9,7 @@ import { isolatedGoogleClient } from '../../scenarios/isolated-google-client';
 import { localIso, reminderHandlers, type ReminderBook } from '../../src/channels/reminders';
 import { standingOrderHandlers, type StandingOrder, type StandingOrderBook } from '../../src/channels/standing-orders';
 import { loopBook, loopHandlers, loopsSection } from '../../src/channels/loops';
+import { notesSection, waldoNotesBook, waldoNotesHandlers } from '../../src/channels/waldo-notes';
 import { episodeIndex, indexedConversationStore, scrubEpisodeTexts } from '../../src/channels/episodes';
 import { durableConversationStore } from '../../src/channels/conversation-store';
 import { toContextHealthMaterial, type HealthContextRow } from '../../src/channels/health-context';
@@ -416,7 +417,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     ...(store ? workspaceToolHandlers(() => store, { origin: async () => null, durable: false }, undefined, { fileTools: true }) : []),
     ...taskToolHandlers({ book: jobs, now, timezone: () => TIMEZONE, surface: 'app', wake: async () => undefined, fence: () => undefined, log: () => undefined }),
     ...googleHandlers(google, desk, clock), connectServiceHandler(google), ...reminderHandlers(reminderBook), ...standingOrderHandlers(standingOrders),
-    ...loopHandlers(loops), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async (texts) => scrubEpisodeTexts(sql, texts, FORGOTTEN), ...(semantic ? { semantic } : {}), validity: true }) : []),
+    ...loopHandlers(loops), ...waldoNotesHandlers(waldoNotesBook(sql), () => localIso(now(), TIMEZONE)), ...(memory ? memoryHandlers({ sql, store: memory, conversationRef: CHAT_REF, now: clock.now, hideHistory: async (texts) => scrubEpisodeTexts(sql, texts, FORGOTTEN), ...(semantic ? { semantic } : {}), validity: true }) : []),
     searchEpisodesHandler(episodes), ...search,
     getHealthHandler(healthReadBook(async (fn) => {
       if (fn === 'health_consent_list') return { consents: sharing === null ? [] : consentRows(sharing === 'shared' ? 'granted' : 'withdrawn') };
@@ -497,6 +498,7 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     // connected account read a few minutes ago. Waldo has placed no blocks here, so there is no block section.
     wakeCalendar: () => readCalendar({ from: now(), to: dayWindow(now(), TIMEZONE).to }, TIMEZONE, client, false),
     wakeLedger: () => loopsSection(loops, TIMEZONE, now()),
+    wakeNotes: () => notesSection(waldoNotesBook(sql).read()),
     wakeShaping: () => dayShapingContext({ offers: true, protocols: false, brief: false, wake: true,
       coverage: { accounts: [{ email: 'owner@example.test', calendar: true, failing: false, read_minutes_ago: 4 }], phone: { state: 'not_shared' }, weekdays: { counts: [7, 8, 7, 8, 6, 1, 0], days: 28 } } }),
     // CAPACITY_BUDGET: the rest of this world's week, as the owner object hands it to the planning Brief.
@@ -527,6 +529,8 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
       reminders: reminders.map(({ id: _id, ...reminder }) => reminder),
       standing_orders: orders.map(({ id: _id, created_at: _created, ...order }) => order),
       open_loops: loops.list().map((loop) => ({ title: loop.title, due: loop.due })),
+      // Waldo's own notes as the run left them (GENERAL_WAKE), so the judge reads what the wake expects next.
+      waldo_notes: waldoNotesBook(sql).read().text,
       // Every claim whatever its status, so a superseded or forgotten one is seen to be retired, not merely missing.
       // seeded tells a claim the world started with from one the model wrote; supersedes_id is the correction link.
       memory: claims.allClaims().map((claim) => ({ id: claim.id, kind: claim.kind, text: claim.text, status: claim.status, origin: claim.origin, pinned: claim.pinned ?? null, supersedes_id: claim.supersedes_id ?? null, valid_to: claim.valid_to ?? null, bring_up_less: Boolean(claim.bring_up_less_at), created_at: claim.created_at, seeded: claim.source_ref?.startsWith('seed:') ?? false })),

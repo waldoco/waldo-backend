@@ -155,6 +155,8 @@ describe('toolName', () => {
       'read_import',
       'import_memories',
       'end_run',
+      'read_notes',
+      'rewrite_notes',
     ]);
   });
 
@@ -333,6 +335,8 @@ describe('TOOL_PERMISSIONS', () => {
         'send_agent_mail',
         'offer_replies',
         'end_run',
+        'read_notes',
+        'rewrite_notes',
         'show_chart',
         'show_health_chart',
         'propose_schedule',

@@ -26,7 +26,7 @@ const wake = (reply: string, ended: RunEndReport | undefined, setup: Readonly<{ 
       consent: () => setup.consent ?? true, quiet: () => (setup.quiet ?? false) || (setup.quietLater === true && out.runs > 0),
       transaction: work => state.storage.transactionSync(work),
       context: async () => ({ changes: '- invite moved: Board prep now 16:00 (was 14:00)', calendar: '- 16:00-17:00 Board prep (3 attending)', cards: 'The Brief reached them at 08:00.',
-        today: '[08:00] Waldo: Morning. Deck block 9 to 12.\n[08:05] Owner: thanks', ledger: '- Send Ana the deck [loop:l1]', goals: '- Get the Q4 board deck out by Friday', style: 'chat' }),
+        today: '[08:00] Waldo: Morning. Deck block 9 to 12.\n[08:05] Owner: thanks', ledger: '- Send Ana the deck [loop:l1]', goals: '- Get the Q4 board deck out by Friday', style: 'chat', notes: '<waldo_notes revision="3">\nWatching: whether Ana replies about the deck.\n</waldo_notes>' }),
       run: async (_trace, text) => { out.runs += 1; out.prompts.push(text); if (setup.throws) throw new Error('provider down'); return { reply, end: ended }; },
       deliver: async (id, _trace, text, commit) => { if (setup.deliverThrows) throw new Error('outbox down'); state.storage.transactionSync(commit); out.delivered.push(`${id.split(':')[0]}:${text}`); },
       record: row => outcomes.record(row),
@@ -103,6 +103,9 @@ describe('Waldo\'s general wake', () => {
     const shared = [...a].findIndex((char, index) => char !== b[index]);
     expect(shared).toBeGreaterThan(a.indexOf('Send Ana the deck'));
     expect(a.indexOf('Board prep now 16:00')).toBeGreaterThan(a.indexOf('Deck block 9 to 12'));
+    // Its own notes come after the slow-moving context and before the calendar and what changed.
+    expect(a.indexOf('whether Ana replies')).toBeGreaterThan(a.indexOf('Deck block 9 to 12'));
+    expect(a.indexOf('whether Ana replies')).toBeLessThan(a.indexOf('16:00-17:00 Board prep'));
     expect(b.slice(shared)).toContain('another time zone or city');
     expect(moved.rows.map(row => row.ref)).toEqual(['place_moved']);
     // The lens is one named block at the head of every wake, so its wording changes in one place.
@@ -118,7 +121,7 @@ describe('Waldo\'s general wake', () => {
 
 describe('what a wake holds', () => {
   it('its tools include memory and health reads, its own note, a follow-up and the owner\'s card', () => {
-    expect(GENERAL_WAKE_TOOLS).toEqual(expect.arrayContaining(['read_memory', 'search_episodes', 'get_health', 'remember', 'open_loop', 'close_loop', 'propose_action', 'propose_calendar_change']));
+    expect(GENERAL_WAKE_TOOLS).toEqual(expect.arrayContaining(['read_memory', 'search_episodes', 'get_health', 'remember', 'open_loop', 'close_loop', 'propose_action', 'propose_calendar_change', 'read_notes', 'rewrite_notes']));
   });
 
   it('its model role is configuration, with plans (the chat model) when unset or unknown', () => {

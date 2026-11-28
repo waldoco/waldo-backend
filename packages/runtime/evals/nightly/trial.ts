@@ -223,7 +223,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         transcript.push({ role: 'world', text: `At ${world.localNow()} (${TIMEZONE}) Waldo wakes on its own to look across the owner's day. Changed since its last look:\n${step.wake}` });
         skills.turn(`${scenario.id}-wake-${turn}`);
         const offered = new Set(world.handlers.map((handler) => handler.name));
-        const prompt = wakePrompt(world.localNow(), null, { changes: step.wake, calendar: await world.wakeCalendar(), cards: '', today: '', ledger: world.wakeLedger(), goals: world.goals(), style: '', shaping: world.wakeShaping() });
+        const prompt = wakePrompt(world.localNow(), null, { changes: step.wake, calendar: await world.wakeCalendar(), cards: '', today: '', ledger: world.wakeLedger(), goals: world.goals(), style: '', shaping: world.wakeShaping(), notes: world.wakeNotes() });
         const said = await responder.prompt(`${scenario.id}-wake-${turn}`, 1, prompt, time, GENERAL_WAKE_TOOLS.filter((name) => offered.has(name)) as never, undefined, undefined, undefined, 'external', 'plans', undefined, undefined, true);
         if (!isSkip(said)) transcript.push({ role: 'waldo', surface: 'notification', text: said });
       } else if ('welcome' in step) {
