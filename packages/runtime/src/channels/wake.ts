@@ -95,7 +95,7 @@ export const wakePrompt = (localNow: string, cause: LookCause | null, context: W
   section('the rest of today on the owner\'s calendar', context.calendar),
   ...(context.inbox ? [context.inbox] : []),
   section('what changed since Waldo last looked (mail and calendar changes not yet on a day card)', context.changes) || 'No mail or calendar change is waiting since the last day card.',
-  `[It is ${localNow} in the owner's time zone. ${cause ? `Why now: ${CAUSES[cause]}.` : 'Why now: Waldo\'s regular look across the owner\'s day.'}]`,
+  `[It is ${localNow} in the owner's time zone. ${cause ? `Why now: ${CAUSES[cause]}.` : context.inbox ? 'Why now: what came in since Waldo last looked, listed above.' : 'Why now: Waldo\'s regular look across the owner\'s day.'}]`,
   RUN_END_INSTRUCTION,
 ].filter(Boolean).join('\n\n');
 
@@ -185,6 +185,8 @@ export type GeneralWakeDeps = Readonly<{
   record(row: WakeRow): void;
   // A wake that ran to an outcome settles the inbox it read, in the same write as its row; one held or failed leaves it for the next.
   settleInbox?(): void;
+  // What brought this wake when it was not a cause of its own (the inbox kinds it read), for the outcome row's ref.
+  refOf?(): string | null;
   chose(trace: string, code: WakeCode): void;
 }>;
 
@@ -198,7 +200,7 @@ const quietEnd = (end: RunEndReport | undefined): WakeOutcome =>
 
 export const generalWake = (deps: GeneralWakeDeps) => async (trace: string, kind: string, cause: LookCause | null): Promise<WakeCode> => {
   const started = deps.now();
-  const row = (outcome: WakeOutcome, end: RunEndReport | undefined): WakeRow => ({ id: trace, at: started, kind, ref: cause ?? 'cadence', outcome, reason: keptReason(end?.why), tools: end?.tools ?? [], outside: true, spend: end?.spend ?? null });
+  const row = (outcome: WakeOutcome, end: RunEndReport | undefined): WakeRow => ({ id: trace, at: started, kind, ref: cause ?? deps.refOf?.() ?? 'cadence', outcome, reason: keptReason(end?.why), tools: end?.tools ?? [], outside: true, spend: end?.spend ?? null });
   const settle = (code: WakeCode, outcome: WakeOutcome, end: RunEndReport | undefined) => {
     deps.chose(trace, code);
     deps.transaction(() => { deps.record(row(outcome, end)); if (outcome !== 'held' && outcome !== 'failed') deps.settleInbox?.(); });

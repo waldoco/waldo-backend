@@ -70,7 +70,8 @@ export type SweepCheckDeps = Readonly<{
 // The job's key is the window it covers: the watermarks before this tick moved them.
 // wakeAt: when a debounced tick's changes can next be judged. recorded: the update record this tick committed with changes,
 // and the sources they came from. seedCapped: the day's read of events was cut at its cap.
-type SweepChecked = Readonly<{ code: SweepCheck; changes: number; analysis: number; job?: JobRow; wakeAt?: number;
+// news: some recorded change is more than context (a mail read, archived or starred is the owner's own action, not news).
+type SweepChecked = Readonly<{ code: SweepCheck; changes: number; analysis: number; news?: boolean; job?: JobRow; wakeAt?: number;
   recorded?: Readonly<{ id: number; sources: readonly Change['source'][] }>; seedCapped?: true; delta?: readonly DeltaCode[] }>;
 export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepChecked> => {
   const { updates } = deps;
@@ -95,7 +96,7 @@ export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepCheck
     updates.pruneMail(deps.now);
     const pending = deps.sourceFollowups ? updates.pendingMail() : [];
     const analysis = deps.sourceFollowups ? [...changes.filter(change => change.source !== 'mail'), ...pending] : changes;
-    const counts = { changes: changes.length, analysis: analysis.length,
+    const counts = { changes: changes.length, analysis: analysis.length, news: changes.some(change => !CONTEXT_KINDS.includes(change.kind)),
       ...(recordId === null ? {} : { recorded: { id: recordId, sources: [...new Set(changes.map(change => change.source))] } }) };
     if (gate !== null) {
       const code = heldOf(gate);

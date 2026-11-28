@@ -110,7 +110,7 @@ describe('the sweep check writes a machine job', () => {
       h.gate.code = 'held_by_wake';
       const raise = vi.fn(() => true);
       const result = await h.check({ raise });
-      expect([result.code, result.changes]).toEqual(['held_by_wake', 1]);
+      expect([result.code, result.changes, result.news]).toEqual(['held_by_wake', 1, true]);
       expect(h.jobs()).toEqual([]);
       expect(h.rows()).toHaveLength(1);
       expect(h.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM update_cards WHERE held_at IS NOT NULL").one().n).toBe(0);

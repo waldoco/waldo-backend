@@ -640,6 +640,30 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
     });
   });
 
+  it('an event right after a wake ran is kept, and its wake comes no sooner than the configured gap after the last one', async () => {
+    await owned('wake-inbox-gap', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1', WAKE_EVENT_GAP_MIN: '30' }, async ({ state, owner }) => {
+      model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Nothing new.' } }] }];
+      await tick(state, owner);
+      const ran = state.storage.sql.exec<{ at: number }>('SELECT at FROM wake_outcomes').one().at;
+      await runtime(owner).placeMoved();
+      expect(inbox(state)).toEqual([{ kind: 'place', ref: 'place_moved', count: 1 }]);
+      expect(dueOf(state, INTERVENTION_REVIEW_ID)).toBeGreaterThanOrEqual(ran + 30 * 60_000);
+    });
+  });
+
+  it('a health-trigger entry armed before the switch never runs beside the wake', async () => {
+    await owned('wake-inbox-old-trigger', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner, hops }) => {
+      state.storage.sql.exec('DELETE FROM schedule');
+      await new Scheduler(state.storage.sql, state.storage, productionDeps()).schedule({ id: 'health-trigger', kind: 'patrol', payloadRefs: { id: 'health-trigger' }, occurrenceAt: AT - 1000, dueAt: AT - 1000, recurrence: null });
+      state.storage.kv.put('owner_alarm_last_v1', 1);
+      await owner.alarm();
+      await state.storage.deleteAlarm();
+      expect(model.ownerRequests).toEqual([]);
+      expect(dueOf(state, 'health-trigger')).toBeUndefined();
+      expect(hops()).toContain('health_trigger');
+    });
+  });
+
   it('the app opening brings a wake when none ran within the cadence, and not when one just did', async () => {
     await owned('wake-inbox-app-open', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner }) => {
       const open = () => owner.fetch(new Request('https://telegram-owner/app/v1/device/timezone', { method: 'POST', headers: headers('wake-inbox-app-open'), body: JSON.stringify({ timezone: 'UTC' }) }));
