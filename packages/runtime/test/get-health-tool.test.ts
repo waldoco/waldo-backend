@@ -39,9 +39,29 @@ const fake = (answers: { consent?: unknown; series?: unknown | ((payload: string
     if (fn === 'health_series_read') { if (answers.series instanceof Error) throw answers.series; return typeof answers.series === 'function' ? answers.series(String(args['p_payload'])) : answers.series ?? series; }
     throw new Error(`unexpected rpc ${fn}`);
   };
-  return { calls, handler: getHealthHandler(healthReadBook(call, 'do-x'), clock) };
+  return { calls, handler: getHealthHandler(healthReadBook(call, 'do-x'), clock), wearOn: getHealthHandler(healthReadBook(call, 'do-x'), clock, { wearHrv: true }) };
 };
 const ctx = {} as never;
+
+describe('get_health and the night\'s RMSSD from Waldo\'s watch app', () => {
+  const watch = {
+    access: 'granted', read_at: '2026-10-13T06:00:00.000Z',
+    sources: [{ source: 'health_connect', consent_epoch: 3, samples: [
+      reading('sleep_duration', '2026-10-12', 412, { method: 'asleep_duration', start_at: '2026-10-11T17:30:00Z', end_at: '2026-10-12T00:45:00Z', samsung_writer: true }),
+      reading('overnight_hrv', '2026-10-12', 41.5, { method: 'rmssd', start_at: '2026-10-11T17:30:00Z', end_at: '2026-10-12T00:45:00Z', waldo_wear: true }),
+    ] }],
+  };
+  const args = { signals: ['hrv' as const], from: '2026-10-11', to: '2026-10-12', aggregation: 'daily' as const };
+  it('leaves it out with the switch off, as every score does', async () => {
+    const { handler } = fake({ consent: consent('granted', 'granted', 'health_connect'), series: watch });
+    expect(JSON.stringify(await handler.handle(args, ctx))).not.toContain('41.5');
+  });
+  it('shows it with the switch on, labelled RMSSD', async () => {
+    const { wearOn } = fake({ consent: consent('granted', 'granted', 'health_connect'), series: watch });
+    const result = await wearOn.handle(args, ctx);
+    expect(result.ok && result.data.state === 'available' && result.data.signals[0]).toMatchObject({ signal: 'hrv', source: 'health_connect', method: 'rmssd', days: [{ day: '2026-10-11', value: null }, { day: '2026-10-12', value: 41.5 }] });
+  });
+});
 
 describe('get_health', () => {
   it('declares a turn-only output and serves owner turns', () => {

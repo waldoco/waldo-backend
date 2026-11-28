@@ -33,6 +33,16 @@ describe('welcome health stage', () => {
     expect(line('hrv')).toBe('hrv (apple_health, ms, rmssd): 2026-10-23 42; 2026-10-24 40');
   });
 
+  it('never reads the night\'s RMSSD from Waldo\'s watch app, which no score counts while its switch is off', async () => {
+    const result = await health(book(granted('health_connect'), series([{ source: 'health_connect', readings: [
+      { ...reading('overnight_hrv', '2026-10-24', 40, 'rmssd'), waldo_wear: true }, reading('overnight_hrv', '2026-10-23', 42, 'rmssd'),
+    ] }])));
+    expect(result.kind).toBe('input');
+    if (result.kind !== 'input') return;
+    expect(result.text).toContain('hrv (health_connect, ms, rmssd): 2026-10-23 42');
+    expect(result.text).not.toContain('2026-10-24');
+  });
+
   it('never reads food: it is read only by get_health in its own turn, never compiled into what Waldo knows', async () => {
     const b = book(granted('apple'), series([{ source: 'apple', readings: [
       { ...reading('nutrition', '2026-10-24', 612, null), nutrition: { protein_g: 38 } }, reading('overnight_hrv', '2026-10-24', 40, 'rmssd'),
