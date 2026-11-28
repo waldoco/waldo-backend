@@ -73,8 +73,9 @@ it.each([
       const decisions = rows.filter(row => row.trace.startsWith('calendar-prep:') && row.hop === 'machine_turn');
       expect(decisions.map(row => [row.note, row.ok])).toEqual(decision === null ? [] : [[decision, decision === 'malformed_reply' ? 0 : 1]]);
       if (decision) expect(sweeps.find(row => row.hop === 'machine_check')?.note).toBe(decision);
-      // The update check still runs after every pass, held or not.
-      expect(rows.some(row => row.trace.startsWith('update:') && row.hop === 'machine_turn')).toBe(mode !== 'no calendar');
+      // The update check still runs after every pass, held or not. With no calendar to read it ends on its closed reason.
+      expect(rows.some(row => row.trace.startsWith('update:') && row.hop === 'machine_turn')).toBe(true);
+      expect(rows.filter(row => row.trace.startsWith('update:') && row.hop === 'update_card' && row.ok === 0).map(row => row.note)).toEqual(mode === 'no calendar' ? ['no_google_client'] : []);
       expect(JSON.stringify(rows)).not.toContain('onboarding mocks');
       const queued = (state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY) ?? []).filter(record => record.calendarPrep);
       expect(queued).toHaveLength(decision === 'queued' ? 1 : 0);

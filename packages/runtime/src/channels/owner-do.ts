@@ -5310,7 +5310,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const armOwnJobs = (timezone: string, now: number, replanCards = false) => Promise.all([
       schedPrefs.enabled('nightly') && armable('nightly') ? armNightly(scheduler, timezone, now) : Promise.resolve(),
       sweepWanted(schedPrefs.all(), sweepCarriesUpdates) && armable('event_briefs')
-        ? accounts().then(all => briefSweepRuns(watchGrants(all)) ? armBriefSweep(scheduler, now) : scheduler.cancelReadable(BRIEF_SWEEP_ID).then(() => undefined)) : Promise.resolve(),
+        ? accounts().then(all => briefSweepRuns(watchGrants(all)) ? armBriefSweep(scheduler, now) : scheduler.cancelReadable(BRIEF_SWEEP_ID).then(() => {
+          // No connected account grants mail or calendar reads: Waldo's own look (meeting prep, update cards) has nothing to read.
+          log({ trace: 'own-jobs', hop: 'own_jobs', ms: 0, ok: false, code: 'brief_sweep_off_no_google_grant' });
+        })) : Promise.resolve(),
       schedPrefs.enabled('daily_brief') && armable('daily_brief') ? (replanCards ? replanDayCards(scheduler, plans, timezone, now).then(() => false) : armDayCards(scheduler, plans, timezone, now)) : Promise.resolve(false),
       schedPrefs.enabled('heartbeat') && armable('heartbeat') ? armHeartbeat(scheduler, now) : Promise.resolve(),
       interventions && schedPrefs.enabled('heartbeat') && armable('heartbeat') ? armLook(now) : dropLook(),
@@ -5332,6 +5335,18 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     // Native chat initialization cannot launch unrequested background model work. An owner whose only surface is iMessage is the
     // exception: their iMessage runtime runs their scheduled work, so it arms it, as a WhatsApp-only owner's runtime does.
+    // An app owner whose zone is not confirmed gets none of Waldo's own jobs until they choose one. That wait is logged by its
+    // closed reason on every runtime build, so an account left without them is visible.
+    if (!armable('nightly')) log({ trace: 'own-jobs', hop: 'own_jobs', ms: 0, ok: false, code: 'waiting_timezone_unconfirmed' });
+    // Arming leaves a look or heartbeat row that exists as it is, so a row that never fires is never replaced. Each build logs
+    // both rows as it found them and as it left them: lookup state, status, minutes to due and to a pause's end, attempts.
+    const rowState = (id: string, now: number): string => {
+      const found = scheduler.lookup(id);
+      if (found.state !== 'entry') return found.state;
+      const { status, due_at, attempts, quarantined_until } = found.entry, minutes = (at: number) => Math.round((at - now) / 60_000);
+      return `${status}:due_in_min=${minutes(due_at)}:attempts=${attempts}${quarantined_until === null ? '' : `:paused_min=${minutes(quarantined_until)}`}`;
+    };
+    const rowsFound = { sweep: rowState(BRIEF_SWEEP_ID, Date.now()), heartbeat: rowState(HEARTBEAT_ID, Date.now()) };
     const proactiveReady = channel === 'imessage' && !this.imessageOnly() ? this.browserReady : channel === 'app'
       ? (armable('nightly') ? Promise.all([backfillEpisodes(kv, episodes), armOwnJobs(clock.timezone, Date.now()), this.browserReady])
         .then(() => reconcileSchedulePreferences(schedPrefs.all(), { scheduler, plans, timezone: clock.timezone, now: Date.now(), cancelMachine, alongHeartbeat: lookFollows, sweepCarriesUpdates })) : this.browserReady)
@@ -5345,7 +5360,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (seeded) void this.serial(() => this.asOwnerJob('brief', `day-plan:boot:${Date.now()}`, () => planToday('day-plan:boot')));
       });
     // Watch upkeep is infrastructure, not proactive work: every runtime arms it, whatever the owner's preferences and zone state.
-    const ready = Promise.all([proactiveReady, accounts().then(all => armWatchUpkeep(scheduler, watchGrants(all), Date.now()))]).then(() => undefined);
+    const ready = Promise.all([proactiveReady, accounts().then(all => armWatchUpkeep(scheduler, watchGrants(all), Date.now()))]).then(() => {
+      const now = Date.now(), sweep = rowState(BRIEF_SWEEP_ID, now), armed = sweep.startsWith('armed:');
+      log({ trace: 'own-jobs', hop: 'own_jobs_rows', ms: 0, ok: armed, code: armed ? 'sweep_armed' : 'sweep_not_armed',
+        detail: `sweep=${rowsFound.sweep}>${sweep};heartbeat=${rowsFound.heartbeat}>${rowState(HEARTBEAT_ID, now)}` });
+    });
     // A model call opens the store under its live turn's run scope. An approved card replays after that turn has ended, as
     // the owner's own decision, so it opens the store as the owner's console does, without one.
     const openWorkspace = (ctx?: Readonly<{ runScope?: RunEffectScope; assertTaskSourceCurrent?: () => Promise<void>; approvedTaintedAction?: unknown }>) => {
@@ -6568,8 +6587,6 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       return read;
     };
     const updateCheck = async (trace: string) => {
-      const client = await google.client();
-      if (client === null) return;
       const started = Date.now();
       // Close each trace with a machine_turn root like every other machine run, so the trace exporter flushes it.
       let followupPrompted = false;
@@ -6577,6 +6594,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok, detail: 'update_card' });
         if (followupPrompted) log({ trace: `${trace}:mail-followup`, hop: 'machine_turn', ms: Date.now() - started, ok, detail: 'mail_followup' });
       };
+      const client = await google.client();
+      // No account the look can read with (no app config, every grant failing, none with the scope): a look that never ran
+      // must still show in the trace, or it reads as a look that was never scheduled.
+      if (client === null) { log({ trace, hop: 'update_card', ms: Date.now() - started, ok: false, code: 'no_google_client', detail: 'no_google_client' }); closeMachineTraces(false); return; }
       try {
         const now = Date.now();
         const sourceFollowups = sweepSourceFollowups();
