@@ -83,4 +83,18 @@ describe('the general wake reaches what is connected and keeps going', () => {
     expect(calls).toEqual(['query_calendar', 'get_health']);
     expect(ends).toEqual([['intervention-review:fails', { reason: 'nothing_to_send', why: 'Calendar unreadable just now; the body reads steady and nothing else moved.', tools: ['get_health'], spend: expect.objectContaining({ calls: 3 }) }]]);
   });
+
+  it('after it reads mail and the body, nothing it reaches through use_tool sends text out: web_search and browse_page are refused, and nothing ran', async () => {
+    const { calls, requests, run } = await harness([
+      { tool: 'search_communication', args: { query: 'vendor' } },
+      { tool: 'get_health', args: { signals: ['sleep'], from: '2026-11-27', to: '2026-11-28' } },
+      { tool: FIND_TOOLS, args: { names: ['web_search', 'browse_page'] } },
+      { tool: 'use_tool', args: { name: 'web_search', arguments: { query: 'vendor quote reply short sleep' } } },
+      { tool: 'use_tool', args: { name: 'browse_page', arguments: { url: 'https://vendor.example/reply' } } },
+      { tool: 'end_run', args: { outcome: 'nothing_to_send', reason: 'Could not look it up from here; noted for the owner.' } },
+    ], [], ['web_search', 'browse_page']);
+    await run('intervention-review:egress');
+    expect(calls).toEqual(['search_communication', 'get_health']);
+    for (const tool of ['web_search', 'browse_page']) expect(requests.at(-1)!.tool_turns!.find((turn) => turn.call.name === 'use_tool' && turn.call.arguments.includes(`"${tool}"`))!.output).toContain('egress_denied');
+  });
 });
