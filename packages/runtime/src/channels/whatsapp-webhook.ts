@@ -13,7 +13,7 @@ export type WhatsAppWebhookEnv = PublicOriginEnv & Readonly<{
   WHATSAPP_APP_SECRET?: string;
   WHATSAPP_ACCESS_TOKEN?: string;
   WHATSAPP_PHONE_NUMBER_ID?: string;
-  // Where a sender with no Waldo account is sent (the waitlist). Unset, the reply carries no link.
+  // Where a sender with no Waldo account gets the app (its install page). Unset, the reply names the app without a link.
   WHATSAPP_ONBOARDING_URL?: string;
   // Waldo's own number, as E.164 digits: sent as a contact card after a link. Unset, no card is sent.
   WHATSAPP_WALDO_NUMBER?: string;
@@ -52,8 +52,8 @@ const textFirstReply = async (sender: string, origin: string, env: WhatsAppWebho
   if (opened === 'opened') return `Tap to link this WhatsApp number to your Waldo. You'll sign in and confirm the number; the link works once, for 10 minutes: ${whatsappLinkUrl(origin, token)}`;
   // pending: the link sent earlier still works, so the sender is not sent a second one.
   if (opened === 'linked' || opened === 'pending') return null;
-  const waitlist = /^https:\/\/[^\s]+$/.test(env.WHATSAPP_ONBOARDING_URL ?? '') ? ` Join the waitlist: ${env.WHATSAPP_ONBOARDING_URL}` : '';
-  return `Waldo is invite-only for now.${waitlist}\n\nAlready on Waldo? Link WhatsApp from your console: ${origin}${CONSOLE_PATH}#/connections. It gives you a code that opens this chat ready to send.`;
+  const app = /^https:\/\/[^\s]+$/.test(env.WHATSAPP_ONBOARDING_URL ?? '') ? `Get the Waldo app: ${env.WHATSAPP_ONBOARDING_URL}` : 'Get the Waldo app on your phone and sign up there.';
+  return `Hi, I'm Waldo. To have your own Waldo, start in the app. ${app}\n\nAlready on Waldo? Link WhatsApp from your console: ${origin}${CONSOLE_PATH}#/connections. It gives you a code that opens this chat ready to send.`;
 };
 
 // What a "waldo CODE" text is told. A refusal by the directory leaves the code unspent, so a link refused for its number can be
@@ -139,11 +139,14 @@ const WHATSAPP_HIDDEN_NUMBER_REPLY = "WhatsApp didn't share this chat's phone nu
 // read or played; Meta skips delivered when a message is read at once), and any other failure. `sent` only says Meta's
 // servers sent it, and a failure can still follow, so it is dropped with every other status.
 type WaStatus = { id?: unknown; status?: unknown; timestamp?: unknown; recipient_id?: unknown; errors?: { code?: unknown }[] };
-type WaReport = { id: string; at: number | null };
+// A failure carries Meta's first numeric error code, so the owner can tell why (131042: no payment method on the account).
+type WaReport = { id: string; at: number | null; code?: number };
 type WaReports = { refused: WaReport[]; delivered: WaReport[]; failed: WaReport[] };
 const ARRIVED = new Set(['delivered', 'read', 'played']);
 const statusesOf = (body: WaBody): WaStatus[] => (body.entry ?? []).flatMap(entry => (entry.changes ?? []).flatMap(change =>
   Array.isArray(change.value?.statuses) ? change.value.statuses as WaStatus[] : []));
+const firstCode = (status: WaStatus): number | undefined => (Array.isArray(status.errors) ? status.errors : [])
+  .map(error => error?.code).find((code): code is number => typeof code === 'number' && Number.isSafeInteger(code) && code > 0);
 const statusReports = (body: WaBody): Map<string, WaReports> => {
   const out = new Map<string, WaReports>();
   for (const status of statusesOf(body)) {
@@ -154,7 +157,8 @@ const statusReports = (body: WaBody): Map<string, WaReports> => {
     if (!kind) continue;
     const at = typeof status.timestamp === 'string' && /^\d{1,12}$/.test(status.timestamp) ? Number(status.timestamp) * 1000 : null;
     const reports = out.get(status.recipient_id) ?? { refused: [], delivered: [], failed: [] };
-    reports[kind].push({ id: status.id, at });
+    const code = kind === 'failed' ? firstCode(status) : undefined;
+    reports[kind].push({ id: status.id, at, ...(code === undefined ? {} : { code }) });
     out.set(status.recipient_id, reports);
   }
   return out;

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import config from '../wrangler.jsonc?raw';
 import { parseJsonc } from '../../../scripts/jsonc.mjs';
 import { flatConfig } from '../../../scripts/wrangler-vars.mjs';
-import { openOwnerCeilingUsd, openSignupCaps } from '../src/identity/open-signup';
+import { openOwnerCeilingUsd, openSignupOn } from '../src/identity/open-signup';
 import { ownerCeilingUsd } from '../src/llm/cost-ledger';
 import { phoneSms } from '../src/identity/phone-sms';
 import { phoneControls, type WhatsAppProof } from '../src/channels/dashboard-phone';
@@ -20,10 +20,11 @@ const PHONE = '+919800000001';
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('open sign-up on staging', () => {
-  it('is on with its caps and ceiling, and off in production', () => {
+  it('is on with no join cap, and off in production', () => {
     expect(STAGING.OPEN_SIGNUP).toBe('1');
-    expect(openSignupCaps(STAGING)).toEqual({ dailyCap: 10, totalCap: 80 });
-    expect(openSignupCaps(PRODUCTION)).toBeNull();
+    expect(openSignupOn(STAGING)).toBe(true);
+    expect(openSignupOn(PRODUCTION)).toBe(false);
+    for (const vars of [STAGING, PRODUCTION]) expect(Object.keys(vars).filter(name => name.startsWith('OPEN_SIGNUP_') && name.endsWith('_CAP'))).toEqual([]);
   });
 
   it('gives every owner a 50 USD monthly ceiling on staging, and leaves production at 25 invited and 5 open', () => {
@@ -33,10 +34,9 @@ describe('open sign-up on staging', () => {
 
   it('turns itself off, and says so, when the agreements or the cost ledger are not on', () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    expect(openSignupCaps({ ...STAGING, APP_AGREEMENTS: '0' })).toBeNull();
-    expect(openSignupCaps({ ...STAGING, WALDO_COST_LEDGER_SYNC: 'off' })).toBeNull();
-    expect(openSignupCaps({ ...STAGING, OPEN_SIGNUP_DAILY_CAP: '' })).toBeNull();
-    expect(logged).toHaveBeenCalledTimes(3);
+    expect(openSignupOn({ ...STAGING, APP_AGREEMENTS: '0' })).toBe(false);
+    expect(openSignupOn({ ...STAGING, WALDO_COST_LEDGER_SYNC: 'off' })).toBe(false);
+    expect(logged).toHaveBeenCalledTimes(2);
     expect(String(logged.mock.calls[0]![0])).toContain('open_signup_misconfigured');
   });
 });

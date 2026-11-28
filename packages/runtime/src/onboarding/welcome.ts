@@ -14,9 +14,10 @@ type Settled = Exclude<StageState, 'pending' | 'reading'>;
 
 // What one source gives the build: text for the model with the sources and item ids it may cite, or a state with nothing to read.
 // noHealth: the owner keeps health out of memory, so no body or mind spot is kept. days: how many days of zone words the health
-// source held when it was read, a count and never a reading.
+// source held when it was read, a count and never a reading. read: what the read rested on (claim ids, and a fingerprint for what
+// is not a claim), so a later change to it can be noticed without keeping text.
 export type StageInput =
-  | Readonly<{ kind: 'input'; text: string; sources: readonly WelcomeSource[]; pointers: ReadonlySet<string>; noHealth?: boolean; days?: number }>
+  | Readonly<{ kind: 'input'; text: string; sources: readonly WelcomeSource[]; pointers: ReadonlySet<string>; noHealth?: boolean; days?: number; read?: readonly (number | string)[] }>
   | Readonly<{ kind: 'settled'; state: Settled }>;
 
 export const WELCOME_HEALTH_DAYS = 30;
@@ -35,11 +36,20 @@ export const WELCOME_RECHECK_MS = 10 * 60_000;
 // A health stage that found nothing may have run before the owner's first readings landed. The next health upload or the night
 // reads it once more, within this long of it settling.
 export const WELCOME_LATE_HEALTH_MS = 24 * 60 * 60_000;
+// The app sends each setup answer as it is given. The answers are spots already, so the setup stage makes no model call: it
+// settles at once and the join pass that follows reads the new answers beside every other spot. The stage is taken up again when
+// the answers it last rested on changed, within a day of the build starting. Answers that land while a run is going wait for it
+// and go in the next together, and that one waits until this long after the last settled, so a run of quick answers costs a few
+// joins, not one each. The cap bounds what one owner's setup can spend.
+export const WELCOME_SETUP_GAP_MS = 30_000;
+export const WELCOME_SETUP_REFINES_MAX = 20;
 const SPOT_MAX = 200;
 const MAX_POINTERS = 10;
 // days: the days of zone words a health stage read; grant: the look-up grant a web stage was taken up again for; reread: a
-// calendar or mail stage taken up again for an account connected after it settled.
-type Stage = Readonly<{ state: StageState; at: number; reopened?: true; checked?: number; retried?: true; days?: number; grant?: number; reread?: true }>;
+// calendar or mail stage taken up again for an account connected after it settled. read: the setup answers' claim ids the
+// setup stage last settled on (ids and fingerprints, never text); refines: how often it was taken up again; after: when the
+// next one may run.
+type Stage = Readonly<{ state: StageState; at: number; reopened?: true; checked?: number; retried?: true; days?: number; grant?: number; reread?: true; read?: readonly (number | string)[]; refines?: number; after?: number }>;
 type Row = Readonly<{ started_at: number; finished_at: number | null; stages_json: string; nodes: number }>;
 
 // The one welcome build per owner. The row holds stage states, times and how many constellations stood after its last join,
@@ -98,6 +108,16 @@ export const welcomeBuild = (sql: Sql, now: () => number) => {
       write({ ...current, [stage]: { ...current[stage], state: 'pending', at, reopened: true } }, null);
       return true;
     },
+    // Something showed the source of a skipped stage may be there now (health readings landed): its next run checks it,
+    // however recently it was checked. Reopening is still once.
+    recheck(stage: WelcomeStage): boolean {
+      const run = row();
+      if (!run) return false;
+      const current = stages(run), { checked: _checked, ...rest } = current[stage];
+      if (rest.state !== 'skipped' || rest.reopened) return false;
+      write({ ...current, [stage]: rest }, run.finished_at);
+      return true;
+    },
     // Late health data: an empty health stage goes back to pending, once, within a day of settling. With partial, so does one
     // that read fewer days than the window, once the backfill has had time to land. Checked again in the same write, like reopen.
     lateHealth(partial = false): boolean {
@@ -133,6 +153,19 @@ export const welcomeBuild = (sql: Sql, now: () => number) => {
       write({ ...current, ...Object.fromEntries(due.map((stage) => [stage, { ...current[stage], state: 'pending', at, reread: true }])) }, null);
       return true;
     },
+    // The setup answers changed since the setup stage last settled on them: it goes back to pending, so the join after it reads
+    // them. A stage still reading is left alone; the change is caught when that read settles and the caller asks again.
+    refineSetup(read: readonly (number | string)[]): boolean {
+      const run = row();
+      if (!run) return false;
+      const current = stages(run), setup = current.setup, at = now(), refines = setup.refines ?? 0;
+      if (!settled(setup.state) || at - run.started_at > WELCOME_LATE_HEALTH_MS || refines >= WELCOME_SETUP_REFINES_MAX) return false;
+      const before = new Set(setup.read ?? []), after = new Set(read);
+      if (before.size === after.size && [...after].every((id) => before.has(id))) return false;
+      write({ ...current, setup: { ...setup, state: 'pending', at, refines: refines + 1, after: setup.at + WELCOME_SETUP_GAP_MS } }, null);
+      return true;
+    },
+    setupAfter: (): number | null => { const run = row(); return run ? stages(run).setup.after ?? null : null; },
     startedAt: (): number | null => row()?.started_at ?? null,
     checked(stage: WelcomeStage): void {
       const run = row();
@@ -145,7 +178,7 @@ export const welcomeBuild = (sql: Sql, now: () => number) => {
       if (run) write({ ...stages(run), [stage]: { ...stages(run)[stage], state: 'reading', at: now() } }, null);
     },
     // joins: a join runs once the run's stages settle, and the build reads done only after it (joined).
-    settle(stage: WelcomeStage, state: Settled, noted: Readonly<{ days?: number }> = {}, joins = false): void {
+    settle(stage: WelcomeStage, state: Settled, noted: Readonly<{ days?: number; read?: readonly (number | string)[] }> = {}, joins = false): void {
       const run = row();
       if (!run) return;
       const at = now(), next = { ...stages(run), [stage]: { ...stages(run)[stage], state, at, ...noted } };
@@ -266,7 +299,10 @@ export type WelcomeDeps = Readonly<{
   v2?: Readonly<{ lookupOpen(): boolean }>;
   // The join pass, once a run's stages have settled. Absent, the spots wait for the next pass that joins.
   join?(): Promise<unknown>;
+  // Waits before a setup stage taken up again; a timer unless a test drives the clock.
+  sleep?(ms: number): Promise<void>;
 }>;
+const pause = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
 
 const within = <T>(work: Promise<T>, ms: number): Promise<T> => {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -305,9 +341,15 @@ export const runWelcome = async (deps: WelcomeDeps): Promise<void> => {
   }
   if (!stages.length) return;
   deps.transaction(() => { for (const stage of stages) deps.build.begin(stage); });
-  const reads = new Map(stages.map((stage) => [stage, within(deps.read[stage](), WELCOME_STAGE_BUDGET_MS).catch(() => null)]));
+  const read = (stage: WelcomeStage) => within(deps.read[stage](), WELCOME_STAGE_BUDGET_MS).catch(() => null);
+  // The setup answers are read at their turn, after any wait, so every answer that landed meanwhile is in this read.
+  const reads = new Map(stages.filter((stage) => stage !== 'setup').map((stage) => [stage, read(stage)]));
   for (const stage of ORDER.filter((name) => stages.includes(name))) {
-    const input = await reads.get(stage)!;
+    if (stage === 'setup') {
+      const wait = (deps.build.setupAfter() ?? 0) - deps.now();
+      if (wait > 0) await (deps.sleep ?? pause)(wait);
+    }
+    const input = stage === 'setup' ? await read(stage) : await reads.get(stage)!;
     let state: Settled = 'unavailable';
     try {
       if (input?.kind === 'settled') state = input.state;
@@ -321,7 +363,9 @@ export const runWelcome = async (deps: WelcomeDeps): Promise<void> => {
       }
     } catch { state = 'unavailable'; }
     const days = input?.kind === 'input' ? input.days : undefined;
-    deps.transaction(() => deps.build.settle(stage, state, days === undefined ? {} : { days }, deps.join !== undefined));
+    // The setup answers this stage settled on, so a later change to them is noticed; a failed read records nothing.
+    const built = stage === 'setup' && input?.kind === 'input' ? { read: input.read ?? [] } : {};
+    deps.transaction(() => deps.build.settle(stage, state, { ...(days === undefined ? {} : { days }), ...built }, deps.join !== undefined));
   }
   if (!deps.join) return;
   await deps.join().catch(() => undefined);

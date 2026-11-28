@@ -13,7 +13,7 @@ import { receivedView, renderForModel, type InboundPart } from './owner-inbound-
 import { searchLocation } from '../tools/live/search-location';
 import {
   deriveContextBudgetChars, EXTERNAL_ORIGIN_TOOLS, literalTextRedactor, redactConversationEntry, sanitiseResultSchema, SANITISE_DESTINATION_POLICIES, acceptTrustedInvocation, buildSessionState, ConversationTree, MODEL_REASONING,
-  TOOL_ERRORS, toolError, type ConnectIntent, type ConversationChart, type ConversationEntry, type LLMTool, type LLMToolTurn, type ModelName, type ToolError,
+  PRIVILEGED_ACTION_TOOLS, TOOL_ERRORS, toolError, type ConnectIntent, type ToolName, type ConversationChart, type ConversationEntry, type LLMTool, type LLMToolTurn, type ModelName, type ToolError,
 } from '@waldo/contracts';
 import type { ConversationModelMessage, RunOrigin } from '@waldo/contracts';
 import { BUDGET_CHARS_PER_TOKEN, MODEL_CONTEXT_MAX_CHARS, PLANNING_EFFORT } from '@waldo/contracts';
@@ -43,7 +43,7 @@ import { usageAnomalous } from '../llm/pricing';
 import { InMemoryCircuitBreaker, ModelUnavailableError, modelDownReason, observedBreaker, RuntimeLLMProvider, TurnSanitiseMemo, type LLMGatewayAdapter, type RouteSpendState } from '../llm/provider';
 import { messagingSystemPrompt, ownerClockLine, unconnectedLine, voiceVersion } from '../prompt/messaging-behavior';
 import { assembleTurnPrompt, fenced, TURN_CONTEXT_HEADER, type TurnPrompt } from '../prompt/turn-prompt';
-import { brainTools, offeredPlacement, toolActivity, toolsWhere } from '../tools/records';
+import { brainTools, offeredPlacement, TOOL_RECORDS, toolActivity, toolsWhere } from '../tools/records';
 import { FIND_TOOLS, harnessToolLoader, META_TOOLS } from '../tools/loader';
 import { eligibleHandlers } from '../tools/eligibility';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
@@ -59,6 +59,7 @@ import { episodesFromSearchTool, previousOwnerMessage, RECALL_MAX_CHARS, recallF
 import type { SemanticRecall } from '../memory/semantic-recall';
 import { coreMemory, CORE_ROOM, LEXICAL_DEADLINE_MS, recallWithin, SEMANTIC_DEADLINE_MS, type MemorySelection } from '../memory/select-memory';
 import { WELCOME_INSTRUCTION, WELCOME_INSTRUCTION_V2, WELCOME_SCHEMA, WELCOME_SCHEMA_V2 } from '../onboarding/welcome';
+import { SUMMARY_INSTRUCTION, SUMMARY_SCHEMA } from '../onboarding/summary';
 import type { ConversationStore, WindowStart } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
 import { billedAttemptEntries } from './billed-attempts';
@@ -101,6 +102,14 @@ const NO_DIRECT: ReadonlySet<string> = new Set();
 // own stored results, which its other tools' answers point at.
 export const EVERY_RUN_TOOLS: readonly string[] = ['skills_load', 'read_tool_output', END_RUN_TOOL];
 const EXTERNAL_REACH_TOOLS = new Set(['execute_action', 'delete_message', 'restore_message']);
+// A tool that changes something: its receipt can back a claim, or it is a privileged action. A tool whose handler only raises
+// the owner's own card changes nothing until the owner says so.
+const changesSomething = (tool: string): boolean => {
+  const record = (TOOL_RECORDS as Partial<Record<string, (typeof TOOL_RECORDS)[ToolName]>>)[tool];
+  if (record === undefined) return false;
+  const ownCard = record.tainted !== undefined && 'exempt' in record.tainted && record.tainted.exempt === 'own_card';
+  return !ownCard && tool !== 'propose_action' && (record.claim !== null || (PRIVILEGED_ACTION_TOOLS as readonly string[]).includes(tool));
+};
 export const ownerToolApproval = ({ tool }: { tool: string }): boolean => !EXTERNAL_REACH_TOOLS.has(tool);
 export const OWNER_TURN_ONLY_TOOLS: ReadonlySet<string> = toolsWhere((record) => record.ownerTurnOnly);
 const WORKSPACE_TOOLS: ReadonlySet<string> = toolsWhere((record) => record.brain === 'workspace');
@@ -170,13 +179,15 @@ export type OwnerContextIntegration = Readonly<{ skills?: OwnerSkillCapability; 
   // The tools this owner's runs offer in the function list beyond the core ones (tools/loaded.ts and the owner's sources), read
   // once per call so every round offers the same list; and where a tool the model loaded or reached by name is noted.
   promotedTools?: () => readonly string[]; noteLoaded?: (names: readonly string[]) => void;
+  // MODEL_SET_WAKES: a run Waldo starts may leave itself a follow-up (open_loop with no mail source; channels/loops.ts bounds it).
+  modelSetWakes?: boolean;
   // The messages the owner's outbox delivered to the owner lately, oldest first: what a lean scheduled run reads of what Waldo said.
   waldoSent?: () => readonly Readonly<{ at: number; text: string }>[];
   // What the owner's day holds now (channels/now-frame.ts), read once per owner message and fenced as data, one section per item.
   nowFrame?: (trace: string) => Promise<readonly string[]> }>;
 // This owner's spend so far this month and the ceiling it is held to, read once when a turn starts.
 export type OwnerSpend = Readonly<{ spentUsd: number; ceilingUsd: number }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; finishedTasks?: (since: number) => string; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; loopHasPassed?: (id: string) => boolean; memoryChat?: (chain: string, principal: string) => string; promptOwnText?: (traceId: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; turnCharts?: (turnId: string) => readonly ConversationChart[]; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; jobOutcomeRows?: boolean; timelineSeed?: TimelineSeed; machineTime?: OwnerContextIntegration['machineTime']; leanScheduled?: boolean; promotedTools?: OwnerContextIntegration['promotedTools']; noteLoaded?: OwnerContextIntegration['noteLoaded']; waldoSent?: OwnerContextIntegration['waldoSent']; nowFrame?: OwnerContextIntegration['nowFrame'] }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; finishedTasks?: (since: number) => string; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; loopHasPassed?: (id: string) => boolean; memoryChat?: (chain: string, principal: string) => string; promptOwnText?: (traceId: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; turnCharts?: (turnId: string) => readonly ConversationChart[]; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; jobOutcomeRows?: boolean; timelineSeed?: TimelineSeed; machineTime?: OwnerContextIntegration['machineTime']; leanScheduled?: boolean; promotedTools?: OwnerContextIntegration['promotedTools']; noteLoaded?: OwnerContextIntegration['noteLoaded']; waldoSent?: OwnerContextIntegration['waldoSent']; nowFrame?: OwnerContextIntegration['nowFrame']; modelSetWakes?: boolean }>;
 
 // Which scoped responder each owner field reaches. A scoped responder is built per run scope: the owner's own message
 // ('chat'), a Waldo-started run as the admitted owner ('job'), or a compaction pass over one chain ('compaction'). Every
@@ -198,6 +209,8 @@ const SCOPED_FIELDS = {
   // A Waldo-started run's own: the memory chat it writes, its prompt's authorship, the alarm's time, the lean view and its
   // outcome rows. None reaches the owner's own turn.
   memoryChat: ['job'], promptOwnText: ['job'], machineTime: ['job'], leanScheduled: ['job'], jobOutcomeRows: ['job'], waldoSent: ['job'],
+  // MODEL_SET_WAKES: a run Waldo starts may leave itself a follow-up; the owner's own turn opens loops as the owner.
+  modelSetWakes: ['job'],
 } as const satisfies Record<keyof PrivateOwner, readonly ScopedKind[]>;
 export const scopedOwner = (kind: ScopedKind, owner: PrivateOwner | undefined, own: PrivateOwner): PrivateOwner => {
   const picked: Record<string, unknown> = {};
@@ -341,7 +354,11 @@ export const createOwnerResponder = (
     sourceTaint: null, toolArgSourceTaint: null, egressAllowlist,
     hasApproval: ownerToolApproval,
     ...(privateOwner?.loopIsSourceBound ? { loopIsSourceBound: privateOwner.loopIsSourceBound } : {}), ...(privateOwner?.loopHasPassed ? { loopHasPassed: privateOwner.loopHasPassed } : {}),
+    waldoOwnFollowUp: () => waldoFirstRun && privateOwner?.modelSetWakes === true,
     heldTool: (tool: string) => {
+      if (changesHeld && changesSomething(tool)) {
+        return { ...toolError('forbidden'), fix: 'This standing order is confirm-first: change nothing until the owner confirms. Read what you need, then put the change on the owner\'s card with propose_action.' };
+      }
       if (!turnCapped() || !PAID_RUNG_TOOLS.has(tool)) return null;
       // The cost ledger counts each hold as a held:<tool> row, so the alpha shows how often the ceiling bites.
       log({ trace: traceId, hop: 'spend_hold', ms: 0, ok: false, code: `spend_ceiling_reached:${tool}`, error_code: 'spend_ceiling_reached' });
@@ -658,7 +675,8 @@ export const createOwnerResponder = (
         return { ...handler, handle: async (args: unknown, ctx: ToolDispatcherContext) => {
           await assertFresh();
           const retainedRead = ['read_memory', 'search_episodes', 'search_history', 'read_tool_output'].includes(handler.name);
-                  if (backgroundToolNames !== undefined && !activeOwnerTurn && handler.name === 'open_loop' && (args === null || typeof args !== 'object' || !('source_ref' in args) || typeof args.source_ref !== 'string')) {
+                  // Without a mail source, a run's open_loop is outside text's word unless it is Waldo's own follow-up in a run Waldo started.
+                  if (backgroundToolNames !== undefined && !activeOwnerTurn && handler.name === 'open_loop' && !(waldoFirstRun && privateOwner?.modelSetWakes) && (args === null || typeof args !== 'object' || !('source_ref' in args) || typeof args.source_ref !== 'string')) {
             return { ok: false, code: 'invalid_args', error: 'Background mail follow-up requires an observed source_ref.', source_taint: null };
           }
           const removal = handler.name === 'forget_memory' && args && typeof args === 'object' ? args as { topic?: string; claim_ids?: number[] } : undefined;
@@ -1021,6 +1039,9 @@ export const createOwnerResponder = (
   let backgroundToolNames: readonly string[] | undefined;
   // A Waldo-first scheduled run reading the lean view, and the bytes of the recent exchange its last call carried.
   let leanRun = false;
+  let waldoFirstRun = false;
+  // A confirm_first standing order's fire: nothing that changes something runs until the owner confirms (safety.heldTool).
+  let changesHeld = false;
   let leanRecentBytes = 0;
   // Tools a job's prompt names to be offered directly under the harness loader; none for any other turn.
   let backgroundDirect: ReadonlySet<string> = NO_DIRECT;
@@ -1357,8 +1378,8 @@ export const createOwnerResponder = (
       try { return await converse(id, conversationRef, reminderCheckBackText(note, timing), time, false, surface); }
       finally { backgroundOwnerModel = false; }
     },
-    async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments, directTools, waldoFirst, lateOwner) {
-      const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments, directTools, waldoFirst, lateOwner), conversationRef);
+    async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments, directTools, waldoFirst, lateOwner, holdChanges) {
+      const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments, directTools, waldoFirst, lateOwner, holdChanges), conversationRef);
       if (asOwner !== undefined) return asOwner;
       backgroundSourceTaint = sourceTaint ?? null;
       backgroundOwnerModel = ownerModel === true || ownerModel === 'plans' || (ownerModel === 'decides' && strongRoles);
@@ -1397,7 +1418,11 @@ export const createOwnerResponder = (
         }
         promptContext = turnContext ?? '';
         // Default-deny for a job over outside text: with no tools named, it gets the read-and-card ceiling, never every tool.
-        const jobTools = toolNames ?? (sourceTaint === 'external' ? OUTSIDE_TEXT_JOB_TOOLS : undefined);
+        const listed = toolNames ?? (sourceTaint === 'external' ? OUTSIDE_TEXT_JOB_TOOLS : undefined);
+        // A run Waldo starts may leave itself a follow-up; its bounds are the loop book's.
+        waldoFirstRun = waldoFirst === true;
+        changesHeld = holdChanges === true;
+        const jobTools = waldoFirstRun && privateOwner?.modelSetWakes && listed !== undefined && !listed.includes('open_loop') ? [...listed, 'open_loop' as const] : listed;
         // Lean only where the caller marked the run Waldo-first and its own tools sit inside the shared menu.
         leanRun = waldoFirst === true && privateOwner?.leanScheduled === true && fitsScheduledMenu(jobTools);
         backgroundDirect = new Set(leanRun ? SCHEDULED_DIRECT : [...(directTools ?? []), ...LOOK_BACK_DIRECT]);
@@ -1411,7 +1436,7 @@ export const createOwnerResponder = (
         }
         return await converse(id, conversationRef, said, time, false, surface, jobTools);
       } finally {
-        if (lateOwner) activeOwnerTurn = undefined; backgroundCurrent = undefined; transientDecision = false; promptContext = ''; backgroundSourceTaint = null; backgroundOwnerModel = false; planningRun = false; pending = undefined; backgroundDirect = NO_DIRECT; leanRun = false; leanRecentBytes = 0; }
+        if (lateOwner) activeOwnerTurn = undefined; backgroundCurrent = undefined; transientDecision = false; promptContext = ''; backgroundSourceTaint = null; backgroundOwnerModel = false; planningRun = false; pending = undefined; backgroundDirect = NO_DIRECT; leanRun = false; waldoFirstRun = false; changesHeld = false; leanRecentBytes = 0; }
     },
     async consolidate(trace, day, sides, policy) {
       const asOwner = await asOwnerJob(trace, job => job.consolidate(trace, day, sides, policy));
@@ -1474,13 +1499,20 @@ export const createOwnerResponder = (
       if (asOwner !== undefined) return asOwner;
       return ask(trace, `memory_welcome_${stage}`, version === 2 ? WELCOME_INSTRUCTION_V2 : WELCOME_INSTRUCTION, input, { name: 'welcome_nodes', schema: version === 2 ? WELCOME_SCHEMA_V2 : WELCOME_SCHEMA }, undefined, undefined, undefined, roleModel);
     },
-    async promote(trace, gate) {
-      const asOwner = await asOwnerJob(trace, job => job.promote(trace, gate));
+    // The onboarding summary's structured call, the same path as a welcome stage: the memory_ purpose keeps its text out of
+    // every trace, since it reads the owner's answers and Waldo's reads of their mail and calendar, fenced as data.
+    async onboardingSummary(trace, input) {
+      const asOwner = await asOwnerJob(trace, job => job.onboardingSummary!(trace, input));
+      if (asOwner !== undefined) return asOwner;
+      return ask(trace, 'memory_onboarding_summary', SUMMARY_INSTRUCTION, input, { name: 'onboarding_summary', schema: SUMMARY_SCHEMA }, undefined, undefined, undefined, roleModel);
+    },
+    async promote(trace, gate, setup) {
+      const asOwner = await asOwnerJob(trace, job => job.promote(trace, gate, setup));
       if (asOwner !== undefined) return asOwner;
       if (!memory || memory.claims().length === 0) return 'no claims';
       // The promotion model reads, and may cite, only claims and nodes that carry no held topic.
       const visible = promptMemory()!;
-      const input = promotionInput(visible);
+      const input = promotionInput(visible, setup);
       if (gate && await sha256Hex(input) === gate.last) return 'unchanged';
       const raw = await ask(trace, 'constellation', promotionInstruction(visible), input, { name: 'promotion', schema: PROMOTION_SCHEMA }, undefined, undefined, undefined, roleModel);
       await assertFresh();
@@ -1491,7 +1523,7 @@ export const createOwnerResponder = (
       }));
       // The memory this promotion left. The nightly pass runs on the owner's serial chain with every memory writer, so nothing
       // else writes between the apply and this read.
-      const left = promotionInput(promptMemory()!);
+      const left = promotionInput(promptMemory()!, setup);
       if (gate) gate.promoted(await sha256Hex(left));
       return detail;
     },

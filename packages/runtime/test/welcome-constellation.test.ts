@@ -11,9 +11,10 @@ import {
   confirmWelcomeNode, correctWelcomeNode, runWelcome, WELCOME_HEALTH_NOT_KEPT, WELCOME_SCHEMA, WELCOME_SCHEMA_V2, WELCOME_STAGE_BUDGET_MS, welcomeBuild, welcomeSupportIds,
   type StageInput, type WelcomeDeps, type WelcomeStage,
 } from '../src/onboarding/welcome';
-import { setupStage } from '../src/onboarding/welcome-sources';
+import { setupJoinContext, setupStage } from '../src/onboarding/welcome-sources';
+import { holdTopic } from './helpers/pending-topic';
 import { openAIStrictParameters } from '../src/llm/strict-schema';
-import { WELCOME_LATE_HEALTH_MS, WELCOME_PARTIAL_HEALTH_MS, WELCOME_RECHECK_MS, WELCOME_WEB_WAIT_MS } from '../src/onboarding/welcome';
+import { WELCOME_LATE_HEALTH_MS, WELCOME_PARTIAL_HEALTH_MS, WELCOME_RECHECK_MS, WELCOME_SETUP_GAP_MS, WELCOME_SETUP_REFINES_MAX, WELCOME_WEB_WAIT_MS } from '../src/onboarding/welcome';
 
 let sequence = 0;
 const withSql = <T>(fn: (sql: SqlStorage, transaction: <R>(work: () => R) => R) => Promise<T> | T) =>
@@ -738,6 +739,30 @@ describe('welcome build: health that arrives after the health stage ran', () => 
     });
   });
 
+  it('readings landing on a health stage that was skipped have its source checked at the next run, once reopened, whenever it was last checked', async () => {
+    await withSql(async (sql, transaction) => {
+      let now = T0, consented = false;
+      const { asked, deps: d } = deps(sql, transaction, {
+        now: () => now, read: { ...others, health: async () => consented ? input(['apple_health'], ['sleep_midpoint', 'hrv']) : ({ kind: 'settled', state: 'skipped' }) },
+        available: async (stage) => stage === 'health' && consented, answers: { health: HEALTH },
+      });
+      const build = () => welcomeBuild(sql, () => now);
+      build().start();
+      await runWelcome({ ...d, build: build() });
+      // A run checked the source and found none, so the stage is not checked again for the window.
+      now += 60_000;
+      await runWelcome({ ...d, build: build() });
+      expect(build().reopenable()).toEqual([]);
+      consented = true; now += 60_000;
+      expect(transaction(() => build().recheck('health'))).toBe(true);
+      expect(build().reopenable()).toEqual(['health']);
+      await runWelcome({ ...d, build: build() });
+      expect(asked).toEqual(['health']);
+      expect(build().view()).toMatchObject({ state: 'done', nodes: 1, stages: { health: 'done' } });
+      expect(transaction(() => build().recheck('health'))).toBe(false);
+    });
+  });
+
   it('never after a day, and never for a health stage that was skipped, revoked or already done', async () => {
     for (const state of ['empty', 'skipped', 'revoked'] as const) {
       await withSql(async (sql, transaction) => {
@@ -980,6 +1005,204 @@ describe('welcome build v2: one source after another, no copies, late sources on
       const texts = [...claims.allClaims().map((claim) => claim.text), ...claims.nodes().flatMap((node) => [node.label, node.summary])];
       expect(texts.some((text) => /\p{Nd}/u.test(text))).toBe(false);
       expect(active(claims).map((node) => [node.label, nodeSources(claims.allClaims(), node)])).toEqual([['Late weekend sleeper', ['apple_health']]]);
+    });
+  });
+});
+
+
+describe('the setup stage takes up answers as they arrive one at a time, and the join reads them', () => {
+  const said = (claims: ClaimStore, ref: string, text: string, kind = 'preference') =>
+    claims.add({ kind, text, source: 'stated', evidence: text, origin: 'owner', source_ref: `owner, first run: ${ref}` }, new Date(T0).toISOString());
+  const idOf = (claims: ClaimStore, text: string) => claims.allClaims().find((claim) => claim.text === text && claim.status === 'active')!.id;
+  const nothing = async (): Promise<StageInput> => ({ kind: 'settled', state: 'skipped' });
+  // What the setup stage reads now, as the owner object hands it to refineSetup.
+  const readNow = async (claims: ClaimStore) => { const read = await setupStage(claims, () => true)(); return read.kind === 'input' ? read.read ?? [] : []; };
+  const run = (sql: SqlStorage, transaction: <R>(work: () => R) => R, clock: { at: number }, claims: ClaimStore, patterns?: readonly Pattern[]) => {
+    const build = welcomeBuild(sql, () => clock.at), asked: string[] = [], slept: number[] = [];
+    let joins = 0;
+    const join = joinBy(claims, transaction, patterns);
+    const d: WelcomeDeps = {
+      build, claims, transaction, now: () => clock.at,
+      read: { health: nothing, calendar: nothing, mail: nothing, web: nothing, setup: setupStage(claims, () => true) },
+      ask: async (_stage, text) => { asked.push(text); return answer(); },
+      join: async () => { joins += 1; return join(); },
+      sleep: async (ms) => { slept.push(ms); clock.at += ms; },
+      v2: { lookupOpen: () => false },
+    };
+    return { build, asked, slept, joins: () => joins, deps: d };
+  };
+  const live = (claims: ClaimStore) => claims.nodes().filter((node) => node.status === 'active');
+
+  it('a later answer takes the setup stage up again with no model call, and the join after it keeps one constellation resting on both answers', async () => {
+    await withSql(async (sql, transaction) => {
+      const clock = { at: T0 }, claims = claimStore(sql, transaction);
+      said(claims, 'name', 'Wants to be called Asha');
+      const name = idOf(claims, 'Wants to be called Asha');
+      const first = run(sql, transaction, clock, claims);
+      first.build.start();
+      await runWelcome(first.deps);
+      expect(first.asked).toEqual([]);
+      expect(first.joins()).toBe(1);
+      // One answer is one spot, not yet a pattern.
+      expect(first.build.view()).toMatchObject({ state: 'done', nodes: 0, stages: { setup: 'done' } });
+
+      clock.at += WELCOME_SETUP_GAP_MS;
+      said(claims, 'protect', 'Never to be moved or booked over: their mornings before work.');
+      const protect = idOf(claims, 'Never to be moved or booked over: their mornings before work.');
+      const ids = await readNow(claims);
+      expect(transaction(() => first.build.refineSetup(ids))).toBe(true);
+      expect(first.build.due()).toEqual(['setup']);
+      expect(first.build.view()).toMatchObject({ state: 'building', stages: { health: 'skipped', setup: 'pending' } });
+
+      const again = run(sql, transaction, clock, claims);
+      await runWelcome(again.deps);
+      expect(again.asked).toEqual([]);
+      expect(again.joins()).toBe(1);
+      expect(live(claims)).toHaveLength(1);
+      expect(JSON.parse(live(claims)[0]!.supporting_spots)).toEqual(expect.arrayContaining([name, protect]));
+      expect(again.build.view()).toMatchObject({ state: 'done', nodes: 1, stages: { setup: 'done' } });
+      // Taken up again with nothing new: nothing reopens.
+      expect(transaction(() => again.build.refineSetup([name, protect]))).toBe(false);
+    });
+  });
+
+  it('an answer sent again with the same words changes no claim, so nothing is taken up again', async () => {
+    await withSql(async (sql, transaction) => {
+      const clock = { at: T0 }, claims = claimStore(sql, transaction);
+      said(claims, 'name', 'Wants to be called Asha');
+      const first = run(sql, transaction, clock, claims);
+      first.build.start();
+      await runWelcome(first.deps);
+      clock.at += WELCOME_SETUP_GAP_MS;
+      expect(transaction(() => first.build.refineSetup([idOf(claims, 'Wants to be called Asha')]))).toBe(false);
+      expect(first.build.due()).toEqual([]);
+    });
+  });
+
+  it('the join may rest one constellation on a setup answer and a later source\'s read together', async () => {
+    await withSql(async (sql, transaction) => {
+      const clock = { at: T0 }, claims = claimStore(sql, transaction);
+      said(claims, 'protect', 'Never to be moved or booked over: their mornings before work.');
+      const mornings: Pattern = { area: 'work', label: 'Guards early mornings', summary: 'Keeps mornings before work for themselves.', of: (claim) => from('owner, first run:')(claim) || from('welcome:calendar')(claim) };
+      const first = run(sql, transaction, clock, claims, [mornings]);
+      first.deps = { ...first.deps, read: { ...first.deps.read, calendar: async () => input(['calendar'], ['evt_a']) }, ask: async () => answer(calendarSpot({ text: 'No meetings before ten' })) };
+      first.build.start();
+      await runWelcome(first.deps);
+      expect(live(claims).map((node) => node.label)).toEqual(['Guards early mornings']);
+      expect([...nodeSources(claims.allClaims(), live(claims)[0]!)].sort()).toEqual(['calendar', 'setup']);
+    });
+  });
+
+  it('the goal given at setup counts as an answer: alone it makes the stage done, and a changed goal takes it up again', async () => {
+    await withSql(async (sql, transaction) => {
+      const clock = { at: T0 }, claims = claimStore(sql, transaction);
+      let goal: string | null = 'Working toward, in their own words: "Finish my first HYROX", by 2027-03-14.';
+      const first = run(sql, transaction, clock, claims);
+      first.deps = { ...first.deps, read: { ...first.deps.read, setup: setupStage(claims, () => true, () => goal) } };
+      first.build.start();
+      await runWelcome(first.deps);
+      expect(first.build.view().stages.setup).toBe('done');
+      expect(first.asked).toEqual([]);
+      const read = async () => { const input = await setupStage(claims, () => true, () => goal)(); return input.kind === 'input' ? input.read ?? [] : []; };
+      clock.at += WELCOME_SETUP_GAP_MS;
+      const same = await read();
+      expect(transaction(() => first.build.refineSetup(same))).toBe(false);
+      goal = 'Working toward, in their own words: "Finish HYROX under ninety minutes", by 2027-04-04.';
+      const moved = await read();
+      expect(transaction(() => first.build.refineSetup(moved))).toBe(true);
+      // With no goal and no answers, there is nothing to read.
+      goal = null;
+      expect(await setupStage(claims, () => true, () => goal)()).toEqual({ kind: 'settled', state: 'skipped' });
+    });
+  });
+
+  it('the join reads the goal as the owner\'s words and a setup question as Waldo\'s, never one the owner asked to forget or a body number kept out', async () => {
+    await withSql(async (sql, transaction) => {
+      const claims = claimStore(sql, transaction);
+      claims.add({ kind: 'fact', text: 'Answered a question at setup: "Before work, three days a week."', source: 'stated', evidence: 'x', origin: 'owner', source_ref: 'owner, first run: question oq_train' }, AT);
+      claims.add({ kind: 'fact', text: 'Answered a question at setup: "My manager, on Mondays."', source: 'stated', evidence: 'x', origin: 'owner', source_ref: 'owner, first run: question oq_plan' }, AT);
+      const trains = idOf(claims, 'Answered a question at setup: "Before work, three days a week."');
+      const questions: Record<string, string> = { oq_train: 'When do you <b>usually</b> train?', oq_plan: 'Who plans the week with you and the Mendel account?' };
+      const goal = () => 'Working toward, in their own words: "Run 10 km", by 2027-03-14.';
+      const context = setupJoinContext(claims, () => true, goal, (id) => questions[id] ?? null)!;
+      expect(context.split('\n')).toEqual(expect.arrayContaining([
+        'The owner\'s goal from setup. Working toward, in their own words: "Run 10 km", by 2027-03-14.',
+        `Spot ${trains} answers Waldo's setup question (Waldo's words, not the owner's): "When do you \\u003cb\\u003eusually\\u003c/b\\u003e train?"`,
+        expect.stringContaining('the Mendel account'),
+      ]));
+      expect(context.split('\n')).toHaveLength(3);
+      // A question carrying a topic the owner asked to forget stays out, like the answers and the goal under it.
+      holdTopic(sql, 'Mendel account', AT);
+      expect(setupJoinContext(claims, () => true, goal, (id) => questions[id] ?? null)).not.toContain('Mendel');
+      // With health kept out of memory, a goal stating a body number is not read.
+      expect(setupJoinContext(claims, () => false, () => 'Working toward, in their own words: "Resting heart rate under 55".', () => null)).toBeNull();
+      expect(setupJoinContext(claimStore(sql, transaction), () => true, () => null, () => null)).toBeNull();
+    });
+  });
+
+  it('never reopens a stage still reading: the answer is caught once that read settles', async () => {
+    await withSql(async (sql, transaction) => {
+      const clock = { at: T0 }, claims = claimStore(sql, transaction);
+      said(claims, 'name', 'Wants to be called Asha');
+      const build = welcomeBuild(sql, () => clock.at);
+      build.start();
+      transaction(() => build.begin('setup'));
+      expect(transaction(() => build.refineSetup([999]))).toBe(false);
+      expect(build.view().stages.setup).toBe('reading');
+    });
+  });
+
+  it('a setup stage that settled skipped, before any answer, is taken up once the first answer lands', async () => {
+    await withSql(async (sql, transaction) => {
+      const clock = { at: T0 }, claims = claimStore(sql, transaction);
+      const first = run(sql, transaction, clock, claims);
+      first.build.start();
+      await runWelcome(first.deps);
+      expect(first.build.view().stages.setup).toBe('skipped');
+      said(claims, 'name', 'Wants to be called Asha');
+      expect(transaction(() => first.build.refineSetup([idOf(claims, 'Wants to be called Asha')]))).toBe(true);
+      expect(first.build.due()).toEqual(['setup']);
+    });
+  });
+
+  it('waits out the gap since the setup stage last settled, and the join after it reads an answer that landed during the wait', async () => {
+    await withSql(async (sql, transaction) => {
+      const clock = { at: T0 }, claims = claimStore(sql, transaction);
+      said(claims, 'name', 'Wants to be called Asha');
+      const first = run(sql, transaction, clock, claims);
+      first.build.start();
+      await runWelcome(first.deps);
+      clock.at += 5_000;
+      said(claims, 'day', 'Most workdays are meetings, often back to back.');
+      expect(transaction(() => first.build.refineSetup([idOf(claims, 'Wants to be called Asha'), idOf(claims, 'Most workdays are meetings, often back to back.')]))).toBe(true);
+      const again = run(sql, transaction, clock, claims);
+      again.deps = { ...again.deps, sleep: async (ms) => { again.slept.push(ms); clock.at += ms; said(claims, 'season', 'At setup: a busy stretch at work.'); } };
+      await runWelcome(again.deps);
+      expect(again.slept).toEqual([WELCOME_SETUP_GAP_MS - 5_000]);
+      expect(again.joins()).toBe(1);
+      expect(JSON.parse(live(claims)[0]!.supporting_spots)).toContain(idOf(claims, 'At setup: a busy stretch at work.'));
+      // What the stage settled on is recorded, so the answer that landed during the wait reopens nothing more.
+      expect(transaction(() => again.build.refineSetup(['Wants to be called Asha', 'Most workdays are meetings, often back to back.', 'At setup: a busy stretch at work.'].map((text) => idOf(claims, text))))).toBe(false);
+    });
+  });
+
+  it('is bounded: only within a day of the build starting, and at most a fixed number of times again', async () => {
+    await withSql(async (sql, transaction) => {
+      const clock = { at: T0 };
+      const build = welcomeBuild(sql, () => clock.at);
+      build.start();
+      transaction(() => build.settle('setup', 'skipped'));
+      for (let refine = 0; refine < WELCOME_SETUP_REFINES_MAX; refine += 1) {
+        expect(transaction(() => build.refineSetup([refine + 1]))).toBe(true);
+        transaction(() => { build.begin('setup'); build.settle('setup', 'done', { read: [refine + 1] }); });
+      }
+      expect(transaction(() => build.refineSetup([1000]))).toBe(false);
+      const late = welcomeBuild(sql, () => clock.at);
+      sql.exec('DELETE FROM welcome_builds');
+      late.start();
+      transaction(() => late.settle('setup', 'skipped'));
+      clock.at += WELCOME_LATE_HEALTH_MS + 1;
+      expect(transaction(() => late.refineSetup([1]))).toBe(false);
     });
   });
 });

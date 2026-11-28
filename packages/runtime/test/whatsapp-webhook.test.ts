@@ -287,7 +287,23 @@ describe('handleWhatsAppWebhook: a send Meta refuses later for the 24-hour windo
       method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550001111' }, body: JSON.stringify({
         refused: [{ id: 'wamid.a', at: 1_700_000_000_000 }, { id: 'wamid.e', at: null }],
         delivered: [{ id: 'wamid.b', at: 1_700_000_001_000 }, { id: 'wamid.f', at: 1_700_000_003_000 }, { id: 'wamid.g', at: 1_700_000_004_000 }],
-        failed: [{ id: 'wamid.c', at: 1_700_000_002_000 }],
+        failed: [{ id: 'wamid.c', at: 1_700_000_002_000, code: 131026 }],
+      }),
+    });
+  });
+
+  it('names a failure by Meta\'s first numeric error code, so the owner can tell a missing payment method (131042) from the rest, and names none without one', async () => {
+    const { fetch, ns } = namespace();
+    const body = statuses([
+      { id: 'wamid.p', status: 'failed', timestamp: '1700000002', recipient_id: '15550001111', errors: [{ code: '131000' }, { code: 131042, title: 'Business eligibility payment issue' }, { code: 131026 }] },
+      { id: 'wamid.q', status: 'failed', timestamp: '1700000003', recipient_id: '15550001111' },
+      { id: 'wamid.r', status: 'failed', timestamp: '1700000004', recipient_id: '15550001111', errors: [{ code: -1 }, { code: 1.5 }] },
+    ]);
+    expect((await run(await post('x', body), env(ns), directory)).status).toBe(200);
+    expect(fetch).toHaveBeenCalledWith('https://telegram-owner/whatsapp-status', {
+      method: 'POST', headers: { 'x-waldo-whatsapp-subject': '15550001111' }, body: JSON.stringify({
+        refused: [], delivered: [],
+        failed: [{ id: 'wamid.p', at: 1_700_000_002_000, code: 131042 }, { id: 'wamid.q', at: 1_700_000_003_000 }, { id: 'wamid.r', at: 1_700_000_004_000 }],
       }),
     });
   });

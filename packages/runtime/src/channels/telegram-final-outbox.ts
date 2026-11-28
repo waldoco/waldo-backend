@@ -40,9 +40,14 @@ export type FinalRecord = {
   notice?: true;
   // Under the owner's choice "both", WhatsApp gets a copy once the app has it (a task or job report, agent mail, a reconnect notice).
   copied?: true;
+  // On a copy of an app message: what the copied message was, so a newer copy replaces it only as a newer message would.
+  copyOf?: CopyOf;
   // accepted: every part was accepted by a surface that confirms arrival later (WhatsApp); not yet delivered, not settled.
   receiptUrls?: string[]; ownerSubject: string; doName: string; status: 'pending' | 'attempting' | 'accepted' | 'delivered' | 'quarantined' | 'blocked';
   dueAt: number; createdAt: number; attempts: number; settled?: boolean; messageId?: number; deliveredAt?: number; reason?: string;
+  // On a record the surface failed (reason provider_failed): the provider's own closed reason, when it gave one
+  // (whatsapp_payment_required). Every reader of reason keeps reading provider_failed.
+  failure?: string;
   // A surface whose receipt names its message by a string id (WhatsApp's wamid) records each part's id here, by part
   // index (null for a part that was held instead of sent), instead of messageId.
   providerMessageIds?: (string | null)[];
@@ -83,10 +88,18 @@ export type FinalRecord = {
   // A standing order's report: the order's run finishes when the report is delivered, or when it ends unsent.
   standingOrder?: { runId: string; gate: StandingGate };
 };
+export type CopyOf = 'day_card' | 'day_update';
 type Kv = Pick<DurableObjectStorage['kv'], 'get' | 'put'>;
 // Whether the provider took any part of the record, whether or not it has arrived. Such a record is on the owner's phone in
 // part, so it is never superseded, moved to another surface, or ended as "not sent".
 export const tookPart = (record: Pick<FinalRecord, 'providerMessageIds'>): boolean => (record.providerMessageIds ?? []).some(Boolean);
+// Each waiting record the new one replaces, and that never went out (no part delivered or taken by the provider), ends
+// blocked as superseded and settles on the next drain.
+const supersede = (rows: FinalRecord[], supersedes: ((record: FinalRecord) => boolean) | undefined): void => {
+  if (supersedes) for (const row of rows) if (row.status === 'pending' && !row.deliveredParts && !tookPart(row) && supersedes(row)) {
+    row.status = 'blocked'; row.reason = 'superseded'; row.settled = false;
+  }
+};
 // What a record that stops waiting without going out again ends as: blocked when nothing went out, quarantined when part did.
 const endUnsent = (row: FinalRecord, reason: string): void => { row.status = tookPart(row) ? 'quarantined' : 'blocked'; row.reason = reason; };
 // What a surface's acknowledgement proves was sent. arrivalBy marks a surface that only accepted the message and reports later
@@ -97,7 +110,8 @@ export type DeliveryReceipt = Readonly<{ messageId?: number; providerMessageId?:
 export type DeliveryAck = DeliveryReceipt | 'held' | 'refused' | null;
 // A surface's later report on one message id: it reached the recipient, it was refused for now (the record goes back to
 // pending and that part is sent again), or it failed for good.
-export type SurfaceStatus = Readonly<{ id: string; kind: 'arrived' | 'refused' | 'failed'; at: number }>;
+// A failure may name the provider's closed reason (whatsappFailureReason); it ends provider_failed either way, the reason beside it.
+export type SurfaceStatus = Readonly<{ id: string; kind: 'arrived' | 'refused' | 'failed'; at: number; reason?: string }>;
 // Telegram's acknowledgement names the message and the chat it landed in, which must be the record's own.
 export const telegramReceipt = (result: unknown, chatId: number): DeliveryAck => {
   const ack = result as { message_id?: unknown; chat?: { id?: unknown } } | undefined;
@@ -160,9 +174,7 @@ export class TelegramFinalOutbox {
       ? { ...r, payload: { chat_id: r.payload.chat_id, text: '' }, parts: [], receiptUrls: [], reason: r.status === 'quarantined' ? 'expired_ambiguous_metadata' : r.reason } : r);
     await this.save(rows);
   }
-  // `supersedes` names the waiting records the new one replaces (a newer report of the same order). In the same save, each of
-  // them that never went out (pending, no part delivered or taken by the provider) ends blocked as superseded and settles on the
-  // next drain. A record any part of which reached the provider is never touched: it was sent.
+  // `supersedes` names the waiting records the new one replaces (a newer report of the same order); they end in the same save.
   async enqueue(input: Omit<FinalRecord, 'digest' | 'status' | 'dueAt' | 'createdAt' | 'attempts'>, options?: Readonly<{ supersedes?(record: FinalRecord): boolean }>): Promise<void> {
     input = { ...input, payload: guardedPayload(input.payload) };
     const hash = await digest(input);
@@ -179,16 +191,14 @@ export class TelegramFinalOutbox {
       if (index < 0) throw new Error('final outbox capacity');
       rows = rows.filter((_, i) => i !== index);
     }
-    for (const row of rows) if (row.status === 'pending' && !row.deliveredParts && !tookPart(row) && options?.supersedes?.(row)) {
-      row.status = 'blocked'; row.reason = 'superseded'; row.settled = false;
-    }
+    supersede(rows, options?.supersedes);
     rows.push({ ...input, payload: { ...input.payload }, parts: payloadParts(input.payload), digest: hash, status: 'pending', dueAt: this.now() + 250, createdAt: this.now(), attempts: 0 });
     await this.save(rows);
   }
   // Hash before entering the caller-owned atomic fence. The caller commits inbox closure
   // in the same synchronous transaction as these outbox writes, then rearms the shared alarm.
   async enqueueFenced(input: Omit<FinalRecord, 'digest' | 'status' | 'dueAt' | 'createdAt' | 'attempts'>,
-    commit: (work: () => void) => void): Promise<void> {
+    commit: (work: () => void) => void, supersedes?: (record: FinalRecord) => boolean): Promise<void> {
     input = { ...input, payload: guardedPayload(input.payload) };
     const hash = await digest(input);
     commit(() => {
@@ -200,6 +210,7 @@ export class TelegramFinalOutbox {
         if (index < 0) throw new Error('final outbox capacity');
         rows = rows.filter((_, i) => i !== index);
       }
+      supersede(rows, supersedes);
       rows.push({ ...input, payload: { ...input.payload }, parts: payloadParts(input.payload), digest: hash, status: 'pending', dueAt: this.now() + 250, createdAt: this.now(), attempts: 0 });
       this.kv.put(FINAL_OUTBOX_KEY, rows);
       this.kv.put(FINAL_OUTBOX_DUE_KEY, this.due(rows));
@@ -416,7 +427,7 @@ export const unconfirmedCards = (records: readonly FinalRecord[], day: string): 
   new Set(records.flatMap(record => record.status === 'accepted' && record.dayCard?.day === day ? [record.dayCard.card] : []));
 
 type StatusKv = Pick<DurableObjectStorage['kv'], 'get' | 'put'>;
-type EarlyStatuses = Record<string, { kind: SurfaceStatus['kind']; at: number; seen: number }>;
+type EarlyStatuses = Record<string, { kind: SurfaceStatus['kind']; at: number; seen: number; reason?: string }>;
 const writeRows = (kv: StatusKv, rows: FinalRecord[]): void => {
   kv.put(FINAL_OUTBOX_KEY, rows);
   const due = rows.flatMap(row => row.status === 'pending' || row.status === 'attempting' || !row.settled ? [row.dueAt] : row.payload.text ? [row.createdAt + 86400000] : []);
@@ -427,7 +438,7 @@ const writeRows = (kv: StatusKv, rows: FinalRecord[]): void => {
 // record that has already ended (delivered, blocked, expired, unconfirmed), about a part sent again since, or a refusal or
 // failure about a part that already arrived (a replayed report) is ignored.
 // Answers whether the record changed.
-const applyStatus = (row: FinalRecord, index: number, kind: SurfaceStatus['kind'], now: number): boolean => {
+const applyStatus = (row: FinalRecord, index: number, kind: SurfaceStatus['kind'], now: number, reason?: string): boolean => {
   if (row.status !== 'accepted' && row.status !== 'pending') return false;
   const arrived = [...(row.arrived ?? [])];
   while (arrived.length < (row.parts?.length ?? 1)) arrived.push(false);
@@ -440,6 +451,7 @@ const applyStatus = (row: FinalRecord, index: number, kind: SurfaceStatus['kind'
   if (arrived[index]) return false;
   if (kind === 'failed' || row.forgotten) {
     row.status = 'blocked'; row.reason = kind === 'failed' ? 'provider_failed' : 'owner_forget'; row.settled = false; row.dueAt = now;
+    if (kind === 'failed' && reason && reason !== 'provider_failed') row.failure = reason;
     return true;
   }
   // Refused for now: this part goes again, in part order, with whatever else is still unsent.
@@ -457,7 +469,7 @@ const applyEarlyStatuses = (kv: StatusKv, row: FinalRecord, now: number): void =
   for (const [index, id] of (row.providerMessageIds ?? []).entries()) {
     const status = id ? early[id] : undefined;
     if (!status || !id) continue;
-    applyStatus(row, index, status.kind, now); delete early[id]; used = true;
+    applyStatus(row, index, status.kind, now, status.reason); delete early[id]; used = true;
   }
   if (used) kv.put(EARLY_STATUS_KEY, early);
 };
@@ -472,8 +484,8 @@ export const observeSurfaceStatuses = (kv: StatusKv, statuses: readonly SurfaceS
   const changed = new Set<FinalRecord>();
   for (const status of statuses) {
     const row = rows.find(record => addressed(record) && record.providerMessageIds?.includes(status.id));
-    if (!row || row.status === 'attempting') { early[status.id] ??= { kind: status.kind, at: status.at, seen: now }; continue; }
-    if (applyStatus(row, row.providerMessageIds!.indexOf(status.id), status.kind, now)) changed.add(row);
+    if (!row || row.status === 'attempting') { early[status.id] ??= { kind: status.kind, at: status.at, seen: now, ...(status.reason ? { reason: status.reason } : {}) }; continue; }
+    if (applyStatus(row, row.providerMessageIds!.indexOf(status.id), status.kind, now, status.reason)) changed.add(row);
   }
   // The surface also reports on messages that are not records (every direct reply and knock), and each of those lands here until
   // a record claims it. Uncapped, one storage value grows with the owner's chat volume until it outgrows what a value can hold;

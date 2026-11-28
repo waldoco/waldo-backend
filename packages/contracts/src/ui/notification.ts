@@ -46,6 +46,11 @@ export const pushNotificationSchema = z
   );
 export type PushNotification = z.infer<typeof pushNotificationSchema>;
 
+// The notification category an approval push carries (Expo's categoryId; iOS categoryIdentifier). The app registers its
+// approve and decline actions under it; an action answers the approval named by the push's approval_id. No other push
+// carries a category.
+export const APPROVAL_PUSH_CATEGORY = 'waldo_approval';
+
 // ADR-0067 (narrow acceptance): bind/rebind/unlink notices form a standalone,
 // budget-exempt, zero-health delivery class. This module owns the class literal and the
 // payload shape; the policy row composes into the ADR-0068 delivery-policy table.

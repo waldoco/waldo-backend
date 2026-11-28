@@ -9,6 +9,7 @@ import type { ConsentLedger } from './consent-ledger';
 import { CURRENT_CONSENT_VERSION } from './consent-ledger';
 import { numericHealthIn } from '../scribe/sanitiser';
 import { bodyDigest } from './request-book';
+import type { OnboardingGoal } from './goal';
 
 type Sql = Pick<SqlStorage, 'exec'>;
 type StepState = AppOnboardingV1['steps'][AppOnboardingStepV1];
@@ -32,6 +33,8 @@ export type FirstRunHost = Readonly<{
   admitFirstLook(clientId: string, text: string): Promise<boolean>;
   // Withdraws the look-up as the consent route does: every finding hidden, erased and barred.
   withdrawLookup(): Promise<unknown>;
+  // The goal answer, kept as the owner's quest; absent where no quest book backs this host, and the goal is then never held.
+  goal?: Pick<OnboardingGoal, 'set' | 'held'>;
 }>;
 export type FirstRunError = 'stale_version' | 'agreements_required' | 'not_started' | 'not_connected' | 'not_offered' | 'completed' | 'unavailable';
 
@@ -45,7 +48,7 @@ const named = (claims: ClaimStore) => claims.claims().some(candidate => candidat
 // should bring things up in the profile after the name, the rest of the conversation in the facts block. The text is the app's
 // own choice put in the third person, with the owner's words quoted as they typed them; the later answers date those words,
 // since they describe a stretch of the owner's life and may carry a reading the owner stated.
-type SetupAnswer = Exclude<keyof AppSetupAnswersRequestV1, 'request_id'>;
+type SetupAnswer = Exclude<keyof AppSetupAnswersRequestV1, 'request_id' | 'goal'>;
 const SETUP_REFS: Readonly<Record<SetupAnswer, string>> = {
   name: NAME_REF, day: `${SETUP_REF}day`, slips: `${SETUP_REF}slips`, wearable: `${SETUP_REF}wearable`,
   matters: `${SETUP_REF}matters`, spots: `${SETUP_REF}spots`, protect: `${SETUP_REF}protect`, rope: `${SETUP_REF}rope`,
@@ -66,8 +69,11 @@ const BODY_MATTERS: readonly string[] = ['sleep', 'energy', 'stress', 'training'
 const HEALTH_PICKS: ReadonlySet<string> = new Set([...BODY_MATTERS, ...appSetupSpotV1Schema.options.filter(spot => BODY_MATTERS.includes(spot.slice(0, spot.indexOf('-'))))]);
 
 const setupParts = (answer: SetupAnswer) => [SETUP_REFS[answer], `${SETUP_REFS[answer]}${HEALTH_PART}`];
-// Whether a claim is a setup answer, by the ref this module writes it under.
-export const isSetupRef = (ref: string | null | undefined): boolean => ref !== null && ref !== undefined && (Object.keys(SETUP_REFS) as SetupAnswer[]).some(answer => setupParts(answer).includes(ref));
+// The owner's answer to an open question from the onboarding summary, under this ref and the question's id: a setup answer too.
+export const QUESTION_REF_PREFIX = 'owner, first run: question ';
+// Whether a claim is a setup answer, by the ref this module (or the summary, for an open question) writes it under.
+export const isSetupRef = (ref: string | null | undefined): boolean => ref !== null && ref !== undefined
+  && ((Object.keys(SETUP_REFS) as SetupAnswer[]).some(answer => setupParts(answer).includes(ref)) || ref.startsWith(QUESTION_REF_PREFIX));
 const DAY_TEXT = {
   meetings: 'Most workdays are meetings, often back to back.', focus: 'Needs long stretches of focus at work, and they are easy to break.',
   fixed: 'Workdays are a steady nine to five, much the same most days.', varies: 'Workdays are different every day, hard to plan more than a day ahead.',
@@ -325,7 +331,8 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, h
         else if (!claims.pin(saved.id, SETUP_PINS[name].block, SETUP_PINS[name].order)) throw new Error('setup answer not pinned');
       });
     }
-    return Object.fromEntries((Object.keys(SETUP_REFS) as SetupAnswer[]).map(name => [name, setupParts(name).some(ref => live(ref).length > 0)])) as Required<AppSetupAnswersResultV1['held']>;
+    if (request.goal !== undefined) host.goal?.set(request.goal);
+    return { ...Object.fromEntries((Object.keys(SETUP_REFS) as SetupAnswer[]).map(name => [name, setupParts(name).some(ref => live(ref).length > 0)])), goal: host.goal?.held() ?? false } as Required<AppSetupAnswersResultV1['held']>;
   };
   // Called in the consent route's transaction after a grant. The consent route asks for a new copy; the finished run stays done.
   const agreementsAccepted = (): void => {
