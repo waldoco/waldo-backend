@@ -1,6 +1,8 @@
 import { TOOL_PERMISSIONS, triggerTypeSchema, writeHomeCardArgsSchema, type ToolHandler, type WriteHomeCardArgs } from '@waldo/contracts';
 import { appHomeCardV1Schema, type AppHomeCardV1 } from '../../../contracts/src/app/home-card';
 import { numericHealthIn } from '../scribe/sanitiser';
+import { guardArtifactLinks } from '../conversation/artifact-link-guard';
+import { redactSecretUrls } from './egress-guard';
 import type { ToolDispatcherContext } from '../tools/dispatcher';
 
 // GENERAL_WAKE: the one card the owner sees first on Home, written by the general wake, in a lazy owner-object table with one
@@ -37,19 +39,24 @@ export const forgetHomeCard = (sql: Sql, texts: readonly string[]): number => {
 
 // What the app reads: the card for the owner's today, or none.
 export const homeCardAnswer = (card: HomeCard | null, today: string): AppHomeCardV1 =>
-  appHomeCardV1Schema.parse(card && card.day === today ? { state: 'written', card_id: card.card_id, text: card.text, written_at: card.written_at, day: card.day } : { state: 'none' });
+  appHomeCardV1Schema.parse(card && card.day === today ? { state: 'written', card_id: card.card_id, text: card.text, written_at: card.written_at, day: card.day, from_outside: card.outside } : { state: 'none' });
 
 const allowlist = triggerTypeSchema.options.filter(trigger => (TOOL_PERMISSIONS[trigger] as readonly string[]).includes('write_home_card'));
-export const homeCardHandler = (book: ReturnType<typeof homeCardBook>, clock: Readonly<{ now(): number; today(): string }>) => ({
+export const homeCardHandler = (book: ReturnType<typeof homeCardBook>, clock: Readonly<{ now(): number; today(): string; newId?(): string }>) => ({
   name: 'write_home_card',
   description: 'Write the one card the owner sees first on Home: what matters now, in a few plain lines, replacing the card before. Write it when what matters has changed. Never a reading or a number about the body.',
   schema: writeHomeCardArgsSchema,
   trigger_allowlist: allowlist,
   autonomy_gated: false,
   mutates_state: true,
-  async handle({ text }, ctx) {
+  async handle(args, ctx) {
+    // Shown on a screen as Waldo's words, so it meets what every owner-visible text meets: no secret-bearing link, no link to
+    // an artifact this run did not make, and no canary (a canary here means the run was steered by injected text).
+    const text = guardArtifactLinks(redactSecretUrls(args.text).text, new Set());
+    const lower = text.toLowerCase();
+    if ((ctx?.session?.canary_tokens ?? []).some(token => lower.includes(token.toLowerCase()))) return { ok: false, code: 'rejected', error: 'The card was not kept.' };
     const now = clock.now();
-    const card: HomeCard = { card_id: `home:${now}`, text, written_at: now, day: clock.today(), outside: ctx?.toolArgSourceTaint === 'external' || ctx?.carriedOutside === true };
+    const card: HomeCard = { card_id: `home:${clock.newId?.() ?? crypto.randomUUID()}`, text, written_at: now, day: clock.today(), outside: ctx?.toolArgSourceTaint === 'external' || ctx?.carriedOutside === true };
     return book.write(card)
       ? { ok: true, data: { card_id: card.card_id, written: true }, source_taint: null }
       : { ok: false, code: 'rejected', error: 'The card holds a reading or a number about the body, so it was not kept. Say it in words, without the number, and write it again.' };

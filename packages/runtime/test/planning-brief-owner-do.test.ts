@@ -713,7 +713,7 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
       model.owner = [{ calls: [{ name: 'write_home_card', arguments: { text: line } }] }, { calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Card updated; nothing to send.' } }] }];
       await tick(state, owner);
       const before = model.ownerRequests.length;
-      expect(await (await card()).json()).toMatchObject({ state: 'written', text: line, day: DAY });
+      expect(await (await card()).json()).toMatchObject({ state: 'written', text: line, day: DAY, from_outside: true });
       expect(model.ownerRequests.length).toBe(before);
       expect((await owner.fetch(new Request('https://telegram-owner/app/v1/home-card', { method: 'POST', headers: headers('general-wake-home-card'), body: '{}' }))).status).toBe(405);
     });

@@ -21,6 +21,8 @@ export const appHomeCardV1Schema = z.discriminatedUnion('state', [
     written_at: z.int().positive(),
     // The owner-local day it is for.
     day: healthDayV1Schema,
+    // Written by a run that had read other people's words (mail, the web), so the app can say where it partly came from.
+    from_outside: z.boolean(),
   }),
 ]);
 export type AppHomeCardV1 = z.infer<typeof appHomeCardV1Schema>;

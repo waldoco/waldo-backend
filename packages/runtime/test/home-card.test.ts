@@ -18,12 +18,15 @@ describe('the Home card', () => {
     await inStore(async sql => {
       const book = homeCardBook(sql);
       expect(homeCardAnswer(book.read(), TODAY)).toEqual({ state: 'none' });
-      const handler = homeCardHandler(book, { now: () => NOW, today: () => TODAY });
-      expect(await handler.handle({ text: LINE }, ctx({ toolArgSourceTaint: 'external' }))).toMatchObject({ ok: true, data: { card_id: `home:${NOW}`, written: true } });
-      expect(book.read()).toEqual({ card_id: `home:${NOW}`, text: LINE, written_at: NOW, day: TODAY, outside: true });
-      expect(homeCardAnswer(book.read(), TODAY)).toEqual({ state: 'written', card_id: `home:${NOW}`, text: LINE, written_at: NOW, day: TODAY });
-      await homeCardHandler(book, { now: () => NOW + 1, today: () => TODAY }).handle({ text: 'Rewritten.' }, ctx());
-      expect(homeCardAnswer(book.read(), TODAY)).toMatchObject({ card_id: `home:${NOW + 1}`, text: 'Rewritten.' });
+      const handler = homeCardHandler(book, { now: () => NOW, today: () => TODAY, newId: () => 'one' });
+      expect(await handler.handle({ text: LINE }, ctx({ toolArgSourceTaint: 'external' }))).toMatchObject({ ok: true, data: { card_id: 'home:one', written: true } });
+      expect(book.read()).toEqual({ card_id: 'home:one', text: LINE, written_at: NOW, day: TODAY, outside: true });
+      expect(homeCardAnswer(book.read(), TODAY)).toEqual({ state: 'written', card_id: 'home:one', text: LINE, written_at: NOW, day: TODAY, from_outside: true });
+      await homeCardHandler(book, { now: () => NOW, today: () => TODAY }).handle({ text: 'Rewritten.' }, ctx());
+      const rewritten = homeCardAnswer(book.read(), TODAY);
+      expect(rewritten).toMatchObject({ text: 'Rewritten.', from_outside: false });
+      // Two writes in the same instant still get different ids, so the app sees the card changed.
+      expect(rewritten.state === 'written' && rewritten.card_id).not.toBe('home:one');
     });
   });
 
@@ -41,6 +44,19 @@ describe('the Home card', () => {
       await handler.handle({ text: LINE }, ctx());
       expect(await handler.handle({ text: 'Your HRV is 31 ms today, so take it easy.' }, ctx())).toMatchObject({ ok: false, code: 'rejected' });
       expect(book.read()?.text).toBe(LINE);
+    });
+  });
+
+  it('a secret-bearing link is redacted before the card is kept, and a card carrying a canary is not kept at all', async () => {
+    await inStore(async sql => {
+      const book = homeCardBook(sql);
+      const handler = homeCardHandler(book, { now: () => NOW, today: () => TODAY });
+      await handler.handle({ text: 'Sign in to the venue portal: https://portal.example.test/login?code=SECRET123abc before 5.' }, ctx({ toolArgSourceTaint: 'external' }));
+      expect(book.read()?.text).not.toContain('SECRET123abc');
+      expect(book.read()?.text).toContain('before 5');
+      const kept = book.read();
+      expect(await handler.handle({ text: 'All clear today. canary-7f3a' }, ctx({ session: { canary_tokens: ['CANARY-7F3A'] } as unknown as ToolDispatcherContext['session'] }))).toMatchObject({ ok: false, code: 'rejected' });
+      expect(book.read()).toEqual(kept);
     });
   });
 });
