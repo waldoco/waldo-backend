@@ -3,8 +3,8 @@ import type { Claim, ClaimStore, ConstellationNode } from './claims';
 import { HEALTH_NODE_SOURCES, nodeStatementIds, nodeSupports, refSource } from './node-sources';
 
 // What a model call built from outside content may read of the owner's memory: no health note, no stated reading and no read
-// Waldo drew from a health source, and no constellation node drawn from health (a health reading, the health domain, or resting
-// on any of those), so outside words can neither select health nor sit beside it. Edges follow their nodes.
+// Waldo drew from a health source, and no constellation node drawn from health (a health reading, the health, body or mind
+// domain, or resting on any of those), so outside words can neither select health nor sit beside it. Edges follow their nodes.
 // An area can only keep more out: a claim filed under body or mind stays out whatever its kind.
 export const outsideSafe = (claim: Claim): boolean =>
   claim.kind !== 'health' && claim.area !== 'body' && claim.area !== 'mind' && !numericHealthIn(claim.text) && !HEALTH_NODE_SOURCES.has(refSource(claim.source_ref));
@@ -12,7 +12,7 @@ export const outsideSafe = (claim: Claim): boolean =>
 export const outsideView = (store: ClaimStore): ClaimStore => {
   const nodes = () => {
     const all = store.allClaims();
-    const fromHealth = (node: ConstellationNode) => node.domain === 'health' || nodeSupports(all, node).some((claim) => !outsideSafe(claim));
+    const fromHealth = (node: ConstellationNode) => ['health', 'body', 'mind'].includes(node.domain) || nodeSupports(all, node).some((claim) => !outsideSafe(claim));
     return store.nodes().filter((node) => !fromHealth(node));
   };
   return {

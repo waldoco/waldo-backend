@@ -84,7 +84,7 @@ export type OwnerResponder = Readonly<{
   migrate(trace: string, input: string, policy?: Readonly<{ health: boolean }>): Promise<string>;
   // With a gate, promote makes no model call when the memory it would read has the digest `last`, and hands the digest of
   // the memory it leaves to `promoted` once a promotion is applied.
-  promote(trace: string, gate?: Readonly<{ last: string | undefined; promoted(digest: string): void }>): Promise<string>;
+  promote(trace: string, gate?: Readonly<{ last: string | undefined; promoted(digest: string): void }>, setup?: string): Promise<string>;
   // One welcome-build stage's structured answer; its input and output never reach a trace. version 2 is the second build's.
   welcome?(trace: string, stage: string, input: string, version?: 2): Promise<string>;
   // The onboarding summary with its open questions; its input and output never reach a trace.

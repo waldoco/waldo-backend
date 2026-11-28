@@ -1,15 +1,14 @@
 import type { AppNodeSourceV13 } from '../../../contracts/src/app/controls';
-import type { HealthReadSignal } from '@waldo/contracts';
 import { GoogleError, type CalendarItem, type GoogleClient, type MailItem, type TaskItem } from '../connectors/google';
-import { parseSeries, type Reading } from '../health/producer';
 import { shiftDay } from '../health/scores/time';
-import { chooseGroup, foldDay, localDayOf, SIGNALS, type HealthReadBook } from '../tools/live/health';
+import { localDayOf, type HealthReadBook } from '../tools/live/health';
+import { zonesAnswer, zoneWords } from '../memory/outcomes';
 import type { GoogleAccess } from '../tools/live/google';
 import type { FindingStore } from './findings';
-import { textFingerprint, type ClaimStore } from '../memory/claims';
+import { fence, textFingerprint, type ClaimStore } from '../memory/claims';
 import { heldTopicsOf, holdsIn } from '../memory/forget-guard';
 import { numericHealthIn } from '../scribe/sanitiser';
-import { fenced } from '../prompt/turn-prompt';
+import { fenced, quoted } from '../prompt/turn-prompt';
 import { isSetupRef, QUESTION_REF_PREFIX } from './first-run';
 import { runWelcome, WELCOME_HEALTH_DAYS, welcomeBuild, type StageInput, type WelcomeStage } from './welcome';
 
@@ -29,36 +28,24 @@ const input = (lines: readonly string[], sources: Iterable<AppNodeSourceV13>, po
 // not welcome sources.
 const HEALTH_SOURCES: Readonly<Record<string, AppNodeSourceV13>> = { apple: 'apple_health', health_connect: 'health_connect', samsung: 'health_connect' };
 
-// Readings go to the model only inside its untainted welcome call; nothing here is stored. An owner who keeps health out of
-// memory gets no health nodes, so the stage reads nothing.
-export const healthStage = (book: HealthReadBook, timezone: () => string, now: () => number, healthMemory: () => boolean) => async (): Promise<StageInput> => {
+// Zone words only, Recovery and Form by day: no reading reaches the model call or memory. An owner who keeps health out of
+// memory gets no health spots, so the stage reads nothing.
+export const healthStage = (book: Pick<HealthReadBook, 'consent'>, readZones: (from: string, to: string) => Promise<unknown>, timezone: () => string, now: () => number, healthMemory: () => boolean) => async (): Promise<StageInput> => {
   if (!healthMemory()) return settled('skipped');
   const consent = await book.consent();
   if (consent.kind === 'consent_withdrawn') return settled('revoked');
   if (consent.kind === 'read_failed') return settled('unavailable');
   if (consent.kind !== 'granted') return settled('skipped');
-  const zone = timezone(), to = localDayOf(new Date(now()), zone), from = shiftDay(to, -(WELCOME_HEALTH_DAYS - 1));
-  // Food is read only by get_health, in the turn that asked, and never compiled into what Waldo knows.
-  const signals = (Object.keys(SIGNALS) as HealthReadSignal[]).filter((signal) => SIGNALS[signal].stored !== 'nutrition');
-  const parsed = parseSeries(await book.series({ from, to, signals: signals.map((signal) => SIGNALS[signal].stored) }));
-  if (parsed.kind === 'no_consent') return settled('skipped');
-  if (parsed.kind === 'failed') return settled('unavailable');
-  const lines: string[] = [], sources: AppNodeSourceV13[] = [], pointers: string[] = [], readDays = new Set<string>();
-  // The same read get_health makes: time asleep only, a sleep stage from its own share of the night, one source and one
-  // method per signal, so methods never blend.
-  const live = parsed.series.sources.filter((source) => HEALTH_SOURCES[source.source] !== undefined && consent.sources.has(source.source));
-  for (const signal of signals) {
-    const group = chooseGroup(signal, live);
-    if (!group) continue;
-    const tag = HEALTH_SOURCES[group.source]!;
-    const byDay = new Map<string, Reading[]>();
-    for (const reading of group.readings) { byDay.set(reading.day, [...(byDay.get(reading.day) ?? []), reading]); readDays.add(reading.day); }
-    const days = [...byDay.keys()].sort().map((day) => `${day} ${foldDay(SIGNALS[signal].fold, byDay.get(day)!, zone)}`);
-    lines.push(`${signal} (${tag}, ${SIGNALS[signal].unit}${group.method ? `, ${group.method}` : ''}): ${days.join('; ')}`);
-    sources.push(tag); pointers.push(signal);
-  }
-  const read = input(lines, sources, pointers);
-  return read.kind === 'input' ? { ...read, days: readDays.size } : read;
+  const sources = [...consent.sources].flatMap((source) => HEALTH_SOURCES[source] ?? []);
+  if (!sources.length) return settled('skipped');
+  const to = localDayOf(new Date(now()), timezone()), from = shiftDay(to, -(WELCOME_HEALTH_DAYS - 1));
+  const answer = zonesAnswer.safeParse(await readZones(from, to));
+  if (!answer.success) return settled('unavailable');
+  const lines = answer.data.zones.days.flatMap((row) => {
+    const { recovery, form } = zoneWords(row), said = [recovery ? `Recovery: ${recovery}` : null, form ? `Form: ${form}` : null].filter(Boolean);
+    return said.length ? [`${row.day} ${said.join(' · ')}`] : [];
+  });
+  return lines.length ? { kind: 'input', text: lines.join('\n'), sources: [...new Set(sources)], pointers: new Set(['recovery', 'form']), days: lines.length } : settled('empty');
 };
 
 type Account = Readonly<{ email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean }>;
@@ -163,30 +150,46 @@ export const mailStage = (google: GoogleAccess) => async (): Promise<StageInput>
 };
 
 // The owner's own setup answers, as they are now: owner-grounded words only, never Waldo's reads or outside text, and nothing a
-// forget still holds. An owner who keeps health out of memory gets neither their health picks nor a stated reading here, and no
-// health node from this stage.
+// forget still holds. An owner who keeps health out of memory gets neither their health picks nor a stated reading here.
 // goal: the goal the owner gave at setup, kept as their quest, as one line; it is their own words too.
+const setupSaid = (claims: ClaimStore, healthMemory: () => boolean, goal: () => string | null) => {
+  const health = healthMemory(), held = holdsIn(heldTopicsOf(claims));
+  const said = [...claims.claims(), ...claims.claims('promoted')].filter((claim) => isSetupRef(claim.source_ref) && claim.origin === 'owner'
+    && claim.verification_status === 'owner-grounded' && !held(claim.text) && (health || (claim.kind !== 'health' && !numericHealthIn(claim.text))));
+  const aim = goal(), aimed = aim !== null && !held(aim) && (health || !numericHealthIn(aim)) ? aim : null;
+  return { health, held, said, aimed };
+};
+const askedOf = (claim: Readonly<{ source_ref?: string | null }>, question: (id: string) => string | null) =>
+  claim.source_ref?.startsWith(QUESTION_REF_PREFIX) ? question(claim.source_ref.slice(QUESTION_REF_PREFIX.length)) : null;
+
+// The answers are spots already, so the stage says only whether there are any; the join pass after it reads them.
 // question: the text of the onboarding question an answer replied to, shown beside it as Waldo's question.
 export const setupStage = (claims: ClaimStore, healthMemory: () => boolean, goal: () => string | null = () => null, question: (id: string) => string | null = () => null) => async (): Promise<StageInput> => setupInput(claims, healthMemory, goal, question);
 const GOAL_POINTER = 'goal';
 export const setupInput = (claims: ClaimStore, healthMemory: () => boolean, goal: () => string | null = () => null, question: (id: string) => string | null = () => null): StageInput => {
-  const health = healthMemory(), held = holdsIn(heldTopicsOf(claims));
-  const said = [...claims.claims(), ...claims.claims('promoted')].filter((claim) => isSetupRef(claim.source_ref) && claim.origin === 'owner'
-    && claim.verification_status === 'owner-grounded' && !held(claim.text) && (health || (claim.kind !== 'health' && !numericHealthIn(claim.text))));
+  const { health, said, aimed } = setupSaid(claims, healthMemory, goal);
+  if (!said.length && aimed === null) return settled('skipped');
   // An answer to an onboarding question is shown with the question, which is Waldo's: the owner's claim holds only their words.
   const shown = (claim: Readonly<{ text: string; source_ref?: string | null }>) => {
-    const asked = claim.source_ref?.startsWith(QUESTION_REF_PREFIX) ? question(claim.source_ref.slice(QUESTION_REF_PREFIX.length)) : null;
+    const asked = askedOf(claim, question);
     return asked ? `${claim.text} (in reply to Waldo's question, not their words: "${asked}")` : claim.text;
   };
-  const aim = goal(), aimed = aim !== null && !held(aim) && (health || !numericHealthIn(aim)) ? aim : null;
-  if (!said.length && aimed === null) return settled('skipped');
   const pointer = (id: number) => `c${id}`;
   return {
     kind: 'input', text: [...(aimed === null ? [] : [`[${GOAL_POINTER}] ${aimed}`]), ...said.map((claim) => `[${pointer(claim.id)}] ${shown(claim)}`)].join('\n'), sources: ['setup'],
-    pointers: new Set([...(aimed === null ? [] : [GOAL_POINTER]), ...said.map((claim) => pointer(claim.id))]), cites: new Map(said.map((claim) => [pointer(claim.id), claim.id])),
+    pointers: new Set([...(aimed === null ? [] : [GOAL_POINTER]), ...said.map((claim) => pointer(claim.id))]),
     read: [...said.map((claim) => claim.id), ...(aimed === null ? [] : [textFingerprint(aimed)])],
     ...(health ? {} : { noHealth: true }),
   };
+};
+
+// What the join pass reads beside the spots from setup: the owner's goal, which is a quest and not a spot, and for each answer
+// to an onboarding question, the question it answered, which is Waldo's words and never the owner's. Null when there is neither.
+export const setupJoinContext = (claims: ClaimStore, healthMemory: () => boolean, goal: () => string | null, question: (id: string) => string | null): string | null => {
+  const { held, said, aimed } = setupSaid(claims, healthMemory, goal);
+  const asked = said.flatMap((claim) => { const text = askedOf(claim, question); return text && !held(text) ? [`Spot ${claim.id} answers Waldo's setup question (Waldo's words, not the owner's): ${quoted(text)}`] : []; });
+  const lines = [...(aimed === null ? [] : [`The owner's goal from setup. ${fence(aimed)}`]), ...asked];
+  return lines.length ? lines.join('\n') : null;
 };
 
 // The public web reaches the gift only as look-up findings. In the first build this stage writes no node: it says whether
@@ -217,13 +220,14 @@ export const welcomeSourceAvailable = (deps: Readonly<{ claims: ClaimStore; heal
     }
   };
 
-// The owner object's welcome run: the readers over its own connections, and one model call per stage, which the owner object
-// runs as an owner job on its queue.
+// The owner object's welcome run: the readers over its own connections, one model call per stage, which the owner object runs
+// as an owner job on its queue, and the join pass once the stages settle.
 // v2: the second build (WELCOME_V2), with lookupOpen saying whether the owner look-up is still running.
 export const ownerWelcome = (deps: Readonly<{
   sql: Pick<SqlStorage, 'exec'>; transaction<T>(work: () => T): T; claims: ClaimStore; now(): number; timezone(): string; healthMemory(): boolean;
-  healthRead: HealthReadBook; google: GoogleAccess; findings(): Pick<FindingStore, 'offered' | 'lookup' | 'page'>;
+  healthRead: HealthReadBook; readZones(from: string, to: string): Promise<unknown>; google: GoogleAccess; findings(): Pick<FindingStore, 'offered' | 'lookup' | 'page'>;
   ask(stage: WelcomeStage, input: string, version?: 2): Promise<string>;
+  join(): Promise<unknown>;
   v2?: Readonly<{ lookupOpen(): boolean }>;
   // The goal the owner gave at setup, as one line, or null.
   goal?(): string | null;
@@ -243,16 +247,14 @@ export const ownerWelcome = (deps: Readonly<{
   lateWeb: (grant: number): boolean => deps.v2 !== undefined && deps.transaction(() => welcomeBuild(deps.sql, deps.now).lateWeb(grant)),
   // A Google account was connected: calendar and mail read again once, within a day of settling (second build only).
   googleConnected: (): boolean => deps.v2 !== undefined && deps.transaction(() => welcomeBuild(deps.sql, deps.now).googleConnected()),
-  // The setup answers changed since the setup stage built from them: it reads them again (second build only; the first has no
-  // way to add to a node, so a second read would write copies).
+  // The setup answers changed since the setup stage settled on them: it is taken up again, and the join after it reads them.
   refine: (): boolean => {
-    if (deps.v2 === undefined) return false;
     const read = setupInput(deps.claims, deps.healthMemory, deps.goal, deps.question);
     return deps.transaction(() => welcomeBuild(deps.sql, deps.now).refineSetup(read.kind === 'input' ? read.read ?? [] : []));
   },
   run: () => runWelcome({
-    build: welcomeBuild(deps.sql, deps.now), claims: deps.claims, now: deps.now, transaction: deps.transaction, ask: deps.ask, available: welcomeSourceAvailable(deps),
-    read: { health: healthStage(deps.healthRead, deps.timezone, deps.now, deps.healthMemory), calendar: calendarStage(deps.google, deps.now), mail: mailStage(deps.google), web: () => webStage(deps.findings(), deps.v2 !== undefined)(), setup: setupStage(deps.claims, deps.healthMemory, deps.goal, deps.question) },
+    build: welcomeBuild(deps.sql, deps.now), claims: deps.claims, now: deps.now, transaction: deps.transaction, ask: deps.ask, join: deps.join, available: welcomeSourceAvailable(deps),
+    read: { health: healthStage(deps.healthRead, deps.readZones, deps.timezone, deps.now, deps.healthMemory), calendar: calendarStage(deps.google, deps.now), mail: mailStage(deps.google), web: () => webStage(deps.findings(), deps.v2 !== undefined)(), setup: setupStage(deps.claims, deps.healthMemory, deps.goal, deps.question) },
     ...(deps.v2 ? { v2: deps.v2 } : {}),
   }),
 });

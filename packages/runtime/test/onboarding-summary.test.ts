@@ -40,6 +40,25 @@ describe('onboarding summary', () => {
     });
   });
 
+  it('with health kept out of memory, reads no constellation drawn from health: not one in body or mind, not one resting on a health read', async () => {
+    await withSql(async (sql, transaction) => {
+      const claims = claimStore(sql, transaction), at = new Date(T0).toISOString();
+      claims.add({ kind: 'observation', text: 'Recovery runs low after late calls', source: 'inferred', evidence: 'welcome build', origin: 'agent', source_ref: 'welcome:apple_health:recovery' }, at);
+      const body = claims.lastClaimId();
+      claims.add({ kind: 'observation', text: 'Calls with the US team run past ten', source: 'inferred', evidence: 'welcome build', origin: 'untrusted', source_ref: 'welcome:calendar:evt_a' }, at);
+      const calls = claims.lastClaimId();
+      claims.saveNode({ id: null, domain: 'body', label: 'Low mornings', summary: 'You start slowly some mornings.', strength: 0.5, status: 'active', supporting_spots: [body] }, at);
+      claims.saveNode({ id: null, domain: 'work', label: 'Late calls, then a low next day', summary: 'Late US calls come before low mornings.', strength: 0.5, status: 'active', supporting_spots: [calls, body] }, at);
+      claims.saveNode({ id: null, domain: 'work', label: 'Late US calls', summary: 'Calls with the US team run late.', strength: 0.5, status: 'active', supporting_spots: [calls] }, at);
+      const off = summaryInput({ claims, healthMemory: () => false, goal: () => null });
+      expect(off).toContain('Late US calls:');
+      expect(off).not.toContain('Low mornings');
+      expect(off).not.toContain('then a low next day');
+      const on = summaryInput({ claims, healthMemory: () => true, goal: () => null });
+      for (const label of ['Low mornings', 'Late calls, then a low next day', 'Late US calls']) expect(on).toContain(label);
+    });
+  });
+
   it('stores what the model wrote, with ids for its questions, and reads it back; none before the first', async () => {
     await withSql(async (sql, transaction) => {
       const book = onboardingSummary(sql, { now: () => T0, newId: () => 'abcdefgh' + String(sequence++).padStart(4, '0'), transaction, claims: claimStore(sql, transaction), loops: loopBook(sql, { newId: () => 'loop1', now: () => T0 }) });

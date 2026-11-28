@@ -13,7 +13,7 @@ import { confirmWelcomeNode, correctWelcomeNode, welcomeBuild, welcomeSupportIds
 import { getToKnowApplier, startGetToKnow } from '../onboarding/get-to-know';
 import { onboardingGoal } from '../onboarding/goal';
 import { summaryQuestion } from '../onboarding/summary';
-import { ownerWelcome, type OwnerWelcome } from '../onboarding/welcome-sources';
+import { ownerWelcome, setupJoinContext, type OwnerWelcome } from '../onboarding/welcome-sources';
 import { chatChannelLinks } from './chat-channel-links';
 import type { IMessageProof, WhatsAppProof } from './dashboard-phone';
 import { enrollAtTap, iMessageNumberView } from './imessage/enrollment';
@@ -5151,9 +5151,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const contextCaps = this.env.WALDO_CONTEXT_CAPS === '1';
     const callCeilings = this.env.WALDO_CALL_CEILINGS === '1';
     const plans = dayPlanBook(storage.sql);
-    // MEMORY_OUTSIDE_NOTES: the turn also recalls notes learned from mail and calendar, shown as not the owner's words.
+    // MEMORY_OUTSIDE_NOTES: the turn also recalls notes learned from mail and calendar, shown as not the owner's words. The
+    // owner's health memory setting rides on the store, read when a pass runs.
     const ownerClaims = claimStore(storage.sql, (work) => storage.transactionSync(work));
-    const memory = this.env.MEMORY_OUTSIDE_NOTES === '1' ? withOutsideNotes(ownerClaims) : ownerClaims;
+    const memory: ClaimStore = { ...(this.env.MEMORY_OUTSIDE_NOTES === '1' ? withOutsideNotes(ownerClaims) : ownerClaims), keepsHealth: () => healthMemoryOn(identity) };
     // Semantic recall, behind MEMORY_SEMANTIC_RECALL. Its sweep embeds what any writer stored since the last one; it runs once
     // here, after each stored claim and after each recall that used it.
     const semantic = semanticRecallFromEnv(this.env, { sql: storage.sql, transaction: (work) => storage.transactionSync(work), kv: storage.kv, defer: (work) => this.ctx.waitUntil(work),
@@ -7023,6 +7024,25 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (delivered && record.reaction) await api.setMessageReaction({ chat_id: record.payload.chat_id,
         message_id: record.reaction.message_id, reaction: [{ type: 'emoji', emoji: record.reaction.emoji }] }).catch(() => undefined);
     };
+    // The join pass (memory/claims.ts): one strong-role call reads every spot beside the constellations and writes them. It asks
+    // the model only when what it reads changed since it last ran, so a second run over the same spots changes nothing.
+    // joinHere runs where it is called, for work already on the serial lane; joinConstellations queues on the lane. Its trace
+    // closes with a machine_turn root, like a welcome call's.
+    const joinHere = (reason: string): Promise<string> => this.asOwnerJob('dreaming', `join:${reason}`, async () => {
+      const started = Date.now(), trace = `join:${reason}:${started}`;
+      let ok = false;
+      try {
+        const setup = setupJoinContext(memory, () => healthMemoryOn(identity), () => onboardingGoal(storage.kv, quests, ownerRef).line(), id => summaryQuestion(storage.sql, id)) ?? undefined;
+        const detail = await responder.promote(trace, { last: storage.kv.get<string>(CONSTELLATION_DIGEST_KEY), promoted: digest => storage.kv.put(CONSTELLATION_DIGEST_KEY, digest) }, setup);
+        log({ trace, hop: 'constellation', ms: Date.now() - started, ok: true, detail, ...(detail === 'unchanged' ? { code: 'unchanged' } : {}) });
+        ok = true;
+        return detail;
+      } catch (error) {
+        log({ trace, hop: 'constellation', ms: Date.now() - started, ok: false, error: String(error) });
+        throw error;
+      } finally { log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok, detail: 'join' }); }
+    });
+    const joinConstellations = (reason: string): Promise<string> => this.serial(() => joinHere(reason));
     // The welcome build's model calls run on the queue as an owner job, like the nightly pass; its reads run beside it.
     // Each welcome call closes its own trace with a machine_turn root, so the trace exporter flushes it. The trace is per run:
     // a build taken up again after a cut must not add to a trace an earlier run already closed.
@@ -7040,11 +7060,12 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       try { const said = await this.asOwnerJob('dreaming', 'onboarding:summary', () => responder.onboardingSummary!(trace, text)); answered = true; return said; }
       finally { log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: answered, detail: 'onboarding_summary' }); }
     };
-    const welcome = ownerWelcome({ sql: storage.sql, transaction: (work) => storage.transactionSync(work), claims: memory, now: Date.now, timezone: () => clock.timezone, healthMemory: () => healthMemoryOn(identity), healthRead, google,
+    const welcome = ownerWelcome({ sql: storage.sql, transaction: (work) => storage.transactionSync(work), claims: memory, now: Date.now, timezone: () => clock.timezone, healthMemory: () => healthMemoryOn(identity), healthRead, readZones, google,
       goal: () => onboardingGoal(storage.kv, quests, ownerRef).line(), question: id => summaryQuestion(storage.sql, id),
       findings: () => findingStore(storage.sql, memory, consentLedger(storage.sql, consentSwitches(this.env)), Date.now),
       // The build runs beside the serial lane, so each call queues on it.
       ask: (stage, text, version) => this.serial(() => askWelcome(stage, text, version)),
+      join: () => joinConstellations('welcome'),
       // The second build (WELCOME_V2) waits for a look-up still running, inside the tour's watch.
       ...(this.env.WELCOME_V2 === '1' ? { v2: { lookupOpen: () => lookupOn
         ? lookupPending({ book: this.jobs(), consent: lookupConsent(), started: lookupStarted }, ownerName(memory) !== null) : openLookup(this.jobs()) !== null } } : {}) });
@@ -7105,8 +7126,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // come back through the welcome build's own call and admission, filed under mail. Its apply already runs in the jobs lane,
     // inside the serial lane, so its call does not queue on it again.
     const getToKnowOn = this.env.WELCOME_V2 === '1';
-    const getToKnowApply = getToKnowOn ? getToKnowApplier({ claims: memory, build: welcomeBuild(storage.sql, Date.now), now: Date.now, transaction: work => storage.transactionSync(work),
-      healthMemory: () => healthMemoryOn(identity), ask: text => askWelcome('mail', text, 2, 'get_to_know') }) : null;
+    const getToKnowApply = getToKnowOn ? getToKnowApplier({ claims: memory, now: Date.now, transaction: work => storage.transactionSync(work),
+      healthMemory: () => healthMemoryOn(identity), ask: text => askWelcome('mail', text, 2, 'get_to_know'), join: () => joinHere('get_to_know') }) : null;
     const getToKnow: OwnerRuntime['getToKnow'] = {
       reconcile: async () => {
         if (!getToKnowOn) return;

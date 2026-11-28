@@ -1534,13 +1534,13 @@ export const createOwnerResponder = (
       if (asOwner !== undefined) return asOwner;
       return ask(trace, 'memory_onboarding_summary', SUMMARY_INSTRUCTION, input, { name: 'onboarding_summary', schema: SUMMARY_SCHEMA }, undefined, undefined, undefined, roleModel);
     },
-    async promote(trace, gate) {
-      const asOwner = await asOwnerJob(trace, job => job.promote(trace, gate));
+    async promote(trace, gate, setup) {
+      const asOwner = await asOwnerJob(trace, job => job.promote(trace, gate, setup));
       if (asOwner !== undefined) return asOwner;
       if (!memory || memory.claims().length === 0) return 'no claims';
       // The promotion model reads, and may cite, only claims and nodes that carry no held topic.
       const visible = promptMemory()!;
-      const input = promotionInput(visible);
+      const input = promotionInput(visible, setup);
       if (gate && await sha256Hex(input) === gate.last) return 'unchanged';
       const raw = await ask(trace, 'constellation', promotionInstruction(visible), input, { name: 'promotion', schema: PROMOTION_SCHEMA }, undefined, undefined, undefined, roleModel);
       await assertFresh();
@@ -1551,7 +1551,7 @@ export const createOwnerResponder = (
       }));
       // The memory this promotion left. The nightly pass runs on the owner's serial chain with every memory writer, so nothing
       // else writes between the apply and this read.
-      const left = promotionInput(promptMemory()!);
+      const left = promotionInput(promptMemory()!, setup);
       if (gate) gate.promoted(await sha256Hex(left));
       return detail;
     },
