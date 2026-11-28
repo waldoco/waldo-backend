@@ -34,12 +34,12 @@ describe('app sign-in and main chat routes', () => {
   it('ignores paths outside /app/v1', async () => {
     expect(await handleApp(new Request('https://w.test/console'), env(), fakeAuth().auth)).toBeNull();
   });
-  it('answers a code request the same for invited and unknown addresses', async () => {
+  it('answers ok only when a code was sent, and names the refusal when none was', async () => {
     const { auth } = fakeAuth();
     const known = await handleApp(post('/app/v1/auth/code', { email: 'member@example.test' }), env(), auth);
     const unknown = await handleApp(post('/app/v1/auth/code', { email: 'stranger@example.test' }), env(), auth);
     expect([known!.status, await known!.json()]).toEqual([200, { ok: true }]);
-    expect([unknown!.status, await unknown!.json()]).toEqual([200, { ok: true }]);
+    expect([unknown!.status, await unknown!.json()]).toEqual([403, { error: 'signup_closed' }]);
   });
   it('verifies a code into the console session artifact and labels the surface app', async () => {
     const response = await handleApp(post('/app/v1/auth/verify', { email: 'member@example.test', code: '123456' }), env(), fakeAuth().auth);
@@ -93,6 +93,20 @@ describe('app sign-in and main chat routes', () => {
     expect(forwards[0]!.method).toBe('POST');
     expect(new URL(forwards[0]!.url).pathname).toBe('/app/v1/chat/main/messages/client-msg-0001/cancel');
     expect(keys).toEqual(['app-read:owner-1']);
+  });
+  it('forwards the phone\'s time zone to the owner DO with the session, in its own rate bucket, never the chat-send one', async () => {
+    forwards.length = 0;
+    const keys: string[] = [];
+    const counted = { ...(env() as object), RESPONSIBILITY_RATE_LIMITER: { limit: async ({ key }: { key: string }) => { keys.push(key); return { success: true }; } } } as never;
+    const report = (method: string) => new Request('https://w.test/app/v1/device/timezone', { method, headers: { authorization: `Bearer ${CREDENTIAL}`, 'content-type': 'application/json' }, ...(method === 'POST' ? { body: JSON.stringify({ timezone: 'Asia/Kolkata' }) } : {}) });
+    const response = await handleApp(report('POST'), counted, fakeAuth().auth);
+    expect(await response!.json()).toEqual({ forwarded: true });
+    expect([forwards[0]!.method, new URL(forwards[0]!.url).pathname, forwards[0]!.headers.get('x-waldo-do-name'), await forwards[0]!.json()]).toEqual(['POST', '/app/v1/device/timezone', 'owner-1', { timezone: 'Asia/Kolkata' }]);
+    expect(forwards[0]!.headers.get('x-waldo-app-session-hash')).toMatch(/^[0-9a-f]{64}$/);
+    expect(keys).toEqual(['app-device-timezone:owner-1']);
+    expect((await handleApp(report('GET'), counted, fakeAuth().auth))!.status).toBe(404);
+    expect(forwards).toHaveLength(1);
+    expect((await handleApp(new Request('https://w.test/app/v1/device/timezone', { method: 'POST', body: '{}' }), counted, fakeAuth().auth))!.status).toBe(401);
   });
   it('forwards a rating PUT with its body to the owner DO as a read, and answers PUT anywhere else with 405', async () => {
     forwards.length = 0;
