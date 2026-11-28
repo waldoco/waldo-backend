@@ -9,10 +9,11 @@ import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 import type { LLMGatewayRequest } from '../src/llm/provider';
+import { WELCOME_SETUP_GAP_MS } from '../src/onboarding/welcome';
 
 // A fresh app-only owner finishes setup in the app: the build starts on that signal alone, before any chat, runs its model
 // calls as the owner's job, and writes Waldo's read of the owner's health as nodes; a second signal starts nothing.
-const model = vi.hoisted(() => ({ welcome: [] as string[], purposes: [] as string[] }));
+const model = vi.hoisted(() => ({ welcome: [] as string[], purposes: [] as string[], hold: false }));
 // The setup stage cites the owner's own answers by their claim ids, as its input lists them.
 const SETUP_ANSWER = (pointer: string | undefined) => JSON.stringify({ nodes: [{ domain: 'people', label: 'Goes by a chosen name', summary: 'Asked Waldo to use the name they go by.', observation: 'Named how Waldo should address them.', source: 'setup', pointers: pointer ? [pointer] : [] }] });
 const WELCOME_ANSWER = JSON.stringify({ nodes: [{ domain: 'health', label: 'Late weekend sleeper', summary: 'Sleeps in on weekends, then starts slowly.', observation: 'Weekend nights end later than weeknights.', source: 'apple_health', pointers: ['sleep_midpoint'] }] });
@@ -20,6 +21,9 @@ vi.mock('../src/channels/telegram-turn', async load => {
   const original = await load<typeof import('../src/channels/telegram-turn')>();
   const gateway = { async complete({ request }: LLMGatewayRequest) {
     const body = JSON.stringify(request);
+    // A held read waits on a flag the test clears; a promise made in the test's context would never settle in this one.
+    if (model.hold && body.includes('Source: what the owner told')) { model.welcome.push(body); while (model.hold) await new Promise((resolve) => setTimeout(resolve, 10)); model.welcome.pop(); }
+    if (body.includes('onboarding_summary')) { model.welcome.push(body); return { ok: true as const, data: { model: request.model, text: JSON.stringify({ summary: 'You go by Asha and keep long stretches for focused work.', questions: [{ text: 'When do you usually train?' }, { text: 'Who do you plan your week with?' }] }), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } }; }
     const text = body.includes('welcome_nodes') ? (model.welcome.push(body), body.includes('Source: what the owner told Waldo') ? SETUP_ANSWER(/\[(c\d+)\] /.exec(body)?.[1]) : WELCOME_ANSWER)
       : '{"add":[],"corrections":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}';
     return { ok: true as const, data: { model: request.model, text, input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
@@ -30,13 +34,13 @@ const { OwnerDO } = await import('../src/channels/owner-do');
 
 const OWNER_ID = '6c1f0d0e-2b7a-4c43-9a51-0d8f5e3b2a77';
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
-const rpc = vi.hoisted(() => ({ called: [] as string[], series: [] as unknown[], readings: [230, 300], synced: true, otlp: [] as string[] }));
+const rpc = vi.hoisted(() => ({ called: [] as string[], series: [] as unknown[], readings: [230, 300], synced: true, consented: true, otlp: [] as string[] }));
 const LANGFUSE = { LANGFUSE_PUBLIC_KEY: 'pk-lf-synthetic', LANGFUSE_SECRET_KEY: 'sk-lf-synthetic', LANGFUSE_BASE_URL: 'https://langfuse.test', WALDO_ENVIRONMENT: 'staging', LANGFUSE_CAPTURE_TEXT: 'true' };
 const LANGFUSE_URL = 'https://langfuse.test/api/public/otel/v1/traces';
 const sample = (day: string, value: number) => ({ signal: 'sleep_midpoint', day, value, method: null, start_at: null, end_at: `${day}T07:00:00.000Z`, timezone: 'UTC' });
 
 beforeEach(() => {
-  model.welcome = []; rpc.called = []; rpc.series = []; rpc.readings = [230, 300]; rpc.synced = true; rpc.otlp = [];
+  model.welcome = []; model.hold = false; rpc.called = []; rpc.series = []; rpc.readings = [230, 300]; rpc.synced = true; rpc.consented = true; rpc.otlp = [];
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input instanceof Request ? input.url : input) === LANGFUSE_URL) { rpc.otlp.push(String(init?.body)); return Response.json({}); }
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
@@ -44,7 +48,7 @@ beforeEach(() => {
     if (fn) rpc.called.push(fn);
     if (fn === 'app_session_authority') return Response.json({ owner_id: OWNER_ID, do_name: asked.p_do_name, session_hash: asked.p_session_hash, state_version: 0, admission_revision: '1', expires_at: Date.now() + 3_600_000 });
     if (fn === 'owner_runtime_authority') return Response.json({ owner_id: OWNER_ID, auth_user_id: OWNER_ID, do_name: asked.p_do_name, state_version: 1, admission_revision: '5' });
-    if (fn === 'health_consent_list') return Response.json({ consents: ['storage_compute', 'model_processing'].map(purpose => ({ source: 'apple', purpose, status: 'granted', epoch: 1 })) });
+    if (fn === 'health_consent_list') return Response.json({ consents: (rpc.consented ? ['storage_compute', 'model_processing'] : []).map(purpose => ({ source: 'apple', purpose, status: 'granted', epoch: 1 })) });
     if (fn === 'health_series_read') rpc.series.push(JSON.parse(asked.p_payload!));
     if (fn === 'health_series_read') return Response.json({ access: 'granted', read_at: new Date().toISOString(), sources: [{ source: 'apple', consent_epoch: 1, samples: rpc.synced ? [sample('2026-10-18', rpc.readings[0]!), sample('2026-10-19', rpc.readings[1]!)] : [] }] });
     if (fn === 'health_context_read') return Response.json(null);
@@ -229,6 +233,142 @@ it('each welcome stage closes its model call\'s trace with a machine root, one t
       for (const root of roots) expect(spans().filter(span => key(span) === root.trace && span.name !== 'app.machine').some(span => span.name.startsWith('llm_'))).toBe(true);
       const wire = rpc.otlp.join('\n');
       for (const reading of ['231.37', '307.61', 'sleep_midpoint (apple_health', 'Wants to be called Asha']) expect(wire, reading).not.toContain(reading);
+    } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
+  });
+});
+
+it('with the second build, an answer sent on its own is read with the others: the setup read alone, health read once, the same words ask nothing', async () => {
+  const name = `welcome-owner-refine-${crypto.randomUUID()}`;
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    claimStore(state.storage.sql);
+    ensureSchema(state.storage);
+    state.storage.kv.put('do_name', name);
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const owner = new OwnerDO(state, { ...env, ...directory, WELCOME_V2: '1', TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const answer = (body: Record<string, unknown>) => owner.fetch(new Request('https://telegram-owner/app/v1/onboarding/answers', { method: 'POST',
+      headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'c'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify(body) }));
+    const row = () => state.storage.sql.exec<{ finished_at: number | null; stages_json: string }>('SELECT finished_at, stages_json FROM welcome_builds').toArray()[0];
+    const setupCalls = () => model.welcome.filter((body) => body.includes('Source: what the owner told'));
+    // The gap since the last setup read is spent, so the next read asks at once.
+    const spendGap = () => {
+      const stages = JSON.parse(row()!.stages_json) as Record<string, { at: number }>;
+      stages.setup!.at -= WELCOME_SETUP_GAP_MS;
+      state.storage.sql.exec('UPDATE welcome_builds SET stages_json = ?', JSON.stringify(stages));
+    };
+    try {
+      expect((await answer({ request_id: 'refine-1', name: 'Asha' })).status).toBe(200);
+      await vi.waitFor(() => expect(row()?.finished_at).not.toBeNull(), { timeout: 15_000, interval: 25 });
+      expect(setupCalls()).toHaveLength(1);
+      expect(rpc.series).toHaveLength(1);
+
+      spendGap();
+      expect((await answer({ request_id: 'refine-2', day: { shape: 'focus', own_words: '' } })).status).toBe(200);
+      await vi.waitFor(() => expect(setupCalls()).toHaveLength(2), { timeout: 15_000, interval: 25 });
+      expect(setupCalls()[1]).toContain('Wants to be called Asha');
+      expect(setupCalls()[1]).toContain('Needs long stretches of focus at work');
+      await vi.waitFor(() => expect(row()?.finished_at).not.toBeNull(), { timeout: 15_000, interval: 25 });
+      // Only the answers were read again: health, calendar and mail were not.
+      expect(model.welcome.filter((body) => !body.includes('Source: what the owner told'))).toHaveLength(1);
+      expect(rpc.series).toHaveLength(1);
+
+      // The same words under a new request change no claim, so nothing is asked.
+      spendGap();
+      expect((await answer({ request_id: 'refine-3', day: { shape: 'focus', own_words: '' } })).status).toBe(200);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(setupCalls()).toHaveLength(2);
+
+      // Answers sent while a read is running are read together in one more read after it. Onboarding requests share the
+      // owner's lane with the welcome's model calls, so they wait behind the read and are saved once it returns.
+      model.hold = true;
+      spendGap();
+      expect((await answer({ request_id: 'refine-4', slips: { picked: ['replies'], own_words: '' } })).status).toBe(200);
+      await vi.waitFor(() => expect(model.welcome.some((body) => body.includes('replies and follow-ups'))).toBe(true), { timeout: 15_000, interval: 25 });
+      const later = [answer({ request_id: 'refine-5', wearable: 'garmin' }), answer({ request_id: 'refine-6', slips: { picked: ['replies', 'breaks'], own_words: '' } })];
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      model.hold = false;
+      expect((await Promise.all(later)).map((saved) => saved.status)).toEqual([200, 200]);
+      await vi.waitFor(async () => { await vi.advanceTimersByTimeAsync(WELCOME_SETUP_GAP_MS); expect(setupCalls()).toHaveLength(4); }, { timeout: 15_000, interval: 25 });
+      vi.useRealTimers();
+      const last = setupCalls()[3]!;
+      for (const said of ['Wears a Garmin watch', 'breaks and meals']) expect(last).toContain(said);
+      await vi.waitFor(() => expect(row()?.finished_at).not.toBeNull(), { timeout: 15_000, interval: 25 });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(setupCalls()).toHaveLength(4);
+      expect(rpc.series).toHaveLength(1);
+    } finally { vi.useRealTimers(); quiet.mockRestore(); await state.storage.deleteAlarm(); }
+  });
+}, 60_000);
+
+it('health connected after the first answer started the build is read once its first readings land, not left out of the first constellation', async () => {
+  const name = `welcome-owner-health-after-${crypto.randomUUID()}`;
+  rpc.consented = false;
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    claimStore(state.storage.sql);
+    ensureSchema(state.storage);
+    state.storage.kv.put('do_name', name);
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const owner = new OwnerDO(state, { ...env, ...directory, WELCOME_V2: '1', TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const health = () => (JSON.parse(state.storage.sql.exec<{ stages_json: string }>('SELECT stages_json FROM welcome_builds').toArray()[0]?.stages_json ?? '{}') as Record<string, { state: string }>).health?.state;
+    try {
+      await owner.fetch(new Request('https://telegram-owner/app/v1/onboarding/answers', { method: 'POST',
+        headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'c'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify({ request_id: 'health-after-1', name: 'Asha' }) }));
+      await vi.waitFor(() => expect(health()).toBe('skipped'), { timeout: 15_000, interval: 25 });
+      rpc.consented = true;
+      const runtime = (owner as unknown as { setup(channel: string): { healthSamples(): Promise<void> } }).setup('app');
+      await runtime.healthSamples();
+      await vi.waitFor(() => expect(health()).toBe('done'), { timeout: 15_000, interval: 25 });
+      expect(state.storage.sql.exec<{ label: string }>('SELECT label FROM constellation_nodes').toArray().map((row) => row.label)).toContain('Late weekend sleeper');
+    } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
+  });
+});
+
+it('the goal given at setup reaches the first build with the other answers', async () => {
+  const name = `welcome-owner-goal-${crypto.randomUUID()}`;
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    claimStore(state.storage.sql);
+    ensureSchema(state.storage);
+    state.storage.kv.put('do_name', name);
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    try {
+      const saved = await owner.fetch(new Request('https://telegram-owner/app/v1/onboarding/answers', { method: 'POST',
+        headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'c'.repeat(64), 'content-type': 'application/json', 'x-waldo-app-contract': 'onboarding=5' },
+        body: JSON.stringify({ request_id: 'welcome-goal-1', name: 'Asha', goal: { own_words: 'Finish my first HYROX', by: '2027-03-14' } }) }));
+      expect(saved.status).toBe(200);
+      await vi.waitFor(() => expect(state.storage.sql.exec<{ finished_at: number | null }>('SELECT finished_at FROM welcome_builds').toArray()[0]?.finished_at).not.toBeNull(), { timeout: 15_000, interval: 25 });
+      const setup = model.welcome.find((body) => body.includes('Source: what the owner told'))!;
+      expect(setup).toContain('[goal] Working toward, in their own words: \\"Finish my first HYROX\\", by 2027-03-14.');
+      expect(setup).toContain('Wants to be called Asha');
+    } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
+  });
+});
+
+it('the onboarding summary is written by one traced owner job over the answers, and its questions are answered or left as open loops', async () => {
+  const name = `welcome-owner-summary-${crypto.randomUUID()}`;
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    claimStore(state.storage.sql);
+    ensureSchema(state.storage);
+    state.storage.kv.put('do_name', name);
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const post = (path: string, body: unknown) => owner.fetch(new Request(`https://telegram-owner${path}`, { method: 'POST',
+      headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'c'.repeat(64), 'content-type': 'application/json' }, body: JSON.stringify(body) }));
+    try {
+      expect((await post('/app/v1/onboarding/answers', { request_id: 'summary-answers-1', name: 'Asha', day: { shape: 'focus', own_words: '' } })).status).toBe(200);
+      const written = await post('/app/v1/onboarding/summary', { request_id: 'summary-owner-0001' });
+      expect(written.status).toBe(200);
+      const { summary } = await written.json() as { summary: { summary: string; questions: { id: string; text: string }[] } };
+      expect(summary.summary).toBe('You go by Asha and keep long stretches for focused work.');
+      const asked = model.welcome.find((body) => body.includes('onboarding_summary'))!;
+      expect(asked).toContain('Wants to be called Asha');
+      expect(asked).toContain('Needs long stretches of focus at work');
+      const roots = state.storage.sql.exec<{ trace: string; ok: number }>("SELECT trace, ok FROM trace_log WHERE hop = 'machine_turn' AND trace LIKE 'onboarding-summary:%'").toArray();
+      expect(roots).toEqual([expect.objectContaining({ ok: 1 })]);
+      const [train, plan] = summary.questions;
+      expect((await post('/app/v1/onboarding/summary/questions', { request_id: 'summary-owner-q1', question_id: train!.id, action: 'answer', text: 'Before work, three days a week.' })).status).toBe(200);
+      expect((await post('/app/v1/onboarding/summary/questions', { request_id: 'summary-owner-q2', question_id: plan!.id, action: 'defer' })).status).toBe(200);
+      expect(state.storage.sql.exec<{ text: string }>("SELECT text FROM claims WHERE status = 'active'").toArray().map((row) => row.text)).toContain('Answered a question at setup: "Before work, three days a week."');
+      expect(state.storage.sql.exec<{ title: string }>("SELECT title FROM loops WHERE status = 'open'").toArray().map((row) => row.title)).toEqual(['Ask the owner when it fits, Waldo\'s question from setup (not the owner\'s words): "Who do you plan your week with?"']);
     } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
   });
 });

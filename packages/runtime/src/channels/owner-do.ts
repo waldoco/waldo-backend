@@ -4,12 +4,15 @@ import { deliveredLately } from './scheduled-run';
 import { appGooglePicture, googlePictures } from './app-google-picture';
 import { wearablesCatalogue } from '../health/wearables';
 import { APP_ONBOARDING_PATHS, appOnboardingRequest, ownerOnboardingHost } from './app-onboarding';
+import { DEVICE_ZONE_MADE, ZONE_SOURCE_KEY, deviceZoneAnswer, deviceZoneApplies, zoneState, type ZoneSource } from './zone-source';
 import { APP_RATING_SUFFIX, appRatingRequest, replyRatings } from './app-rating';
 import { memoryUsedBook, memoryUsedFor } from './app-memory-used';
 import { outsideSafe } from '../memory/outside-view';
 import { requestBook } from '../onboarding/request-book';
 import { confirmWelcomeNode, correctWelcomeNode, welcomeBuild, welcomeSupportIds, type WelcomeStage } from '../onboarding/welcome';
 import { getToKnowApplier, startGetToKnow } from '../onboarding/get-to-know';
+import { onboardingGoal } from '../onboarding/goal';
+import { summaryQuestion } from '../onboarding/summary';
 import { ownerWelcome, type OwnerWelcome } from '../onboarding/welcome-sources';
 import { chatChannelLinks } from './chat-channel-links';
 import type { IMessageProof, WhatsAppProof } from './dashboard-phone';
@@ -266,7 +269,7 @@ import { approvalHandlers, approveShownHandler } from '../tools/live/raise-appro
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi, telegramReplyDraft } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
-import { APP_CHAT_CHART_REVISION, APP_CHAT_HEALTH_CHART_REVISION, APP_CHAT_MEMORY_USED_REVISION, APP_CHAT_RATING_REVISION, APP_CHAT_UPLOAD_MAX_BYTES, APP_CHAT_UPLOAD_PATH, APP_CONTRACT_HEADER, appChatUploadResultV1Schema, appContractRevision } from '../../../contracts/src/app/core';
+import { APP_CHAT_CHART_REVISION, APP_CHAT_HEALTH_CHART_REVISION, APP_CHAT_MEMORY_USED_REVISION, APP_CHAT_RATING_REVISION, APP_CHAT_UPLOAD_MAX_BYTES, APP_CHAT_UPLOAD_PATH, APP_CONTRACT_HEADER, APP_DEVICE_TIMEZONE_PATH, appChatUploadResultV1Schema, appContractRevision, appDeviceTimezoneRequestV1Schema, appDeviceTimezoneResultV1Schema } from '../../../contracts/src/app/core';
 import { APP_AUTONOMY_PATH, APP_CHAT_PATH, APP_CHAT_SEND_PATH, APP_THREADS_PATH, APP_UPDATE_BASE, appSubjectFor, appTranscriptPage, appTranscriptPageRead, appTranscriptPageRows, ownerPrincipalRef, parseAppSend } from './app-api';
 import { appThreadsRequest, askThreadTitle, nameThread, recallReach, redactThreadTitles, threadChainRef, threadOfChain, threadRecord, threadRowsOfChain, threadRowsPrefix, touchThread, type AppThreadsHost } from './app-threads';
 import { stableJson } from '../context-composer/canonical';
@@ -364,6 +367,8 @@ type OwnerRuntime = Readonly<{
   listener: TelegramOwnerListener | null;
   control: TurnControl;
   welcome: OwnerWelcome;
+  // The onboarding summary's model call over its input.
+  onboardingSummary(input: string): Promise<string>;
   // The owner look-up the owner's yes starts: written or stopped as the yes stands, and let start once the first reply is out.
   lookup: Readonly<{ reconcile(): Promise<void>; afterReply(): Promise<void> }>;
   // The first-week read of the owner's own Google data (WELCOME_V2): written once, when the welcome build has begun and Google
@@ -2124,6 +2129,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const origin=request.headers.get('x-waldo-app-origin');if(origin)this.ctx.storage.kv.put('origin',origin);
     // An owner who joined openly writes nothing outside the first run and the consents until they accept the agreements.
     if(request.method!=='GET'&&!APP_ONBOARDING_PATHS.includes(path)&&await this.openHold().held())return Response.json({error:'agreements_required'},{status:409,headers:{'cache-control':'no-store'}});
+    if(path===APP_DEVICE_TIMEZONE_PATH)return request.method==='POST'?this.serial(()=>this.deviceZone(request,async()=>{await this.appAuthority(name,hash);})):fail(405);
     if(path===APP_CHAT_SEND_PATH&&request.method==='POST')return this.appSend(request,authority.ownerId);
     if(path===APP_DEVICE_CALENDAR_PATH||path.startsWith(APP_DEVICE_CALENDAR_PATH+'/'))return this.env.DEVICE_CALENDAR==='1'?deviceCalendarRequest(request,this.deviceCalendar(),work=>this.ctx.storage.transactionSync(work)):fail(404);
     if(path===APP_CHAT_UPLOAD_PATH&&request.method==='POST')return this.appUpload(request,name);
@@ -2162,6 +2168,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         try{
           return await appOnboardingRequest(request,ownerOnboardingHost({storage:this.ctx.storage,doName:name,now:Date.now,rpc:signedRpc(this.env),assertCurrent:current,
             ...consentSwitches(this.env),hideText:texts=>this.hideRetainedText(texts),stopLookup:()=>{for(const id of this.jobs().cancelMachine('owner_lookup')){this.tasks.cancelled(id);this.setup('app').log({trace:`task:${id}`,hop:'lookup_cancelled',ms:0,ok:true,job_id:id});}},
+            goal:onboardingGoal(this.ctx.storage.kv,{set:(args,user)=>this.setup('app').quests.set(args,user),open:()=>this.setup('app').quests.open()},()=>this.ctx.storage.kv.get<string>('owner_principal_ref')??name),
+            loops:loopBook(this.ctx.storage.sql,{newId:()=>crypto.randomUUID().slice(0,8),now:Date.now}),healthMemory:()=>healthMemoryOn(this.ctx.storage.kv),
+            summarise:input=>this.setup('app').onboardingSummary(input),
             chat:chatChannelLinks({env:this.env,kv:this.ctx.storage.kv,doName:name,auth:consoleAuth(this.env)}),bothDefault:proactiveBothDefault(this.env),
             signedInRecently:async()=>signedInRecently((await consoleAuth(this.env)!.listSessions(name)).find(row=>row.session===hash)?.signed_in_at,Date.now()),
             act:action=>this.setup('app').act(action,current),
@@ -3122,6 +3131,19 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     const { kv } = this.ctx.storage;
     kv.put('telegram_unlinked', true);
     kv.put('telegram_link_epoch', (kv.get<number>('telegram_link_epoch') ?? 0) + 1);
+  }
+
+  // The phone's own zone (zone-source.ts). It goes through the owner's own timezone.set, marked as the phone's, so the directory
+  // keeps it first and the owner's jobs re-arm on it; a zone the owner chose is answered back unchanged.
+  private async deviceZone(request: Request, current: () => Promise<void>): Promise<Response> {
+    const reply = (body: object, status = 200) => Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
+    const asked = appDeviceTimezoneRequestV1Schema.safeParse(await request.json().catch(() => null));
+    const zone = asked.success ? ianaZone(asked.data.timezone) : null;
+    if (!zone) return reply({ error: 'invalid_request' }, 400);
+    const before = zoneState(this.ctx.storage.kv);
+    if (deviceZoneApplies(before, zone) && (await this.setup('app').act({ action: 'timezone.set', id: '', value: zone, made: DEVICE_ZONE_MADE }, current)) !== true)
+      return reply({ error: 'unavailable' }, 503);
+    return reply(appDeviceTimezoneResultV1Schema.parse(deviceZoneAnswer(before, zoneState(this.ctx.storage.kv), zone)));
   }
 
   // The webhook names the Telegram subject and timezone it resolved for this owner; they outlive deploy variables.
@@ -4099,9 +4121,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       .then((result) => { if (result) console.log(JSON.stringify({ hop: 'rating_score', ok: result.ok, code: result.code })); }, () => undefined);
     this.ctx.waitUntil(this.ratingScores);
   }
+  // Answers sent, or readings landed, while a run is in flight are caught when it ends: one more run takes them up together.
   private continueWelcome(runtime: OwnerRuntime): void {
-    if (this.welcomeRun || !runtime.welcome.wanted()) return;
-    this.welcomeRun = runtime.welcome.run().catch(() => { console.error(JSON.stringify({ hop: 'welcome', ok: false })); }).finally(() => { this.welcomeRun = null; });
+    if (this.welcomeRun) return;
+    runtime.welcome.refine();
+    if (!runtime.welcome.wanted()) return;
+    this.welcomeRun = runtime.welcome.run().catch(() => { console.error(JSON.stringify({ hop: 'welcome', ok: false })); })
+      .finally(() => {
+        this.welcomeRun = null;
+        try { if (runtime.welcome.refine() || runtime.welcome.recheckDue()) this.continueWelcome(runtime); } catch { console.error(JSON.stringify({ hop: 'welcome_refine', ok: false })); }
+      });
     this.ctx.waitUntil(this.welcomeRun);
   }
   // A fixed one-minute window per owner DO: 90 console reads, 20 console actions.
@@ -5288,12 +5317,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // The owner's own time zone, from the console or from chat: the directory keeps it first, then this object applies it,
     // confirms it and re-arms the owner's jobs on it. Runtimes are rebuilt so values captured at build time follow the zone;
     // from inside a turn, the turn's own runtime is kept, since its stop and steer controls are reached through it.
-    const confirmZone = async (zone: string, now: number, assertCurrent?: () => Promise<void>, inTurn = false): Promise<string | null> => {
+    const confirmZone = async (zone: string, now: number, assertCurrent?: () => Promise<void>, inTurn = false, source: ZoneSource = 'owner'): Promise<string | null> => {
       const named = ianaZone(zone);
       if (!named || !(await saveSettings({ timezone: named, ...loops.proactivity() }))) return null;
       await assertCurrent?.();
       identity.put('timezone', named);
       identity.put('timezone_confirmed', true);
+      identity.put(ZONE_SOURCE_KEY, source);
       await armOwnJobs(named, now, true);
       const own = inTurn ? this.runtimes[channel] : undefined;
       this.runtimes = own ? { [channel]: own } : {};
@@ -6126,7 +6156,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     }, forgetDemand: day => forgetDemandDay(storage.sql, day, Date.now()),
       wakes: { enabled: () => schedPrefs.enabled('health_proposals'), woken: healthWoken,
         readContext: readModelHealth, noted: startedAt => (this.env.WORKOUT_WAKE === '1' && workoutStillFresh(storage.kv.get(WORKOUT_NOTED_KEY), startedAt) ? ['workout_ended'] : []) } });
-    // An upload or a wearable sync changed the readings; an empty welcome health stage reads them once more.
+    // An upload or a wearable sync changed the readings; an empty welcome health stage reads them once more, and a skipped one
+    // (the build began before health was connected) is checked for them.
     // A new stated need changes no reading, so it never spends the welcome's one retry for late health data.
     const healthSamples = async (cause: HealthRecomputeCause = 'readings', woke = false, workout = false) => {
       // WORKOUT_WAKE: a workout just ended. The time is noted before the recompute is asked for, so a recompute already due
@@ -6137,7 +6168,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // would otherwise be written from the rows as they were before the upload.
       if (woke && this.env.WAKE_BRIEF === '1') storage.kv.put(NIGHT_NOTED_KEY, Date.now());
       await recompute.ask();
-      if (cause === 'readings' && runtime.welcome.lateHealth()) this.continueWelcome(runtime);
+      if (cause === 'readings' && (runtime.welcome.lateHealth() || runtime.welcome.healthArrived())) this.continueWelcome(runtime);
     };
     // BRIEF_BODY_REVISION (brief-revision.ts): today's first row written after the Brief went out has the Brief looked at again
     // once, on the surface that took it.
@@ -6961,7 +6992,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       try { const said = await this.asOwnerJob('dreaming', `welcome:${stage}`, () => responder.welcome!(trace, stage, text, version)); answered = true; return said; }
       finally { log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: answered, detail }); }
     };
+    // The onboarding summary's one model call, as an owner job like a welcome stage. Never through this.serial: the onboarding
+    // route that asks for it already runs in the serial lane.
+    const onboardingSummary = async (text: string) => {
+      const started = Date.now(), trace = `onboarding-summary:${started}`;
+      let answered = false;
+      try { const said = await this.asOwnerJob('dreaming', 'onboarding:summary', () => responder.onboardingSummary!(trace, text)); answered = true; return said; }
+      finally { log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: answered, detail: 'onboarding_summary' }); }
+    };
     const welcome = ownerWelcome({ sql: storage.sql, transaction: (work) => storage.transactionSync(work), claims: memory, now: Date.now, timezone: () => clock.timezone, healthMemory: () => healthMemoryOn(identity), healthRead, google,
+      goal: () => onboardingGoal(storage.kv, quests, ownerRef).line(), question: id => summaryQuestion(storage.sql, id),
       findings: () => findingStore(storage.sql, memory, consentLedger(storage.sql, consentSwitches(this.env)), Date.now),
       // The build runs beside the serial lane, so each call queues on it.
       ask: (stage, text, version) => this.serial(() => askWelcome(stage, text, version)),
@@ -7038,7 +7078,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         await armTaskJobsWake(storage, made.job.due_at ?? Date.now());
       },
     };
-    const runtime: OwnerRuntime = { welcome, lookup, getToKnow, sentToday: () => sendsToday(sendsDeps()), machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}), ...(getToKnowApply ? { get_to_know_you: getToKnowApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, push, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, reviseBriefForBody, healthChanged, healthTrigger, interventionReview, announcementPass, announcementsCurrent, placeMoved, placeArrived, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
+    const runtime: OwnerRuntime = { welcome, onboardingSummary, lookup, getToKnow, sentToday: () => sendsToday(sendsDeps()), machine: { heartbeat: heartbeatApply, update_sweep: updateSweepApply, meeting_prep: meetingPrepApply, owner_lookup: lookupApply, ...(interventionApply ? { intervention: interventionApply } : {}), ...(getToKnowApply ? { get_to_know_you: getToKnowApply } : {}) }, macFollowup:responder.prompt, finalOutbox, settleFinal, push, owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, quests, autonomy: { grants, usesToday: grant => effects.count(grants.usage(grant, deps.now())) }, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, noticeFailures, nightly, briefs, healthSamples, healthRecompute: healthRecomputeRun, reviseBriefForBody, healthChanged, healthTrigger, interventionReview, announcementPass, announcementsCurrent, placeMoved, placeArrived, watches, cards, updateCheck, calendarPrepCurrent, traces, log, google,
       toolHandlers: () => replayHandlers,
       lookupToolHandlers: () => {
         const unlocated = webSearchOffered(this.env.BRAVE_SEARCH_API_KEY, ownerModels(modelAccess).provider) ? observeReads(webSearchHandler(this.env.BRAVE_SEARCH_API_KEY, fetch), this.lookupPages) : null;
@@ -7130,7 +7170,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           await assertCurrent?.();
           loops.setProactivity(parsed.data);
         } else if (action === 'timezone.set') {
-          if (!(await confirmZone(value ?? '', now, assertCurrent))) return false;
+          if (!(await confirmZone(value ?? '', now, assertCurrent, false, made === DEVICE_ZONE_MADE ? 'device' : 'owner'))) return false;
         } else if (action === 'spot.pin' || action === 'spot.unpin') {
           // The owner's pin goes at the end of its block; only the kinds the pinned blocks carry can be pinned.
           const claim = [...memory.claims(), ...memory.claims('promoted')].find((row) => row.id === spotId);
