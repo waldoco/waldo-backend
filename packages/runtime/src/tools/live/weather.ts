@@ -25,6 +25,13 @@ export const weatherPlaceBook = (call: SignedCall | null, doName: string | null)
   },
 });
 
+// The weather is for the place observed most recently, whichever phone sent it; null when no phone holds a place. Rows that do
+// not parse are passed over.
+export const newestPlace = (places: readonly unknown[]) => places.flatMap((row) => {
+  const stored = devicePlaceStoredV1Schema.safeParse(row);
+  return stored.success && stored.data.place ? [{ ...stored.data, place: stored.data.place }] : [];
+}).sort((a, b) => Date.parse(b.place.observed_at) - Date.parse(a.place.observed_at))[0] ?? null;
+
 type Unavailable = Extract<GetWeatherResult, { state: 'unavailable' }>['reason'];
 const REFUSALS: ReadonlySet<string> = new Set<Unavailable>(['consent_required', 'consent_withdrawn', 'not_linked']);
 const allowlist = triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('get_weather'));
@@ -44,11 +51,7 @@ export const getWeatherHandler = (book: WeatherPlaceBook, provider: WeatherKit, 
     const answer = (raw ?? {}) as { error?: unknown; places?: unknown };
     if (typeof answer.error === 'string') return unavailable(REFUSALS.has(answer.error) ? answer.error as Unavailable : 'read_failed');
     if (!Array.isArray(answer.places)) return unavailable('read_failed');
-    // The forecast is for the place observed most recently, whichever phone sent it.
-    const placed = answer.places.flatMap((row) => {
-      const stored = devicePlaceStoredV1Schema.safeParse(row);
-      return stored.success && stored.data.place ? [{ ...stored.data, place: stored.data.place }] : [];
-    }).sort((a, b) => Date.parse(b.place.observed_at) - Date.parse(a.place.observed_at))[0];
+    const placed = newestPlace(answer.places);
     if (!placed) return unavailable('no_place');
     let forecast: Awaited<ReturnType<WeatherKit['forecast']>>;
     try { forecast = await provider.forecast(placed.place.cell, placed.timezone, effectSignal(ctx?.runScope, WEATHER_CEILING_MS)); } catch { forecast = null; }
