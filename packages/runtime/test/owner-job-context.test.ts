@@ -9,6 +9,8 @@ import { ownerJobAdmission } from '../src/identity/surface-owner-admission';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { claimStore, type ClaimStore } from '../src/memory/claims';
 import { toolOutputLedger } from '../src/conversation/tool-output-ledger';
+import { toContextHealthMaterial } from '../src/channels/health-context';
+import { confirmWelcomeNode } from '../src/onboarding/welcome';
 
 const OWNER = '10000000-0000-0000-0000-000000000001';
 const CANARIES = ['0123456789abcdef', '1123456789abcdef', '2123456789abcdef'];
@@ -108,5 +110,51 @@ it('a scheduled job\'s context carries earlier internal results, never an earlie
     expect(seen).toContain('MARK-1451');
     expect(seen).toContain('get_tasks failed (unavailable)');
     for (const outside of ['SUBJ-1451', 'BODY-1451', 'all contacts', 'PAGE-1451', 'NOTE-1451']) expect(seen).not.toContain(outside);
+  });
+});
+
+// A run Waldo starts from outside content (the Brief) composes as an admitted owner job. The owner's confirmed body pattern rides
+// in its health block, read through the job's composed context; a job not built from outside content reads it from memory as
+// before, so its health block carries none. Every value is synthetic.
+it('a Brief job built from outside content carries the owner\'s confirmed body pattern with their shared health', async () => {
+  const id = env.OWNER_DO!.idFromName('job-context-patterns');
+  await runInDurableObject(env.OWNER_DO!.get(id), async (_instance, state) => {
+    const claims = claimStore(state.storage.sql, (work) => state.storage.transactionSync(work));
+    const at = new Date(Date.now() - 60_000).toISOString();
+    claims.add({ kind: 'observation', text: 'Takes a late call with the US team on Wednesdays', source: 'inferred', evidence: 'welcome build', origin: 'untrusted', source_ref: 'welcome:calendar:us-wed', area: 'work' }, at);
+    claims.add({ kind: 'observation', text: 'Recovery sits low on Thursday mornings', source: 'inferred', evidence: 'welcome build', origin: 'agent', source_ref: 'welcome:apple_health:recovery', area: 'body' }, at);
+    const spots = claims.claims().map((claim) => claim.id);
+    const node = claims.saveNode({ id: null, domain: 'body', label: 'Late calls, then a low next day', summary: 'A late US call comes before a low morning.', strength: 0.7, status: 'active', supporting_spots: spots }, at);
+    expect(confirmWelcomeNode(claims, node, at)).toBe(true);
+    const material = toContextHealthMaterial({
+      context: {
+        id: 'ctx-job', day: new Date().toISOString().slice(0, 10), compiled_at: at, basis: [{ source: 'apple', consent_epoch: 1 }],
+        recovery: { reason: 'missing_resting_signal' }, form: { reason: 'missing_resting_signal' }, weight: { reason: 'calendar_demand_unavailable' },
+        sleep_debt: { state: 'partial', confidence: 0.5, algorithm_version: 'sleep-debt.v2', activation: 'accepted' },
+        drivers: [], confidence: null, freshness: 'fresh', tags: [],
+      },
+      previous: null,
+    }, { timezone: 'UTC', now: () => new Date() }, undefined, { partial: true });
+    expect(material).not.toBeNull();
+    const run = async (sourceTaint: 'external' | undefined) => {
+      const admission = await ownerJobAdmission({ lookup: async () => ({ ownerId: OWNER, bindingRef: 'runtime:owner-demo', revision: '5', physicalDoId: 'actual-do' }),
+        expectedPhysicalDoId: 'actual-do', job: 'reminder', occurrenceKey: `brief-${sourceTaint ?? 'own'}:1`, occurredAt: Date.now() - 1 });
+      const requests: LLMGatewayRequest['request'][] = [];
+      const gateway: LLMGatewayAdapter = { complete: async (request) => {
+        requests.push(request.request);
+        return { ok: true, data: { model: request.request.model, text: 'A light day.', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } };
+      } };
+      const responder = createOwnerResponder('fixture', undefined, claims, undefined, undefined, [], undefined, false, undefined, undefined, gateway,
+        undefined, undefined, undefined, undefined, undefined, undefined, async () => material, undefined, undefined, undefined,
+        { jobHost: { admit: async () => admission, chain: (_admission, surfaceChain) => surfaceChain } });
+      await responder.prompt(`brief-${sourceTaint ?? 'own'}`, 'telegram-7', 'Write the morning Brief.', async (_hop, work) => work(), 'telegram', undefined, undefined, undefined, undefined, sourceTaint);
+      expect(requests).toHaveLength(1);
+      return JSON.stringify(requests[0]);
+    };
+    const brief = await run('external');
+    expect(brief).toContain('Patterns the owner confirmed about their body');
+    expect(brief).toContain('Late calls, then a low next day');
+    expect(brief).not.toContain('Recovery sits low on Thursday mornings');
+    expect(await run(undefined)).not.toContain('Patterns the owner confirmed about their body');
   });
 });

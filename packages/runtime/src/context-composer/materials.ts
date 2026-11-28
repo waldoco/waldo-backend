@@ -322,6 +322,13 @@ function viewMatchesNarrative(
 // without it and the model is told so. Any other refusal (a canary, a payload of another shape) still fails the whole run.
 export type PreparedHealth = Readonly<{ health: ContextHealthMaterial | null; withheld?: 'oversize' }>;
 
+// A pattern the sanitiser refuses is left out alone: the owner's health and their other patterns still reach the run.
+const preparedPattern = (pattern: string, canaries: CanaryTokens): readonly string[] => {
+  try { return [preparePromptSourceText(pattern, null, canaries, 'narrative')]; } catch (failure) {
+    if (failure instanceof FailClosed) return [];
+    throw failure;
+  }
+};
 export function prepareHealth(
   health: ContextHealthMaterial | null,
   canaries: CanaryTokens,
@@ -362,7 +369,7 @@ export function prepareHealth(
   provenance.add(
     health.source,
     { source_kind: 'derived_health_view' },
-    stableJson({ view: view.data, narrative: narrative.data }),
+    stableJson({ view: view.data, narrative: narrative.data, ...(health.patterns?.length ? { patterns: health.patterns } : {}) }),
     revisionRef,
   );
   const preparedNarrative = {
@@ -382,6 +389,7 @@ export function prepareHealth(
       upcoming_high_stakes: Object.freeze([...preparedNarrative.upcoming_high_stakes]),
     }),
     source: health.source,
+    ...(health.patterns?.length ? { patterns: Object.freeze(health.patterns.flatMap((pattern) => preparedPattern(pattern, canaries))) } : {}),
   }) as ContextHealthMaterial };
 }
 

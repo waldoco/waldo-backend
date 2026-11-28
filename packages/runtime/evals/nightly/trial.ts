@@ -30,6 +30,8 @@ export const TRIAGE_CARDS: readonly string[] = ['mail.send.proposed', 'calendar.
 import type { EmbeddingRunner } from '../../src/memory/semantic-recall';
 import { welcomeStageText, type WelcomeStage } from '../../src/onboarding/welcome';
 
+// How the transcript lists the patterns a join step wrote, one '- label: summary' line each.
+export const PATTERNS_WRITTEN = 'Patterns written:';
 export type Step =
   | Readonly<{ say: string }>
   // The owner sends a file with these words (world.files): the turn carries the keeper's note beside them.
@@ -54,6 +56,10 @@ export type Step =
   | Readonly<{ triage: readonly Change[] }>
   // One stage of the second welcome build reads this source text, as the owner object asks it, over an empty constellation.
   | Readonly<{ welcome: Readonly<{ stage: WelcomeStage; sources: readonly string[]; text: string }> }>
+  // The join pass runs as the nightly runs it, through the production constellation call over the owner's spots.
+  | Readonly<{ join: true }>
+  // The owner confirms the wording of every pattern the join wrote, in the app.
+  | Readonly<{ confirm_patterns: true }>
   // GENERAL_WAKE: Waldo wakes on its own with these changes since its last look, through the production wake prompt over the
   // world's calendar, tainted external, with the wake's tools; what it says reaches the owner as a notification.
   | Readonly<{ wake: string }>;
@@ -153,6 +159,7 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
   const transcript: JudgeInput['transcript'][number][] = [];
   let status: TrialRecord['status'] = 'ran';
+  let joined: string | undefined;
   let error: string | undefined;
   try {
     for (const step of scenario.steps) {
@@ -226,6 +233,15 @@ export const runTrial = async (scenario: TrialScenario, deps: Readonly<{ gateway
         // An answer that is not a spot list writes nothing, as the build settles that stage unavailable.
         const spots = (() => { try { return (JSON.parse(raw) as { spots?: readonly Readonly<{ area?: string; text?: string }>[] }).spots; } catch { return undefined; } })();
         transcript.push({ role: 'waldo', text: !Array.isArray(spots) ? '(the answer was not a spot list; nothing written)' : spots.length ? spots.map((spot) => `${spot.area}: ${spot.text}`).join('\n') : '(no spots)' });
+      } else if ('join' in step) {
+        transcript.push({ role: 'world', text: 'Overnight, the join pass reads every spot Waldo holds about the owner and writes the patterns it finds.' });
+        // An answer that is not JSON writes nothing, as the owner object logs a failed join and the night goes on.
+        const said = await responder.promote(`${scenario.id}-join`, { last: joined, promoted: (digest) => { joined = digest; } })
+          .catch((failure: unknown) => { if (failure instanceof SyntaxError) return 'the answer was not JSON'; throw failure; });
+        const patterns = world.patterns();
+        transcript.push({ role: 'waldo', text: patterns.length ? `${PATTERNS_WRITTEN}\n${patterns.map((pattern) => `- ${pattern}`).join('\n')}` : `(no pattern written: ${said})` });
+      } else if ('confirm_patterns' in step) {
+        transcript.push({ role: 'world', text: `In the app, the owner confirms ${world.confirmPatterns()} of Waldo's patterns as worded.` });
       } else if ('mail_arrives' in step) {
         world.deliver(step.mail_arrives);
         transcript.push({ role: 'world', text: `New mail arrives from ${step.mail_arrives.from}: "${step.mail_arrives.subject}".` });

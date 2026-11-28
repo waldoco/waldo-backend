@@ -76,8 +76,10 @@ export type LocalOwnerBinding = Readonly<{
 }>;
 
 // A Form or Recovery view rides with the zone narrative; a partial view, which carries neither zone, with its own.
-export type ZoneHealthMaterial = Readonly<{ view: FormHealthView | RecoveryHealthView; narrative: NarrativeContext; source: ContextSource }>;
-export type PartialHealthMaterial = Readonly<{ view: PartialHealthView; narrative: PartialHealthNarrative; source: ContextSource }>;
+// patterns: the owner's confirmed patterns about their body, each in its confirmed wording and never a reading, carried with
+// the health they rest on into a run Waldo starts (memory/outside-view.ts confirmedBodyPatterns).
+export type ZoneHealthMaterial = Readonly<{ view: FormHealthView | RecoveryHealthView; narrative: NarrativeContext; source: ContextSource; patterns?: readonly string[] }>;
+export type PartialHealthMaterial = Readonly<{ view: PartialHealthView; narrative: PartialHealthNarrative; source: ContextSource; patterns?: readonly string[] }>;
 export type ContextHealthMaterial = ZoneHealthMaterial | PartialHealthMaterial;
 // What a health source answers: the material, none (no row, or health not shared), or a read that failed. A failed read is
 // never none, so the model is not led to tell an owner who shares health that they share nothing.

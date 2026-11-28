@@ -279,15 +279,26 @@ export function snapshotResolvedInput(value: unknown): ResolvedInvocationInput {
   });
 }
 
+// The owner's confirmed body patterns a health material may carry: a constellation's wording is a label of at most 40 characters,
+// ': ' and a summary of at most 140.
+export const HEALTH_PATTERNS_MAX = 12;
+export const HEALTH_PATTERN_MAX_CHARS = 182;
 export function snapshotHealthMaterial(
   value: unknown,
   failure: ContextCompositionFailureCode,
 ): ContextHealthMaterial | null {
   if (value === null) return null;
-  const health = recordWithKeys(value, ['view', 'narrative', 'source'], failure);
+  const carriesPatterns = typeof value === 'object' && Object.hasOwn(value, 'patterns');
+  const health = recordWithKeys(value, ['view', 'narrative', 'source', ...(carriesPatterns ? ['patterns'] : [])], failure);
+  const patterns = health.patterns;
+  if (carriesPatterns && (!Array.isArray(patterns) || patterns.length > HEALTH_PATTERNS_MAX
+    || patterns.some((pattern) => typeof pattern !== 'string' || pattern.length === 0 || pattern.length > HEALTH_PATTERN_MAX_CHARS))) {
+    throw new FailClosed(failure);
+  }
   return Object.freeze({
     view: snapshotData(health.view) as DerivedHealthDestinationView,
     narrative: snapshotData(health.narrative) as NarrativeContext,
     source: snapshotContextSource(health.source, failure),
+    ...(carriesPatterns ? { patterns: Object.freeze([...(patterns as readonly string[])]) } : {}),
   }) as ContextHealthMaterial;
 }

@@ -7,7 +7,7 @@ import { APP_ONBOARDING_PATHS, appOnboardingRequest, ownerOnboardingHost } from 
 import { DEVICE_ZONE_MADE, ZONE_SOURCE_KEY, deviceZoneAnswer, deviceZoneApplies, zoneState, type ZoneSource } from './zone-source';
 import { APP_RATING_SUFFIX, appRatingRequest, replyRatings } from './app-rating';
 import { memoryUsedBook, memoryUsedFor } from './app-memory-used';
-import { outsideSafe } from '../memory/outside-view';
+import { confirmedBodyPatterns, outsideSafe } from '../memory/outside-view';
 import { requestBook } from '../onboarding/request-book';
 import { confirmWelcomeNode, correctWelcomeNode, welcomeBuild, welcomeSupportIds, type WelcomeStage } from '../onboarding/welcome';
 import { getToKnowApplier, startGetToKnow } from '../onboarding/get-to-know';
@@ -5380,7 +5380,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const rpc = signedRpc(this.env), doName = identity.get<string>('do_name');
       const row = rpc && doName ? await rpc('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName }) : null;
       const shown = row !== null && typeof row === 'object' ? toContextHealthMaterial(row as HealthContextRow, clock) : null;
-      return [...healthWordsOf(healthTriggerView(row, Date.now(), clock.timezone)), ...healthZoneWords(shown)];
+      return [...healthWordsOf(healthTriggerView(row, Date.now(), clock.timezone)), ...healthZoneWords(shown),
+        ...confirmedBodyPatterns(memory).flatMap((pattern) => [pattern, ...pattern.split(': ')])];
     });
     // One skill book for every surface of this owner: the reviewed catalog, its lifecycle
     // commands and the workspace receipts reach an app, iMessage or WhatsApp turn exactly as they reach a Telegram turn. The custody key is the

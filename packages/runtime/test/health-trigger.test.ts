@@ -558,6 +558,15 @@ describe('proposal checks', () => {
     expect(calendarEgressClear({ title: 'Sleepless in Seattle screening' }, words)).toBe(true);
   });
 
+  it('screens a confirmed body pattern\'s wording as written, capitals and punctuation included, never as a pattern of its own', () => {
+    const words = ['Late calls, then a low next day', 'Mornings (after calls)', 'A.M. low'];
+    expect(calendarEgressClear({ title: 'late calls, then a low next day' }, words)).toBe(false);
+    expect(calendarEgressClear({ title: 'Prep', description: 'mornings (after calls) are slow' }, words)).toBe(false);
+    expect(calendarEgressClear({ title: 'Call the US team' }, words)).toBe(true);
+    // A dot is a dot: "A.M. low" never matches "Abm low".
+    expect(calendarEgressClear({ title: 'Abm low' }, words)).toBe(true);
+  });
+
   it('cancels only an event, and asks Google to email guests only when the model said so', () => {
     const cancel = (notify: boolean | null) => parseHealthDecision(JSON.stringify({ kind: 'propose', action: 'cancel', item: 'e1', start: null, end: null, title: null, notify_guests: notify, reason: 'Clear the morning.' }), [REVIEW], NOW, TZ);
     expect(cancel(true)).toEqual({ kind: 'propose', args: { action: 'cancel', event_id: 'gcal-review-1', reason: 'Clear the morning.', send_updates: 'all' } });
