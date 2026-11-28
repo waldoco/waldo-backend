@@ -1,6 +1,7 @@
 import { withRequestTimeout } from '../identity/request-timeout';
 import { numericHealthIn } from '../scribe/sanitiser';
 import { pushNotificationSchema, type PushNotification } from '../../../contracts/src/ui/notification';
+import { offAppPayload } from '../health/cycle/off-app';
 
 // Expo's push service, which delivers through APNs and FCM. The directory releases only tokens registered under expo.
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
@@ -117,11 +118,14 @@ export const ownerPush = (deps: OwnerPushDeps) => async (kind: PushKind, approva
   deps.kv.put(key, { day, sent: sent + 1 });
   deps.spent?.(kind);
   if (kind === 'brief') deps.kv.put(BRIEF_DAY_KEY, day);
+  // A push leaves the app's own surface, so it carries no cycle-derived field, and one that cannot be checked is not sent (D6).
+  const messages = offAppPayload(devices.map(device => ({ to: device.token, body, data: data.data, sound: 'default' })));
+  if (messages === null) return deps.log('strip_failed', 0);
   let response: Response;
   try {
     response = await withRequestTimeout(signal => deps.send(EXPO_PUSH_URL, { method: 'POST', signal,
       headers: { 'content-type': 'application/json', accept: 'application/json', authorization: `Bearer ${deps.accessToken}` },
-      body: JSON.stringify(devices.map(device => ({ to: device.token, body, data: data.data, sound: 'default' }))) }));
+      body: JSON.stringify(messages) }));
   } catch { return deps.log('send_failed', 0); }
   if (!response.ok) return deps.log('send_refused', 0);
   let answer: unknown;

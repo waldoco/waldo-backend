@@ -6,6 +6,8 @@ import { dayLoadV2, type PassiveInput } from './scores/passive-load';
 import { ENERGY_WINDOWS_VERSION } from './scores/energy-windows';
 import { formCurve, formProjection, withProjection, type FormCurvePoint, type StoredFormCurve } from './scores/form-curve';
 import { stressCurve } from './scores/stress-curve';
+import { PHASE_WINDOW_DAYS, type CycleContext } from './scores/cycle';
+import { cyclePhaseOn, type PeriodDates } from './cycle/phase';
 import { shiftDay } from './scores/time';
 import { trainingLoad, type TrainingLoad, type WorkoutLoad } from './scores/training-load';
 import { formZone, heldZone, recoveryZone, weightZone } from './scores/zones';
@@ -58,6 +60,11 @@ export type ProducerDeps = Readonly<{
   // The owner's health settings (waldo.health_settings_read), given only while the coaching switch is on. With it, every row
   // is computed on the sleep need the owner stated, and a read that fails writes nothing rather than a row on another need.
   readSettings?: () => Promise<unknown>;
+  // Given only while HEALTH_CYCLE is "1": the owner's period dates (waldo.cycle_periods_read), which the database answers only while
+  // cycle_context is live. With them the live rows read HRV, resting heart rate, wrist temperature and breathing rate against the
+  // owner's own same-phase days over the last 90 (scores/cycle.ts), and a row the phase changed carries reading_basis. A read that
+  // fails, is refused or does not parse changes nothing: the rows are computed exactly as without it. Backfilled rows never use it.
+  readCycle?: () => Promise<unknown>;
   // Told which step failed a run that ends failed, and the database's closed answer to it: no owner, day, value or payload.
   // A run calls it at most once, for the first failure; a late day's backfill never fails a run, so it is never told.
   onFailure?: (failure: ProducerFailure) => void;
@@ -102,6 +109,9 @@ const SIGNALS: readonly string[] = ['sleep_duration', 'sleep_midpoint', 'overnig
 // The night's vital signals feed only the drivers. They are read on their own, beside the scores' read: a point signal
 // such as breathing rate can be dense, and a read that reached its row cap would shorten the scores' baseline.
 const VITAL_SIGNALS: readonly string[] = ['respiratory_rate', 'spo2', 'wrist_temperature', 'walking_heart_rate_average'] satisfies readonly HealthSignal[];
+// What the phase prior reads over its lookback: the four phase-read signals, and the night they belong to.
+const PHASE_SIGNALS: readonly string[] = ['sleep_duration', 'sleep_midpoint', 'overnight_hrv', 'resting_heart_rate', 'respiratory_rate', 'wrist_temperature'] satisfies readonly HealthSignal[];
+const MAX_PERIODS = 64;
 const NIGHT_SIGNALS: readonly string[] = ['respiratory_rate', 'spo2', 'wrist_temperature'] satisfies readonly HealthSignal[];
 // The passive load's readings are read on their own too: 24 bins and 24 step windows a day would otherwise eat the scores' row cap.
 const PASSIVE_SIGNALS: readonly string[] = ['heart_rate_bins_window', 'steps_window'] satisfies readonly HealthSignal[];
@@ -194,6 +204,20 @@ export const parseSeries = (raw: unknown): Parsed => {
     sources.push({ source: s.source, epoch: s.consent_epoch as number, truncated: s.truncated === true, readings: s.samples.map(reading).filter((r): r is Reading => r !== null) });
   }
   return { kind: 'series', series: { readAt: body.read_at, sources } };
+};
+
+// The period dates of a cycle_periods_read answer, or null for anything else: a refusal, no answer, or a shape that is not dates.
+export const periodsOf = (raw: unknown): PeriodDates[] | null => {
+  const periods = asRecord(raw)?.periods;
+  if (!Array.isArray(periods) || periods.length > MAX_PERIODS) return null;
+  const out: PeriodDates[] = [];
+  for (const entry of periods) {
+    const period = asRecord(entry);
+    if (!period || typeof period.start_date !== 'string' || !DAY.test(period.start_date)) return null;
+    if (period.end_date !== null && (typeof period.end_date !== 'string' || !DAY.test(period.end_date))) return null;
+    out.push({ start: period.start_date, end: period.end_date as string | null });
+  }
+  return out;
 };
 
 // A read that reached its row cap returned the newest rows, so the oldest day it holds may be partial. That day is
@@ -586,6 +610,10 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
     const vitalsRead = deps.readSeries({ ...range, signals: VITAL_SIGNALS }).then(parseSeries, (): Parsed => ({ kind: 'failed' }));
     const passiveOn = deps.dayLoad === true && (deps.passiveLoad?.length ?? 0) > 0;
     const passiveRead = passiveOn ? deps.readSeries({ ...range, signals: PASSIVE_SIGNALS }).then(parseSeries, (): Parsed => ({ kind: 'failed' })) : null;
+    // The cycle reads start beside the others. Neither is ever logged: a date or a phase must not reach a log line (D9), and
+    // without them every row is the one computed without cycle context, which is the safe outcome.
+    const cycleRead = deps.readCycle ? deps.readCycle().then(periodsOf, (): null => null) : null;
+    const lookbackRead = deps.readCycle ? deps.readSeries({ from: shiftDay(today, -PHASE_WINDOW_DAYS), to: today, signals: PHASE_SIGNALS }).then(parseSeries, (): Parsed => ({ kind: 'failed' })) : null;
     const seriesAnswer = await scoresRead, parsed = parseSeries(seriesAnswer);
     if (parsed.kind === 'failed') return failed('series_read', answerCode(seriesAnswer));
     if (parsed.kind !== 'series') return parsed.kind;
@@ -651,6 +679,18 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
         if (outcome === 'refused') break;
       }
     };
+    // The phase of each day the prior may read, from the owner's own periods, over the lookback days of the source the day is
+    // computed from, read under the same consent epoch as its scores' readings.
+    const periods = cycleRead && await cycleRead;
+    const lookback = lookbackRead && await lookbackRead;
+    const cycleOf = (chosen: Source): CycleContext | undefined => {
+      if (!periods || lookback?.kind !== 'series') return undefined;
+      const same = lookback.series.sources.find(other => other.source === chosen.source && other.epoch === chosen.epoch);
+      if (!same || same.truncated) return undefined;
+      const days = daysOf(same.readings, at.timezone).days;
+      const placed = new Set([...days.map(day => day.day), shiftDay(today, -1), today]);
+      return { phases: new Map([...placed].map(day => [day, cyclePhaseOn(day, periods, '1')])), lookback: days };
+    };
     const ask = { parts: deps.scoreParts === true, usual: deps.usual === true };
     const outcomes: ReturnType<typeof writeOutcome>[] = [];
     // Only the provisional engine names its windows, even when there are none; the earlier engine never backfills.
@@ -659,7 +699,8 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
       const chosen = chooseFor(targetDay);
       const { readingDays, travelled, days } = recordsOf(chosen);
       const input: DailyScoresInput = { access: 'granted', targetDay, days, sleepNeedMinutes: stated.minutes, asOf: series.readAt };
-      const scores = deps.compute({ ...input, ...(ask.parts ? { parts: true } : {}), ...(ask.usual ? { usual: true } : {}) });
+      const cycle = cycleOf(chosen);
+      const scores = deps.compute({ ...input, ...(ask.parts ? { parts: true } : {}), ...(ask.usual ? { usual: true } : {}), ...(cycle ? { cycle } : {}) });
       provisional ||= scores.windows !== undefined;
       const nothingToShow = [scores.recovery, scores.form, scores.weight].every(p => p.state === 'unavailable');
       if (nothingToShow && !readingDays.some(d => d.day === targetDay)) continue;
@@ -690,6 +731,7 @@ export const produceHealthScores = async (deps: ProducerDeps, at: Readonly<{ now
         ...(deps.dayLoad ? orNothing('day load', () => ({ day_load: dayLoadOf(chosen, targetDay) })) : {}),
         ...(forToday && deps.stressCurve ? orNothing('stress curve', () => { const curve = stressCurve({ targetDay, days, asOf: series.readAt }); return curve && { stress_curve: curve }; }) : {}),
         ...(curve ? { form_curve: withProjection(curve, projected) } : {}),
+        ...(scores.basis ? { reading_basis: scores.basis } : {}),
       };
       const answer = await deps.writeContext(JSON.stringify(row));
       const written = writeOutcome(answer);

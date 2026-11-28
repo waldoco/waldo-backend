@@ -1,5 +1,6 @@
 import type { DerivedSleepDebtTrend, FormZone, LoadZone, RecoveryZone } from '../../../../contracts/src/health/crs';
 import { HEALTH_SCORE_INPUT_NAMES, type HealthScoreInput } from '../../../../contracts/src/health/signals';
+import type { CycleContext } from './cycle';
 
 // Reasons come from the H1 contract's healthScoreUnavailableReasonV1Schema. Only those the math
 // itself can produce appear here; the producer decides link and consent state and passes it in.
@@ -76,6 +77,8 @@ export interface DailyScoresInput {
   // owner's usual bands (usual); every score, zone and coverage in it is the same as with them off.
   readonly parts?: boolean;
   readonly usual?: boolean;
+  // Present only for an owner with cycle_context live and the engine on (HEALTH_CYCLE "1").
+  readonly cycle?: CycleContext;
 }
 
 export interface Unavailable { readonly state: 'unavailable'; readonly reason: UnavailableReason }
@@ -143,6 +146,8 @@ export interface DailyScores {
   // the owner's usual bands. They describe the scores above and change none of them.
   readonly components?: PartsByPillar;
   readonly usual?: readonly UsualRow[];
+  // Present only when the owner's cycle phase changed the reading. App surfaces only.
+  readonly basis?: Readonly<{ kind: 'cycle_phase'; explanation: string }>;
 }
 
 // What a component stood on, carried out of the computation that scored it: the signed distance from the owner's usual in

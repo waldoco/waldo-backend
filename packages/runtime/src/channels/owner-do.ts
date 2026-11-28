@@ -47,6 +47,9 @@ import { dispatchProviderCall, HEALTH_PROVIDER_PATH, verifiedProviderCall } from
 import { whoopOwner, WHOOP_SYNC_EVERY_MS, WHOOP_SYNC_ID, type WhoopOwner } from '../health/providers/whoop-owner';
 import { whoopConfig } from '../health/providers/whoop-routes';
 import { dailyScoresFor } from '../health/scores';
+import { cycleEngineOn } from '../health/cycle/phase';
+import { invokeCycle } from './app-cycle';
+import { offAppRoute } from '../health/cycle/off-app';
 import { passiveLoadSources } from '../health/producer';
 import { invokeHealth } from './app-health';
 import { calendarEgressRuns, comingItemsFrom, healthCardBudget, healthTriggerBook, healthTriggerDueAt, healthTriggerView, healthWordsOf, runHealthTrigger, healthNoticeCurrent, HEALTH_TRIGGER_ID, type HealthTriggerOutcome } from '../health/trigger';
@@ -529,6 +532,8 @@ const logAppReadFailure = (hop: 'app_history_read' | 'app_controls_read' | 'app_
 };
 const offsetKeyOf = (channel: ChannelKind) => channel === 'whatsapp' ? 'wa_offset' : channel === 'app' ? 'app_offset' : channel === 'imessage' ? 'imessage_offset' : 'offset';
 // Channels whose replies never use Telegram transport, commands or reactions.
+// Which surface is the owner's own authenticated app, where cycle-derived fields may be shown (ADR-0085 D6).
+const OWNER_APP_SURFACE: Readonly<Record<ChannelKind, boolean>> = { app: true, telegram: false, whatsapp: false, imessage: false };
 const nativeSurface = (channel: ChannelKind) => channel === 'app' || channel === 'imessage';
 // Surfaces where a send can wait for the owner instead of going out, each with how to tell that a send would go out now:
 // WhatsApp, outside its 24-hour window (whatsapp-window.ts), and iMessage, which sends nothing at once outside a turn (its
@@ -3785,7 +3790,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       // iMessage sends nothing itself outside a turn: each part goes to the bridge through the iMessage outbox.
       imessage: inner => iMessageScheduledRoute(inner, (id, text) => this.queueIMessageCopy(id, text)),
     };
-    return windowed[surface]?.(route) ?? route;
+    const onSurface = windowed[surface]?.(route) ?? route;
+    // Off the owner's own app, every payload loses its cycle-derived fields first, and one that cannot be checked is not sent (D6).
+    return OWNER_APP_SURFACE[surface] ? onSurface : offAppRoute(onSurface);
   }
 
   // Whether the pass may start its next machine turn (a task report, a check-back, a day card, a mail turn): it needs time
@@ -6079,6 +6086,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       readScores: day => healthRpc('scores_read', JSON.stringify({ day })), readHistory: days => healthRpc('scores_history', JSON.stringify({ days })),
       compute: dailyScoresFor(this.env.HEALTH_PROVISIONAL_SCORES), trainingLoad: this.env.HEALTH_TRAINING_LOAD === '1', scoreParts: this.env.HEALTH_SCORE_PARTS === '1', usual: this.env.HEALTH_USUAL === '1', dayLoad: this.env.HEALTH_DAY_LOAD === '1', passiveLoad: passiveLoadSources(this.env.HEALTH_PASSIVE_LOAD), stressCurve: this.env.HEALTH_STRESS_CURVE === '1', formCurve: this.env.HEALTH_FORM_CURVE === '1', readCurves: () => healthRpc('form_curves_read', '{}'),
       ...(this.env.HEALTH_COACHING === '1' ? { readSettings: () => healthRpc('settings_read', '{}') } : {}), readDemand: range => this.setup('app').calendarDemand(range), onZoneChange: healthChanged,
+      ...(cycleEngineOn(this.env.HEALTH_CYCLE) ? { readCycle: () => invokeCycle(signedRpc(this.env), identity.get<string>('do_name') ?? '', 'periods_read', '{}') } : {}),
     }, forgetDemand: day => forgetDemandDay(storage.sql, day, Date.now()),
       wakes: { enabled: () => schedPrefs.enabled('health_proposals'), woken: healthWoken,
         readContext: readModelHealth, noted: startedAt => (this.env.WORKOUT_WAKE === '1' && workoutStillFresh(storage.kv.get(WORKOUT_NOTED_KEY), startedAt) ? ['workout_ended'] : []) } });

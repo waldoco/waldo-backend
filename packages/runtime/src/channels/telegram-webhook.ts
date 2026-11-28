@@ -97,6 +97,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   HEALTH_PASSIVE_LOAD?: string;
   HEALTH_STRESS_CURVE?: string;
   HEALTH_COACHING?: string;
+  // HEALTH_CYCLE: "1" lets the health recompute read the owner's period dates and read their signals against their own phase.
+  HEALTH_CYCLE?: string;
   // "1" lets a health proposal, and a chat card, swap an event for another in its slot (a hard workout for an easy one) by
   // renaming it; the connector-proxy function must be deployed with the rename first.
   HEALTH_EASE_WORKOUT?: string;

@@ -4,6 +4,7 @@ import type { OwnerDirectoryEnv } from '../../identity/owner-directory';
 import { agentMailDirectory } from './handles';
 import { agentMailInbox } from './inbox';
 import { renderAgentMail, type AgentMailParts, type AgentMailRendered } from './render';
+import { offAppPayload } from '../../health/cycle/off-app';
 
 // Waldo sending as itself from the owner's Waldo address, through the Cloudflare Email Service binding. Only an approval
 // card sends: the card freezes the rendered words and the digest of the parts, and approving re-renders the stored draft
@@ -116,7 +117,12 @@ export const agentMailDeskDep = (env: AgentMailSendEnv & OwnerDirectoryEnv, stor
       if (!parts || !directory) return null;
       try { return (await directory.current())?.handle === p.handle ? parts : null; } catch { return null; }
     },
-    send: parts => on.sender.send(parts),
+    // Mail leaves the app's own surface, so it carries no cycle-derived field, and parts that cannot be checked are not sent (D6).
+    send: parts => {
+      const clean = offAppPayload(parts);
+      if (clean === null) return Promise.reject(new Error('off-app payload refused'));
+      return on.sender.send(clean);
+    },
     sent: (messageId, p) => agentMailInbox(storage).recordOutbound(messageId, p.in_reply_to),
   };
 };
