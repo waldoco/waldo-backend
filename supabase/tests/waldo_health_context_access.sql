@@ -11,8 +11,8 @@ select is(
     'freshness:text:YES:<null>', 'tags:_text:NO:''{}''::text[]', 'evidence:jsonb:NO:''[]''::jsonb',
     'created_at:timestamptz:NO:now()', 'updated_at:timestamptz:NO:now()', 'sleep_debt:jsonb:YES:<null>',
     'windows:jsonb:YES:<null>', 'windows_version:text:YES:<null>', 'backfilled:bool:YES:<null>', 'training_load:jsonb:YES:<null>',
-    'components:jsonb:YES:<null>', 'usual:jsonb:YES:<null>', 'day_load:jsonb:YES:<null>', 'stress_curve:jsonb:YES:<null>', 'form_curve:jsonb:YES:<null>']::text[],
-  'the fourteen historical columns, sleep_debt, the energy windows with their version, backfilled, the training load, the parts and usual bands, the day load, the stress curve and the Form curve, with exact types, nullability and defaults');
+    'components:jsonb:YES:<null>', 'usual:jsonb:YES:<null>', 'day_load:jsonb:YES:<null>', 'stress_curve:jsonb:YES:<null>', 'form_curve:jsonb:YES:<null>', 'changes:jsonb:YES:<null>']::text[],
+  'the fourteen historical columns, sleep_debt, the energy windows with their version, backfilled, the training load, the parts and usual bands, the day load, the stress curve, the Form curve and what changed, with exact types, nullability and defaults');
 select is(
   (select array_agg(conname::text || ':' || pg_get_constraintdef(oid) order by conname)
    from pg_constraint where conrelid='public.health_context_daily'::regclass),

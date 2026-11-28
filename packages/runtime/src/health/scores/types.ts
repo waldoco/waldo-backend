@@ -110,6 +110,7 @@ export interface Available<Zone> {
   // Provisional and asked for only. Carried to the day's result, which removes them from the pillar.
   readonly parts?: readonly PartRow[];
   readonly usual?: readonly UsualRow[];
+  readonly readings?: readonly TodayReading[];
 }
 export type RecoveryResult = Available<RecoveryZone> | Unavailable;
 export type FormResult = Available<FormZone> | Unavailable;
@@ -143,7 +144,13 @@ export interface DailyScores {
   // the owner's usual bands. They describe the scores above and change none of them.
   readonly components?: PartsByPillar;
   readonly usual?: readonly UsualRow[];
+  // Asked for with the parts or bands: today's value of each reading that has a usual band, in the band's unit, and which way it
+  // scores. Never served or stored; the day's changes are made from it.
+  readonly readings?: readonly TodayReading[];
 }
+// One reading of the day against its usual band. 'none' is a reading that feeds no score (the driver vitals, active energy), so
+// no direction of it is better or worse.
+export type TodayReading = Readonly<{ signal: string; method: string | null; value: number; sense: 'higher' | 'lower' | 'near' | 'none' }>;
 
 // What a component stood on, carried out of the computation that scored it: the signed distance from the owner's usual in
 // spreads (null for a part judged against a need), the own days and the share of the centre that is the owner's own data
