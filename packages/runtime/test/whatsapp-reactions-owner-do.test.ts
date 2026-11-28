@@ -4,6 +4,7 @@
 // answers; a reply quotes the owner's message only when a later one came in after it; a static sticker is read as an image.
 import { env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
+import { noteUndelivered } from '../src/channels/delivery-notes';
 import { OwnerDO } from '../src/channels/owner-do';
 import { drainWhatsAppTurns } from './helpers/whatsapp-drain';
 
@@ -31,7 +32,7 @@ type GraphCall = Record<string, unknown> & { type?: string; status?: string; con
 
 beforeEach(() => { model.requests = []; model.react = null; });
 
-const whatsappOwner = (name: string, run: (deliver: (...messages: Record<string, unknown>[]) => Promise<void>, graph: GraphCall[], owner: OwnerDO) => Promise<void>) =>
+const whatsappOwner = (name: string, run: (deliver: (...messages: Record<string, unknown>[]) => Promise<void>, graph: GraphCall[], owner: OwnerDO, storage: DurableObjectStorage) => Promise<void>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
     const bytes = new Map<string, Uint8Array>();
     const graph: GraphCall[] = [];
@@ -69,7 +70,7 @@ const whatsappOwner = (name: string, run: (deliver: (...messages: Record<string,
       expect(response.status).toBe(200);
       await drainWhatsAppTurns(instance);
     };
-    try { await run(deliver, graph, instance); } finally { network.mockRestore(); await state.storage.deleteAlarm(); }
+    try { await run(deliver, graph, instance, state.storage); } finally { network.mockRestore(); await state.storage.deleteAlarm(); }
   });
 
 const sends = (graph: readonly GraphCall[]) => graph.filter(call => call.status !== 'read');
@@ -95,6 +96,19 @@ it('the owner\'s reaction on Waldo\'s reply starts no turn and reaches their nex
     await deliver(text('and tomorrow?', 'wamid.after'));
     expect(lastMessage()).toContain('and tomorrow?');
     expect(lastMessage()).not.toContain('Owner reacted');
+  });
+}, 60_000);
+
+it('a message of Waldo\'s that never reached the owner reaches their next turn as one line, once', async () => {
+  await whatsappOwner('wa-delivery-note', async (deliver, _graph, _owner, storage) => {
+    noteUndelivered(storage.kv, { id: 'update:1', trace: 't', payload: { chat_id: 1, text: 'Your 15:00 moved to 16:00.' }, digest: 'd', ownerSubject: SUBJECT, doName: 'wa-delivery-note',
+      status: 'blocked', reason: 'provider_failed', dueAt: 0, createdAt: Date.now(), attempts: 1, update: { recordId: 1 } }, 'telegram', 'UTC', Date.now());
+    await deliver(text('did you tell me about my 3pm?', 'wamid.ask.note'));
+    expect(lastMessage()).toContain('[Delivery: your update card for Telegram');
+    expect(lastMessage()).toContain('did not reach the owner (the provider refused it)');
+    expect(lastMessage()).toContain('Your 15:00 moved to 16:00.');
+    await deliver(text('ok', 'wamid.ask.after'));
+    expect(lastMessage()).not.toContain('[Delivery:');
   });
 }, 60_000);
 

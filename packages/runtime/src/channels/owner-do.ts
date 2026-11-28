@@ -96,11 +96,11 @@ import { compactChatTimeline, whatsappTimelineContext, type ChatTimelineHost, ty
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, TELEGRAM_TURN_DEADLINE_MS, needsRecoveryNotice, ownerInboxDue, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
 import { ALARM_FAILED_LANE_KEY, ALARM_RETRY_DUE_KEY, APP_INBOX_DUE_KEY, COMPACTION_DUE_KEY, armCompactionWake, NO_SCHEDULE_WAKE, TASK_JOBS_DUE_KEY, WHATSAPP_PENDING_DUE_KEY, AlarmLaneFailure, alarmPass, alarmRetryDelay, armAlarm, armTaskJobsWake, armWhatsappPendingWake, commitTaskJobsWake, holdTaskJobsDue, heldLane, nothingDueBy, persistInboxWake, persistTransportWake, rearmSharedAlarm, runLane, type AlarmLane } from '../scheduler/alarm-slot';
-import { APP_COPY_UNTIL, APP_REPLIES, APP_THREAD, SEND_NOW_ONLY, admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
-import { TelegramFinalOutbox, standingOrderFinalId, dayCardFinalId, tookPart, observeSurfaceStatuses, outboxRunNotes, unconfirmedCards, redactMailFollowupEntries, redactCalendarPrepEntries, redactJobReportEntries, type CalendarPrepReceipt, type FinalRecord } from './telegram-final-outbox';
+import { APP_COPY_OF, APP_REPLIES, APP_THREAD, SEND_NOW_ONLY, admittedRoute, routedDelivery, withPlainCopy, type OutboxRoute } from './delivery-routes';
+import { TelegramFinalOutbox, standingOrderFinalId, dayCardFinalId, tookPart, observeSurfaceStatuses, outboxRunNotes, unconfirmedCards, redactMailFollowupEntries, redactCalendarPrepEntries, redactJobReportEntries, type CalendarPrepReceipt, type CopyOf, type FinalRecord } from './telegram-final-outbox';
 import { computeAdmission } from '../delivery-gate/gate';
 import { drawingOn, interruptBook, interruptLimits, reopensAt } from './interruptions';
-import { ANNOUNCEMENT_MESSAGE_FRESH_MS, ANNOUNCEMENTS_CHECKED_KEY, ANNOUNCEMENTS_RETRY_KEY, ANNOUNCEMENTS_RETRY_MS, announcementPassKey, requiresOf, type AnnouncementRow, announcementBook, announcementCardSection, announcementPrompt, announcementsFeedSchema, runAnnouncementPass, switchOn, WHATS_NEW_WINDOW_MS, whatsNewSection, type AnnouncementOutcome, type AnnouncementPrerequisite } from './announcements';
+import { ANNOUNCEMENTS_CHECKED_KEY, ANNOUNCEMENTS_RETRY_KEY, ANNOUNCEMENTS_RETRY_MS, announcementPassKey, requiresOf, type AnnouncementRow, announcementBook, announcementCardSection, announcementPrompt, announcementsFeedSchema, runAnnouncementPass, switchOn, WHATS_NEW_WINDOW_MS, whatsNewSection, type AnnouncementOutcome, type AnnouncementPrerequisite } from './announcements';
 import { armInterventionReview, interventionApplier, interventionEveryMs, interventionSpec, INTERVENTION_REVIEW_ID, lookCause, MOVE_PULL_KEY, movePullAllowed, nextLocalHour, nextLookAt } from './interventions';
 import { DeliveryGateStore } from '../delivery-gate/store';
 import { ownerTurnTrace, type OwnerTurnEnvelope } from './owner-turn-envelope';
@@ -180,7 +180,7 @@ import { commonRuntimeDiagnostic } from './common-runtime-diagnostic';
 import { schedulePreferences, schedulePreferencesLine, schedulePreferenceHandlers, applySchedulePreferences, gateScheduleExecutors, reconcileSchedulePreferences, replanDayCards, sweepWanted, type ScheduleHold, type ScheduleKind } from './schedule-preferences';
 import { armBriefSweep, BRIEF_SWEEP_ID, briefSweepRuns, eventBriefs, calendarPrepDigest, CALENDAR_PREP_FORMAT, notesFrom, prepPushBody, type PrepGate } from './event-briefs';
 import { mergedSteps, whyJson, withWhy, type TrailStep, type WhyHolder } from '../tools/why-trail';
-import { applyDayPlan, applyReplan, applyWake, ownerCardTime, setCardTime, parseWakeReply, takeWakeTurn, wakeTarget, wakeTurnsPerDay, heldCardsOn, coalesced, dayCardsWhy, movableCards, SET_FOR_TODAY, dayPlanTraceDetail, armDayCards, cardDeliveries, dayCardsLine, cardExpiry, cardFor, isClock, composeDayCard, dayIsOwnText, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, cardStatus, retryDayCard, runDayCard } from './day-cards';
+import { applyDayPlan, applyReplan, applyWake, ownerCardTime, setCardTime, parseWakeReply, takeWakeTurn, wakeTarget, wakeTurnsPerDay, heldCardsOn, coalesced, dayCardsWhy, movableCards, SET_FOR_TODAY, dayPlanTraceDetail, armDayCards, cardDeliveries, dayCardsLine, cardFor, isClock, composeDayCard, dayIsOwnText, dayPlanBook, dayWindow, isSkip, latestDelivery, parseDayPlan, readCalendar, cardStatus, retryDayCard, runDayCard } from './day-cards';
 import { DAY_CARDS, dayPlanInput, planningCard, waitingSection, type CardId } from '../prompt/day-cards';
 import { channelStyle, type ReadsAs } from '../prompt/update-cards';
 import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview, waitingApprovals } from './dashboard-overview';
@@ -193,7 +193,7 @@ import { meetingPrepApplier, meetingPrepSpec } from './meeting-prep';
 import { prepGranola } from './meeting-prep-granola';
 import { prepFireflies } from './meeting-prep-fireflies';
 import { briefBodyAfter, briefBodyBefore, BRIEF_BODY_KEY, BRIEF_BODY_TOOLS, briefBodyPrompt, briefBodyRevision, recoveryScored, type BriefBodyCode } from './brief-revision';
-import { emitObserved, observedEvents, triageHold, UPDATE_CARD_FRESH_MS, UPDATE_JUDGE_WAKE_KEY, updateSweepApplier, updateSweepCheck, updateSweepTools, type ObservedSubscriber, type SweepGate } from './update-sweep';
+import { emitObserved, observedEvents, triageHold, UPDATE_JUDGE_WAKE_KEY, updateSweepApplier, updateSweepCheck, updateSweepTools, type ObservedSubscriber, type SweepGate } from './update-sweep';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { recallChain, recallChainOn } from '../history/recall-chain';
 import { searchHistoryHandler } from '../tools/live/search-history';
@@ -275,12 +275,13 @@ import { healthMemoryOn, memoryFlushHooks, setHealthMemory } from './health-memo
 import { capacityBudgetContext, cardCapacityNote, recentBlocks, recentMoves, runCapacityPass } from './capacity';
 import { capacityContext } from '../prompt/capacity';
 import { renderHealth } from '../context-composer/prompt';
-import { chooseProactiveSurface, linkingAppRows, proactiveBothDefault, proactiveOnOwnerChain, proactiveReads, proactiveSurface, unaskedRecord, proactiveSurfaceReceipt, expiredCode, type ChatLinks, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, answersOwnerIn, ANSWERS_WHERE_ASKED, waldoFirstWaitingFor, wantedTargets, whatsappSubjects, withCopy, IMESSAGE_COPY_PREFIX, WHATSAPP_COPY_FRESH_MS, WHATSAPP_COPY_PREFIX, type ProactiveTarget } from './proactive-surface';
+import { chooseProactiveSurface, linkingAppRows, proactiveBothDefault, proactiveOnOwnerChain, proactiveReads, proactiveSurface, unaskedRecord, proactiveSurfaceReceipt, expiredCode, boundForWhatsApp, recordSurface, supersededBy, copyOf, copySupersedes, type ChatLinks, proactiveTargets, refusingUnreachableCheckBacks, rememberWhatsAppSubject, answersOwnerIn, ANSWERS_WHERE_ASKED, waldoFirstWaitingFor, wantedTargets, whatsappSubjects, withCopy, IMESSAGE_COPY_PREFIX, WHATSAPP_COPY_PREFIX, type ProactiveTarget } from './proactive-surface';
 import { appApprovalsRequest } from './app-approvals';
 import { WHATSAPP_LINK_CONFIRM_ACTION, whatsappLinkConfirmAction, whatsappLinkConfirmPage } from './whatsapp-link-console';
 import { WHATSAPP_LINK_PATH, whatsappLinkDirectory } from '../identity/whatsapp-link';
 import { WA_LAST_INBOUND_ID_KEY, WHATSAPP_PARTIAL_NOTICE, whatsappAckId, whatsappForwarded, claimNewWhatsAppMessages, plainOwnerText, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim, whatsappTurnMessage, type WaIngressMessage } from './whatsapp-api';
 import { whatsAppWaldoNumber } from './whatsapp-send-url';
+import { forgetDeliveryNotes, noteUndelivered, takeDeliveryNotes } from './delivery-notes';
 import { forgetWhatsAppContext, noteWhatsAppReaction, recordWhatsAppSent, takeWhatsAppReactionNotes, whatsappSentText } from './whatsapp-context';
 import { SEND_UNASKED, bindWhatsAppNumber, deliverHeldWhatsApp, deliverWhatsAppFileInWindow, forgetHeldWhatsApp, whatsappHeld, whatsappKnock, whatsappKnockFailed, recordWhatsAppInbound, releaseWhatsAppOutbox, templateFor, whatsappWindowCaller, whatsappWindowOpen, whatsappWindowRefused, whatsappWindowRoute, whatsappTemplates, markWindowPushed, windowPushed } from './whatsapp-window';
 import { readDriveHandler } from '../tools/live/drive';
@@ -740,8 +741,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     try {
       const runtime = this.setup(told.channel);
       if (runtime.owner === 0) throw new Error('owner_unbound');
-      await runtime.finalOutbox.enqueue({ id: trace, trace, payload: { chat_id: runtime.owner, text: told.text }, ownerSubject: String(runtime.owner),
-        doName: this.ctx.storage.kv.get<string>('do_name') ?? '', expiresAt: Date.now() + 86_400_000, ...(told.thread ? { appThread: told.thread } : {}) });
+      const outcome = { id: trace, trace, payload: { chat_id: runtime.owner, text: told.text }, ownerSubject: String(runtime.owner),
+        doName: this.ctx.storage.kv.get<string>('do_name') ?? '', ...(told.thread ? { appThread: told.thread } : {}) };
+      await runtime.finalOutbox.enqueue(outcome, { supersedes: supersededBy(outcome) });
       console.log(JSON.stringify({ trace, hop: 'connect_app_settled', ok: true, detail: told.channel }));
     } catch (error) {
       console.log(JSON.stringify({ trace, hop: 'connect_app_settled', ok: false, error: error instanceof Error ? error.message : String(error) }));
@@ -1805,16 +1807,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return new IMessageFinalOutbox(this.ctx.storage).freezeProactive(id, commandId, targetOf(latest), redactSecretUrls(text).text).commandId;
   }
   // How each surface takes a copy of a message the app already has: under that message's id, behind the surface's prefix.
-  private readonly copyQueues: Readonly<Record<ProactiveTarget, Readonly<{ prefix: string; queue(id: string, text: string, appAt: number, until?: number): Promise<void> }> | null>> = {
+  private readonly copyQueues: Readonly<Record<ProactiveTarget, Readonly<{ prefix: string; queue(id: string, text: string, copyOf?: CopyOf): Promise<void> }> | null>> = {
     app: null,
-    whatsapp: { prefix: WHATSAPP_COPY_PREFIX, queue: (id, text, appAt, until) => this.queueWhatsAppCopy(id, text, appAt, until) },
+    whatsapp: { prefix: WHATSAPP_COPY_PREFIX, queue: (id, text, kind) => this.queueWhatsAppCopy(id, text, kind) },
     imessage: { prefix: IMESSAGE_COPY_PREFIX, queue: async (id, text) => { await this.queueIMessageCopy(id, text); } },
   };
   private copiedTo(target: ProactiveTarget, deliver: ScheduledAppDelivery): ScheduledAppDelivery {
     const copy = this.copyQueues[target];
     if (!copy) return deliver;
     const { log } = this.setup('app');
-    return withCopy(copy.prefix, deliver, (id, text, until) => copy.queue(id, text, Date.now(), until),
+    return withCopy(copy.prefix, deliver, (id, text, kind) => copy.queue(id, text, kind),
       code => log({ trace: `copy:${Date.now()}`, hop: `${target}_copy`, ms: 0, ok: false, code, detail: code }));
   }
   private copiedToTelegram(deliver: ScheduledAppDelivery): ScheduledAppDelivery {
@@ -1843,11 +1845,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     return left.size ? left : null;
   }
   // A WhatsApp copy of an app message waits in the delivery outbox, where WhatsApp's 24-hour window and the owner gate apply,
-  // until it is no longer fresh. `appAt` is when the app got the message, the same on every attempt to queue one copy.
-  private queueWhatsAppCopy(id: string, text: string, appAt: number, until?: number): Promise<void> {
-    const whatsapp = this.setup('whatsapp');
-    return whatsapp.finalOutbox.enqueue({ id, trace: id, payload: { chat_id: whatsapp.owner, text }, ownerSubject: String(whatsapp.owner),
-      doName: this.ctx.storage.kv.get<string>('do_name') ?? '', expiresAt: Math.min(appAt + WHATSAPP_COPY_FRESH_MS, until ?? Infinity) });
+  // until it goes out or a newer copy replaces it, as a newer message replaces the one it copies (copySupersedes).
+  private queueWhatsAppCopy(id: string, text: string, kind?: CopyOf): Promise<void> {
+    const whatsapp = this.setup('whatsapp'), copy = { id, trace: id, payload: { chat_id: whatsapp.owner, text }, ownerSubject: String(whatsapp.owner),
+      doName: this.ctx.storage.kv.get<string>('do_name') ?? '', ...(kind ? { copyOf: kind } : {}) };
+    return whatsapp.finalOutbox.enqueue(copy, { supersedes: copySupersedes(copy, whatsapp.finalOutbox.records()) });
   }
   // Settles each record and, once a follow-up (a loop's check-back or a mail follow-up, and under PROACTIVE_OVER_TELEGRAM a
   // record marked copied) has reached the app, queues a copy for each surface the owner chose under the record's own id, so
@@ -1861,7 +1863,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (record.inPlace || record.status !== 'delivered' || !((record.copied && this.proactiveOverTelegram()) || record.heartbeat || record.mailFollowup || record.update || record.id.startsWith(MAC_FOLLOWUP_RECORD_PREFIX) || record.id.startsWith(LOOKUP_RECORD_PREFIX)) || record.payload.chat_id !== app.owner) return;
       for (const target of copies) {
         const copy = this.copyQueues[target];
-        try { await copy?.queue(`${copy.prefix}${record.id}`, record.payload.fallback_text ?? record.payload.text, record.deliveredAt ?? record.createdAt, record.expiresAt); }
+        try { await copy?.queue(`${copy.prefix}${record.id}`, record.payload.fallback_text ?? record.payload.text, copyOf(record)); }
         catch { app.log({ trace: record.trace, hop: `${target}_copy`, ms: 0, ok: false, code: 'copy_failed', detail: 'copy_failed' }); }
       }
     };
@@ -2014,6 +2016,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       { name: 'job_reports', run: (texts) => redactJobReportEntries(kv, texts, FORGOTTEN).remaining },
       { name: 'whatsapp_held', run: (texts) => forgetHeldWhatsApp(kv, texts).remaining },
       { name: 'whatsapp_context', run: (texts) => forgetWhatsAppContext(kv, texts).remaining },
+      { name: 'delivery_notes', run: (texts) => forgetDeliveryNotes(kv, texts).remaining },
       { name: 'whatsapp_inbox', run: (texts) => redactWhatsAppInboxEntries(storage, texts, FORGOTTEN).remaining },
       { name: 'waiting_cards', run: (texts) => forgetWaitingCards(storage.sql, texts, Date.now()).remaining },
       { name: 'why_trails', run: (texts) => forgetTrails(storage.sql, texts) + dayPlanBook(storage.sql).forgetWhy(texts) },
@@ -4576,7 +4579,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     type TurnHooks = Readonly<{ notes(turn: InboundTurn): readonly string[]; listener: Pick<import('./telegram-listener').TelegramOwnerListenerOptions, 'replyFields' | 'deliverReaction'> }>;
     const runningWhatsApp = (turn: InboundTurn) => { const active = this.activeWhatsApp; return active?.wamid && active.scope.runId === turn.runScope?.runId ? active : null; };
     const whatsappTurnHooks: TurnHooks = {
-      notes: turn => { const take = () => takeWhatsAppReactionNotes(identity, Date.now()); return turn.runScope ? turn.runScope.commit(take) : take(); },
+      notes: () => takeWhatsAppReactionNotes(identity, Date.now()),
       listener: {
         replyFields: turn => {
           const active = runningWhatsApp(turn);
@@ -4654,8 +4657,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const email = (await accounts()).find((known) => known.id === id)?.email;
       try {
         if (owner === 0) throw new Error('owner_unbound');
-        await finalOutbox.enqueue({ id: trace, trace, payload: { chat_id: owner, text: reconnectNoticeText(this.appBound() ? 'app' : 'console', email) }, notice: true, copied: true,
-          ownerSubject: String(owner), doName: identity.get<string>('do_name') ?? '', expiresAt: Date.now() + 86_400_000 });
+        const notice = { id: trace, trace, payload: { chat_id: owner, text: reconnectNoticeText(this.appBound() ? 'app' : 'console', email) }, notice: true as const, copied: true as const,
+          ownerSubject: String(owner), doName: identity.get<string>('do_name') ?? '' };
+        await finalOutbox.enqueue(notice, { supersedes: supersededBy(notice) });
       } catch (error) {
         log({ trace, hop: 'google_reauth_notice', ms: 0, ok: false, error: String(error), code: 'not_queued' });
         return;
@@ -5628,7 +5632,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // An app message that is only an attachment is admitted under a note naming it (appTurnText); its parts stay as sent.
         const app = this.activeApp;
         if (app?.upload && !app.text && turn.updateId === app.updateId) turn = { ...turn, text: appTurnText(app) };
-        const notes = turnHooks?.notes(turn) ?? [];
+        // What did not reach the owner since their last turn, on any surface, then what this surface adds.
+        const take = () => [...takeDeliveryNotes(this.ctx.storage.kv, Date.now()), ...(turnHooks?.notes(turn) ?? [])];
+        const notes = turn.runScope ? turn.runScope.commit(take) : take();
         if (notes.length) turn = { ...turn, parts: [...turn.parts, ...notes.map(text => ({ authorship: 'media_note' as const, text }))] };
         return responder.respond(attachmentRoute ? { ...turn, canAttach: true } : turn, time);
       },
@@ -6118,9 +6124,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       const chosen = briefBodyRevision(await ledgerJob(trace, briefBodyPrompt(localIso(now, clock.timezone).replace('T', ' '), dayCards(), revises), [...BRIEF_BODY_TOOLS],
         undefined, true, undefined, true));
       if (typeof chosen === 'string') return chosen;
-      await finalOutbox.enqueueFenced({ id: trace, trace, payload: { chat_id: owner, text: redactSecretUrls(chosen.text).text }, ownerSubject: String(owner),
-        doName: storage.kv.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], expiresAt: now + UPDATE_CARD_FRESH_MS,
-        revision: { day, card: 'card:brief' }, ...(revises ? { inPlace: true as const } : {}) }, work => storage.transactionSync(work));
+      const revision = { id: trace, trace, payload: { chat_id: owner, text: redactSecretUrls(chosen.text).text }, ownerSubject: String(owner),
+        doName: storage.kv.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0],
+        revision: { day, card: 'card:brief' as const }, ...(revises ? { inPlace: true as const } : {}) };
+      await finalOutbox.enqueueFenced(revision, work => storage.transactionSync(work), supersededBy(revision));
       return 'revised';
     };
     // The wake an upload noted, taken by the first recompute that started after it. An older note is dropped: its night is no
@@ -6184,9 +6191,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           deliver: async (id, text, commit) => {
             if (finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
             const recordId = updates.record(localIso(Date.now(), timezone).slice(0, 10), Date.now(), [], null);
-            await finalOutbox.enqueueFenced({ id, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
-              doName: doName ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], expiresAt: Date.now() + UPDATE_CARD_FRESH_MS, update: { recordId },
-              healthNotice: { day: localIso(Date.now(), timezone).slice(0, 10) } }, work => storage.transactionSync(() => { work(); commit(); }));
+            const notice = { id, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
+              doName: doName ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], update: { recordId },
+              healthNotice: { day: localIso(Date.now(), timezone).slice(0, 10) } };
+            await finalOutbox.enqueueFenced(notice, work => storage.transactionSync(() => { work(); commit(); }), supersededBy(notice));
             await scheduler.rearm();
           } },
         reschedule: async at => { await scheduler.schedule({ id: HEALTH_TRIGGER_ID, kind: 'patrol', occurrenceAt: at, dueAt: at, payloadRefs: { id: HEALTH_TRIGGER_ID } }); },
@@ -6551,10 +6559,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       deliver: async (id, trace, text, recordId, commit, effect) => {
         if (finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
         const card = effect?.revision as CardId | undefined;
-        await finalOutbox.enqueueFenced({ id, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
+        const update = { id, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
           doName: storage.kv.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0],
-          expiresAt: Date.now() + UPDATE_CARD_FRESH_MS, update: { recordId }, ...(card ? { revision: { day: today(), card } } : {}), ...(card && effect?.inPlace ? { inPlace: true as const } : {}),
-          ...(effect?.push ? { updatePush: { line: effect.push, ...(card ? { card } : {}) } } : {}) }, work => storage.transactionSync(() => { work(); commit(); }));
+          update: { recordId }, ...(card ? { revision: { day: today(), card } } : {}), ...(card && effect?.inPlace ? { inPlace: true as const } : {}),
+          ...(effect?.push ? { updatePush: { line: effect.push, ...(card ? { card } : {}) } } : {}) };
+        await finalOutbox.enqueueFenced(update, work => storage.transactionSync(() => { work(); commit(); }), supersededBy(update));
       },
       ...(dayState ? { dayState: {
         quiet: () => revisesCards && quiet(),
@@ -6577,8 +6586,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       cardsSince: (at: number) => storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM ledger WHERE created_at >= ? AND status != 'done'", at).one().n,
       deliver: async (id, trace, text, commit) => {
         if (finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
-        await finalOutbox.enqueueFenced({ id, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
-          doName: storage.kv.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], expiresAt: Date.now() + UPDATE_CARD_FRESH_MS }, work => storage.transactionSync(() => { work(); commit(); }));
+        const look = { id, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
+          doName: storage.kv.get<string>('do_name') ?? '', bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] };
+        await finalOutbox.enqueueFenced(look, work => storage.transactionSync(() => { work(); commit(); }), supersededBy(look));
       },
       chose: (trace, code) => log({ trace, hop: 'intervention', ms: 0, ok: true, code }),
     }) : null;
@@ -6630,8 +6640,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const spend = () => { commit(); interrupts?.book.spend(interrupts.limits(), false, id); };
           // Already queued (a pass retried after its record was written): the interruption was spent then.
           if (finalOutbox.records().some(record => record.id === id)) { storage.transactionSync(commit); return; }
-          await finalOutbox.enqueueFenced({ id, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner), announcement: { ids },
-            doName, bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0], expiresAt: Date.now() + ANNOUNCEMENT_MESSAGE_FRESH_MS }, work => storage.transactionSync(() => { work(); spend(); }));
+          const message = { id, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner), announcement: { ids },
+            doName, bot: this.env.TELEGRAM_BOT_TOKEN?.split(':')[0] };
+          await finalOutbox.enqueueFenced(message, work => storage.transactionSync(() => { work(); spend(); }), supersededBy(message));
         },
         report: announcementReport, now: () => Date.now(),
         chose: (code, detail) => {
@@ -6758,24 +6769,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
         const skipped = !text || isSkip(text);
         if (explains) plans.why(day, card.id, skipped ? null : whyJson(mergedSteps(raised)));
-        // The card is current until the owner's next card is due, and never past its own day: a copy for a chat that waits for its
-        // window stops waiting then, so a morning Brief never replays at night.
-        const validUntil = (): number => {
-          const queuedIds = new Set(finalOutbox.records().map(record => record.id));
-          const laterDue = DAY_CARDS.flatMap(other => {
-            const found = scheduler.lookup(other.id);
-            return other.id !== card.id && found.state === 'entry' && found.entry.status === 'armed' && !queuedIds.has(dayCardFinalId(day, other.id)) ? [found.entry.due_at] : [];
-          });
-          return cardExpiry(entry.occurrence_at, clock.timezone, laterDue);
-        };
         if (!skipped && outboxed) {
           // The day plan records the card sent, and folds the updates it covered, only once it is delivered (settleFinal).
           // What it announces is held before the card is queued, so a queued card always holds it: a card that fails to queue
           // releases it, and one lost before it was queued holds it only until the hold lapses.
           announced.carded(announcementIds, now);
+          // The card waits until it goes out or the owner's next card replaces it, with the day updates waiting before it.
           try {
-            await finalOutbox.enqueue({ id: queued, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
-              doName: identity.get<string>('do_name') ?? '', expiresAt: validUntil(), dayCard: { day, card: card.id, foldUpTo: now, ...(questsDue.length ? { quests: questsDue } : {}), ...(verdictsOffered.length ? { verdicts: verdictsOffered } : {}), ...(announcementIds.length ? { announcements: announcementIds } : {}) } });
+            const queuedCard = { id: queued, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ownerSubject: String(owner),
+              doName: identity.get<string>('do_name') ?? '', dayCard: { day, card: card.id, foldUpTo: now, ...(questsDue.length ? { quests: questsDue } : {}), ...(verdictsOffered.length ? { verdicts: verdictsOffered } : {}), ...(announcementIds.length ? { announcements: announcementIds } : {}) } };
+            await finalOutbox.enqueue(queuedCard, { supersedes: supersededBy(queuedCard) });
           } catch (error) { announced.uncard(announcementIds); throw error; }
           plans.waiting(day, card.id);
           await scheduler.rearm();
@@ -6784,7 +6787,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
         let appRow: string | undefined;
         if (!skipped) {
-          const receipt = await sentOrThrow(routedCall('sendMessage', { chat_id: owner, text, ...(replies.length ? { [APP_REPLIES]: replies } : {}), [APP_COPY_UNTIL]: validUntil() })) as { app_row_id?: unknown };
+          const receipt = await sentOrThrow(routedCall('sendMessage', { chat_id: owner, text, ...(replies.length ? { [APP_REPLIES]: replies } : {}), [APP_COPY_OF]: 'day_card' })) as { app_row_id?: unknown };
           // The Brief's answers to tap are the day's question: nothing else asks one until the owner answers.
           if (replies.length) interrupts?.book.ask(`${card.id}:${day}`);
           if (typeof receipt.app_row_id === 'string') {
@@ -6827,9 +6830,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       log({ trace: record.trace, hop: 'outbox_delivery', ms: 0, ok: delivered,
         detail: record.status, ...(record.reason ? { code: record.reason } : {}) });
       if (record.status === 'pending') return;
-      if (record.reason === 'expired') {
+      noteUndelivered(this.ctx.storage.kv, record, recordSurface(record, this.ctx.storage.kv.get<string>('whatsapp_subject'), { surface: channel, owner: String(owner) }), clock.timezone, Date.now());
+      if (record.reason === 'expired' || record.reason === 'superseded') {
         const now = Date.now(), kv = this.ctx.storage.kv, settings = loops.proactivity(), whatsapp = kv.get<string>('whatsapp_subject');
-        const toWhatsApp = record.id.startsWith(WHATSAPP_COPY_PREFIX) || (whatsapp !== undefined && record.ownerSubject === whatsapp);
+        const toWhatsApp = boundForWhatsApp(record, whatsapp);
         log({ trace: record.trace, hop: 'outbox_expired', ms: now - record.createdAt, ok: false, code: expiredCode(record, {
           windowClosed: toWhatsApp && !whatsappWindowOpen(kv, now), quiet: isQuiet(settings, now, clock.timezone),
           volumeLow: settings.volume === 'low', followupsOff: settings.followups === false }) });
