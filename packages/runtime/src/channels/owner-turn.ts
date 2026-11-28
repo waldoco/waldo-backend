@@ -591,9 +591,10 @@ export const createOwnerResponder = (
   const forgetBarrierMode: ForgetBarrierMode = privateOwner?.forgetBarrier ?? 'reads';
   const barrier = () => forgetBarrier(heldTopics(), forgetBarrierMode);
   const promptMemory = (): ClaimStore | undefined => memory && barrierMemory(memory, heldTopics);
-  // A run built from outside content reads memory through the outside view, which keeps out every pattern drawn from health. The
-  // ones the owner confirmed ride with the shared health they rest on, the one block such a run may already hold the owner's body
-  // in. They are read on each compose, so a forget made mid-run takes them out at once.
+  // A run built from outside content, or one whose mark follows what it reads, reads memory through a view that keeps out every
+  // pattern drawn from health. The ones the owner confirmed, in the owner's own wording, ride with the shared health they rest on,
+  // the one block such a run may already hold the owner's body in. They are read on each compose, so a forget made mid-run takes
+  // them out at once.
   const withPatterns = async (read: Promise<HealthRead>): Promise<HealthRead> => {
     const shared = await read, view = promptMemory();
     if (shared === null || shared === 'unreadable' || !view) return shared;
@@ -652,7 +653,7 @@ export const createOwnerResponder = (
     return round;
   };
   // A turn without a composed owner context (tests, probes) composes from the local fixture.
-  const composer = context?.composer ?? localTrustedBriefContextComposer({ ...(privateSystemSkills ? { localSystemSkills: privateSystemSkills } : {}), toolOutputs: recentToolResults, ...(health === undefined ? {} : { health: async () => backgroundSourceTaint === 'external' ? withPatterns(health(traceId)) : health(traceId) }),
+  const composer = context?.composer ?? localTrustedBriefContextComposer({ ...(privateSystemSkills ? { localSystemSkills: privateSystemSkills } : {}), toolOutputs: recentToolResults, ...(health === undefined ? {} : { health: async () => backgroundSourceTaint === 'external' || markFollowsReads ? withPatterns(health(traceId)) : health(traceId) }),
     onComposerPhase: (phase, previousMs) => log({ trace: traceId, hop: 'composer_phase', ms: previousMs, ok: true, detail: phase }) });
   const contextInputs = () => ({ ...(context?.snapshot() ?? localTrustedBriefTurnSnapshot()), canary_tokens: CANARIES, replay_context_ref: null });
   // The store a turn reads its chain from carries the settings it read under, so the view and the trigger agree with it.
@@ -1424,7 +1425,7 @@ export const createOwnerResponder = (
       finally { backgroundOwnerModel = false; }
     },
     async prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments, directTools, waldoFirst, lateOwner, holdChanges) {
-      const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments, directTools, waldoFirst, lateOwner, holdChanges), conversationRef, sourceTaint === 'external' && !lateOwner);
+      const asOwner = await asOwnerJob(id, job => job.prompt(id, conversationRef, jobText, time, surface, toolNames, current, decision, turnContext, sourceTaint, ownerModel, attachments, directTools, waldoFirst, lateOwner, holdChanges), conversationRef, (sourceTaint === 'external' || sourceTaint === 'as_read') && !lateOwner);
       if (asOwner !== undefined) return asOwner;
       backgroundSourceTaint = sourceTaint === 'external' ? 'external' : null;
       markFollowsReads = sourceTaint === 'as_read';

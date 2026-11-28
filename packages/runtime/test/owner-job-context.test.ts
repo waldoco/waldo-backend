@@ -114,7 +114,8 @@ it('a scheduled job\'s context carries earlier internal results, never an earlie
 });
 
 // A run Waldo starts from outside content (the Brief) composes as an admitted owner job. The owner's confirmed body pattern rides
-// in its health block, read through the job's composed context; a job not built from outside content reads it from memory as
+// in its health block, read through the job's composed context; so does a run whose mark follows what it reads ('as_read', an
+// own-text Brief), whose memory view keeps every health pattern out. A job not built from outside content reads it from memory as
 // before, so its health block carries none. Every value is synthetic.
 it('a Brief job built from outside content carries the owner\'s confirmed body pattern with their shared health', async () => {
   const id = env.OWNER_DO!.idFromName('job-context-patterns');
@@ -136,7 +137,7 @@ it('a Brief job built from outside content carries the owner\'s confirmed body p
       previous: null,
     }, { timezone: 'UTC', now: () => new Date() }, undefined, { partial: true });
     expect(material).not.toBeNull();
-    const run = async (sourceTaint: 'external' | undefined) => {
+    const run = async (sourceTaint: 'external' | 'as_read' | undefined) => {
       const admission = await ownerJobAdmission({ lookup: async () => ({ ownerId: OWNER, bindingRef: 'runtime:owner-demo', revision: '5', physicalDoId: 'actual-do' }),
         expectedPhysicalDoId: 'actual-do', job: 'reminder', occurrenceKey: `brief-${sourceTaint ?? 'own'}:1`, occurredAt: Date.now() - 1 });
       const requests: LLMGatewayRequest['request'][] = [];
@@ -155,6 +156,10 @@ it('a Brief job built from outside content carries the owner\'s confirmed body p
     expect(brief).toContain('Patterns the owner confirmed about their body');
     expect(brief).toContain('Late calls, then a low next day');
     expect(brief).not.toContain('Recovery sits low on Thursday mornings');
+    const ownText = await run('as_read');
+    expect(ownText).toContain('Patterns the owner confirmed about their body');
+    expect(ownText).toContain('Late calls, then a low next day');
+    expect(ownText).not.toContain('Recovery sits low on Thursday mornings');
     expect(await run(undefined)).not.toContain('Patterns the owner confirmed about their body');
   });
 });
