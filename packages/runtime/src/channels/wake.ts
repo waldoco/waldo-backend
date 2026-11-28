@@ -15,7 +15,7 @@ import { triageTools } from './update-sweep';
 // baseline: the run leaves itself a follow-up (open_loop, a check-back at its minute) when it wants one sooner. No count of messages a day is kept,
 // and the owner's volume is never read. The owner's own no to follow-ups and their quiet hours hold the wake before it runs
 // (a card it raised would reach them as a message), and again when it decides to speak. Every run leaves one outcome row with the reason it gave and what it cost, including when it chose to say nothing.
-export const GENERAL_WAKE_TOOLS: readonly ToolName[] = [...new Set<ToolName>([...triageTools(false, true), 'close_loop', 'remember', 'open_loop', 'read_notes', 'rewrite_notes'])];
+export const GENERAL_WAKE_TOOLS: readonly ToolName[] = [...new Set<ToolName>([...triageTools(false, true), 'close_loop', 'remember', 'open_loop', 'read_notes', 'rewrite_notes', 'write_home_card'])];
 
 // The model role a wake runs on is configuration, one value per kind of wake. plans and chat both run on the chat model
 // (plans at the planning effort); auxiliary is the small model. Unset or unknown, plans.
@@ -70,7 +70,7 @@ const WAKE_ORDER = [
   '5. What would protect their sustainable capacity? Roughly from the lightest: keep the sharp hours for the hardest work; move, shrink or hand off routine work; adjust the workout to the day; protect tonight\'s sleep and the next recovery; reshape the week. One change at a time.',
   '6. Act, then tell. Ask first only when it reaches other people, spends money or cannot be undone. For now every change to their calendar, mail or tasks still goes on the owner\'s card (propose_calendar_change, propose_action, send_email): the card is the notification, so it needs no message as well, and never say a change is made when only a card was raised. Say why in words: never a reading.',
   '7. Is it worth saying? It changes what they do next, reaches them in time, and is news to them. A number with no meaning for their day stays unsaid, and a good day needs no health comment. Never guilt. There is no daily count: judge how often to reach them from what Waldo already said today and how they answered.',
-  '8. Leave the next run better off. Rewrite your notes last with rewrite_notes, before end_run: what you are watching, what you concluded and what you expect next, in words, never a reading. Keep a lasting fact about the owner with remember, and when something needs checking at a set minute (after a meeting, when a reply is due, tomorrow morning), leave yourself a follow-up with open_loop and a note of what to check: Waldo checks back on it then. Your regular look is a baseline, not a limit.',
+  '8. Leave the next run better off. When what matters now for the owner has changed, write the one card they see first on Home with write_home_card, in a few plain lines. Rewrite your notes last with rewrite_notes, before end_run: what you are watching, what you concluded and what you expect next, in words, never a reading. Keep a lasting fact about the owner with remember, and when something needs checking at a set minute (after a meeting, when a reply is due, tomorrow morning), leave yourself a follow-up with open_loop and a note of what to check: Waldo checks back on it then. Your regular look is a baseline, not a limit.',
   'Silence is allowed; say why in end_run.',
 ].join('\n');
 

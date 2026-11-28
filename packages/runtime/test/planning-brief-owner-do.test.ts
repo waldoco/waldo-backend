@@ -705,6 +705,20 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
     });
   });
 
+  it('a wake writes the Home card, and the app reads it for today with no model call', async () => {
+    await owned('general-wake-home-card', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner }) => {
+      const card = () => owner.fetch(new Request('https://telegram-owner/app/v1/home-card', { headers: headers('general-wake-home-card') }));
+      expect(await (await card()).json()).toEqual({ state: 'none' });
+      const line = 'The 15:00 moved to 16:00; your morning block is still clear for the deck.';
+      model.owner = [{ calls: [{ name: 'write_home_card', arguments: { text: line } }] }, { calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Card updated; nothing to send.' } }] }];
+      await tick(state, owner);
+      const before = model.ownerRequests.length;
+      expect(await (await card()).json()).toMatchObject({ state: 'written', text: line, day: DAY });
+      expect(model.ownerRequests.length).toBe(before);
+      expect((await owner.fetch(new Request('https://telegram-owner/app/v1/home-card', { method: 'POST', headers: headers('general-wake-home-card'), body: '{}' }))).status).toBe(405);
+    });
+  });
+
   it('a wake can load the health-protocols skill: skills_load is offered and the skill index says when to load it', async () => {
     await owned('general-wake-skill', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1', HEALTH_ACTIONS: '1' }, async ({ state, owner }) => {
       model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Nothing new.' } }] }];

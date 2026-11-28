@@ -157,6 +157,7 @@ describe('toolName', () => {
       'end_run',
       'read_notes',
       'rewrite_notes',
+      'write_home_card',
     ]);
   });
 
@@ -337,6 +338,7 @@ describe('TOOL_PERMISSIONS', () => {
         'end_run',
         'read_notes',
         'rewrite_notes',
+        'write_home_card',
         'show_chart',
         'show_health_chart',
         'propose_schedule',

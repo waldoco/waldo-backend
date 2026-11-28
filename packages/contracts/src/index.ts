@@ -60,6 +60,7 @@ export * from './tools/schemas/quests';
 export * from './tools/schemas/autonomy';
 export * from './tools/schemas/loops';
 export * from './tools/schemas/notes';
+export * from './tools/schemas/home-card';
 export * from './tools/schemas/approvals';
 export * from './tools/schemas/calendar';
 export * from './tools/schemas/threading';
