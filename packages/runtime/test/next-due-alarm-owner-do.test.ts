@@ -28,12 +28,13 @@ const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', S
 const AUTHORITY = new Set(['owner_runtime_authority', 'common_owner_authority', 'assert_channel_presence']);
 
 // Every request the owner object makes: the directory's authority calls by name, anything else by host.
-const wire = { asked: [] as string[], fetches: 0, revoked: false, blips: 0 };
+const wire = { asked: [] as string[], urls: [] as string[], fetches: 0, revoked: false, blips: 0 };
 beforeEach(() => {
-  wire.asked = []; wire.fetches = 0; wire.revoked = false; wire.blips = 0;
+  wire.asked = []; wire.urls = []; wire.fetches = 0; wire.revoked = false; wire.blips = 0;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     wire.fetches += 1;
     const url = String(input instanceof Request ? input.url : input);
+    wire.urls.push(url);
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url)?.[1];
     if (fn) wire.asked.push(fn);
     if (fn === 'owner_runtime_authority') {
@@ -44,6 +45,7 @@ beforeEach(() => {
     }
     if (fn === 'common_owner_authority') return presenceAuthority(OWNER_ID, init?.body);
     if (fn === 'assert_channel_presence') return Response.json(true);
+    if (url === 'https://exp.host/--/api/v2/push/getReceipts') return Response.json({ data: { 'ticket-1': { status: 'ok' } } });
     if (/^https:\/\/api\.telegram\.org\/bot[^/]+\/sendMessage$/.test(url)) {
       const sent = JSON.parse(String(init?.body)) as { chat_id: number };
       return Response.json({ ok: true, result: { message_id: 40 + wire.fetches, chat: { id: sent.chat_id } } });
@@ -58,7 +60,8 @@ const authorityCalls = () => wire.asked.filter(fn => AUTHORITY.has(fn));
 
 // One owner object under a fixed clock. `alarm` stands in for the platform's invocation, which consumes the alarm that fired.
 const withOwner = async <T>(name: string, surface: Surface, flag: '0' | '1', at: string,
-  work: (h: Readonly<{ state: DurableObjectState; scheduler: Scheduler; alarm: () => Promise<number | null>; clock: (iso: string | number) => void; request: () => Promise<unknown>; restart: (flag: '0' | '1') => void }>) => Promise<T>) => {
+  work: (h: Readonly<{ state: DurableObjectState; scheduler: Scheduler; alarm: () => Promise<number | null>; clock: (iso: string | number) => void; request: () => Promise<unknown>; restart: (flag: '0' | '1') => void }>) => Promise<T>,
+  extra: Readonly<Record<string, string>> = {}) => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(Date.parse(at));
   return runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
@@ -68,7 +71,7 @@ const withOwner = async <T>(name: string, surface: Surface, flag: '0' | '1', at:
     state.storage.kv.put('owner_alarm_full_release_v1', env.WALDO_RELEASE ?? 'unknown');
     if (surface === 'app') state.storage.kv.put('app_subject', String(appSubjectFor(name)));
     else state.storage.kv.put('telegram_subject', '7');
-    const make = (switched: '0' | '1') => new OwnerDO(state, { ...env, ...directory, NEXT_DUE_ALARM: switched, PROACTIVE_INTERVENTIONS: '0', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const make = (switched: '0' | '1') => new OwnerDO(state, { ...env, ...directory, NEXT_DUE_ALARM: switched, PROACTIVE_INTERVENTIONS: '0', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined, ...extra });
     let owner = make(flag);
     // A deploy that sets the switch the other way: the same storage under a new object.
     const restart = (switched: '0' | '1') => { owner = make(switched); };
@@ -101,6 +104,23 @@ describe('an owner wake with nothing due', () => {
       expect(await alarm()).toBe(dueOf(state, HEARTBEAT_ID));
       expect(authorityCalls()).toEqual([]);
     });
+  });
+
+  it('reads Expo receipts for an app owner without building the runtime: no authority, and the wake stays where it was due', async () => {
+    await withOwner('next-due-receipts', 'app', '1', '2027-03-10T10:00:00Z', async ({ state, scheduler, alarm }) => {
+      await armHeartbeat(scheduler, Date.now() - 10 * 60_000);
+      const jobsDue = Date.now() + 5 * 60_000;
+      await state.storage.put(TASK_JOBS_DUE_KEY, jobsDue);
+      const heartbeatDue = dueOf(state, HEARTBEAT_ID);
+      state.storage.kv.put('app_push_tickets_v1', [{ id: 'ticket-1', at: Date.now() - 20 * 60_000, installation_id: 'install-1', device_epoch: 1 }]);
+      const armed = await alarm();
+      await vi.waitFor(() => expect(state.storage.kv.get('app_push_tickets_v1')).toEqual([]));
+      expect(wire.urls).toEqual(['https://exp.host/--/api/v2/push/getReceipts']);
+      expect(authorityCalls()).toEqual([]);
+      expect(armed).toBe(jobsDue);
+      expect(runs(state, HEARTBEAT_ID)).toEqual([]);
+      expect(dueOf(state, HEARTBEAT_ID)).toBe(heartbeatDue);
+    }, { EXPO_ACCESS_TOKEN: 'synthetic-expo' });
   });
 
   it('with the switch off, the app owner still asks the directory on an empty wake', async () => {

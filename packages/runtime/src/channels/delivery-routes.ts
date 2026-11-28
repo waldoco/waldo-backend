@@ -48,6 +48,9 @@ export const APP_THREAD: unique symbol = Symbol('send.app_thread');
 export const APP_REPLIES: unique symbol = Symbol('send.app_replies');
 // What a message the app copies to a chat surface is (a day card), so its copy is replaced only as the message would be.
 export const APP_COPY_OF: unique symbol = Symbol('send.app_copy_of');
+// A message the app writes without its own push: the sender raises a push of its kind (the Brief, an event) or, for an
+// outbox record, the settlement does once the whole record is delivered. Only the app reads it; a symbol key.
+export const APP_NO_PUSH: unique symbol = Symbol('send.app_no_push');
 
 export type Admission = 'admitted' | 'dormant' | 'retry';
 
