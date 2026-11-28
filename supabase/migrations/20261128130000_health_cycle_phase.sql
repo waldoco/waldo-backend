@@ -65,9 +65,11 @@ declare
   v_old public.health_context_daily; v_old_basis jsonb; v_changed jsonb := '[]'::jsonb;
   -- The closed driver vocabulary: a signal's plain-word subject, an optional 'far', a direction, 'usual'. Nothing else, so no
   -- value, abbreviation or judgment can ride a driver into the prompt or the app.
-  -- How far back a pillar's used days may reach: the ordinary 31-day window, or the 90-day phase lookback on a row the owner's
-  -- cycle phase changed (it still holds at most 31 of them).
+  -- How far back a pillar's used days may reach, and how many it may name: the ordinary 31-day window and 31 days, or, on a row
+  -- the owner's cycle phase changed, the 90-day phase lookback and 61 days (one component on its 30 same-phase days, another on its
+  -- ordinary 30, and the day itself).
   v_used_back integer := 31;
+  v_used_most integer := 31;
   v_driver constant text := '^(breathing rate|wrist temperature|blood oxygen|awake time in the night|walking heart rate)( far)? (above|below) usual$';
 begin
   if p_do_name is null or length(p_do_name) not between 1 and 240 or p_payload is null
@@ -93,6 +95,7 @@ begin
     if not waldo.health_reading_basis_valid(v_body->'reading_basis') or v_body ? 'backfilled' then return '{"error":"invalid_request"}'; end if;
     if not waldo.cycle_live(v_owner) then return '{"error":"consent_required"}'; end if;
     v_used_back := 90;
+    v_used_most := 61;
   end if;
   -- A row is for a day the owner can be in: at most tomorrow by their own clock, within the aggregate retention.
   if v_day > (now() at time zone v_tz)::date + 1 or v_day < (now() at time zone v_tz)::date - 731 then return '{"error":"invalid_request"}'; end if;
@@ -140,7 +143,7 @@ begin
         or exists (select 1 from jsonb_array_elements(v_p #> '{used,signals}') s where jsonb_typeof(s) <> 'string'
           or (s #>> '{}') not in ('sleep','hrv','resting_heart_rate','sleep_midpoint','daylight','movement','stress','calendar','tasks','messages','physical_load','steps'))
         or (select count(distinct s) from jsonb_array_elements(v_p #> '{used,signals}') s) <> jsonb_array_length(v_p #> '{used,signals}')
-        or jsonb_typeof(v_p #> '{used,days}') is distinct from 'array' or jsonb_array_length(v_p #> '{used,days}') not between 1 and 31
+        or jsonb_typeof(v_p #> '{used,days}') is distinct from 'array' or jsonb_array_length(v_p #> '{used,days}') not between 1 and v_used_most
         or exists (select 1 from jsonb_array_elements(v_p #> '{used,days}') d where jsonb_typeof(d) <> 'string' or (d #>> '{}') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
           or (d #>> '{}')::date not between v_day - v_used_back and v_day)
         or (select count(distinct d) from jsonb_array_elements(v_p #> '{used,days}') d) <> jsonb_array_length(v_p #> '{used,days}')))

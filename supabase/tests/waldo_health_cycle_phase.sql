@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(32);
+select plan(33);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
@@ -29,10 +29,12 @@ create function pg_temp.rid(n int) returns text language sql as $$ select '00000
 create function pg_temp.day(days_back int default 0) returns text language sql as $$ select to_char((now() at time zone 'UTC')::date-days_back,'YYYY-MM-DD') $$;
 create function pg_temp.basis() returns jsonb language sql as $$ select '{"kind":"cycle_phase","explanation":"Read against your own usual for this part of your cycle."}'::jsonb $$;
 -- A recovery whose baseline used a day 60 back, as a phase-read row's does.
-create function pg_temp.recovery(score numeric,used_back int,days_back int) returns jsonb language sql as $$
+-- used_count > 2 fills the used days with the most recent days before the row's own.
+create function pg_temp.recovery(score numeric,used_back int,days_back int,used_count int default 2) returns jsonb language sql as $$
   select jsonb_build_object('score',score,'zone','good','algorithm_version','recovery.v5','activation','accepted','hrv_method','rmssd','confidence',0.8,
     'baseline',jsonb_build_object('state','personal','personal_days',14,'needed',14,'prior','none'),
-    'used',jsonb_build_object('signals',jsonb_build_array('sleep','hrv'),'days',jsonb_build_array(pg_temp.day(days_back+used_back),pg_temp.day(days_back)))) $$;
+    'used',jsonb_build_object('signals',jsonb_build_array('sleep','hrv'),'days',
+      jsonb_build_array(pg_temp.day(days_back+used_back),pg_temp.day(days_back)) || coalesce((select jsonb_agg(pg_temp.day(days_back+k)) from generate_series(1,used_count-2) k),'[]'::jsonb))) $$;
 create function pg_temp.ctx(extra jsonb,days_back int,score numeric default 72,used_back int default 10) returns jsonb language sql as $$
   select jsonb_build_object('day',pg_temp.day(days_back),'timezone','UTC',
     'basis',jsonb_build_array(jsonb_build_object('source','apple','consent_epoch',1)),
@@ -66,6 +68,8 @@ select is(pg_temp.write('{}'::jsonb,1)->>'written','true','an ordinary row is wr
 -- Live.
 select is(pg_temp.cy('consent_grant','phase-owner',jsonb_build_object('request_id',pg_temp.rid(1),'version',1,'expected_epoch',0)::text)->'consent'->>'status','granted','the owner turns cycle context on');
 select is(pg_temp.write(jsonb_build_object('reading_basis',pg_temp.basis()),0,74,60)->>'written','true','a phase-read row is written with its basis and its used days from the lookback');
+select is(pg_temp.h('context_write','phase-owner',pg_temp.ctx(jsonb_build_object('reading_basis',pg_temp.basis()),0) || jsonb_build_object('recovery',pg_temp.recovery(74,60,0,45)))->>'written','true',
+  'a phase-read pillar may name a component''s same-phase days and another''s ordinary days together');
 select is(pg_temp.write(jsonb_build_object('reading_basis',pg_temp.basis() || '{"phase":"luteal"}'),0),'{"error":"invalid_request"}'::jsonb,'a basis carrying anything else is refused');
 select is(pg_temp.write(jsonb_build_object('reading_basis',pg_temp.basis(),'backfilled',true),5),'{"error":"invalid_request"}'::jsonb,'a backfilled row never carries one');
 select is(pg_temp.h('scores_read','phase-owner',jsonb_build_object('day',pg_temp.day(0)))->'scores'->'reading_basis',pg_temp.basis(),'the scores read returns it');
