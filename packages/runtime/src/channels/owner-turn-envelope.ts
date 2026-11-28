@@ -48,6 +48,10 @@ export type OwnerTurnEnvelope = Readonly<{
 }>;
 // When a reminder was due and when it fires, in the owner's local time, for the model to judge: one that fires hours late says so.
 export type ReminderTiming = Readonly<{ due: string; now: string; timezone: string }>;
+// The owner's own message a job answers late (a retry after every provider failed): the run holds what that owner turn would
+// have held, the owner-only tools and memory grounded in these words, under the taint the message carried. text is empty when
+// the message held health details and was not kept.
+export type LateOwnerMessage = Readonly<{ text: string; messageRef: string; conversationRef: string; surface: string; receivedAt: number }>;
 // What a background job runs on (OwnerResponder.prompt's ownerModel).
 export type OwnerJobModel = boolean | 'decides' | 'plans';
 export type OwnerResponder = Readonly<{
@@ -63,20 +67,28 @@ export type OwnerResponder = Readonly<{
   // `attachments` reach the model with `said` on this turn only, as an owner turn's files do; they are never stored.
   // `waldoFirst` marks a run Waldo starts on a schedule (a day card, a check-back, a sweep, an intervention), never one that
   // answers the owner: with WALDO_LEAN_SCHEDULED it reads the lean scheduled view instead of the chat replay.
-  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string, sourceTaint?: 'external', ownerModel?: OwnerJobModel, attachments?: readonly LLMAttachment[], directTools?: readonly ToolName[], waldoFirst?: boolean): Promise<string>;
+  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string, sourceTaint?: 'external', ownerModel?: OwnerJobModel, attachments?: readonly LLMAttachment[], directTools?: readonly ToolName[], waldoFirst?: boolean, lateOwner?: LateOwnerMessage,
+    // The owner set this run to change nothing until they confirm (a confirm_first standing order): every tool that changes
+    // something is refused at dispatch, except the owner's own card.
+    holdChanges?: boolean): Promise<string>;
   // done is false when the conversation was not consolidated and must be offered again.
   // policy.health false keeps no health notes from this pass, or from the migration.
   consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>, policy?: Readonly<{ health: boolean }>): Promise<Readonly<{ done: boolean; detail: string }>>;
   // The model's reply over the day's calendar and mail changes (outside content), applied by the caller. Absent on fakes.
   sourceClaims?(trace: string, updates: string, policy?: Readonly<{ health: boolean; people?: boolean }>): Promise<string>;
+  // MEMORY_OUTCOME_LEARNING: the model's reply over what Waldo did on its own initiative and what became of it (memory/outcomes.ts),
+  // applied by the caller. Absent on fakes.
+  outcomeClaims?(trace: string, outcomes: string, policy: Readonly<{ health: boolean; body: boolean; outside: boolean }>): Promise<string>;
   // CAPACITY_PLAN: the model's raw answer keeping the owner's capacity note, applied by the caller. Absent on fakes.
   capacity?(trace: string, input: string): Promise<string>;
   migrate(trace: string, input: string, policy?: Readonly<{ health: boolean }>): Promise<string>;
   // With a gate, promote makes no model call when the memory it would read has the digest `last`, and hands the digest of
   // the memory it leaves to `promoted` once a promotion is applied.
-  promote(trace: string, gate?: Readonly<{ last: string | undefined; promoted(digest: string): void }>): Promise<string>;
+  promote(trace: string, gate?: Readonly<{ last: string | undefined; promoted(digest: string): void }>, setup?: string): Promise<string>;
   // One welcome-build stage's structured answer; its input and output never reach a trace. version 2 is the second build's.
   welcome?(trace: string, stage: string, input: string, version?: 2): Promise<string>;
+  // The onboarding summary with its open questions; its input and output never reach a trace.
+  onboardingSummary?(trace: string, input: string): Promise<string>;
   planDay(trace: string, input: string): Promise<string>;
   // After a reply is delivered: compact the chain's older rows into one summary row when the last window dropped rows or
   // ran near its budget. Never throws; a failure is one content-free `compaction` hop. Inert while the switch is off.

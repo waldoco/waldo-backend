@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSessionState, TOOL_SPILL_VIEW_MAX_CHARS, type ToolHandler, type ToolName } from '@waldo/contracts';
+import { buildSessionState, TOOL_ERRORS, TOOL_SPILL_VIEW_MAX_CHARS, type ToolHandler, type ToolName } from '@waldo/contracts';
 import { b64url, googleClient } from '../src/connectors/google';
 import { inMemoryToolOutputStore } from '../src/conversation/tool-output-store';
 import { sanitise } from '../src/scribe/sanitiser';
@@ -55,7 +55,7 @@ describe('a Google call that cannot succeed on retry', () => {
     const failing = googleClient(app, { refresh_token: 'r' }, (async (input: RequestInfo | URL) =>
       String(input).includes('oauth2') ? Response.json({ access_token: 'a' }) : new Response('busy', { status: 503 })) as typeof fetch);
     const result = await dispatch(failing, 'read_thread', { thread_id: 't' });
-    expect(result).toMatchObject({ ok: false, code: 'transient', retryable: true, fix: 'Try the same call once more; if it fails again, tell the owner.' });
+    expect(result).toMatchObject({ ok: false, code: 'transient', retryable: true, fix: TOOL_ERRORS.transient.fix });
   });
 });
 

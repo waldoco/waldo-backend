@@ -3,7 +3,8 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { applyDayPlan, applyWake, armDayCards, dayPlanBook, parseWakeReply, SET_FOR_TODAY, takeWakeTurn, wakeTarget, wakeTurnsPerDay, MOVED_EARLIER } from '../src/channels/day-cards';
 import { reopensAt } from '../src/channels/interruptions';
-import { sleepJustEnded, wakeFreshMs } from '../src/health/wake-notice';
+import { sleepJustEnded, wakeFreshMs, wakeNoteStillFresh } from '../src/health/wake-notice';
+import { nightScoredToday } from '../src/health/wakes';
 import { DAY_CARDS, dayCardPrompt, dayPlanInput, PROSE_RULE, SCHEDULE_RULE } from '../src/prompt/day-cards';
 import { sanitise } from '../src/scribe/sanitiser';
 import { Scheduler } from '../src/scheduler/multiplexer';
@@ -56,6 +57,26 @@ const owner = (tz: string, at: number, run: (scheduler: Scheduler, book: ReturnT
     await armDayCards(scheduler, book, tz, at);
     await run(scheduler, book, state.storage.kv);
   });
+
+describe('the wake waits for the recompute that read the night', () => {
+  const noted = Date.parse('2026-11-04T01:30:00Z');
+  it('a note is taken only by a run that started after the upload, and only while the night is fresh', () => {
+    expect(wakeNoteStillFresh(noted, noted + 60_000, FRESH)).toBe(true);
+    expect(wakeNoteStillFresh(noted, noted, FRESH)).toBe(true);
+    expect(wakeNoteStillFresh(noted, noted - 1, FRESH)).toBe(false);
+    expect(wakeNoteStillFresh(noted, noted + FRESH + 1, FRESH)).toBe(false);
+    for (const absent of [undefined, null, 'soon', Number.NaN]) expect(wakeNoteStillFresh(absent, noted + 60_000, FRESH)).toBe(false);
+  });
+
+  const context = (day: string, recovery: unknown) => ({ context: { id: 'ctx', day, recovery, basis: [{ source: 'apple', consent_epoch: 1 }], drivers: [] }, previous: null });
+  it('today\'s scored Recovery is the night; yesterday\'s row, an unscored one, no row or an unreadable one is not', () => {
+    expect(nightScoredToday(context('2026-11-04', { zone: 'good', score: 60 }), '2026-11-04')).toBe(true);
+    expect(nightScoredToday(context('2026-11-03', { zone: 'good', score: 60 }), '2026-11-04')).toBe(false);
+    expect(nightScoredToday(context('2026-11-04', { reason: 'missing_sleep' }), '2026-11-04')).toBe(false);
+    expect(nightScoredToday(null, '2026-11-04')).toBe(false);
+    expect(nightScoredToday('not a row', '2026-11-04')).toBe(false);
+  });
+});
 
 describe('the wake turn moves only a Brief still to come, and never later', () => {
   const tz = 'Asia/Kolkata';

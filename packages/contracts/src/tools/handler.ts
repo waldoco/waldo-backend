@@ -146,7 +146,8 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
 // search_history: a run, task or card summary records nothing of where its words came from, so any entry is outside text.
 // read_memory: a note the owner stated is theirs; one saved while reading outside content, by a background pass, from an
 // import, or with no recorded origin is not. list_reminders: a reminder set while reading outside content may carry its words.
-export const VARYING_ORIGIN_TOOLS: readonly ToolName[] = ['raise_approval', 'extract_archive', 'get_weather', 'search_episodes', 'search_history', 'read_memory', 'list_reminders'];
+// list_health_logs: so may a meal or workout logged while reading outside content.
+export const VARYING_ORIGIN_TOOLS: readonly ToolName[] = ['raise_approval', 'extract_archive', 'get_weather', 'search_episodes', 'search_history', 'read_memory', 'list_reminders', 'list_health_logs'];
 
 // A privileged action is any DIRECT external mutation or send (ADR-0049) — the conservative
 // superset the taint gate blocks, in tool-union order: the memory/Scribe write, execute_action,

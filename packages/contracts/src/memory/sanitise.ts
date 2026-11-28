@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { canaryTokensSchema } from '../core/trigger';
+import { DERIVED_HEALTH_VIEW_BOUNDS } from '../health/crs';
 import { trustClassSchema } from './trust';
 
 // ADR-0024 canonical Scribe sanitiser contract: ONE seam every persistence and egress path
@@ -53,10 +54,11 @@ export const SANITISE_DESTINATION_POLICIES = {
   system_prompt: {
     payload_kind: 'text_or_structured',
     max_chars: MODEL_CONTEXT_MAX_CHARS,
-    max_depth: 4,
-    // The derived health view is nine fixed fields and up to three the model is told in words (baseline, sleep debt, windows).
-    max_object_fields: 12,
-    max_array_items: 16,
+    // The only structured payload this destination accepts is a derived health view its closed schema admits, so the view's
+    // own bounds are the caps: a fixed figure here refused whole runs once the inventory listed more kinds than it allowed.
+    max_depth: DERIVED_HEALTH_VIEW_BOUNDS.depth,
+    max_object_fields: DERIVED_HEALTH_VIEW_BOUNDS.fields,
+    max_array_items: DERIVED_HEALTH_VIEW_BOUNDS.items,
     max_key_chars: 128,
   },
   internal_context: {
@@ -199,6 +201,7 @@ export const sanitisationFailureSourceSchema = z.enum([
   'recall_memory',
   'recall_episode',
   'narrative',
+  'health_view',
   'skill',
   'staged_input',
   'material',

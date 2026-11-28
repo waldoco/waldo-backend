@@ -1,3 +1,5 @@
+import type { PartBasis, UsualRow } from './types';
+
 export const BASELINE_DAYS = 14;
 export const BASELINE_WINDOW_DAYS = 30;
 const Z_LIMIT = 2.5;
@@ -34,7 +36,7 @@ export const lowerIsBetter = (z: number): number => clampScore(50 - 20 * z);
 // Closer to the owner's usual scores higher, in either direction.
 export const nearUsual = (z: number): number => clampScore(100 - 20 * Math.abs(z));
 
-export interface Component { readonly name: string; readonly score: number; readonly weight: number }
+export interface Component { readonly name: string; readonly score: number; readonly weight: number; readonly basis?: PartBasis; readonly usual?: UsualRow }
 // Components that had usable inputs, renormalised; coverage is the share of weight present.
 export const combine = (components: readonly Component[]): { score: number; coverage: number } => {
   const weight = components.reduce((sum, component) => sum + component.weight, 0);

@@ -12,7 +12,7 @@ import { productionDeps } from '../src/seams/deps';
 import { ensureSchema } from '../src/tracer/schema';
 import { holdTopic } from './helpers/pending-topic';
 
-const openai = vi.hoisted(() => ({ promotions: 0, promotion: '{"nodes":[],"edges":[],"promoted":[]}' }));
+const openai = vi.hoisted(() => ({ promotions: 0, promotion: '{"constellations":[],"links":[],"promoted":[]}' }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (body: unknown) => {
   const input = JSON.stringify(body);
   const promoting = input.includes('"name":"promotion"');
@@ -26,7 +26,7 @@ const NOW = Date.parse('2026-10-22T03:00:00Z');
 const DAY = 86_400_000;
 const directory = { SUPABASE_PROJECT_URL: 'https://directory.fixture.invalid', SUPABASE_PUBLISHABLE_KEY: 'synthetic-publishable', WALDO_ROUTER_HMAC_SECRET: 'synthetic-router-secret' };
 beforeEach(() => {
-  openai.promotions = 0; openai.promotion = '{"nodes":[],"edges":[],"promoted":[]}';
+  openai.promotions = 0; openai.promotion = '{"constellations":[],"links":[],"promoted":[]}';
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const fn = /\/rest\/v1\/rpc\/([a-z_]+)$/.exec(String(input instanceof Request ? input.url : input))?.[1];
     const asked = init?.body ? JSON.parse(String(init.body)) as Record<string, string> : {};
@@ -102,7 +102,7 @@ describe('the nightly promotion gate', () => {
       openai.promotion = 'not json';
       expect((await night()).map(hop => hop.ok)).toEqual([false]);
       expect(state.storage.kv.get(CONSTELLATION_DIGEST_KEY)).toBeUndefined();
-      openai.promotion = '{"nodes":[],"edges":[],"promoted":[]}';
+      openai.promotion = '{"constellations":[],"links":[],"promoted":[]}';
       expect((await night()).map(hop => hop.ok)).toEqual([true]);
       expect(openai.promotions).toBe(2);
       expect(state.storage.kv.get(CONSTELLATION_DIGEST_KEY)).toMatch(/^[0-9a-f]{64}$/);
@@ -127,7 +127,7 @@ describe('the nightly promotion gate', () => {
       memory.add({ kind: 'observation', text: 'Took calls after ten on Monday', source: 'stated', evidence: 'calls after ten', origin: 'owner', source_ref: 'owner, app-1' }, '2026-10-19T08:00:00Z');
       memory.add({ kind: 'observation', text: 'Took calls after ten on Tuesday', source: 'stated', evidence: 'calls after ten again', origin: 'owner', source_ref: 'owner, app-2' }, '2026-10-20T08:00:00Z');
       const spots = memory.claims().map(claim => claim.id);
-      openai.promotion = JSON.stringify({ nodes: [{ id: null, domain: 'work', label: 'Late mornings', summary: 'Calls land after ten', strength: 0.6, status: 'active', supporting_spots: spots, durable: true, reason: 'two days' }], edges: [], promoted: [] });
+      openai.promotion = JSON.stringify({ constellations: [{ id: null, replaces: [], area: 'work', label: 'Late mornings', summary: 'Your calls land after ten', strength: 0.6, spots }], links: [], promoted: [] });
       await night();
       expect(claimStore(state.storage.sql).nodes()).toHaveLength(1);
       await night();

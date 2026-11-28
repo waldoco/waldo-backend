@@ -49,7 +49,7 @@ it('the owner saying a mail item is done closes it in that turn, and the next ca
 
       expect(JSON.parse(toolOutput('close-item') ?? '{}')).toMatchObject({ ok: true, data: { id: item.id, closed: true } });
       expect(loops.get(item.id)?.status).toBe('done');
-      const ledger = loopsSection(loops, 'UTC');
+      const ledger = loopsSection(loops, 'UTC', now);
       expect(ledger).toContain('- nothing open');
       expect(ledger).not.toContain('completion unknown');
       expect(ledger).toContain('- done: Confirm the interview slot with the recruiter');

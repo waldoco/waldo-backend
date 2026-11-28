@@ -79,12 +79,21 @@ export const healthLogBook = (
   };
 };
 
+// A log written in a turn that had read outside content (mail, an invite, a page) carries that mark, so its words are read back as
+// outside content, never as the owner's.
+const OUTSIDE_MARK = 'from_outside_content';
+const fromOutside = (entry: HealthLogEntry): boolean => entry.payload[OUTSIDE_MARK] === true;
+const marked = (payload: Record<string, unknown>, ctx: ToolDispatcherContext | undefined): Record<string, unknown> =>
+  ctx?.toolArgSourceTaint === 'external' ? { ...payload, [OUTSIDE_MARK]: true } : payload;
+
 // Terse ledger lines for the proactive beats: data only, estimates marked, never a diagnosis.
 export const healthSection = (entries: readonly HealthLogEntry[], timezone: string): string => {
   if (entries.length === 0) return '';
   const line = (entry: HealthLogEntry): string => {
     const when = localIso(Date.parse(entry.logged_at), timezone).slice(5).replace('T', ' ');
     const payload = entry.payload;
+    // Its words may be outside content's, and this section is context no turn's taint covers, so only list_health_logs shows them.
+    if (fromOutside(entry)) return `- ${when} ${entry.kind} logged after reading outside content (list_health_logs shows it)`;
     if (entry.kind === 'meal') {
       const description = typeof payload['description'] === 'string' ? (payload['description'] as string).slice(0, 120) : 'meal';
       const estimate = typeof payload['calories_estimate'] === 'number' ? ` (~${payload['calories_estimate']} kcal, estimate)` : '';
@@ -112,12 +121,12 @@ export const healthLogHandlers = (book: HealthLogBook) => [
     trigger_allowlist: allowlist('log_meal'),
     autonomy_gated: false,
     mutates_state: true,
-    async handle(args) {
+    async handle(args, ctx?: ToolDispatcherContext) {
       try {
         const payload: Record<string, unknown> = { description: args.description };
         if (args.items !== undefined) payload['items'] = args.items;
         if (args.calories_estimate !== undefined) payload['calories_estimate'] = args.calories_estimate;
-        const logged = await book.log('meal', payload, args.at);
+        const logged = await book.log('meal', marked(payload, ctx), args.at);
         return { ok: true, data: { ...logged, kind: 'meal' as const }, source_taint: null };
       } catch (error) {
         return { ok: false, code: error instanceof Error && error.message === NOT_LINKED ? 'transient' : 'invalid_args', error: error instanceof Error ? error.message : String(error) };
@@ -131,12 +140,12 @@ export const healthLogHandlers = (book: HealthLogBook) => [
     trigger_allowlist: allowlist('log_workout'),
     autonomy_gated: false,
     mutates_state: true,
-    async handle(args) {
+    async handle(args, ctx?: ToolDispatcherContext) {
       try {
         const payload: Record<string, unknown> = { type: args.type };
         if (args.duration_minutes !== undefined) payload['duration_minutes'] = args.duration_minutes;
         if (args.notes !== undefined) payload['notes'] = args.notes;
-        const logged = await book.log('workout', payload, args.at);
+        const logged = await book.log('workout', marked(payload, ctx), args.at);
         return { ok: true, data: { ...logged, kind: 'workout' as const }, source_taint: null };
       } catch (error) {
         return { ok: false, code: error instanceof Error && error.message === NOT_LINKED ? 'transient' : 'invalid_args', error: error instanceof Error ? error.message : String(error) };
@@ -145,7 +154,7 @@ export const healthLogHandlers = (book: HealthLogBook) => [
   } satisfies ToolHandler<LogWorkoutArgs, LogResult, ToolDispatcherContext>,
   {
     name: 'list_health_logs',
-    description: "The owner's recent meal and workout logs, newest first. Entries are what the owner logged; calorie figures are estimates.",
+    description: "The owner's recent meal and workout logs, newest first. Entries are what the owner logged, except one marked from_outside_content, which was logged after reading outside content; calorie figures are estimates.",
     schema: listHealthLogsArgsSchema,
     trigger_allowlist: allowlist('list_health_logs'),
     autonomy_gated: false,
@@ -153,7 +162,7 @@ export const healthLogHandlers = (book: HealthLogBook) => [
     turn_only_output: true,
     async handle(args) {
       const entries = (await book.recent(args.limit)).filter((entry) => args.kind === undefined || entry.kind === args.kind);
-      return { ok: true, data: { linked: book.linked(), entries }, source_taint: null };
+      return { ok: true, data: { linked: book.linked(), entries }, source_taint: entries.some(fromOutside) ? 'external' : null };
     },
   } satisfies ToolHandler<ListHealthLogsArgs, ListResult, ToolDispatcherContext>,
   {

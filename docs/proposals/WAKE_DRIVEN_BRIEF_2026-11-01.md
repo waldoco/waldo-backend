@@ -127,6 +127,16 @@ A wake turn only moves a pending card. It never writes a second one.
 
 The amendment is a waldo-brain PR, marked **Accepted** on 1 November 2026: see the link in this PR's description.
 
+### What the owner's object keeps for the wake
+
+The wake is asked after the recompute that read the upload, so the upload leaves a note until that recompute takes it.
+
+| What | Where | How long | On withdrawal of health consent |
+|---|---|---|---|
+| The server time the upload carrying a night just ended arrived (not the night's own time) | owner DO key-value `health_night_noted_v1` | until a recompute that started after it takes it; dropped by the next run once older than `WAKE_BRIEF_FRESH_MIN` (default 180 minutes) | the recompute finds no row to read, so no wake is asked; the note is taken or dropped with the next run |
+
+It is removed by account deletion with the rest of the owner's object. The wake is asked only when today's row then holds a scored Recovery the model may read; a night that could not be scored, a failed read, or missing or revoked health keeps the planned time.
+
 ## 5. Flags, tests and evals
 
 **Flags** (all default `0`):

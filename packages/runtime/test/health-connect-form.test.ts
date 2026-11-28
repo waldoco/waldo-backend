@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { produceHealthScores } from '../src/health/producer';
 import { dailyScoresFor } from '../src/health/scores';
+import { healthPartsV1Schema, healthUsualListV1Schema } from '../../contracts/src/app/health-ingest';
 
 // Form for a Galaxy Watch through Health Connect, as the series read returns it: Samsung Health's night, heart-rate hours and
 // hourly steps, and no daylight or movement minutes, which Health Connect does not have. Every value is synthetic.
@@ -31,12 +32,13 @@ const history = (days: number, atHour: number, opts: { steps?: boolean; movement
   Array.from({ length: days }, (_, i) => dayOf(addDays(TODAY, -i), i, i === 0 ? atHour - 1 : 23, opts)).flat();
 
 type Row = Record<string, any>;
-const produce = async (samples: readonly Sample[], atHour: number): Promise<{ rows: Row[]; payloads: string[] }> => {
+const produce = async (samples: readonly Sample[], atHour: number, detail = false): Promise<{ rows: Row[]; payloads: string[] }> => {
   const rows: Row[] = [], payloads: string[] = [];
   await produceHealthScores({
     readSeries: async range => ({ access: 'granted', read_at: iso(local(TODAY, atHour)).replace('Z', '000Z'), sources: [{ source: 'health_connect', consent_epoch: 1, truncated: false, samples: samples.filter(s => range.signals.includes(String(s.signal))) }] }),
     writeContext: async payload => { payloads.push(payload); rows.push(JSON.parse(payload)); return { written: true }; },
     compute: dailyScoresFor('1'),
+    ...(detail ? { scoreParts: true, usual: true } : {}),
     readDemand: async () => ({ state: 'available', days: Array.from({ length: 31 }, (_, i) => ({ day: addDays(TODAY, -i), busy_minutes: 240, partial: false })) }),
   }, { now: local(TODAY, atHour), timezone: TZ });
   return { rows, payloads };
@@ -70,11 +72,11 @@ describe('Form on Android, where Health Connect has no daylight or movement minu
     expect(signals).not.toContain('steps');
   });
 
-  it('computes the same but never accepts it when steps came from another app', async () => {
+  it('accepts it the same when steps came from another app', async () => {
     const samples = history(25, 9);
     const stray = samples.map((s, i) => (i === samples.findIndex(x => x.signal === 'steps_window') ? { ...s, samsung_writer: undefined } : s));
     const [mixed, own] = [await formAt(stray, 9), await formAt(samples, 9)];
-    expect(mixed).toMatchObject({ activation: 'candidate_unaccepted', score: own.score });
+    expect(mixed).toMatchObject({ activation: 'accepted', score: own.score });
   });
 
   it('keeps every step count out of the logs and out of the row it writes, which holds the score and the signals used, never a reading', async () => {
@@ -98,5 +100,21 @@ describe('Form on Android, where Health Connect has no daylight or movement minu
       .map(s => ({ ...s, start_at: iso(Date.parse(String(s.start_at)) + 30 * 60_000), end_at: iso(Date.parse(String(s.end_at)) + 30 * 60_000) }));
     const form = await formAt([...samples, ...moved], 9);
     expect(form.used?.signals ?? []).not.toContain('steps');
+  });
+});
+
+describe('Form\'s parts on Android, where steps stand in for movement', () => {
+  it('puts steps in movement\'s part, so the parts still make the whole score, and links it to no band the contract would refuse', async () => {
+    const { rows } = await produce(history(25, 18), 18, true);
+    const row = rows.find(r => r.day === TODAY)!;
+    expect(row.form.used.signals).toContain('steps');
+    expect(healthPartsV1Schema.safeParse(row.components).success).toBe(true);
+    expect(healthUsualListV1Schema.safeParse(row.usual ?? []).success).toBe(true);
+    const movement = row.components.form.find((part: Row) => part.key === 'movement');
+    expect(movement).toMatchObject({ state: 'available', signals: [] });
+    const available = row.components.form.filter((part: Row) => part.state === 'available');
+    expect(available.reduce((sum: number, part: Row) => sum + part.share, 0)).toBeCloseTo(1, 4);
+    expect(Math.round(available.reduce((sum: number, part: Row) => sum + part.points, 0))).toBe(row.form.score);
+    expect((row.usual ?? []).map((band: Row) => band.signal)).not.toContain('steps');
   });
 });

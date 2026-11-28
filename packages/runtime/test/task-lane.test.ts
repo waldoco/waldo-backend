@@ -428,7 +428,7 @@ describe('a report after the owner may already have heard it', () => {
       await runJobsLane(deps({ ...capture(turns), recentExchange: since => { asked.push(since); return { text: 'Owner: how is it going?\nWaldo: Asha asked for the quote.', outside: false }; } }));
       expect(asked).toEqual([T0]);
       expect(turns[0]!.text).toContain('Waldo: Asha asked for the quote.');
-      expect(turns[0]!.text).toMatch(/already told the owner what this result says, reply with exactly SKIP/);
+      expect(turns[0]!.text).toMatch(/already told the owner what this result says, end the run with end_run as nothing_to_send/);
       expect(turns[0]!.text).toMatch(/only what is new/);
       expect(turns[0]!.text).not.toContain('The owner has not heard about it yet');
       expect(turns[0]!.taint).toBeNull();

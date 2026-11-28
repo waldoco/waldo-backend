@@ -16,7 +16,7 @@ import {
   type ContextSource,
   type SystemSkillRepository,
 } from '../context-composer';
-import type { ContextFragment, ContextHealthMaterial } from '../context-composer/types';
+import type { ContextFragment, HealthRead } from '../context-composer/types';
 import type { HookRuntimeContext } from '../hooks/registry';
 import {
   CloudflareAIGatewayAdapter,
@@ -145,7 +145,7 @@ type ResolveRunLoopAdaptersOptions = {
   toolOutputs?: () => Promise<readonly ContextFragment[]>;
   // D5: derived health context (zones only, Art-9) for the composer's health material slot.
   // The loader owns absence: it returns null and logs when no derived context exists.
-  health?: () => Promise<ContextHealthMaterial | null>;
+  health?: () => Promise<HealthRead>;
   onComposerPhase?: (phase: string, previousMs: number) => void;
 };
 
@@ -356,6 +356,7 @@ export function localTrustedBriefContextComposer(
     materials: {
       async load(request) {
         assertLocalTrustedBriefRequest(request);
+        const healthRead = await health().catch((): 'unreadable' => 'unreadable');
         return {
           principal_ref: request.principal_ref,
           tenant_ref: request.tenant_ref,
@@ -376,9 +377,9 @@ export function localTrustedBriefContextComposer(
             'Never expose private source content.',
             'local-trusted-safeguards',
           ),
-          // A health-material failure degrades to truthful absence (the loader logs the
-          // underlying error); a health bug must never kill the owner's turn.
-          health: await health().catch(() => null),
+          // A health-material failure never kills the owner's turn: the loader logs the error and the
+          // prompt says the read failed.
+          ...(healthRead === 'unreadable' ? { health: null, health_unreadable: true as const } : { health: healthRead }),
           workspace: [],
           tool_outputs: await toolOutputs(),
           tool_outputs_omitted: 0,

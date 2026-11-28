@@ -5,7 +5,7 @@
 // being forgotten or a health number, and a link that survives its row's purge. Every row is synthetic.
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
-import type { RecallLink, SearchHistoryResult } from '@waldo/contracts';
+import { llmToolSchema, type RecallLink, type SearchHistoryResult } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
 import { approvalDesk, ledgerSummary, type EmailSendProposal } from '../src/channels/approvals';
 import { appApprovalLink, appCaller } from '../src/channels/surfaces/app';
@@ -428,5 +428,15 @@ describe('the recall chain, measured', () => {
     expect(result.on[0]).toMatch(/"rel":"started","line":"delegate_task completed: Found two Lisbon flights/);
     expect(result.definitions.on - result.definitions.off).toBeLessThan(1_600);
     expect(result.idle).toEqual({ off: 0, on: 0 });
+  });
+});
+
+describe('the recall chain\'s tool descriptions', () => {
+  // A description the model request schema refuses fails every request that carries the tool, not only the recall.
+  it('fit the model request schema with the chain on and off', () => {
+    const chain = {} as never;
+    for (const handler of [searchEpisodesHandler({} as never), searchEpisodesHandler({} as never, chain), searchHistoryHandler({} as never, () => null, undefined), searchHistoryHandler({} as never, () => null, chain)]) {
+      expect(llmToolSchema.safeParse({ name: handler.name, description: handler.description, parameters: {} }).success, `${handler.name}: ${handler.description.length} characters`).toBe(true);
+    }
   });
 });

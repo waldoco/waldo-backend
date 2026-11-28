@@ -17,6 +17,7 @@ const TEXT_JSON = 'text-bearing JSON or free text; no purge wired, contents not 
 const TABLES: Record<string, Row> = {
   // Memory and derived stores
   reminder_notes: purged('memory-forget-do-provider.test.ts'),
+  wake_outcomes: purged('forget-wake-outcomes.test.ts'),
   reminder_outside: exempt('a reminder id, kept while that reminder\'s note was written after outside text; no owner text'),
   responsibility_outside: exempt('a responsibility id, kept once its text was written after outside text or holds a worker\'s report; no owner text'),
   claims: purged('forget-coverage.test.ts'), episodes: purged('forget-coverage.test.ts'),
@@ -33,6 +34,7 @@ const TABLES: Record<string, Row> = {
   model_auth_incidents: exempt('a provider name and the time its key was first refused; no owner text'),
   claim_recall_ready: exempt('claim ids'),
   claim_rests_on: exempt('claim ids only: a merged or rewritten note and the notes it replaced; a row goes when either claim is deleted'),
+  constellation_dismissals: exempt('claim ids only: the spots a constellation the owner forgot or corrected rested on, and a time; never its words'),
   node_statement_backfill: exempt('an empty marker that the one-time node statement backfill ran'),
   claim_vectors: purged('forget-semantic-recall.test.ts'),
   owner_findings: purged('forget-owner-findings.test.ts'),
@@ -43,6 +45,7 @@ const TABLES: Record<string, Row> = {
   app_row_traces: exempt('a chat row id and the trace key of the job that wrote it, kept only in the shape `<schedule id>:<time>` or `<surface>-<n>`; no owner text'),
   onboarding_runs: exempt('run id, step states, the first-look client id, a clock time and times; the answers live as claims'),
   welcome_builds: exempt('stage states, times and a node count; the nodes and their support live in constellation_nodes and claims'),
+  onboarding_summary: gap('the latest onboarding summary and its open questions, Waldo\'s text about the owner written from their answers and reads; replaced by the next summary; the answers live as claims and deferred questions as loops, which a forget reaches, and any forget made after the summary was written retires it from every read (onboarding-summary.test.ts), but the words stay in the row until the next summary replaces it'),
   schedule_preferences: exempt('a scheduled-behavior kind enum and an on/off flag; no owner text'),
   schedule_settings: exempt('a setting key and an enum value (the health proposal mode); no owner text'),
   health_trigger_pending: exempt('an owner-local day and the time it was marked; no owner text, zone word or reading'),

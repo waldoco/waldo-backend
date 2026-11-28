@@ -311,6 +311,38 @@ describe('get_health', () => {
   });
 });
 
+describe('get_health at a finer grain than a day', () => {
+  it('gives each hour of a signal read by the hour, by its local start', async () => {
+    const { handler } = fake({});
+    const result = await handler.handle({ signals: ['heart_rate', 'movement'], from: '2026-10-12', to: '2026-10-12', aggregation: 'hourly' }, ctx);
+    expect(result.ok && getHealthResultSchema.parse(result.data).state === 'available' && result.data.state === 'available' && result.data.signals).toEqual([
+      { signal: 'heart_rate', unit: 'bpm', source: 'apple', method: null, hours: [{ at: '2026-10-12T08:30', value: 62 }, { at: '2026-10-12T09:30', value: 70 }, { at: '2026-10-12T10:30', value: 78 }] },
+      { signal: 'movement', unit: 'minutes', source: 'apple', method: null, hours: [{ at: '2026-10-12T08:30', value: 10 }, { at: '2026-10-12T10:30', value: 25 }] },
+    ]);
+  });
+
+  it('gives each night of a signal read once a night, with when it began and ended: for sleep, asleep and awake', async () => {
+    const { handler } = fake({});
+    const result = await handler.handle({ signals: ['sleep'], from: '2026-10-11', to: '2026-10-12', aggregation: 'nightly' }, ctx);
+    expect(result.ok && getHealthResultSchema.parse(result.data).state === 'available' && result.data.state === 'available' && result.data.signals).toEqual([
+      { signal: 'sleep', unit: 'minutes', source: 'apple', method: 'asleep', nights: [
+        { day: '2026-10-11', from: '2026-10-10T23:30', to: '2026-10-11T06:00', value: 390 },
+        { day: '2026-10-12', from: '2026-10-11T23:00', to: '2026-10-12T06:15', value: 412 },
+      ] },
+    ]);
+  });
+
+  it('refuses a signal of another grain, or an hourly read longer than two days, and says what it takes', async () => {
+    const { handler, calls } = fake({});
+    const nightlySteps = await handler.handle({ signals: ['sleep', 'steps'], from: '2026-10-11', to: '2026-10-12', aggregation: 'nightly' }, ctx);
+    expect(nightlySteps).toMatchObject({ ok: false, code: 'invalid_args' });
+    expect(!nightlySteps.ok && nightlySteps.error).toMatch(/nightly reads only sleep, sleep_midpoint, hrv, .*; not steps$/);
+    expect(await handler.handle({ signals: ['sleep'], from: '2026-10-12', to: '2026-10-12', aggregation: 'hourly' }, ctx)).toMatchObject({ ok: false, code: 'invalid_args' });
+    expect(await handler.handle({ signals: ['steps'], from: '2026-10-10', to: '2026-10-12', aggregation: 'hourly' }, ctx)).toEqual({ ok: false, code: 'invalid_args', error: 'hourly reads at most 2 days' });
+    expect(calls).toEqual([]);
+  });
+});
+
 describe('get_health daytime heart rate variability', () => {
   const hour = (h: number, value: number, method: string) => reading('hrv_window', '2026-10-12', value, { method, start_at: `2026-10-12T0${h}:00:00Z`, end_at: `2026-10-12T0${h + 1}:00:00Z` });
   it('gives the day\'s mean of the hourly readings, one method, apart from the overnight reading, and asks for hrv_window', async () => {

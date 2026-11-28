@@ -154,6 +154,7 @@ describe('toolName', () => {
       'show_health_chart',
       'read_import',
       'import_memories',
+      'end_run',
     ]);
   });
 
@@ -331,6 +332,7 @@ describe('TOOL_PERMISSIONS', () => {
         'send_email',
         'send_agent_mail',
         'offer_replies',
+        'end_run',
         'show_chart',
         'show_health_chart',
         'propose_schedule',

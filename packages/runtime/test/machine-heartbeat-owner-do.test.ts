@@ -1,3 +1,4 @@
+import { EVERY_RUN_TOOLS } from '../src/channels/owner-turn';
 import { env, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { approvalDesk } from '../src/channels/approvals';
@@ -96,7 +97,7 @@ it('golden: a past-due loop becomes a reader job; the worker reads with the mach
   expect(seen.apply[0]).toContain('Asha wrote after the call: the notes come tomorrow.');
   const applyTools = toolNames(seen.apply[0]!);
   expect(applyTools).toContain('close_loop');
-  for (const tool of applyTools) expect(LOOP_CHECK_BACK_TOOLS).toContain(tool);
+  for (const tool of applyTools.filter(name => !EVERY_RUN_TOOLS.includes(name))) expect(LOOP_CHECK_BACK_TOOLS).toContain(tool);
   await runInDurableObject(owner, async (_instance, state) => {
     const records = (state.storage.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY) ?? []).filter(record => record.heartbeat);
     expect(records.map(record => [record.id, record.payload.text])).toEqual([[`heartbeat:${settled.id}`, REPLY]]);

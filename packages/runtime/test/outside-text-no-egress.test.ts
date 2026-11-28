@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CHECK_BACK_TOOLS, LOOP_CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS } from '../src/channels/check-back';
+import { LOOP_CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS } from '../src/channels/check-back';
 import { updateSweepTools } from '../src/channels/update-sweep';
 import { CHILD_READ_TOOLS } from '../src/conversation/subagent';
 import { EGRESS_READ_TOOLS, MACHINE_READER } from '../src/tasks/profiles';
@@ -25,12 +25,10 @@ describe('unattended turns on outside text hold no egress reads', () => {
     const reads = CHILD_READ_TOOLS.filter((name) => !EGRESS_READ_TOOLS.includes(name));
     expect(reads).toEqual(expect.arrayContaining(['read_thread', 'query_calendar', 'read_memory']));
     expect(OUTSIDE_TEXT_JOB_TOOLS).toEqual([...reads, 'propose_action']);
-    expect(LOOP_CHECK_BACK_TOOLS).toEqual([...reads, 'close_loop', 'propose_action']);
+    expect(LOOP_CHECK_BACK_TOOLS).toEqual([...reads, 'close_loop', 'propose_action', 'remember']);
   });
 
-  it('leaves the reminder check-back, which starts on the owner\'s own words, with every child read, page reads included', () => {
-    expect(CHECK_BACK_TOOLS).toEqual(CHILD_READ_TOOLS);
-    expect(CHECK_BACK_TOOLS).toEqual(expect.arrayContaining(['web_search', 'browse_page']));
+  it('leaves page reads to the owner\'s own reminders (owner-reminder-tools.test.ts), never to a job over outside text', () => {
     for (const tools of [LOOP_CHECK_BACK_TOOLS, OUTSIDE_TEXT_JOB_TOOLS]) expect(tools).not.toContain('browse_page');
   });
 });

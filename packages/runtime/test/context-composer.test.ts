@@ -20,7 +20,7 @@ import {
   type RuntimeOwnedContextInputs,
 } from '../src/context-composer';
 import type { ResolvedSkillBudget } from '../src/skills/budget';
-import { toContextHealthMaterial } from '../src/channels/health-context';
+import { toContextHealthMaterial, toHealthInventory, withInventory } from '../src/channels/health-context';
 
 const SNAPSHOT_AT = Date.parse('2026-07-15T12:00:00.000Z');
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'] as const;
@@ -797,6 +797,32 @@ describe('ContextComposer', () => {
     expect(await createContextComposer(withHealth(zoned)).compose(trustedEnvelope(), RUNTIME_INPUTS)).toEqual({ ok: false, failure: { code: 'health_context_invalid' } });
   });
 
+  it('composes the body data on hand through the Scribe pass, beside a partial row and alone', async () => {
+    const base = dependencies();
+    const clock = { timezone: 'UTC', now: () => new Date(SNAPSHOT_AT) };
+    const at = (hours: number) => new Date(new Date(SNAPSHOT_AT).getTime() - hours * 3_600_000).toISOString().replace('.000Z', 'Z');
+    const inventory = toHealthInventory({ sources: [{ source: 'health_connect', kinds: [
+      { signal: 'steps_window', newest_at: at(2), days: 30 }, { signal: 'heart_rate_window', newest_at: at(2), days: 30 }, { signal: 'sleep_duration', newest_at: at(5), days: 20 },
+    ] }] }, clock);
+    const row = toContextHealthMaterial({
+      context: {
+        id: 'ctx-partial', day: '2026-07-15', compiled_at: '2026-07-15T11:00:00.000Z', basis: [{ source: 'health_connect', consent_epoch: 1 }],
+        recovery: { reason: 'missing_resting_signal' }, form: { reason: 'missing_resting_signal' }, weight: { reason: 'calendar_demand_unavailable' },
+        drivers: [], confidence: null, freshness: 'fresh', tags: [],
+      },
+      previous: null,
+    }, clock, undefined, { partial: true });
+    const withHealth = (health: unknown) => ({
+      ...base,
+      materials: { async load(request: Parameters<typeof base.materials.load>[0]) { return { ...(await base.materials.load(request)), health } as never; } },
+    });
+    for (const material of [withInventory(row, inventory, clock), withInventory(null, inventory, clock)]) {
+      const composed = await createContextComposer(withHealth(material)).compose(trustedEnvelope(), RUNTIME_INPUTS);
+      expect(composed.ok, composed.ok ? undefined : composed.failure.code).toBe(true);
+      if (composed.ok) expect(composed.prompt).toContain('Body data on hand this month: time asleep (nightly; newest today, fresh; most days); heart rate through the day (hourly; newest within hours, fresh; nearly every day); steps (hourly; newest within hours, fresh; nearly every day).');
+    }
+  });
+
   it('fails closed for missing safeguards, unsafe derived health, external prompt injection, and an owner-mismatched recall snapshot', async () => {
     const base = dependencies();
     const missingSafeguards = await createContextComposer({
@@ -1152,6 +1178,24 @@ describe('ContextComposer', () => {
     expect(result.prompt).not.toContain('<available-skills>');
     expect(result.prompt).toContain('No relevant memory or history surfaced for this context.');
     expect(result.prompt).toContain('No derived health context is available for this invocation.');
+  });
+
+  it('says a failed health read failed, apart from health that is absent, and carries it into healthPrompt', async () => {
+    const base = dependencies();
+    const compose = (flag: Record<string, unknown>) => createContextComposer({
+      ...base,
+      materials: { async load(request) { return { ...(await base.materials.load(request)), health: null, ...flag }; } },
+    }).compose(trustedEnvelope(), RUNTIME_INPUTS);
+    const absent = await compose({});
+    const failed = await compose({ health_unreadable: true });
+    expect(failed.ok, failed.ok ? undefined : failed.failure.code).toBe(true);
+    expect(absent.ok).toBe(true);
+    if (!absent.ok || !failed.ok) return;
+    expect(absent.prompt).toContain('No derived health context is available for this invocation.');
+    expect(failed.prompt).not.toContain('No derived health context is available');
+    expect(failed.prompt).toContain('could not be read just now');
+    expect(failed.healthPrompt).toContain('could not be read just now');
+    expect(absent.healthPrompt).toBe('No derived health context is available for this invocation.');
   });
 
   it('applies only explicitly-attested headless skill state and does not treat persisted curator pinning as invocation priority', async () => {

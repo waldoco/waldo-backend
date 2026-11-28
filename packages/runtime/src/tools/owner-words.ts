@@ -1,6 +1,7 @@
 // The owner's current message as the authenticated host hands it to the tools (owner-turn memoryContext), never from model
 // arguments. Each text is the owner's own message body; quote ranges mark forwarded or provider-authored chunks.
-export type MemoryOwnerTurn = Readonly<{ message_ref: string; text: string; sourceQuoteRanges?: readonly Readonly<{ start: number; end: number }>[] }>;
+// steer marks a message the owner sent while this turn was running.
+export type MemoryOwnerTurn = Readonly<{ message_ref: string; text: string; sourceQuoteRanges?: readonly Readonly<{ start: number; end: number }>[]; steer?: true }>;
 
 // Split, rather than join, so evidence cannot bridge an excluded quote.
 export const ownerParts = (turn: MemoryOwnerTurn): readonly string[] => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DAY_CARDS, dayCardPrompt, PLANNING_BRIEF_INSTRUCTION, SKIP_CARD } from '../src/prompt/day-cards';
+import { DAY_CARDS, dayCardPrompt, PLANNING_BRIEF_INSTRUCTION } from '../src/prompt/day-cards';
 
 // PROACTIVE_ACT_AHEAD's day shape: the Check-in goes only when the plan slipped, and the Close ends Waldo's day. The prompts
 // change; whether the plan slipped is the model's reading. These check which instruction a card carries, never its words.
@@ -10,7 +10,7 @@ const prompt = (id: string, dayShape: boolean, planning = false) => dayCardPromp
 describe('the day shape', () => {
   it('the Check-in reads the plan against the day and may skip, in place of its old instruction', () => {
     expect(prompt('card:midday', true)).not.toContain(card('card:midday').instruction);
-    expect(prompt('card:midday', true)).toContain(SKIP_CARD);
+    expect(prompt('card:midday', true)).toContain('end_run as nothing_to_send');
   });
 
   it('the Close keeps its wrap and adds the end of Waldo\'s day', () => {

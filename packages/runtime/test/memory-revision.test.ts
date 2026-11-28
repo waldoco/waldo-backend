@@ -45,13 +45,13 @@ describe('memory_revision', () => {
       const mail = store.saveNode({ id: null, domain: 'work', label: 'Investor mornings', summary: 'Mail first', strength: 0.5, status: 'active', supporting_spots: [read] }, AT);
       step('node confirm', () => confirmWelcomeNode(store, mail, AT));
       step('node correct', () => correctWelcomeNode(store, mail, 'Investors after standup', AT));
-      step('promotion', () => applyPromotion(store, JSON.stringify({ nodes: [{ id: node, domain: 'work', label: 'Deep mornings', summary: 'Focus before noon', strength: 0.7, status: 'active', supporting_spots: [second, store.claims().find((claim) => claim.text === 'Writes before eleven')!.id], durable: true, reason: 'two days' }], edges: [], promoted: [] }), LATER));
+      step('promotion', () => applyPromotion(store, JSON.stringify({ constellations: [{ id: node, replaces: [], area: 'work', label: 'Deep mornings', summary: 'Focus before noon', strength: 0.7, spots: [second, store.claims().find((claim) => claim.text === 'Writes before eleven')!.id] }], links: [], promoted: [] }), LATER));
       step('chat ops', () => applyClaimOps(store, JSON.stringify({ add: [{ kind: 'fact', text: 'Lives in Pune', source: 'stated', evidence: 'Lives in Pune', touches_forgotten: false, aliases_touch_forgotten: false, aliases: [] }], seen: [], confirm: [], dismiss: [], corrections: [], forget_claims: [], forget_nodes: [], forget_topic: null }), AT));
+      step('forget node', () => store.forgetNode(node));
       step('purge', () => store.purge([second], AT));
       step('settle', () => store.settle([second]));
-      step('forget node', () => store.forgetNode(node));
       step('forget', () => store.forget(inferred));
-      expect(moved).toEqual(['add', 'add inferred', 'nightly confirm', 'owner confirm', 'pin', 'unpin', 'correct', 'dismiss', 'node', 'node edit', 'edge', 'welcome read', 'node confirm', 'node correct', 'promotion', 'chat ops', 'purge', 'settle', 'forget node', 'forget']);
+      expect(moved).toEqual(['add', 'add inferred', 'nightly confirm', 'owner confirm', 'pin', 'unpin', 'correct', 'dismiss', 'node', 'node edit', 'edge', 'welcome read', 'node confirm', 'node correct', 'promotion', 'chat ops', 'forget node', 'purge', 'settle', 'forget']);
     });
   });
 

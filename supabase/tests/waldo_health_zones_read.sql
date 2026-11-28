@@ -1,11 +1,12 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(20);
+select plan(26);
 delete from vault.secrets where name='waldo_router_hmac';
 select vault.create_secret('fixture-router','waldo_router_hmac');
 
 -- The zones a personal experiment is judged on: each day's Recovery and Form zone words over a bounded range, for the model,
--- so only under live model-use consent, never a score and never a backfilled day. Synthetic owners and values throughout.
+-- so only under live model-use consent and never a score. A backfilled day appears only when the first build asks for history.
+-- Synthetic owners and values throughout.
 create function pg_temp.sig(msg text,at bigint) returns text language sql as $$ select encode(extensions.hmac(at::text||'.'||msg,'fixture-router','sha256'),'hex') $$;
 create function pg_temp.h(op text,owner text,body jsonb default '{}') returns jsonb language plpgsql as $$
 declare t text:=body::text; a bigint:=extract(epoch from now())::bigint; r jsonb;
@@ -21,11 +22,11 @@ create function pg_temp.live(back int, score int, zone text) returns jsonb langu
     'form',jsonb_build_object('reason','intraday_inputs_unavailable'),
     'recovery',jsonb_build_object('score',score,'zone',zone,'algorithm_version','recovery.v5','activation','accepted','hrv_method','rmssd','confidence',0.8),
     'weight',jsonb_build_object('reason','calendar_demand_unavailable'),'freshness','fresh') $$;
-create function pg_temp.zones(owner text,back_from int,back_to int) returns jsonb language sql as $$
-  select pg_temp.h('zones_read',owner,jsonb_build_object('from',pg_temp.d(back_from),'to',pg_temp.d(back_to))) $$;
-create function pg_temp.days(owner text,back_from int,back_to int) returns text[] language sql as $$
+create function pg_temp.zones(owner text,back_from int,back_to int,extra jsonb default '{}') returns jsonb language sql as $$
+  select pg_temp.h('zones_read',owner,jsonb_build_object('from',pg_temp.d(back_from),'to',pg_temp.d(back_to)) || extra) $$;
+create function pg_temp.days(owner text,back_from int,back_to int,extra jsonb default '{}') returns text[] language sql as $$
   select coalesce(array_agg((d->>'day') || ' ' || coalesce(d->>'recovery','none') || ' ' || coalesce(d->>'form','none') order by n),array[]::text[])
-  from jsonb_array_elements(pg_temp.zones(owner,back_from,back_to)->'zones'->'days') with ordinality as x(d,n) $$;
+  from jsonb_array_elements(pg_temp.zones(owner,back_from,back_to,extra)->'zones'->'days') with ordinality as x(d,n) $$;
 
 insert into auth.users(id,email) values ('f1000000-0000-0000-0000-0000000000f1','zones@example.invalid'), ('f2000000-0000-0000-0000-0000000000f2','zones-other@example.invalid');
 insert into waldo.owners(id,auth_user_id,do_name,email) values
@@ -54,6 +55,17 @@ select is(pg_temp.h('consent_grant','zones-owner',pg_temp.grant_body('grant-z-mo
 select is(pg_temp.days('zones-owner',9,0),array[pg_temp.d(9)||' high none',pg_temp.d(3)||' low none',pg_temp.d(1)||' moderate none',pg_temp.d(0)||' good none'],
   'each live day in the range, oldest first, as its zone words; a pillar with no zone is null and a day with no row is absent');
 select ok(not (pg_temp.d(5) = any(pg_temp.days('zones-owner',9,0))),'a backfilled day never reaches the model');
+select is(pg_temp.days('zones-owner',9,0,'{"history":false}'),pg_temp.days('zones-owner',9,0),'history false reads as the read without it');
+
+-- The first build asks for history: backfilled days join the live ones, as their Recovery word only.
+select is(pg_temp.days('zones-owner',9,0,'{"history":true}'),
+  array[pg_temp.d(9)||' high none',pg_temp.d(5)||' good none',pg_temp.d(3)||' low none',pg_temp.d(1)||' moderate none',pg_temp.d(0)||' good none'],
+  'with history, a backfilled day is returned among the live ones, oldest first, as its zone word');
+select ok(pg_temp.zones('zones-owner',9,0,'{"history":true}')::text !~ 'score|backfilled|60|72|85','with history, no score and no mark reaches the answer');
+select is((select array_agg(k order by k) from jsonb_array_elements(pg_temp.zones('zones-owner',9,0,'{"history":true}')->'zones'->'days') d, jsonb_object_keys(d) k where d->>'day' = pg_temp.d(5)),
+  array['day','form','recovery'],'a backfilled day carries the same three keys as a live one');
+select is((select count(*)::int from unnest(array['{"history":"yes"}'::jsonb,'{"history":1}','{"history":null}']) bad
+  where pg_temp.zones('zones-owner',9,0,bad)->>'error' = 'invalid_request'),3,'history that is not a boolean is refused');
 select is(pg_temp.days('zones-owner',3,1),array[pg_temp.d(3)||' low none',pg_temp.d(1)||' moderate none'],'the range bounds both ends');
 select ok(pg_temp.zones('zones-owner',9,0)::text !~ 'score|72|85','no score reaches the answer');
 select is((select array_agg(k order by k) from jsonb_array_elements(pg_temp.zones('zones-owner',9,0)->'zones'->'days') d, jsonb_object_keys(d) k where d->>'day' = pg_temp.d(0)),
@@ -64,5 +76,6 @@ select ok(pg_temp.zones('zones-owner',56,0)->'zones'->'days' is not null,'57 day
 select is(pg_temp.days('zones-other',9,0),array[]::text[],'another owner sees none of these days');
 select is(pg_temp.h('consent_withdraw','zones-owner',jsonb_build_object('request_id','withdraw-z-model01','source','apple','purpose','model_processing','expected_epoch',1))->'consent'->>'status','withdrawn','the owner withdraws model use');
 select is(pg_temp.days('zones-owner',9,0),array[]::text[],'and the model reads none of their days again');
+select is(pg_temp.days('zones-owner',9,0,'{"history":true}'),array[]::text[],'history included');
 select * from finish();
 rollback;

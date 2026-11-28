@@ -65,17 +65,16 @@ const dayOfReadings = (d: string, i: number): Sample[] => [
 ];
 export const PRODUCER_NOW = Date.parse('2026-03-20T12:00:00Z');
 const READ_AT = '2026-03-20T12:00:00.000123Z';
-// Whether Samsung Health wrote a reading, as the series read returns it: present only when it did. `stray` leaves the first
-// reading without it, for a source whose readings come from more than one app.
-const withWriter = (samples: Sample[], writer: 'samsung_health' | undefined, stray: boolean | undefined): Sample[] =>
-  (writer === undefined ? samples : samples.map((s, i) => (i === 0 && stray === true ? s : { ...s, samsung_writer: true })));
+// Whether Samsung Health wrote a reading, as the series read returns it: present only when it did. No row depends on it.
+const withWriter = (samples: Sample[], writer: 'samsung_health' | undefined): Sample[] =>
+  (writer === undefined ? samples : samples.map(s => ({ ...s, samsung_writer: true })));
 const seriesOf = (spec: GoldenProducerCase) => ({
   access: 'granted', read_at: READ_AT,
-  sources: [{ source: spec.source, consent_epoch: 3, truncated: false, samples: withWriter(Array.from({ length: spec.nights }, (_, i) => dayOfReadings(addDays(TARGET, -i), i)).flat(), spec.writer, spec.stray) }],
+  sources: [{ source: spec.source, consent_epoch: 3, truncated: false, samples: withWriter(Array.from({ length: spec.nights }, (_, i) => dayOfReadings(addDays(TARGET, -i), i)).flat(), spec.writer) }],
 });
 const busy = Array.from({ length: 31 }, (_, i) => ({ day: addDays(TARGET, -i), busy_minutes: Math.round(240 + wobble(i, 40)), partial: false }));
 
-export type GoldenProducerCase = Readonly<{ nights: number; source: string; calendar: boolean; writer?: 'samsung_health'; stray?: boolean }>;
+export type GoldenProducerCase = Readonly<{ nights: number; source: string; calendar: boolean; writer?: 'samsung_health' }>;
 export const goldenProducerCases: Readonly<Record<string, GoldenProducerCase>> = {
   apple_mature_with_calendar: { nights: 25, source: 'apple', calendar: true },
   oura_mature_no_calendar: { nights: 25, source: 'oura', calendar: false },
@@ -86,7 +85,7 @@ export const goldenProducerCases: Readonly<Record<string, GoldenProducerCase>> =
 };
 
 // The exact payloads written to the derived-row writer, as the strings the signed call carries.
-export const producerPayloads = async (compute: ProducerDeps['compute'], spec: GoldenProducerCase): Promise<string[]> => {
+export const producerPayloads = async (compute: ProducerDeps['compute'], spec: GoldenProducerCase, extra: Partial<ProducerDeps> = {}): Promise<string[]> => {
   const written: string[] = [];
   const series = seriesOf(spec);
   await produceHealthScores({
@@ -94,6 +93,10 @@ export const producerPayloads = async (compute: ProducerDeps['compute'], spec: G
     writeContext: async payload => { written.push(payload); return { written: true }; },
     compute,
     ...(spec.calendar ? { readDemand: async () => ({ state: 'available', days: busy }) } : {}),
+    ...extra,
   }, { now: PRODUCER_NOW, timezone: 'UTC' });
   return written;
 };
+
+// The same builders for tests that need an owner of their own shape.
+export { run as syntheticRun, day as syntheticDay, input as syntheticInput, addDays as syntheticAddDays, wobble as syntheticWobble, TARGET as SYNTHETIC_TARGET };

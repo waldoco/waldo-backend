@@ -21,10 +21,11 @@ export const OWNER_ANSWERED_OUTSIDE = 'owner_said_answering_outside';
 type StoredSpeaker = Speaker | typeof OWNER_SAID | typeof WALDO_READ_OUTSIDE | typeof OWNER_ANSWERED_OUTSIDE;
 type StoredEpisode = Readonly<{ entry_id: string; speaker: StoredSpeaker; at: number; text: string; row?: number }>;
 // row is the index row's id, where a reader needs to come back to exactly that row.
-export type Episode = Readonly<{ entry_id: string; speaker: Speaker; at: number; text: string; own?: boolean; answersOutside?: true; row?: number }>;
+export type Episode = Readonly<{ entry_id: string; speaker: Speaker; at: number; text: string; own?: boolean; answersOutside?: true; readOutside?: true; row?: number }>;
 const shownSpeaker = (speaker: StoredSpeaker): Speaker => speaker === OWNER_SAID || speaker === OWNER_ANSWERED_OUTSIDE ? 'owner' : speaker === WALDO_READ_OUTSIDE ? 'waldo' : speaker;
 const episodeOf = ({ speaker, ...row }: StoredEpisode): Episode => speaker === OWNER_SAID ? { ...row, speaker: 'owner', own: true }
-  : speaker === OWNER_ANSWERED_OUTSIDE ? { ...row, speaker: 'owner', own: true, answersOutside: true } : { ...row, speaker: shownSpeaker(speaker) };
+  : speaker === OWNER_ANSWERED_OUTSIDE ? { ...row, speaker: 'owner', own: true, answersOutside: true }
+  : speaker === WALDO_READ_OUTSIDE ? { ...row, speaker: 'waldo', readOutside: true } : { ...row, speaker: shownSpeaker(speaker) };
 // ref is the index row's own id: unique per stored row, so a snippet traces to exactly its row
 // even if the same entry_id was indexed twice (entry_id is informational, not unique).
 // surface and links are set only with the recall chain on (history/recall-chain.ts).

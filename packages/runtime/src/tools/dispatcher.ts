@@ -51,6 +51,8 @@ import { DEEP_ENCODING_MARKER, guardForOffload, sanitiseDenialLabel } from '../s
 import { sha256Hex, stableJson } from '../context-composer/canonical';
 import type { StoredPut, ToolOutputStore } from '../conversation/tool-output-store';
 import type { OpenFile } from '../channels/opened-files';
+import { TOOL_RECORDS } from './records';
+import { READ_TOOL_TIMEOUT_MS } from '../llm/time-budget';
 
 export type RuntimeToolCall = {
   id: string;
@@ -171,7 +173,8 @@ export type ToolDispatchErrorReason =
   | 'invalid_handler_result'
   | 'tool_result_error'
   | 'invalid_tool_result'
-  | 'result_oversize';
+  | 'result_oversize'
+  | 'timed_out';
 
 export type ToolDefinition = {
   name: ToolName;
@@ -194,6 +197,8 @@ export type DispatchToolOptions<Ctx extends ToolDispatcherContext> = {
   trustedEffect?: Readonly<{
     prepare(input: Readonly<{ tool: ToolName; args: unknown }>): Promise<TrustedToolEffect>;
   }>;
+  // When the turn's tool time ends (epoch ms). A read still running then is given up; absent, only the read limit applies.
+  toolDeadline?: number;
 };
 
 const DEFAULT_MAX_RESULT_JSON_CHARS = 16_384;
@@ -375,7 +380,10 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     } else {
       ctx.runScope?.admit();
       const store = options.offload;
-      handlerResult = await handler.handle(args, { ...ctx, toolCallId: call.id, ...(claimedWhy === undefined ? {} : { claimedWhy }), ...(store ? { keepOutput: (text: string) => keepGuarded(call.id, text, ctx, store) } : {}) });
+      const limit = readLimitMs(tool.data, options.toolDeadline);
+      const settled = await withinLimit(() => handler.handle(args, { ...ctx, toolCallId: call.id, ...(claimedWhy === undefined ? {} : { claimedWhy }), ...(store ? { keepOutput: (text: string) => keepGuarded(call.id, text, ctx, store) } : {}) }), limit);
+      if (settled === GIVEN_UP) return failDispatch(call.id, tool.data, readTimedOut(limit!), 'transient', 'timed_out');
+      handlerResult = settled;
     }
   } catch (error) {
     // A trusted adapter can have crossed its side-effect boundary before an unexpected throw.
@@ -1041,6 +1049,38 @@ const boundedError = (callId: string, error: string, ctx: ToolDispatcherContext,
   const stored = store.put(text, { call_id: callId });
   return `${text.slice(0, MAX_TOOL_ERROR_CHARS)}\n[full error stored as ${stored.id}: ${stored.stored_chars} of ${stored.original_chars} characters kept; call read_tool_output with this id, offset and length to read more]`;
 };
+
+// How long the turn waits for this call: a read with no claimable effect gets the read limit (a long read, the turn's
+// tool time), cut to the turn's tool deadline. Null for anything else, which runs to its own end.
+const readLimitMs = (tool: ToolName, toolDeadline: number | undefined): number | null => {
+  const record = TOOL_RECORDS[tool];
+  if (record.replay.replay !== 'safe_read' || record.claim !== null) return null;
+  const limit = Math.min(record.long ? Infinity : READ_TOOL_TIMEOUT_MS, toolDeadline === undefined ? Infinity : Math.max(0, toolDeadline - Date.now()));
+  return Number.isFinite(limit) ? limit : null;
+};
+
+const GIVEN_UP = Symbol('given_up');
+// The handler's promise cannot be cancelled: a given-up read keeps running and its late result or throw is dropped.
+async function withinLimit<T>(work: () => Promise<T>, limitMs: number | null): Promise<T | typeof GIVEN_UP> {
+  const running = Promise.resolve().then(work);
+  if (limitMs === null) return running;
+  running.catch(() => undefined);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expiry = new Promise<typeof GIVEN_UP>((resolve) => { timer = setTimeout(() => resolve(GIVEN_UP), limitMs); });
+  try {
+    return await Promise.race([running, expiry]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// retryable, so the tool loop never keeps it as this turn's settled answer for the same call.
+const readTimedOut = (limitMs: number): ToolError => toolError(
+  'transient',
+  `The tool did not answer within ${Math.max(1, Math.round(limitMs / 1_000))} s, so this turn stopped waiting. It only reads, so nothing changed.`,
+  undefined,
+  'Get the answer another way (another tool, a narrower request, what you already know); call it again only when no other route exists. Tell the owner what you could not read only when no route is left.',
+);
 
 function failDispatch(
   callId: string,

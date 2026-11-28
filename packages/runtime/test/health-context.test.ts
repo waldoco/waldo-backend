@@ -38,6 +38,7 @@ describe('toContextHealthMaterial', () => {
       form_zone: 'steady',
       trend: 'improving',
       freshness: 'fresh',
+      as_of_day: 'today',
       missing_components: [],
       confidence_band: 'high',
       provenance_refs: [`hpr_${md5Hex('health-context.ctx-1')}`],
@@ -216,7 +217,7 @@ describe('toContextHealthMaterial reads what the stored row says about its own s
 
   it('produces the material it always did for a row without the new fields', () => {
     const material = toContextHealthMaterial(row(), clock);
-    expect(Object.keys(material!.view).sort()).toEqual(['algorithm_version', 'authority', 'confidence_band', 'destination_eligibility', 'form_zone', 'freshness', 'missing_components', 'provenance_refs', 'trend']);
+    expect(Object.keys(material!.view).sort()).toEqual(['algorithm_version', 'as_of_day', 'authority', 'confidence_band', 'destination_eligibility', 'form_zone', 'freshness', 'missing_components', 'provenance_refs', 'trend']);
   });
 
   it('words sleep debt as an amount only: some, little, partial or unknown, with no direction', () => {
@@ -300,7 +301,8 @@ describe('healthContextBook', () => {
     expect(book.linked()).toBe(true);
     const material = await book.latest();
     expect(material).not.toBeNull();
-    expect(formZoneOf(material!)).toBe('steady');
+    expect(material).not.toBe('unreadable');
+    expect(formZoneOf(material as Exclude<typeof material, 'unreadable' | null>)).toBe('steady');
     expect(calls[0]).toEqual({ fn: 'health_context_read', message: 'healthctx.read.do-health', args: { p_do_name: 'do-health' } });
   });
 
@@ -321,7 +323,7 @@ describe('healthContextBook', () => {
     expect(calls.length).toBe(before);
   });
 
-  it('degrades to null and reports when the rail fails or the owner has no rows', async () => {
+  it('is unreadable and reports when the rail fails, and null when the owner has no rows', async () => {
     const errors: unknown[] = [];
     const failing = healthContextBook(
       async () => {
@@ -331,7 +333,7 @@ describe('healthContextBook', () => {
       clock,
       (error) => errors.push(error),
     );
-    expect(await failing.latest()).toBeNull();
+    expect(await failing.latest()).toBe('unreadable');
     expect(errors).toHaveLength(1);
     expect(String(errors[0])).toContain('owner directory 500');
     const empty = healthContextBook(async () => null, 'do-health', clock);

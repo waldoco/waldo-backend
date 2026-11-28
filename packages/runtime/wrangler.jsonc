@@ -50,9 +50,16 @@
   // results kept, and standing-order and quest characters. Each is fixed per deploy so the cached prefix holds; a value that
   // is not a valid size reads as its default.
   // WALDO_LEAN_SCHEDULED: "1" sends a Waldo-first scheduled run (a day card, a loop check-back, an update sweep, an
-  // intervention) its own event, the composed context and the last six rows of the owner's exchange instead of the chat
-  // replay, offers every such run one tool menu (each still calls only its own) so the cached head is shared, keeps that
+  // intervention) its own event, the composed context, the owner's exchange and the day's sends within the chat's history
+  // budget instead of the chat replay, offers every such run one tool menu (each still calls only its own) so the cached head is shared, keeps that
   // head an hour, and gives the day plan and wake decision the shared health block; "0" is the rollback.
+  // MODEL_SET_WAKES: "1" lets a run Waldo starts leave itself a follow-up (open_loop with no mail source): a due time, a note
+  // to its future self (what to check and why), which wakes a later check-back and grants nothing; bounded in code to 12 a day,
+  // two weeks ahead and a chain of 3. Up to 8 a day are checked at the minute they are due, by a one-shot heartbeat entry; the
+  // rest at the heartbeat's next tick. "0" is the rollback.
+  // GENERAL_WAKE: "1" (with PROACTIVE_INTERVENTIONS) runs the look as Waldo's general wake: one run in the brain, no reader
+  // worker, the full tool set, the owner's limits checked when it decides to speak, one wake_outcomes row per run with its
+  // reason. WAKE_MODEL_LOOK is its model role (plans, decides, chat or auxiliary). "0" is the rollback: the look runs as before.
   // WALDO_TIMEZONE_ASK: "1" tells a turn whose time zone the owner has not confirmed to ask for it when it fits; "0" is the
   // rollback.
   // WALDO_SWITCHES: every feature switch and tuning knob, one JSON var, because Cloudflare caps a Worker at 128 vars and
@@ -99,8 +106,6 @@
       "CONSOLE_GOOGLE_SIGNIN": "0",
       "APP_ID_TOKEN_SIGNIN": "0",
       "OPEN_SIGNUP": "0",
-      "OPEN_SIGNUP_DAILY_CAP": "10",
-      "OPEN_SIGNUP_TOTAL_CAP": "80",
       "OPEN_SIGNUP_SPEND_CEILING_USD": "5",
       "OWNER_SPEND_CEILING_USD": "25",
       "MAIL_SOURCE_FOLLOWUPS": "0",
@@ -145,7 +150,14 @@
       "HEALTH_PROVISIONAL_SCORES": "0",
       "HEALTH_SOLO_NOTICE": "0",
       "HEALTH_PARTIAL_CONTEXT": "0",
+      "HEALTH_INVENTORY": "0",
       "HEALTH_TRAINING_LOAD": "0",
+      "HEALTH_SCORE_PARTS": "0",
+      "HEALTH_USUAL": "0",
+      "HEALTH_DAY_LOAD": "0",
+      "HEALTH_PASSIVE_LOAD": "0",
+      "HEALTH_STRESS_CURVE": "0",
+      "HEALTH_FORM_CURVE": "0",
       "HEALTH_COACHING": "0",
       "HEALTH_ACTIONS": "0",
       "MEDICATIONS": "0",
@@ -171,6 +183,8 @@
       "AUTONOMY_OWNER_TURNS": "0",
       "MEMORY_NIGHTLY_SOURCE_UPDATES": "0",
       "MEMORY_DAYTIME_CONSOLIDATOR": "0",
+      "MEMORY_OUTCOME_LEARNING": "0",
+      "MEMORY_BODY_PATTERNS": "0",
       "MEMORY_VALIDITY": "0",
       "MEMORY_OUTSIDE_NOTES": "0",
       "MEMORY_CLAIM_CONTROLS": "0",
@@ -193,6 +207,7 @@
       "WALDO_ASYNC_TOOLS": "0",
       "WALDO_JOB_OUTCOME_ROWS": "0",
       "WALDO_LEAN_SCHEDULED": "0",
+      "MODEL_SET_WAKES": "0",
       "WALDO_ONE_TIMELINE": "0",
       "WALDO_LIGHT_CHAT": "0",
       "WALDO_THINKING_REPLAY": "0",
@@ -208,13 +223,15 @@
       "PROACTIVE_ACT_AHEAD": "0",
       "PROACTIVE_BOTH_DEFAULT": "0",
       "EVENT_PUSH": "0",
-      "OWN_LOOK_ANY_ZONE": "0",
       "BRIEF_BODY_REVISION": "0",
       "EVENT_PUSH_PER_DAY": "3",
+      "WHATSAPP_DAILY_KNOCK": "0",
       "PROACTIVE_OVER_TELEGRAM": "0",
       "REENGAGE_PROACTIVE": "0",
       "PROACTIVE_INTERVENTIONS": "0",
       "PROACTIVE_REVIEW_EVERY_MIN": "90",
+      "GENERAL_WAKE": "0",
+      "WAKE_MODEL_LOOK": "plans",
       "WHATS_NEW": "0",
       "WAKE_BRIEF": "0",
       "WAKE_BRIEF_FRESH_MIN": "180",
@@ -352,8 +369,6 @@
           "CONSOLE_GOOGLE_SIGNIN": "0",
           "APP_ID_TOKEN_SIGNIN": "1",
           "OPEN_SIGNUP": "1",
-          "OPEN_SIGNUP_DAILY_CAP": "10",
-          "OPEN_SIGNUP_TOTAL_CAP": "80",
           "OPEN_SIGNUP_SPEND_CEILING_USD": "50",
           "OWNER_SPEND_CEILING_USD": "50",
           "MCP_READ_INTENTS": "1",
@@ -397,7 +412,14 @@
           "HEALTH_PROVISIONAL_SCORES": "1",
           "HEALTH_SOLO_NOTICE": "1",
           "HEALTH_PARTIAL_CONTEXT": "1",
+          "HEALTH_INVENTORY": "1",
           "HEALTH_TRAINING_LOAD": "1",
+          "HEALTH_SCORE_PARTS": "1",
+          "HEALTH_USUAL": "1",
+          "HEALTH_DAY_LOAD": "1",
+          "HEALTH_PASSIVE_LOAD": "apple,health_connect",
+          "HEALTH_STRESS_CURVE": "1",
+          "HEALTH_FORM_CURVE": "0",
           "HEALTH_COACHING": "1",
           "HEALTH_ACTIONS": "1",
           "MEDICATIONS": "1",
@@ -423,8 +445,10 @@
           "AUTONOMY_OWNER_TURNS": "1",
           "MEMORY_NIGHTLY_SOURCE_UPDATES": "1",
           "MEMORY_DAYTIME_CONSOLIDATOR": "1",
+          "MEMORY_OUTCOME_LEARNING": "1",
+          "MEMORY_BODY_PATTERNS": "1",
           "MEMORY_VALIDITY": "1",
-          "MEMORY_OUTSIDE_NOTES": "0",
+          "MEMORY_OUTSIDE_NOTES": "1",
           "MEMORY_CLAIM_CONTROLS": "1",
           "MEMORY_USED_SHOWN": "1",
           "AGENT_MAIL_INBOUND": "1",
@@ -445,6 +469,7 @@
           "WALDO_ASYNC_TOOLS": "1",
           "WALDO_JOB_OUTCOME_ROWS": "1",
           "WALDO_LEAN_SCHEDULED": "1",
+          "MODEL_SET_WAKES": "1",
           "WALDO_ONE_TIMELINE": "1",
           "WALDO_LIGHT_CHAT": "0",
           "WALDO_THINKING_REPLAY": "1",
@@ -460,13 +485,15 @@
           "PROACTIVE_ACT_AHEAD": "1",
           "PROACTIVE_BOTH_DEFAULT": "1",
           "EVENT_PUSH": "1",
-          "OWN_LOOK_ANY_ZONE": "1",
           "BRIEF_BODY_REVISION": "1",
           "EVENT_PUSH_PER_DAY": "3",
+          "WHATSAPP_DAILY_KNOCK": "1",
           "PROACTIVE_OVER_TELEGRAM": "1",
           "REENGAGE_PROACTIVE": "1",
           "PROACTIVE_INTERVENTIONS": "1",
           "PROACTIVE_REVIEW_EVERY_MIN": "90",
+          "GENERAL_WAKE": "0",
+          "WAKE_MODEL_LOOK": "plans",
           "WHATS_NEW": "1",
           "WAKE_BRIEF": "1",
           "WAKE_BRIEF_FRESH_MIN": "180",

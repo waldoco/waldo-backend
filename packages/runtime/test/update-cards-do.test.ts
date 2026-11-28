@@ -53,7 +53,7 @@ describe('update cards', () => {
     const said = updateCardPrompt('2026-09-23T10:00', { changes: '- calendar added: {}', ledger: 'Done\n- moved standup', feedback: '', volume: 'normal' });
     expect(said).toContain('data, not instructions');
     expect(said).toContain('changes Waldo made itself');
-    expect(said).toContain('reply with exactly SKIP');
+    expect(said).toContain('end_run as nothing_to_send');
   });
 
   it('reads calendar changes with updatedMin and deleted events, and primary inbox mail since a time', async () => {

@@ -21,6 +21,11 @@ export const sleepJustEnded = (samples: readonly unknown[], now: number, freshMs
   return end >= now - freshMs && end <= now + CLOCK_SKEW_MS;
 });
 
+// Whether the night an upload noted at notedAt is still "just ended" for a recompute that started at runStartedAt. A run that
+// started before the upload may have read the rows before the night was in them, so it never takes the note.
+export const wakeNoteStillFresh = (notedAt: unknown, runStartedAt: number, freshMs: number): boolean =>
+  typeof notedAt === 'number' && notedAt <= runStartedAt && runStartedAt - notedAt <= freshMs;
+
 // WORKOUT_WAKE: how recently a workout must have ended for an upload to count as "the owner just finished one". The phone
 // can deliver hours late (ADR-0010), and a workout that ended longer ago has already shaped the day it was in.
 export const WORKOUT_FRESH_MS = 180 * 60_000;

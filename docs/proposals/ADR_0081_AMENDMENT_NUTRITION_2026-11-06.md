@@ -52,8 +52,9 @@ its store record id, so re-sending it is idempotent, as for every other point re
 ### 3. Sources
 
 Nutrition arrives from the phone transports Waldo already reads (HealthKit, Health Connect, Samsung Health), under their
-existing consent. The 27 October rule still holds: Health Connect is a transport, and a writer other than Samsung Health is
-`candidate_unaccepted` for scores. Nutrition feeds no score, so the rule changes nothing here.
+existing consent. The 27 October rule was that Health Connect is a transport and a writer other than Samsung Health is
+`candidate_unaccepted` for scores; the 19 November amendment (`ADR_0081_AMENDMENT_HEALTH_CONNECT_ANY_WRITER_2026-11-19.md`)
+proposes accepting any writer. Nutrition feeds no score, so the rule changes nothing here.
 
 ### 4. Older builds and older backends
 

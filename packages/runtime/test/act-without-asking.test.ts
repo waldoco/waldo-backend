@@ -499,7 +499,9 @@ describe('the real owner turn carries the provenance the desk decides on', () =>
     const gateway: LLMGatewayAdapter = { async complete(request) {
       const reply = (text: string, call?: { name: string; arguments: string }) => ({ ok: true as const, data: { model: request.request.model, text, ...(call ? { tool_calls: [{ call_id: `c${calls.length}`, ...call }] } : {}), input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 0 } });
       if (request.request.response_format) return reply('{}');
-      const next = calls.shift();
+      // The script advances only on a call that offers its next tool, so a model call the turn adds elsewhere (a side
+      // step, a retry) answers plainly instead of taking a scripted call meant for the tool loop.
+      const next = calls[0] && request.request.tools?.some(tool => tool.name === calls[0]!.name) ? calls.shift() : undefined;
       return next ? reply('', next) : reply('Done.');
     } };
     const mail = { name: 'read_thread' as const, description: 'Read a mail thread.', schema: readThreadArgsSchema, trigger_allowlist: allowed('read_thread'),
@@ -509,7 +511,7 @@ describe('the real owner turn carries the provenance the desk decides on', () =>
     const responder = createOwnerResponder('fixture', undefined, undefined, undefined, undefined, [probe, mail] as never, undefined, false, undefined, undefined, gateway);
     const turn = (text: string) => ownerTyped({ traceId: `owner-${crypto.randomUUID()}`, conversationRef: 'owner', surface: 'whatsapp', text, messageRef: { id: `wamid.${crypto.randomUUID()}`, conversationRef: 'owner' } });
     const sendCall = { name: 'send_message', arguments: JSON.stringify({ ...message(), idempotency_key: Array.from(crypto.getRandomValues(new Uint8Array(32)), byte => byte.toString(16).padStart(2, '0')).join('') }) };
-    return { f, calls, seen, responder, turn, sendCall };
+    return { f, calls, seen, responder, turn, sendCall, gateway };
   };
 
   it('the owner asks, the turn reads a mail, then sends: it runs with no card, and the desk saw the owner\'s own words', () => owner('turn-read-send', async state => {
@@ -519,6 +521,15 @@ describe('the real owner turn carries the provenance the desk decides on', () =>
     expect(seen).toEqual([{ asked: false, ownerTurn: { words: 'check the Acme thread and tell the team I am running late', ref: expect.stringMatching(/^wamid\./) } }]);
     expect(f.sent).toEqual(['Running 10 minutes late']);
     expect(f.messages).toEqual([]);
+  }));
+
+  it('one extra model call that offers none of the scripted tools leaves the script for the tool loop', () => owner('turn-extra-call', async state => {
+    const { f, calls, responder, turn, sendCall, gateway } = turnHarness(state);
+    calls.push({ name: 'read_thread', arguments: '{"thread_id":"thread-1"}' }, sendCall);
+    const extra = await gateway.complete({ request: { model: 'fixture', messages: [{ role: 'user', content: 'quick check' }] } } as never);
+    expect(extra.ok && extra.data.tool_calls).toBeUndefined();
+    await responder.respond(turn('check the Acme thread and tell the team I am running late'), timer);
+    expect(f.sent).toEqual(['Running 10 minutes late']);
   }));
 
   it('the same turn with the choice off: the send is a card and nothing goes out', () => owner('turn-read-send-off', async state => {

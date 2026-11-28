@@ -3,7 +3,7 @@ import { readDriveArgsSchema, triggerTypeSchema, TOOL_PERMISSIONS, type ReadDriv
 import { connectNeededText } from './connect-text';
 import { GoogleError, type DriveFileMeta, type DriveFilePage } from '../../connectors/google';
 import type { ToolDispatcherContext } from '../dispatcher';
-import { accountShare, accountsToRead, missingClientReason, nameTheAccount, readEveryAccount, type GoogleAccess } from './google';
+import { accountShare, accountsToRead, granted, missingClientReason, nameTheAccount, readEveryAccount, type GoogleAccess } from './google';
 import { driveContentExport } from '../../connectors/drive-rest';
 
 // Explicit Drive REST reads through the connector proxy, with no MCP fallback.
@@ -82,7 +82,7 @@ export const readDriveHandler = (google: GoogleAccess, enabled = false, contentE
     trigger_allowlist: allowlist,
     autonomy_gated: false,
     requires_connector: true,
-    eligible: () => enabled ? { ok: true } : { ok: false, reason: 'not_configured' },
+    eligible: enabled ? granted(google, 'drive') : () => ({ ok: false, reason: 'not_configured' }),
     handle: async (args: ReadDriveArgs, ctx): Promise<ToolResult<unknown>> => {
       const accounts = enabled ? await accountsToRead(google, 'drive', args.account) : [];
       if (accounts.length < 2) return read(args, ctx);

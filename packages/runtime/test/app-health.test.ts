@@ -701,6 +701,16 @@ describe('app health scores: revision 4', () => {
     expect('body' in consoleView && (consoleView.body as Record<string, unknown>).sleep_debt).toEqual(own);
     expect(JSON.stringify(consoleView)).not.toContain('trend');
   });
+  // The measured Form curve is for the app's calendar day alone: the one scores view never passes it on.
+  it('never serves the stored Form curve: not to a build at any revision, and not to the console', async () => {
+    const stored = { ...plain, form_curve: { version: 'form.v9', points: [{ at: '2026-03-20T08:00:00.000Z', score: 63.25, kind: 'measured' }] } };
+    for (const header of [{}, contracts('health=2'), contracts('health=3'), contracts('health=4'), contracts('health=7')]) {
+      expect(await text(stored, header), JSON.stringify(header)).toEqual(await text(plain, header));
+      expect((await text(stored, header))[1], JSON.stringify(header)).not.toMatch(/form_curve|63\.25/);
+    }
+    const consoleView = healthScoresView({ scores: stored }, null, Date.parse(row.compiled_at as string), 7);
+    expect(JSON.stringify(consoleView)).not.toMatch(/form_curve|63\.25/);
+  });
   // The app pins the sleep debt need as two words, strictly, so a third must never reach a build below revision 4.
   it('serves a sleep debt that leans on the prior only from revision 4, and leaves the key out below it', async () => {
     const blended = { state: 'available', debt_minutes: 315.5, need_basis: 'blended_average', algorithm_version: 'sleep-debt.v2', activation: 'accepted' };

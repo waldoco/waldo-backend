@@ -39,7 +39,8 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   WALDO_ASYNC_TOOLS: gap('the owner turn holds no long tool and hands that work to start_task; the trial runs no task worker or report turn, so it keeps the long tools inline'),
   WALDO_ONE_TIMELINE: gap('the owner\'s WhatsApp turns share the app chat\'s chain; the trial runs the app surface only, so it never sees a WhatsApp turn in its history'),
   WALDO_JOB_OUTCOME_ROWS: gap('a background job stores a keyed stub in place of its prompt, so a later job turn on the same chain (the Close after the Brief) no longer reads the earlier job\'s prompt; app owner turns already did not, and the trial runs no job turn after another'),
-  WALDO_LEAN_SCHEDULED: gap('a Waldo-first scheduled run (a day card, check-back, sweep or intervention) reads a lean view instead of the chat replay, and the day plan reads the shared health block; the trial\'s day cards and triage turns are not marked Waldo-first, so they read the full chat replay as with the switch off'),
+  WALDO_LEAN_SCHEDULED: mapped('the trial\'s day cards and triage turns run as the Waldo-first scheduled runs the owner object marks them, on the lean view and its shared menu'),
+  MODEL_SET_WAKES: mapped('the trial\'s day cards and triage turns may leave themselves a follow-up, as the owner object\'s do; no trial step fires its check-back yet'),
   WALDO_LIGHT_CHAT: gap("the owner's reply takes a light step on the auxiliary model that answers quick chat or hands the turn to the chat model, and task workers run on the chat model; the profile's trials stay on the chat model, and the lc- scenarios run with it on"),
   WALDO_THINKING_REPLAY: gap("a Claude turn replays its thinking across tool rounds, and every turn's closing round keeps its tool list; the live profile runs on OpenAI (a Claude staging is refused), so a trial sees only the kept tool list at a close"),
   WALDO_STRONG_ROLES: gap('memory writes, background decisions, the day plan and planning runs move to the chat model; the trial runs owner turns, which it leaves unchanged'),
@@ -75,11 +76,13 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   PROACTIVE_GAP_MIN: gap('the default gap between two unasked messages; no trial runs an unasked message'),
   PROACTIVE_OVER_TELEGRAM: gap('where unasked messages go for an owner still linked on Telegram; no trial runs an unasked message or a Telegram owner'),
   PROACTIVE_BOTH_DEFAULT: gap('where unasked messages go for an owner with WhatsApp bound; no trial runs an unasked message'),
-  OWN_LOOK_ANY_ZONE: inert('which jobs an app owner\'s unconfirmed zone holds; the trial runs its scheduled steps directly'),
   BRIEF_BODY_REVISION: gap('the world writes no health row after the Brief, so a Brief revised for late body data is not modelled; staging has it on'),
   EVENT_PUSH: inert('the app push raised after an event notice reaches the app chat; no model turn runs for it'),
   EVENT_PUSH_PER_DAY: inert('the most event pushes in an owner\'s day; no model turn runs for them'),
+  WHATSAPP_DAILY_KNOCK: inert('how often a closed WhatsApp window is knocked on; no model turn runs for it'),
   PROACTIVE_ACT_AHEAD: gap('the sweep worker and triage are not run in a trial, and the day-card cases run the Check-in and Close as before'),
+  GENERAL_WAKE: gap('the general wake runs on the scheduler, which a trial does not run; a wake step runs the production wake prompt and tools on its own, whatever this says'),
+  WAKE_MODEL_LOOK: gap('the model role a general wake runs on; a trial\'s wake step runs on plans, the chat model, the default'),
   PROACTIVE_INTERVENTIONS: gap('Waldo\'s own look runs on the scheduler and the job lane, which a trial does not run; no case judges the look yet'),
   WHATS_NEW: gap('the what\'s new pass runs on the release wake and folds into day cards, neither of which a trial runs; with no announcement decided, an owner turn carries no what\'s new section'),
   PROACTIVE_REVIEW_EVERY_MIN: inert('how often the look is scheduled; a trial turn is not an alarm pass'),
@@ -99,6 +102,7 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   HEALTH_PROVISIONAL_SCORES: gap('the world serves synthetic health, not the provisional score computation'),
   HEALTH_SOLO_NOTICE: gap('the solo-owner health notice is not run in a trial'),
   HEALTH_PARTIAL_CONTEXT: gap('the world serves a full synthetic health row, so no trial reads a partial health block'),
+  HEALTH_INVENTORY: gap('the world serves no inventory read, so no trial reads the body data on hand'),
   CALENDAR_UNDO_CANCEL: gap('no trial undoes a cancel; staging has it on'),
   NEXT_DUE_ALARM: inert('decides only whether an owner alarm with nothing due runs its pass; a trial turn is not an alarm pass'),
   WHY_TRAIL: gap('no trial reads the steps behind a card; staging has it on'),
@@ -137,12 +141,20 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   HEALTH_ACTIONS: gap('the health trigger\'s decision is not run in a trial; the trial\'s skill book always offers health-protocols, as staging does'),
   HEALTH_COACHING: gap('the trial offers no set_sleep_need, and the world serves synthetic health with no stated sleep need'),
   HEALTH_TRAINING_LOAD: gap('the world serves synthetic health, not the candidate training load the producer writes'),
+  HEALTH_SCORE_PARTS: gap('the parts of each score are served to the app only; the model never reads them and the world serves synthetic health; staging has it on since migration 20261116100000 was applied (19 Nov 2026)'),
+  HEALTH_USUAL: gap('the usual bands are served to the app only; the model never reads them and the world serves synthetic health; staging has it on since migration 20261116100000 was applied (19 Nov 2026)'),
+  HEALTH_DAY_LOAD: gap('the day load is served to the app only; the model never reads it and the world serves synthetic health; staging has it on since migration 20261116110000 was applied (19 Nov 2026)'),
+  HEALTH_PASSIVE_LOAD: gap('the passive day load is served to the app only; the model never reads it and the world serves synthetic health; staging lists apple and health_connect, and it acts only once HEALTH_DAY_LOAD is on after migrations 20261116110000 and 20261116110200'),
+  HEALTH_STRESS_CURVE: gap('the stress curve is served to the app only; the model never reads it and the world serves synthetic health; staging has it on since migration 20261116110100 was applied (19 Nov 2026)'),
+  HEALTH_FORM_CURVE: inert('the measured Form curve is read only by the app\'s calendar day; no turn is sent it'),
   MEMORY_NIGHTLY_SOURCE_UPDATES: gap('the nightly memory pass is not run in a trial'),
   MEMORY_CLAIM_CONTROLS: inert('the app\'s claim controls (confirm, forget, dismiss, bring up less) are an app read; the trial runs no app controls'),
   MEMORY_VALIDITY: gap('the trial turns on recall of replaced facts and read_memory include_replaced, as staging has them; the nightly pass that retires a contradicted claim is not run in a trial'),
   MEMORY_OUTSIDE_NOTES: gap('recall of notes learned from mail and calendar is not turned on in a trial'),
   MEMORY_USED_SHOWN: inert('the app shows which notes a reply looked at; the trial reads no app history'),
   MEMORY_DAYTIME_CONSOLIDATOR: gap('the daytime memory pass is not run in a trial'),
+  MEMORY_OUTCOME_LEARNING: gap('the nightly outcomes pass is not run in a trial, so no turn reads what it learned'),
+  MEMORY_BODY_PATTERNS: gap('the nightly outcomes pass is not run in a trial'),
   WALDO_IMESSAGE_PROGRESS: gap('iMessage progress notes; the trial runs the app surface; staging has them off'),
   IMESSAGE_MEDIA: gap('iMessage media; the trial runs the app surface'),
   IMESSAGE_STOP: inert('a typed /stop on iMessage ends the running turn; the trial runs the app surface and sends no stop'),
@@ -163,8 +175,6 @@ export const STAGING_VAR_CLASSES: Readonly<Record<string, VarClass>> = {
   CONSOLE_GOOGLE_SIGNIN: inert('console sign-in'),
   APP_ID_TOKEN_SIGNIN: inert('app sign-in'),
   OPEN_SIGNUP: inert('app sign-up without an invite'),
-  OPEN_SIGNUP_DAILY_CAP: inert('app sign-up without an invite'),
-  OPEN_SIGNUP_TOTAL_CAP: inert('app sign-up without an invite'),
   OPEN_SIGNUP_SPEND_CEILING_USD: inert('applies only to an owner who joined without an invite; the trial owner is invited'),
   OWNER_SPEND_CEILING_USD: inert('the trial keeps no month of spend, so no ceiling is reached'),
   GMAIL_PUSH_PROJECT: inert('mail push subscription'),
@@ -215,6 +225,8 @@ export type StagingProfile = Readonly<{
   forgetBarrier: ForgetBarrierMode;
   memorySelection: boolean;
   semantic: boolean;
+  leanScheduled: boolean;
+  modelSetWakes: boolean;
 }>;
 
 // The owner object's own precedence: the harness loader wins over provider tool search. The model is the chat model of the
@@ -229,5 +241,7 @@ export const stagingProfile = (vars: StagingVars): StagingProfile => {
     forgetBarrier: vars.WALDO_FORGET_BARRIER === 'on' ? 'items' : 'reads',
     memorySelection: vars.MEMORY_SELECTION === '1',
     semantic: vars.MEMORY_SEMANTIC_RECALL === '1',
+    leanScheduled: vars.WALDO_LEAN_SCHEDULED === '1',
+    modelSetWakes: vars.MODEL_SET_WAKES === '1',
   };
 };

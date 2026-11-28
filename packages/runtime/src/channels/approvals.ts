@@ -863,6 +863,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // When the owner's message this turn answers reached Waldo, from its inbox row. A card shown after that, such as one that
   // waited for this very message or one an earlier queued message's turn raised, is not what the message is about.
   ownerMessageAt?: () => number | undefined;
+  // Tells the owner's phone an approval opened in the app, once, when its card first opens there outside an app chat turn
+  // (inside one, the turn's own reply push covers it). Best effort, never awaited by the card.
+  appPush?: (approvalId: string) => Promise<void>;
 }>): ApprovalDesk => {
   sql.exec(`CREATE TABLE IF NOT EXISTS ledger (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL,
@@ -1099,6 +1102,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     if (inApp) shown.push({ surface: 'app', message_ref: runRef ? `run:${runRef}` : `approval:${id}`, approvable: inApp.approvable, in_full: inApp.approvable });
     const thread = deps.conversationRef?.() ?? null;
     if (!shown.length && !waits) throw sendFailure ?? journalFailure ?? new Error('Approval card not confirmed');
+    let openedInApp = false;
     // The card it revises closes in the commit that first shows this one, and only then: until the owner can see the new
     // card, the earlier one stays theirs to decide.
     const replaced = commit(() => {
@@ -1112,6 +1116,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       }
       for (const s of shown) record(s, null);
       const opened = shown.length ? sql.exec("UPDATE ledger SET status = ? WHERE id = ? AND status = 'card_unconfirmed'", shown.some(s => s.approvable) ? 'open' : 'review_only', id).rowsWritten : 0;
+      openedInApp = opened > 0 && inApp !== null;
       if (waits || sentHere) sql.exec('UPDATE ledger SET card_waits_on = ? WHERE id = ?', waits ? surface : null, id);
       if (raise) sql.exec("UPDATE ledger SET deferred_at = NULL WHERE id = ? AND deferred_at IS NOT NULL AND status IN ('open', 'review_only')", id);
       // Only a card the owner can approve somewhere takes the earlier one's place; one too long to approve leaves it open.
@@ -1120,6 +1125,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     });
     if (replaced === 'closed') await clearButtons(id, shown);
     else if (replaced) await afterWithdrawn(entry.replaces!, replaced);
+    if (openedInApp && thread === null) void deps.appPush?.(id).catch(() => undefined);
     return shown;
   };
   // The cards that showed the whole review on this desk's surface, in this thread, and are still live. Only an app turn names

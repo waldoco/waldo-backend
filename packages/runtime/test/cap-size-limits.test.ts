@@ -129,6 +129,35 @@ describe('splitTelegramText', () => {
     expect(parts.join(' ')).toBe(paragraph);
   });
 
+  it('splits a long list at its line breaks, keeping every line and every word whole', () => {
+    const list = Array.from({ length: 300 }, (_, index) => `- follow up with vendor number ${index} about the invoice`).join('\n');
+    const parts = splitTelegramText(list);
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts.every(part => part.length <= TELEGRAM_MESSAGE_MAX_CHARS && part.startsWith('- ') && /invoice$/.test(part))).toBe(true);
+    expect(parts.join('\n')).toBe(list);
+  });
+
+  it('keeps the line breaks inside an oversized paragraph and cuts it between sentences', () => {
+    const paragraph = Array.from({ length: 120 }, (_, index) => `Point ${index} is settled and needs no more work.`).join('\n');
+    const parts = splitTelegramText(paragraph);
+    expect(parts.length).toBe(2);
+    expect(parts.join('\n')).toBe(paragraph);
+  });
+
+  it('cuts text with no sentence end or line break at a space, so no word is split', () => {
+    const run = Array.from({ length: 900 }, (_, index) => `word${index}`).join(' ');
+    const parts = splitTelegramText(run);
+    expect(parts.length).toBe(2);
+    expect(parts.every(part => part.length <= TELEGRAM_MESSAGE_MAX_CHARS && /^word\d+( word\d+)*$/.test(part))).toBe(true);
+    expect(parts.join(' ')).toBe(run);
+  });
+
+  it('never splits a surrogate pair when a run has no space at all', () => {
+    const parts = splitTelegramText('😀'.repeat(3_000));
+    expect(parts.every(part => part.length <= TELEGRAM_MESSAGE_MAX_CHARS && part.length % 2 === 0)).toBe(true);
+    expect(parts.join('')).toBe('😀'.repeat(3_000));
+  });
+
   it('hard-cuts a single sentence longer than the cap so the content still goes out', () => {
     const word = 'x'.repeat(9_000);
     const parts = splitTelegramText(word);

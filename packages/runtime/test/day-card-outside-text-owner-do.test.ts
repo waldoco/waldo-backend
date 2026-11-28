@@ -120,11 +120,12 @@ it('a sender display name asking to log a meal writes nothing to the owner\'s he
   });
 }, 30_000);
 
-it('the card turn holds read tools and the owner\'s card, and nothing that writes', async () => {
+it('the card turn holds read tools, the owner\'s card and closing a passed loop, and nothing else that writes', async () => {
   await morningCard([mail('Lunch moved', 'Priya <priya@vendor.example>', 'Now at 13:00.')], () => [], () => {
     const tools = cardTools();
-    expect(tools).toEqual(expect.arrayContaining(['propose_action', 'get_context', 'list_reminders']));
-    for (const write of ['cancel_reminder', 'set_reminder', 'close_loop', 'open_loop', 'log_meal', 'log_workout', 'set_standing_order', 'set_quest', 'set_experiment', 'set_proactivity', 'create_artifact', 'workspace_write', 'send_email', 'draft_email', 'connect_service', 'browse_act', 'delegate_task']) expect(tools).not.toContain(write);
+    // close_loop is held, but under outside text it closes only an owner's loop whose time has passed (passed-loops.test.ts).
+    expect(tools).toEqual(expect.arrayContaining(['propose_action', 'get_context', 'list_reminders', 'close_loop']));
+    for (const write of ['cancel_reminder', 'set_reminder', 'open_loop', 'log_meal', 'log_workout', 'set_standing_order', 'set_quest', 'set_experiment', 'set_proactivity', 'create_artifact', 'workspace_write', 'send_email', 'draft_email', 'connect_service', 'browse_act', 'delegate_task']) expect(tools).not.toContain(write);
     expect(delivered()).toHaveLength(1);
   });
 }, 30_000);

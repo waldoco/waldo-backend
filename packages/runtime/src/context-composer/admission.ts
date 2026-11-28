@@ -1,5 +1,6 @@
 import {
   canaryTokensSchema,
+  MODEL_CONTEXT_MAX_CHARS,
   type CanaryTokens,
   type DerivedHealthDestinationView,
   type InvocationInputReference,
@@ -23,7 +24,9 @@ import type {
 } from './types';
 
 const MAX_SNAPSHOT_TIME = 253_402_300_799_999;
-const MAX_SNAPSHOT_STRING_CHARS = 8_192;
+// A memory guard on one copied string, well above every model-facing size bound (owner text 65,536, one source fragment a quarter of
+// the model context). It is not a product limit: materials.ts clips an oversize source below it with a note the model reads.
+const MAX_SNAPSHOT_STRING_CHARS = 4 * MODEL_CONTEXT_MAX_CHARS;
 const SNAPSHOT_REF = /^snp_[a-f0-9]{32}$/;
 const RESERVED_SNAPSHOT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 

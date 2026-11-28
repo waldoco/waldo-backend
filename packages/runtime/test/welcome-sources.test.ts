@@ -6,77 +6,49 @@ import { calendarStage, healthStage, mailStage, WEB_FENCE, webStage } from '../s
 import { fenced } from '../src/prompt/turn-prompt';
 
 const NOW = Date.parse('2026-10-25T13:00:00Z');
-const series = (sources: readonly { source: string; readings: readonly object[] }[]) => ({ access: 'granted', read_at: '2026-10-25T13:00:00.000Z', sources: sources.map(({ source, readings }) => ({ source, consent_epoch: 1, samples: readings })) });
-const reading = (signal: string, day: string, value: number, method: string | null = null) => ({ signal, day, value, method, start_at: null, end_at: `${day}T07:00:00.000Z`, timezone: 'Europe/London' });
-const book = (consent: Awaited<ReturnType<HealthReadBook['consent']>>, raw: unknown = series([])): HealthReadBook & { asked: unknown[] } => {
-  const asked: unknown[] = [];
-  return { asked, consent: async () => consent, series: async (range) => { asked.push(range); return raw; } };
-};
+type Zones = readonly Readonly<{ day: string; recovery: string | null; form: string | null; [extra: string]: unknown }>[];
 const granted = (...sources: string[]) => ({ kind: 'granted' as const, sources: new Set(sources) });
-const health = (b: HealthReadBook) => healthStage(b, () => 'Europe/London', () => NOW, () => true)();
+const plane = (consent: Awaited<ReturnType<HealthReadBook['consent']>>, answer: unknown = { zones: { days: [] } }) => {
+  const asked: (readonly [string, string])[] = [];
+  return { asked, consent: { consent: async () => consent }, zones: async (from: string, to: string) => { asked.push([from, to]); return answer; } };
+};
+const zones = (days: Zones) => ({ zones: { from: '2026-09-26', to: '2026-10-25', days } });
+const health = (p: ReturnType<typeof plane>, keeps = true) => healthStage(p.consent, p.zones, () => 'Europe/London', () => NOW, () => keeps)();
 
 describe('welcome health stage', () => {
-  // The welcome read is get_health's read: time asleep only, a stage from its own share of the night, one method per signal.
-  it('reads a sleep stage from its share of the night and never time in bed or blended methods', async () => {
-    const night = { start_at: '2026-10-23T22:00:00.000Z', end_at: '2026-10-24T06:00:00.000Z' };
-    const result = await health(book(granted('apple'), series([{ source: 'apple', readings: [
-      { ...reading('sleep_duration', '2026-10-24', 420, 'asleep_duration'), ...night, stages: { light: 200, deep: 70, rem: 90, unspecified: 60, awake: 22 } },
-      { ...reading('sleep_duration', '2026-10-24', 480, 'time_in_bed'), ...night },
-      reading('overnight_hrv', '2026-10-24', 40, 'rmssd'), reading('overnight_hrv', '2026-10-24', 90, 'sdnn'), reading('overnight_hrv', '2026-10-23', 42, 'rmssd'),
-    ] }])));
-    expect(result.kind).toBe('input');
+  it('gives the model zone words by day, never a reading, under the consented sources and never WHOOP', async () => {
+    const result = await health(plane(granted('apple', 'whoop'), zones([
+      { day: '2026-10-23', recovery: 'low', form: 'moderate', hrv: 41 },
+      { day: '2026-10-24', recovery: 'good', form: null, resting_hr: 52 },
+      { day: '2026-10-25', recovery: null, form: null },
+    ])));
+    expect(result).toEqual({ kind: 'input', text: expect.any(String), sources: ['apple_health'], pointers: new Set(['recovery', 'form']), days: 2 });
     if (result.kind !== 'input') return;
-    const line = (signal: string) => result.text.split('\n').find((row) => row.startsWith(`${signal} (`));
-    expect(line('sleep')).toBe('sleep (apple_health, minutes): 2026-10-24 420');
-    expect(line('sleep_light')).toBe('sleep_light (apple_health, minutes): 2026-10-24 200');
-    expect(line('sleep_awake')).toBe('sleep_awake (apple_health, minutes): 2026-10-24 22');
-    expect(line('hrv')).toBe('hrv (apple_health, ms, rmssd): 2026-10-23 42; 2026-10-24 40');
-  });
-
-  it('never reads food: it is read only by get_health in its own turn, never compiled into what Waldo knows', async () => {
-    const b = book(granted('apple'), series([{ source: 'apple', readings: [
-      { ...reading('nutrition', '2026-10-24', 612, null), nutrition: { protein_g: 38 } }, reading('overnight_hrv', '2026-10-24', 40, 'rmssd'),
-    ] }]));
-    const result = await health(b);
-    expect(b.asked.flatMap(asked => (asked as { signals: string[] }).signals)).not.toContain('nutrition');
-    expect(result.kind === 'input' ? result.text : '').not.toMatch(/food|protein|612/);
+    expect(result.text.split('\n')).toEqual([expect.stringMatching(/^2026-10-23 Recovery: \w+ · Form: \w+$/), expect.stringMatching(/^2026-10-24 Recovery: \w+$/)]);
+    expect(result.text).not.toMatch(/41|52/);
   });
 
   it('skips without consent, says revoked after a withdrawal, unavailable on a failed read, and asks the plane nothing then', async () => {
     for (const [consent, state] of [[{ kind: 'consent_required' }, 'skipped'], [{ kind: 'not_linked' }, 'skipped'], [{ kind: 'consent_withdrawn' }, 'revoked'], [{ kind: 'read_failed' }, 'unavailable']] as const) {
-      const b = book(consent);
-      expect(await health(b)).toEqual({ kind: 'settled', state });
-      expect(b.asked).toEqual([]);
+      const p = plane(consent);
+      expect(await health(p)).toEqual({ kind: 'settled', state });
+      expect(p.asked).toEqual([]);
     }
-    expect(await health(book(granted('apple'), { error: 'boom' }))).toEqual({ kind: 'settled', state: 'unavailable' });
+    expect(await health(plane(granted('apple'), { error: 'boom' }))).toEqual({ kind: 'settled', state: 'unavailable' });
+    expect(await health(plane(granted('whoop')))).toEqual({ kind: 'settled', state: 'skipped' });
   });
 
   it('reads the last thirty local days, today included, and settles empty when there is nothing', async () => {
-    const b = book(granted('apple'));
-    expect(await health(b)).toEqual({ kind: 'settled', state: 'empty' });
-    expect(b.asked).toEqual([expect.objectContaining({ from: '2026-09-26', to: '2026-10-25' })]);
+    const p = plane(granted('apple'));
+    expect(await health(p)).toEqual({ kind: 'settled', state: 'empty' });
+    expect(p.asked).toEqual([['2026-09-26', '2026-10-25']]);
   });
 
   it('is skipped when the owner keeps health out of memory, and reads nothing then', async () => {
-    const b = book(granted('apple'), series([{ source: 'apple', readings: [reading('sleep_midpoint', '2026-10-24', 240)] }]));
     let consentRead = false;
-    expect(await healthStage({ ...b, consent: async () => { consentRead = true; return b.consent(); } }, () => 'Europe/London', () => NOW, () => false)()).toEqual({ kind: 'settled', state: 'skipped' });
-    expect([consentRead, b.asked]).toEqual([false, []]);
-  });
-
-  it('gives the model the owner\'s readings per signal and source, only from sources with live consent, and never WHOOP', async () => {
-    const result = await health(book(granted('apple', 'whoop'), series([
-      { source: 'apple', readings: [reading('sleep_midpoint', '2026-10-24', 240), reading('resting_heart_rate', '2026-10-24', 52)] },
-      { source: 'whoop', readings: [reading('resting_heart_rate', '2026-10-24', 50)] },
-      { source: 'health_connect', readings: [reading('resting_heart_rate', '2026-10-24', 49)] },
-    ])));
-    expect(result.kind).toBe('input');
-    if (result.kind !== 'input') return;
-    expect(result.sources).toEqual(['apple_health']);
-    expect([...result.pointers].sort()).toEqual(['resting_hr', 'sleep_midpoint']);
-    expect(result.text).toContain('resting_hr (apple_health, bpm): 2026-10-24 52');
-    expect(result.text).not.toContain('50');
-    expect(result.text).not.toContain('49');
+    const p = plane(granted('apple'), zones([{ day: '2026-10-24', recovery: 'low', form: 'low' }]));
+    expect(await healthStage({ consent: async () => { consentRead = true; return granted('apple'); } }, p.zones, () => 'Europe/London', () => NOW, () => false)()).toEqual({ kind: 'settled', state: 'skipped' });
+    expect([consentRead, p.asked]).toEqual([false, []]);
   });
 });
 
@@ -105,9 +77,9 @@ describe('welcome calendar stage', () => {
     expect(await calendarStage(google([account('a@x.com')], { 'a@x.com': new GoogleError(401, 'expired') }), () => NOW)()).toEqual({ kind: 'settled', state: 'revoked' });
   });
 
-  it('reads every connected account by name, sends titles and times but no descriptions or addresses, and cites event ids', async () => {
+  it('reads every connected account by name, sends titles, times and who else is in each event but no descriptions, and cites event ids', async () => {
     const g = google([account('a@x.com'), account('b@y.com')], {
-      'a@x.com': { calendarPage: async () => ({ events: [event('evt_a', { recurring_event_id: 'r1' })], next_page_token: null, fetched_count: 1, account: { connection_id: null, email: 'a@x.com' }, observed_at: '' }) },
+      'a@x.com': { calendarPage: async () => ({ events: [event('evt_a', { recurring_event_id: 'r1', attendee_names: ['Priya Shah'], attendee_emails: ['priya@studio.example'] })], next_page_token: null, fetched_count: 1, account: { connection_id: null, email: 'a@x.com' }, observed_at: '' }) },
       'b@y.com': { calendarPage: async () => ({ events: [event('evt_b'), event('evt_gone', { status: 'cancelled' })], next_page_token: null, fetched_count: 2, account: { connection_id: null, email: 'b@y.com' }, observed_at: '' }) },
     });
     const result = await calendarStage(g, () => NOW)();
@@ -117,7 +89,10 @@ describe('welcome calendar stage', () => {
     expect([...result.pointers]).toEqual(['evt_a', 'evt_b']);
     expect(result.text).toContain('[evt_a] Planning evt_a');
     expect(result.text).toContain('repeats');
-    expect(result.text).not.toMatch(/SECRET|someone@example\.com|evt_gone/);
+    // The people in a meeting feed the people map: names and addresses as the calendar shows them.
+    expect(result.text).toContain('[evt_a] Planning evt_a · 2026-10-20T09:00:00Z · 3 people · repeats · with Priya Shah · priya@studio.example');
+    expect(result.text).toContain('[evt_b] Planning evt_b · 2026-10-20T09:00:00Z · 3 people · with someone@example.com');
+    expect(result.text).not.toMatch(/SECRET|evt_gone/);
   });
 
   it('is empty when the connected calendars and task lists hold nothing', async () => {
@@ -134,15 +109,15 @@ describe('welcome calendar stage', () => {
 });
 
 describe('welcome mail stage', () => {
-  it('sends who and what about, never a snippet or a full address, and cites each thread once', async () => {
+  it('sends who and what about, with the sender\'s address for the people map, never a snippet, and cites each thread once', async () => {
     const g = google([account('a@x.com', { calendar: false })], { 'a@x.com': { mailPage: async () => ({ messages: [mail('thr_1'), mail('thr_1'), mail('thr_2')], next_page_token: null, result_size_estimate: 3 }) } });
     const result = await mailStage(g)();
     expect(result.kind).toBe('input');
     if (result.kind !== 'input') return;
     expect(result.sources).toEqual(['gmail']);
     expect([...result.pointers]).toEqual(['thr_1', 'thr_2']);
-    expect(result.text).toContain('[thr_1] Ana Diaz (design.example) · Review thr_1');
-    expect(result.text).not.toMatch(/SECRET|ana@/);
+    expect(result.text).toContain('[thr_1] Ana Diaz <ana@design.example> · Review thr_1');
+    expect(result.text).not.toMatch(/SECRET/);
   });
 
   it('says revoked when the mail grant is dead or its scope was taken back, and reads nothing then', async () => {
@@ -202,8 +177,4 @@ describe('welcome Google stages across accounts', () => {
     await expect(calendarStage(quiet, () => NOW)()).rejects.toThrow('down');
   });
 
-  it('counts the days of readings the health stage read, never a reading', async () => {
-    const read = await health(book(granted('apple'), series([{ source: 'apple', readings: [reading('sleep_midpoint', '2026-10-23', 240), reading('sleep_midpoint', '2026-10-24', 250), reading('resting_heart_rate', '2026-10-24', 52)] }])));
-    expect(read.kind === 'input' && read.days).toBe(2);
-  });
 });

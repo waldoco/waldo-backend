@@ -72,10 +72,30 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1" gives the model a partial health block, in words, for a day whose body data made no Recovery score, and fills the
   // block's missing lists from the stored row; anything else leaves such a day with no health block.
   HEALTH_PARTIAL_CONTEXT?: string;
+  // "1", with HEALTH_PARTIAL_CONTEXT, adds to the health block which kinds of body data exist, in words, and gives an owner with
+  // readings but no score row a block of that alone; anything else leaves the block as the stored row makes it.
+  HEALTH_INVENTORY?: string;
   HEALTH_TRAINING_LOAD?: string;
+  // '1' has the health producer write today's Form curve, measured and then projected, on today's derived row, for the app's
+  // calendar day; anything else writes none.
+  HEALTH_FORM_CURVE?: string;
   // '1' has the health decision reason from the reviewed health protocols (skills/health-protocols), read through the
   // owner's next day, in the chat role. Anything else keeps the decision as it was.
   HEALTH_ACTIONS?: string;
+  // "1" writes the parts of each score (HEALTH_SCORE_PARTS) and the owner's usual band for each reading (HEALTH_USUAL) on the
+  // derived row, and shows them to a build that names health revision 13; anything else writes and shows neither. Apply migration
+  // 20261116100000, which admits the two new columns, before turning either on. Both need HEALTH_PROVISIONAL_SCORES "1".
+  HEALTH_SCORE_PARTS?: string;
+  HEALTH_USUAL?: string;
+  // "1" writes the day's load (HEALTH_DAY_LOAD) or today's hourly stress curve (HEALTH_STRESS_CURVE) on the derived row, and shows
+  // it to a build that names health revision 14; anything else writes and shows none. Apply migrations 20261116110000 (day load)
+  // and 20261116110100 (the stress curve), which admit the new columns, before turning each on.
+  HEALTH_DAY_LOAD?: string;
+  // "0", or a comma list of upload sources (apple, health_connect, samsung) whose days the day's load counts every observed minute
+  // for, from the hourly heart-rate bins, beside HEALTH_DAY_LOAD, and shows to a build that names health revision 15. Apply
+  // migration 20261116110200 first.
+  HEALTH_PASSIVE_LOAD?: string;
+  HEALTH_STRESS_CURVE?: string;
   HEALTH_COACHING?: string;
   // "1" lets a health proposal, and a chat card, swap an event for another in its slot (a hard workout for an easy one) by
   // renaming it; the connector-proxy function must be deployed with the rename first.
@@ -248,6 +268,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // composed context and the last few rows of the owner's exchange instead of the chat replay, under one tool menu and a
   // 1-hour cached head shared by every scheduled job kind (channels/owner-turn.ts).
   WALDO_LEAN_SCHEDULED?: string;
+  // "1": a run Waldo starts (a day card, a check-back, a sweep, an intervention) may leave itself a bounded follow-up with a
+  // note to its future self, which wakes a later check-back and grants nothing (channels/loops.ts).
+  MODEL_SET_WAKES?: string;
   // "1": the owner's WhatsApp turns read and write the owner's own chain, the one their app chat uses (conversation/one-timeline.ts).
   WALDO_ONE_TIMELINE?: string;
   // "1": the owner's own reply takes a light step that answers quick chat or hands the turn to the strong role, and every task
@@ -299,6 +322,10 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   MEMORY_NIGHTLY_SOURCE_UPDATES?: string;
   // "1" with MEMORY_NIGHTLY_SOURCE_UPDATES also "1": mail and calendar changes reach memory the same day (memory/consolidator.ts).
   MEMORY_DAYTIME_CONSOLIDATOR?: string;
+  // "1": the nightly pass reads what Waldo did on its own initiative and what became of it, and every turn reads what it learned (memory/outcomes.ts).
+  MEMORY_OUTCOME_LEARNING?: string;
+  // "1" with MEMORY_OUTCOME_LEARNING: that pass also reads the owner's Recovery and Form zone words around each of Waldo's own outcomes.
+  MEMORY_BODY_PATTERNS?: string;
   MEMORY_VALIDITY?: string;
   // "1": an owner turn also recalls notes learned from mail and calendar, shown as not the owner's words; a turn that recalls one is marked as carrying outside content (memory/claims.ts withOutsideNotes).
   MEMORY_OUTSIDE_NOTES?: string;
@@ -337,14 +364,14 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   PROACTIVE_BOTH_DEFAULT?: string;
   // '1' has an event notice that reaches the app chat raise one push, under quiet hours and the owner's own limits.
   EVENT_PUSH?: string;
-  // "1": an app owner's Waldo look (meeting prep, update cards) and heartbeat arm whether or not they have confirmed a time
-  // zone; the day cards and the nightly pass still wait for their own choice. Off unless "1".
-  OWN_LOOK_ANY_ZONE?: string;
   // "1": when today's first health row is written after the Daily Brief reached the owner, one turn reads it against the Brief
   // and may revise it (in place where cards can be edited). Once a day. Off unless "1".
   BRIEF_BODY_REVISION?: string;
   // The most event pushes in an owner's day, a backstop under the owner's limits (default 3).
   EVENT_PUSH_PER_DAY?: string;
+  // "1": Waldo knocks on a closed WhatsApp window at most once in 24 hours while something waits, and looks again each day
+  // instead of once per closed window. Off unless "1".
+  WHATSAPP_DAILY_KNOCK?: string;
   // "1": Waldo's own sends follow the owner's choice among their other surfaces even while Telegram is linked.
   PROACTIVE_OVER_TELEGRAM?: string;
   // '1': with no proactive template approved, Waldo's own work outside WhatsApp's window knocks with the re-engage template;
@@ -353,6 +380,9 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // '1' (with PROACTIVE_GATE) has Waldo look across the owner's plate on its own every PROACTIVE_REVIEW_EVERY_MIN minutes
   // (default 180, at least 30) and raise drift or an anomaly it judges worth one message or card, under the owner's limits.
   PROACTIVE_INTERVENTIONS?: string;
+  // GENERAL_WAKE: "1" runs the look as Waldo's general wake in the brain (channels/wake.ts); WAKE_MODEL_LOOK is its model role.
+  GENERAL_WAKE?: string;
+  WAKE_MODEL_LOOK?: string;
   PROACTIVE_REVIEW_EVERY_MIN?: string;
   // '1': on the first wake of each release, the owner's Waldo reads the team's announcements and decides how and whether to
   // tell its owner about each new capability that is live for them (announcements.ts). Off unless "1".

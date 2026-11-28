@@ -1,4 +1,4 @@
-import { HEALTH_SCORE_INPUTS, HEALTH_SIGNAL_NAMES, HEALTH_SIGNALS } from '@waldo/contracts';
+import { HEALTH_ENGINE_ONLY_SIGNALS, HEALTH_SCORE_INPUTS, HEALTH_SIGNAL_NAMES, HEALTH_SIGNALS } from '@waldo/contracts';
 import { healthSampleV1Schema } from '../../contracts/src/app/health-ingest';
 import { describe, expect, it } from 'vitest';
 import { SIGNALS as READ_SIGNALS } from '../src/tools/live/health';
@@ -32,8 +32,8 @@ describe('the health signal registry', () => {
     expect(sorted(WRITER_USED_SIGNALS)).toEqual(sorted(Object.keys(HEALTH_SCORE_INPUTS)));
   });
 
-  it('leaves no stored kind the read tool cannot read', () => {
+  it('leaves no stored kind the read tool cannot read, unless only the score engine reads it', () => {
     const readable = new Set(Object.values(READ_SIGNALS).map(spec => spec.stored));
-    expect(HEALTH_SIGNAL_NAMES.filter(signal => !readable.has(signal))).toEqual([]);
+    expect(HEALTH_SIGNAL_NAMES.filter(signal => !readable.has(signal))).toEqual([...HEALTH_ENGINE_ONLY_SIGNALS]);
   });
 });

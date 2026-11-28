@@ -28,12 +28,12 @@ const MIN_OBSERVED_DAYS = 21;
 // Edwards' summated heart-rate-zone TRIMP, session RPE (Foster 2001), or minutes. A window takes the first method every
 // workout in it carries, so two methods are never added together; an effort window is all rated or all estimated. Zones are
 // counted the same way whatever set them; a window with any zones set from an observed peak says so, as approximate.
-const methodOf = (workouts: readonly WorkoutLoad[]): LoadMethod => {
+export const methodOf = (workouts: readonly WorkoutLoad[]): LoadMethod => {
   if (workouts.every(w => w.zoneSeconds?.length === 5)) return workouts.some(w => w.zonesFromObservedPeak === true) ? 'hr_zones_observed_peak' : 'hr_zones';
   const kinds = new Set(workouts.map(w => w.effort?.method ?? null));
   return kinds.size === 1 && !kinds.has(null) ? 'effort' : 'minutes';
 };
-const loadOf = (workout: WorkoutLoad, method: LoadMethod): number =>
+export const loadOf = (workout: WorkoutLoad, method: LoadMethod): number =>
   method === 'hr_zones' || method === 'hr_zones_observed_peak' ? workout.zoneSeconds!.reduce((sum, seconds, zone) => sum + (zone + 1) * seconds / 60, 0)
     : method === 'effort' ? workout.minutes * workout.effort!.score
       : workout.minutes;

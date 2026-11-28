@@ -3,8 +3,9 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { OwnerDO } from '../src/channels/owner-do';
 import { presenceAuthority } from './helpers/directory-presence';
 
-// The owner forwards a restaurant receipt mail that asks Waldo to log a 2400 kcal meal. The turn has read someone else's
-// words, so nothing reaches the owner's health log until they tap the card; the tap logs it once.
+// The owner forwards a restaurant receipt mail that asks Waldo to log a 2400 kcal meal. Logging writes only into the owner's
+// own health log and the owner can delete it, so it runs with no card (owner ruling D1, 13 Nov 2026), and the reply lists it
+// in fixed words with the way back, whatever the model wrote.
 const proof = vi.hoisted(() => ({ outputs: [] as unknown[][], replies: [] as string[], requests: [] as string[], telegram: [] as { method: string; body: any }[], rpc: [] as string[] }));
 vi.mock('openai', () => ({ default: class { responses = { create: async (input: any) => {
   const format = input.text?.format?.name;
@@ -40,7 +41,7 @@ const toolOutput = (callId: string) => {
   return null;
 };
 
-it('a forwarded mail asking to log a meal becomes one card; nothing is logged until the owner taps it, then it logs once', async () => {
+it('a forwarded mail asking to log a meal logs it once with no card, and the reply lists it with its undo', async () => {
   const name = `log-meal-taint-${crypto.randomUUID()}`, stub = env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name));
   await runInDurableObject(stub, async (_unused, state) => {
     const originalNow = Date.now;
@@ -54,20 +55,16 @@ it('a forwarded mail asking to log a meal becomes one card; nothing is logged un
     };
     const meal = { description: 'Lunch at the restaurant on the receipt', calories_estimate: 2400 };
     try {
-      proof.outputs.push([call('log-direct', 'log_meal', meal)], [call('log-card', 'propose_action', { tool: 'log_meal', args: meal, reasoning: 'A forwarded receipt asks to log this lunch.' })], []);
-      proof.replies.push('', '', 'The receipt asks me to log a lunch. Tap the card if I should.');
+      proof.outputs.push([call('log-direct', 'log_meal', meal)], []);
+      proof.replies.push('', 'Logged that lunch.');
       await deliver({ update_id: 300, message: { message_id: 1, from: { id: 7, is_bot: false }, chat: { id: 7, type: 'private' }, text: RECEIPT, forward_origin: { type: 'hidden_user', sender_user_name: 'Restaurant Receipts', date: 1761220000 }, forward_date: 1761220000 } });
 
-      expect(toolOutput('log-direct')).toContain('propose_action');
-      expect(proof.rpc).not.toContain('health_log_add');
-      const cards = proof.telegram.filter(entry => entry.method === 'sendMessage' && JSON.stringify(entry.body.reply_markup ?? {}).includes('"a:'));
-      expect(cards).toHaveLength(1);
-      expect(cards[0]!.body.text).toMatch(/^Do this\? Log a meal: "/);
-      expect(cards[0]!.body.text).toContain('Lunch at the restaurant on the receipt');
-
-      const id = /"a:([A-Za-z0-9_-]+)"/.exec(JSON.stringify(cards[0]!.body.reply_markup))![1]!;
-      await deliver({ update_id: 301, callback_query: { id: 'log-it', from: { id: 7, is_bot: false }, data: `a:${id}`, message: { message_id: proof.telegram.indexOf(cards[0]!) + 1, chat: { id: 7, type: 'private' } } } });
+      expect(toolOutput('log-direct')).not.toContain('propose_action');
       expect(proof.rpc.filter(fn => fn === 'health_log_add')).toHaveLength(1);
+      const sent = proof.telegram.filter(entry => entry.method === 'sendMessage');
+      expect(sent.filter(entry => JSON.stringify(entry.body.reply_markup ?? {}).includes('"a:'))).toEqual([]);
+      // Telegram sends HTML, so the line's quotation marks arrive escaped.
+      expect(sent.map(entry => String(entry.body.text)).join('\n')).toContain('Changed after reading outside content in this conversation:\n- Logged a meal: &#34;Lunch at the restaurant on the receipt&#34; (you can delete it)');
     } finally { Date.now = originalNow; await state.storage.deleteAlarm(); }
   });
 }, 30_000);

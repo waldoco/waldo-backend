@@ -76,13 +76,14 @@ export function createContextComposer(deps: ContextComposerDependencies): Contex
           provenance,
         );
         enter('health');
-        const health = prepareHealth(
+        const { health, withheld: healthWithheld } = prepareHealth(
           materials.health,
           inputs.canary_tokens,
           provenance,
           materials.snapshot.revision_ref,
           inputs.snapshot_at,
         );
+        const healthAbsent = healthWithheld ? 'withheld' as const : materials.health_unreadable === true ? 'unreadable' as const : undefined;
         const recallKey = recallKeyFor(invocation.data.runtime_binding.trigger, invocation.data.runtime_binding.variant);
         enter('recall');
         const recall = await loadRecall(
@@ -96,7 +97,7 @@ export function createContextComposer(deps: ContextComposerDependencies): Contex
         );
 
         enter('rendering');
-        const assembled = assembleReasonsPrompt(invocation.data, stagedInputs, materials, skills.selected, recall, health);
+        const assembled = assembleReasonsPrompt(invocation.data, stagedInputs, materials, skills.selected, recall, health, healthAbsent);
         const rendered = await renderProviderPrompt(assembled.prompt, inputs.canary_tokens);
         if (!rendered.ok) throw new FailClosed(rendered.failure);
         const prompt = rendered.prompt;
@@ -141,7 +142,8 @@ export function createContextComposer(deps: ContextComposerDependencies): Contex
           instructions: assembled.instructions,
           operations: assembled.operations,
           ...(skills.selected.length ? { skillPrompt: wrapSkills(skills.selected) } : {}),
-          healthPrompt: renderHealth(health),
+          healthPrompt: renderHealth(health, healthAbsent),
+          ...(healthWithheld ? { health_withheld: healthWithheld } : {}),
           checkpoint: checkedCheckpoint.data,
           evidence,
         });

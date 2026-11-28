@@ -1,5 +1,5 @@
 import type { ToolName } from '@waldo/contracts';
-import { SKIP_UPDATE } from '../prompt/skip-update';
+import { sendsNothing } from './run-end';
 
 // A write the taint gate lets run without a card after outside text (tools/records owner_inward and narrows, and a figure the
 // owner stated) is listed under the reply in these fixed words, whatever the model wrote, so the owner sees what outside
@@ -20,10 +20,17 @@ export const INWARD_RECEIPT_LINES: Readonly<Partial<Record<ToolName, (args: Fiel
   track_responsibility: (args) => `Now tracking "${text(args, 'title')}" (you can close it)`,
   workspace_write: (args) => `Wrote ${text(args, 'path')} in your workspace (its earlier versions are kept)`,
   create_artifact: (args) => `Created "${text(args, 'name')}" in your artifacts`,
+  revise_artifact: (args) => `Revised artifact ${text(args, 'artifact_id')} (its earlier revision is kept)`,
+  restore_artifact: (args) => `Brought back revision ${String(args.revision)} of artifact ${text(args, 'artifact_id')} (you can restore again)`,
+  log_meal: (args) => `Logged a meal: "${text(args, 'description')}" (you can delete it)`,
+  log_workout: (args) => `Logged a workout: "${text(args, 'type')}" (you can delete it)`,
   // The note is gone once cancelled, so the line carries it: the owner can set it again from here.
   cancel_reminder: (args, result) => args.all === true ? 'Cancelled all your reminders'
     : result.cancelled !== true ? null
     : `Cancelled the reminder${text(result, 'at') ? ` for ${text(result, 'at').replace('T', ' ')}` : ''}: "${text(result, 'note')}"`,
+  // Only an owner's loop answers with its title; a mail follow-up's title is someone else's text and is not repeated here.
+  close_loop: (_args, result) => typeof result.title !== 'string' ? null
+    : `Closed "${text(result, 'title')}"${text(result, 'due') ? ` (due ${text(result, 'due').replace('T', ' ')})` : ''}; tell me if you still want it and I will open it again`,
   cancel_task: (args) => `Stopped background task ${text(args, 'job_id')} (you can start it again)`,
   start_task: (args) => `Started background task "${text(args, 'title')}" (${args.profile === 'web' ? 'public web only' : 'your own data, no web'}; you can stop it)`,
   steer_task: (args) => `Changed background task ${text(args, 'job_id')}: "${text(args, 'instruction')}" (you can change it again or cancel it)`,
@@ -52,5 +59,5 @@ export const inwardReceipt = (tool: string, argumentsJson: string, data?: unknow
 export const withInwardReceipts = (reply: string, receipts: readonly string[]): string => {
   if (receipts.length === 0) return reply;
   const listed = `${INWARD_RECEIPTS_HEADER}\n${receipts.map((line) => `- ${line}`).join('\n')}`;
-  return reply.trim() === SKIP_UPDATE ? listed : `${reply}\n\n${listed}`;
+  return sendsNothing(reply) ? listed : `${reply}\n\n${listed}`;
 };

@@ -63,13 +63,15 @@ it('nightly memory consolidation asks Luna at low effort', async () => {
   });
 });
 
-it('a reminder, a scheduled job, a background decision and the day plan ask Luna at low effort', async () => {
+// A reminder the owner set carries what they asked for at that time, so it asks the chat model, as their own turn does.
+it('an owner\'s reminder asks the chat model; a scheduled job, a background decision and the day plan ask Luna at low effort', async () => {
   const { owner, routed } = responder();
   await owner.remind('route-reminder-1', 'telegram-1', 'call Sam', time, 'telegram');
+  expect(routed()).toEqual([TERRA_MEDIUM]);
   await owner.prompt('route-job-1', 'telegram-1', 'Write the morning card from these facts: two meetings, one open loop.', time, 'telegram');
   await owner.prompt('route-decision-1', 'telegram-1', 'Is this meeting worth a prep note?', time, 'telegram', [], async () => undefined, { name: 'decision', schema: { type: 'object' } });
   await owner.planDay('route-plan-1', 'Plan the day around two meetings.');
-  expect(routed()).toEqual([LUNA_LOW, LUNA_LOW, LUNA_LOW, LUNA_LOW]);
+  expect(routed()).toEqual([TERRA_MEDIUM, LUNA_LOW, LUNA_LOW, LUNA_LOW]);
 });
 
 // After a turn in its own run scope, compaction runs in the responder rebuilt for that turn.
@@ -88,12 +90,12 @@ it('compacting the history of owner turns that ran in their own run scope asks L
 });
 
 // A deployed owner's reminders and jobs run in a responder rebuilt for the owner the job host admits.
-it('a reminder for an admitted owner asks Luna at low effort', async () => {
+it('a reminder for an admitted owner asks the chat model', async () => {
   const admission = await ownerJobAdmission({ lookup: async () => ({ ownerId: '10000000-0000-0000-0000-000000000001', bindingRef: 'runtime:owner-demo', revision: '5', physicalDoId: 'actual-do' }),
     expectedPhysicalDoId: 'actual-do', job: 'reminder', occurrenceKey: 'route-reminder-2:1', occurredAt: Date.now() - 1 });
   const { owner, routed } = responder({ privateOwner: { jobHost: { admit: async () => admission, chain: (_admission, surfaceChain) => surfaceChain } } });
   await owner.remind('route-reminder-2:1', 'telegram-7', 'call Sam', time, 'telegram');
-  expect(routed()).toEqual([LUNA_LOW]);
+  expect(routed()).toEqual([TERRA_MEDIUM]);
 });
 
 // Reasoning tokens count against max_output_tokens; OpenAI's reasoning guide asks for at least 25,000 tokens of room.

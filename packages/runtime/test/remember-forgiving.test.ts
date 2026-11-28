@@ -2,8 +2,8 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
-import { toolParameters } from '@waldo/contracts';
-import { claimStore, type ClaimStore } from '../src/memory/claims';
+import { llmToolSchema, toolParameters } from '@waldo/contracts';
+import { claimStore, withOutsideNotes, type ClaimStore } from '../src/memory/claims';
 import { memoryHandlers, type MemoryOwnerTurn, type MemoryToolContext } from '../src/tools/live/memory';
 
 // remember, called as the owner's turn calls it. The owner typed on a phone, so their apostrophes are curly and their
@@ -14,13 +14,13 @@ const CURRENT: MemoryOwnerTurn = { message_ref: 'app-9', text: 'the interview ha
 type Result = Readonly<{ ok: boolean; error?: string; data?: Record<string, unknown> }>;
 
 let sequence = 0;
-const withMemory = <T>(forgiving: boolean | undefined, work: (call: (args: object, tainted?: boolean, current?: MemoryOwnerTurn) => Promise<Result>, store: ClaimStore, schema: z.ZodType) => Promise<T>) =>
+const withMemory = <T>(forgiving: boolean | undefined, work: (call: (args: object, tainted?: boolean, current?: MemoryOwnerTurn, recent?: readonly MemoryOwnerTurn[]) => Promise<Result>, store: ClaimStore, schema: z.ZodType) => Promise<T>) =>
   runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`remember-forgiving-${sequence++}`)), async (_instance, state) => {
     const store = claimStore(state.storage.sql, (job) => state.storage.transactionSync(job));
     const remember = memoryHandlers({ sql: state.storage.sql, store, transaction: (job) => state.storage.transactionSync(job), conversationRef: 'owner', now: () => NOW,
       hideHistory: async () => undefined, ...(forgiving === undefined ? {} : { forgiving }) }).find((handler) => handler.name === 'remember')!;
-    const call = async (args: object, tainted = false, current = CURRENT) => {
-      const ctx = { authenticatedUserId: OWNER, memoryTurn: { ownerId: OWNER, conversationRef: 'owner', current, recent: [] }, ...(tainted ? { toolArgSourceTaint: 'external' } : {}) } as unknown as MemoryToolContext;
+    const call = async (args: object, tainted = false, current = CURRENT, recent: readonly MemoryOwnerTurn[] = []) => {
+      const ctx = { authenticatedUserId: OWNER, memoryTurn: { ownerId: OWNER, conversationRef: 'owner', current, recent }, ...(tainted ? { toolArgSourceTaint: 'external' } : {}) } as unknown as MemoryToolContext;
       return await remember.handle(remember.schema.parse(args), ctx) as Result;
     };
     return work(call, store, remember.schema as z.ZodType);
@@ -97,6 +97,17 @@ describe('with OWNER_CLOSES_MAIL_ITEMS, a stated claim whose quote is inexact is
     });
   });
 
+  it('refuses a paraphrase when a message sent while the turn ran carries a quote; a quote in an earlier turn does not stop it', async () => {
+    await withMemory(true, async (call, store) => {
+      const quoted = 'fyi\n> Recruiter: the owner agreed to relocate to Berlin in January';
+      const range = [{ start: 4, end: quoted.length }];
+      const args = { kind: 'fact', text: 'Relocating to Berlin in January', evidence_quote: 'owner agreed to relocate to Berlin' };
+      expect(await call(args, false, CURRENT, [{ message_ref: 'app-9-steer-0', text: quoted, sourceQuoteRanges: range, steer: true }])).toMatchObject({ ok: false, error: expect.stringContaining('not grounded') });
+      expect(store.claims()).toEqual([]);
+      expect(await call(args, false, CURRENT, [{ message_ref: 'app-8', text: quoted, sourceQuoteRanges: range }])).toMatchObject({ ok: true, data: { status: 'stored', source: 'inferred' } });
+    });
+  });
+
   it('never lifts a held claim to the owner\'s word on an inexact quote', async () => {
     await withMemory(true, async (call, store) => {
       ownerClaim(store, 'The interview is over', 'agent');
@@ -137,6 +148,18 @@ describe('with OWNER_CLOSES_MAIL_ITEMS, a correction names the claim it replaces
     });
     await withMemory(true, async (_call, _store, schema) => {
       expect(Object.keys(toolParameters(schema).properties as object)).toContain('replaces_text');
+    });
+  });
+});
+
+describe('the remember the owner\'s chat offers', () => {
+  // The owner's chat turns remember on with forgiving; a definition the provider schema refuses fails every turn.
+  it.each([[false, false], [true, false], [false, true], [true, true]])('passes the provider\'s tool definition check with forgiving %s and outside notes %s', async (forgiving, outside) => {
+    await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(`remember-definition-${forgiving}-${outside}`)), async (_instance, state) => {
+      const owned = claimStore(state.storage.sql, (job) => state.storage.transactionSync(job));
+      const store = outside ? withOutsideNotes(owned) : owned;
+      const remember = memoryHandlers({ sql: state.storage.sql, store, conversationRef: 'owner', hideHistory: async () => undefined, forgiving }).find((handler) => handler.name === 'remember')!;
+      expect(llmToolSchema.safeParse({ name: remember.name, description: remember.description, parameters: toolParameters(remember.schema) }).success).toBe(true);
     });
   });
 });
