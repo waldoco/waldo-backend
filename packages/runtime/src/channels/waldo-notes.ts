@@ -88,4 +88,4 @@ export const waldoNotesHandlers = (book: ReturnType<typeof waldoNotesBook>, now:
         : { ok: false, code: 'rejected', error: `The page changed since you read it (now revision ${written.notes.revision}${written.notes.written_by === 'owner' ? ', rewritten at the owner\'s request' : ''}). Read it again with read_notes and rewrite it on top of that, keeping any correction.` };
     },
   } satisfies ToolHandler<RewriteNotesArgs, { revision: number; written: true }, ToolDispatcherContext>,
-];
+] as const;

@@ -13,7 +13,7 @@ const inStore = <T,>(work: (sql: SqlStorage) => T | Promise<T>) =>
   runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`waldo-notes-${seq += 1}`)), async (_instance, state) => work(state.storage.sql));
 const handlers = (sql: SqlStorage) => {
   const [read, rewrite] = waldoNotesHandlers(waldoNotesBook(sql), () => AT);
-  return { read: read!, rewrite: rewrite! };
+  return { read, rewrite };
 };
 const ctx = (extra: Partial<ToolDispatcherContext> = {}) => extra as ToolDispatcherContext;
 
@@ -21,9 +21,9 @@ describe('Waldo\'s own notes', () => {
   it('golden: an empty page is revision 0; a rewrite from it is kept as revision 1 with who wrote it and when', async () => {
     await inStore(async sql => {
       const { read, rewrite } = handlers(sql);
-      expect((await read.handle({}, ctx())).data).toEqual({ text: '', revision: 0, written_by: 'waldo', written_at: null, outside: false });
+      expect((await read.handle()).data).toEqual({ text: '', revision: 0, written_by: 'waldo', written_at: null, outside: false });
       expect(await rewrite.handle({ text: PAGE, revision: 0 }, ctx())).toMatchObject({ ok: true, data: { revision: 1, written: true } });
-      expect((await read.handle({}, ctx())).data).toEqual({ text: PAGE, revision: 1, written_by: 'waldo', written_at: AT, outside: false });
+      expect((await read.handle()).data).toEqual({ text: PAGE, revision: 1, written_by: 'waldo', written_at: AT, outside: false });
     });
   });
 
