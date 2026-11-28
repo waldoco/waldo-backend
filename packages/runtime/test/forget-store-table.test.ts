@@ -19,6 +19,7 @@ const TABLES: Record<string, Row> = {
   reminder_notes: purged('memory-forget-do-provider.test.ts'),
   wake_outcomes: purged('forget-wake-outcomes.test.ts'),
   waldo_notes: purged('forget-waldo-notes.test.ts'),
+  home_card: purged('forget-home-card.test.ts'),
   wake_inbox: exempt('what came in since the last general wake, as kind and code (a health reason code, a place code, mail_calendar, app) with counts and times; no owner text or mail words'),
   reminder_outside: exempt('a reminder id, kept while that reminder\'s note was written after outside text; no owner text'),
   responsibility_outside: exempt('a responsibility id, kept once its text was written after outside text or holds a worker\'s report; no owner text'),

@@ -177,6 +177,8 @@ export const toolNameSchema = z.enum([
   // first and rewrites it last, and the owner reads and corrects it in chat.
   'read_notes',
   'rewrite_notes',
+  // write_home_card: the general wake writes the one card the owner sees first on Home (app.v1 home-card).
+  'write_home_card',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -338,6 +340,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'end_run',
     'read_notes',
     'rewrite_notes',
+    'write_home_card',
     'show_chart',
     'show_health_chart',
     'propose_schedule',
