@@ -272,11 +272,6 @@ export type TriageCode = 'act' | 'act_without_card' | 'tell' | 'tell+push' | 're
   // HELD_RAISE: what became of the held batches the job took. told: they reached the owner. carried: the next day card carries
   // them. dropped: the turn judged them no longer worth telling, for the reason it gave.
   | 'raise_told' | 'raise_carried' | `raise_dropped:${HeldDrop | 'unstated'}`;
-// The owner's daily interrupt budget for triage: act, and a tell that messages or pushes, each spend one.
-export const TRIAGE_INTERRUPTS_PER_DAY = 2;
-export const TRIAGE_COOLDOWN_MS = 60 * 60_000;
-export const triageHold = (spent: Readonly<{ count: number; last: number | null }>, now: number, quiet: boolean): TriageHold | null =>
-  quiet ? 'quiet' : spent.count >= TRIAGE_INTERRUPTS_PER_DAY ? 'budget' : spent.last !== null && now - spent.last < TRIAGE_COOLDOWN_MS ? 'cooldown' : null;
 
 export type UpdateSweepApplyDeps = Readonly<{
   updates: UpdateBook; timezone: string; now(): number; sourceFollowups(): boolean;
@@ -379,10 +374,12 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
     // With the owner's limits the turn may act or tell past the budget when it judges the batch urgent, so it keeps its card
     // tools while some urgent allowance is left; any card past the budget or the gap draws on that allowance, marked or not.
     const ownHold = (urgent: boolean, asks: boolean) => own!.book.hold({ consent: true, quiet: day.quiet(), closed: own!.closed, asks, urgent, limits: own!.limits });
-    const hold = own ? (day.quiet() ? 'quiet' : null) : triageHold(deps.updates.interrupts(localDay), started, day.quiet());
+    // Triage keeps no budget or gap of its own: only quiet hours hold it, and the owner's
+    // own limits when they are on.
+    const hold = day.quiet() ? 'quiet' as const : null;
     const canAct = own ? ownHold(true, false) === null : hold === null;
     const prompt = triagePrompt(localIso(started, deps.timezone), { changes: changeLines(changes), ...await deps.context(), ...await sense.context(), sourceFollowups,
-      cards: day.cards(), revisesCards: day.revisesCards, hold, left: TRIAGE_INTERRUPTS_PER_DAY - deps.updates.interrupts(localDay).count, ...(own ? { limits: own.book.line(own.limits) } : {}),
+      cards: day.cards(), revisesCards: day.revisesCards, hold, ...(own ? { limits: own.book.line(own.limits) } : {}),
       ...(sense.actAhead ? { actAhead: { style: sense.actAhead.style() } } : {}) });
     const heldText = held.length ? `\n\n${heldSection(held, changes, deps.timezone)}` : '';
     const reply = await deps.turn(io.trace, `${prompt}${heldText}\n\n${machineResultText(result, withheld)}`, io.current, triageTools(sourceFollowups, canAct));
@@ -390,7 +387,7 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
     const asks = chosen !== 'invalid' && chosen.asks === true;
     const urgent = chosen !== 'invalid' && chosen.urgent === true;
     // What a delivery will be charged to, known before it goes so the trace code survives a failed delivery.
-    const charge = (): InterruptSpend | null => own ? spendOf(own.book.spent(), own.limits, deps.now()) : null;
+    const charge = (): InterruptSpend | null => own ? spendOf(own.book.spent(), own.limits) : null;
     const spend = () => { if (own) own.book.spend(own.limits, asks, `update:${row.id}`); else deps.updates.interrupted(localDay, deps.now()); };
     // The held batches the job took settle once, with the judgment: what reached the owner or was let go is folded; what was
     // left for the next card stays for it. A tell held again keeps them waiting, beside its own batch.
@@ -402,7 +399,7 @@ export const updateSweepApplier = (deps: UpdateSweepApplyDeps): MachineHandler =
       return 'skipped' as const;
     };
     const holdOwn = (code: HeldCode) => () => { if (deps.holds) deps.updates.hold(recordId, code, deps.now()); };
-    if (sense.cardsSince(started) > 0) return settle(own === null || withinBudget(own.book.spent(), own.limits, deps.now()) ? 'act' : urgent ? 'act+urgent' : 'act+over_budget', spend, raised('raise_told'));
+    if (sense.cardsSince(started) > 0) return settle(own === null || withinBudget(own.book.spent(), own.limits) ? 'act' : urgent ? 'act+urgent' : 'act+over_budget', spend, raised('raise_told'));
     if (chosen === 'invalid') return settle('invalid', undefined, raised('raise_carried'));
     if (chosen.decision === 'act') return settle('act_without_card', undefined, raised('raise_carried'));
     if (chosen.decision === 'brief') return settle('brief', undefined, raised('raise_carried'));

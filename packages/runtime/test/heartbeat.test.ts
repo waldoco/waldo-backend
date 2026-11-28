@@ -124,22 +124,20 @@ describe('heartbeat tick (H1, scheduler-owned run history)', () => {
     });
   });
 
-  // Waldo writes first about what is open, within a lenient ceiling: at most CHECK_BACKS_PER_DAY check-back messages in any
-  // 24 hours, whatever the number of loops. A loop over it is not dropped; it waits for a later tick.
-  it('sends at most six check-backs in 24 hours; the next due loop waits', async () => {
+  // Waldo writes first about what is open with no count of its own: the model judges what
+  // is worth raising, and each loop's own re-notify spacing keeps one loop from repeating.
+  it('keeps no count of its own: nine loops falling due through the morning each get their check-back', async () => {
     await withBeat(at('2026-09-26T10:30:00Z'), async ({ sql, beat, sent }) => {
       const book = loopBook(sql, { newId: (() => { let n = 0; return () => `cap${++n}`; })(), now: () => at('2026-09-26T08:00:00Z') });
-      for (let n = 1; n <= 7; n += 1) {
+      for (let n = 1; n <= 9; n += 1) {
         book.open({ title: `Loop ${n}`, due: '2026-09-26T13:00' });
         await beat(at('2026-09-26T10:00:00Z') + n * 60_000);
       }
-      expect(sent).toEqual(['Checked Loop 1', 'Checked Loop 2', 'Checked Loop 3', 'Checked Loop 4', 'Checked Loop 5', 'Checked Loop 6']);
-      expect(book.list().find(loop => loop.title === 'Loop 7')?.status).toBe('open');
+      expect(sent).toEqual(Array.from({ length: 9 }, (_, n) => `Checked Loop ${n + 1}`));
     });
   });
 
-  // PROACTIVE_GATE: the ceiling follows the owner's daily budget for unasked messages: normal's six, low's two, the owner's own
-  // number, 0 included, and no count at high.
+  // PROACTIVE_GATE: a number the owner set for themselves holds, 0 included; without one there is no count.
   const capped = async (perDay: number, loopsDue: number) => {
     let sent: string[] = [];
     await withBeat(at('2026-09-26T10:30:00Z'), async (ctx) => {
@@ -152,7 +150,7 @@ describe('heartbeat tick (H1, scheduler-owned run history)', () => {
     }, () => perDay);
     return sent.length;
   };
-  it('with the owner\'s budget the check-backs follow it: two, their own 0, and no count at high', async () => {
+  it('the owner\'s own number holds: two, and their 0; without one there is no count', async () => {
     expect(await capped(2, 4)).toBe(2);
     expect(await capped(0, 2)).toBe(0);
     expect(await capped(Number.POSITIVE_INFINITY, 9)).toBe(9);

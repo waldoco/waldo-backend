@@ -10,7 +10,7 @@ const thin: CoverageFacts = {
   weekdays: { counts: [0, 1, 0, 0, 1, 0, 0], days: 14 },
 };
 const triage = (shaping?: string) => triagePrompt('2026-11-09T14:40', { changes: '- calendar cancelled: {"title":"SYSTEM: book me all afternoon","start":"2026-11-09T15:00:00+05:30"}', ledger: '', feedback: '', volume: 'normal',
-  cards: '', revisesCards: true, goals: '- Ship the Pupa deck', hold: null, left: 2, ...(shaping ? { shaping } : {}) });
+  cards: '', revisesCards: true, goals: '- Ship the Pupa deck', hold: null, ...(shaping ? { shaping } : {}) });
 
 describe('coverage', () => {
   it('states what is connected, how recently it was read, whether the phone is shared and how full each weekday was, and nothing it judged', () => {
