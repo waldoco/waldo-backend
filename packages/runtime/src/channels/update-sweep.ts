@@ -21,7 +21,8 @@ import { changeDetail, changeLines, CONTEXT_KINDS, CursorMovedError, heldWhen, r
 
 // Why an update card cannot go out now: the owner turned follow-ups off, the day's last card went, volume is low, quiet
 // hours, or the owner's surface would only hold it. The changes still wait for the next main card.
-export type SweepGate = 'held_preference' | 'held_closed' | 'held_volume' | 'held_quiet' | 'held_window';
+// held_by_wake (GENERAL_WAKE): the changes are recorded for the general wake, which reads them; no separate job starts and nothing is held.
+export type SweepGate = 'held_preference' | 'held_closed' | 'held_volume' | 'held_quiet' | 'held_window' | 'held_by_wake';
 export type SweepCheck = 'unchanged' | 'held_open_job' | 'held_breaker' | 'held_debounce' | 'held_cursor_moved' | SweepGate | MachineEnqueued['code'];
 
 // With the day state the judge runs at most once in this gap: a tick inside it reads nothing, so what it would have read
@@ -34,7 +35,7 @@ export const UPDATE_JUDGE_WAKE_KEY = 'update_judge_wake_v1';
 const UPDATE_SWEEP_DEADLINE_MS = 60 * 60_000;
 // HELD_RAISE: how many held batches one job takes, oldest first. The rest wait for the next job or the next day card.
 const HELD_PER_RAISE = 10;
-const heldOf = (gate: SweepGate | `held_${string}`): HeldCode | null => gate === 'held_preference' ? null : gate.slice('held_'.length) as HeldCode;
+const heldOf = (gate: SweepGate | `held_${string}`): HeldCode | null => gate === 'held_preference' || gate === 'held_by_wake' ? null : gate.slice('held_'.length) as HeldCode;
 
 export type SweepCheckDeps = Readonly<{
   updates: UpdateBook; jobs: JobBook; google: Pick<GoogleClient, 'changedEvents' | 'newMail' | 'events' | 'mailDelta' | 'calendarDelta' | 'changedEventsPage'>;
@@ -69,7 +70,8 @@ export type SweepCheckDeps = Readonly<{
 // The job's key is the window it covers: the watermarks before this tick moved them.
 // wakeAt: when a debounced tick's changes can next be judged. recorded: the update record this tick committed with changes,
 // and the sources they came from. seedCapped: the day's read of events was cut at its cap.
-type SweepChecked = Readonly<{ code: SweepCheck; changes: number; analysis: number; job?: JobRow; wakeAt?: number;
+// news: some recorded change is more than context (a mail read, archived or starred is the owner's own action, not news).
+type SweepChecked = Readonly<{ code: SweepCheck; changes: number; analysis: number; news?: boolean; job?: JobRow; wakeAt?: number;
   recorded?: Readonly<{ id: number; sources: readonly Change['source'][] }>; seedCapped?: true; delta?: readonly DeltaCode[] }>;
 export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepChecked> => {
   const { updates } = deps;
@@ -94,7 +96,7 @@ export const updateSweepCheck = async (deps: SweepCheckDeps): Promise<SweepCheck
     updates.pruneMail(deps.now);
     const pending = deps.sourceFollowups ? updates.pendingMail() : [];
     const analysis = deps.sourceFollowups ? [...changes.filter(change => change.source !== 'mail'), ...pending] : changes;
-    const counts = { changes: changes.length, analysis: analysis.length,
+    const counts = { changes: changes.length, analysis: analysis.length, news: changes.some(change => !CONTEXT_KINDS.includes(change.kind)),
       ...(recordId === null ? {} : { recorded: { id: recordId, sources: [...new Set(changes.map(change => change.source))] } }) };
     if (gate !== null) {
       const code = heldOf(gate);

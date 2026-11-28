@@ -18,6 +18,8 @@ import { DAY_CARDS, PLANNING_BRIEF_INSTRUCTION } from '../src/prompt/day-cards';
 import { interruptBook } from '../src/channels/interruptions';
 import { ownerSpokeSince } from '../src/channels/episodes';
 import { armInterventionReview, INTERVENTION_REVIEW_ID } from '../src/channels/interventions';
+import { WAKE_MERGE_MS } from '../src/channels/wake-inbox';
+import { updateBook } from '../src/channels/update-cards';
 import { loopBook } from '../src/channels/loops';
 import { schedulePreferences } from '../src/channels/schedule-preferences';
 import { Scheduler } from '../src/scheduler/multiplexer';
@@ -596,6 +598,110 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
         await state.storage.deleteAlarm();
       } finally { Date.now = before; }
       expect(model.ownerRequests.join('\n')).toContain('the deck block slipped twice this week');
+    });
+  });
+
+  // GENERAL_WAKE: the one inbox. Every event lands there and brings the wake within the merge window; the wake reads them all.
+  const inbox = (state: DurableObjectState) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'wake_inbox'").one().n
+    ? state.storage.sql.exec<{ kind: string; ref: string; count: number }>('SELECT kind, ref, count FROM wake_inbox ORDER BY kind, ref').toArray() : [];
+  const dueOf = (state: DurableObjectState, id: string) => state.storage.sql.exec<{ due_at: number }>('SELECT due_at FROM schedule WHERE id = ?', id).toArray()[0]?.due_at;
+  const runtime = (owner: Steps['owner']) => owner.setup('app') as unknown as { healthChanged(day: string): Promise<void>; placeMoved(): Promise<void>; appOpened(): Promise<void> };
+  it('a body fact the code computed always brings a wake: it lands in the inbox, the wake comes within the merge window, the separate health trigger is not armed, and the wake reads it', async () => {
+    await owned('wake-inbox-health', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner }) => {
+      await runtime(owner).healthChanged(DAY);
+      expect(inbox(state)).toEqual([{ kind: 'health', ref: 'zone_change', count: 1 }]);
+      expect(dueOf(state, INTERVENTION_REVIEW_ID)).toBeLessThanOrEqual(AT + WAKE_MERGE_MS);
+      expect(dueOf(state, 'health-trigger')).toBeUndefined();
+      model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Recovery dipped but the day is light; nothing to change.' } }] }];
+      await tick(state, owner);
+      expect(model.ownerRequests[0]).toContain('one of their body zones moved');
+      expect(inbox(state)).toEqual([]);
+    });
+  });
+
+  it('events close together are one wake: a second move inside the window is merged, with no limit of one pull per cadence', async () => {
+    await owned('wake-inbox-merge', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner, hops }) => {
+      await runtime(owner).placeMoved();
+      const first = dueOf(state, INTERVENTION_REVIEW_ID);
+      await runtime(owner).placeMoved();
+      await runtime(owner).healthChanged(DAY);
+      expect(inbox(state)).toEqual([{ kind: 'health', ref: 'zone_change', count: 1 }, { kind: 'place', ref: 'place_moved', count: 2 }]);
+      expect(dueOf(state, INTERVENTION_REVIEW_ID)).toBe(first);
+      expect(hops()).not.toContain('intervention_review');
+    });
+  });
+
+  it('a wake held by the owner\'s no to follow-ups leaves the inbox for the next wake', async () => {
+    await owned('wake-inbox-held', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner }) => {
+      loopBook(state.storage.sql, { newId: () => 'l', now: () => AT }).setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', followups: false });
+      await runtime(owner).placeMoved();
+      await tick(state, owner);
+      expect(model.ownerRequests).toEqual([]);
+      expect(inbox(state)).toEqual([{ kind: 'place', ref: 'place_moved', count: 1 }]);
+    });
+  });
+
+  it('a wake that ran judges the waiting mail it was shown, so none is left for a sweep job after the switch turns off; a held wake leaves it', async () => {
+    const seedMail = (sql: SqlStorage) => {
+      const updates = updateBook(sql);
+      sql.exec("INSERT INTO update_cards (at, day, changes) VALUES (?, ?, ?)", AT - 60_000, DAY, JSON.stringify([{ source: 'mail', kind: 'new', detail: 'Pat: deck review', source_ref: 'mail:t-1', source_message_id: 'm-1' }]));
+      sql.exec('INSERT INTO observed_mail (source_ref, thread_id, observed_at, message_id, update_id) VALUES (?, ?, ?, ?, ?)', 'mail:t-1', 't-1', AT - 60_000, 'm-1', updates.lastRecord());
+      return updates;
+    };
+    await owned('wake-judges-mail', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner }) => {
+      const updates = seedMail(state.storage.sql);
+      expect(updates.pendingMail()).toHaveLength(1);
+      model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Nothing new.' } }] }];
+      await tick(state, owner);
+      expect(model.ownerRequests[0]).toContain('[source_ref mail:t-1]');
+      expect(updates.pendingMail()).toEqual([]);
+    });
+    await owned('wake-held-keeps-mail', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner }) => {
+      loopBook(state.storage.sql, { newId: () => 'l', now: () => AT }).setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', followups: false });
+      const updates = seedMail(state.storage.sql);
+      await tick(state, owner);
+      expect(updates.pendingMail()).toHaveLength(1);
+    });
+  });
+
+  it('an event right after a wake ran is kept, and its wake comes no sooner than the configured gap after the last one; a gap that does not read as minutes is the default', async () => {
+    for (const [gap, minutes] of [['45', 45], ['abc', 30], ['', 30]] as const) {
+      await owned(`wake-inbox-gap-${minutes}-${gap || 'empty'}`, { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1', WAKE_EVENT_GAP_MIN: gap }, async ({ state, owner }) => {
+        model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Nothing new.' } }] }];
+        await tick(state, owner);
+        const ran = state.storage.sql.exec<{ at: number }>('SELECT at FROM wake_outcomes').one().at;
+        await runtime(owner).placeMoved();
+        expect(inbox(state)).toEqual([{ kind: 'place', ref: 'place_moved', count: 1 }]);
+        const due = dueOf(state, INTERVENTION_REVIEW_ID)!;
+        expect(due, gap).toBeGreaterThanOrEqual(ran + minutes * 60_000);
+        expect(due, gap).toBeLessThan(ran + (minutes + 1) * 60_000);
+      });
+    }
+  });
+
+  it('a health-trigger entry armed before the switch never runs beside the wake', async () => {
+    await owned('wake-inbox-old-trigger', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner, hops }) => {
+      state.storage.sql.exec('DELETE FROM schedule');
+      await new Scheduler(state.storage.sql, state.storage, productionDeps()).schedule({ id: 'health-trigger', kind: 'patrol', payloadRefs: { id: 'health-trigger' }, occurrenceAt: AT - 1000, dueAt: AT - 1000, recurrence: null });
+      state.storage.kv.put('owner_alarm_last_v1', 1);
+      await owner.alarm();
+      await state.storage.deleteAlarm();
+      expect(model.ownerRequests).toEqual([]);
+      expect(dueOf(state, 'health-trigger')).toBeUndefined();
+      expect(hops()).toContain('health_trigger');
+    });
+  });
+
+  it('the app opening brings a wake when none ran within the cadence, and not when one just did', async () => {
+    await owned('wake-inbox-app-open', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner }) => {
+      const open = () => owner.fetch(new Request('https://telegram-owner/app/v1/device/timezone', { method: 'POST', headers: headers('wake-inbox-app-open'), body: JSON.stringify({ timezone: 'UTC' }) }));
+      expect((await open()).status).toBe(200);
+      expect(inbox(state)).toEqual([{ kind: 'app_open', ref: 'app', count: 1 }]);
+      model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Nothing new since the Brief.' } }] }];
+      await tick(state, owner);
+      expect(inbox(state)).toEqual([]);
+      expect((await open()).status).toBe(200);
+      expect(inbox(state)).toEqual([]);
     });
   });
 

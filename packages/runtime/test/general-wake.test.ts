@@ -15,12 +15,12 @@ const NUDGE = 'The deck block slipped this morning and the board deck is due Fri
 const SPEND: RunSpend = { calls: 3, model: WALDO_CHAT_MODEL, input: 41_200, cached: 38_000, output: 900, usd: 0.0312 };
 const end = (reason: string, why?: string, tools: readonly string[] = []): RunEndReport => ({ reason, ...(why ? { why } : {}), tools, spend: SPEND });
 
-type Wake = Readonly<{ code: WakeCode | 'threw'; delivered: string[]; runs: number; prompts: string[]; rows: readonly WakeRow[] }>;
+type Wake = Readonly<{ code: WakeCode | 'threw'; delivered: string[]; runs: number; prompts: string[]; rows: readonly WakeRow[]; settled: number }>;
 let seq = 0;
 const wake = (reply: string, ended: RunEndReport | undefined, setup: Readonly<{ cause?: LookCause; quiet?: boolean; quietLater?: boolean; consent?: boolean; throws?: boolean; deliverThrows?: boolean }> = {}) =>
   runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`general-wake-${seq += 1}`)), async (_instance, state): Promise<Wake> => {
     const outcomes = wakeOutcomeBook(state.storage.sql);
-    const out = { delivered: [] as string[], runs: 0, prompts: [] as string[] };
+    const out = { delivered: [] as string[], runs: 0, prompts: [] as string[], settled: 0 };
     const run = generalWake({
       now: () => NOW, localNow: () => '2026-11-28T10:00',
       consent: () => setup.consent ?? true, quiet: () => (setup.quiet ?? false) || (setup.quietLater === true && out.runs > 0),
@@ -30,6 +30,7 @@ const wake = (reply: string, ended: RunEndReport | undefined, setup: Readonly<{ 
       run: async (_trace, text) => { out.runs += 1; out.prompts.push(text); if (setup.throws) throw new Error('provider down'); return { reply, end: ended }; },
       deliver: async (id, _trace, text, commit) => { if (setup.deliverThrows) throw new Error('outbox down'); state.storage.transactionSync(commit); out.delivered.push(`${id.split(':')[0]}:${text}`); },
       record: row => outcomes.record(row),
+      settleInbox: () => { out.settled += 1; },
       chose: () => undefined,
     });
     let code: WakeCode | 'threw';
@@ -136,5 +137,12 @@ describe('what a wake holds', () => {
       expect(month.add('2026-12', 0.01)).toEqual({ month: '2026-12', wakes: 1, priced: 1, usd: 0.01 });
       expect(month.read('2026-11')).toEqual({ month: '2026-11', wakes: 0, priced: 0, usd: 0 });
     });
+  });
+
+  it('a wake that ran to an outcome settles the inbox it read; one held, before it ran or at send, or that failed, leaves it', async () => {
+    expect((await wake(NUDGE, end('send', 'Worth raising.'))).settled).toBe(1);
+    expect((await wake('SKIP', end('nothing_to_send', 'Nothing.'))).settled).toBe(1);
+    for (const setup of [{ consent: false }, { quietLater: true }, { throws: true }, { deliverThrows: true }]) expect((await wake(NUDGE, end('send', 'Worth raising.'), setup)).settled, JSON.stringify(setup)).toBe(0);
+    expect((await wake('Half a thought', undefined)).settled).toBe(0);
   });
 });

@@ -117,6 +117,16 @@ export const updateBook = (sql: Sql) => {
           AND json_extract(j.value, '$.source_ref') = m.source_ref AND json_extract(j.value, '$.source_message_id') = m.message_id
         ORDER BY m.observed_at`, recordId, ...refs).toArray().map((row): Change => ({ source: 'mail', kind: 'new', ...row }))];
     },
+    // The newest record; a run that reads every unfolded record now has read the mail of every record up to it.
+    lastRecord(): number {
+      return sql.exec<{ id: number | null }>('SELECT MAX(id) AS id FROM update_cards').one().id ?? 0;
+    },
+    // GENERAL_WAKE: a wake that read the records through recordId judged the mail they carry, as a sweep job does for its own.
+    // Left unjudged, that mail would wait for a sweep job that never starts while the wake is on, and all of it would go to the
+    // first job after the switch turned off.
+    judgedThrough(recordId: number): void {
+      sql.exec('UPDATE observed_mail SET judged = 1 WHERE judged = 0 AND update_id <= ?', recordId);
+    },
     // The job judged its pending mail, by the same bound.
     judgedJob(recordId: number, refs: readonly string[]): void {
       if (refs.length) sql.exec(`UPDATE observed_mail SET judged = 1 WHERE judged = 0 AND update_id <= ? AND source_ref IN (${refs.map(() => '?').join(', ')})`, recordId, ...refs);

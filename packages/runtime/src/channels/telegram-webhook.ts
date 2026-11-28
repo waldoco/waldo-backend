@@ -383,6 +383,8 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // GENERAL_WAKE: "1" runs the look as Waldo's general wake in the brain (channels/wake.ts); WAKE_MODEL_LOOK is its model role.
   GENERAL_WAKE?: string;
   WAKE_MODEL_LOOK?: string;
+  // GENERAL_WAKE: minutes after the last wake that ran before an event brings the next one (default 30); the owner's cost lever.
+  WAKE_EVENT_GAP_MIN?: string;
   PROACTIVE_REVIEW_EVERY_MIN?: string;
   // '1': on the first wake of each release, the owner's Waldo reads the team's announcements and decides how and whether to
   // tell its owner about each new capability that is live for them (announcements.ts). Off unless "1".

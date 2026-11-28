@@ -73,7 +73,7 @@ export const workerRouteDown = (access: OwnerModelAccess): boolean => {
 };
 
 // Why a machine job with news still told the owner nothing: its gate closed between the check and the apply.
-export type MachineHeld = 'held_quiet' | 'held_volume' | 'held_preference' | 'held_stale' | 'held_closed' | 'held_window' | 'held_budget' | 'no_source' | 'malformed_reply';
+export type MachineHeld = 'held_quiet' | 'held_volume' | 'held_preference' | 'held_by_wake' | 'held_stale' | 'held_closed' | 'held_window' | 'held_budget' | 'no_source' | 'malformed_reply';
 export type MachineApplied = 'delivered' | 'skipped' | Readonly<{ held: MachineHeld }>;
 // A job's apply: rechecks its gates, runs its apply turn and delivers. It calls `settle` exactly once, as the commit of its
 // delivery or alone when nothing goes out; `settle` throws ClosedRunError for a job cancelled or forgotten meanwhile. A
