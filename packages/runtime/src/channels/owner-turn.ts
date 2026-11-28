@@ -187,14 +187,16 @@ export type OwnerContextIntegration = Readonly<{ skills?: OwnerSkillCapability; 
   // What the owner's day holds now (channels/now-frame.ts), read once per owner message and fenced as data, one section per item.
   nowFrame?: (trace: string) => Promise<readonly string[]>;
   // How a Waldo-started run ended, once per return of its loop: the end it chose and the tools that succeeded, by name only.
-  runEnded?: (trace: string, end: RunEndReport) => void }>;
+  runEnded?: (trace: string, end: RunEndReport) => void;
+  // Each change a Waldo-started run made with no card, as it is made (conversation/inward-receipts).
+  inwardMade?: (trace: string, line: string) => void }>;
 // What a run's model calls cost: the last model that answered, tokens summed over its calls, and dollars where every call's
 // model has a price (null when one has none).
 export type RunSpend = Readonly<{ calls: number; model: string; input: number; cached: number; output: number; usd: number | null }>;
 export type RunEndReport = Readonly<{ reason: string; why?: string; tools: readonly string[]; spend?: RunSpend; inward?: readonly string[] }>;
 // This owner's spend so far this month and the ceiling it is held to, read once when a turn starts.
 export type OwnerSpend = Readonly<{ spentUsd: number; ceilingUsd: number }>;
-type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; finishedTasks?: (since: number) => string; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; loopHasPassed?: (id: string) => boolean; memoryChat?: (chain: string, principal: string) => string; promptOwnText?: (traceId: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; turnCharts?: (turnId: string) => readonly ConversationChart[]; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; jobOutcomeRows?: boolean; timelineSeed?: TimelineSeed; machineTime?: OwnerContextIntegration['machineTime']; leanScheduled?: boolean; promotedTools?: OwnerContextIntegration['promotedTools']; noteLoaded?: OwnerContextIntegration['noteLoaded']; waldoSent?: OwnerContextIntegration['waldoSent']; nowFrame?: OwnerContextIntegration['nowFrame']; modelSetWakes?: boolean; undoableInward?: boolean; runEnded?: OwnerContextIntegration['runEnded'] }>;
+type PrivateOwner = Readonly<{ skillHost?: OwnerSkillHost; skills?: OwnerSkillCapability; contextHost?: OwnerContextHost; context?: OwnerContextCapability; history?: OwnerHistoryFactory; jobHost?: OwnerJobHost; ownerProfile?: () => Promise<string | null>; watchStatus?: () => string; connectors?: () => string; dayCards?: () => string; compactionFlush?: CompactionFlush; memoryNotice?: () => Readonly<{ line: string; modelLine: string; taken(): void }> | null; newerOwnerInput?: (scope: RunEffectScope | undefined) => boolean; newerOwnerMessages?: () => SecondMessageRound; finishedTasks?: (since: number) => string; spend?: () => OwnerSpend; forgetBarrier?: ForgetBarrierMode; forgetPass?: () => Promise<unknown>; loopIsSourceBound?: (id: string) => boolean; loopHasPassed?: (id: string) => boolean; memoryChat?: (chain: string, principal: string) => string; promptOwnText?: (traceId: string) => boolean; profileView?: boolean; semanticRecall?: Pick<SemanticRecall, 'near'>; memorySelection?: MemorySelection; memoryValidity?: boolean; memoryUsed?: (turnId: string, ids: readonly number[]) => void; turnCharts?: (turnId: string) => readonly ConversationChart[]; asyncTools?: boolean; lightChat?: boolean; lightRoles?: LightChatRoles; jobOutcomeRows?: boolean; timelineSeed?: TimelineSeed; machineTime?: OwnerContextIntegration['machineTime']; leanScheduled?: boolean; promotedTools?: OwnerContextIntegration['promotedTools']; noteLoaded?: OwnerContextIntegration['noteLoaded']; waldoSent?: OwnerContextIntegration['waldoSent']; nowFrame?: OwnerContextIntegration['nowFrame']; modelSetWakes?: boolean; undoableInward?: boolean; runEnded?: OwnerContextIntegration['runEnded']; inwardMade?: OwnerContextIntegration['inwardMade'] }>;
 
 // Which scoped responder each owner field reaches. A scoped responder is built per run scope: the owner's own message
 // ('chat'), a Waldo-started run as the admitted owner ('job'), or a compaction pass over one chain ('compaction'). Every
@@ -221,7 +223,7 @@ const SCOPED_FIELDS = {
   // UNDOABLE_INWARD: an undoable inward change runs without a card in the owner's turn and in a run Waldo started alike.
   undoableInward: ['chat', 'job'],
   // The general wake records one outcome row per run from how its run ended (channels/wake.ts).
-  runEnded: ['job'],
+  runEnded: ['job'], inwardMade: ['job'],
 } as const satisfies Record<keyof PrivateOwner, readonly ScopedKind[]>;
 export const scopedOwner = (kind: ScopedKind, owner: PrivateOwner | undefined, own: PrivateOwner): PrivateOwner => {
   const picked: Record<string, unknown> = {};
@@ -1047,6 +1049,7 @@ export const createOwnerResponder = (
         },
         // How the run closed, on every return: the root hop's outcome alone cannot tell a run that chose silence from one that
         // had nothing to say.
+        onInward: (line) => { privateOwner?.inwardMade?.(trace, line); },
         onRunEnd: (end) => {
           log({ trace, hop: 'run_end', ms: 0, ok: end.reason !== 'no_reply', code: end.reason, ...(end.why ? { detail: end.why } : {}) });
           const spent = runSpend.get(trace);

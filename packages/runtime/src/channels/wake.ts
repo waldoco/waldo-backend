@@ -16,7 +16,9 @@ import { triageTools } from './update-sweep';
 // baseline: the run leaves itself a follow-up (open_loop, a check-back at its minute) when it wants one sooner. No count of messages a day is kept,
 // and the owner's volume is never read. The owner's own no to follow-ups and their quiet hours hold the wake before it runs
 // (a card it raised would reach them as a message), and again when it decides to speak. Every run leaves one outcome row with the reason it gave and what it cost, including when it chose to say nothing.
-export const GENERAL_WAKE_TOOLS: readonly ToolName[] = [...new Set<ToolName>([...triageTools(false, true), 'close_loop', 'remember', 'open_loop', 'set_reminder'])];
+export const GENERAL_WAKE_TOOLS: readonly ToolName[] = [...new Set<ToolName>([...triageTools(false, true), 'close_loop', 'remember', 'open_loop'])];
+// UNDOABLE_INWARD: step 6 names set_reminder, so the wake is offered it; off, its menu is as before.
+export const wakeTools = (undoable: boolean): readonly ToolName[] => (undoable ? [...GENERAL_WAKE_TOOLS, 'set_reminder'] : GENERAL_WAKE_TOOLS);
 
 // The model role a wake runs on is configuration, one value per kind of wake. plans and chat both run on the chat model
 // (plans at the planning effort); auxiliary is the small model. Unset or unknown, plans.
@@ -188,6 +190,8 @@ export type GeneralWakeDeps = Readonly<{
   undoable?: boolean;
   // Changes a wake made with no card that have not reached the owner yet (a held or failed send): the next delivery carries them.
   untold?: Readonly<{ read(): readonly Readonly<{ seq: number; line: string }>[]; add(lines: readonly string[]): void; settle(through: number): void }>;
+  // The changes the run made so far, as the tool loop reported each; read once the run is over, whatever its ending.
+  made?(trace: string): readonly string[];
 }>;
 
 const MESSAGE_ENDS: ReadonlySet<string> = new Set(['send', 'ask_owner', 'replied']);
@@ -212,9 +216,9 @@ export const generalWake = (deps: GeneralWakeDeps) => async (trace: string, kind
   const tells = deps.undoable === true && deps.untold !== undefined;
   const row = (outcome: WakeOutcome, end: RunEndReport | undefined): WakeRow => ({ id: trace, at: started, kind, ref: cause ?? 'cadence', outcome, reason: keptReason(end?.why), tools: end?.tools ?? [], outside: true, spend: end?.spend ?? null });
   // An ending that reaches no one keeps what the run changed and has not told, so a change is never made unseen.
-  const settle = (code: WakeCode, outcome: WakeOutcome, end: RunEndReport | undefined) => {
+  const settle = (code: WakeCode, outcome: WakeOutcome, end: RunEndReport | undefined, made: readonly string[] = end?.inward ?? []) => {
     deps.chose(trace, code);
-    deps.transaction(() => { deps.record(row(outcome, end)); if (tells && end?.inward?.length) deps.untold!.add(end.inward); });
+    deps.transaction(() => { deps.record(row(outcome, end)); if (tells && made.length) deps.untold!.add(made); });
     return code;
   };
   const hold = (): WakeHold | null => (!deps.consent() ? 'consent' : deps.quiet() ? 'quiet' : null);
@@ -224,16 +228,19 @@ export const generalWake = (deps: GeneralWakeDeps) => async (trace: string, kind
   try {
     ({ reply, end } = await deps.run(trace, wakePrompt(deps.localNow(), cause, await deps.context(), deps.undoable === true)));
   } catch (error) {
-    settle('failed', 'failed', undefined);
+    // A run that failed after changing something keeps what it changed, for the next delivery.
+    settle('failed', 'failed', undefined, deps.made?.(trace) ?? []);
     throw error;
   }
+  deps.made?.(trace);
   const text = tells ? saidOnly(reply.trim()) : reply.trim();
   // A run whose ending is unknown sends nothing: words it left (an unfinished run's) are not a message it chose.
   if (end === undefined) return text && !sendsNothing(text) ? settle('failed', 'failed', end) : settle('nothing', 'nothing', end);
   // A card it raised is the notification; a run that ends without wanting to speak is its own outcome, unless there are changes to tell.
   const quietOutcome = quietEnd(end);
   const speaks = text !== '' && !sendsNothing(text) && MESSAGE_ENDS.has(end.reason) && quietOutcome !== 'carded';
-  const owed = tells ? deps.untold!.read() : [];
+  // Rows exist only from a time the switch was on; they are carried even after it is turned off, so none is stranded.
+  const owed = deps.untold?.read() ?? [];
   const lines = [...owed.map(entry => entry.line), ...(tells ? end.inward ?? [] : [])];
   if (!speaks && !lines.length) return settle(quietOutcome, quietOutcome, end);
   // Checked again when the run wants to speak: quiet hours may have begun, or follow-ups been turned off, while it ran.
@@ -244,7 +251,7 @@ export const generalWake = (deps: GeneralWakeDeps) => async (trace: string, kind
   const through = owed.at(-1)?.seq;
   deps.chose(trace, outcome);
   try {
-    await deps.deliver(`wake:${trace}`, trace, message, () => { deps.record(row(outcome, end)); if (through !== undefined) deps.untold!.settle(through); });
+    await deps.deliver(`wake:${trace}`, trace, message, () => { deps.record(row(outcome, end)); if (through !== undefined) deps.untold?.settle(through); });
   } catch (error) {
     settle('failed', 'failed', end);
     throw error;

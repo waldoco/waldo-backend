@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { WALDO_CHAT_MODEL } from '@waldo/contracts';
 import type { LookCause } from '../src/channels/interventions';
 import { EVERY_RUN_TOOLS, type RunEndReport, type RunSpend } from '../src/channels/owner-turn';
-import { GENERAL_WAKE_TOOLS, TOLD_LINES_MAX, generalWake, wakeCostMonth, wakeOutcomeBook, wakePrompt, wakeRole, wakeUntoldBook, WALDO_LENS, WITHHELD_REASON, type WakeCode, type WakeRow } from '../src/channels/wake';
+import { GENERAL_WAKE_TOOLS, TOLD_LINES_MAX, wakeTools, generalWake, wakeCostMonth, wakeOutcomeBook, wakePrompt, wakeRole, wakeUntoldBook, WALDO_LENS, WITHHELD_REASON, type WakeCode, type WakeRow } from '../src/channels/wake';
 import { INWARD_RECEIPTS_HEADER } from '../src/conversation/inward-receipts';
 
 // GENERAL_WAKE: Waldo's general wake replaces the look. The model judges; code holds the wake only for the owner's no to
@@ -18,7 +18,7 @@ const end = (reason: string, why?: string, tools: readonly string[] = [], inward
 
 type Wake = Readonly<{ code: WakeCode | 'threw'; delivered: string[]; runs: number; prompts: string[]; rows: readonly WakeRow[]; untold: readonly string[] }>;
 let seq = 0;
-const wake = (reply: string, ended: RunEndReport | undefined, setup: Readonly<{ cause?: LookCause; quiet?: boolean; quietLater?: boolean; consent?: boolean; throws?: boolean; deliverThrows?: boolean; owed?: readonly string[]; undoable?: boolean }> = {}) =>
+const wake = (reply: string, ended: RunEndReport | undefined, setup: Readonly<{ cause?: LookCause; quiet?: boolean; quietLater?: boolean; consent?: boolean; throws?: boolean; deliverThrows?: boolean; owed?: readonly string[]; undoable?: boolean; made?: readonly string[] }> = {}) =>
   runInDurableObject(env.TEST_STORAGE_DO.get(env.TEST_STORAGE_DO.idFromName(`general-wake-${seq += 1}`)), async (_instance, state): Promise<Wake> => {
     const outcomes = wakeOutcomeBook(state.storage.sql), untold = wakeUntoldBook(state.storage.sql);
     if (setup.owed) untold.add(setup.owed);
@@ -32,7 +32,7 @@ const wake = (reply: string, ended: RunEndReport | undefined, setup: Readonly<{ 
       run: async (_trace, text) => { out.runs += 1; out.prompts.push(text); if (setup.throws) throw new Error('provider down'); return { reply, end: ended }; },
       deliver: async (id, _trace, text, commit) => { if (setup.deliverThrows) throw new Error('outbox down'); state.storage.transactionSync(commit); out.delivered.push(`${id.split(':')[0]}:${text}`); },
       record: row => outcomes.record(row),
-      chose: () => undefined, untold, undoable: setup.undoable ?? true,
+      chose: () => undefined, untold, undoable: setup.undoable ?? true, made: () => setup.made ?? [],
     });
     let code: WakeCode | 'threw';
     try { code = await run('intervention-review:1', 'look', setup.cause ?? null); } catch { code = 'threw'; }
@@ -126,6 +126,13 @@ describe('Waldo\'s general wake', () => {
     expect([speaks.code, speaks.delivered, speaks.untold]).toEqual(['spoke', [`wake:${told(NUDGE, [REMINDER])}`], []]);
   });
 
+  it('a run that fails after changing something keeps the change for the next delivery; set_reminder is offered only with the switch on', async () => {
+    const failed = await wake('', undefined, { throws: true, made: [REMINDER] });
+    expect([failed.code, failed.untold]).toEqual(['threw', [REMINDER]]);
+    expect(wakeTools(false)).not.toContain('set_reminder');
+    expect(wakeTools(true)).toContain('set_reminder');
+  });
+
   it('one message carries at most the cap of change lines and counts the rest', async () => {
     const many = Array.from({ length: TOLD_LINES_MAX + 5 }, (_, index) => `Reminder set for 2026-11-29 09:${String(index).padStart(2, '0')}: "item ${index}" (you can cancel it)`);
     const out = await wake('SKIP', end('nothing_to_send', 'Set them.', ['set_reminder'], many));
@@ -167,7 +174,7 @@ describe('Waldo\'s general wake', () => {
     expect(b).toContain(WALDO_LENS);
     // Every tool the orientation names is one a wake is offered, or one every run has.
     const named = new Set(a.slice(0, a.indexOf('Get the Q4')).match(/\b[a-z]+(?:_[a-z]+)+\b/g));
-    expect([...named].filter(name => ![...GENERAL_WAKE_TOOLS, ...EVERY_RUN_TOOLS].includes(name))).toEqual([]);
+    expect([...named].filter(name => ![...wakeTools(true), ...EVERY_RUN_TOOLS].includes(name))).toEqual([]);
     expect(named.size).toBeGreaterThan(3);
   });
 });

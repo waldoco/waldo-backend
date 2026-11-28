@@ -109,7 +109,7 @@ describe('a tainted turn sends every write to the owner card', () => {
 
   // UNDOABLE_INWARD, the owner's 28 Nov rule: reversibility decides, not where the run's words came from. A write that names its
   // way back runs with no card in any run, Waldo-started and over outside text included; everything else answers as before.
-  const UNDOABLE = new Set<ToolName>(['set_reminder', 'update_todo', 'track_responsibility']);
+  const UNDOABLE = new Set<ToolName>(['set_reminder']);
   it('with UNDOABLE_INWARD on, an inward write the owner can undo runs under outside text with no owner in the turn; the health logs, workspace and artifacts stay carded', async () => {
     for (const [tool, args] of INWARD) {
       const undoable = UNDOABLE.has(tool);

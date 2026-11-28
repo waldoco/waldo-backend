@@ -149,6 +149,8 @@ export async function runToolLoop(input: Readonly<{
   onSettle?: (exit: LoopExit) => void;
   // Fired once, beside onSettle, with how the run closed: the end the model chose with end_run, or what the loop saw.
   onRunEnd?: (end: RunEnd) => void;
+  // Each receipt line as the change is made, so a run that fails later still leaves what it changed.
+  onInward?: (line: string) => void;
   // Shared tool-round budget across a parent turn and its children (subagent orchestration
   // spec): when present, every offered round in EVERY loop holding the same object decrements
   // it, so a turn's stated round cap is absolute - children can never dispatch past it. The
@@ -435,7 +437,7 @@ export async function runToolLoop(input: Readonly<{
         // A write runs one at a time, so the turn's taint here is the taint it was dispatched under.
         if (result.ok && actsOnOutside(input.ctx as { toolArgSourceTaint?: unknown; runOrigin?: unknown })) {
           const line = inwardReceipt(call.name, call.arguments, result.data);
-          if (line !== null) inward.push(line);
+          if (line !== null) { inward.push(line); input.onInward?.(line); }
         }
         if (result.ok) recordRead(input.ctx.turnReads, call.name, call.arguments, result.data, started);
       }

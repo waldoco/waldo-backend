@@ -104,7 +104,7 @@ import { TelegramFinalOutbox, standingOrderFinalId, dayCardFinalId, tookPart, ob
 import { computeAdmission } from '../delivery-gate/gate';
 import { drawingOn, interruptBook, interruptLimits, reopensAt } from './interruptions';
 import { ANNOUNCEMENTS_CHECKED_KEY, ANNOUNCEMENTS_RETRY_KEY, ANNOUNCEMENTS_RETRY_MS, announcementPassKey, requiresOf, type AnnouncementRow, announcementBook, announcementCardSection, announcementPrompt, announcementsFeedSchema, runAnnouncementPass, switchOn, WHATS_NEW_WINDOW_MS, whatsNewSection, type AnnouncementOutcome, type AnnouncementPrerequisite } from './announcements';
-import { forgetWakeReasons, forgetWakeUntold, GENERAL_WAKE_TOOLS, generalWake, wakeCostMonth, wakeOutcomeBook, wakeRole, wakeUntoldBook } from './wake';
+import { forgetWakeReasons, forgetWakeUntold, generalWake, wakeTools, wakeCostMonth, wakeOutcomeBook, wakeRole, wakeUntoldBook } from './wake';
 import type { RunEndReport } from './owner-turn';
 import { armInterventionReview, interventionApplier, interventionEveryMs, interventionSpec, INTERVENTION_REVIEW_ID, lookCause, MOVE_PULL_KEY, movePullAllowed, nextLocalHour, nextLookAt } from './interventions';
 import { DeliveryGateStore } from '../delivery-gate/store';
@@ -5548,8 +5548,11 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       promotedTools, noteLoaded: (names: readonly string[]) => loadedTools.note(names, Date.now()),
       waldoSent: () => deliveredLately(finalOutbox.records(), Date.now()),
       // GENERAL_WAKE: how a wake's run ended, kept only for the traces a wake is waiting on (channels/wake.ts).
-      runEnded: (trace: string, end: RunEndReport) => { if (wakeEnds.has(trace)) wakeEnds.set(trace, end); } };
+      runEnded: (trace: string, end: RunEndReport) => { if (wakeEnds.has(trace)) wakeEnds.set(trace, end); },
+      inwardMade: (trace: string, line: string) => { wakeMade.get(trace)?.push(line); } };
     const wakeEnds = new Map<string, RunEndReport | null>();
+    // UNDOABLE_INWARD: the changes a wake's run has made so far, read by the wake when the run fails before it ends (channels/wake.ts).
+    const wakeMade = new Map<string, string[]>();
     const forgetPass = () => this.forgetPurgeJob().run();
     // An owner who joined openly runs under open sign-up's ceiling; every other owner under the invited one.
     const spend = costs ? () => ({ spentUsd: costs.monthSpendUsd(deps.now()), ceilingUsd: this.openHold().open() ? openOwnerCeilingUsd(this.env) : ownerCeilingUsd(this.env) }) : undefined;
@@ -6707,9 +6710,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         };
       },
       run: async (trace, text) => {
-        wakeEnds.set(trace, null);
+        wakeEnds.set(trace, null); wakeMade.set(trace, []);
         try {
-          const reply = await this.asOwnerJob('heartbeat', trace, async () => responder.prompt(trace, owner, text, async (_hop, work) => work(), GENERAL_WAKE_TOOLS, undefined, undefined,
+          const reply = await this.asOwnerJob('heartbeat', trace, async () => responder.prompt(trace, owner, text, async (_hop, work) => work(), wakeTools(this.env.UNDOABLE_INWARD === '1'), undefined, undefined,
             await healthLogLines(), 'external', wakeRole(this.env.WAKE_MODEL_LOOK), undefined, undefined, true));
           return { reply, end: wakeEnds.get(trace) ?? undefined };
         } finally { wakeEnds.delete(trace); }
@@ -6724,6 +6727,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
       chose: (trace, code) => log({ trace, hop: 'wake', ms: 0, ok: code !== 'failed', code }),
       undoable: this.env.UNDOABLE_INWARD === '1', untold: wakeUntoldBook(storage.sql),
+      made: trace => { const lines = wakeMade.get(trace) ?? []; wakeMade.delete(trace); return lines; },
     }) : null;
     // What's new: on the first wake of each release this owner's Waldo reads the team's announcements for its environment and
     // decides, for its owner, whether and how to say each one (announcements.ts). Code holds the capability truth check, the
