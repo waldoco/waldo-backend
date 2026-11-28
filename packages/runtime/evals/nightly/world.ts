@@ -24,6 +24,7 @@ import { getHealthHandler, healthReadBook } from '../../src/tools/live/health';
 import { healthLogHandlers, type HealthLogBook, type HealthLogEntry } from '../../src/channels/health-log';
 import { EffectUnknownError } from '../../src/channels/owner-effect-ledger';
 import { claimStore, FORGOTTEN, textFingerprint } from '../../src/memory/claims';
+import { admitWelcomeSpots } from '../../src/onboarding/welcome';
 import { semanticRecall, workersAiEmbedder, type EmbeddingRunner } from '../../src/memory/semantic-recall';
 import { taskToolHandlers } from '../../src/tasks/tools';
 import type { JobBook, JobRow } from '../../src/tasks/jobs';
@@ -64,6 +65,8 @@ export type MemoryMode = 'claims' | 'raw_history';
 // tools the owner let run without a card; results maps a tool name to the text it returns.
 export type SeedMcpTool = Readonly<{ name: string; description: string; inputSchema: Readonly<Record<string, unknown>>; annotations?: Readonly<Record<string, unknown>> }>;
 export type SeedMcp = Readonly<{ url: string; tools: readonly SeedMcpTool[]; runs_without_asking?: readonly string[]; results: Readonly<Record<string, string>> }>;
+// A spot an earlier welcome build wrote from the owner's calendar or their health zone words, as its stage writes it.
+export type SeedSpot = Readonly<{ stage: 'calendar' | 'health'; area: string; text: string; pointers: readonly string[] }>;
 export type WorldSeed = Readonly<{
   events?: readonly SeedEvent[]; mail?: readonly SeedMail[]; web?: readonly SeedWeb[];
   // What the shared health looks like once a step shares it; a moderate day with a short night when unset.
@@ -81,6 +84,7 @@ export type WorldSeed = Readonly<{
   faults?: Readonly<{ draft?: 'unconfirmed'; transient?: Readonly<{ reads: 'calendar' | 'mail'; on_call: number }> }>;
   // Claims the owner already gave, as the memory store holds them; pinned ones show in every turn's profile or facts block.
   memory?: readonly SeedClaim[];
+  spots?: readonly SeedSpot[];
   // Topics the owner asked to forget whose purge has not settled: claims that carry them stay out of every turn meanwhile.
   held_topics?: readonly string[];
   // Loops the owner already gave Waldo to stay on, as the loop store holds them.
@@ -309,6 +313,12 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
     if (seeded.pinned) claims.pin(seeded.id, seeded.pinned, seeded.id);
     if (seeded.forgotten !== undefined) { claims.forget(seeded.id); claims.barrier(seeded.forgotten, start); }
   }
+  for (const spot of seed.spots ?? []) {
+    const source = spot.stage === 'health' ? 'apple_health' : 'calendar';
+    const written = admitWelcomeSpots(claims, spot.stage, { kind: 'input', text: '', sources: [source], pointers: new Set(spot.pointers) },
+      JSON.stringify({ spots: [{ area: spot.area, text: spot.text, source, pointers: spot.pointers }] }), start, true);
+    if (written !== 1) throw new Error('a seeded spot was refused by the welcome writer');
+  }
   for (const topic of seed.held_topics ?? []) sql.exec('INSERT OR IGNORE INTO topic_purge_pending (fingerprint, topic, created_at) VALUES (?, ?, ?)', textFingerprint(topic), topic, start);
   const memory = memoryMode === 'claims' ? claims : undefined;
   const semantic = memory && embeddings ? semanticRecall({ sql, transaction: transactionSync, embedder: workersAiEmbedder(embeddings) }) : undefined;
@@ -467,6 +477,11 @@ export const evalWorld = (seed: WorldSeed, start: string, memoryMode: MemoryMode
 
   return {
     clock, conversation, memory, handlers, healthChange, sql, semantic,
+    // The constellations standing now, as label and summary.
+    patterns: () => claims.nodes().filter((row) => row.status === 'active').map((row) => `${row.label}: ${row.summary}`),
+    // The owner confirms the wording of every constellation standing, through the app's confirm control. How many it confirmed.
+    confirmPatterns: () => claims.nodes().filter((row) => row.status === 'active')
+      .filter((row) => claims.confirmNode(row.id, 'app:node.confirm', new Date(now()).toISOString())).length,
     // The owner sends a file: kept through the production keeper, and the note the turn carries, as the surfaces write it.
     upload: async (file: SeedUpload, key: string): Promise<string> => {
       if (!keepUpload) throw new Error('an upload step needs world.files');
