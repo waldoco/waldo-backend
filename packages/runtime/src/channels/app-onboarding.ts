@@ -193,6 +193,8 @@ export type OwnerOnboardingDeps = Readonly<{
   // episodes, thread titles and the rest), and throws when it cannot verify that it did.
   hideText(texts: readonly string[]): Promise<void>;
   stopLookup(): void;
+  // The setup goal, kept as the owner's quest.
+  goal?: FirstRunHost['goal'];
 }>;
 // Quiet hours run from this time until the Brief, so nothing but the Brief opens the owner's morning.
 export const FIRST_RUN_QUIET_FROM = '22:00';
@@ -258,6 +260,7 @@ export const ownerOnboardingHost = (deps: OwnerOnboardingDeps): AppOnboardingHos
     },
     admitFirstLook: deps.admit,
     withdrawLookup,
+    ...(deps.goal ? { goal: deps.goal } : {}),
   };
   return {
     firstRun: firstRun(sql, consent, claims, firstRunHost, now), consent, findings, requests: requestBook(sql, now), chat: deps.chat, signedInRecently: deps.signedInRecently, ...(deps.setupDone ? { setupDone: deps.setupDone } : {}), ...(deps.lookupChanged ? { lookupChanged: deps.lookupChanged } : {}), proactiveSurface: firstRunHost.proactiveSurface, now, transaction,

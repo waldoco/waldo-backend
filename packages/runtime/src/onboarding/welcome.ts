@@ -16,9 +16,10 @@ type Settled = Exclude<StageState, 'pending' | 'reading'>;
 // What one source gives the build: text for the model with the sources and item ids it may cite, or a state with nothing to read.
 // cites maps a pointer to the owner claim it names, for a source that is the owner's own words; such a node rests on those claims
 // too, so a retired answer takes it out of every turn. noHealth: the owner keeps health out of memory, so no health node is kept.
-// days: how many days of readings the health source held when it was read, a count and never a reading.
+// days: how many days of readings the health source held when it was read, a count and never a reading. read: what the read
+// rested on (claim ids, and a fingerprint for what is not a claim), so a later change to it can be noticed without keeping text.
 export type StageInput =
-  | Readonly<{ kind: 'input'; text: string; sources: readonly WelcomeSource[]; pointers: ReadonlySet<string>; cites?: ReadonlyMap<string, number>; noHealth?: boolean; days?: number }>
+  | Readonly<{ kind: 'input'; text: string; sources: readonly WelcomeSource[]; pointers: ReadonlySet<string>; cites?: ReadonlyMap<string, number>; noHealth?: boolean; days?: number; read?: readonly (number | string)[] }>
   | Readonly<{ kind: 'settled'; state: Settled }>;
 
 export const WELCOME_MAX_NODES = 15;
@@ -57,8 +58,9 @@ const DIGIT = /\p{Nd}/u;
 
 // days: the days of readings a health stage read; grant: the look-up grant a web stage was taken up again for; reread: a
 // calendar or mail stage taken up again for an account connected after it settled. read: the setup answers' claim ids the
-// setup stage last built from (ids, never text); refines: how often it was read again; after: when it may next ask the model.
-type Stage = Readonly<{ state: StageState; at: number; reopened?: true; checked?: number; retried?: true; days?: number; grant?: number; reread?: true; read?: readonly number[]; refines?: number; after?: number }>;
+// setup stage last built from (ids and fingerprints, never text); refines: how often it was read again; after: when it may next
+// ask the model.
+type Stage = Readonly<{ state: StageState; at: number; reopened?: true; checked?: number; retried?: true; days?: number; grant?: number; reread?: true; read?: readonly (number | string)[]; refines?: number; after?: number }>;
 type Row = Readonly<{ started_at: number; finished_at: number | null; stages_json: string; nodes: number }>;
 
 // The one welcome build per owner. The row holds stage states, times and a count, never text.
@@ -163,7 +165,7 @@ export const welcomeBuild = (sql: Sql, now: () => number) => {
     },
     // The setup answers changed since the setup stage last built from them: it goes back to pending, to read them all again.
     // A stage still reading is left alone; the change is caught when that read settles and the caller asks again.
-    refineSetup(read: readonly number[]): boolean {
+    refineSetup(read: readonly (number | string)[]): boolean {
       const run = row();
       if (!run) return false;
       const current = stages(run), setup = current.setup, at = now(), refines = setup.refines ?? 0;
@@ -185,7 +187,7 @@ export const welcomeBuild = (sql: Sql, now: () => number) => {
       const run = row();
       if (run) write({ ...stages(run), [stage]: { ...stages(run)[stage], state: 'reading', at: now() } }, null);
     },
-    settle(stage: WelcomeStage, state: Settled, added: number, noted: Readonly<{ days?: number; read?: readonly number[] }> = {}): void {
+    settle(stage: WelcomeStage, state: Settled, added: number, noted: Readonly<{ days?: number; read?: readonly (number | string)[] }> = {}): void {
       const run = row();
       if (!run) return;
       const at = now(), next = { ...stages(run), [stage]: { ...stages(run)[stage], state, at, ...noted } };
@@ -462,7 +464,7 @@ const runInOrder = async (deps: WelcomeDeps, v2: NonNullable<WelcomeDeps['v2']>,
     } catch { state = 'unavailable'; }
     const days = input?.kind === 'input' ? input.days : undefined;
     // A read the model failed on records nothing, so the same answers are tried again on the next change.
-    const built = stage === 'setup' && input && state !== 'unavailable' ? { read: input.kind === 'input' ? [...new Set(input.cites?.values() ?? [])] : [] } : {};
+    const built = stage === 'setup' && input && state !== 'unavailable' ? { read: input.kind === 'input' ? input.read ?? [] : [] } : {};
     deps.transaction(() => deps.build.settle(stage, state, added, { ...(days === undefined ? {} : { days }), ...built }));
   }
 };

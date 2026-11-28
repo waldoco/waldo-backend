@@ -1123,6 +1123,33 @@ describe('welcome build v2: the setup stage refines as answers arrive one at a t
     });
   });
 
+  it('reads the goal given at setup beside the answers, a node may rest on it, and a changed goal reads the stage again', async () => {
+    await withSql(async (sql, transaction) => {
+      const clock = { at: T0 }, claims = claimStore(sql, transaction);
+      let goal: string | null = 'Working toward, in their own words: "Finish my first HYROX", by 2027-03-14.';
+      const aimNode = { domain: 'goals', label: 'Training for a HYROX', summary: 'You are working toward your first HYROX in March.', observation: 'Named a HYROX in March as the goal.', source: 'setup', pointers: ['goal'], extends: null, people: [], links_to: [] };
+      const first = run(sql, transaction, clock, claims, () => answer(aimNode as unknown as Node));
+      first.deps = { ...first.deps, read: { ...first.deps.read, setup: setupStage(claims, () => true, () => goal) } };
+      first.build.start();
+      await runWelcome(first.deps);
+      expect(first.asked[0]).toContain('[goal] Working toward, in their own words: "Finish my first HYROX", by 2027-03-14.');
+      expect(claims.nodes().map((node) => [node.domain, node.label])).toEqual([['goals', 'Training for a HYROX']]);
+      const read = async () => { const input = await setupStage(claims, () => true, () => goal)(); return input.kind === 'input' ? input.read ?? [] : []; };
+      clock.at += WELCOME_SETUP_GAP_MS;
+      expect(transaction(() => first.build.refineSetup([]))).toBe(true);
+      transaction(() => { first.build.begin('setup'); first.build.settle('setup', 'done', 0, { read: [] }); });
+      const same = await read();
+      transaction(() => { first.build.begin('setup'); first.build.settle('setup', 'done', 0, { read: same }); });
+      expect(transaction(() => first.build.refineSetup(same))).toBe(false);
+      goal = 'Working toward, in their own words: "Finish HYROX under ninety minutes", by 2027-04-04.';
+      const moved = await read();
+      expect(transaction(() => first.build.refineSetup(moved))).toBe(true);
+      // With no goal and no answers, there is nothing to read.
+      goal = null;
+      expect(await setupStage(claims, () => true, () => goal)()).toEqual({ kind: 'settled', state: 'skipped' });
+    });
+  });
+
   it('never reopens a stage still reading: the answer is caught once that read settles', async () => {
     await withSql(async (sql, transaction) => {
       const clock = { at: T0 }, claims = claimStore(sql, transaction);

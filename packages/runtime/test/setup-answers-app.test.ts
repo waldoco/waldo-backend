@@ -89,3 +89,54 @@ it('setup answers saved from the app are owner facts in the next app turn\'s sys
     } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
   });
 });
+
+it('the goal given at setup is the owner\'s quest: held, read on every turn with its day, changed in place, closed when cleared, and only for a build at revision 5', async () => {
+  const name = 'setup-answers-goal-owner';
+  await runInDurableObject(env.OWNER_DO!.get(env.OWNER_DO!.idFromName(name)), async (_instance, state) => {
+    claimStore(state.storage.sql);
+    ensureSchema(state.storage);
+    state.storage.kv.put('do_name', name);
+    state.storage.kv.put('app_subject', String(appSubjectFor(name)));
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const owner = new OwnerDO(state, { ...env, ...directory, TELEGRAM_BOT_TOKEN: undefined, OPENAI_API_KEY: 'synthetic-fixture', WALDO_OWNER_TIMEZONE: 'UTC', WALDO_OWNER_TELEGRAM_ID: undefined });
+    const app = (path: string, body: unknown, contract = 'onboarding=5') => owner.fetch(new Request(`https://telegram-owner${path}`, { method: 'POST',
+      headers: { 'x-waldo-do-name': name, 'x-waldo-app-session-hash': 'b'.repeat(64), 'content-type': 'application/json', 'x-waldo-app-contract': contract }, body: JSON.stringify(body) }));
+    const quests = () => state.storage.sql.exec<{ id: string; description: string; deadline: string | null; state: string; plan: string | null; check_in_days: number | null }>('SELECT id, description, deadline, state, plan, check_in_days FROM goals').toArray();
+    try {
+      // A build below revision 5 cannot send it, and its answers come back without it.
+      const old = await app('/app/v1/onboarding/answers', { request_id: 'setup-goal-old', goal: { own_words: 'Finish my first HYROX', by: '2027-03-14' } }, 'onboarding=4');
+      expect([old.status, await old.json()]).toEqual([400, { error: 'invalid_request' }]);
+      const named = await app('/app/v1/onboarding/answers', { request_id: 'setup-goal-name', name: 'Asha' }, 'onboarding=4');
+      expect(Object.keys(((await named.json()) as { held: object }).held)).not.toContain('goal');
+
+      const saved = await app('/app/v1/onboarding/answers', { request_id: 'setup-goal-1', goal: { own_words: 'Finish my first HYROX', by: '2027-03-14' } });
+      expect(saved.status).toBe(200);
+      expect(((await saved.json()) as { held: { goal: boolean } }).held.goal).toBe(true);
+      // The owner's words and day, active, with no plan or check-in pace they have not agreed.
+      expect(quests()).toEqual([expect.objectContaining({ description: 'Finish my first HYROX', deadline: '2027-03-14T00:00:00Z', state: 'active', plan: null, check_in_days: null })]);
+      const id = quests()[0]!.id;
+
+      const sent = await app('/app/v1/chat/main/messages', { client_message_id: 'setup-goal-chat-1', text: 'What should I focus on this week?' });
+      expect(sent.status).toBe(202);
+      const { message_id: messageId } = await sent.json() as { message_id: string };
+      await vi.waitFor(() => expect(state.storage.kv.get<AppInboxRecord>(`app:inbox-record:${messageId}`)?.state).toBe('completed'), { timeout: 10_000, interval: 20 });
+      const turn = model.requests.find(request => request.includes('What should I focus on this week?'))!;
+      expect(turn).toContain(`[${id}] Finish my first HYROX (active`);
+
+      // A change of words or day changes the same quest; the same words again change nothing.
+      const changed = await app('/app/v1/onboarding/answers', { request_id: 'setup-goal-2', goal: { own_words: 'Finish HYROX under ninety minutes', by: '2027-04-04' } });
+      expect(((await changed.json()) as { held: { goal: boolean } }).held.goal).toBe(true);
+      expect(quests()).toEqual([expect.objectContaining({ id, description: 'Finish HYROX under ninety minutes', deadline: '2027-04-04T00:00:00Z', state: 'active' })]);
+
+      // Cleared: the quest is closed, not deleted, and the answer is no longer held.
+      const cleared = await app('/app/v1/onboarding/answers', { request_id: 'setup-goal-3', goal: null });
+      expect(((await cleared.json()) as { held: { goal: boolean } }).held.goal).toBe(false);
+      expect(quests()).toEqual([expect.objectContaining({ id, state: 'completed' })]);
+      // A goal given again after that is a new quest.
+      const again = await app('/app/v1/onboarding/answers', { request_id: 'setup-goal-4', goal: { own_words: 'Run a half marathon', by: null } });
+      expect(((await again.json()) as { held: { goal: boolean } }).held.goal).toBe(true);
+      expect(quests().filter(quest => quest.state === 'active')).toEqual([expect.objectContaining({ description: 'Run a half marathon', deadline: null })]);
+      expect(quests()).toHaveLength(2);
+    } finally { quiet.mockRestore(); await state.storage.deleteAlarm(); }
+  });
+});

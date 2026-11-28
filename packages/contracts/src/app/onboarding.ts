@@ -218,8 +218,13 @@ export const appFindingResultV1Schema = z.strictObject({
 // answers result strictly, so a held.train at 3 would fail every one of them. Naming 4 turns on 3 with it. Gated as revision 2
 // was: a build below revision 4 is refused the training matter, its spots and train as invalid_request, and does not find train
 // in held.
+// Onboarding revision 5 (`onboarding=5`) adds goal: what the owner is working toward, in their own words, and the calendar day
+// it is by when there is one (a race, an event). Waldo keeps it as one of the owner's quests, so every turn, the Brief and the
+// quests list read it from there; held.goal says whether that quest is open. null clears it (the quest is closed). A build below
+// revision 5 is refused goal as invalid_request and does not find it in held. Naming 5 turns on 4 and 3 with it.
 export const APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1 = 2;
 export const APP_ONBOARDING_SETUP_TRAINING_REVISION_V1 = 4;
+export const APP_ONBOARDING_SETUP_GOAL_REVISION_V1 = 5;
 export const APP_SETUP_OWN_WORDS_MAX_V1 = 280;
 export const appSetupDayShapeV1Schema = z.enum(['meetings', 'focus', 'fixed', 'varies']);
 export const appSetupSlipV1Schema = z.enum(['replies', 'overlaps', 'promises', 'breaks', 'evenings']);
@@ -246,7 +251,9 @@ const ownWords = z.string().trim().max(APP_SETUP_OWN_WORDS_MAX_V1);
 const pickedOnce = <Choice extends z.ZodEnum>(choice: Choice) =>
   z.array(choice).max(choice.options.length).refine(picked => new Set(picked).size === picked.length, 'a choice is picked once');
 const picks = <Choice extends z.ZodEnum>(choice: Choice) => z.strictObject({ picked: pickedOnce(choice), own_words: ownWords });
-const SETUP_ANSWERS = ['name', 'day', 'slips', 'wearable', 'matters', 'spots', 'protect', 'rope', 'season', 'low', 'train'] as const;
+const calendarDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(day => { const at = Date.parse(`${day}T00:00:00Z`); return Number.isFinite(at) && new Date(at).toISOString().startsWith(day); }, 'a real calendar day');
+export const appSetupGoalV1Schema = z.strictObject({ own_words: ownWords.min(1), by: calendarDay.nullable() });
+const SETUP_ANSWERS = ['name', 'day', 'slips', 'wearable', 'matters', 'spots', 'protect', 'rope', 'season', 'low', 'train', 'goal'] as const;
 export const appSetupAnswersRequestV1Schema = z.strictObject({
   request_id: requestId,
   name: z.string().trim().min(1).max(80).nullable().optional(),
@@ -260,6 +267,7 @@ export const appSetupAnswersRequestV1Schema = z.strictObject({
   season: z.strictObject({ choice: appSetupSeasonV1Schema.nullable(), own_words: ownWords }).nullable().optional(),
   low: picks(appSetupLowV1Schema).nullable().optional(),
   train: picks(appSetupTrainV1Schema).nullable().optional(),
+  goal: appSetupGoalV1Schema.nullable().optional(),
 }).refine(request => SETUP_ANSWERS.some(answer => request[answer] !== undefined), 'name at least one answer');
 // Whether a build reading `revision` may send this request: below revision 2 it names none of the later answers; below revision 4
 // it names no training: not the matter, not its spots, not train.
@@ -271,32 +279,33 @@ const namesTraining = (request: AppSetupAnswersRequestV1): boolean =>
   || (request.spots?.some(spot => (APP_SETUP_TRAINING_SPOTS_V1 as readonly string[]).includes(spot)) ?? false);
 export const appSetupAnswersFitRevision = (request: AppSetupAnswersRequestV1, revision: number): boolean =>
   (revision >= APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1 || APP_SETUP_ANSWERS_REVISION_TWO_V1.every(answer => request[answer] === undefined))
-  && (revision >= APP_ONBOARDING_SETUP_TRAINING_REVISION_V1 || !namesTraining(request));
+  && (revision >= APP_ONBOARDING_SETUP_TRAINING_REVISION_V1 || !namesTraining(request))
+  && (revision >= APP_ONBOARDING_SETUP_GOAL_REVISION_V1 || request.goal === undefined);
 // held says, for each answer, whether Waldo holds it as an owner fact now, read back after the write. The revision 2 answers
 // are present exactly for a build that declares it, and train exactly for a build that declares revision 4, except in a replay
 // of an answer recorded before them.
 const revisionTwoHeld = { matters: z.boolean(), spots: z.boolean(), protect: z.boolean(), rope: z.boolean(), season: z.boolean(), low: z.boolean() };
 const trainingHeld = { train: z.boolean() };
+const goalHeld = { goal: z.boolean() };
 export const appSetupAnswersResultV1Schema = z.strictObject({
   request_id: requestId,
   held: z.strictObject({
     name: z.boolean(), day: z.boolean(), slips: z.boolean(), wearable: z.boolean(),
-    ...z.strictObject(revisionTwoHeld).partial().shape, ...z.strictObject(trainingHeld).partial().shape,
+    ...z.strictObject(revisionTwoHeld).partial().shape, ...z.strictObject(trainingHeld).partial().shape, ...z.strictObject(goalHeld).partial().shape,
   }),
   replayed: z.boolean(),
 });
 // A result as a build reading `revision` parses it: below revision 2, held names the first four answers only; below revision 4,
-// it leaves train out.
+// it leaves train out; below revision 5, goal.
 export const appSetupAnswersResultAtRevision = (result: AppSetupAnswersResultV1, revision: number): AppSetupAnswersResultV1 => {
-  if (revision < APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1 && Object.keys(result.held).some(key => Object.hasOwn(revisionTwoHeld, key) || Object.hasOwn(trainingHeld, key))) {
+  if (revision < APP_ONBOARDING_SETUP_ANSWERS_REVISION_V1 && Object.keys(result.held).some(key => Object.hasOwn(revisionTwoHeld, key) || Object.hasOwn(trainingHeld, key) || Object.hasOwn(goalHeld, key))) {
     const { name, day, slips, wearable } = result.held;
     return { ...result, held: { name, day, slips, wearable } };
   }
-  if (revision < APP_ONBOARDING_SETUP_TRAINING_REVISION_V1 && Object.hasOwn(result.held, 'train')) {
-    const { train: _train, ...held } = result.held;
-    return { ...result, held };
-  }
-  return result;
+  const leftOut = [...(revision < APP_ONBOARDING_SETUP_TRAINING_REVISION_V1 ? ['train'] : []), ...(revision < APP_ONBOARDING_SETUP_GOAL_REVISION_V1 ? ['goal'] : [])]
+    .filter(key => Object.hasOwn(result.held, key));
+  if (!leftOut.length) return result;
+  return { ...result, held: Object.fromEntries(Object.entries(result.held).filter(([key]) => !leftOut.includes(key))) as AppSetupAnswersResultV1['held'] };
 };
 
 // channel.linked marks the channel step done once the owner directory shows that provider linked, as health.connected does for health.
@@ -340,3 +349,4 @@ export type AppFindingCategoryV1 = z.infer<typeof appFindingCategoryV1Schema>;
 export type AppFindingActionV1 = z.infer<typeof appFindingActionV1Schema>;
 export type AppSetupAnswersRequestV1 = z.infer<typeof appSetupAnswersRequestV1Schema>;
 export type AppSetupAnswersResultV1 = z.infer<typeof appSetupAnswersResultV1Schema>;
+export type AppSetupGoalV1 = z.infer<typeof appSetupGoalV1Schema>;

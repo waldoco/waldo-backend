@@ -8,6 +8,7 @@ import type { ConsentLedger } from './consent-ledger';
 import { CURRENT_CONSENT_VERSION } from './consent-ledger';
 import { numericHealthIn } from '../scribe/sanitiser';
 import { bodyDigest } from './request-book';
+import type { OnboardingGoal } from './goal';
 
 type Sql = Pick<SqlStorage, 'exec'>;
 type StepState = AppOnboardingV1['steps'][AppOnboardingStepV1];
@@ -31,6 +32,8 @@ export type FirstRunHost = Readonly<{
   admitFirstLook(clientId: string, text: string): Promise<boolean>;
   // Withdraws the look-up as the consent route does: every finding hidden, erased and barred.
   withdrawLookup(): Promise<unknown>;
+  // The goal answer, kept as the owner's quest; absent where no quest book backs this host, and the goal is then never held.
+  goal?: Pick<OnboardingGoal, 'set' | 'held'>;
 }>;
 export type FirstRunError = 'stale_version' | 'agreements_required' | 'not_started' | 'not_connected' | 'not_offered' | 'completed' | 'unavailable';
 
@@ -44,7 +47,7 @@ const named = (claims: ClaimStore) => claims.claims().some(candidate => candidat
 // should bring things up in the profile after the name, the rest of the conversation in the facts block. The text is the app's
 // own choice put in the third person, with the owner's words quoted as they typed them; the later answers date those words,
 // since they describe a stretch of the owner's life and may carry a reading the owner stated.
-type SetupAnswer = Exclude<keyof AppSetupAnswersRequestV1, 'request_id'>;
+type SetupAnswer = Exclude<keyof AppSetupAnswersRequestV1, 'request_id' | 'goal'>;
 const SETUP_REFS: Readonly<Record<SetupAnswer, string>> = {
   name: NAME_REF, day: 'owner, first run: day', slips: 'owner, first run: slips', wearable: 'owner, first run: wearable',
   matters: 'owner, first run: matters', spots: 'owner, first run: spots', protect: 'owner, first run: protect', rope: 'owner, first run: rope',
@@ -324,7 +327,8 @@ export const firstRun = (sql: Sql, consent: ConsentLedger, claims: ClaimStore, h
         else if (!claims.pin(saved.id, SETUP_PINS[name].block, SETUP_PINS[name].order)) throw new Error('setup answer not pinned');
       });
     }
-    return Object.fromEntries((Object.keys(SETUP_REFS) as SetupAnswer[]).map(name => [name, setupParts(name).some(ref => live(ref).length > 0)])) as Required<AppSetupAnswersResultV1['held']>;
+    if (request.goal !== undefined) host.goal?.set(request.goal);
+    return { ...Object.fromEntries((Object.keys(SETUP_REFS) as SetupAnswer[]).map(name => [name, setupParts(name).some(ref => live(ref).length > 0)])), goal: host.goal?.held() ?? false } as Required<AppSetupAnswersResultV1['held']>;
   };
   // Called in the consent route's transaction after a grant. The consent route asks for a new copy; the finished run stays done.
   const agreementsAccepted = (): void => {
