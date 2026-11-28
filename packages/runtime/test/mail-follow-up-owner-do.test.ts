@@ -99,8 +99,8 @@ it('a due mail follow-up is reviewed while the general wake is on and new mail i
     let now = Date.parse('2026-10-03T06:59:00Z');
     Date.now = () => now;
     fixture.mail = false; fixture.extra = false; fixture.loopId = ''; fixture.sent = []; fixture.prompts = [];
-    const config: Record<string, unknown> = { ...env, MAIL_SOURCE_FOLLOWUPS: '1', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };
-    let owner = new OwnerDO(state, config as typeof env);
+    const config = { ...env, MAIL_SOURCE_FOLLOWUPS: '1', WALDO_OWNER_TELEGRAM_ID: '7', WALDO_OWNER_TIMEZONE: 'UTC', TELEGRAM_BOT_TOKEN: '7:synthetic-fixture', OPENAI_API_KEY: 'synthetic-fixture', GOOGLE_CLIENT_ID: 'synthetic-client', GOOGLE_CLIENT_SECRET: 'synthetic-secret' };
+    let owner = new OwnerDO(state, config);
     state.storage.kv.put('do_name', 'synthetic-mail-owner-wake'); state.storage.kv.put('telegram_subject', '7');
     await state.storage.put('origin', 'https://fixture.invalid');
     await state.storage.put('google:accounts', [{ id: 'local:owner@example.test', email: 'owner@example.test', refresh_token: 'synthetic-offline-only', scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.compose'] }]);
@@ -122,7 +122,7 @@ it('a due mail follow-up is reviewed while the general wake is on and new mail i
       await (owner as unknown as { drainJobs(channel: string): Promise<void> }).drainJobs('telegram');
       fixture.loopId = loops.list()[0]!.id;
       Object.assign(config, { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' });
-      owner = new OwnerDO(state, config as typeof env);
+      owner = new OwnerDO(state, config);
       fixture.extra = true; now += 300_000;
       await incoming('/fire fetch');
       expect(reportMachineJobs(state.storage.sql)).toHaveLength(0);
