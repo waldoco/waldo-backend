@@ -118,7 +118,7 @@ type WakeOutcome = 'spoke' | 'asked' | 'followed_up' | 'noted' | 'carded' | 'not
 
 ### What it sits on
 
-PR 1 stacks on #2234 only. It takes none of #2235, #2238 or #2239, so a no on any of them leaves it standing. Step 1b needs #2238. Once they merge:
+PR 1 is based on `beta-mvp` with #2234 merged (`b6c9fbfc7`). It takes none of #2235, #2238 or #2239, so a no on any of them leaves it standing. Step 1b needs #2238. Once they merge:
 - **#2238** lets a wake whose starting context is all the owner's own text start unmarked (`'as_read'`). Most wakes see an invite or a mail and start marked anyway.
 - **#2239** puts today's calendar in the owner turn's now frame from the update sweep's cache. The wake reads the calendar live with the day cards' `calendarRead`, since it runs over outside content anyway and may see titles; it can move to the cache once #2239 lands.
 - **#2235** widens follow-up bounds. The wake's `open_loop` uses whatever bounds are merged.
