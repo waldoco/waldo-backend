@@ -6745,7 +6745,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // reader job. It reads what changed, the rest of today, what is open and what was said today; the body comes as every run's
     // does. It keeps no daily count and never reads the owner's volume: a message waits only for the owner's no to follow-ups
     // or their quiet hours, checked when it decides to speak, never before it looks. Off, the look runs as before.
-    let inboxReadAt: number | null = null, inboxKinds: readonly string[] = [];
+    let inboxReadAt: number | null = null, inboxRecord = 0, inboxKinds: readonly string[] = [];
     const runGeneralWake = generalWakeOn ? generalWake({
       now: () => Date.now(), localNow: () => localIso(Date.now(), clock.timezone),
       consent: () => loops.proactivity().followups !== false, quiet, transaction: work => storage.transactionSync(work),
@@ -6760,6 +6760,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         // The inbox and the time it was read together, after every await: a row that lands later stays for the next wake.
         const read = wakeInbox.pending();
         inboxReadAt = Date.now();
+        inboxRecord = updates.lastRecord();
         inboxKinds = [...new Set(read.map(row => row.kind))];
         return { ...context, changes: updates.unfolded(clock.timezone, inboxReadAt), inbox: inboxSection(read, at => localIso(at, clock.timezone).slice(0, 16).replace('T', ' ')) };
       },
@@ -6780,7 +6781,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         const month = wakeCostMonth(storage.kv).add(localIso(row.at, clock.timezone).slice(0, 7), row.spend?.usd);
         log({ trace: row.id, hop: 'wake_cost', ms: 0, ok: true, detail: `usd=${row.spend?.usd ?? 'unknown'} calls=${row.spend?.calls ?? 0} in=${row.spend?.input ?? 0} cached=${row.spend?.cached ?? 0} out=${row.spend?.output ?? 0} month=${month.month} month_wakes=${month.wakes} month_usd=${month.usd}` });
       },
-      settleInbox: () => { if (inboxReadAt !== null) wakeInbox.settle(inboxReadAt); },
+      // A wake that ran settles what it read: its inbox rows, and the waiting mail on the records it was shown.
+      settleInbox: () => { if (inboxReadAt !== null) { wakeInbox.settle(inboxReadAt); updates.judgedThrough(inboxRecord); } },
       chose: (trace, code) => log({ trace, hop: 'wake', ms: 0, ok: code !== 'failed', code }),
     }) : null;
     // What's new: on the first wake of each release this owner's Waldo reads the team's announcements for its environment and
@@ -6853,7 +6855,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       await armLook(now, true);
       if (runGeneralWake) {
         // A wake that fails has recorded its failed row and trace hop; the look armed above is its retry.
-        inboxReadAt = null; inboxKinds = [];
+        inboxReadAt = null; inboxRecord = 0; inboxKinds = [];
         await runGeneralWake(trace, 'look', lookCause(entry)).catch((error: unknown) => log({ trace, hop: 'wake_error', ms: 0, ok: false, code: error instanceof Error ? error.name : 'unknown' }));
         return;
       }

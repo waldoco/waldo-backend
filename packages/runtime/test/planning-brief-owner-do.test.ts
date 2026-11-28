@@ -19,6 +19,7 @@ import { interruptBook } from '../src/channels/interruptions';
 import { ownerSpokeSince } from '../src/channels/episodes';
 import { armInterventionReview, INTERVENTION_REVIEW_ID } from '../src/channels/interventions';
 import { WAKE_MERGE_MS } from '../src/channels/wake-inbox';
+import { updateBook } from '../src/channels/update-cards';
 import { loopBook } from '../src/channels/loops';
 import { schedulePreferences } from '../src/channels/schedule-preferences';
 import { Scheduler } from '../src/scheduler/multiplexer';
@@ -637,6 +638,29 @@ describe('Waldo\'s own look (PROACTIVE_INTERVENTIONS)', { timeout: 30_000 }, () 
       await tick(state, owner);
       expect(model.ownerRequests).toEqual([]);
       expect(inbox(state)).toEqual([{ kind: 'place', ref: 'place_moved', count: 1 }]);
+    });
+  });
+
+  it('a wake that ran judges the waiting mail it was shown, so none is left for a sweep job after the switch turns off; a held wake leaves it', async () => {
+    const seedMail = (sql: SqlStorage) => {
+      const updates = updateBook(sql);
+      sql.exec("INSERT INTO update_cards (at, day, changes) VALUES (?, ?, ?)", AT - 60_000, DAY, JSON.stringify([{ source: 'mail', kind: 'new', detail: 'Pat: deck review', source_ref: 'mail:t-1', source_message_id: 'm-1' }]));
+      sql.exec('INSERT INTO observed_mail (source_ref, thread_id, observed_at, message_id, update_id) VALUES (?, ?, ?, ?, ?)', 'mail:t-1', 't-1', AT - 60_000, 'm-1', updates.lastRecord());
+      return updates;
+    };
+    await owned('wake-judges-mail', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner }) => {
+      const updates = seedMail(state.storage.sql);
+      expect(updates.pendingMail()).toHaveLength(1);
+      model.owner = [{ calls: [{ name: 'end_run', arguments: { outcome: 'nothing_to_send', reason: 'Nothing new.' } }] }];
+      await tick(state, owner);
+      expect(model.ownerRequests[0]).toContain('[source_ref mail:t-1]');
+      expect(updates.pendingMail()).toEqual([]);
+    });
+    await owned('wake-held-keeps-mail', { PROACTIVE_GATE: '1', PROACTIVE_INTERVENTIONS: '1', GENERAL_WAKE: '1' }, async ({ state, owner }) => {
+      loopBook(state.storage.sql, { newId: () => 'l', now: () => AT }).setProactivity({ quiet_start: null, quiet_end: null, volume: 'normal', followups: false });
+      const updates = seedMail(state.storage.sql);
+      await tick(state, owner);
+      expect(updates.pendingMail()).toHaveLength(1);
     });
   });
 
