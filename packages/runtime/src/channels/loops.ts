@@ -222,7 +222,8 @@ export const loopHandlers = (book: LoopBook, closable: (turnId: string | undefin
       const given = [...closable(ctx?.turnId) ?? []].map((id) => book.get(id)).filter((loop) => loop?.origin === 'waldo');
       let loop: Loop;
       try {
-        loop = book.open(args, { origin: 'waldo', taint: origin === 'external' ? 'external' : null, chainDepth: 1 + Math.max(0, ...given.map((loop) => loop!.chain_depth ?? 0)) });
+        // The follow-up carries what the run had read when it set it, not how the run started.
+        loop = book.open(args, { origin: 'waldo', taint: ctx?.toolArgSourceTaint === 'external' ? 'external' : null, chainDepth: 1 + Math.max(0, ...given.map((loop) => loop!.chain_depth ?? 0)) });
       } catch (error) {
         if (error instanceof SelfLoopRefused) return { ok: false, code: 'rejected', error: error.message };
         throw error;

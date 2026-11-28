@@ -13,6 +13,7 @@ import type { StoredPut, ToolOutputStore } from './tool-output-store';
 import { numericHealthInJsonText } from '../scribe/sanitiser';
 import { chosenEnd, replyOfEnd, unchosenEnd, type RunEnd } from './run-end';
 import { META_TOOLS, toolOfCall, type RoutedCall, type ToolLoader } from '../tools/loader';
+import { actsOnOutside } from '../tools/run-authority';
 
 
 export const TOOL_OUTPUT_LIMIT = 16_000;
@@ -148,6 +149,8 @@ export async function runToolLoop(input: Readonly<{
   onSettle?: (exit: LoopExit) => void;
   // Fired once, beside onSettle, with how the run closed: the end the model chose with end_run, or what the loop saw.
   onRunEnd?: (end: RunEnd) => void;
+  // Each receipt line as the change is made, so a run that fails later still leaves what it changed.
+  onInward?: (line: string) => void;
   // Shared tool-round budget across a parent turn and its children (subagent orchestration
   // spec): when present, every offered round in EVERY loop holding the same object decrements
   // it, so a turn's stated round cap is absolute - children can never dispatch past it. The
@@ -307,7 +310,7 @@ export async function runToolLoop(input: Readonly<{
   // Every return goes through here, so no run ends without its exit and its closed reason.
   const close = (settled: LoopExit, end: RunEnd, reply: string): string => {
     input.onSettle?.(settled);
-    input.onRunEnd?.(end);
+    input.onRunEnd?.(inward.length ? { ...end, inward: [...inward] } : end);
     return withInwardReceipts(reply, inward);
   };
   for (let round = 0; ; round += 1) {
@@ -317,7 +320,7 @@ export async function runToolLoop(input: Readonly<{
     const timeAvailable = timeLeft >= FINAL_ANSWER_RESERVE_MS && !(round > 0 && input.yieldNow?.() === true);
     // propose_action is the route for a privileged call whose arguments came from external content, so it is on the
     // menu exactly while the turn is tainted; the browse tools leave it once browsing is withheld.
-    const tainted = (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint === 'external';
+    const tainted = actsOnOutside(input.ctx as { toolArgSourceTaint?: unknown; runOrigin?: unknown });
     const roundTools = input.stableMenu ? tools : tools.filter((tool) => (tool.name !== 'propose_action' || tainted) && !(browsingWithheld && BROWSE_TOOLS.has(tool.name)));
     const offer = roundTools.length > 0 && roundsAvailable && timeAvailable;
     // An initially empty authority ceiling can reject an illegal request once and
@@ -362,8 +365,9 @@ export async function runToolLoop(input: Readonly<{
     }
     // This round's calls were written from the request just answered, so they are fenced when it showed both.
     if (response.healthInContext === true) { healthShown = true; input.ctx.healthShown = true; }
-    healthFenced ||= healthShown && (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint === 'external';
-    outsideFenced ||= input.outsideEgressFence === true && (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint === 'external';
+    const onOutside = actsOnOutside(input.ctx as { toolArgSourceTaint?: unknown; runOrigin?: unknown });
+    healthFenced ||= healthShown && onOutside;
+    outsideFenced ||= input.outsideEgressFence === true && onOutside;
     let firstCall = true;
     roundStarts.push(turns.length);
     // The model's calls as it made them, which its history replays, and the calls the loop runs for them.
@@ -431,9 +435,9 @@ export async function runToolLoop(input: Readonly<{
         readRuns.set(key, { dispatched, at: Date.now() });
         if (result.ok && !META_TOOLS.has(call.name)) done.push(call.name);
         // A write runs one at a time, so the turn's taint here is the taint it was dispatched under.
-        if (result.ok && (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint === 'external') {
+        if (result.ok && actsOnOutside(input.ctx as { toolArgSourceTaint?: unknown; runOrigin?: unknown })) {
           const line = inwardReceipt(call.name, call.arguments, result.data);
-          if (line !== null) inward.push(line);
+          if (line !== null) { inward.push(line); input.onInward?.(line); }
         }
         if (result.ok) recordRead(input.ctx.turnReads, call.name, call.arguments, result.data, started);
       }

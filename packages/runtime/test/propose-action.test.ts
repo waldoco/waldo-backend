@@ -239,6 +239,13 @@ describe('taint goes to a card', () => {
       expect((await desk.decide(row!.id, 'a', 't')).toast).toBe('Done');
       expect(set).toHaveLength(1);
 
+      // A run Waldo started that is held as if it had read outside content, before it has read any, raises the card too: the
+      // direct call is refused there, so a refusal here would leave it no way to ask.
+      const held = context({ runOrigin: 'external', toolCallId: 'p2' });
+      expect(await dispatchTool({ id: 'c3', name: 'set_reminder', args }, held, { handlers })).toMatchObject({ ok: false, error_code: 'taint_needs_approval' });
+      expect(await proposeActionHandler(desk).handle({ tool: 'set_reminder', args, reasoning: 'The Brief would set it.' } as never, held)).toMatchObject({ ok: true, data: { executed: false } });
+      expect(rows('tainted_action')).toHaveLength(2);
+
       // The owner's own untainted turn sets it directly, with no approval line consulted: standing changes are not privileged.
       expect(await dispatchTool({ id: 'c2', name: 'set_reminder', args }, context({ hasApproval: undefined }), { handlers })).toMatchObject({ ok: true });
       expect(set).toHaveLength(2);

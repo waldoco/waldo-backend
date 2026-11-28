@@ -54,6 +54,7 @@ export type ReminderTiming = Readonly<{ due: string; now: string; timezone: stri
 export type LateOwnerMessage = Readonly<{ text: string; messageRef: string; conversationRef: string; surface: string; receivedAt: number }>;
 // What a background job runs on (OwnerResponder.prompt's ownerModel).
 export type OwnerJobModel = boolean | 'decides' | 'plans';
+export type JobSourceTaint = 'external' | 'as_read';
 export type OwnerResponder = Readonly<{
   respond(turn: OwnerTurnEnvelope, time: TurnTimer): Promise<string>;
   chooseReaction(turn: OwnerTurnEnvelope): Promise<string | null>;
@@ -64,10 +65,13 @@ export type OwnerResponder = Readonly<{
   // check-back, a mail follow-up, a standing order): on the chat model with WALDO_STRONG_ROLES, else the auxiliary one.
   // 'plans' is a planning run (a day card's plan, the intervention look, triage): on the chat model, at PLANNING_EFFORT
   // with WALDO_STRONG_ROLES.
+  // `sourceTaint` 'external': the job's text may hold someone else's words, so the run is marked from its start. 'as_read': the
+  // caller vouches that everything it passed is the owner's own, so the mark follows what the run reads; what it may do and send
+  // stays that of a run over outside content. Absent: a clean run, as before.
   // `attachments` reach the model with `said` on this turn only, as an owner turn's files do; they are never stored.
   // `waldoFirst` marks a run Waldo starts on a schedule (a day card, a check-back, a sweep, an intervention), never one that
   // answers the owner: with WALDO_LEAN_SCHEDULED it reads the lean scheduled view instead of the chat replay.
-  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string, sourceTaint?: 'external', ownerModel?: OwnerJobModel, attachments?: readonly LLMAttachment[], directTools?: readonly ToolName[], waldoFirst?: boolean, lateOwner?: LateOwnerMessage,
+  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string, sourceTaint?: JobSourceTaint, ownerModel?: OwnerJobModel, attachments?: readonly LLMAttachment[], directTools?: readonly ToolName[], waldoFirst?: boolean, lateOwner?: LateOwnerMessage,
     // The owner set this run to change nothing until they confirm (a confirm_first standing order): every tool that changes
     // something is refused at dispatch, except the owner's own card.
     holdChanges?: boolean): Promise<string>;

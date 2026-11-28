@@ -271,6 +271,7 @@ export type TelegramWebhookEnv = PublicOriginEnv & Readonly<{
   // "1": a run Waldo starts (a day card, a check-back, a sweep, an intervention) may leave itself a bounded follow-up with a
   // note to its future self, which wakes a later check-back and grants nothing (channels/loops.ts).
   MODEL_SET_WAKES?: string;
+  UNDOABLE_INWARD?: string;
   // "1": the owner's WhatsApp turns read and write the owner's own chain, the one their app chat uses (conversation/one-timeline.ts).
   WALDO_ONE_TIMELINE?: string;
   // "1": the owner's own reply takes a light step that answers quick chat or hands the turn to the strong role, and every task

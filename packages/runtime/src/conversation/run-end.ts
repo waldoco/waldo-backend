@@ -5,7 +5,9 @@ import { SKIP_UPDATE } from '../prompt/skip-update';
 // loop saw. replied: words with no end chosen, sent as they are. no_reply: no words at all, which no caller reads as a choice.
 // handed_off: the loop's last call carried the result (a Mac request, a task worker's finish_task).
 export type RunClosedReason = RunEndOutcome | 'replied' | 'no_reply' | 'budget_exhausted' | 'time_exhausted' | 'handed_off';
-export type RunEnd = Readonly<{ reason: RunClosedReason; why?: string }>;
+// inward: the receipt lines for changes the run made with no card after outside content (conversation/inward-receipts), passed
+// beside the reply so a caller never reads them back out of text the model wrote.
+export type RunEnd = Readonly<{ reason: RunClosedReason; why?: string; inward?: readonly string[] }>;
 
 export const END_RUN_TOOL = 'end_run';
 

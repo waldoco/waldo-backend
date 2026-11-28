@@ -519,8 +519,11 @@ const eventLine = (event: CalendarItem, timezone: string) =>
   JSON.stringify({ ...calendarPromptProjection(event), start: event.all_day ? event.start : localIso(Date.parse(event.start), timezone), end: event.all_day ? event.end : localIso(Date.parse(event.end), timezone) });
 
 // An event is the owner's own text only when they organized it and it names no one else: an invite's title and description,
-// and a guest's display name, are written by other people. An event whose organizer is unknown counts as someone else's.
-const ownersOwn = (event: CalendarItem): boolean => event.owner_status === 'organizer' && !event.attendee_names?.length;
+// and a guest's display name, are written by other people. An event whose organizer is unknown counts as someone else's. So
+// does one with a description or attachments (an event saved from a page or a mail carries that page's words in them), and one
+// Waldo made (a card raised over mail can title it from the mail).
+const ownersOwn = (event: CalendarItem): boolean => event.owner_status === 'organizer' && !event.attendee_names?.length && !event.attendees
+  && !event.description && !event.attachments?.length && event.waldo_made !== true;
 
 // The card's calendar, and whether any of it was written by someone other than the owner.
 const calendarRead = async (

@@ -1,3 +1,4 @@
+import { numericHealthIn } from '../scribe/sanitiser';
 import type {
   BrowserTaskCommand,
   CanaryTokens,
@@ -147,6 +148,7 @@ import {
 import { EGRESS_TARGET_PATHS, OPEN_PUBLIC, OPEN_PUBLIC_TOOLS, evaluateDeclaredEgress } from './egress-policy';
 import { TOOL_RECORDS, type ToolRecord } from '../tools/records';
 import { holdsPrivateAndEgress, TASK_PROFILE_SPECS } from '../tasks/profile-tools';
+import { actsOnOutside } from '../tools/run-authority';
 import { ownerStatedMinutes, type MemoryOwnerTurn } from '../tools/owner-words';
 
 export type HookRegistry<Ctx> = readonly HookHandler<Ctx>[];
@@ -194,6 +196,8 @@ export type HookRuntimeContext = {
   // mail source, is Waldo's own note. It keeps the run's taint, wakes only a check-back that reads and cards, is bounded by
   // the loop book, and its title never reaches an owner prompt after outside text (openLoopsPrompt).
   waldoOwnFollowUp?: () => boolean;
+  // UNDOABLE_INWARD: a record that names its way back runs without a card in any run (tools/records.ts undo).
+  undoableInward?: boolean;
   // Set by the host on a turn the owner's own message started, quotes and forwards included: its reply goes to the owner.
   ownerInitiated?: boolean;
   egressAllowlist?: readonly string[];
@@ -495,8 +499,10 @@ export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
     if (payload.event !== 'PreToolUse') return ok();
     const tool = parseToolName(payload.tool);
     if (!tool.parsed) return tool.result;
-    const sourceTaint = sourceTaintSchema.safeParse(ctx.toolArgSourceTaint);
-    if (!sourceTaint.success) return halt('tool argument taint invalid', 'invalid_args');
+    const parsedTaint = sourceTaintSchema.safeParse(ctx.toolArgSourceTaint);
+    if (!parsedTaint.success) return halt('tool argument taint invalid', 'invalid_args');
+    // A run held as if it had read outside content has its arguments checked as one that has (no health reading leaves in them).
+    const sourceTaint = { data: actsOnOutside(ctx) ? 'external' as const : parsedTaint.data };
     const destination = preToolUseDestination(tool.data);
     // draft_email/send_email/send_agent_mail args are executable: the recipient addresses ARE the call.
     // Redaction would corrupt them (the 2026-09-25 halt - [REDACTED_EMAIL] fails zod), so they
@@ -549,17 +555,29 @@ const ownerStatedFigure = (args: unknown, ctx: Pick<HookRuntimeContext, 'ownerIn
 // owner's card instead of running. A tool changes something when its receipt can back a claim, so the set is read from the
 // tool's record, and a record without an exemption is carded. Privileged actions are carded by their own law first.
 export const taintedCallNeedsOwnerApproval = async (
-  tool: ToolName, taint: SourceTaint, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound' | 'loopHasPassed' | 'ownerInitiated' | 'waldoOwnFollowUp'>,
+  tool: ToolName, taint: SourceTaint, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound' | 'loopHasPassed' | 'ownerInitiated' | 'waldoOwnFollowUp' | 'undoableInward'>,
 ): Promise<boolean> => taintGateBlocksDirectExecution(tool, taint)
   || (isExternalSourceTaint(taint) && await recordNeedsOwnerCard(tool, TOOL_RECORDS[tool], args, ctx));
+
+// UNDOABLE_INWARD's hard limits on a call that skips the card: a reminder that repeats spends a model run and a message each time
+// it fires, so only a one-time reminder is undoable here; and a health number in what outside content asked for is never written
+// from that path (the owner's 22 Oct ruling), so that call keeps its card.
+const stringsIn = (value: unknown): string[] => typeof value === 'string' ? [value] : Array.isArray(value) ? value.flatMap(stringsIn)
+  : value !== null && typeof value === 'object' ? Object.values(value).flatMap(stringsIn) : [];
+const undoableCall = (tool: ToolName, args: unknown): boolean => {
+  const repeat = typeof args === 'object' && args !== null ? (args as { repeat?: unknown }).repeat : undefined;
+  if (tool === 'set_reminder' && repeat !== undefined && repeat !== 'none') return false;
+  return !stringsIn(args).some(text => numericHealthIn(text));
+};
 
 // One record's answer for a tainted call. own_card is not admitted here: the dispatcher admits it per call from the
 // handler's proposal_only declaration, so the exemption holds only while the handler actually only proposes.
 export const recordNeedsOwnerCard = async (
-  tool: ToolName, record: Pick<ToolRecord, 'claim' | 'tainted'>, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound' | 'loopHasPassed' | 'ownerInitiated' | 'waldoOwnFollowUp'>,
+  tool: ToolName, record: Pick<ToolRecord, 'claim' | 'tainted'>, args: unknown, ctx: Pick<HookRuntimeContext, 'loopIsSourceBound' | 'loopHasPassed' | 'ownerInitiated' | 'waldoOwnFollowUp' | 'undoableInward'>,
 ): Promise<boolean> => {
   const tainted = record.tainted;
   if (record.claim === null || (tainted !== undefined && 'refused' in tainted)) return false;
+  if (ctx.undoableInward === true && tainted !== undefined && 'exempt' in tainted && tainted.undo !== undefined && undoableCall(tool, args)) return false;
   switch (tainted?.exempt) {
     case 'draft': case 'honest_origin': case 'instructions_only': return false;
     case 'narrows': return clearsEverything(tool, args);
@@ -646,13 +664,15 @@ export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
       return halt('tool argument taint invalid', 'invalid_args');
     }
 
-    if (taintedCallRefused(tool.data, sourceTaint.data, payload.args, ctx)) return halt(TAINT_REFUSED_REASON, 'forbidden');
+    // A run held as if it had read outside content meets the gate as one that has, whatever its mark says so far.
+    const gateTaint = actsOnOutside(ctx) ? 'external' as const : sourceTaint.data;
+    if (taintedCallRefused(tool.data, gateTaint, payload.args, ctx)) return halt(TAINT_REFUSED_REASON, 'forbidden');
 
     // Two calls pass with tainted arguments: the owner-approved replay of a frozen call, and a call whose handler only
     // raises the owner's card. Neither executes anything the owner has not seen.
     if (ctx.approvedTaintedAction?.tool !== tool.data && ctx.proposalOnlyCall !== tool.data) {
       let needsOwner: boolean;
-      try { needsOwner = await taintedCallNeedsOwnerApproval(tool.data, sourceTaint.data, payload.args, ctx); }
+      try { needsOwner = await taintedCallNeedsOwnerApproval(tool.data, gateTaint, payload.args, ctx); }
       catch { return halt('loop lookup failed', 'transient'); }
       // Only the owner's own turn can start the narrower task at once, so only there is the model pointed at it.
       if (needsOwner) return halt(ctx.ownerInitiated === true && combinedTask(tool.data, payload.args) ? TAINT_COMBINED_TASK_REASON : TAINT_NEEDS_APPROVAL_REASON, 'forbidden');

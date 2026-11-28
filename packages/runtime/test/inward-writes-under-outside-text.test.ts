@@ -156,6 +156,12 @@ describe('an injected request in the owner\'s turn can set an owner-inward write
     expect(Object.keys(INWARD_RECEIPT_LINES).sort()).toEqual([...listed, 'close_loop'].sort());
   });
 
+  it('every record that names its way back (UNDOABLE_INWARD) has a receipt line, so a change made with no card is always listed', () => {
+    const undoable = (Object.entries(TOOL_RECORDS) as [ToolName, ToolRecord][]).filter(([, { tainted }]) => tainted !== undefined && 'exempt' in tainted && tainted.undo !== undefined).map(([tool]) => tool);
+    expect(undoable.length).toBeGreaterThan(0);
+    for (const tool of undoable) expect(INWARD_RECEIPT_LINES[tool], tool).toBeDefined();
+  });
+
   it('a passed owner loop closed after outside text is listed with its title; a mail follow-up, whose title is someone else\'s text, is not', () => {
     expect(inwardReceipt('close_loop', JSON.stringify({ id: 'o1', outcome: 'done' }), { id: 'o1', closed: true, title: 'Send the deck', due: '2026-11-16T09:00' }))
       .toBe('Closed "Send the deck" (due 2026-11-16 09:00); tell me if you still want it and I will open it again');

@@ -104,7 +104,7 @@ import { TelegramFinalOutbox, standingOrderFinalId, dayCardFinalId, tookPart, ob
 import { computeAdmission } from '../delivery-gate/gate';
 import { drawingOn, interruptBook, interruptLimits, reopensAt } from './interruptions';
 import { ANNOUNCEMENTS_CHECKED_KEY, ANNOUNCEMENTS_RETRY_KEY, ANNOUNCEMENTS_RETRY_MS, announcementPassKey, requiresOf, type AnnouncementRow, announcementBook, announcementCardSection, announcementPrompt, announcementsFeedSchema, runAnnouncementPass, switchOn, WHATS_NEW_WINDOW_MS, whatsNewSection, type AnnouncementOutcome, type AnnouncementPrerequisite } from './announcements';
-import { forgetWakeReasons, GENERAL_WAKE_TOOLS, generalWake, wakeCostMonth, wakeOutcomeBook, wakeRole } from './wake';
+import { forgetWakeReasons, forgetWakeUntold, generalWake, wakeTools, wakeCostMonth, wakeOutcomeBook, wakeRole, wakeUntoldBook } from './wake';
 import type { RunEndReport } from './owner-turn';
 import { armInterventionReview, interventionApplier, interventionEveryMs, interventionSpec, INTERVENTION_REVIEW_ID, lookCause, MOVE_PULL_KEY, movePullAllowed, nextLocalHour, nextLookAt } from './interventions';
 import { DeliveryGateStore } from '../delivery-gate/store';
@@ -323,7 +323,7 @@ import { armWatchUpkeep, endWatchUpkeep, watchGrants, watchStatusLine, watchUpke
 import { gmailPush, stopChannel } from '../connectors/google-push';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 import type { LLMToolCall, LLMToolTurn, StandingGrantRecord, ToolName } from '@waldo/contracts';
-import { jobBook, jobsKept, REPLAY_DEADLINE_MS, replayKey, taskJobsForgetStore, type JobBook, type MachineJob, type ReplayBrief, type ReplayOutcome, type TaskTicket } from '../tasks/jobs';
+import { jobBook, jobsKept, REPLAY_DEADLINE_MS, replayKey, taskBrief, taskJobsForgetStore, type JobBook, type MachineJob, type ReplayBrief, type ReplayOutcome, type TaskTicket } from '../tasks/jobs';
 import { BROWSER_TOOLS, jobTools, LOOKUP_ORIGIN } from '../tasks/profiles';
 import { taskAsks } from '../tasks/asks';
 import { taskHost, type TaskHost } from '../tasks/brain';
@@ -2061,6 +2061,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       { name: 'waiting_cards', run: (texts) => forgetWaitingCards(storage.sql, texts, Date.now()).remaining },
       { name: 'why_trails', run: (texts) => forgetTrails(storage.sql, texts) + dayPlanBook(storage.sql).forgetWhy(texts) },
       { name: 'wake_reasons', run: (texts) => forgetWakeReasons(storage.sql, texts) },
+      { name: 'wake_untold', run: (texts) => forgetWakeUntold(storage.sql, texts) },
       { name: 'imessage', run: (texts) => redactIMessageEntries(storage, texts, FORGOTTEN).remaining },
       { name: 'thread_titles', run: (texts) => redactThreadTitles(kv, texts, FORGOTTEN).remaining },
       this.taskJobsForgetStore(),
@@ -5214,8 +5215,10 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // reading outside content, or any approval (its summary carries no mark of what it quotes, so any row counts).
     // Day-card runs whose prompt is the owner's own text, while they run (memoryRun.ownText).
     const ownTextRuns = new Set<string>();
-    const ledgerFromOthers = () => loops.list().some((loop) => loop.source_ref) || loops.closed().some((loop) => loops.sourceBound(loop.id))
-      || book.list().some((reminder) => reminder.outside) || storage.sql.exec('SELECT 1 FROM ledger LIMIT 1').toArray().length > 0;
+    const ledgerFromOthers = () => loops.list().some((loop) => loop.source_ref || loop.taint === 'external') || loops.closed().some((loop) => loops.sourceBound(loop.id))
+      || book.list().some((reminder) => reminder.outside) || storage.sql.exec('SELECT 1 FROM ledger LIMIT 1').toArray().length > 0
+      // The running tasks' titles ride beside the open loops; one written after reading someone else's words is theirs.
+      || this.jobs().open().some((row) => row.kind === 'task' && taskBrief(row).outside_text === true);
     const quiet = () => isQuiet(loops.proactivity(), Date.now(), clock.timezone);
     // PROACTIVE_GATE: one set of owner limits on every unasked message. The owner speaking anywhere answers a waiting question.
     const interrupts = this.env.PROACTIVE_GATE === '1' ? {
@@ -5551,12 +5554,15 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
     // their source), and the health reads while the owner shares body data.
     const loadedTools = loadedToolsBook(storage.kv);
     const promotedTools = () => [...loadedTools.names(Date.now()), ...(this.appBound() ? PHONE_TOOLS : []), ...(healthSharedLately(storage.kv, Date.now()) ? HEALTH_READ_TOOLS : [])];
-    const router = { asyncTools: asyncToolsEnabled(this.env), lightChat: lightChatEnabled(this.env), lightRoles: lightChatRoles(this.env), jobOutcomeRows: jobOutcomeRowsEnabled(this.env), machineTime: () => this.machineTime(), leanScheduled: this.env.WALDO_LEAN_SCHEDULED === '1', modelSetWakes: this.env.MODEL_SET_WAKES === '1',
+    const router = { asyncTools: asyncToolsEnabled(this.env), lightChat: lightChatEnabled(this.env), lightRoles: lightChatRoles(this.env), jobOutcomeRows: jobOutcomeRowsEnabled(this.env), machineTime: () => this.machineTime(), leanScheduled: this.env.WALDO_LEAN_SCHEDULED === '1', modelSetWakes: this.env.MODEL_SET_WAKES === '1', undoableInward: this.env.UNDOABLE_INWARD === '1',
       promotedTools, noteLoaded: (names: readonly string[]) => loadedTools.note(names, Date.now()),
       waldoSent: () => deliveredLately(finalOutbox.records(), Date.now()),
       // GENERAL_WAKE: how a wake's run ended, kept only for the traces a wake is waiting on (channels/wake.ts).
-      runEnded: (trace: string, end: RunEndReport) => { if (wakeEnds.has(trace)) wakeEnds.set(trace, end); } };
+      runEnded: (trace: string, end: RunEndReport) => { if (wakeEnds.has(trace)) wakeEnds.set(trace, end); },
+      inwardMade: (trace: string, line: string) => { wakeMade.get(trace)?.push(line); } };
     const wakeEnds = new Map<string, RunEndReport | null>();
+    // UNDOABLE_INWARD: the changes a wake's run has made so far, read by the wake when the run fails before it ends (channels/wake.ts).
+    const wakeMade = new Map<string, string[]>();
     const forgetPass = () => this.forgetPurgeJob().run();
     // An owner who joined openly runs under open sign-up's ceiling; every other owner under the invited one.
     const spend = costs ? () => ({ spentUsd: costs.monthSpendUsd(deps.now()), ceilingUsd: this.openHold().open() ? openOwnerCeilingUsd(this.env) : ownerCeilingUsd(this.env) }) : undefined;
@@ -5642,7 +5648,7 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         return this.env.DEVICE_BRIDGE_DO.get(this.env.DEVICE_BRIDGE_DO.idFromName(device.device_id)).enqueueCommand({ ...input, owner_id: auth.owner_id, device_id: device.device_id });
       } }), ...loopHandlers(loops, closableIn, this.env.PROACTIVE_GATE === '1', this.env.MODEL_SET_WAKES === '1', followupWake), ...schedulePreferenceHandlers(schedPrefs, async () => ({ scheduler, plans, timezone: clock.timezone, now: Date.now(), armable: await armableNow(), cancelMachine, alongHeartbeat: lookFollows, sweepCarriesUpdates }), (card, time) => ownerCardTime(cardTimeDeps(Date.now()), card, time, this.env.WAKE_BRIEF === '1'), (zone) => confirmZone(zone, Date.now(), undefined, true)), ...taskToolHandlers({ book: this.jobs(), now: Date.now, timezone: () => clock.timezone, surface: channel, wake: due => armTaskJobsWake(storage, due), fence: id => this.tasks.cancelled(id), log, steer: this.env.WALDO_TASK_STEER === '1',
         // A task started by an app thread's own turn (the call's run scope is that message's attempt) reports in that thread.
-        conversationRef: ctx => { const record = this.activeApp; return record && ctx.runScope?.runId === record.id && ctx.runScope.attempt === record.attempt && threadOfChain(record.conversationRef) ? record.conversationRef : null; } })]), undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; }, approvableHere: () => desk.approvableHere() }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now()); const trails = forgetTrails(this.ctx.storage.sql, texts) + dayPlanBook(this.ctx.storage.sql).forgetWhy(texts) + forgetWakeReasons(this.ctx.storage.sql, texts); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + trails + titles.remaining }; }), undefined,
+        conversationRef: ctx => { const record = this.activeApp; return record && ctx.runScope?.runId === record.id && ctx.runScope.attempt === record.attempt && threadOfChain(record.conversationRef) ? record.conversationRef : null; } })]), undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage, { proposalState: async id => { const [approval] = await desk.approvals(Date.now(), { id }); return approval ? { kind: approval.kind, state: approval.state } : null; }, approvableHere: () => desk.approvableHere() }), offerConnect, this.ownerBrowser.gateway(), (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); const mail = redactMailFollowupEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const prep = redactCalendarPrepEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); const reports = redactJobReportEntries(this.ctx.storage.kv, texts, FORGOTTEN, scope); forgetHeldWhatsApp(this.ctx.storage.kv, texts); const cards = forgetWaitingCards(this.ctx.storage.sql, texts, Date.now()); const trails = forgetTrails(this.ctx.storage.sql, texts) + dayPlanBook(this.ctx.storage.sql).forgetWhy(texts) + forgetWakeReasons(this.ctx.storage.sql, texts) + forgetWakeUntold(this.ctx.storage.sql, texts); const titles = redactThreadTitles(this.ctx.storage.kv, texts, FORGOTTEN, scope); return { rewritten: result.rewritten, remaining: result.remaining + mail.remaining + prep.remaining + reports.remaining + cards.remaining + trails + titles.remaining }; }), undefined,
       (opt) => opt ? [openLoopsPrompt(loops, clock.timezone, opt.loopsRoom, false, Date.now()), runningTasksLine(this.jobs(), Date.now()),
         // "What's new?" in the owner's own turns: what is recent and still live by its switch, while feature news is on.
         whatsNewSection(newsOn() ? announced.recent(Date.now() - WHATS_NEW_WINDOW_MS).filter(row => switchOn(declaredSwitch(this.env, row.capability))) : [], budget.whatsNewChars),
@@ -5673,12 +5679,16 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
       jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus,connectors,dayCards:dayFacts,nowFrame,loopIsSourceBound:loops.sourceBound,loopHasPassed:id=>loops.passed(id,Date.now(),clock.timezone),promptOwnText:trace=>ownTextRuns.has(trace),...memoryHooks,...(spend ? { spend } : {}),forgetBarrier,forgetPass,profileView,newerOwnerMessages,...(finishedTasks ? { finishedTasks } : {}),...router} : {...(telegramContext ?? timelineContext),jobHost:this.jobHostFor((_admission,surfaceChain)=>surfaceChain),ownerProfile:google.nameLine,watchStatus,connectors,dayCards:dayFacts,nowFrame,loopIsSourceBound:loops.sourceBound,loopHasPassed:id=>loops.passed(id,Date.now(),clock.timezone),promptOwnText:trace=>ownTextRuns.has(trace),...memoryHooks,...(spend ? { spend } : {}),forgetBarrier,forgetPass,profileView,newerOwnerMessages,...(finishedTasks ? { finishedTasks } : {}),...router,newerOwnerInput:scope=>this.whatsappOvertaken(scope)},
     );
     // A job prompt built on the ledger: the owner's health logs reach the model as this turn's context.
-    // Every job here runs tainted: an action or a standing change it wants goes to the owner's card, as in an owner turn that
-    // read outside text. What it may keep in memory follows the data instead (ownTextRuns).
-    const ledgerJob = async (trace: string, said: string, toolNames?: Parameters<typeof responder.prompt>[4], directTools?: Parameters<typeof responder.prompt>[11], strong?: Parameters<typeof responder.prompt>[9], context?: string, waldoFirst?: boolean) =>
-      responder.prompt(trace, owner, said, async (_hop, work) => work(), toolNames, undefined, undefined, [await healthLogLines(),
-        // MEMORY_OUTCOME_LEARNING: what the nightly pass learned from rows drawn from outside content; this job already runs over outside content.
-        this.env.MEMORY_OUTCOME_LEARNING === '1' ? outcomeReadsSection(memory, storage.kv.get<number[]>(OUTCOME_OUTSIDE_CLAIMS_KEY), true) : '', context ?? ''].filter(Boolean).join('\n\n'), 'external', strong, undefined, directTools, waldoFirst);
+    // Every job here acts as one over outside text: an action or a standing change it wants goes to the owner's card. What it
+    // may keep in memory follows the data instead (ownTextRuns). ownText: the caller vouches that said and context are the
+    // owner's own; with the health logs (whose outside-written words are withheld) and no outcome reads, the run's mark then
+    // follows what it reads ('as_read') instead of starting marked.
+    const ledgerJob = async (trace: string, said: string, toolNames?: Parameters<typeof responder.prompt>[4], directTools?: Parameters<typeof responder.prompt>[11], strong?: Parameters<typeof responder.prompt>[9], context?: string, waldoFirst?: boolean, ownText?: boolean) => {
+      // MEMORY_OUTCOME_LEARNING: what the nightly pass learned from rows drawn from outside content.
+      const outcomes = this.env.MEMORY_OUTCOME_LEARNING === '1' ? outcomeReadsSection(memory, storage.kv.get<number[]>(OUTCOME_OUTSIDE_CLAIMS_KEY), true) : '';
+      return responder.prompt(trace, owner, said, async (_hop, work) => work(), toolNames, undefined, undefined, [await healthLogLines(), outcomes, context ?? ''].filter(Boolean).join('\n\n'),
+        ownText === true && outcomes === '' ? 'as_read' : 'external', strong, undefined, directTools, waldoFirst);
+    };
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);
       if (input === null) return;
@@ -6712,9 +6722,9 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         };
       },
       run: async (trace, text) => {
-        wakeEnds.set(trace, null);
+        wakeEnds.set(trace, null); wakeMade.set(trace, []);
         try {
-          const reply = await this.asOwnerJob('heartbeat', trace, async () => responder.prompt(trace, owner, text, async (_hop, work) => work(), GENERAL_WAKE_TOOLS, undefined, undefined,
+          const reply = await this.asOwnerJob('heartbeat', trace, async () => responder.prompt(trace, owner, text, async (_hop, work) => work(), wakeTools(this.env.UNDOABLE_INWARD === '1'), undefined, undefined,
             await healthLogLines(), 'external', wakeRole(this.env.WAKE_MODEL_LOOK), undefined, undefined, true));
           return { reply, end: wakeEnds.get(trace) ?? undefined };
         } finally { wakeEnds.delete(trace); }
@@ -6728,6 +6738,8 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace: row.id, hop: 'wake_cost', ms: 0, ok: true, detail: `usd=${row.spend?.usd ?? 'unknown'} calls=${row.spend?.calls ?? 0} in=${row.spend?.input ?? 0} cached=${row.spend?.cached ?? 0} out=${row.spend?.output ?? 0} month=${month.month} month_wakes=${month.wakes} month_usd=${month.usd}` });
       },
       chose: (trace, code) => log({ trace, hop: 'wake', ms: 0, ok: code !== 'failed', code }),
+      undoable: this.env.UNDOABLE_INWARD === '1', untold: wakeUntoldBook(storage.sql),
+      made: trace => { const lines = wakeMade.get(trace) ?? []; wakeMade.delete(trace); return lines; },
     }) : null;
     // What's new: on the first wake of each release this owner's Waldo reads the team's announcements for its environment and
     // decides, for its owner, whether and how to say each one (announcements.ts). Code holds the capability truth check, the
@@ -6897,12 +6909,13 @@ export class OwnerDO extends DurableObject<TelegramWebhookEnv> {
           const shaping = planning ? await dayShaping(trace, 'brief') : card.id === 'card:close' ? await dayShaping(trace, 'close') : '';
           // The card's prompt is the owner's own text unless something in it was written by someone else: an approval waiting (its
           // title can quote a mail or a page), the day so far, the ledger, or the capacity budget (the week's events). The shaping
-          // holds counts, the owner's own accounts and Waldo's own blocks. Only its memory follows this; its actions still card.
-          if (!(composed.outside || waiting.length > 0 || !dayIsOwnText(today) || ledgerFromOthers() || budget)) ownTextRuns.add(trace);
+          // holds counts, the owner's own accounts and Waldo's own blocks. Its memory and its mark follow this; its actions still card.
+          const ownText = !(composed.outside || waiting.length > 0 || !dayIsOwnText(today) || ledgerFromOthers() || budget);
+          if (ownText) ownTextRuns.add(trace);
           const capacityText = capacity ? [capacityContext(cardCapacityNote(memory, storage.kv, healthMemoryOn(identity), await healthContext.read(trace).then(read => read === 'unknown' ? read : read !== null)), recentBlocks(storage.sql, now, clock.timezone)),
             ...(budget ? [await capacityBudgetContext(now, clock.timezone, client, !client && google.configured(), recentMoves(storage.sql, now, clock.timezone))] : [])].join('\n\n') : undefined;
           text = (await ledgerJob(trace, composed.text, proposing ? [...DAY_CARD_TOOLS, ...proposes] : DAY_CARD_TOOLS, proposing ? proposes : undefined, actAhead || capacity || tomorrow || questText !== null || shaping !== '' ? 'plans' : undefined,
-            [shaping, capacityText, questText, announcementText].filter(Boolean).join('\n\n') || undefined, true)).trim();
+            [shaping, capacityText, questText, announcementText].filter(Boolean).join('\n\n') || undefined, true, ownText)).trim();
         } finally {
           ownTextRuns.delete(trace);
           raised = this.whyHolder.collected ?? []; this.whyHolder.collected = undefined;

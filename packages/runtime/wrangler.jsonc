@@ -57,6 +57,10 @@
   // to its future self (what to check and why), which wakes a later check-back and grants nothing; bounded in code to 12 a day,
   // two weeks ahead and a chain of 3. Up to 8 a day are checked at the minute they are due, by a one-shot heartbeat entry; the
   // rest at the heartbeat's next tick. "0" is the rollback.
+  // UNDOABLE_INWARD: "1" applies the owner's 28 Nov rule: a change the owner can undo that stays in their own space (a reminder,
+  // a tracked item, a step, a workspace file or artifact) runs without a card even after outside content, in their
+  // own turn and in a run Waldo started, and the reply lists it with its way back. Sends, spending, deletion and anything that
+  // cannot be undone keep their card or fence. "0" keeps every such change on the card when no owner message started the turn.
   // GENERAL_WAKE: "1" (with PROACTIVE_INTERVENTIONS) runs the look as Waldo's general wake: one run in the brain, no reader
   // worker, the full tool set, the owner's limits checked when it decides to speak, one wake_outcomes row per run with its
   // reason. WAKE_MODEL_LOOK is its model role (plans, decides, chat or auxiliary). "0" is the rollback: the look runs as before.
@@ -208,6 +212,7 @@
       "WALDO_JOB_OUTCOME_ROWS": "0",
       "WALDO_LEAN_SCHEDULED": "0",
       "MODEL_SET_WAKES": "0",
+      "UNDOABLE_INWARD": "0",
       "WALDO_ONE_TIMELINE": "0",
       "WALDO_LIGHT_CHAT": "0",
       "WALDO_THINKING_REPLAY": "0",
@@ -470,6 +475,7 @@
           "WALDO_JOB_OUTCOME_ROWS": "1",
           "WALDO_LEAN_SCHEDULED": "1",
           "MODEL_SET_WAKES": "1",
+          "UNDOABLE_INWARD": "0",
           "WALDO_ONE_TIMELINE": "1",
           "WALDO_LIGHT_CHAT": "0",
           "WALDO_THINKING_REPLAY": "1",
