@@ -2,6 +2,7 @@ import { withRequestTimeout } from './request-timeout';
 import { adminCostSummarySchema, type AdminCostSummary } from '../channels/admin-spend';
 import { announcementReportSchema, type AnnouncementDraft, type AnnouncementReport } from '../channels/announcements';
 import { OPEN_SIGNUP_EMAIL_DAILY_LIMIT, OPEN_SIGNUP_IP_DAILY_LIMIT, type OpenSignup } from './open-signup';
+import { APP_JOIN_TICKET_SECONDS } from '../../../contracts/src/app/core';
 import { hex, linkCodeHash, routerSignature, signedRpc, type OwnerDirectoryEnv } from './owner-directory';
 import { openValue, sealValue } from './sealed-value';
 
@@ -56,16 +57,27 @@ export const sessionFamily = (rows: readonly ConsoleSession[], session: string):
   return [...family];
 };
 
+// Why a person who proved their mailbox or token got no account: this server takes no new ones, today's attempts from their
+// network or for their email are spent, or another owner row holds the email.
+export type JoinRefusal = 'signup_closed' | 'join_limited' | 'account_conflict';
+// new_account: the person proved the mailbox or token, no owner has the email, and nothing was created; `ticket` makes the
+// account on their yes (joinWithTicket). Asked only when the sign-in passes confirmNew.
+type AskedOrRefused = Readonly<{ state: 'join_refused'; reason: JoinRefusal } | { state: 'new_account'; email: string; ticket: string }>;
 // refused: Supabase declined the token or code, or it vouched for no confirmed email (no_email). confirm: the identity
 // reached an existing owner it has never signed in; nothing is signed in until the owner enters an email code with link.
+// needs_invite: no owner, and this sign-in does not join (the console's).
 export type IdentitySignIn = Readonly<{ state: 'owner'; doName: string } | { state: 'needs_invite' } | { state: 'refused'; reason: 'token' | 'no_email' }
-  | { state: 'confirm'; email: string; link: string }>;
+  | { state: 'confirm'; email: string; link: string }> | AskedOrRefused;
+// code_invalid: the email code did not verify. Nothing else was checked.
+export type EmailSignIn = Readonly<{ state: 'owner'; doName: string } | { state: 'code_invalid' }> | AskedOrRefused;
+export type JoinSignIn = Readonly<{ state: 'owner'; doName: string } | { state: 'ticket_invalid' } | { state: 'join_refused'; reason: JoinRefusal }>;
 // How long a confirm link stays good: about as long as the email code it travels with.
 export const SIGNIN_LINK_SECONDS = 15 * 60;
 const SIGNIN_LINK_PURPOSE = 'signinlink';
+const JOIN_TICKET_PURPOSE = 'jointicket';
 
 export type ConsoleAuth = Readonly<{
-  // With open sign-up, an address that is not a member also gets a code while a join could still fit.
+  // With open sign-up, an address that is not a member also gets a code. False when no code was sent.
   sendCode(email: string, code?: string, open?: OpenSignup): Promise<boolean>;
   // Strict fixed-window auth throttle kept in the owner directory: global and durable, unlike
   // the per-location binding layer, which only expresses 10s/60s periods.
@@ -77,12 +89,17 @@ export type ConsoleAuth = Readonly<{
   // sign-up, joins openly. The phone is kept, unverified, only on a join; an existing member's sign-in never changes the
   // number on file.
   verifyOrJoin(email: string, code: string, inviteCode: string, phone?: string, link?: string, open?: OpenSignup): Promise<string | null>;
+  // verifyOrJoin, saying why when no owner signs in. With confirmNew and no invite, a newcomer is asked first (new_account)
+  // instead of joined.
+  signInWithEmailCode?(email: string, code: string, options: Readonly<{ invite?: string; phone?: string; link?: string; open?: OpenSignup; confirmNew?: boolean }>): Promise<EmailSignIn>;
+  // The yes to new_account: makes the one account the ticket's proven identity names, or signs into it when it already exists.
+  joinWithTicket?(ticket: string, phone?: string, open?: OpenSignup): Promise<JoinSignIn>;
   // App sign-in with Apple or Google: Supabase checks the identity token's signature, audience and nonce, and the owner
   // resolves from the email it confirms as verifyOrJoin resolves it. An identity signs an existing owner in only once it
   // is trusted: it created the owner (through an invite or an open join), or the owner confirmed it with an email code. Supabase links a new
   // identity to the Auth user holding the same verified email, and a provider's verified flag is the provider's view of the
   // address (Google's covers whoever held a custom domain's address before), so the mailbox decides.
-  signInWithIdToken?(provider: 'apple' | 'google', idToken: string, nonce: string, inviteCode: string, phone?: string, open?: OpenSignup): Promise<IdentitySignIn>;
+  signInWithIdToken?(provider: 'apple' | 'google', idToken: string, nonce: string, inviteCode: string, phone?: string, open?: OpenSignup, confirmNew?: boolean): Promise<IdentitySignIn>;
   // Console Google sign-in: the PKCE code Supabase redirected back with and this browser's verifier. Members only, like verify.
   signInWithAuthCode?(code: string, verifier: string): Promise<IdentitySignIn>;
   issueLinkCode(doName: string): Promise<string | null>;
@@ -131,6 +148,8 @@ export type ConsoleAuth = Readonly<{
   revokeSession(doName: string, sessionHash: string): Promise<boolean>;
   signOutAll(doName: string): Promise<number>;
 }>;
+
+const ownerName = (signedIn: EmailSignIn): string | null => signedIn.state === 'owner' ? signedIn.doName : null;
 
 // The sub claim of a compact JWT; null when the payload is not JSON or carries no usable subject.
 const tokenSubject = (token: string): string | null => {
@@ -248,28 +267,36 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     if (typeof revoked !== 'boolean') throw new Error('session revocation unavailable');
     return revoked;
   };
-  const resolveOwner = async (email: string, code: string, inviteCode: string, join: boolean, joinPhone = '', link = '', open?: OpenSignup) => {
+  const resolveOwner = async (email: string, code: string, inviteCode: string, join: boolean, joinPhone = '', link = '', open?: OpenSignup, confirmNew = false): Promise<EmailSignIn> => {
     const address = email.trim().toLowerCase();
     const user = await auth('verify', { type: 'email', email: address, token: code.trim() }, async response => {
       if (!response.ok) return null;
       const { user } = (await response.json()) as { user?: { id?: string; email?: string } };
       return user;
     });
-    if (!user?.id || user.email?.toLowerCase() !== address) return null;
-    const owner = await ownerFor({ id: user.id, email: address }, inviteCode, join, joinPhone, undefined, open);
-    const ticket = owner && link ? await openValue(secret, SIGNIN_LINK_PURPOSE, link, now(), SIGNIN_LINK_SECONDS) : null;
+    if (!user?.id || user.email?.toLowerCase() !== address) return { state: 'code_invalid' };
+    const proven = { id: user.id, email: address }, askFirst = join && confirmNew && !inviteCode;
+    const owner = await ownerFor(proven, inviteCode, join && !askFirst, joinPhone, undefined, open);
+    if (owner && 'refused' in owner) return { state: 'join_refused', reason: owner.refused };
+    if (!owner) return askFirst ? askToJoin(proven, '', '', open) : { state: 'join_refused', reason: 'signup_closed' };
+    const ticket = link ? await openValue(secret, SIGNIN_LINK_PURPOSE, link, now(), SIGNIN_LINK_SECONDS) : null;
     if (ticket && ticket.user === user.id && ticket.email === address && (ticket.provider === 'apple' || ticket.provider === 'google') && typeof ticket.subject === 'string')
-      await trustIdentity({ id: user.id, email: address }, ticket.provider, ticket.subject);
-    return owner?.doName ?? null;
+      await trustIdentity(proven, ticket.provider, ticket.subject);
+    return { state: 'owner', doName: owner.doName };
   };
+  // A newcomer who proved the mailbox or token: a ticket for their yes, unless no join could be made at all.
+  const askToJoin = async (user: Readonly<{ id: string; email: string }>, provider: '' | 'apple' | 'google', subject: string, open?: OpenSignup): Promise<AskedOrRefused> =>
+    open ? { state: 'new_account', email: user.email, ticket: await sealValue(secret, JOIN_TICKET_PURPOSE, { user: user.id, email: user.email, provider, subject, expires: Math.floor(now() / 1000) + APP_JOIN_TICKET_SECONDS }) }
+      : { state: 'join_refused', reason: 'signup_closed' };
   // An existing member resolves first, so an invite they also hold is never spent. Empty phone makes
   // owner_for_auth refuse new provisioning; only the join path admits a new member, through
   // signup_owner_for_auth, which rechecks the confirmed Auth email and spends the exact invite atomically.
   // joined: this call created the owner, spending its invite. With an identity, the same transaction trusts it, and
   // joined comes from that transaction: an owner another sign-in created first is only found.
   // With open sign-up an invite still goes first, so the one who sent it stays named; a join it cannot make joins openly.
+  // null: no owner, and this call does not join. refused: it tried to join and could not.
   const ownerFor = async (user: Readonly<{ id: string; email: string }>, inviteCode: string, join: boolean, joinPhone = '',
-    identity?: Readonly<{ provider: 'apple' | 'google'; subject: string }>, open?: OpenSignup): Promise<Readonly<{ doName: string; joined: boolean }> | null> => {
+    identity?: Readonly<{ provider: 'apple' | 'google'; subject: string }>, open?: OpenSignup): Promise<Joined | Readonly<{ refused: JoinRefusal }> | null> => {
     const address = user.email;
     const phoneE164 = '';
     const codeHash = inviteCode ? await linkCodeHash(inviteCode) : '';
@@ -277,10 +304,10 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     if (owner) return { doName: owner, joined: false };
     if (!join) return null;
     const invited = codeHash ? await inviteJoin(user, codeHash, joinPhone, identity) : null;
-    return invited ?? (open ? openJoin(user, joinPhone, identity, open) : null);
+    return invited ?? (open ? openJoin(user, joinPhone, identity, open) : { refused: 'signup_closed' });
   };
   const inviteJoin = async (user: Readonly<{ id: string; email: string }>, codeHash: string, joinPhone: string,
-    identity?: Readonly<{ provider: 'apple' | 'google'; subject: string }>): Promise<Readonly<{ doName: string; joined: boolean }> | null> => {
+    identity?: Readonly<{ provider: 'apple' | 'google'; subject: string }>): Promise<Joined | null> => {
     const address = user.email;
     if (identity) {
       const { provider, subject } = identity;
@@ -291,31 +318,33 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     const joined = await rpc('signup_owner_for_auth', `signup.owner.${user.id}.${address}.${joinPhone}.${codeHash}`, { p_auth_user: user.id, p_email: address, p_phone: joinPhone, p_code_hash: codeHash });
     return typeof joined === 'string' && joined.length > 0 ? { doName: joined, joined: true } : null;
   };
-  const refuseOpen = (code: 'open_signup_limited' | 'open_signup_cap' | 'open_signup_taken') => {
+  const refuseOpen = (code: 'open_signup_limited' | 'open_signup_taken' | 'open_signup_refused', refused: JoinRefusal) => {
     console.error(JSON.stringify({ hop: 'open_signup', ok: false, code }));
-    return null;
+    return { refused };
   };
   // Each attempt spends one of the address's and one of the email's daily attempts, keyed by a router-keyed digest, so a
-  // leaked key names neither an address nor an email that can be guessed and hashed. The database
-  // counts the day's joins against the signed caps under one lock and trusts the joining identity as an invite join does.
+  // leaked key names neither an address nor an email that can be guessed and hashed. The database counts the day's joins,
+  // caps none, and trusts the joining identity as an invite join does.
   const openJoin = async (user: Readonly<{ id: string; email: string }>, joinPhone: string,
-    identity: Readonly<{ provider: 'apple' | 'google'; subject: string }> | undefined, open: OpenSignup): Promise<Readonly<{ doName: string; joined: boolean }> | null> => {
+    identity: Readonly<{ provider: 'apple' | 'google'; subject: string }> | undefined, open: OpenSignup): Promise<Joined | Readonly<{ refused: JoinRefusal }>> => {
     const address = user.email;
     const attempt = async (key: string, limit: number) =>
       (await rpc('open_signup_throttle', `signup.open.throttle.${key}.${limit}`, { p_key: key, p_limit: limit })) === true;
     const keyed = (text: string) => routerSignature(secret, 0, `openthrottle.${text}`);
     if (!(await attempt(`ip.${await keyed(open.ip)}`, OPEN_SIGNUP_IP_DAILY_LIMIT)) || !(await attempt(`email.${await keyed(address)}`, OPEN_SIGNUP_EMAIL_DAILY_LIMIT)))
-      return refuseOpen('open_signup_limited');
+      return refuseOpen('open_signup_limited', 'join_limited');
     const provider = identity?.provider ?? '', subject = identity?.subject ?? '';
-    const result = (await rpc('signup_owner_open', `signup.open.${user.id}.${address}.${provider}.${subject}.${joinPhone}.${open.dailyCap}.${open.totalCap}`,
-      { p_auth_user: user.id, p_email: address, p_provider: provider, p_subject: subject, p_phone: joinPhone, p_daily_cap: open.dailyCap, p_total_cap: open.totalCap })) as
+    const result = (await rpc('signup_owner_open_uncapped', `signup.open.uncapped.${user.id}.${address}.${provider}.${subject}.${joinPhone}`,
+      { p_auth_user: user.id, p_email: address, p_provider: provider, p_subject: subject, p_phone: joinPhone })) as
       { do_name?: unknown; created?: unknown; refused?: unknown } | null;
     if (typeof result?.do_name === 'string' && result.do_name.length > 0) return { doName: result.do_name, joined: result.created === true };
-    if (result?.refused === 'cap') return refuseOpen('open_signup_cap');
-    if (result?.refused === 'taken') return refuseOpen('open_signup_taken');
-    return null;
+    if (result?.refused === 'taken') return refuseOpen('open_signup_taken', 'account_conflict');
+    // The database refused the join's own fields (an Auth user that no longer holds this confirmed email, or a malformed phone):
+    // retrying cannot change that, so it is not reported as unavailable.
+    return refuseOpen('open_signup_refused', 'account_conflict');
   };
   type Identity = Readonly<{ id: string; email: string }>;
+  type Joined = Readonly<{ doName: string; joined: boolean }>;
   const identityTrusted = async (user: Identity, provider: string, subject: string) =>
     (await rpc('signin_identity_trusted', `signinid.trusted.${user.id}.${user.email}.${provider}.${subject}`, { p_auth_user: user.id, p_email: user.email, p_provider: provider, p_subject: subject })) === true;
   // Recording trust is never what signs the owner in, so a failure here costs only an email code at the next sign-in.
@@ -346,12 +375,18 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     return typeof id === 'string' && id.length > 0 && id.length <= 255 ? id : null;
   }) : Promise.resolve(null);
   const signInIdentity = async (grant: Awaited<ReturnType<typeof granted>>, provider: 'apple' | 'google', subject: (granted: Extract<typeof grant, { state: 'user' }>) => Promise<string | null>,
-    inviteCode: string, join: boolean, joinPhone = '', open?: OpenSignup): Promise<IdentitySignIn> => {
+    inviteCode: string, join: boolean, joinPhone = '', open?: OpenSignup, confirmNew = false): Promise<IdentitySignIn> => {
     if (grant.state === 'refused') return grant;
     const user = { id: grant.id, email: grant.email }, sub = await subject(grant);
     if (!sub) return { state: 'refused', reason: 'token' };
-    const owner = await ownerFor(user, inviteCode, join, joinPhone, { provider, subject: sub }, open);
-    if (!owner) return { state: 'needs_invite' };
+    const askFirst = join && confirmNew && !inviteCode;
+    const owner = await ownerFor(user, inviteCode, join && !askFirst, joinPhone, { provider, subject: sub }, open);
+    if (owner && 'refused' in owner) return { state: 'join_refused', reason: owner.refused };
+    if (!owner) return askFirst ? askToJoin(user, provider, sub, open) : { state: 'needs_invite' };
+    return identityOwner(user, provider, sub, owner);
+  };
+  // An identity signs an owner it did not create in only once it is trusted; otherwise the owner confirms it with an email code.
+  const identityOwner = async (user: Identity, provider: 'apple' | 'google', sub: string, owner: Joined): Promise<IdentitySignIn> => {
     if (!owner.joined && !(await identityTrusted(user, provider, sub)))
       return { state: 'confirm', email: user.email, link: await sealValue(secret, SIGNIN_LINK_PURPOSE, { user: user.id, email: user.email, provider, subject: sub, expires: Math.floor(now() / 1000) + SIGNIN_LINK_SECONDS }) };
     return { state: 'owner', doName: owner.doName };
@@ -360,25 +395,40 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     async throttle(key, limit, windowSeconds) {
       return (await rpc('console_auth_throttle', `throttle.${key}.${limit}.${windowSeconds}`, { p_key: key, p_limit: limit, p_window_seconds: windowSeconds })) === true;
     },
-    // Unknown addresses get no email and the same answer, so the page never reveals who is invited. With open sign-up
-    // they get one while a join could still fit.
+    // With open sign-up every address gets a code. Without it, an address that is neither a member nor holding a matching
+    // invite gets none, and the answer says so.
     async sendCode(email, code = '', open) {
       const address = email.trim().toLowerCase();
       const codeHash = code ? await linkCodeHash(code) : '';
-      if (!(await rpc('signin_allowed', `signin.${address}.${codeHash}`, { p_email: address, p_code_hash: codeHash }))
-        && !(open && (await rpc('open_signup_room', `signup.open.room.${open.dailyCap}.${open.totalCap}`, { p_daily_cap: open.dailyCap, p_total_cap: open.totalCap })) === true)) return false;
+      if (!open && !(await rpc('signin_allowed', `signin.${address}.${codeHash}`, { p_email: address, p_code_hash: codeHash }))) return false;
       // Supabase may create an Auth identity here; this does not create a Waldo owner.
       return auth('otp', { email: address, create_user: true }, response => {
         if (!response.ok) throw new Error(`otp send ${response.status}`);
         return true;
       });
     },
-    verify: (email, code, _phone, inviteCode = '', link = '') => resolveOwner(email, code, inviteCode, false, '', link),
-    verifyOrJoin: (email, code, inviteCode, phone = '', link = '', open) => resolveOwner(email, code, inviteCode, true, phone, link, open),
+    verify: async (email, code, _phone, inviteCode = '', link = '') => ownerName(await resolveOwner(email, code, inviteCode, false, '', link)),
+    verifyOrJoin: async (email, code, inviteCode, phone = '', link = '', open) => ownerName(await resolveOwner(email, code, inviteCode, true, phone, link, open)),
+    signInWithEmailCode: (email, code, { invite = '', phone = '', link = '', open, confirmNew = false }) => resolveOwner(email, code, invite, true, phone, link, open, confirmNew),
+    // The ticket is the proven identity, sealed for APP_JOIN_TICKET_SECONDS: it joins that person, or finds them if they joined
+    // since. An identity that reaches an owner it has not signed in before is not trusted here: the person signs in again
+    // and confirms it with an email code.
+    async joinWithTicket(raw, phone = '', open) {
+      const ticket = await openValue(secret, JOIN_TICKET_PURPOSE, raw, now(), APP_JOIN_TICKET_SECONDS);
+      const { user: id, email, provider, subject } = ticket ?? {};
+      if (typeof id !== 'string' || typeof email !== 'string' || (provider !== '' && provider !== 'apple' && provider !== 'google') || typeof subject !== 'string') return { state: 'ticket_invalid' };
+      const user = { id, email };
+      const owner = await ownerFor(user, '', true, phone, provider ? { provider, subject } : undefined, open);
+      if (!owner) return { state: 'ticket_invalid' };
+      if ('refused' in owner) return { state: 'join_refused', reason: owner.refused };
+      if (!provider) return { state: 'owner', doName: owner.doName };
+      const signedIn = await identityOwner(user, provider, subject, owner);
+      return signedIn.state === 'owner' ? signedIn : { state: 'ticket_invalid' };
+    },
     // The identity is the token's own subject. Supabase accepted these exact bytes, so the claim is authentic; the grant's
     // identity list cannot name it, because Supabase leaves an identity it links in this call out of that list.
-    signInWithIdToken: async (provider, idToken, nonce, inviteCode, phone = '', open) =>
-      signInIdentity(await granted('id_token', { provider, id_token: idToken, nonce }), provider, async () => tokenSubject(idToken), inviteCode, true, phone, open),
+    signInWithIdToken: async (provider, idToken, nonce, inviteCode, phone = '', open, confirmNew = false) =>
+      signInIdentity(await granted('id_token', { provider, id_token: idToken, nonce }), provider, async () => tokenSubject(idToken), inviteCode, true, phone, open, confirmNew),
     // Google names the account behind this flow's token; it must be one of this user's Google identities.
     signInWithAuthCode: async (code, verifier) => signInIdentity(await granted('pkce', { auth_code: code, code_verifier: verifier }), 'google', async grant => {
       const sub = await googleSubject(grant.providerToken);

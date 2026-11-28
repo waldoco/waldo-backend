@@ -67,7 +67,10 @@ export type OwnerResponder = Readonly<{
   // `attachments` reach the model with `said` on this turn only, as an owner turn's files do; they are never stored.
   // `waldoFirst` marks a run Waldo starts on a schedule (a day card, a check-back, a sweep, an intervention), never one that
   // answers the owner: with WALDO_LEAN_SCHEDULED it reads the lean scheduled view instead of the chat replay.
-  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string, sourceTaint?: 'external', ownerModel?: OwnerJobModel, attachments?: readonly LLMAttachment[], directTools?: readonly ToolName[], waldoFirst?: boolean, lateOwner?: LateOwnerMessage): Promise<string>;
+  prompt(id: string, conversationRef: string, said: string, time: TurnTimer, surface?: string, toolNames?: readonly ToolName[], current?: () => Promise<void>, decision?: Readonly<{ name: string; schema: Record<string, unknown> }>, turnContext?: string, sourceTaint?: 'external', ownerModel?: OwnerJobModel, attachments?: readonly LLMAttachment[], directTools?: readonly ToolName[], waldoFirst?: boolean, lateOwner?: LateOwnerMessage,
+    // The owner set this run to change nothing until they confirm (a confirm_first standing order): every tool that changes
+    // something is refused at dispatch, except the owner's own card.
+    holdChanges?: boolean): Promise<string>;
   // done is false when the conversation was not consolidated and must be offered again.
   // policy.health false keeps no health notes from this pass, or from the migration.
   consolidate(trace: string, day: string, sides?: Readonly<{ owner: string; shared: string; waldo: string; ownerMessages: readonly Readonly<{ ref: string; text: string }>[] }>, policy?: Readonly<{ health: boolean }>): Promise<Readonly<{ done: boolean; detail: string }>>;
@@ -81,9 +84,11 @@ export type OwnerResponder = Readonly<{
   migrate(trace: string, input: string, policy?: Readonly<{ health: boolean }>): Promise<string>;
   // With a gate, promote makes no model call when the memory it would read has the digest `last`, and hands the digest of
   // the memory it leaves to `promoted` once a promotion is applied.
-  promote(trace: string, gate?: Readonly<{ last: string | undefined; promoted(digest: string): void }>): Promise<string>;
+  promote(trace: string, gate?: Readonly<{ last: string | undefined; promoted(digest: string): void }>, setup?: string): Promise<string>;
   // One welcome-build stage's structured answer; its input and output never reach a trace. version 2 is the second build's.
   welcome?(trace: string, stage: string, input: string, version?: 2): Promise<string>;
+  // The onboarding summary with its open questions; its input and output never reach a trace.
+  onboardingSummary?(trace: string, input: string): Promise<string>;
   planDay(trace: string, input: string): Promise<string>;
   // After a reply is delivered: compact the chain's older rows into one summary row when the last window dropped rows or
   // ran near its budget. Never throws; a failure is one content-free `compaction` hop. Inert while the switch is off.

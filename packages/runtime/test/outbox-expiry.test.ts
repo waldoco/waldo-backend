@@ -19,6 +19,10 @@ describe('an expired record names what it was and what held it', () => {
     expect(expiredCode(record(), open)).toBe('expired:message:waited');
   });
 
+  it('names a superseded record as superseded', () => {
+    expect(expiredCode(record({ reason: 'superseded', update: { recordId: 3 } }), { ...open, quiet: true })).toBe('superseded:update_card:quiet');
+  });
+
   it('names the hold, the closed WhatsApp window first', () => {
     const update = record({ update: { recordId: 3 } });
     expect(expiredCode(update, { ...open, windowClosed: true, quiet: true })).toBe('expired:update_card:window_closed');

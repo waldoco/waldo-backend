@@ -5,7 +5,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cardExpiry, dayPlanBook } from '../src/channels/day-cards';
+import { dayPlanBook } from '../src/channels/day-cards';
 import { traceBook } from '../src/channels/harness';
 import { loopBook } from '../src/channels/loops';
 import { questBook } from '../src/channels/quests';
@@ -231,8 +231,8 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
       expect(planned()).toMatchObject({ sent: false });
       expect(folded()).toEqual([0]);
       expect(outbox()).toEqual([{ id: `day-card:${today()}:card:brief`, status: 'pending' }]);
-      // It is current until the Check-in is due (or the day ends, if that comes first).
-      expect(expiry()).toBe(Math.min(Date.parse(`${today()}T00:00:00Z`) + 24 * HOUR, nextCard));
+      // It has no clock of its own: it waits until it goes out or a newer card replaces it, whenever the Check-in is due.
+      expect([expiry(), nextCard > Date.now()]).toEqual([undefined, true]);
       // Later passes neither knock again, nor send, nor write the card again, even when the card is armed again that day.
       await card();
       await alarms(3);
@@ -254,16 +254,17 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
     });
   });
 
-  it('leaves a card that is already queued out of the next-card bound, so arming it again never shortens another card', async () => {
-    await owned('wa-queued-card-rearmed', async ({ alarms, midday, card, checkIn, expiryOf }) => {
+  it('a newer day card replaces one still waiting, and a card armed again writes nothing new', async () => {
+    await owned('wa-queued-card-rearmed', async ({ alarms, midday, card, checkIn, expiryOf, outbox }) => {
       await midday();
       await alarms(1);
-      expect(expiryOf('card:midday')).toBeDefined();
+      expect(expiryOf('card:midday')).toBeUndefined();
       // The queued Midday card is armed again for later today (a pin, a retry or a crash leaves it so); it will write nothing.
       await checkIn(10 * 60_000);
       await card();
       await alarms(3);
-      expect(expiryOf('card:brief')).toBe(Date.parse(`${today()}T00:00:00Z`) + 24 * HOUR);
+      expect(outbox()).toEqual([{ id: `day-card:${today()}:card:midday`, status: 'blocked', reason: 'superseded' }, { id: `day-card:${today()}:card:brief`, status: 'pending' }]);
+      expect(expiryOf('card:brief')).toBeUndefined();
     });
   });
 
@@ -313,7 +314,7 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
     });
   });
 
-  it('lets a day card expire unsent when the owner writes only after its day, instead of sending it late', async () => {
+  it('sends a day card nothing replaced when the owner writes only after its day, instead of dropping it', async () => {
     await owned('wa-held-day-card-stale', async ({ alarms, reply, later, card, planned, outbox, update, folded }) => {
       update();
       await card();
@@ -321,11 +322,11 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
       expect(outbox()).toMatchObject([{ status: 'pending' }]);
 
       await later(24 * HOUR, reply);
-      expect(wire.events).toEqual(['template:waldo_proactive_update', 'turn']);
+      expect(wire.events).toEqual(['template:waldo_proactive_update', `text:${CARD}`, 'turn']);
+      // Recorded only once Meta reports it reached the phone; until then what it covered stays for the next card.
       expect(planned()).toMatchObject({ sent: false });
-      // What the card covered stays for the next card.
       expect(folded()).toEqual([0]);
-      expect(outbox()).toEqual([{ id: `day-card:${today()}:card:brief`, status: 'blocked', reason: 'expired' }]);
+      expect(outbox()).toEqual([{ id: `day-card:${today()}:card:brief`, status: 'accepted' }]);
     });
   });
 
@@ -563,21 +564,6 @@ describe('scheduled cards and reports for a WhatsApp-only owner', { timeout: 20_
         expect(state.storage.sql.exec<{ pushed: number }>('SELECT pushed FROM update_cards ORDER BY id').toArray()).toEqual([{ pushed: sent }]);
       } finally { await state.storage.deleteAlarm(); }
     });
-  });
-});
-
-describe('a waiting day card goes stale', () => {
-  const at = (iso: string) => Date.parse(iso);
-  it('when the owner\'s next card is due, since that card covers the same day with newer facts', () => {
-    expect(cardExpiry(at('2026-10-17T08:00:00Z'), 'UTC', [at('2026-10-17T14:00:00Z'), at('2026-10-17T21:30:00Z')])).toBe(at('2026-10-17T14:00:00Z'));
-  });
-  it('at the end of its own day when no later card is due that day', () => {
-    expect(cardExpiry(at('2026-10-17T21:30:00Z'), 'UTC', [])).toBe(at('2026-10-18T00:00:00Z'));
-    expect(cardExpiry(at('2026-10-17T21:30:00Z'), 'UTC', [at('2026-10-18T08:00:00Z')])).toBe(at('2026-10-18T00:00:00Z'));
-    expect(cardExpiry(at('2026-10-17T16:00:00Z'), 'Asia/Kolkata', [])).toBe(at('2026-10-17T18:30:00Z'));
-  });
-  it('never by a card due before it', () => {
-    expect(cardExpiry(at('2026-10-17T14:00:00Z'), 'UTC', [at('2026-10-17T08:00:00Z')])).toBe(at('2026-10-18T00:00:00Z'));
   });
 });
 

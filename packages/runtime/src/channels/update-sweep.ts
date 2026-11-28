@@ -24,8 +24,6 @@ import { changeDetail, changeLines, CONTEXT_KINDS, CursorMovedError, heldWhen, r
 export type SweepGate = 'held_preference' | 'held_closed' | 'held_volume' | 'held_quiet' | 'held_window';
 export type SweepCheck = 'unchanged' | 'held_open_job' | 'held_breaker' | 'held_debounce' | 'held_cursor_moved' | SweepGate | MachineEnqueued['code'];
 
-// An update card is worth reading only soon: one still waiting after half an hour is dropped, its changes left for the next card.
-export const UPDATE_CARD_FRESH_MS = 30 * 60_000;
 // With the day state the judge runs at most once in this gap: a tick inside it reads nothing, so what it would have read
 // waits, watermarks unmoved, for the first tick after it.
 export const UPDATE_JUDGE_GAP_MS = 5 * 60_000;
