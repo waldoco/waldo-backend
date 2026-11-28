@@ -765,6 +765,19 @@ describe('hook registry', () => {
     expect(draftResult.args).toEqual(draftArgs);
   });
 
+  it('checks a tool\'s arguments in a run held as if it had read outside content as in one that has: no health reading leaves in them', async () => {
+    const args = { title: 'Check the evening block', due: '2030-03-04T19:20', note: 'HRV was 32 ms and resting heart rate 61 bpm this morning.' };
+    const run = async (over: Partial<HookRuntimeContext>) => {
+      const result = await runHooks('PreToolUse', { event: 'PreToolUse', tool: 'open_loop', args }, runtimeCtx({ sanitise, ...over }), { registry: [scribeSanitisePreToolUseHook] });
+      if (result.event !== 'PreToolUse') throw new Error('unreachable');
+      return JSON.stringify(result.args);
+    };
+    expect(await run({ toolArgSourceTaint: null })).toContain('32 ms');
+    const held = await run({ toolArgSourceTaint: null, runOrigin: 'external' } as Partial<HookRuntimeContext>);
+    expect(held).not.toContain('32 ms');
+    expect(held).toBe(await run({ toolArgSourceTaint: 'external' }));
+  });
+
   it('refuses executable arguments that carry a value encoded past the decode limit, with the decode reason, and withholds it from rewritten ones', async () => {
     const ctx = runtimeCtx({ sanitise, toolArgSourceTaint: 'external' });
     const deep = btoa(btoa(btoa(`the code is ${validCanaries[0]}`)));

@@ -114,8 +114,8 @@ describe('a run that read outside content', () => {
   });
 });
 
-// The Brief and every day card run tainted, since each reads calendar or mail text someone else wrote (owner-do ledgerJob),
-// and so does the heartbeat's check-back. While notes learned from outside content are off (MEMORY_OUTSIDE_NOTES, off in
+// The Brief and every day card act as runs over outside content (owner-do ledgerJob); one whose prompt is the owner's own text
+// runs 'as_read', its mark following what it reads. The heartbeat's check-back runs marked. While notes learned from outside content are off (MEMORY_OUTSIDE_NOTES, off in
 // staging), what such a run tries to keep is refused, not stored as Waldo's own note; it is kept, labelled as outside
 // content, only where those notes are on.
 describe('a Brief over the owner\'s calendar', () => {
@@ -142,7 +142,7 @@ describe('a Brief over the owner\'s calendar', () => {
     args[1] = conversation; args[3] = () => undefined; args[5] = tools as never; args[7] = false; args[10] = gateway;
     args[21] = { jobHost: { admit: async () => admission, chain: (_admission, surfaceChain) => surfaceChain }, leanScheduled: true, promptOwnText: () => clean };
     await createOwnerResponder(...args).prompt('card:brief:1', 'telegram-1', 'Write the Daily Brief for today.\n\nCalendar: Northwind pitch, Friday 10:00',
-      async (_hop, work) => work(), 'telegram', DAY_CARD_TOOLS, undefined, undefined, undefined, 'external', 'plans', undefined, undefined, true);
+      async (_hop, work) => work(), 'telegram', DAY_CARD_TOOLS, undefined, undefined, undefined, clean ? 'as_read' : 'external', 'plans', undefined, undefined, true);
     const asked = requests.filter((request) => !request.response_format);
     return { offered: (asked[0]!.tools ?? []).map((tool) => tool.name), answer: JSON.stringify(asked.at(-1)), claims: store.allClaims() };
   });
